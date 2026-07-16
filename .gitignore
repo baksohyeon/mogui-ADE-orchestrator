@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.mypy_cache/
+.pytest_cache/
+dist/
+coverage/
+.env
+.env.*
+!.env.example
+.DS_Store
+.idea/
+.vscode/settings.json
+# local-only workspace manifests (real coordinates never enter this repo)
+*.local.json

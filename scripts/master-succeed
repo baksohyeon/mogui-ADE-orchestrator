@@ -1,0 +1,138 @@
+#!/usr/bin/env python3
+"""Command line entry point for Orca-native master succession."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+
+SCRIPT_PATH = Path(__file__).resolve()
+REPO_ROOT = SCRIPT_PATH.parent.parent
+SRC_ROOT = REPO_ROOT / "src"
+sys.path.insert(0, str(SRC_ROOT))
+
+from master_runtime.core.succession import (  # noqa: E402
+    SuccessionError,
+    build_handoff,
+    detect_duplicate_instances,
+    detect_trigger,
+    retire_predecessor,
+    verify_successor,
+)
+
+
+def main(argv=None) -> int:
+    argv, json_requested, fixture_json = _extract_common_args(
+        sys.argv[1:] if argv is None else argv
+    )
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    args.json = bool(getattr(args, "json", False) or json_requested)
+    args.fixture_json = getattr(args, "fixture_json", None) or fixture_json
+    runner = _fixture_runner(args.fixture_json) if getattr(args, "fixture_json", None) else None
+    try:
+        payload = _dispatch(args, runner)
+    except SuccessionError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+    else:
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2))
+    return 0
+
+
+def _dispatch(args, runner):
+    if args.command == "detect":
+        return detect_trigger(args.text, {"context_ratio": args.context_ratio}).to_dict()
+    if args.command == "handoff":
+        spec = json.loads(Path(args.spec).read_text(encoding="utf-8"))
+        return {"handoff": build_handoff(spec)}
+    if args.command == "verify-successor":
+        report = json.loads(Path(args.report).read_text(encoding="utf-8"))
+        return verify_successor(report).to_dict()
+    if args.command == "check-duplicates":
+        duplicates = detect_duplicate_instances(args.marker, args.self_handle, runner)
+        return {"duplicates": [session.to_dict() for session in duplicates]}
+    if args.command == "retire":
+        report = retire_predecessor(
+            predecessor_selector=args.expected,
+            self_handle=args.self_handle,
+            expected_substr=args.expected,
+            orca_runner=runner,
+            execute=args.execute,
+        )
+        return report.to_dict()
+    raise SuccessionError("unknown command: " + str(args.command))
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="master-succeed")
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--json", action="store_true")
+    common.add_argument("--fixture-json", help=argparse.SUPPRESS)
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    detect = subparsers.add_parser("detect", parents=[common])
+    detect.add_argument("text")
+    detect.add_argument("--context-ratio", type=float)
+
+    handoff = subparsers.add_parser("handoff", parents=[common])
+    handoff.add_argument("--spec", required=True)
+
+    verify = subparsers.add_parser("verify-successor", parents=[common])
+    verify.add_argument("--report", required=True)
+
+    duplicates = subparsers.add_parser("check-duplicates", parents=[common])
+    duplicates.add_argument("--self-handle", required=True)
+    duplicates.add_argument("--marker", required=True)
+
+    retire = subparsers.add_parser("retire", parents=[common])
+    retire.add_argument("--self-handle", required=True)
+    retire.add_argument("--expected", required=True)
+    retire.add_argument("--execute", action="store_true")
+    return parser
+
+
+def _extract_common_args(argv):
+    remaining = []
+    json_requested = False
+    fixture_json = None
+    index = 0
+    argv = list(argv)
+    while index < len(argv):
+        item = argv[index]
+        if item == "--json":
+            json_requested = True
+            index += 1
+            continue
+        if item == "--fixture-json":
+            if index + 1 >= len(argv):
+                remaining.append(item)
+                index += 1
+                continue
+            fixture_json = argv[index + 1]
+            index += 2
+            continue
+        remaining.append(item)
+        index += 1
+    return remaining, json_requested, fixture_json
+
+
+def _fixture_runner(fixture_json: str):
+    def run(command):
+        if tuple(command) == ("orca", "terminal", "list", "--json"):
+            return 0, fixture_json, ""
+        if len(command) >= 4 and tuple(command[:3]) == ("orca", "terminal", "close"):
+            return 0, '{"ok":true}', ""
+        return 1, "", "unsupported fixture command"
+
+    return run
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

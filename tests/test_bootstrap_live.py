@@ -5,7 +5,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from master_runtime.core.bootstrap_live import latest_handoff, load_role_state
+from master_runtime.core.bootstrap_live import (
+    audit_memories,
+    latest_handoff,
+    load_role_state,
+)
 
 
 HANDOFF = """# handoff
@@ -52,6 +56,31 @@ class LoadRoleStateTests(unittest.TestCase):
         block, alerts = load_role_state(self._dir / "none")
         self.assertIsNone(block)
         self.assertTrue(any("role-state" in a for a in alerts))
+
+
+MEMS = """### rule-a
+내용 [L0] 규칙
+### ptr-b
+내용 [L1 포인터]
+### naked-c
+태그 없는 서사
+"""
+
+
+class AuditMemoriesTests(unittest.TestCase):
+    def test_audit_counts_tiers_and_flags_untagged(self) -> None:
+        line, alerts = audit_memories(MEMS, cap=15, budget_chars=12000)
+        self.assertIn("memories=3", line)
+        self.assertIn("L0=1", line)
+        self.assertIn("L1=1", line)
+        self.assertIn("untagged=1", line)
+        self.assertTrue(any("untagged" in a for a in alerts))
+
+    def test_audit_alerts_over_cap_and_budget(self) -> None:
+        many = "\n".join("### k%d\n[L0] x" % i for i in range(16))
+        line, alerts = audit_memories(many, cap=15, budget_chars=10)
+        self.assertTrue(any("cap" in a for a in alerts))
+        self.assertTrue(any("BUDGET-ALERT" in a for a in alerts))
 
 
 if __name__ == "__main__":

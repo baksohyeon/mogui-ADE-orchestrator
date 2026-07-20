@@ -17,6 +17,7 @@ Canonical src-layout: `src/master_runtime/core/context/{descriptor,manifest,reso
 
 - **Manifest declares**: workspace root, known repositories, identities, expected branch policy (opaque passthrough), optional metadata.
 - **Runtime observes**: path existence, `.git` presence (dir = repo, `gitdir:` file = worktree), repo membership (longest-path match), nesting, disappearance.
+- **Non-goal**: path-local discovery does not recursively scan arbitrary workspace subtrees beyond declarations, workspace-root children, and the queried path's ancestors.
 - **Conflict model**: declarations are never trusted. Drift is data, not an exception — per-repo status ∈ {declared+observed, declared-missing, observed-undeclared} + explicit warnings. Only malformed input raises (`ManifestError`). No git commands are executed — pure filesystem observation.
 
 ## Minimal ContextDescriptor (U2)

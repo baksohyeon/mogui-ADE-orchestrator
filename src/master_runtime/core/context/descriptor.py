@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
+from typing import Tuple
 
 
 class ContextKind(str, Enum):
@@ -50,4 +51,7 @@ class ContextDescriptor:
     repository_identity: str | None
     repo_set: tuple[RepoEntry, ...]
     capabilities: Capabilities
-    warnings: list[str] = field(default_factory=list)
+    warnings: Tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "warnings", tuple(self.warnings))

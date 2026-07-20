@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping as MappingABC
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -39,15 +40,27 @@ class WorkspaceManifest:
     ) -> None:
         if not isinstance(workspace_identity, str) or not workspace_identity:
             raise ManifestError("workspace_identity must be a non-empty string")
+        if metadata is not None and not isinstance(metadata, MappingABC):
+            raise ManifestError("manifest metadata must be an object")
 
-        normalized_repositories = tuple(
-            _coerce_repository(repository) for repository in repositories
-        )
+        try:
+            repository_iter = iter(repositories)
+        except TypeError as exc:
+            raise ManifestError("manifest repositories must be iterable") from exc
+
+        try:
+            normalized_repositories = tuple(
+                _coerce_repository(repository) for repository in repository_iter
+            )
+        except ManifestError:
+            raise
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise ManifestError("manifest repositories are malformed") from exc
 
         object.__setattr__(self, "workspace_root", str(workspace_root))
         object.__setattr__(self, "workspace_identity", workspace_identity)
         object.__setattr__(self, "repositories", normalized_repositories)
-        object.__setattr__(self, "metadata", dict(metadata or {}))
+        object.__setattr__(self, "metadata", dict(metadata) if metadata is not None else {})
 
     @classmethod
     def from_file(cls, path: str | Path) -> "WorkspaceManifest":
@@ -70,7 +83,7 @@ def load_manifest(path: str | Path) -> WorkspaceManifest:
     except OSError as exc:
         raise ManifestError(f"cannot read manifest file: {manifest_path}") from exc
 
-    if not isinstance(raw, Mapping):
+    if not isinstance(raw, MappingABC):
         raise ManifestError("manifest must be a JSON object")
 
     workspace_root = _required_string(raw, "workspace_root")
@@ -84,7 +97,7 @@ def load_manifest(path: str | Path) -> WorkspaceManifest:
         root_path = manifest_path.parent / root_path
 
     metadata = raw.get("metadata")
-    if metadata is not None and not isinstance(metadata, Mapping):
+    if metadata is not None and not isinstance(metadata, MappingABC):
         raise ManifestError("manifest metadata must be an object")
 
     return WorkspaceManifest(
@@ -99,12 +112,25 @@ def _coerce_repository(
     repository: RepositoryDeclaration | Mapping[str, Any],
 ) -> RepositoryDeclaration:
     if isinstance(repository, RepositoryDeclaration):
-        return repository
+        if not isinstance(repository.path, str) or not repository.path:
+            raise ManifestError("repository path must be a non-empty string")
+        if not isinstance(repository.identity, str) or not repository.identity:
+            raise ManifestError("repository identity must be a non-empty string")
+        if not isinstance(repository.metadata, MappingABC):
+            raise ManifestError("repository metadata must be an object")
+        return RepositoryDeclaration(
+            path=repository.path,
+            identity=repository.identity,
+            metadata=dict(repository.metadata),
+        )
+
+    if not isinstance(repository, MappingABC):
+        raise ManifestError("repository entry must be an object")
 
     path = _required_string(repository, "path")
     identity = _required_string(repository, "identity")
     metadata = repository.get("metadata", {})
-    if not isinstance(metadata, Mapping):
+    if not isinstance(metadata, MappingABC):
         raise ManifestError("repository metadata must be an object")
 
     return RepositoryDeclaration(path=path, identity=identity, metadata=dict(metadata))

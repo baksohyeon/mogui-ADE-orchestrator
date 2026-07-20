@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from master_runtime.core.context.descriptor import ContextKind, RepoStatus
 from master_runtime.core.context.manifest import (
@@ -82,7 +83,7 @@ class ContextResolverTests(unittest.TestCase):
         self.assertEqual(descriptor.kind, ContextKind.MULTI_REPO_WORKSPACE)
         self.assertFalse(descriptor.capabilities.git_repo)
         self.assertEqual(descriptor.repository_identity, None)
-        self.assertEqual(descriptor.warnings, [])
+        self.assertEqual(descriptor.warnings, ())
         self.assertEqual(len(descriptor.repo_set), 3)
         self.assertEqual(
             {entry.status for entry in descriptor.repo_set},
@@ -109,7 +110,19 @@ class ContextResolverTests(unittest.TestCase):
 
         self.assertEqual(first, second)
         self.assertEqual(first.kind, ContextKind.FOLDER)
-        self.assertEqual(first.warnings, [])
+        self.assertEqual(first.warnings, ())
+
+    def test_workspace_root_git_marker_takes_precedence_over_workspace_kind(self) -> None:
+        fixture = ContextFixture(self)
+        fixture.git_repo(".")
+        manifest = fixture.manifest([])
+
+        descriptor = resolve(fixture.root, manifest)
+
+        self.assertEqual(descriptor.kind, ContextKind.GIT_REPO)
+        self.assertTrue(descriptor.capabilities.git_repo)
+        self.assertEqual(descriptor.repository_identity, "observed:.")
+        self.assertIn("Observed undeclared repository: .", descriptor.warnings)
 
     def test_declared_missing_is_data_not_exception(self) -> None:
         fixture = ContextFixture(self)
@@ -191,6 +204,106 @@ class ContextResolverTests(unittest.TestCase):
             with self.subTest(manifest_path=manifest_path):
                 with self.assertRaises(ManifestError):
                     resolve(fixture.root, manifest_path)
+
+    def test_non_object_repository_entries_raise_manifest_error(self) -> None:
+        fixture = ContextFixture(self)
+        manifest_path = fixture.manifest_file(
+            {
+                "workspace_root": str(fixture.root),
+                "workspace_identity": "workspace:test",
+                "repositories": ["backend"],
+            }
+        )
+
+        with self.assertRaises(ManifestError):
+            resolve(fixture.root, manifest_path)
+
+    def test_manifest_constructor_wraps_malformed_collections(self) -> None:
+        fixture = ContextFixture(self)
+
+        with self.assertRaises(ManifestError):
+            WorkspaceManifest(
+                workspace_root=fixture.root,
+                workspace_identity="workspace:test",
+                repositories=object(),  # type: ignore[arg-type]
+            )
+
+        with self.assertRaises(ManifestError):
+            WorkspaceManifest(
+                workspace_root=fixture.root,
+                workspace_identity="workspace:test",
+                repositories=[object()],  # type: ignore[list-item]
+            )
+
+        with self.assertRaises(ManifestError):
+            WorkspaceManifest(
+                workspace_root=fixture.root,
+                workspace_identity="workspace:test",
+                repositories=[],
+                metadata=object(),  # type: ignore[arg-type]
+            )
+
+    def test_normalized_declared_path_identity_collision_raises_manifest_error(self) -> None:
+        fixture = ContextFixture(self)
+        fixture.git_repo("backend")
+        manifest = WorkspaceManifest(
+            workspace_root=fixture.root,
+            workspace_identity="workspace:test",
+            repositories=[
+                {"path": "backend", "identity": "repo:backend"},
+                {"path": "./backend", "identity": "repo:other-backend"},
+            ],
+        )
+
+        with self.assertRaises(ManifestError):
+            resolve(fixture.root, manifest)
+
+    def test_workspace_child_listing_failure_is_reported_as_warning(self) -> None:
+        fixture = ContextFixture(self)
+        manifest = fixture.manifest([])
+        original_iterdir = Path.iterdir
+        expected_root = fixture.root.resolve(strict=False)
+
+        def failing_iterdir(path: Path) -> Any:
+            if path.resolve(strict=False) == expected_root:
+                raise OSError("permission denied")
+            return original_iterdir(path)
+
+        with patch.object(Path, "iterdir", failing_iterdir):
+            descriptor = resolve(fixture.root, manifest)
+
+        self.assertEqual(descriptor.kind, ContextKind.MULTI_REPO_WORKSPACE)
+        self.assertTrue(
+            any("Could not list workspace children" in warning for warning in descriptor.warnings)
+        )
+
+    def test_descriptor_warnings_are_immutable_tuple(self) -> None:
+        fixture = ContextFixture(self)
+        manifest = fixture.manifest([("backend", "repo:backend")])
+
+        descriptor = resolve(fixture.root, manifest)
+
+        self.assertIsInstance(descriptor.warnings, tuple)
+        self.assertFalse(hasattr(descriptor.warnings, "append"))
+
+    def test_git_marker_file_is_not_full_read(self) -> None:
+        fixture = ContextFixture(self)
+        worktree = fixture.git_worktree("frontend")
+        manifest = fixture.manifest([("frontend", "repo:frontend")])
+
+        with patch.object(Path, "read_text", side_effect=AssertionError("full read")):
+            descriptor = resolve(worktree, manifest)
+
+        self.assertEqual(descriptor.kind, ContextKind.GIT_WORKTREE)
+
+    def test_path_local_recursive_repo_discovery_is_non_goal(self) -> None:
+        fixture = ContextFixture(self)
+        hidden_repo = fixture.git_repo("scratch/deep/repo")
+        manifest = fixture.manifest([])
+
+        descriptor = resolve(fixture.root, manifest)
+
+        self.assertNotIn(str(hidden_repo), {entry.path for entry in descriptor.repo_set})
 
 
 if __name__ == "__main__":

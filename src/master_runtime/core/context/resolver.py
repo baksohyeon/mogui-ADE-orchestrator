@@ -1,4 +1,7 @@
-"""Pure filesystem context resolver."""
+"""Pure filesystem context resolver.
+
+Non-goal: path-local discovery does not recursively scan arbitrary workspace subtrees.
+"""
 
 from __future__ import annotations
 
@@ -14,6 +17,7 @@ from master_runtime.core.context.descriptor import (
     RepoStatus,
 )
 from master_runtime.core.context.manifest import WorkspaceManifest, load_manifest
+from master_runtime.core.context.manifest import ManifestError
 
 
 @dataclass(frozen=True)
@@ -23,26 +27,35 @@ class _ObservedRepo:
     marker_kind: ContextKind
 
 
+_GITDIR_PREFIX = "gitdir:"
+
+
 def resolve(
     path: str | Path,
     workspace_manifest: WorkspaceManifest | str | Path,
 ) -> ContextDescriptor:
-    """Resolve path context from manifest declarations and filesystem facts."""
+    """Resolve path context from manifest declarations and filesystem facts.
+
+    Path-local recursive repository discovery is a non-goal; only declarations,
+    workspace-root children, and the queried path's ancestors are observed.
+    """
 
     manifest = _coerce_manifest(workspace_manifest)
     workspace_root = _normalize_path(Path(manifest.workspace_root))
     resolved_path = _normalize_path(Path(path))
 
-    declared = {
-        _repository_path(workspace_root, declaration.path): declaration.identity
-        for declaration in manifest.repositories
-    }
+    declared = _declared_repositories(workspace_root, manifest)
 
-    observed = _observe_repositories(workspace_root, resolved_path, declared)
-    entries, warnings = _build_repo_set(workspace_root, declared, observed)
+    observed, observation_warnings = _observe_repositories(
+        workspace_root,
+        resolved_path,
+        declared,
+    )
+    entries, repo_warnings = _build_repo_set(workspace_root, declared, observed)
+    warnings = tuple(sorted((*observation_warnings, *repo_warnings)))
     matched = _longest_repo_match(resolved_path, observed.values())
 
-    if resolved_path == workspace_root:
+    if matched is None and resolved_path == workspace_root:
         return ContextDescriptor(
             kind=ContextKind.MULTI_REPO_WORKSPACE,
             resolved_path=str(resolved_path),
@@ -103,19 +116,44 @@ def _repository_path(workspace_root: Path, repository_path: str) -> Path:
     return _normalize_path(path)
 
 
+def _declared_repositories(
+    workspace_root: Path,
+    manifest: WorkspaceManifest,
+) -> dict[Path, str]:
+    declared: dict[Path, str] = {}
+
+    for declaration in manifest.repositories:
+        repo_path = _repository_path(workspace_root, declaration.path)
+        existing_identity = declared.get(repo_path)
+        if existing_identity is not None:
+            if existing_identity != declaration.identity:
+                raise ManifestError(
+                    "repository path collision after normalization: "
+                    f"{declaration.path!r} maps to {repo_path} with identities "
+                    f"{existing_identity!r} and {declaration.identity!r}"
+                )
+            continue
+        declared[repo_path] = declaration.identity
+
+    return declared
+
+
 def _observe_repositories(
     workspace_root: Path,
     resolved_path: Path,
     declared: dict[Path, str],
-) -> dict[Path, _ObservedRepo]:
+) -> tuple[dict[Path, _ObservedRepo], tuple[str, ...]]:
     observed: dict[Path, _ObservedRepo] = {}
+    warnings: list[str] = []
 
     for repo_path, identity in declared.items():
         marker_kind = _git_marker_kind(repo_path)
         if marker_kind is not None:
             observed[repo_path] = _ObservedRepo(repo_path, identity, marker_kind)
 
-    for child in _immediate_children(workspace_root):
+    children, child_warnings = _immediate_children(workspace_root)
+    warnings.extend(child_warnings)
+    for child in children:
         marker_kind = _git_marker_kind(child)
         if marker_kind is not None and child not in observed:
             observed[child] = _ObservedRepo(
@@ -133,16 +171,20 @@ def _observe_repositories(
                 marker_kind,
             )
 
-    return observed
+    return observed, tuple(warnings)
 
 
-def _immediate_children(workspace_root: Path) -> Iterable[Path]:
+def _immediate_children(workspace_root: Path) -> tuple[tuple[Path, ...], tuple[str, ...]]:
     if not workspace_root.is_dir():
-        return ()
-    return sorted(
-        (child for child in workspace_root.iterdir() if child.is_dir()),
-        key=lambda child: str(child),
-    )
+        return (), ()
+    try:
+        children = sorted(
+            (child for child in workspace_root.iterdir() if child.is_dir()),
+            key=lambda child: str(child),
+        )
+    except OSError as exc:
+        return (), (f"Could not list workspace children: {workspace_root}: {exc}",)
+    return tuple(children), ()
 
 
 def _candidate_ancestors(workspace_root: Path, resolved_path: Path) -> tuple[Path, ...]:
@@ -164,10 +206,11 @@ def _git_marker_kind(path: Path) -> ContextKind | None:
         return ContextKind.GIT_REPO
     if git_marker.is_file():
         try:
-            content = git_marker.read_text(encoding="utf-8", errors="replace")
+            with git_marker.open("r", encoding="utf-8", errors="replace") as marker:
+                prefix = marker.read(len(_GITDIR_PREFIX))
         except OSError:
             return None
-        if content.startswith("gitdir:"):
+        if prefix == _GITDIR_PREFIX:
             return ContextKind.GIT_WORKTREE
     return None
 

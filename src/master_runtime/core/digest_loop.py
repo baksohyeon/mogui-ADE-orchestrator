@@ -15,13 +15,22 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, TextIO, Tuple
 
-from master_runtime.core.watchdog import StallStatus, check_stall
-
 
 SHORT_INTERVAL_SECONDS = 600
 LONG_INTERVAL_SECONDS = 1800
 DEFAULT_LEDGER_TAIL_LIMIT = 20
 DEFAULT_MAX_IDLE_SECONDS = 360
+DEFAULT_ACTIVE_WINDOW_SECONDS = 6 * 60 * 60
+DEFAULT_FINISHED_MARKERS = (
+    "completed",
+    "cancelled",
+    "canceled",
+    "finished",
+    "done",
+    "landed",
+)
+FINISHED_SIDECAR_STATUSES = ("completed", "cancelled", "canceled")
+JOB_LOG_TAIL_LINES = 20
 
 
 class TriageClassification(str, Enum):
@@ -46,6 +55,16 @@ class ProcessStatus(str, Enum):
     IDLE = "idle"
 
 
+class JobLogClassification(str, Enum):
+    """Internal job log triage classes."""
+
+    RUNNING = "running"
+    STALLED = "stalled"
+    DORMANT = "dormant"
+    FINISHED = "finished"
+    MISSING = "missing"
+
+
 @dataclass(frozen=True)
 class RepoConfig:
     """Repository configured for observation."""
@@ -66,6 +85,8 @@ class DigestConfig:
     digest_dir: Path
     ledger_tail_limit: int = DEFAULT_LEDGER_TAIL_LIMIT
     max_idle_seconds: int = DEFAULT_MAX_IDLE_SECONDS
+    active_window_seconds: int = DEFAULT_ACTIVE_WINDOW_SECONDS
+    finished_markers: Tuple[str, ...] = DEFAULT_FINISHED_MARKERS
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "DigestConfig":
@@ -94,6 +115,15 @@ class DigestConfig:
                 value.get("ledger_tail_limit", DEFAULT_LEDGER_TAIL_LIMIT)
             ),
             max_idle_seconds=int(value.get("max_idle_seconds", DEFAULT_MAX_IDLE_SECONDS)),
+            active_window_seconds=int(
+                value.get("active_window_seconds", DEFAULT_ACTIVE_WINDOW_SECONDS)
+            ),
+            finished_markers=tuple(
+                str(item)
+                for item in _sequence(
+                    value.get("finished_markers", DEFAULT_FINISHED_MARKERS)
+                )
+            ),
         )
 
 
@@ -127,6 +157,15 @@ class JobObservation:
     status: JobStatus
     idle_seconds: Optional[float] = None
     reason: str = "OK"
+
+
+@dataclass(frozen=True)
+class JobLogDecision:
+    """Internal decision for one worker job log."""
+
+    classification: JobLogClassification
+    idle_seconds: Optional[float]
+    reason: str
 
 
 @dataclass(frozen=True)
@@ -203,7 +242,14 @@ def collect_observations(config: DigestConfig) -> Snapshot:
     return Snapshot(
         repos=tuple(_collect_repo(repo) for repo in config.repos),
         ledger_entries=tuple(_tail_jsonl(config.ledger_path, config.ledger_tail_limit)),
-        jobs=tuple(_collect_jobs(config.job_log_globs, config.max_idle_seconds)),
+        jobs=tuple(
+            _collect_jobs(
+                config.job_log_globs,
+                config.max_idle_seconds,
+                active_window_seconds=config.active_window_seconds,
+                finished_markers=config.finished_markers,
+            )
+        ),
         processes=tuple(_collect_processes(config.monitor_pgrep_patterns)),
     )
 
@@ -474,15 +520,29 @@ def _collect_repo(repo: RepoConfig) -> RepoObservation:
     )
 
 
-def _collect_jobs(patterns: Sequence[str], max_idle_seconds: int) -> List[JobObservation]:
+def _collect_jobs(
+    patterns: Sequence[str],
+    max_idle_seconds: int,
+    active_window_seconds: int = DEFAULT_ACTIVE_WINDOW_SECONDS,
+    finished_markers: Sequence[str] = DEFAULT_FINISHED_MARKERS,
+    now: Optional[NowFn] = None,
+    stat_mtime: Optional[Callable[[Path], float]] = None,
+) -> List[JobObservation]:
     jobs: List[JobObservation] = []
     for pattern in patterns:
         for path_text in sorted(glob.glob(pattern)):
             path = Path(path_text)
-            decision = check_stall(path, max_idle_seconds=max_idle_seconds)
-            if decision.status == StallStatus.STALLED:
+            decision = _classify_job_log(
+                path,
+                max_idle_seconds=max_idle_seconds,
+                active_window_seconds=active_window_seconds,
+                finished_markers=finished_markers,
+                now=now,
+                stat_mtime=stat_mtime,
+            )
+            if decision.classification == JobLogClassification.STALLED:
                 status = JobStatus.STALLED
-            elif decision.status == StallStatus.OK:
+            elif decision.classification == JobLogClassification.RUNNING:
                 status = JobStatus.RUNNING
             else:
                 continue
@@ -496,6 +556,75 @@ def _collect_jobs(patterns: Sequence[str], max_idle_seconds: int) -> List[JobObs
                 )
             )
     return jobs
+
+
+def _classify_job_log(
+    path: Path,
+    max_idle_seconds: int,
+    active_window_seconds: int,
+    finished_markers: Sequence[str],
+    now: Optional[NowFn] = None,
+    stat_mtime: Optional[Callable[[Path], float]] = None,
+) -> JobLogDecision:
+    current_time = _resolve_now(now)
+    if not path.exists():
+        return JobLogDecision(JobLogClassification.MISSING, None, "LOG_MISSING")
+
+    sidecar_decision = _classify_job_sidecar(path.with_suffix(".json"))
+    if sidecar_decision is not None:
+        return sidecar_decision
+
+    tail = _tail_text_lines(path, JOB_LOG_TAIL_LINES)
+    if _has_finished_marker(tail, finished_markers):
+        return JobLogDecision(JobLogClassification.FINISHED, None, "FINISHED_MARKER")
+
+    modified_at = stat_mtime(path) if stat_mtime is not None else path.stat().st_mtime
+    idle_seconds = max(0.0, current_time - modified_at)
+    if idle_seconds > active_window_seconds:
+        return JobLogDecision(
+            JobLogClassification.DORMANT,
+            idle_seconds,
+            "OUTSIDE_ACTIVE_WINDOW",
+        )
+    if idle_seconds > max_idle_seconds:
+        return JobLogDecision(JobLogClassification.STALLED, idle_seconds, "IDLE_TIMEOUT")
+    return JobLogDecision(JobLogClassification.RUNNING, idle_seconds, "OK")
+
+
+def _classify_job_sidecar(path: Path) -> Optional[JobLogDecision]:
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, Mapping):
+        return None
+
+    status = data.get("status")
+    if not isinstance(status, str):
+        return None
+    if status.strip().lower() in FINISHED_SIDECAR_STATUSES:
+        return JobLogDecision(JobLogClassification.FINISHED, None, "SIDECAR_STATUS")
+    return None
+
+
+def _tail_text_lines(path: Path, limit: int) -> Tuple[str, ...]:
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return ()
+    return tuple(lines[-limit:])
+
+
+def _has_finished_marker(lines: Sequence[str], markers: Sequence[str]) -> bool:
+    text = "\n".join(lines).lower()
+    for marker in markers:
+        if not marker:
+            continue
+        if marker.lower() in text:
+            return True
+    return False
 
 
 def _collect_processes(patterns: Sequence[str]) -> List[ProcessObservation]:

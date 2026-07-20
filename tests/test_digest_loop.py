@@ -17,6 +17,8 @@ from master_runtime.core.digest_loop import (
     render_digest,
     suggest_next_interval_seconds,
     triage_snapshot,
+    _classify_job_log,
+    _collect_jobs,
 )
 
 
@@ -187,6 +189,157 @@ def test_pace_is_short_with_active_jobs_and_long_when_idle() -> None:
     assert suggest_next_interval_seconds(idle) == 1800
 
 
+def test_job_log_triage_classifies_dormant_finished_and_stalled(tmp_path: Path) -> None:
+    dormant = tmp_path / "dormant.log"
+    finished = tmp_path / "finished.log"
+    stalled = tmp_path / "stalled.log"
+    dormant.write_text("still old\n", encoding="utf-8")
+    finished.write_text("한국어 완료 요약만 있는 로그 꼬리\n", encoding="utf-8")
+    finished.with_suffix(".json").write_text(
+        json.dumps({"status": "completed"}),
+        encoding="utf-8",
+    )
+    stalled.write_text("working\n", encoding="utf-8")
+    old = 1_000.0
+    recent_idle = 11_500.0
+    now = 12_000.0
+    for path in (dormant, finished):
+        path.touch()
+    stalled.touch()
+
+    assert _classify_job_log(
+        dormant,
+        max_idle_seconds=360,
+        active_window_seconds=3_600,
+        finished_markers=("completed", "cancelled"),
+        now=lambda: now,
+        stat_mtime=lambda path: old,
+    ).classification == "dormant"
+    assert _classify_job_log(
+        finished,
+        max_idle_seconds=360,
+        active_window_seconds=3_600,
+        finished_markers=("completed", "cancelled"),
+        now=lambda: now,
+        stat_mtime=lambda path: old,
+    ).classification == "finished"
+    assert _classify_job_log(
+        stalled,
+        max_idle_seconds=360,
+        active_window_seconds=3_600,
+        finished_markers=("completed", "cancelled"),
+        now=lambda: now,
+        stat_mtime=lambda path: recent_idle,
+    ).classification == "stalled"
+
+
+def test_collect_jobs_excludes_dormant_and_finished_logs(tmp_path: Path) -> None:
+    dormant = tmp_path / "dormant.output"
+    finished = tmp_path / "finished.output"
+    stalled = tmp_path / "stalled.output"
+    dormant.write_text("old progress\n", encoding="utf-8")
+    finished.write_text("한국어 완료 요약\n", encoding="utf-8")
+    finished.with_suffix(".json").write_text(
+        json.dumps({"status": "failed"}),
+        encoding="utf-8",
+    )
+    stalled.write_text("active but idle\n", encoding="utf-8")
+
+    jobs = _collect_jobs(
+        (str(tmp_path / "*.output"),),
+        max_idle_seconds=360,
+        active_window_seconds=3_600,
+        finished_markers=("completed", "cancelled"),
+        now=lambda: 12_000.0,
+        stat_mtime=lambda path: 11_500.0
+        if path.name == "stalled.output"
+        else 1_000.0,
+    )
+
+    assert jobs == [
+        JobObservation(
+            name="stalled.output",
+            path=str(stalled),
+            status=JobStatus.STALLED,
+            idle_seconds=500.0,
+            reason="IDLE_TIMEOUT",
+        )
+    ]
+
+
+def test_job_log_sidecar_status_marks_finished_before_text_or_mtime(tmp_path: Path) -> None:
+    log_path = tmp_path / "task-mrsjvxwx-jxyb81.log"
+    sidecar_path = tmp_path / "task-mrsjvxwx-jxyb81.json"
+    log_path.write_text("한국어 완료 요약만 있는 로그 꼬리\n", encoding="utf-8")
+    sidecar_path.write_text(
+        json.dumps({"status": "completed", "phase": "done"}),
+        encoding="utf-8",
+    )
+
+    decision = _classify_job_log(
+        log_path,
+        max_idle_seconds=360,
+        active_window_seconds=3_600,
+        finished_markers=("completed", "cancelled"),
+        now=lambda: 12_000.0,
+        stat_mtime=lambda path: 11_500.0,
+    )
+
+    assert decision.classification == "finished"
+    assert decision.reason == "SIDECAR_STATUS"
+
+
+def test_job_log_marker_is_fallback_when_sidecar_is_unreadable(tmp_path: Path) -> None:
+    log_path = tmp_path / "task-mrsjvxwx-jxyb81.log"
+    sidecar_path = tmp_path / "task-mrsjvxwx-jxyb81.json"
+    log_path.write_text("worker cleanup finished\n", encoding="utf-8")
+    sidecar_path.write_text("{not-json", encoding="utf-8")
+
+    decision = _classify_job_log(
+        log_path,
+        max_idle_seconds=360,
+        active_window_seconds=3_600,
+        finished_markers=("finished",),
+        now=lambda: 12_000.0,
+        stat_mtime=lambda path: 11_500.0,
+    )
+
+    assert decision.classification == "finished"
+    assert decision.reason == "FINISHED_MARKER"
+
+
+def test_collect_jobs_uses_json_sidecar_and_falls_back_when_absent(
+    tmp_path: Path,
+) -> None:
+    finished = tmp_path / "finished.log"
+    stalled = tmp_path / "stalled.log"
+    finished.write_text("한국어 완료 요약\n", encoding="utf-8")
+    stalled.write_text("active but idle\n", encoding="utf-8")
+    finished.with_suffix(".json").write_text(
+        json.dumps({"status": "cancelled"}),
+        encoding="utf-8",
+    )
+
+    jobs = _collect_jobs(
+        (str(tmp_path / "*.log"),),
+        max_idle_seconds=360,
+        active_window_seconds=3_600,
+        finished_markers=("completed", "cancelled"),
+        now=lambda: 12_000.0,
+        stat_mtime=lambda path: 11_500.0,
+    )
+
+    assert jobs == [
+        JobObservation(
+            name="stalled.log",
+            path=str(stalled),
+            status=JobStatus.STALLED,
+            idle_seconds=500.0,
+            reason="IDLE_TIMEOUT",
+        )
+    ]
+
+
 def test_config_requires_contract_fields(tmp_path: Path) -> None:
     config = DigestConfig.from_mapping(
         {
@@ -201,3 +354,5 @@ def test_config_requires_contract_fields(tmp_path: Path) -> None:
 
     assert config.baseline_path == tmp_path / "baseline.json"
     assert config.digest_dir == tmp_path / "digests"
+    assert config.active_window_seconds == 21_600
+    assert "completed" in config.finished_markers

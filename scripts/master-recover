@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+"""Command line entry point for Recovery Flow 0-6."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+
+SCRIPT_PATH = Path(__file__).resolve()
+REPO_ROOT = SCRIPT_PATH.parent.parent
+SRC_ROOT = REPO_ROOT / "src"
+sys.path.insert(0, str(SRC_ROOT))
+
+from master_runtime.core.recovery import RecoveryConfig, recover  # noqa: E402
+
+
+def main(argv=None) -> int:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    config = RecoveryConfig(
+        charter_path=Path(args.charter),
+        handoff_path=Path(args.handoff),
+        ledger_path=Path(args.ledger) if args.ledger else None,
+        repo_paths=tuple(Path(path) for path in args.repo),
+        monitor_pgrep_patterns=tuple(args.monitor_pattern),
+        session_id=args.session_id,
+    )
+
+    report = recover(config)
+    payload = report.to_dict()
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+    else:
+        for step in payload["steps"]:
+            print("{0} {1}: {2}".format(step["step"], step["status"], step["evidence"]))
+    return 0
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="master-recover")
+    parser.add_argument("--charter", required=True)
+    parser.add_argument("--handoff", required=True)
+    parser.add_argument("--ledger")
+    parser.add_argument("--repo", action="append", default=[])
+    parser.add_argument("--monitor-pattern", action="append", default=[])
+    parser.add_argument("--session-id")
+    parser.add_argument("--json", action="store_true")
+    return parser
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

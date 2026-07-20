@@ -40,4 +40,6 @@ def classify(action: ActionSpec) -> GateClass:
         return GateClass.G2_SHARED_STATE
     if action.writes_local:
         return GateClass.G1_REVERSIBLE_LOCAL
+    if not action.read_only:
+        return GateClass.G2_SHARED_STATE
     return GateClass.G0_READ_ONLY

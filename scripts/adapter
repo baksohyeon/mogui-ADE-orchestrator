@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+"""CLI for the adapter layer."""
+
+import argparse
+import json
+import os
+import sys
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SRC_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), "src")
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
+
+from master_runtime.core.adapter.dispatch import DispatchRequest, dispatch
+from master_runtime.core.adapter.doctor import doctor
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="adapter")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    subparsers.add_parser("doctor")
+
+    dispatch_parser = subparsers.add_parser("dispatch")
+    dispatch_parser.add_argument("--contract", required=True)
+    dispatch_parser.add_argument("--repo", required=True)
+    dispatch_parser.add_argument("--isolation", choices=("auto", "shared", "worktree"), default="auto")
+    dispatch_parser.add_argument("--runtime", choices=("codex",), default="codex")
+    dispatch_parser.add_argument("--agents", type=int, default=1)
+    dispatch_parser.add_argument("--est-chars", type=int, default=0)
+    dispatch_parser.add_argument("--ledger", default="~/.mogui/dispatch-ledger.jsonl")
+    dispatch_parser.add_argument("--dry-run", action="store_true")
+
+    args = parser.parse_args(argv)
+    if args.command == "doctor":
+        print(json.dumps(_doctor_payload(doctor()), indent=2, sort_keys=True))
+        return 0
+
+    request = DispatchRequest(
+        contract_path=args.contract,
+        repo_path=args.repo,
+        isolation=args.isolation,
+        runtime=args.runtime,
+        agents=args.agents,
+        est_chars=args.est_chars,
+        ledger_path=args.ledger,
+        dry_run=args.dry_run,
+    )
+    outcome = dispatch(request)
+    print(json.dumps(_dispatch_payload(outcome), indent=2, sort_keys=True))
+    return 0 if outcome.ok else 1
+
+
+def _doctor_payload(report):
+    return {
+        "results": [
+            {
+                "name": result.name,
+                "present": result.present,
+                "detail": result.detail,
+                "probe_cmd": list(result.probe_cmd) if result.probe_cmd else None,
+                "path": result.path,
+            }
+            for result in report.results
+        ],
+        "present": list(report.present_names),
+        "missing": list(report.missing_names),
+    }
+
+
+def _dispatch_payload(outcome):
+    return {
+        "ok": outcome.ok,
+        "error_code": outcome.error_code,
+        "message": outcome.message,
+        "job_id": outcome.job_id,
+        "worktree_path": outcome.worktree_path,
+        "ledger_reflected": outcome.ledger_reflected,
+        "isolation": {
+            "mode": outcome.isolation.mode.value,
+            "reasons": list(outcome.isolation.reasons),
+        },
+        "worker_cmd": list(outcome.worker_cmd) if outcome.worker_cmd else None,
+        "probe_cmd": list(outcome.probe_cmd) if outcome.probe_cmd else None,
+        "worktree_cmd": list(outcome.worktree_cmd) if outcome.worktree_cmd else None,
+    }
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,19 @@
+#!/usr/bin/env python3
+"""Command line entry point for the L1 digest loop."""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+
+SCRIPT_PATH = Path(__file__).resolve()
+REPO_ROOT = SCRIPT_PATH.parent.parent
+SRC_ROOT = REPO_ROOT / "src"
+sys.path.insert(0, str(SRC_ROOT))
+
+from master_runtime.core.digest_loop import cli_main  # noqa: E402
+
+
+if __name__ == "__main__":
+    raise SystemExit(cli_main())

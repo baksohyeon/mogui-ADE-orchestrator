@@ -8,15 +8,21 @@ never re-publishes memory bodies; it only audits the bd prime block.
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Sequence, Tuple
 
 from master_runtime.core.bootstrap import _role_state_block
 
 
 DEFAULT_MEMORY_CAP = 15
 DEFAULT_BUDGET_CHARS = 12_000
+# Self-block target ~1KB (see plan Architecture: "동적 블록(~1KB)"). The block
+# is truncated (tracks first) once it exceeds this cap.
+SELF_BLOCK_CAP = 1_000
 _BLOCK_SPLIT = re.compile(r"(?m)^### ")
+
+BdRunner = Callable[[Sequence[str]], str]
 
 
 def latest_handoff(handoff_dir: Path) -> Optional[Path]:
@@ -123,3 +129,79 @@ def audit_memories(
         + "KB)"
     )
     return line, alerts
+
+
+def _default_bd_runner(argv: Sequence[str]) -> str:
+    result = subprocess.run(
+        tuple(argv),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout
+
+
+def collect_tracks(runner: Optional[BdRunner] = None) -> Tuple[List[str], List[str]]:
+    """Collect active track title lines via ``bd list --status in_progress``.
+
+    ``runner`` receives argv and returns stdout (injectable for tests). On
+    any failure the tracks list is empty and an alert is appended.
+    """
+
+    alerts: List[str] = []
+    run = runner or _default_bd_runner
+    try:
+        output = run(("bd", "list", "--status", "in_progress"))
+    except Exception as exc:  # noqa: BLE001 — 부팅은 어떤 실패에도 죽지 않는다
+        alerts.append("[AUDIT-ALERT] tracks: 수집 실패 " + exc.__class__.__name__)
+        return [], alerts
+
+    tracks = [line.strip() for line in output.splitlines() if line.strip()]
+    return tracks, alerts
+
+
+def compose(
+    role_block: Optional[str],
+    tracks: Sequence[str],
+    audit_line: str,
+    alerts: Sequence[str],
+    dual_line: str,
+    charter_pointer: str,
+) -> str:
+    """Assemble the master bootstrap block in fixed section order.
+
+    Order: header / Role State / 활성 트랙 / Charter pointer / audit / dual /
+    alerts. If the rendered block exceeds ``SELF_BLOCK_CAP`` the tracks section
+    is truncated first and a ``[BUDGET-ALERT] self-block`` line is appended.
+    """
+
+    def render(track_list: Sequence[str], extra_alerts: Sequence[str]) -> str:
+        lines = ["[MASTER-BOOTSTRAP v1]", "## Role State"]
+        lines.append(role_block if role_block else "(role-state unavailable)")
+        lines.append("## 활성 트랙")
+        if track_list:
+            lines.extend(track_list)
+        else:
+            lines.append("(none)")
+        lines.append("## Charter")
+        lines.append(charter_pointer)
+        lines.append(audit_line)
+        lines.append(dual_line)
+        combined = list(alerts) + list(extra_alerts)
+        if combined:
+            lines.append("## Alerts")
+            lines.extend(combined)
+        return "\n".join(lines)
+
+    out = render(tracks, [])
+    if len(out) <= SELF_BLOCK_CAP:
+        return out
+
+    truncated = list(tracks)
+    extra = ["[BUDGET-ALERT] self-block 트랙 절단"]
+    while truncated and len(render(truncated, extra)) > SELF_BLOCK_CAP:
+        if len(truncated) > 4:
+            truncated = truncated[: len(truncated) // 2]
+        else:
+            truncated = truncated[:-1]
+    return render(truncated, extra)

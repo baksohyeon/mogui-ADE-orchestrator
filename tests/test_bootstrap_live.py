@@ -7,6 +7,8 @@ from pathlib import Path
 
 from master_runtime.core.bootstrap_live import (
     audit_memories,
+    collect_tracks,
+    compose,
     latest_handoff,
     load_role_state,
 )
@@ -81,6 +83,37 @@ class AuditMemoriesTests(unittest.TestCase):
         line, alerts = audit_memories(many, cap=15, budget_chars=10)
         self.assertTrue(any("cap" in a for a in alerts))
         self.assertTrue(any("BUDGET-ALERT" in a for a in alerts))
+
+
+class CollectTracksTests(unittest.TestCase):
+    def test_collect_tracks_parses_titles(self) -> None:
+        fake = lambda argv: "◐ AL-3be ● P1 OPS-02: batch 살리기\n◐ AL-mpr ● P1 QA-01: 마감\n"
+        tracks, alerts = collect_tracks(fake)
+        self.assertEqual(len(tracks), 2)
+        self.assertEqual(alerts, [])
+
+    def test_collect_tracks_runner_failure_alerts(self) -> None:
+        def boom(argv):
+            raise RuntimeError("bd missing")
+
+        tracks, alerts = collect_tracks(boom)
+        self.assertEqual(tracks, [])
+        self.assertTrue(any("tracks" in a for a in alerts))
+
+
+class ComposeTests(unittest.TestCase):
+    def test_compose_orders_sections_and_caps_self_block(self) -> None:
+        out = compose(
+            "Current Role: X",
+            ["t"] * 500,
+            "[BD-PRIME-AUDIT] ...",
+            [],
+            "[DUAL-INSTANCE] none",
+            "Charter: Recovery Flow 0 정독",
+        )
+        self.assertTrue(out.startswith("[MASTER-BOOTSTRAP v1]"))
+        self.assertLessEqual(len(out), 2200)
+        self.assertIn("[BUDGET-ALERT] self-block", out)
 
 
 if __name__ == "__main__":

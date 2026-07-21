@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,6 +13,7 @@ from master_runtime.core.bootstrap_live import (
     compose,
     latest_handoff,
     load_role_state,
+    run_live,
 )
 
 
@@ -114,6 +117,41 @@ class ComposeTests(unittest.TestCase):
         self.assertTrue(out.startswith("[MASTER-BOOTSTRAP v1]"))
         self.assertLessEqual(len(out), 2200)
         self.assertIn("[BUDGET-ALERT] self-block", out)
+
+
+class RunLiveTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._dir = Path(tempfile.mkdtemp())
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self._dir, ignore_errors=True)
+
+    def test_run_live_never_raises(self) -> None:
+        def boom(argv):
+            raise RuntimeError("everything broken")
+
+        out = run_live(self._dir / "none", bd_runner=boom, probe=lambda: "")
+        self.assertTrue(
+            "[MASTER-BOOTSTRAP v1]" in out or "[BOOTSTRAP-FALLBACK]" in out
+        )
+
+
+class CliTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._dir = Path(tempfile.mkdtemp())
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self._dir, ignore_errors=True)
+
+    def test_cli_exits_zero_with_missing_dir(self) -> None:
+        script = Path(__file__).resolve().parent.parent / "scripts" / "master-bootstrap-live"
+        proc = subprocess.run(
+            [sys.executable, str(script), "--handoff-dir", str(self._dir / "none")],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0)
+        self.assertNotEqual(proc.stdout.strip(), "")
 
 
 if __name__ == "__main__":

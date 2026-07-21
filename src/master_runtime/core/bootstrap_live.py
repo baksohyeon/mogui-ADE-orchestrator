@@ -12,7 +12,10 @@ import subprocess
 from pathlib import Path
 from typing import Callable, List, Optional, Sequence, Tuple
 
-from master_runtime.core.bootstrap import _role_state_block
+from master_runtime.core.bootstrap import (
+    _detect_dual_instances,
+    _role_state_block,
+)
 
 
 DEFAULT_MEMORY_CAP = 15
@@ -20,9 +23,13 @@ DEFAULT_BUDGET_CHARS = 12_000
 # Self-block target ~1KB (see plan Architecture: "동적 블록(~1KB)"). The block
 # is truncated (tracks first) once it exceeds this cap.
 SELF_BLOCK_CAP = 1_000
+CHARTER_POINTER = (
+    "Charter: specs/MASTER-ORCHESTRATOR-CHARTER.md — Recovery Flow 0 정독"
+)
 _BLOCK_SPLIT = re.compile(r"(?m)^### ")
 
 BdRunner = Callable[[Sequence[str]], str]
+ProcessProbe = Callable[[], str]
 
 
 def latest_handoff(handoff_dir: Path) -> Optional[Path]:
@@ -205,3 +212,69 @@ def compose(
         else:
             truncated = truncated[:-1]
     return render(truncated, extra)
+
+
+def _audit_bd_prime(
+    bd_runner: Optional[BdRunner],
+    budget_chars: int,
+) -> Tuple[str, List[str]]:
+    run = bd_runner or _default_bd_runner
+    try:
+        text = run(("bd", "prime", "--memories-only"))
+    except Exception as exc:  # noqa: BLE001 — 부팅 불사
+        return (
+            "[BD-PRIME-AUDIT] unavailable (" + exc.__class__.__name__ + ")",
+            ["[AUDIT-ALERT] bd-prime: 수집 실패 " + exc.__class__.__name__],
+        )
+    return audit_memories(text, budget_chars=budget_chars)
+
+
+def _dual_line(
+    session_id: Optional[str],
+    probe: Optional[ProcessProbe],
+) -> Tuple[str, List[str]]:
+    try:
+        warnings = _detect_dual_instances(session_id, probe)
+    except Exception as exc:  # noqa: BLE001 — 부팅 불사
+        return (
+            "[DUAL-INSTANCE] probe-failed (" + exc.__class__.__name__ + ")",
+            ["[AUDIT-ALERT] dual-instance: 탐지 실패 " + exc.__class__.__name__],
+        )
+    if warnings:
+        return "[DUAL-INSTANCE] " + ", ".join(warnings), list(warnings)
+    return "[DUAL-INSTANCE] none", []
+
+
+def run_live(
+    handoff_dir: Path,
+    bd_runner: Optional[BdRunner] = None,
+    probe: Optional[ProcessProbe] = None,
+    session_id: Optional[str] = None,
+    budget_chars: int = DEFAULT_BUDGET_CHARS,
+) -> str:
+    """Assemble the full master bootstrap block.
+
+    Any internal exception is caught and reduced to a single
+    ``[BOOTSTRAP-FALLBACK] <reason>`` line so booting never dies.
+    """
+
+    try:
+        alerts: List[str] = []
+        role_block, role_alerts = load_role_state(Path(handoff_dir))
+        alerts.extend(role_alerts)
+        tracks, track_alerts = collect_tracks(bd_runner)
+        alerts.extend(track_alerts)
+        audit_line, audit_alerts = _audit_bd_prime(bd_runner, budget_chars)
+        alerts.extend(audit_alerts)
+        dual_line, dual_alerts = _dual_line(session_id, probe)
+        alerts.extend(dual_alerts)
+        return compose(
+            role_block,
+            tracks,
+            audit_line,
+            alerts,
+            dual_line,
+            CHARTER_POINTER,
+        )
+    except Exception as exc:  # noqa: BLE001 — 부팅 불사, 폴백 1줄
+        return "[BOOTSTRAP-FALLBACK] " + exc.__class__.__name__ + ": " + str(exc)

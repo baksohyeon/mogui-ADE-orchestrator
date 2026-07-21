@@ -163,7 +163,17 @@ def collect_tracks(runner: Optional[BdRunner] = None) -> Tuple[List[str], List[s
         alerts.append("[AUDIT-ALERT] tracks: 수집 실패 " + exc.__class__.__name__)
         return [], alerts
 
-    tracks = [line.strip() for line in output.splitlines() if line.strip()]
+    tracks: List[str] = []
+    for raw in output.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("---"):
+            # bd list footer separator — tracks end here.
+            break
+        if line.startswith("Total:") or line.startswith("Status:"):
+            continue
+        tracks.append(line)
     return tracks, alerts
 
 

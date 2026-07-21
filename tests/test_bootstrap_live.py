@@ -103,6 +103,21 @@ class CollectTracksTests(unittest.TestCase):
         self.assertEqual(tracks, [])
         self.assertTrue(any("tracks" in a for a in alerts))
 
+    def test_collect_tracks_excludes_bd_footer(self) -> None:
+        real = (
+            "◐ AL-3be ● P1 OPS-02: batch 살리기\n"
+            "◐ AL-mpr ● P1 QA-01: 마감\n"
+            "--------------------------------------------------------------------------------\n"
+            "Total: 6 issues (0 open, 6 in progress)\n"
+            "Status: ○ open  ◐ in_progress  ● blocked  ✓ closed  ❄ deferred\n"
+        )
+        tracks, alerts = collect_tracks(lambda argv: real)
+        self.assertEqual(len(tracks), 2)
+        joined = "\n".join(tracks)
+        self.assertNotIn("Total:", joined)
+        self.assertNotIn("Status:", joined)
+        self.assertFalse(any(t.startswith("---") for t in tracks))
+
 
 class ComposeTests(unittest.TestCase):
     def test_compose_orders_sections_and_caps_self_block(self) -> None:

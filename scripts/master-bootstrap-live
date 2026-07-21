@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+"""master-bootstrap-live — SessionStart hook entry point.
+
+Emits the dynamic master bootstrap block. Booting must never die: any
+internal error is reduced to a ``[BOOTSTRAP-FALLBACK]`` line and the exit
+code is always 0.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+SCRIPT_PATH = Path(__file__).resolve()
+REPO_ROOT = SCRIPT_PATH.parent.parent
+SRC_ROOT = REPO_ROOT / "src"
+sys.path.insert(0, str(SRC_ROOT))
+
+
+def _make_bd_runner(bd_exe):
+    def runner(argv):
+        cmd = [bd_exe] + list(argv)[1:]
+        result = subprocess.run(
+            cmd,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        return result.stdout
+
+    return runner
+
+
+def main(argv=None) -> int:
+    try:
+        from master_runtime.core.bootstrap_live import (  # noqa: E402
+            DEFAULT_BUDGET_CHARS,
+            run_live,
+        )
+
+        parser = argparse.ArgumentParser(prog="master-bootstrap-live")
+        parser.add_argument("--handoff-dir", required=True)
+        parser.add_argument("--budget", type=int, default=DEFAULT_BUDGET_CHARS)
+        parser.add_argument("--bd", default="bd")
+        args = parser.parse_args(argv)
+
+        block = run_live(
+            Path(args.handoff_dir),
+            bd_runner=_make_bd_runner(args.bd),
+            probe=None,
+            session_id=os.environ.get("CLAUDE_SESSION_ID"),
+            budget_chars=args.budget,
+        )
+        print(block)
+        return 0
+    except SystemExit:
+        raise
+    except BaseException as exc:  # noqa: BLE001 — 부팅 불사, 항상 exit 0
+        print("[BOOTSTRAP-FALLBACK] CLI " + exc.__class__.__name__ + ": " + str(exc))
+        return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -89,6 +90,54 @@ def test_r2_allows_single_high_cost_runtime_with_warning(tmp_path: Path) -> None
     assert decision.warnings == (ReasonCode.HIGH_COST_RUNTIME,)
 
 
+def test_check_allow_issues_dispatch_ticket_with_contract_fixture(
+    tmp_path: Path,
+) -> None:
+    contract = _dispatch_contract(tmp_path, runtime="grok")
+    gate = _gate(tmp_path, now=1_700_000_000)
+
+    decision = gate.check(
+        DispatchRequest(
+            runtime="grok",
+            contract_path=contract,
+            est_input_chars=25_000,
+            n_agents=3,
+            purpose="u5 ticket issuance",
+        )
+    )
+
+    contract_sha = _sha256(contract)
+    ticket = tmp_path / "dispatch-tickets" / f"grok-{contract_sha[:12]}.json"
+
+    assert decision.allow is True
+    assert decision.contract_sha == contract_sha
+    assert json.loads(ticket.read_text(encoding="utf-8")) == {
+        "runtime": "grok",
+        "contract_sha": contract_sha,
+        "issued_ts": 1_700_000_000,
+        "count": 3,
+    }
+
+
+def test_check_deny_does_not_issue_dispatch_ticket(tmp_path: Path) -> None:
+    contract = _dispatch_contract(tmp_path, runtime="codex")
+    gate = _gate(tmp_path, now=1_700_000_000)
+
+    decision = gate.check(
+        DispatchRequest(
+            runtime="codex",
+            contract_path=contract,
+            est_input_chars=500_001,
+            n_agents=1,
+            purpose="u5 denial path",
+        )
+    )
+
+    assert decision.allow is False
+    assert decision.reason == ReasonCode.BUDGET_EXCEEDED
+    assert not (tmp_path / "dispatch-tickets").exists()
+
+
 def test_r2_denies_multi_agent_high_cost_runtime(tmp_path: Path) -> None:
     contract = _contract(tmp_path, "multi fable contract")
     gate = _gate(tmp_path, now=1_000)
@@ -168,6 +217,9 @@ def test_r4_denies_unverified_job_id(tmp_path: Path) -> None:
 def test_cli_check_register_and_watch_commands(tmp_path: Path) -> None:
     contract = _contract(tmp_path, "cli contract")
     ledger = tmp_path / "cli-ledger.jsonl"
+    home = tmp_path / "cli-home"
+    env = os.environ.copy()
+    env["HOME"] = str(home)
 
     check_result = subprocess.run(
         [
@@ -187,6 +239,7 @@ def test_cli_check_register_and_watch_commands(tmp_path: Path) -> None:
         check=False,
         capture_output=True,
         text=True,
+        env=env,
     )
     register_result = subprocess.run(
         [
@@ -202,6 +255,7 @@ def test_cli_check_register_and_watch_commands(tmp_path: Path) -> None:
         check=False,
         capture_output=True,
         text=True,
+        env=env,
     )
     log = tmp_path / "worker.log"
     log.write_text("progress\n", encoding="utf-8")
@@ -217,11 +271,53 @@ def test_cli_check_register_and_watch_commands(tmp_path: Path) -> None:
         check=False,
         capture_output=True,
         text=True,
+        env=env,
     )
 
     assert check_result.returncode == 0, check_result.stderr
     assert register_result.returncode == 0, register_result.stderr
     assert watch_result.returncode == 0, watch_result.stderr
+
+
+def test_cli_check_creates_default_ticket_directory(tmp_path: Path) -> None:
+    contract = _dispatch_contract(tmp_path, runtime="codex")
+    ledger = tmp_path / "cli-ledger.jsonl"
+    home = tmp_path / "home"
+    env = os.environ.copy()
+    env["HOME"] = str(home)
+
+    result = subprocess.run(
+        [
+            str(_script()),
+            "--ledger",
+            str(ledger),
+            "check",
+            "--runtime",
+            "codex",
+            "--contract",
+            str(contract),
+            "--agents",
+            "2",
+            "--est-chars",
+            "24000",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    contract_sha = _sha256(contract)
+    ticket_dir = home / ".mogui" / "dispatch-tickets"
+    ticket = ticket_dir / f"codex-{contract_sha[:12]}.json"
+
+    assert result.returncode == 0, result.stderr
+    assert ticket_dir.is_dir()
+    payload = json.loads(ticket.read_text(encoding="utf-8"))
+    assert payload["runtime"] == "codex"
+    assert payload["contract_sha"] == contract_sha
+    assert payload["count"] == 2
+    assert isinstance(payload["issued_ts"], (int, float))
 
 
 def test_incident_a_fable_fanout_denied(tmp_path: Path) -> None:
@@ -318,7 +414,10 @@ def _gate(
     clock: _MutableClock | None = None,
 ) -> DispatchGate:
     return DispatchGate(
-        DispatchGateConfig(ledger_path=tmp_path / "ledger.jsonl"),
+        DispatchGateConfig(
+            ledger_path=tmp_path / "ledger.jsonl",
+            ticket_dir=tmp_path / "dispatch-tickets",
+        ),
         clock=clock or (lambda: now if now is not None else 1_000),
     )
 
@@ -327,6 +426,42 @@ def _contract(tmp_path: Path, content: str) -> Path:
     contract = tmp_path / f"{abs(hash(content))}.md"
     contract.write_text(content, encoding="utf-8")
     return contract
+
+
+def _dispatch_contract(tmp_path: Path, runtime: str) -> Path:
+    payload = {
+        "job_id": "u5-ticket-impl-mogui-20260723",
+        "runtime": runtime,
+        "workspace": "/Users/polsia/dev/work/Polsia",
+        "repo": "/Users/polsia/dev/personal/mogui-ADE-orchestrator",
+        "objective": "Implement U5 dispatch gate ticket issuance",
+        "scope": {
+            "include": [
+                "src/master_runtime/core/dispatch_gate.py",
+                "scripts/dispatch-gate",
+            ],
+            "exclude": [
+                "ops-planning dispatch-gate-warn.sh consumption",
+                "git commit",
+                "git push",
+            ],
+        },
+        "acceptance": [
+            "ALLOW check writes a dispatch ticket",
+            "DENY check does not write a dispatch ticket",
+            "ticket directory is created automatically",
+        ],
+    }
+    contract = tmp_path / "u5-ticket-impl-mogui-20260723.contract.json"
+    contract.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return contract
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _ledger_entries(tmp_path: Path) -> list[dict[str, object]]:

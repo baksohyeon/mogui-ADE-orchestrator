@@ -17,6 +17,7 @@ DEFAULT_BATCH_DISPATCH_CHAR_LIMIT = 1_000_000
 DEFAULT_DUPLICATE_WINDOW_SECONDS = 30 * 60
 DEFAULT_HIGH_COST_RUNTIMES = frozenset({"fable"})
 DEFAULT_LEDGER_PATH = Path(".dispatch-gate-ledger.jsonl")
+DEFAULT_TICKET_DIR = Path(".mogui") / "dispatch-tickets"
 
 
 def _default_ledger_path() -> Path:
@@ -24,6 +25,10 @@ def _default_ledger_path() -> Path:
     if value:
         return Path(value)
     return DEFAULT_LEDGER_PATH
+
+
+def _default_ticket_dir() -> Path:
+    return Path.home() / DEFAULT_TICKET_DIR
 
 
 class ReasonCode(str, Enum):
@@ -66,6 +71,7 @@ class DispatchGateConfig:
     """Configurable dispatch gate thresholds and storage."""
 
     ledger_path: str | Path = field(default_factory=_default_ledger_path)
+    ticket_dir: str | Path = field(default_factory=_default_ticket_dir)
     single_dispatch_char_limit: int = DEFAULT_SINGLE_DISPATCH_CHAR_LIMIT
     batch_dispatch_char_limit: int = DEFAULT_BATCH_DISPATCH_CHAR_LIMIT
     duplicate_window_seconds: int = DEFAULT_DUPLICATE_WINDOW_SECONDS
@@ -146,6 +152,7 @@ class DispatchGate:
             cost_proxy=cost_proxy,
         )
         self._append_decision(request, decision)
+        self._issue_dispatch_ticket(request, contract_sha)
         return decision
 
     def register_job(
@@ -209,6 +216,26 @@ class DispatchGate:
         with ledger_path.open("a", encoding="utf-8") as ledger:
             ledger.write(json.dumps(entry, sort_keys=True, separators=(",", ":")))
             ledger.write("\n")
+
+    def _issue_dispatch_ticket(
+        self,
+        request: DispatchRequest,
+        contract_sha: str,
+    ) -> None:
+        ticket_dir = Path(self.config.ticket_dir)
+        ticket_dir.mkdir(parents=True, exist_ok=True)
+
+        runtime = request.runtime.lower()
+        ticket_path = ticket_dir / f"{runtime}-{contract_sha[:12]}.json"
+        payload = {
+            "runtime": runtime,
+            "contract_sha": contract_sha,
+            "issued_ts": self._clock(),
+            "count": request.n_agents,
+        }
+        with ticket_path.open("w", encoding="utf-8") as ticket:
+            ticket.write(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+            ticket.write("\n")
 
     def _has_recent_contract(self, contract_sha: str) -> bool:
         threshold = self._clock() - self.config.duplicate_window_seconds

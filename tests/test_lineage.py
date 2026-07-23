@@ -113,10 +113,24 @@ class LineageRecorderTests(unittest.TestCase):
         shutil.copyfile(source, dry_run_path)
         original = dry_run_path.read_bytes()
 
-        append_entry(dry_run_path, valid_entry())
+        append_entry(
+            dry_run_path,
+            valid_entry(generation=_next_generation(dry_run_path)),
+        )
 
         self.assertEqual(original, dry_run_path.read_bytes()[: len(original)])
         self.assertEqual(original, source.read_bytes())
+
+
+def _next_generation(path: Path) -> int:
+    generations: list[int] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.startswith("- **Generation**: "):
+            continue
+        value = line.rsplit(":", maxsplit=1)[1].strip()
+        if value.isdigit():
+            generations.append(int(value))
+    return max(generations, default=0) + 1
 
 
 if __name__ == "__main__":

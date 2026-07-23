@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -18,6 +19,7 @@ DEFAULT_DUPLICATE_WINDOW_SECONDS = 30 * 60
 DEFAULT_HIGH_COST_RUNTIMES = frozenset({"fable"})
 DEFAULT_LEDGER_PATH = Path(".dispatch-gate-ledger.jsonl")
 DEFAULT_TICKET_DIR = Path(".mogui") / "dispatch-tickets"
+RUNTIME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 
 
 def _default_ledger_path() -> Path:
@@ -105,6 +107,22 @@ class DispatchGate:
             self._append_decision(request, decision)
             return decision
         cost_proxy = request.n_agents * request.est_input_chars
+        if (
+            _dispatch_ticket_path(
+                Path(self.config.ticket_dir),
+                request.runtime.lower(),
+                contract_sha,
+            )
+            is None
+        ):
+            decision = GateDecision(
+                allow=False,
+                reason=ReasonCode.INVALID_REQUEST,
+                contract_sha=contract_sha,
+                cost_proxy=cost_proxy,
+            )
+            self._append_decision(request, decision)
+            return decision
 
         if (
             request.est_input_chars > self.config.single_dispatch_char_limit
@@ -152,7 +170,7 @@ class DispatchGate:
             cost_proxy=cost_proxy,
         )
         self._append_decision(request, decision)
-        self._issue_dispatch_ticket(request, contract_sha)
+        self._issue_dispatch_ticket(request, decision)
         return decision
 
     def register_job(
@@ -220,22 +238,32 @@ class DispatchGate:
     def _issue_dispatch_ticket(
         self,
         request: DispatchRequest,
-        contract_sha: str,
+        decision: GateDecision,
     ) -> None:
+        if not decision.allow:
+            return
+        if decision.contract_sha is None:
+            return
+
         ticket_dir = Path(self.config.ticket_dir)
         ticket_dir.mkdir(parents=True, exist_ok=True)
 
         runtime = request.runtime.lower()
-        ticket_path = ticket_dir / f"{runtime}-{contract_sha[:12]}.json"
+        ticket_path = _dispatch_ticket_path(ticket_dir, runtime, decision.contract_sha)
+        if ticket_path is None:
+            return
+
         payload = {
             "runtime": runtime,
-            "contract_sha": contract_sha,
+            "contract_sha": decision.contract_sha,
             "issued_ts": self._clock(),
             "count": request.n_agents,
         }
-        with ticket_path.open("w", encoding="utf-8") as ticket:
+        tmp_path = ticket_path.with_name(f".{ticket_path.name}.{os.getpid()}.tmp")
+        with tmp_path.open("w", encoding="utf-8") as ticket:
             ticket.write(json.dumps(payload, sort_keys=True, separators=(",", ":")))
             ticket.write("\n")
+        os.replace(tmp_path, ticket_path)
 
     def _has_recent_contract(self, contract_sha: str) -> bool:
         threshold = self._clock() - self.config.duplicate_window_seconds
@@ -281,11 +309,26 @@ class DispatchGate:
 def _validate_request(request: DispatchRequest) -> ReasonCode | None:
     if not request.runtime:
         return ReasonCode.INVALID_REQUEST
+    if RUNTIME_PATTERN.fullmatch(request.runtime) is None:
+        return ReasonCode.INVALID_REQUEST
     if request.est_input_chars < 0:
         return ReasonCode.INVALID_REQUEST
     if request.n_agents < 1:
         return ReasonCode.INVALID_REQUEST
     return None
+
+
+def _dispatch_ticket_path(
+    ticket_dir: Path,
+    runtime: str,
+    contract_sha: str,
+) -> Path | None:
+    ticket_dir_resolved = ticket_dir.resolve()
+    ticket_path = ticket_dir / f"{runtime}-{contract_sha[:12]}.json"
+    ticket_path_resolved = ticket_path.resolve()
+    if ticket_path_resolved.parent != ticket_dir_resolved:
+        return None
+    return ticket_path
 
 
 def _contract_sha(contract_path: str | Path) -> str:

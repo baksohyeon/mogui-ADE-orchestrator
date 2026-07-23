@@ -9,6 +9,7 @@ code is always 0.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -34,6 +35,50 @@ def _make_bd_runner(bd_exe):
     return runner
 
 
+_COMPACT_SUPPRESSED_LINE = (
+    "[E12] compact: tracks/role suppressed for recall probe "
+    "(정본은 회상 기록 후 bd로 대조)"
+)
+
+
+def _session_source_from_stdin():
+    raw = sys.stdin.read()
+    if not raw.strip():
+        return None
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload.get("source")
+
+
+def _suppress_compact_recall_leaks(block):
+    lines = block.splitlines()
+    output = []
+    suppressed = False
+    skip_section = False
+
+    for line in lines:
+        if line in {"## Role State", "## 활성 트랙"}:
+            if not suppressed:
+                output.append(_COMPACT_SUPPRESSED_LINE)
+                suppressed = True
+            skip_section = True
+            continue
+        if line.startswith("## "):
+            skip_section = False
+        if not skip_section:
+            output.append(line)
+
+    if suppressed:
+        return "\n".join(output)
+    if lines and lines[0].startswith("[MASTER-BOOTSTRAP"):
+        return "\n".join([lines[0], _COMPACT_SUPPRESSED_LINE] + lines[1:])
+    return _COMPACT_SUPPRESSED_LINE + "\n" + block
+
+
 def main(argv=None) -> int:
     try:
         from master_runtime.core.bootstrap_live import (  # noqa: E402
@@ -46,6 +91,7 @@ def main(argv=None) -> int:
         parser.add_argument("--budget", type=int, default=DEFAULT_BUDGET_CHARS)
         parser.add_argument("--bd", default="bd")
         args = parser.parse_args(argv)
+        source = _session_source_from_stdin()
 
         block = run_live(
             Path(args.handoff_dir),
@@ -54,6 +100,8 @@ def main(argv=None) -> int:
             session_id=os.environ.get("CLAUDE_SESSION_ID"),
             budget_chars=args.budget,
         )
+        if source == "compact":
+            block = _suppress_compact_recall_leaks(block)
         print(block)
         return 0
     except SystemExit:

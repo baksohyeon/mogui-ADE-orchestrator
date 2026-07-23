@@ -6,10 +6,12 @@ import os
 import subprocess
 from pathlib import Path
 
+import master_runtime.core.dispatch_gate as dispatch_gate
 from master_runtime.core.dispatch_gate import (
     DispatchGate,
     DispatchGateConfig,
     DispatchRequest,
+    GateDecision,
     ReasonCode,
 )
 from master_runtime.core.watchdog import StallStatus, check_stall
@@ -135,6 +137,134 @@ def test_check_deny_does_not_issue_dispatch_ticket(tmp_path: Path) -> None:
 
     assert decision.allow is False
     assert decision.reason == ReasonCode.BUDGET_EXCEEDED
+    assert not (tmp_path / "dispatch-tickets").exists()
+
+
+def test_check_rejects_invalid_runtimes_without_ticket(
+    tmp_path: Path,
+) -> None:
+    contract = _dispatch_contract(tmp_path, runtime="codex")
+    invalid_runtimes = ("../escape", "Codex", "a" * 33)
+
+    for runtime in invalid_runtimes:
+        case_dir = tmp_path / runtime.replace("/", "_")
+        gate = DispatchGate(
+            DispatchGateConfig(
+                ledger_path=case_dir / "ledger.jsonl",
+                ticket_dir=case_dir / "dispatch-tickets",
+            ),
+            clock=lambda: 1_700_000_000,
+        )
+
+        decision = gate.check(
+            DispatchRequest(
+                runtime=runtime,
+                contract_path=contract,
+                est_input_chars=25_000,
+                n_agents=1,
+                purpose="u5 invalid runtime regression",
+            )
+        )
+
+        assert decision.allow is False
+        assert decision.reason == ReasonCode.INVALID_REQUEST
+        assert not (case_dir / "dispatch-tickets").exists()
+        assert not (case_dir.parent / "escape").exists()
+
+
+def test_issue_dispatch_ticket_confines_runtime_path_escape(
+    tmp_path: Path,
+) -> None:
+    contract = _dispatch_contract(tmp_path, runtime="codex")
+    gate = _gate(tmp_path, now=1_700_000_000)
+
+    gate._issue_dispatch_ticket(
+        DispatchRequest(
+            runtime="../escape",
+            contract_path=contract,
+            est_input_chars=25_000,
+            n_agents=1,
+            purpose="u5 ticket confinement regression",
+        ),
+        GateDecision(
+            allow=True,
+            reason=ReasonCode.OK,
+            contract_sha="b" * 64,
+            cost_proxy=25_000,
+        ),
+    )
+
+    assert list((tmp_path / "dispatch-tickets").glob("*.json")) == []
+    assert not (tmp_path / "escape-bbbbbbbbbbbb.json").exists()
+
+
+def test_issue_dispatch_ticket_uses_tmp_then_os_replace(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    contract = _dispatch_contract(tmp_path, runtime="codex")
+    gate = _gate(tmp_path, now=1_700_000_000)
+    contract_sha = _sha256(contract)
+    ticket = tmp_path / "dispatch-tickets" / f"codex-{contract_sha[:12]}.json"
+    replace_calls: list[tuple[Path, Path]] = []
+    real_replace = dispatch_gate.os.replace
+
+    def tracking_replace(
+        src: str | os.PathLike[str],
+        dst: str | os.PathLike[str],
+    ) -> None:
+        src_path = Path(src)
+        dst_path = Path(dst)
+        replace_calls.append((src_path, dst_path))
+        assert src_path.name.startswith(f".{ticket.name}.")
+        assert src_path.name.endswith(".tmp")
+        assert src_path.exists()
+        assert not dst_path.exists()
+        real_replace(src, dst)
+
+    monkeypatch.setattr(dispatch_gate.os, "replace", tracking_replace)
+
+    decision = gate.check(
+        DispatchRequest(
+            runtime="codex",
+            contract_path=contract,
+            est_input_chars=25_000,
+            n_agents=1,
+            purpose="u5 atomic ticket regression",
+        )
+    )
+
+    assert decision.allow is True
+    assert len(replace_calls) == 1
+    tmp_ticket, final_ticket = replace_calls[0]
+    assert final_ticket == ticket
+    assert ticket.exists()
+    assert not tmp_ticket.exists()
+    assert json.loads(ticket.read_text(encoding="utf-8"))["count"] == 1
+
+
+def test_issue_dispatch_ticket_allow_guard_skips_deny_decision(
+    tmp_path: Path,
+) -> None:
+    contract = _dispatch_contract(tmp_path, runtime="codex")
+    gate = _gate(tmp_path, now=1_700_000_000)
+
+    gate._issue_dispatch_ticket(
+        DispatchRequest(
+            runtime="codex",
+            contract_path=contract,
+            est_input_chars=500_001,
+            n_agents=1,
+            purpose="u5 allow guard regression",
+        ),
+        GateDecision(
+            allow=False,
+            reason=ReasonCode.BUDGET_EXCEEDED,
+            contract_sha="c" * 64,
+            cost_proxy=500_001,
+        ),
+    )
+
     assert not (tmp_path / "dispatch-tickets").exists()
 
 

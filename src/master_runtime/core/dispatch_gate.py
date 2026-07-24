@@ -44,6 +44,8 @@ class ReasonCode(str, Enum):
     INVALID_REQUEST = "INVALID_REQUEST"
     CONTRACT_UNREADABLE = "CONTRACT_UNREADABLE"
     HIGH_COST_RUNTIME = "HIGH_COST_RUNTIME"
+    AMBIGUOUS_TICKET = "AMBIGUOUS_TICKET"
+    NO_MATCHING_TICKET = "NO_MATCHING_TICKET"
 
 
 @dataclass(frozen=True)
@@ -177,15 +179,34 @@ class DispatchGate:
         self,
         job_id: str,
         probe_fn: Callable[[str], bool],
+        contract_sha: str | None = None,
     ) -> GateDecision:
         """Register a job only after independent probe verification succeeds."""
 
         if not job_id or not probe_fn(job_id):
             return GateDecision(False, ReasonCode.UNVERIFIED_JOB)
 
-        pending = self._latest_pending_dispatch()
-        if pending is None:
-            return GateDecision(False, ReasonCode.UNVERIFIED_JOB)
+        pending_dispatches = self._pending_dispatches()
+        if contract_sha is not None:
+            contract_sha_filter = _normalize_contract_sha_filter(contract_sha)
+            if contract_sha_filter is None:
+                return GateDecision(False, ReasonCode.INVALID_REQUEST)
+            matching_pending = tuple(
+                entry
+                for entry in pending_dispatches
+                if _contract_sha_matches(entry.get("contract_sha"), contract_sha_filter)
+            )
+            if not matching_pending:
+                return GateDecision(False, ReasonCode.NO_MATCHING_TICKET)
+            if len(matching_pending) > 1:
+                return GateDecision(False, ReasonCode.AMBIGUOUS_TICKET)
+            pending = matching_pending[0]
+        else:
+            if not pending_dispatches:
+                return GateDecision(False, ReasonCode.UNVERIFIED_JOB)
+            if len(pending_dispatches) > 1:
+                return GateDecision(False, ReasonCode.AMBIGUOUS_TICKET)
+            pending = pending_dispatches[0]
 
         decision = GateDecision(
             allow=True,
@@ -276,8 +297,9 @@ class DispatchGate:
                 return True
         return False
 
-    def _latest_pending_dispatch(self) -> Mapping[str, object] | None:
+    def _pending_dispatches(self) -> tuple[Mapping[str, object], ...]:
         registered_counts: dict[str, int] = {}
+        pending: list[Mapping[str, object]] = []
         for entry in reversed(self._read_entries()):
             contract_sha = _string_or_none(entry.get("contract_sha"))
             if contract_sha is None:
@@ -289,9 +311,10 @@ class DispatchGate:
             elif entry.get("decision") == "ALLOW":
                 registrations = registered_counts.get(contract_sha, 0)
                 if registrations == 0:
-                    return entry
-                registered_counts[contract_sha] = registrations - 1
-        return None
+                    pending.append(entry)
+                else:
+                    registered_counts[contract_sha] = registrations - 1
+        return tuple(pending)
 
     def _read_entries(self) -> Sequence[Mapping[str, object]]:
         ledger_path = Path(self.config.ledger_path)
@@ -359,3 +382,19 @@ def _string_or_none(value: object) -> str | None:
     if isinstance(value, str):
         return value
     return None
+
+
+def _normalize_contract_sha_filter(contract_sha: str) -> str | None:
+    contract_sha_filter = contract_sha.strip().lower()
+    if len(contract_sha_filter) < 12:
+        return None
+    if re.fullmatch(r"[0-9a-f]+", contract_sha_filter) is None:
+        return None
+    return contract_sha_filter
+
+
+def _contract_sha_matches(value: object, contract_sha_filter: str) -> bool:
+    contract_sha = _string_or_none(value)
+    if contract_sha is None:
+        return False
+    return contract_sha.lower().startswith(contract_sha_filter)

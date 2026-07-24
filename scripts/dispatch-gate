@@ -53,6 +53,7 @@ def _build_parser() -> argparse.ArgumentParser:
     register_parser = subparsers.add_parser("register")
     register_parser.add_argument("--job-id", required=True)
     register_parser.add_argument("--probe-cmd", required=True)
+    register_parser.add_argument("--contract-sha")
 
     watch_parser = subparsers.add_parser("watch")
     watch_parser.add_argument("--log", required=True)
@@ -92,6 +93,7 @@ def _register(args: argparse.Namespace) -> int:
     decision = _gate(args).register_job(
         args.job_id,
         lambda job_id: _probe_contains_job_id(args.probe_cmd, job_id),
+        contract_sha=args.contract_sha,
     )
     _print_decision(decision)
     if decision.allow:

@@ -332,6 +332,69 @@ def test_r4_registers_verified_job_id(tmp_path: Path) -> None:
     assert _ledger_entries(tmp_path)[-1]["job_id"] == "job-123"
 
 
+def test_register_consumes_matching_pending_dispatch_by_contract_sha(
+    tmp_path: Path,
+) -> None:
+    first_contract = _contract(tmp_path, "first parallel dispatch")
+    second_contract = _contract(tmp_path, "second parallel dispatch")
+    gate = _gate(tmp_path, now=1_000)
+    gate.check(
+        DispatchRequest("codex", first_contract, est_input_chars=10_000, n_agents=1)
+    )
+    gate.check(
+        DispatchRequest("codex", second_contract, est_input_chars=10_000, n_agents=1)
+    )
+
+    first_sha = _sha256(first_contract)
+    decision = gate.register_job(
+        "job-first",
+        lambda job_id: job_id == "job-first",
+        contract_sha=first_sha[:12],
+    )
+
+    assert decision.allow is True
+    assert decision.reason == ReasonCode.OK
+    assert _ledger_entries(tmp_path)[-1]["contract_sha"] == first_sha
+
+
+def test_register_denies_ambiguous_pending_dispatch_without_contract_sha(
+    tmp_path: Path,
+) -> None:
+    first_contract = _contract(tmp_path, "first ambiguous dispatch")
+    second_contract = _contract(tmp_path, "second ambiguous dispatch")
+    gate = _gate(tmp_path, now=1_000)
+    gate.check(
+        DispatchRequest("codex", first_contract, est_input_chars=10_000, n_agents=1)
+    )
+    gate.check(
+        DispatchRequest("codex", second_contract, est_input_chars=10_000, n_agents=1)
+    )
+
+    decision = gate.register_job("job-ambiguous", lambda job_id: job_id)
+
+    assert decision.allow is False
+    assert decision.reason == ReasonCode.AMBIGUOUS_TICKET
+    assert all("job_id" not in entry for entry in _ledger_entries(tmp_path))
+
+
+def test_register_denies_contract_sha_without_matching_pending_dispatch(
+    tmp_path: Path,
+) -> None:
+    contract = _contract(tmp_path, "pending dispatch")
+    gate = _gate(tmp_path, now=1_000)
+    gate.check(DispatchRequest("codex", contract, est_input_chars=10_000, n_agents=1))
+
+    decision = gate.register_job(
+        "job-mismatch",
+        lambda job_id: job_id == "job-mismatch",
+        contract_sha="f" * 12,
+    )
+
+    assert decision.allow is False
+    assert decision.reason == ReasonCode.NO_MATCHING_TICKET
+    assert all("job_id" not in entry for entry in _ledger_entries(tmp_path))
+
+
 def test_r4_denies_unverified_job_id(tmp_path: Path) -> None:
     contract = _contract(tmp_path, "unverified job")
     gate = _gate(tmp_path, now=1_000)

@@ -395,6 +395,127 @@ def test_register_denies_contract_sha_without_matching_pending_dispatch(
     assert all("job_id" not in entry for entry in _ledger_entries(tmp_path))
 
 
+def test_contract_lint_warns_for_mcp_without_trust_handling(
+    tmp_path: Path,
+) -> None:
+    contract = _contract(tmp_path, "Use the MCP tool mcp__review for this contract.")
+    gate = _gate(tmp_path, now=1_000)
+
+    decision = gate.check(
+        DispatchRequest("codex", contract, est_input_chars=10_000, n_agents=1)
+    )
+
+    assert decision.allow is True
+    assert decision.reason == ReasonCode.OK
+    assert ReasonCode.MCP_TRUST_UNHANDLED in decision.warnings
+
+
+def test_contract_lint_accepts_mcp_with_trust_handling(
+    tmp_path: Path,
+) -> None:
+    contract = _contract(
+        tmp_path,
+        "Use MCP after the trust dialog is handled by the worker.",
+    )
+    gate = _gate(tmp_path, now=1_000)
+
+    decision = gate.check(
+        DispatchRequest("codex", contract, est_input_chars=10_000, n_agents=1)
+    )
+
+    assert ReasonCode.MCP_TRUST_UNHANDLED not in decision.warnings
+
+
+def test_contract_lint_warns_for_path_outside_known_roots(
+    tmp_path: Path,
+) -> None:
+    known_roots = tmp_path / "known-roots.json"
+    known_roots.write_text(
+        json.dumps(["/Users/polsia/dev/work/Polsia"]),
+        encoding="utf-8",
+    )
+    contract = _contract(
+        tmp_path,
+        "Inspect /Users/polsia/dev/personal/mogui-ADE-orchestrator/src.",
+    )
+    gate = _gate(tmp_path, now=1_000, known_roots_path=known_roots)
+
+    decision = gate.check(
+        DispatchRequest("codex", contract, est_input_chars=10_000, n_agents=1)
+    )
+
+    assert ReasonCode.PATH_OUTSIDE_KNOWN_ROOTS in decision.warnings
+
+
+def test_contract_lint_accepts_paths_inside_known_roots(
+    tmp_path: Path,
+) -> None:
+    known_roots = tmp_path / "known-roots.json"
+    known_roots.write_text(
+        json.dumps(["/Users/polsia/dev/work/Polsia"]),
+        encoding="utf-8",
+    )
+    contract = _contract(
+        tmp_path,
+        "Inspect /Users/polsia/dev/work/Polsia/ops-planning.",
+    )
+    gate = _gate(tmp_path, now=1_000, known_roots_path=known_roots)
+
+    decision = gate.check(
+        DispatchRequest("codex", contract, est_input_chars=10_000, n_agents=1)
+    )
+
+    assert ReasonCode.PATH_OUTSIDE_KNOWN_ROOTS not in decision.warnings
+
+
+def test_contract_lint_skips_path_check_without_known_roots(
+    tmp_path: Path,
+) -> None:
+    contract = _contract(
+        tmp_path,
+        "Inspect /Users/polsia/dev/personal/mogui-ADE-orchestrator/src.",
+    )
+    gate = _gate(tmp_path, now=1_000, known_roots_path=tmp_path / "missing.json")
+
+    decision = gate.check(
+        DispatchRequest("codex", contract, est_input_chars=10_000, n_agents=1)
+    )
+
+    assert ReasonCode.PATH_OUTSIDE_KNOWN_ROOTS not in decision.warnings
+
+
+def test_contract_lint_warns_for_worktree_as_repo_root(
+    tmp_path: Path,
+) -> None:
+    contract = _contract(
+        tmp_path,
+        "repo_root=/Users/polsia/dev/work/Polsia/.orca/worktrees/unit-a",
+    )
+    gate = _gate(tmp_path, now=1_000)
+
+    decision = gate.check(
+        DispatchRequest("codex", contract, est_input_chars=10_000, n_agents=1)
+    )
+
+    assert ReasonCode.WORKTREE_AS_REPO_ROOT in decision.warnings
+
+
+def test_contract_lint_accepts_worktree_path_without_repo_root_context(
+    tmp_path: Path,
+) -> None:
+    contract = _contract(
+        tmp_path,
+        "workspace=/Users/polsia/dev/work/Polsia/.orca/worktrees/unit-a",
+    )
+    gate = _gate(tmp_path, now=1_000)
+
+    decision = gate.check(
+        DispatchRequest("codex", contract, est_input_chars=10_000, n_agents=1)
+    )
+
+    assert ReasonCode.WORKTREE_AS_REPO_ROOT not in decision.warnings
+
+
 def test_r4_denies_unverified_job_id(tmp_path: Path) -> None:
     contract = _contract(tmp_path, "unverified job")
     gate = _gate(tmp_path, now=1_000)
@@ -605,11 +726,13 @@ def _gate(
     tmp_path: Path,
     now: float | None = None,
     clock: _MutableClock | None = None,
+    known_roots_path: Path | None = None,
 ) -> DispatchGate:
     return DispatchGate(
         DispatchGateConfig(
             ledger_path=tmp_path / "ledger.jsonl",
             ticket_dir=tmp_path / "dispatch-tickets",
+            known_roots_path=known_roots_path or tmp_path / "missing-known-roots.json",
         ),
         clock=clock or (lambda: now if now is not None else 1_000),
     )

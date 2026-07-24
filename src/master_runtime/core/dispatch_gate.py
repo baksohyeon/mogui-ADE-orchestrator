@@ -19,7 +19,9 @@ DEFAULT_DUPLICATE_WINDOW_SECONDS = 30 * 60
 DEFAULT_HIGH_COST_RUNTIMES = frozenset({"fable"})
 DEFAULT_LEDGER_PATH = Path(".dispatch-gate-ledger.jsonl")
 DEFAULT_TICKET_DIR = Path(".mogui") / "dispatch-tickets"
+DEFAULT_KNOWN_ROOTS_PATH = Path(".mogui") / "known-roots.json"
 RUNTIME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
+USERS_ABSOLUTE_PATH_PATTERN = re.compile(r"/Users/[^\s\"'`<>{}\[\](),;:]+")
 
 
 def _default_ledger_path() -> Path:
@@ -31,6 +33,10 @@ def _default_ledger_path() -> Path:
 
 def _default_ticket_dir() -> Path:
     return Path.home() / DEFAULT_TICKET_DIR
+
+
+def _default_known_roots_path() -> Path:
+    return Path.home() / DEFAULT_KNOWN_ROOTS_PATH
 
 
 class ReasonCode(str, Enum):
@@ -46,6 +52,9 @@ class ReasonCode(str, Enum):
     HIGH_COST_RUNTIME = "HIGH_COST_RUNTIME"
     AMBIGUOUS_TICKET = "AMBIGUOUS_TICKET"
     NO_MATCHING_TICKET = "NO_MATCHING_TICKET"
+    MCP_TRUST_UNHANDLED = "MCP_TRUST_UNHANDLED"
+    PATH_OUTSIDE_KNOWN_ROOTS = "PATH_OUTSIDE_KNOWN_ROOTS"
+    WORKTREE_AS_REPO_ROOT = "WORKTREE_AS_REPO_ROOT"
 
 
 @dataclass(frozen=True)
@@ -76,6 +85,7 @@ class DispatchGateConfig:
 
     ledger_path: str | Path = field(default_factory=_default_ledger_path)
     ticket_dir: str | Path = field(default_factory=_default_ticket_dir)
+    known_roots_path: str | Path = field(default_factory=_default_known_roots_path)
     single_dispatch_char_limit: int = DEFAULT_SINGLE_DISPATCH_CHAR_LIMIT
     batch_dispatch_char_limit: int = DEFAULT_BATCH_DISPATCH_CHAR_LIMIT
     duplicate_window_seconds: int = DEFAULT_DUPLICATE_WINDOW_SECONDS
@@ -103,11 +113,16 @@ class DispatchGate:
             return decision
 
         try:
-            contract_sha = _contract_sha(request.contract_path)
+            contract_content = _contract_content(request.contract_path)
         except FileNotFoundError:
             decision = GateDecision(False, ReasonCode.CONTRACT_UNREADABLE)
             self._append_decision(request, decision)
             return decision
+        contract_sha = _contract_sha_from_content(contract_content)
+        lint_warnings = _contract_lint_warnings(
+            contract_content.decode("utf-8", errors="replace"),
+            Path(self.config.known_roots_path),
+        )
         cost_proxy = request.n_agents * request.est_input_chars
         if (
             _dispatch_ticket_path(
@@ -120,6 +135,7 @@ class DispatchGate:
             decision = GateDecision(
                 allow=False,
                 reason=ReasonCode.INVALID_REQUEST,
+                warnings=lint_warnings,
                 contract_sha=contract_sha,
                 cost_proxy=cost_proxy,
             )
@@ -133,6 +149,7 @@ class DispatchGate:
             decision = GateDecision(
                 allow=False,
                 reason=ReasonCode.BUDGET_EXCEEDED,
+                warnings=lint_warnings,
                 contract_sha=contract_sha,
                 cost_proxy=cost_proxy,
             )
@@ -144,6 +161,7 @@ class DispatchGate:
             decision = GateDecision(
                 allow=False,
                 reason=ReasonCode.ROUTING_VIOLATION,
+                warnings=lint_warnings,
                 contract_sha=contract_sha,
                 cost_proxy=cost_proxy,
             )
@@ -154,15 +172,16 @@ class DispatchGate:
             decision = GateDecision(
                 allow=False,
                 reason=ReasonCode.DUPLICATE_CONTRACT,
+                warnings=lint_warnings,
                 contract_sha=contract_sha,
                 cost_proxy=cost_proxy,
             )
             self._append_decision(request, decision)
             return decision
 
-        warnings: tuple[ReasonCode, ...] = ()
+        warnings = lint_warnings
         if runtime in self.config.high_cost_runtimes:
-            warnings = (ReasonCode.HIGH_COST_RUNTIME,)
+            warnings = (*warnings, ReasonCode.HIGH_COST_RUNTIME)
 
         decision = GateDecision(
             allow=True,
@@ -354,11 +373,18 @@ def _dispatch_ticket_path(
     return ticket_path
 
 
-def _contract_sha(contract_path: str | Path) -> str:
+def _contract_content(contract_path: str | Path) -> bytes:
     try:
-        content = Path(contract_path).read_bytes()
+        return Path(contract_path).read_bytes()
     except OSError as exc:
         raise FileNotFoundError(f"cannot read contract: {contract_path}") from exc
+
+
+def _contract_sha(contract_path: str | Path) -> str:
+    return _contract_sha_from_content(_contract_content(contract_path))
+
+
+def _contract_sha_from_content(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
@@ -382,6 +408,90 @@ def _string_or_none(value: object) -> str | None:
     if isinstance(value, str):
         return value
     return None
+
+
+def _contract_lint_warnings(
+    contract_text: str,
+    known_roots_path: Path,
+) -> tuple[ReasonCode, ...]:
+    warnings: list[ReasonCode] = []
+    if _mentions_mcp_without_trust_handling(contract_text):
+        warnings.append(ReasonCode.MCP_TRUST_UNHANDLED)
+    if _has_path_outside_known_roots(contract_text, known_roots_path):
+        warnings.append(ReasonCode.PATH_OUTSIDE_KNOWN_ROOTS)
+    if _has_worktree_as_repo_root(contract_text):
+        warnings.append(ReasonCode.WORKTREE_AS_REPO_ROOT)
+    return tuple(warnings)
+
+
+def _mentions_mcp_without_trust_handling(contract_text: str) -> bool:
+    mentions_mcp = re.search(
+        r"\bmcp\b|mcp__|code-review-graph",
+        contract_text,
+        flags=re.IGNORECASE,
+    )
+    if mentions_mcp is None:
+        return False
+    mentions_trust_handling = re.search(
+        r"trust|신뢰|다이얼로그",
+        contract_text,
+        flags=re.IGNORECASE,
+    )
+    return mentions_trust_handling is None
+
+
+def _has_path_outside_known_roots(
+    contract_text: str,
+    known_roots_path: Path,
+) -> bool:
+    known_roots = _load_known_roots(known_roots_path)
+    if not known_roots:
+        return False
+
+    for path in _absolute_users_paths(contract_text):
+        if not any(_path_is_under(path, root) for root in known_roots):
+            return True
+    return False
+
+
+def _load_known_roots(known_roots_path: Path) -> tuple[Path, ...]:
+    if not known_roots_path.exists():
+        return ()
+    try:
+        payload = json.loads(known_roots_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ()
+    if not isinstance(payload, list):
+        return ()
+    return tuple(Path(root) for root in payload if isinstance(root, str) and root)
+
+
+def _absolute_users_paths(contract_text: str) -> tuple[Path, ...]:
+    paths: list[Path] = []
+    for match in USERS_ABSOLUTE_PATH_PATTERN.finditer(contract_text):
+        paths.append(Path(match.group(0).rstrip(".,)]}\"'`")))
+    return tuple(paths)
+
+
+def _path_is_under(path: Path, root: Path) -> bool:
+    if not path.is_absolute() or not root.is_absolute():
+        return False
+    return path == root or path.is_relative_to(root)
+
+
+def _has_worktree_as_repo_root(contract_text: str) -> bool:
+    for line in contract_text.splitlines():
+        lower_line = line.lower()
+        if "/.orca/worktrees/" not in line:
+            continue
+        if (
+            "repo_root" in lower_line
+            or "repo root" in lower_line
+            or "repo-root" in lower_line
+            or "graph" in lower_line
+        ):
+            return True
+    return False
 
 
 def _normalize_contract_sha_filter(contract_sha: str) -> str | None:

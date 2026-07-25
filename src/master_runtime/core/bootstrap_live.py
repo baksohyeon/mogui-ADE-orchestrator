@@ -24,7 +24,7 @@ DEFAULT_BUDGET_CHARS = 12_000
 # is truncated (tracks first) once it exceeds this cap.
 SELF_BLOCK_CAP = 1_000
 CHARTER_POINTER = (
-    "Charter: specs/MASTER-ORCHESTRATOR-CHARTER.md — Recovery Flow 0 정독"
+    "Operations SSOT: ops-planning/docs/MASTER-OPERATIONS.md — Role State 정본"
 )
 _BLOCK_SPLIT = re.compile(r"(?m)^### ")
 

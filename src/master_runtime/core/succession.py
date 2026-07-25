@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shlex
 import subprocess
 from dataclasses import asdict, dataclass
@@ -115,6 +116,8 @@ SPAWN_CREATE_ERROR = 20
 SPAWN_PARSE_ERROR = 21
 SPAWN_WORKTREE_MISMATCH = 22
 SPAWN_CLOSE_ERROR = 23
+
+_SPAWN_HANDLE_HINT = re.compile(r'"(?:handle|terminal|terminalHandle)"\s*:\s*"([^"]+)"')
 
 
 def detect_trigger(text: str, context: Optional[Mapping[str, object]] = None) -> TriggerDecision:
@@ -436,21 +439,25 @@ def spawn_successor(
             SPAWN_CREATE_ERROR,
         )
 
-    terminal = _created_terminal(stdout)
+    handle_hint = _spawn_handle_hint(stdout)
+    try:
+        terminal = _created_terminal(stdout)
+    except SuccessionError as exc:
+        _raise_spawn_error_after_cleanup(runner, handle_hint, exc)
+        raise
+
     handle = _spawn_field(terminal, ("handle", "terminal", "terminalHandle"), "handle")
-    worktree_id = _spawn_field(terminal, ("worktreeId",), "worktreeId")
+    try:
+        worktree_id = _spawn_field(terminal, ("worktreeId",), "worktreeId")
+    except SuccessionError as exc:
+        _raise_spawn_error_after_cleanup(runner, handle, exc)
+        raise
     if worktree_id != selector:
-        close_command = ("orca", "terminal", "close", "--terminal", handle, "--json")
-        close_code, close_stdout, close_stderr = runner(close_command)
-        if close_code != 0:
-            raise SuccessionError(
-                "spawn worktree mismatch and close failed: requested {0}, got {1}; close error: {2}".format(
-                    selector,
-                    worktree_id,
-                    _command_error(close_stdout, close_stderr),
-                ),
-                SPAWN_CLOSE_ERROR,
-            )
+        _close_spawned_terminal(
+            runner,
+            handle,
+            "spawn worktree mismatch: requested {0}, got {1}".format(selector, worktree_id),
+        )
         raise SuccessionError(
             "spawn worktree mismatch; closed terminal {0}: requested {1}, got {2}".format(
                 handle,
@@ -526,6 +533,44 @@ def _created_terminal(stdout: str) -> Mapping[str, object]:
     if "handle" in payload or "terminalHandle" in payload or "terminal" in payload:
         return payload
     raise SuccessionError("spawn JSON missing created terminal", SPAWN_PARSE_ERROR)
+
+
+def _spawn_handle_hint(stdout: str) -> Optional[str]:
+    match = _SPAWN_HANDLE_HINT.search(stdout)
+    if not match:
+        return None
+    return match.group(1)
+
+
+def _raise_spawn_error_after_cleanup(
+    runner: OrcaRunner,
+    handle: Optional[str],
+    error: SuccessionError,
+) -> None:
+    if not handle:
+        raise error
+    _close_spawned_terminal(runner, handle, str(error))
+    raise SuccessionError(
+        "{0}; closed terminal {1}".format(str(error), handle),
+        error.exit_code,
+    ) from error
+
+
+def _close_spawned_terminal(
+    runner: OrcaRunner,
+    handle: str,
+    failure_message: str,
+) -> None:
+    close_command = ("orca", "terminal", "close", "--terminal", handle, "--json")
+    close_code, close_stdout, close_stderr = runner(close_command)
+    if close_code != 0:
+        raise SuccessionError(
+            "{0} and close failed: close error: {1}".format(
+                failure_message,
+                _command_error(close_stdout, close_stderr),
+            ),
+            SPAWN_CLOSE_ERROR,
+        )
 
 
 def _spawn_field(item: Mapping[str, object], keys: Sequence[str], label: str) -> str:

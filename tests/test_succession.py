@@ -456,6 +456,82 @@ def test_spawn_successor_close_failure_is_reported() -> None:
     assert raised.exception.exit_code == 23
 
 
+def test_spawn_successor_parse_error_after_handle_closes_terminal() -> None:
+    calls = []
+    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    close_command = ("orca", "terminal", "close", "--terminal", "term-new", "--json")
+    runner = _recording_runner(
+        {
+            create_command: (0, '{"ok":true,"result":{"terminal":{"handle":"term-new",', ""),
+            close_command: (0, '{"ok":true}', ""),
+        },
+        calls,
+    )
+
+    with unittest.TestCase().assertRaisesRegex(SuccessionError, "invalid spawn JSON") as raised:
+        spawn_successor(
+            workspace_selector="folder:unit-a",
+            kickoff_text="start here",
+            root="/repo/example",
+            title="successor",
+            orca_runner=runner,
+        )
+
+    assert raised.exception.exit_code == 21
+    assert close_command in calls
+
+
+def test_spawn_successor_parse_error_close_failure_is_reported() -> None:
+    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    close_command = ("orca", "terminal", "close", "--terminal", "term-new", "--json")
+    runner = _runner(
+        {
+            create_command: (0, '{"ok":true,"result":{"terminal":{"handle":"term-new",', ""),
+            close_command: (1, "", "close denied"),
+        }
+    )
+
+    with unittest.TestCase().assertRaisesRegex(SuccessionError, "invalid spawn JSON.*close failed") as raised:
+        spawn_successor(
+            workspace_selector="folder:unit-a",
+            kickoff_text="start here",
+            root="/repo/example",
+            title="successor",
+            orca_runner=runner,
+        )
+
+    assert raised.exception.exit_code == 23
+
+
+def test_spawn_successor_missing_worktree_after_handle_closes_terminal() -> None:
+    calls = []
+    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    close_command = ("orca", "terminal", "close", "--terminal", "term-new", "--json")
+    runner = _recording_runner(
+        {
+            create_command: (
+                0,
+                json.dumps({"ok": True, "result": {"terminal": {"handle": "term-new"}}}),
+                "",
+            ),
+            close_command: (0, '{"ok":true}', ""),
+        },
+        calls,
+    )
+
+    with unittest.TestCase().assertRaisesRegex(SuccessionError, "missing worktreeId") as raised:
+        spawn_successor(
+            workspace_selector="folder:unit-a",
+            kickoff_text="start here",
+            root="/repo/example",
+            title="successor",
+            orca_runner=runner,
+        )
+
+    assert raised.exception.exit_code == 21
+    assert close_command in calls
+
+
 def test_spawn_successor_rejects_invalid_create_json() -> None:
     create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
     runner = _runner({create_command: (0, "not json", "")})

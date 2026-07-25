@@ -61,9 +61,12 @@ def _dispatch(args, runner):
         return {"duplicates": [session.to_dict() for session in duplicates]}
     if args.command == "retire":
         report = retire_predecessor(
-            predecessor_selector=args.expected,
+            predecessor_selector=args.expected or "",
             self_handle=args.self_handle,
             expected_substr=args.expected,
+            target_handle=args.target_handle,
+            target_pty_id=args.target_pty_id,
+            target_session_id=args.target_session_id,
             orca_runner=runner,
             execute=args.execute,
         )
@@ -108,7 +111,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
     retire = subparsers.add_parser("retire", parents=[common])
     retire.add_argument("--self-handle", required=True)
-    retire.add_argument("--expected", required=True)
+    retire.add_argument("--expected")
+    retire.add_argument("--target-handle")
+    retire.add_argument("--target-pty-id")
+    retire.add_argument("--target-session-id")
     retire.add_argument("--execute", action="store_true")
 
     spawn = subparsers.add_parser("spawn", parents=[common])

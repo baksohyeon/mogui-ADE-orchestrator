@@ -66,6 +66,10 @@ class SessionInfo:
     branch: str
     title: str
     connected: bool
+    pty_id: str = ""
+    worktree_id: str = ""
+    session_id: str = ""
+    process_id: Optional[int] = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -78,10 +82,12 @@ class RetirementReport:
     reason: str
     candidates: Tuple[SessionInfo, ...]
     closed: bool = False
+    match_attempts: Tuple[str, ...] = ()
 
     def to_dict(self) -> dict:
         payload = asdict(self)
         payload["candidates"] = [candidate.to_dict() for candidate in self.candidates]
+        payload["match_attempts"] = list(self.match_attempts)
         return payload
 
 
@@ -103,6 +109,7 @@ class SpawnReport:
 
 
 OrcaRunner = Callable[[Sequence[str]], Tuple[int, str, str]]
+ProcessProbe = Callable[[int], bool]
 
 SPAWN_CREATE_ERROR = 20
 SPAWN_PARSE_ERROR = 21
@@ -278,28 +285,50 @@ def detect_duplicate_instances(
 def retire_predecessor(
     predecessor_selector: str,
     self_handle: str,
-    expected_substr: str,
+    expected_substr: Optional[str] = None,
     orca_runner: Optional[OrcaRunner] = None,
     execute: bool = False,
+    target_handle: Optional[str] = None,
+    target_pty_id: Optional[str] = None,
+    target_session_id: Optional[str] = None,
+    process_probe: Optional[ProcessProbe] = None,
 ) -> RetirementReport:
     """Resolve and optionally close exactly one predecessor terminal."""
 
     _require_handle(self_handle)
-    expected = _require_substr(expected_substr, "expected_substr")
-    candidates = find_sessions(orca_runner, predecessor_selector)
-    expected_candidates = tuple(
-        session for session in candidates if _session_matches(session, expected)
+    criteria = _retirement_criteria(
+        predecessor_selector,
+        expected_substr,
+        target_handle,
+        target_pty_id,
+        target_session_id,
     )
-    if any(session.handle == self_handle for session in expected_candidates):
+    sessions = find_sessions(orca_runner)
+    candidates, attempts = _retirement_candidates(sessions, criteria)
+    if any(session.handle == self_handle for session in candidates):
         raise SuccessionError("self_handle matched retirement candidate; refusing to close self")
-    if not expected_candidates:
-        return RetirementReport("REFUSED", None, "expected substring did not match target", candidates)
-    if len(expected_candidates) > 1:
-        return RetirementReport("REFUSED", None, "ambiguous predecessor candidates", expected_candidates)
+    if not candidates:
+        return RetirementReport(
+            "REFUSED",
+            None,
+            _retirement_refusal_reason("no predecessor candidates", candidates, attempts),
+            candidates,
+            False,
+            attempts,
+        )
+    if len(candidates) > 1:
+        return RetirementReport(
+            "REFUSED",
+            None,
+            _retirement_refusal_reason("ambiguous predecessor candidates", candidates, attempts),
+            candidates,
+            False,
+            attempts,
+        )
 
-    target = expected_candidates[0]
+    target = candidates[0]
     if not execute:
-        return RetirementReport("DRY_RUN", target.handle, "dry-run only", (target,))
+        return RetirementReport("DRY_RUN", target.handle, "dry-run only", (target,), False, attempts)
 
     runner = orca_runner or _default_orca_runner
     code, stdout, stderr = runner(
@@ -311,11 +340,46 @@ def retire_predecessor(
             target.handle,
             stderr.strip() or stdout.strip() or "orca terminal close failed",
             (target,),
+            False,
+            attempts,
         )
     remaining = find_sessions(runner)
     if any(session.handle == target.handle for session in remaining):
-        return RetirementReport("REFUSED", target.handle, "target still present after close", (target,))
-    return RetirementReport("CLOSED", target.handle, "target disappeared after close", (target,), True)
+        return RetirementReport(
+            "REFUSED",
+            target.handle,
+            "target still present after close",
+            (target,),
+            False,
+            attempts,
+        )
+    if target.process_id is not None:
+        probe = process_probe or _default_process_probe
+        if probe(target.process_id):
+            return RetirementReport(
+                "REFUSED",
+                target.handle,
+                "target process still present after close: pid={0}".format(target.process_id),
+                (target,),
+                False,
+                attempts,
+            )
+        return RetirementReport(
+            "CLOSED",
+            target.handle,
+            "target disappeared after close; process gone: pid={0}".format(target.process_id),
+            (target,),
+            True,
+            attempts,
+        )
+    return RetirementReport(
+        "CLOSED",
+        target.handle,
+        "target disappeared after close; no pid reported by terminal list",
+        (target,),
+        True,
+        attempts,
+    )
 
 
 def spawn_successor(
@@ -484,6 +548,71 @@ def _command_error(stdout: str, stderr: str) -> str:
     return (stderr.strip() or stdout.strip() or "no error output")
 
 
+def _retirement_criteria(
+    predecessor_selector: str,
+    expected_substr: Optional[str],
+    target_handle: Optional[str],
+    target_pty_id: Optional[str],
+    target_session_id: Optional[str],
+) -> Tuple[Tuple[str, str, bool], ...]:
+    criteria = []
+    if target_handle:
+        criteria.append(("handle", target_handle, True))
+    if target_pty_id:
+        criteria.append(("pty_id", target_pty_id, True))
+    if target_session_id:
+        criteria.append(("session_id", target_session_id, True))
+    if criteria:
+        return tuple(criteria)
+
+    selector = predecessor_selector or (expected_substr or "")
+    _require_substr(selector, "predecessor_selector")
+    return (("selector", selector, False),)
+
+
+def _retirement_candidates(
+    sessions: Sequence[SessionInfo],
+    criteria: Sequence[Tuple[str, str, bool]],
+) -> Tuple[Tuple[SessionInfo, ...], Tuple[str, ...]]:
+    candidates = []
+    attempts = []
+    for session in sessions:
+        matched_fields = []
+        for label, expected, exact in criteria:
+            fields = _retirement_match_fields(session)
+            matches = [
+                field
+                for field, value in fields
+                if value and ((value == expected) if exact else (expected in value))
+            ]
+            attempts.append(
+                "{0}: {1}={2} -> {3}".format(
+                    session.handle,
+                    label,
+                    expected,
+                    ",".join(matches) if matches else "no-match",
+                )
+            )
+            matched_fields.extend(matches)
+        if matched_fields:
+            candidates.append(session)
+    return tuple(candidates), tuple(attempts)
+
+
+def _retirement_refusal_reason(
+    reason: str,
+    candidates: Sequence[SessionInfo],
+    attempts: Sequence[str],
+) -> str:
+    candidate_handles = ",".join(session.handle for session in candidates) or "none"
+    attempt_text = " | ".join(attempts) or "none"
+    return "{0}; candidates={1}; match_attempts={2}".format(
+        reason,
+        candidate_handles,
+        attempt_text,
+    )
+
+
 def _parse_session(item: Mapping[str, object]) -> SessionInfo:
     handle = str(item.get("handle") or "")
     if not handle:
@@ -494,11 +623,27 @@ def _parse_session(item: Mapping[str, object]) -> SessionInfo:
         branch=str(item.get("branch") or ""),
         title=str(item.get("title") or ""),
         connected=bool(item.get("connected")),
+        pty_id=str(item.get("ptyId") or item.get("ptyID") or ""),
+        worktree_id=str(item.get("worktreeId") or ""),
+        session_id=str(item.get("sessionId") or item.get("sessionID") or ""),
+        process_id=_optional_int(item.get("processId") or item.get("pid")),
     )
 
 
 def _session_matches(session: SessionInfo, marker: str) -> bool:
-    return marker in session.worktree_path or marker in session.title or marker in session.branch
+    return any(value and marker in value for _field, value in _retirement_match_fields(session))
+
+
+def _retirement_match_fields(session: SessionInfo) -> Tuple[Tuple[str, str], ...]:
+    return (
+        ("handle", session.handle),
+        ("pty_id", session.pty_id),
+        ("session_id", session.session_id),
+        ("worktree_id", session.worktree_id),
+        ("worktree_path", session.worktree_path),
+        ("branch", session.branch),
+        ("title", session.title),
+    )
 
 
 def _default_orca_runner(command: Sequence[str]) -> Tuple[int, str, str]:
@@ -509,6 +654,23 @@ def _default_orca_runner(command: Sequence[str]) -> Tuple[int, str, str]:
         text=True,
     )
     return completed.returncode, completed.stdout, completed.stderr
+
+
+def _default_process_probe(pid: int) -> bool:
+    completed = subprocess.run(
+        ("ps", "-p", str(pid), "-o", "pid="),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return completed.returncode == 0 and bool(completed.stdout.strip())
+
+
+def _optional_int(value: object) -> Optional[int]:
+    try:
+        return int(value) if value not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _get_value(source: object, key: str) -> Optional[object]:

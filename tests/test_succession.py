@@ -149,6 +149,7 @@ def test_find_sessions_parses_real_orca_json_shape() -> None:
     sessions = find_sessions(_runner({("orca", "terminal", "list", "--json"): (0, ORCA_LIST_JSON, "")}))
 
     assert sessions[0].handle == "term-self"
+    assert sessions[0].pty_id == "pty-self"
     assert sessions[0].worktree_path.endswith("u9-succession")
     assert sessions[0].connected is True
 
@@ -173,16 +174,38 @@ def test_retire_predecessor_rejects_self_handle() -> None:
         )
 
 
-def test_retire_predecessor_rejects_expected_mismatch() -> None:
+def test_retire_predecessor_refusal_explains_title_drift_and_empty_worktree() -> None:
+    fixture = _orca_json_from_terminals(
+        {
+            "handle": "term-self",
+            "ptyId": "pty-self",
+            "worktreePath": "/repo/mogui-ADE-orchestrator/u9-succession",
+            "branch": "feat/u9-succession",
+            "connected": True,
+            "title": "u9 successor",
+        },
+        {
+            "handle": "term-u8",
+            "ptyId": "pty-u8",
+            "worktreePath": "",
+            "branch": "",
+            "connected": True,
+            "title": "conversation summary rewrote this pane title",
+        },
+    )
+
     report = retire_predecessor(
         predecessor_selector="u8-recovery",
         self_handle="term-self",
-        expected_substr="not-present",
-        orca_runner=_runner({("orca", "terminal", "list", "--json"): (0, ORCA_LIST_JSON, "")}),
+        expected_substr="u8-recovery",
+        orca_runner=_runner({("orca", "terminal", "list", "--json"): (0, fixture, "")}),
     )
 
     assert report.status == "REFUSED"
     assert report.target_handle is None
+    assert report.candidates == ()
+    assert "candidates=none" in report.reason
+    assert "term-u8: selector=u8-recovery -> no-match" in report.match_attempts
 
 
 def test_retire_predecessor_rejects_ambiguous_candidates() -> None:
@@ -195,6 +218,8 @@ def test_retire_predecessor_rejects_ambiguous_candidates() -> None:
 
     assert report.status == "REFUSED"
     assert "ambiguous" in report.reason
+    assert "term-u8" in report.reason
+    assert "term-u8-shadow" in report.reason
 
 
 def test_retire_predecessor_dry_run_does_not_close() -> None:
@@ -246,6 +271,119 @@ def test_retire_predecessor_execute_closes_and_rechecks() -> None:
     assert report.status == "CLOSED"
     assert report.target_handle == "term-u8"
     assert ("orca", "terminal", "close", "--terminal", "term-u8", "--json") in calls
+
+
+def test_retire_predecessor_explicit_handle_closes_title_drift_folder_context() -> None:
+    calls = []
+    first_list = _orca_json_from_terminals(
+        {
+            "handle": "term-self",
+            "ptyId": "pty-self",
+            "worktreePath": "/repo/mogui-ADE-orchestrator/u9-succession",
+            "branch": "feat/u9-succession",
+            "connected": True,
+            "title": "u9 successor",
+        },
+        {
+            "handle": "term-u8",
+            "ptyId": "pty-u8",
+            "processId": 4242,
+            "worktreePath": "",
+            "branch": "",
+            "connected": True,
+            "title": "conversation summary rewrote this pane title",
+        },
+    )
+    second_list = _orca_json_from_terminals(
+        {
+            "handle": "term-self",
+            "ptyId": "pty-self",
+            "worktreePath": "/repo/mogui-ADE-orchestrator/u9-succession",
+            "branch": "feat/u9-succession",
+            "connected": True,
+            "title": "u9 successor",
+        },
+    )
+    runner = _recording_runner(
+        {
+            ("orca", "terminal", "list", "--json"): [
+                (0, first_list, ""),
+                (0, second_list, ""),
+            ],
+            ("orca", "terminal", "close", "--terminal", "term-u8", "--json"): (0, '{"ok":true}', ""),
+        },
+        calls,
+    )
+
+    report = retire_predecessor(
+        predecessor_selector="",
+        self_handle="term-self",
+        target_handle="term-u8",
+        orca_runner=runner,
+        execute=True,
+        process_probe=lambda pid: False,
+    )
+
+    assert report.status == "CLOSED"
+    assert report.target_handle == "term-u8"
+    assert report.closed is True
+    assert "process gone: pid=4242" in report.reason
+    assert "term-u8: handle=term-u8 -> handle" in report.match_attempts
+    assert ("orca", "terminal", "close", "--terminal", "term-u8", "--json") in calls
+
+
+def test_retire_predecessor_refuses_when_pid_survives_close() -> None:
+    runner = _runner(
+        {
+            ("orca", "terminal", "list", "--json"): [
+                (
+                    0,
+                    _orca_json_from_terminals(
+                        {
+                            "handle": "term-self",
+                            "worktreePath": "/repo/mogui-ADE-orchestrator/u9-succession",
+                            "connected": True,
+                            "title": "u9 successor",
+                        },
+                        {
+                            "handle": "term-u8",
+                            "processId": 4242,
+                            "worktreePath": "",
+                            "connected": True,
+                            "title": "conversation summary",
+                        },
+                    ),
+                    "",
+                ),
+                (
+                    0,
+                    _orca_json_from_terminals(
+                        {
+                            "handle": "term-self",
+                            "worktreePath": "/repo/mogui-ADE-orchestrator/u9-succession",
+                            "connected": True,
+                            "title": "u9 successor",
+                        },
+                    ),
+                    "",
+                ),
+            ],
+            ("orca", "terminal", "close", "--terminal", "term-u8", "--json"): (0, '{"ok":true}', ""),
+        }
+    )
+
+    report = retire_predecessor(
+        predecessor_selector="",
+        self_handle="term-self",
+        target_handle="term-u8",
+        orca_runner=runner,
+        execute=True,
+        process_probe=lambda pid: True,
+    )
+
+    assert report.status == "REFUSED"
+    assert report.closed is False
+    assert "target process still present after close: pid=4242" in report.reason
 
 
 def test_spawn_successor_creates_and_verifies_worktree() -> None:
@@ -403,6 +541,48 @@ def test_cli_spawn_dry_run_outputs_json() -> None:
     assert payload["verification"]["fail_closed_action"] == "terminal close on mismatch"
 
 
+def test_cli_retire_accepts_explicit_target_handle() -> None:
+    fixture = _orca_json_from_terminals(
+        {
+            "handle": "term-self",
+            "ptyId": "pty-self",
+            "worktreePath": "/repo/mogui-ADE-orchestrator/u9-succession",
+            "branch": "feat/u9-succession",
+            "connected": True,
+            "title": "u9 successor",
+        },
+        {
+            "handle": "term-u8",
+            "ptyId": "pty-u8",
+            "worktreePath": "",
+            "branch": "",
+            "connected": True,
+            "title": "conversation summary rewrote this pane title",
+        },
+    )
+    result = subprocess.run(
+        [
+            str(Path(__file__).resolve().parent.parent / "scripts" / "master-succeed"),
+            "retire",
+            "--self-handle",
+            "term-self",
+            "--target-handle",
+            "term-u8",
+            "--json",
+            "--fixture-json",
+            fixture,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "DRY_RUN"
+    assert payload["target_handle"] == "term-u8"
+
+
 def _runner(responses):
     def run(command: Sequence[str]) -> Tuple[int, str, str]:
         response = responses[tuple(command)]
@@ -424,25 +604,24 @@ def _recording_runner(responses, calls):
 
 
 def _orca_json_with_handles(*items) -> str:
-    return json.dumps(
-        {
-            "ok": True,
-            "result": {
-                "terminals": [
-                    {
-                        "handle": handle,
-                        "ptyId": handle + "-pty",
-                        "worktreeId": "repo:" + marker,
-                        "worktreePath": "/repo/mogui-ADE-orchestrator/" + marker,
-                        "branch": "feat/" + marker,
-                        "connected": True,
-                        "title": marker + " master",
-                    }
-                    for handle, marker in items
-                ]
-            },
-        }
+    return _orca_json_from_terminals(
+        *(
+            {
+                "handle": handle,
+                "ptyId": handle + "-pty",
+                "worktreeId": "repo:" + marker,
+                "worktreePath": "/repo/mogui-ADE-orchestrator/" + marker,
+                "branch": "feat/" + marker,
+                "connected": True,
+                "title": marker + " master",
+            }
+            for handle, marker in items
+        )
     )
+
+
+def _orca_json_from_terminals(*terminals) -> str:
+    return json.dumps({"ok": True, "result": {"terminals": list(terminals)}})
 
 
 def _orca_create_json(handle: str, worktree_id: str) -> str:

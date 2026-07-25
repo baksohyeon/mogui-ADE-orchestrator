@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Polsia 마스터 세션 부팅에 U1 기반 `master-bootstrap-live`를 추가 훅으로 배선해 Role State 검증·이중 인스턴스 감지·bd 블록 예산 감사를 코드로 강제한다.
+**Goal:** example-product 마스터 세션 부팅에 U1 기반 `master-bootstrap-live`를 추가 훅으로 배선해 Role State 검증·이중 인스턴스 감지·bd 블록 예산 감사를 코드로 강제한다.
 
 **Architecture:** 기존 `src/master_runtime/core/bootstrap.py`(U1)의 Role State 파서·이중 인스턴스 감지를 재사용하는 신규 모듈 `bootstrap_live.py` + CLI `scripts/master-bootstrap-live`. 플러그인 소유 bd prime은 건드리지 않고, 마스터 cwd에서만 도는 추가 SessionStart 훅이 동적 블록(~1KB)을 덧붙인다. 메모리 재발행 금지 — bd prime 블록의 감사만 한다.
 
@@ -181,18 +181,18 @@ def test_cli_exits_zero_with_missing_dir(tmp_path: Path) -> None:
 ### Task 5: 훅 배선 + 드라이런 검증 (마스터 검수 단계 — 워커는 5a 검증까지만)
 
 **Files:**
-- Modify: `/Users/polsia/dev/work/Polsia/.claude/settings.json` (git 밖 — 변경 전문을 스펙에 추기해 기록 보존)
+- Modify: `/Users/dev/workspace/example-product/.claude/settings.json` (git 밖 — 변경 전문을 스펙에 추기해 기록 보존)
 
 **Steps:**
-- [ ] 5a. 워커: 드라이런 3종 실측 결과를 보고에 첨부 — ① `scripts/master-bootstrap-live --handoff-dir /Users/polsia/dev/work/Polsia/ops-planning/docs/handoffs` 출력 전문+바이트 수 ② 출력에 Role State·AUDIT 라인 존재 ③ exit 0
-- [ ] 5b. 마스터: Polsia/.claude/settings.json의 hooks.SessionStart 배열에 추가(수동, 워커 권한 밖):
+- [ ] 5a. 워커: 드라이런 3종 실측 결과를 보고에 첨부 — ① `scripts/master-bootstrap-live --handoff-dir /Users/dev/workspace/example-product/ops-planning/docs/handoffs` 출력 전문+바이트 수 ② 출력에 Role State·AUDIT 라인 존재 ③ exit 0
+- [ ] 5b. 마스터: example-product/.claude/settings.json의 hooks.SessionStart 배열에 추가(수동, 워커 권한 밖):
 
 ```json
-{"matcher": "", "hooks": [{"type": "command", "command": "sh -c 'if [ \"$PWD\" = \"/Users/polsia/dev/work/Polsia\" ]; then /Users/polsia/dev/personal/mogui-ADE-orchestrator/scripts/master-bootstrap-live --handoff-dir /Users/polsia/dev/work/Polsia/ops-planning/docs/handoffs || echo \"[BOOTSTRAP-FALLBACK] master-bootstrap-live 실패\"; fi'"}]}
+{"matcher": "", "hooks": [{"type": "command", "command": "sh -c 'if [ \"$PWD\" = \"/Users/dev/workspace/example-product\" ]; then /Users/dev/projects/mogui-ADE-orchestrator/scripts/master-bootstrap-live --handoff-dir /Users/dev/workspace/example-product/ops-planning/docs/handoffs || echo \"[BOOTSTRAP-FALLBACK] master-bootstrap-live 실패\"; fi'"}]}
 ```
 
 - [ ] 5c. 마스터: 훅 커맨드를 셸에서 직접 실행해 마스터 cwd에서 블록 출력, 워커 cwd(예: ops-planning)에서 무출력 실측
-- [ ] 5d. 마스터: 변경 전문을 스펙 문서에 추기 커밋 (Polsia/.claude가 git 밖이므로 기록 보존)
+- [ ] 5d. 마스터: 변경 전문을 스펙 문서에 추기 커밋 (example-product/.claude가 git 밖이므로 기록 보존)
 
 ### Task 6: 실부팅 수락 (마스터, 다음 세션)
 

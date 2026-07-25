@@ -431,12 +431,12 @@ def test_contract_lint_warns_for_path_outside_known_roots(
 ) -> None:
     known_roots = tmp_path / "known-roots.json"
     known_roots.write_text(
-        json.dumps(["/Users/polsia/dev/work/Polsia"]),
+        json.dumps(["/Users/dev/workspace/example-product"]),
         encoding="utf-8",
     )
     contract = _contract(
         tmp_path,
-        "Inspect /Users/polsia/dev/personal/mogui-ADE-orchestrator/src.",
+        "Inspect /Users/dev/projects/mogui-ADE-orchestrator/src.",
     )
     gate = _gate(tmp_path, now=1_000, known_roots_path=known_roots)
 
@@ -452,12 +452,12 @@ def test_contract_lint_accepts_paths_inside_known_roots(
 ) -> None:
     known_roots = tmp_path / "known-roots.json"
     known_roots.write_text(
-        json.dumps(["/Users/polsia/dev/work/Polsia"]),
+        json.dumps(["/Users/dev/workspace/example-product"]),
         encoding="utf-8",
     )
     contract = _contract(
         tmp_path,
-        "Inspect /Users/polsia/dev/work/Polsia/ops-planning.",
+        "Inspect /Users/dev/workspace/example-product/ops-planning.",
     )
     gate = _gate(tmp_path, now=1_000, known_roots_path=known_roots)
 
@@ -473,7 +473,7 @@ def test_contract_lint_skips_path_check_without_known_roots(
 ) -> None:
     contract = _contract(
         tmp_path,
-        "Inspect /Users/polsia/dev/personal/mogui-ADE-orchestrator/src.",
+        "Inspect /Users/dev/projects/mogui-ADE-orchestrator/src.",
     )
     gate = _gate(tmp_path, now=1_000, known_roots_path=tmp_path / "missing.json")
 
@@ -489,7 +489,7 @@ def test_contract_lint_warns_for_worktree_as_repo_root(
 ) -> None:
     contract = _contract(
         tmp_path,
-        "repo_root=/Users/polsia/dev/work/Polsia/.orca/worktrees/unit-a",
+        "repo_root=/Users/dev/workspace/example-product/.orca/worktrees/unit-a",
     )
     gate = _gate(tmp_path, now=1_000)
 
@@ -505,7 +505,7 @@ def test_contract_lint_accepts_worktree_path_without_repo_root_context(
 ) -> None:
     contract = _contract(
         tmp_path,
-        "workspace=/Users/polsia/dev/work/Polsia/.orca/worktrees/unit-a",
+        "workspace=/Users/dev/workspace/example-product/.orca/worktrees/unit-a",
     )
     gate = _gate(tmp_path, now=1_000)
 
@@ -748,8 +748,8 @@ def _dispatch_contract(tmp_path: Path, runtime: str) -> Path:
     payload = {
         "job_id": "u5-ticket-impl-mogui-20260723",
         "runtime": runtime,
-        "workspace": "/Users/polsia/dev/work/Polsia",
-        "repo": "/Users/polsia/dev/personal/mogui-ADE-orchestrator",
+        "workspace": "/Users/dev/workspace/example-product",
+        "repo": "/Users/dev/projects/mogui-ADE-orchestrator",
         "objective": "Implement U5 dispatch gate ticket issuance",
         "scope": {
             "include": [

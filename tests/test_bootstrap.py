@@ -82,9 +82,9 @@ def test_missing_handoff_warns_and_returns_l0_only(tmp_path: Path) -> None:
 def test_detects_dual_instance_from_injected_ps_output(tmp_path: Path) -> None:
     charter = _file(tmp_path, "charter.md", "# Charter\n")
     ps_output = """USER         PID  %CPU %MEM      VSZ    RSS   TT  STAT STARTED      TIME COMMAND
-polsia       33196   0.0  0.0 410724800   2240 s003  S+    2:01PM   0:00.03 /bin/zsh /private/tmp/claude-501/0464cb11-aaaa-bbbb-cccc-dddddddddddd/scratchpad/drift-monitor.sh
-polsia       48015   0.0  0.0 410724800   2240 s004  S+    2:02PM   0:00.01 /bin/zsh -lc printf 0464cb11-aaaa-bbbb-cccc-dddddddddddd
-polsia       40309   0.0  0.1 410000000  12000 s001  S+    1:23PM   0:01.23 claude --dangerously-skip-permissions --resume 0464cb11-aaaa-bbbb-cccc-dddddddddddd
+devuser    33196   0.0  0.0 410724800   2240 s003  S+    2:01PM   0:00.03 /bin/zsh /private/tmp/claude-501/0464cb11-aaaa-bbbb-cccc-dddddddddddd/scratchpad/drift-monitor.sh
+devuser    48015   0.0  0.0 410724800   2240 s004  S+    2:02PM   0:00.01 /bin/zsh -lc printf 0464cb11-aaaa-bbbb-cccc-dddddddddddd
+devuser    40309   0.0  0.1 410000000  12000 s001  S+    1:23PM   0:01.23 claude --dangerously-skip-permissions --resume 0464cb11-aaaa-bbbb-cccc-dddddddddddd
 """
 
     result = bootstrap(

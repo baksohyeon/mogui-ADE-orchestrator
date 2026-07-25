@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 from dataclasses import asdict, dataclass
 from typing import Callable, Mapping, Optional, Sequence, Tuple
@@ -21,6 +22,10 @@ VERIFY_FAILED = "FAILED"
 
 class SuccessionError(RuntimeError):
     """Raised when succession would violate a hard safety guard."""
+
+    def __init__(self, message: str, exit_code: int = 2) -> None:
+        super().__init__(message)
+        self.exit_code = exit_code
 
 
 @dataclass(frozen=True)
@@ -80,7 +85,29 @@ class RetirementReport:
         return payload
 
 
+@dataclass(frozen=True)
+class SpawnReport:
+    status: str
+    handle: Optional[str]
+    worktree_id: Optional[str]
+    requested_worktree: str
+    verified: bool
+    command: Tuple[str, ...]
+    startup_command: str
+    verification: Mapping[str, object]
+
+    def to_dict(self) -> dict:
+        payload = asdict(self)
+        payload["command"] = list(self.command)
+        return payload
+
+
 OrcaRunner = Callable[[Sequence[str]], Tuple[int, str, str]]
+
+SPAWN_CREATE_ERROR = 20
+SPAWN_PARSE_ERROR = 21
+SPAWN_WORKTREE_MISMATCH = 22
+SPAWN_CLOSE_ERROR = 23
 
 
 def detect_trigger(text: str, context: Optional[Mapping[str, object]] = None) -> TriggerDecision:
@@ -291,6 +318,100 @@ def retire_predecessor(
     return RetirementReport("CLOSED", target.handle, "target disappeared after close", (target,), True)
 
 
+def spawn_successor(
+    workspace_selector: str,
+    kickoff_text: str,
+    root: str,
+    title: str,
+    model: str = "claude-fable-5",
+    orca_runner: Optional[OrcaRunner] = None,
+    dry_run: bool = False,
+) -> SpawnReport:
+    """Create a successor terminal and fail closed if Orca places it elsewhere."""
+
+    selector = _require_substr(workspace_selector, "workspace_selector")
+    kickoff = _require_substr(kickoff_text, "kickoff_text")
+    cwd = _require_substr(root, "root")
+    pane_title = _require_substr(title, "title")
+    model_name = _require_substr(model, "model")
+    startup_command = _spawn_startup_command(cwd, model_name, kickoff)
+    create_command = (
+        "orca",
+        "terminal",
+        "create",
+        "--worktree",
+        selector,
+        "--title",
+        pane_title,
+        "--command",
+        startup_command,
+        "--json",
+    )
+    verification = {
+        "requested_worktree": selector,
+        "expected_response_field": "worktreeId",
+        "fail_closed_action": "terminal close on mismatch",
+    }
+    if dry_run:
+        return SpawnReport(
+            "DRY_RUN",
+            None,
+            None,
+            selector,
+            False,
+            create_command,
+            startup_command,
+            verification,
+        )
+
+    runner = orca_runner or _default_orca_runner
+    code, stdout, stderr = runner(create_command)
+    if code != 0:
+        raise SuccessionError(
+            "spawn terminal create failed: " + _command_error(stdout, stderr),
+            SPAWN_CREATE_ERROR,
+        )
+
+    terminal = _created_terminal(stdout)
+    handle = _spawn_field(terminal, ("handle", "terminal", "terminalHandle"), "handle")
+    worktree_id = _spawn_field(terminal, ("worktreeId",), "worktreeId")
+    if worktree_id != selector:
+        close_command = ("orca", "terminal", "close", "--terminal", handle, "--json")
+        close_code, close_stdout, close_stderr = runner(close_command)
+        if close_code != 0:
+            raise SuccessionError(
+                "spawn worktree mismatch and close failed: requested {0}, got {1}; close error: {2}".format(
+                    selector,
+                    worktree_id,
+                    _command_error(close_stdout, close_stderr),
+                ),
+                SPAWN_CLOSE_ERROR,
+            )
+        raise SuccessionError(
+            "spawn worktree mismatch; closed terminal {0}: requested {1}, got {2}".format(
+                handle,
+                selector,
+                worktree_id,
+            ),
+            SPAWN_WORKTREE_MISMATCH,
+        )
+
+    return SpawnReport(
+        "CREATED",
+        handle,
+        worktree_id,
+        selector,
+        True,
+        create_command,
+        startup_command,
+        {
+            "requested_worktree": selector,
+            "actual_worktree": worktree_id,
+            "result": "MATCH",
+        },
+    )
+
+
 def _terminal_items(stdout: str) -> Tuple[Mapping[str, object], ...]:
     try:
         payload = json.loads(stdout)
@@ -310,6 +431,57 @@ def _terminal_items(stdout: str) -> Tuple[Mapping[str, object], ...]:
     if not isinstance(terminals, list):
         raise SuccessionError("orca JSON missing result.terminals")
     return tuple(item for item in terminals if isinstance(item, Mapping))
+
+
+def _created_terminal(stdout: str) -> Mapping[str, object]:
+    try:
+        payload = json.loads(stdout)
+    except ValueError as exc:
+        raise SuccessionError("invalid spawn JSON", SPAWN_PARSE_ERROR) from exc
+    if not isinstance(payload, Mapping):
+        raise SuccessionError("spawn JSON root must be an object", SPAWN_PARSE_ERROR)
+    if payload.get("ok") is False:
+        error = payload.get("error")
+        if isinstance(error, Mapping):
+            raise SuccessionError(
+                "spawn orca error: " + str(error.get("message") or error.get("code") or "orca error"),
+                SPAWN_CREATE_ERROR,
+            )
+        raise SuccessionError("spawn orca error", SPAWN_CREATE_ERROR)
+
+    result = payload.get("result")
+    if isinstance(result, Mapping):
+        terminal = result.get("terminal")
+        if isinstance(terminal, Mapping):
+            return terminal
+        terminals = result.get("terminals")
+        if isinstance(terminals, list) and len(terminals) == 1 and isinstance(terminals[0], Mapping):
+            return terminals[0]
+        if "handle" in result or "terminalHandle" in result or "terminal" in result:
+            return result
+    if "handle" in payload or "terminalHandle" in payload or "terminal" in payload:
+        return payload
+    raise SuccessionError("spawn JSON missing created terminal", SPAWN_PARSE_ERROR)
+
+
+def _spawn_field(item: Mapping[str, object], keys: Sequence[str], label: str) -> str:
+    for key in keys:
+        value = item.get(key)
+        if value:
+            return str(value)
+    raise SuccessionError("spawn JSON missing " + label, SPAWN_PARSE_ERROR)
+
+
+def _spawn_startup_command(root: str, model: str, kickoff_text: str) -> str:
+    return "cd {0} && exec claude --model {1} --dangerously-skip-permissions {2}".format(
+        shlex.quote(root),
+        shlex.quote(model),
+        shlex.quote(kickoff_text),
+    )
+
+
+def _command_error(stdout: str, stderr: str) -> str:
+    return (stderr.strip() or stdout.strip() or "no error output")
 
 
 def _parse_session(item: Mapping[str, object]) -> SessionInfo:
@@ -387,6 +559,7 @@ __all__ = (
     "FrozenState",
     "RetirementReport",
     "SessionInfo",
+    "SpawnReport",
     "SuccessionError",
     "TriggerDecision",
     "VerificationReport",
@@ -396,5 +569,6 @@ __all__ = (
     "find_sessions",
     "freeze_roles",
     "retire_predecessor",
+    "spawn_successor",
     "verify_successor",
 )

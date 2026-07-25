@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 import unittest
 from pathlib import Path
@@ -16,6 +17,7 @@ from master_runtime.core.succession import (
     find_sessions,
     freeze_roles,
     retire_predecessor,
+    spawn_successor,
     verify_successor,
 )
 
@@ -246,6 +248,111 @@ def test_retire_predecessor_execute_closes_and_rechecks() -> None:
     assert ("orca", "terminal", "close", "--terminal", "term-u8", "--json") in calls
 
 
+def test_spawn_successor_creates_and_verifies_worktree() -> None:
+    calls = []
+    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    runner = _recording_runner(
+        {create_command: (0, _orca_create_json("term-new", "folder:unit-a"), "")},
+        calls,
+    )
+
+    report = spawn_successor(
+        workspace_selector="folder:unit-a",
+        kickoff_text="start here",
+        root="/repo/example",
+        title="successor",
+        orca_runner=runner,
+    )
+
+    assert report.status == "CREATED"
+    assert report.handle == "term-new"
+    assert report.worktree_id == "folder:unit-a"
+    assert report.verified is True
+    assert create_command in calls
+
+
+def test_spawn_successor_mismatch_closes_terminal_and_fails_closed() -> None:
+    calls = []
+    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    close_command = ("orca", "terminal", "close", "--terminal", "term-new", "--json")
+    runner = _recording_runner(
+        {
+            create_command: (0, _orca_create_json("term-new", "folder:wrong"), ""),
+            close_command: (0, '{"ok":true}', ""),
+        },
+        calls,
+    )
+
+    with unittest.TestCase().assertRaisesRegex(SuccessionError, "worktree mismatch") as raised:
+        spawn_successor(
+            workspace_selector="folder:unit-a",
+            kickoff_text="start here",
+            root="/repo/example",
+            title="successor",
+            orca_runner=runner,
+        )
+
+    assert raised.exception.exit_code == 22
+    assert close_command in calls
+
+
+def test_spawn_successor_close_failure_is_reported() -> None:
+    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    close_command = ("orca", "terminal", "close", "--terminal", "term-new", "--json")
+    runner = _runner(
+        {
+            create_command: (0, _orca_create_json("term-new", "folder:wrong"), ""),
+            close_command: (1, "", "close denied"),
+        }
+    )
+
+    with unittest.TestCase().assertRaisesRegex(SuccessionError, "close failed") as raised:
+        spawn_successor(
+            workspace_selector="folder:unit-a",
+            kickoff_text="start here",
+            root="/repo/example",
+            title="successor",
+            orca_runner=runner,
+        )
+
+    assert raised.exception.exit_code == 23
+
+
+def test_spawn_successor_rejects_invalid_create_json() -> None:
+    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    runner = _runner({create_command: (0, "not json", "")})
+
+    with unittest.TestCase().assertRaisesRegex(SuccessionError, "invalid spawn JSON") as raised:
+        spawn_successor(
+            workspace_selector="folder:unit-a",
+            kickoff_text="start here",
+            root="/repo/example",
+            title="successor",
+            orca_runner=runner,
+        )
+
+    assert raised.exception.exit_code == 21
+
+
+def test_spawn_successor_dry_run_only_builds_plan() -> None:
+    calls = []
+
+    report = spawn_successor(
+        workspace_selector="folder:unit-a",
+        kickoff_text="start here",
+        root="/repo/example",
+        title="successor",
+        orca_runner=lambda command: calls.append(tuple(command)) or (1, "", "unexpected call"),
+        dry_run=True,
+    )
+
+    assert report.status == "DRY_RUN"
+    assert report.handle is None
+    assert report.verified is False
+    assert report.command == _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    assert calls == []
+
+
 def test_cli_check_duplicates_outputs_json() -> None:
     result = subprocess.run(
         [
@@ -267,6 +374,33 @@ def test_cli_check_duplicates_outputs_json() -> None:
     assert result.returncode == 0
     payload = json.loads(result.stdout)
     assert [item["handle"] for item in payload["duplicates"]] == ["term-u8-shadow"]
+
+
+def test_cli_spawn_dry_run_outputs_json() -> None:
+    result = subprocess.run(
+        [
+            str(Path(__file__).resolve().parent.parent / "scripts" / "master-succeed"),
+            "spawn",
+            "--workspace-selector",
+            "folder:unit-a",
+            "--kickoff-text",
+            "start here",
+            "--root",
+            "/repo/example",
+            "--title",
+            "successor",
+            "--dry-run",
+            "--json",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "DRY_RUN"
+    assert payload["verification"]["fail_closed_action"] == "terminal close on mismatch"
 
 
 def _runner(responses):
@@ -308,6 +442,40 @@ def _orca_json_with_handles(*items) -> str:
                 ]
             },
         }
+    )
+
+
+def _orca_create_json(handle: str, worktree_id: str) -> str:
+    return json.dumps(
+        {
+            "ok": True,
+            "result": {
+                "terminal": {
+                    "handle": handle,
+                    "worktreeId": worktree_id,
+                    "title": "successor",
+                }
+            },
+        }
+    )
+
+
+def _spawn_create_command(selector: str, kickoff: str, root: str, title: str, model: str = "claude-fable-5"):
+    return (
+        "orca",
+        "terminal",
+        "create",
+        "--worktree",
+        selector,
+        "--title",
+        title,
+        "--command",
+        "cd {0} && exec claude --model {1} --dangerously-skip-permissions {2}".format(
+            shlex.quote(root),
+            shlex.quote(model),
+            shlex.quote(kickoff),
+        ),
+        "--json",
     )
 
 

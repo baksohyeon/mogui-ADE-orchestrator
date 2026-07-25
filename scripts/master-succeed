@@ -20,6 +20,7 @@ from master_runtime.core.succession import (  # noqa: E402
     detect_duplicate_instances,
     detect_trigger,
     retire_predecessor,
+    spawn_successor,
     verify_successor,
 )
 
@@ -37,7 +38,7 @@ def main(argv=None) -> int:
         payload = _dispatch(args, runner)
     except SuccessionError as exc:
         print(str(exc), file=sys.stderr)
-        return 2
+        return exc.exit_code
 
     if args.json:
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
@@ -65,6 +66,20 @@ def _dispatch(args, runner):
             expected_substr=args.expected,
             orca_runner=runner,
             execute=args.execute,
+        )
+        return report.to_dict()
+    if args.command == "spawn":
+        kickoff_text = args.kickoff_text
+        if args.kickoff_file:
+            kickoff_text = Path(args.kickoff_file).read_text(encoding="utf-8")
+        report = spawn_successor(
+            workspace_selector=args.workspace_selector,
+            kickoff_text=kickoff_text,
+            root=args.root,
+            title=args.title,
+            model=args.model,
+            orca_runner=runner,
+            dry_run=args.dry_run,
         )
         return report.to_dict()
     raise SuccessionError("unknown command: " + str(args.command))
@@ -95,6 +110,16 @@ def _build_parser() -> argparse.ArgumentParser:
     retire.add_argument("--self-handle", required=True)
     retire.add_argument("--expected", required=True)
     retire.add_argument("--execute", action="store_true")
+
+    spawn = subparsers.add_parser("spawn", parents=[common])
+    spawn.add_argument("--workspace-selector", required=True)
+    kickoff = spawn.add_mutually_exclusive_group(required=True)
+    kickoff.add_argument("--kickoff-text")
+    kickoff.add_argument("--kickoff-file")
+    spawn.add_argument("--root", required=True)
+    spawn.add_argument("--model", default="claude-fable-5")
+    spawn.add_argument("--title", required=True)
+    spawn.add_argument("--dry-run", action="store_true")
     return parser
 
 

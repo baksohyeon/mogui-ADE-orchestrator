@@ -273,6 +273,63 @@ def test_retire_predecessor_execute_closes_and_rechecks() -> None:
     assert ("orca", "terminal", "close", "--terminal", "term-u8", "--json") in calls
 
 
+def test_retire_predecessor_exact_handle_ignores_title_and_worktree_collisions() -> None:
+    """exact handle target must not match sessions whose title/worktree_id equal the handle string."""
+    fixture = _orca_json_from_terminals(
+        {
+            "handle": "term-self",
+            "ptyId": "pty-self",
+            "worktreeId": "repo:self",
+            "worktreePath": "/repo/mogui-ADE-orchestrator/self",
+            "branch": "feat/self",
+            "connected": True,
+            "title": "self pane",
+        },
+        {
+            "handle": "term-decoy-title",
+            "ptyId": "pty-decoy-title",
+            "worktreeId": "repo:decoy-title",
+            "worktreePath": "/repo/mogui-ADE-orchestrator/decoy-title",
+            "branch": "feat/decoy-title",
+            "connected": True,
+            "title": "term-u8",
+        },
+        {
+            "handle": "term-decoy-wt",
+            "ptyId": "pty-decoy-wt",
+            "worktreeId": "term-u8",
+            "worktreePath": "/repo/mogui-ADE-orchestrator/decoy-wt",
+            "branch": "feat/decoy-wt",
+            "connected": True,
+            "title": "decoy worktree",
+        },
+        {
+            "handle": "term-u8",
+            "ptyId": "pty-u8",
+            "worktreeId": "repo:u8",
+            "worktreePath": "/repo/mogui-ADE-orchestrator/u8-recovery",
+            "branch": "feat/u8-recovery",
+            "connected": True,
+            "title": "real predecessor",
+        },
+    )
+
+    report = retire_predecessor(
+        predecessor_selector="",
+        self_handle="term-self",
+        target_handle="term-u8",
+        orca_runner=_runner({("orca", "terminal", "list", "--json"): (0, fixture, "")}),
+    )
+
+    assert report.status == "DRY_RUN"
+    assert report.target_handle == "term-u8"
+    assert len(report.candidates) == 1
+    assert report.candidates[0].handle == "term-u8"
+    assert "term-decoy-title: handle=term-u8 -> no-match" in report.match_attempts
+    assert "term-decoy-wt: handle=term-u8 -> no-match" in report.match_attempts
+    assert "term-u8: handle=term-u8 -> handle" in report.match_attempts
+
+
 def test_retire_predecessor_explicit_handle_closes_title_drift_folder_context() -> None:
     calls = []
     first_list = _orca_json_from_terminals(

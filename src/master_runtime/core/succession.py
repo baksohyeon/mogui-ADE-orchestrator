@@ -625,11 +625,19 @@ def _retirement_candidates(
         matched_fields = []
         for label, expected, exact in criteria:
             fields = _retirement_match_fields(session)
-            matches = [
-                field
-                for field, value in fields
-                if value and ((value == expected) if exact else (expected in value))
-            ]
+            if exact:
+                # Exact targets bind to the labeled field only
+                # (handle==X means session.handle, never title/worktree_id collisions).
+                field_map = dict(fields)
+                value = field_map.get(label, "")
+                matches = [label] if value and value == expected else []
+            else:
+                # Selector mode keeps substring search across all fields.
+                matches = [
+                    field
+                    for field, value in fields
+                    if value and expected in value
+                ]
             attempts.append(
                 "{0}: {1}={2} -> {3}".format(
                     session.handle,

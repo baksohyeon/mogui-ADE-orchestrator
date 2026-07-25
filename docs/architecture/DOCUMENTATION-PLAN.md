@@ -44,7 +44,7 @@ README.md                   ← docs/README-public-draft.md 승격, 위 문서�
   - **컨텍스트 품질(context quality)**: `context` / `digest_loop` (E12 회상 프로브)
   - **관측(observability)**: `watchdog`
   - **경계(boundary)**: `adapter` — core(tool-name-free)와 실제 도구(orca/beads/ctx/Git)를 잇는 레이어
-- **데이터 흐름 한 장**: charter/문서(Git) → bootstrap → 마스터 세션 → dispatch_gate(파견 승인) → 워커 → work_ledger/lineage(기록) → 컴팩션 시 context/digest_loop 계측(현 환경에선 수동 `/compact` 트리거 의존 — §3.1) → 임계 시 succession(Dorito 지시 트리거, 자동 승계 금지).
+- **데이터 흐름 한 장**: charter/문서(Git) → bootstrap → 마스터 세션 → dispatch_gate(파견 승인) → 워커 → work_ledger/lineage(기록) → 컴팩션 시 context/digest_loop 계측(현 환경에선 수동 `/compact` 트리거 의존 — §3.1) → 임계 시 succession(operator 지시 트리거, 자동 승계 금지).
 - **벤더 중립 원칙** (0.2 방침대로 정확히).
 
 ## 3. 유닛별 문서 명세 (SSOT)

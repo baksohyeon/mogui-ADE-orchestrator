@@ -1,0 +1,16 @@
+# Redaction scan allowlist (fail-closed scanner: scripts/redaction-scan.sh)
+#
+# Formats:
+#   path/to/file:LINE     silence one line
+#   path/to/file          silence whole file
+#   PREFIX:/Users/dev/    treat path prefix as synthetic fixture
+#   RULE:rule_id          silence a rule id (use sparingly)
+#
+# Default synthetic home prefixes are built into the scanner:
+#   /Users/dev/ /Users/user/ /Users/example/ /Users/runner/ /Users/you/
+#   /home/dev/ /home/user/
+#
+# Add project-specific exceptions below only after human review.
+
+# LLM budget wording uses the word "tokens" — covered by specific secret regexes,
+# not a blanket "token" rule. No allowlist entry required for u5 notes.

@@ -32,12 +32,26 @@ BdRunner = Callable[[Sequence[str]], str]
 ProcessProbe = Callable[[], str]
 
 
-def latest_handoff(handoff_dir: Path) -> Optional[Path]:
+def _same_path(left: Path, right: Path) -> bool:
+    try:
+        return left.resolve() == right.resolve()
+    except OSError:
+        return left == right
+
+
+def latest_handoff(handoff_dir: Path, exclude: Optional[Path] = None) -> Optional[Path]:
     """Return the lexicographically greatest ``*.md`` handoff, or None."""
 
     directory = Path(handoff_dir)
+    exclude_path = Path(exclude) if exclude is not None else None
     try:
-        candidates = [p for p in directory.glob("*.md") if p.is_file()]
+        candidates = []
+        for path in directory.glob("*.md"):
+            if not path.is_file():
+                continue
+            if exclude_path is not None and _same_path(path, exclude_path):
+                continue
+            candidates.append(path)
     except OSError:
         return None
     if not candidates:
@@ -45,8 +59,31 @@ def latest_handoff(handoff_dir: Path) -> Optional[Path]:
     return max(candidates, key=lambda p: p.name)
 
 
-def load_role_state(handoff_dir: Path) -> Tuple[Optional[str], List[str]]:
-    """Load the Role State block from the latest handoff.
+def _read_role_state_block(path: Path, source: str) -> Tuple[Optional[str], List[str]]:
+    alerts: List[str] = []
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        alerts.append("[AUDIT-ALERT] " + source + ": 읽기 실패 " + exc.__class__.__name__)
+        return None, alerts
+
+    block = _role_state_block(text)
+    if block is None:
+        alerts.append("[AUDIT-ALERT] " + source + ": Role State 블록 없음 (" + path.name + ")")
+        return None, alerts
+
+    return block, alerts
+
+
+def load_role_state(
+    handoff_dir: Path,
+    role_state_file: Optional[Path] = None,
+) -> Tuple[Optional[str], List[str]]:
+    """Load the Role State block.
+
+    If ``role_state_file`` is provided it is tried first. On absence, read
+    failure, or parse failure, an ``[AUDIT-ALERT] role-state-file: <reason>``
+    line is appended and loading falls back to the latest handoff.
 
     Returns ``(block_text, alerts)``. On any absence or parse failure the
     block is ``None`` and a ``[AUDIT-ALERT] role-state: <reason>`` line is
@@ -54,20 +91,26 @@ def load_role_state(handoff_dir: Path) -> Tuple[Optional[str], List[str]]:
     """
 
     alerts: List[str] = []
-    path = latest_handoff(handoff_dir)
+    if role_state_file is not None:
+        explicit = Path(role_state_file)
+        if not explicit.exists():
+            alerts.append("[AUDIT-ALERT] role-state-file: 부재 (" + str(explicit) + ")")
+        elif not explicit.is_file():
+            alerts.append("[AUDIT-ALERT] role-state-file: 파일 아님 (" + str(explicit) + ")")
+        else:
+            block, file_alerts = _read_role_state_block(explicit, "role-state-file")
+            if block is not None:
+                return block, alerts
+            alerts.extend(file_alerts)
+
+    path = latest_handoff(handoff_dir, exclude=role_state_file)
     if path is None:
         alerts.append("[AUDIT-ALERT] role-state: handoff 부재 (" + str(handoff_dir) + ")")
         return None, alerts
 
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        alerts.append("[AUDIT-ALERT] role-state: 읽기 실패 " + exc.__class__.__name__)
-        return None, alerts
-
-    block = _role_state_block(text)
+    block, handoff_alerts = _read_role_state_block(path, "role-state")
     if block is None:
-        alerts.append("[AUDIT-ALERT] role-state: Role State 블록 없음 (" + path.name + ")")
+        alerts.extend(handoff_alerts)
         return None, alerts
 
     return block, alerts
@@ -257,6 +300,7 @@ def _dual_line(
 
 def run_live(
     handoff_dir: Path,
+    role_state_file: Optional[Path] = None,
     bd_runner: Optional[BdRunner] = None,
     probe: Optional[ProcessProbe] = None,
     session_id: Optional[str] = None,
@@ -270,7 +314,10 @@ def run_live(
 
     try:
         alerts: List[str] = []
-        role_block, role_alerts = load_role_state(Path(handoff_dir))
+        role_block, role_alerts = load_role_state(
+            Path(handoff_dir),
+            role_state_file=Path(role_state_file) if role_state_file is not None else None,
+        )
         alerts.extend(role_alerts)
         tracks, track_alerts = collect_tracks(bd_runner)
         alerts.extend(track_alerts)

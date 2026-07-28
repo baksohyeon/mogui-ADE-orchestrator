@@ -27,6 +27,17 @@ Unlock: explicit user instruction only
 ```
 """
 
+ROLE_STATE_FILE = """# Role State (정본)
+
+Current Role: Maintenance
+Role Lock: ENABLED
+Frozen: all other roles
+Unlock: explicit user instruction only
+
+- Generation: 20
+- Last transition: 2026-07-28 Gen-20 승계 부팅
+"""
+
 
 class LatestHandoffTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -61,6 +72,34 @@ class LoadRoleStateTests(unittest.TestCase):
         block, alerts = load_role_state(self._dir / "none")
         self.assertIsNone(block)
         self.assertTrue(any("role-state" in a for a in alerts))
+
+    def test_load_role_state_uses_explicit_role_state_file(self) -> None:
+        (self._dir / "2026-07-20-gen6-handoff.md").write_text(HANDOFF, encoding="utf-8")
+        role_state_file = self._dir / "role-state.md"
+        role_state_file.write_text(ROLE_STATE_FILE, encoding="utf-8")
+        block, alerts = load_role_state(self._dir, role_state_file=role_state_file)
+        self.assertIsNotNone(block)
+        self.assertIn("Current Role: Maintenance", block)
+        self.assertEqual(alerts, [])
+
+    def test_load_role_state_missing_explicit_file_falls_back_with_alert(self) -> None:
+        (self._dir / "2026-07-20-gen6-handoff.md").write_text(HANDOFF, encoding="utf-8")
+        block, alerts = load_role_state(
+            self._dir,
+            role_state_file=self._dir / "missing-role-state.md",
+        )
+        self.assertIsNotNone(block)
+        self.assertIn("Current Role: Reference Implementation", block)
+        self.assertTrue(any("role-state-file" in a for a in alerts))
+
+    def test_load_role_state_mangled_explicit_file_falls_back_with_alert(self) -> None:
+        (self._dir / "2026-07-20-gen6-handoff.md").write_text(HANDOFF, encoding="utf-8")
+        role_state_file = self._dir / "mangled-role-state.md"
+        role_state_file.write_text("# Role State (정본)\n\nBROKEN CONTENT\n", encoding="utf-8")
+        block, alerts = load_role_state(self._dir, role_state_file=role_state_file)
+        self.assertIsNotNone(block)
+        self.assertIn("Current Role: Reference Implementation", block)
+        self.assertTrue(any("role-state-file" in a for a in alerts))
 
 
 MEMS = """### rule-a

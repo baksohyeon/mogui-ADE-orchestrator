@@ -88,6 +88,7 @@ def main(argv=None) -> int:
 
         parser = argparse.ArgumentParser(prog="master-bootstrap-live")
         parser.add_argument("--handoff-dir", required=True)
+        parser.add_argument("--role-state-file")
         parser.add_argument("--budget", type=int, default=DEFAULT_BUDGET_CHARS)
         parser.add_argument("--bd", default="bd")
         args = parser.parse_args(argv)
@@ -95,6 +96,7 @@ def main(argv=None) -> int:
 
         block = run_live(
             Path(args.handoff_dir),
+            role_state_file=Path(args.role_state_file) if args.role_state_file else None,
             bd_runner=_make_bd_runner(args.bd),
             probe=None,
             session_id=os.environ.get("CLAUDE_SESSION_ID"),

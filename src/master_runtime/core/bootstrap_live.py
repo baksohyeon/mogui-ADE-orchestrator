@@ -32,26 +32,12 @@ BdRunner = Callable[[Sequence[str]], str]
 ProcessProbe = Callable[[], str]
 
 
-def _same_path(left: Path, right: Path) -> bool:
-    try:
-        return left.resolve() == right.resolve()
-    except OSError:
-        return left == right
-
-
-def latest_handoff(handoff_dir: Path, exclude: Optional[Path] = None) -> Optional[Path]:
+def latest_handoff(handoff_dir: Path) -> Optional[Path]:
     """Return the lexicographically greatest ``*.md`` handoff, or None."""
 
     directory = Path(handoff_dir)
-    exclude_path = Path(exclude) if exclude is not None else None
     try:
-        candidates = []
-        for path in directory.glob("*.md"):
-            if not path.is_file():
-                continue
-            if exclude_path is not None and _same_path(path, exclude_path):
-                continue
-            candidates.append(path)
+        candidates = [p for p in directory.glob("*.md") if p.is_file()]
     except OSError:
         return None
     if not candidates:
@@ -103,7 +89,7 @@ def load_role_state(
                 return block, alerts
             alerts.extend(file_alerts)
 
-    path = latest_handoff(handoff_dir, exclude=role_state_file)
+    path = latest_handoff(handoff_dir)
     if path is None:
         alerts.append("[AUDIT-ALERT] role-state: handoff 부재 (" + str(handoff_dir) + ")")
         return None, alerts

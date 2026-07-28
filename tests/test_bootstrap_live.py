@@ -94,7 +94,10 @@ class LoadRoleStateTests(unittest.TestCase):
 
     def test_load_role_state_mangled_explicit_file_falls_back_with_alert(self) -> None:
         (self._dir / "2026-07-20-gen6-handoff.md").write_text(HANDOFF, encoding="utf-8")
-        role_state_file = self._dir / "mangled-role-state.md"
+        # 실배선과 동일하게 role-state 파일은 핸드오프 디렉토리 밖에 둔다
+        runbooks = self._dir / "runbooks"
+        runbooks.mkdir()
+        role_state_file = runbooks / "mangled-role-state.md"
         role_state_file.write_text("# Role State (정본)\n\nBROKEN CONTENT\n", encoding="utf-8")
         block, alerts = load_role_state(self._dir, role_state_file=role_state_file)
         self.assertIsNotNone(block)

@@ -1,18 +1,10 @@
-This guide maps Deep Agents concepts to the workspace-level concepts implemented or specified by mogui-ADE-orchestrator.
+This guide defines the vocabulary the rest of the public documentation uses: how evidence is labelled, what the runtime units are, and which mechanism covers each capability area.
 
 # Concepts
 
-Deep Agents describes an agent harness in terms of execution, context, delegation, steering, and virtual filesystem access. mogui-ADE-orchestrator uses a similar mental model, but applies it to real sessions and repositories instead of an in-process agent runtime.
+A master session is an operating role, not a process. That single choice drives everything else here: if the role outlives any one process, then state has to live outside the process, handoffs have to be verified rather than trusted, and every capability has to be describable as "which mechanism, and what evidence."
 
-| Deep Agents component | mogui-ADE-orchestrator counterpart | Current status |
-| --- | --- | --- |
-| Execution Environment | Orca terminal sessions, script entry points, adapter dispatch, git worktrees | Implemented entry points and core helpers |
-| Context Management | L0/L1 bootstrap context, Role State, issue-tracker memory audit, compaction recall probe, operations documents | Implemented bootstrap and digest pieces; issue tracker selected during onboarding |
-| Delegation | Dispatch gate, worker contract, adapter dispatch, registration probe, acceptance gate | Implemented gate and adapter flow |
-| Steering | `Proposal -> Approval -> Execution`, Role State, role lock, separated review lenses | Approval registry implemented; role and review rules are operating policy |
-| Virtual Filesystem | Repository worktrees, context resolver, path observations, sensitive lane separation | Worktree and path helpers implemented; sensitive lane separation is policy/design |
-
-## Status Labels
+## Evidence Labels
 
 The public docs use implementation status labels narrowly:
 
@@ -23,34 +15,52 @@ The public docs use implementation status labels narrowly:
 | Observed | Git state, local execution, logs, ledgers, process state, or probes have shown the behavior outside an agent self-report. |
 | Unknown | The current evidence does not prove the behavior, or the behavior is deliberately outside the public surface. |
 
-The distinction matters because configured does not mean operating. A hook file, descriptor, or command can exist without proving that every worker path is forced through it. Public documentation should keep C/I/O/U separate instead of turning "present" into "working."
+The distinction matters because configured does not mean operating. A hook file, descriptor, or command can exist without proving that every worker path is forced through it. These pages keep C/I/O/U separate instead of turning "present" into "working."
+
+One consequence worth stating plainly: a passing test suite is local execution evidence for the unit under test, and nothing more. It does not show that an operating workspace routes real work through that unit.
+
+## Capability Areas
+
+Five areas cover what a master has to do. Each row names the mechanism in this repository and the strongest label the evidence supports.
+
+| Area | Mechanism here | Label | Evidence and limits |
+| --- | --- | --- | --- |
+| Execution environment | Orca terminal sessions, `scripts/` entry points, `adapter/dispatch`, git worktrees via `adapter/isolation` | Observed | Entry points and isolation planning are exercised by the unit suite; terminal placement itself is host behavior, not code in this repository. |
+| Context management | `bootstrap.py` and `bootstrap_live.py` L0/L1 block, Role State parsing, issue-tracker memory audit, compaction recall probe | Observed | Boot block, Role State parsing, and compaction suppression are exercised locally. The memory audit depends on an external tracker command; without one it degrades rather than fails. |
+| Delegation | `dispatch_gate.py` check/register, worker contract file, `adapter/dispatch`, JSONL gate ledger | Observed | Gate decisions and ledger writes are observable after the fact. Whether *every* worker-creation path in a given workspace goes through the gate is Unknown from this repository alone — that is a workspace wiring property. |
+| Steering | `approval/registry.py` and `approval/gates.py`, Role State file, role lock, separated review lenses | Mixed | The approval registry is Observed (gated actions must match an approved proposal). Role lock and review lenses are Intended — they are operating policy, not enforcement code. |
+| Repository filesystem model | `context/resolver.py` path resolution, per-repository worktrees, sensitive-lane routing | Mixed | Path resolution and worktree planning are Observed. Sensitive-lane separation is Intended *in this repository* — it is a routing rule, and the blocking that enforces it lives in a workspace's own host hooks, outside this public surface. |
+
+That last row is a deliberate split. Operating workspaces do enforce the sensitive lane with host-level hooks, and that enforcement has been observed live; but this repository ships the rule, not the block. Claiming otherwise would put someone else's hook configuration in our status table.
 
 ## Runtime Units
 
-The master is easier to test when its responsibilities are named as runtime units, even if early implementations share one process or one CLI.
+The master is easier to test when its responsibilities are named as runtime units, even if early implementations share one process or one CLI. The unit numbers are design vocabulary; the module layout is what actually exists.
 
-| Unit | Name | Responsibility |
-| --- | --- | --- |
-| U1 | Bootstrap | Load the minimum L0/L1 context needed to start safely. |
-| U2 | Context Resolver | Decide whether a request belongs to the workspace, a repository, a worktree, or an external system. |
-| U3 | Workspace Runtime | Own tracks, cross-repository state, and long-lived execution records. |
-| U4 | Repository Runtime Loader | Load only the Repository Harness needed for the resolved target. |
-| U5 | Worker Scheduler | Issue worker leases, choose isolation, dispatch workers, enforce budget, and reap resources. |
-| U6 | Approval Manager | Classify action risk and bind execution to a valid approval state. |
-| U7 | Role Runtime | Keep one active role, role lock, and role transition state. |
-| U8 | Recovery Manager | Reattach, resume once, or reconstruct state before spawning a replacement session. |
-| U9 | Succession Manager | Freeze mutable work, write a thin handoff, verify the successor, and retire the predecessor. |
-| U10 | Lineage Recorder | Append audit metadata about succession quality without making lineage a bootstrap source. |
-| U11 | Observability | Record probes, alerts, context quality, model identity, and acceptance evidence. |
-| U12 | Adapter Layer | Isolate product-specific CLIs and file formats behind common contracts. |
+| Unit | Name | Responsibility | Module |
+| --- | --- | --- | --- |
+| U1 | Bootstrap | Load the minimum L0/L1 context needed to start safely. | `bootstrap.py`, `bootstrap_live.py` |
+| U2 | Context Resolver | Decide whether a request belongs to the workspace, a repository, a worktree, or an external system. | `context/` |
+| U3 | Workspace Runtime | Own tracks, cross-repository state, and long-lived execution records. | `work_ledger.py` (`WorkspaceRuntime`) |
+| U4 | Repository Runtime Loader | Load only the Repository Harness needed for the resolved target. | none — design only |
+| U5 | Worker Scheduler | Issue worker leases, choose isolation, dispatch workers, enforce budget, and reap resources. | partial: `dispatch_gate.py`, `adapter/dispatch.py`, `adapter/isolation.py`; no lease or reap module |
+| U6 | Approval Manager | Classify action risk and bind execution to a valid approval state. | `approval/` |
+| U7 | Role Runtime | Keep one active role, role lock, and role transition state. | partial: `RoleState` is parsed in `bootstrap.py`; the lock itself is policy |
+| U8 | Recovery Manager | Reattach, resume once, or reconstruct state before spawning a replacement session. | `recovery.py` |
+| U9 | Succession Manager | Freeze mutable work, write a thin handoff, verify the successor, and retire the predecessor. | `succession.py` |
+| U10 | Lineage Recorder | Append audit metadata about succession quality without making lineage a bootstrap source. | `lineage.py` |
+| U11 | Observability | Record probes, alerts, context quality, model identity, and acceptance evidence. | partial: `digest_loop.py`, `watchdog.py`, `acceptance/` |
+| U12 | Adapter Layer | Isolate product-specific CLIs and file formats behind common contracts. | `adapter/` |
 
-For example, Context Resolver can decide that a request targets `polsia-api` or spans `polsia-api` and `polsia-ops`, Repository Runtime Loader can page in only the needed repository rules, Worker Scheduler can create a scoped lease, and Approval Manager can refuse a production-facing action until the correct gate is satisfied.
+Two units have no module and two more are partial. That is the honest state, and it is the reason the table above exists: a unit number is a place to put a responsibility, not a claim that the responsibility is implemented.
+
+For example, Context Resolver can decide that a request targets `polsia-api` or spans `polsia-api` and `polsia-ops`, Worker Scheduler can create a scoped dispatch, and Approval Manager can refuse a production-facing action until the correct gate is satisfied.
 
 ## Execution Environment
 
-In Deep Agents, the execution environment is where the agent uses tools, files, and code execution. In this repository, the execution environment is an actual workspace.
+The execution environment is an actual workspace: real checkouts, real terminals, real CLI agent sessions.
 
-The master can operate through script entry points such as `scripts/master-bootstrap`, `scripts/master-succeed`, `scripts/dispatch-gate`, `scripts/adapter`, and `scripts/l1-digest`. Worker execution is routed through the adapter layer. When parallel writes, branch anchoring, tree contention, or branch switching make shared checkout work risky, the adapter can plan a git worktree for isolation.
+The master can operate through script entry points such as `scripts/master-bootstrap`, `scripts/master-succeed`, `scripts/dispatch-gate`, `scripts/adapter`, `scripts/acceptance-loop`, and `scripts/l1-digest`. Worker execution is routed through the adapter layer. When parallel writes, branch anchoring, tree contention, or branch switching make shared checkout work risky, the adapter can plan a git worktree for isolation.
 
 Example:
 
@@ -123,8 +133,12 @@ These lenses are a review discipline, not a separate consensus engine in the cur
 
 ## Repository Filesystem Model
 
-Deep Agents exposes a virtual filesystem backed by pluggable storage. mogui-ADE-orchestrator does not provide that abstraction.
+There is no virtual filesystem here. The real repository filesystem is the boundary.
 
-Instead, it treats the real repository filesystem as the boundary. The context resolver observes repository paths and git worktrees. The adapter can plan a worker worktree under the target repository when isolation is needed. Sensitive lanes are separated by operating policy and by routing to dedicated sessions, not by a public virtual filesystem implementation.
+The context resolver observes repository paths and git worktrees. The adapter can plan a worker worktree under the target repository when isolation is needed. Sensitive lanes are separated by routing them to dedicated sessions; as noted above, the enforcement that makes that stick is host-level hook configuration in the operating workspace, not code in this repository.
 
-Read next: [Delegation and Review](delegation-and-review.md), then [Master Lifecycle](master-lifecycle.md). See [Reference](reference.md) for the local script entry points.
+## Acceptance
+
+Acceptance is a separate step from worker completion, and it has its own machinery. `acceptance/` evaluates a candidate against a casebook: raw case results and aggregated scores are distinct types, the casebook — not the evaluator — owns which split each case belongs to, and holdout visibility is decided by a single predicate so the private-holdout invariant cannot quietly drift. A candidate that changes nothing still produces a decision record, so "we looked and did nothing" stays auditable.
+
+Read next: [Delegation and Review](delegation-and-review.md), then [Master Lifecycle](master-lifecycle.md). See [Reference](reference.md) for the local script entry points, and [Overview](overview.md#related-work) for how this compares to in-process agent harnesses.

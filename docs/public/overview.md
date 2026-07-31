@@ -52,10 +52,16 @@ Filesystem model: this project does not provide a virtual filesystem. Its analog
 
 ## Related Work
 
-[LangChain Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview) addresses a similar reliability problem inside an agent application. It is a high-level abstraction built on the LangGraph runtime, with built-in support for an execution environment, context management, delegation, steering, and virtual filesystem access.
+LangChain's [deepagents](https://docs.langchain.com/oss/python/deepagents/overview) solves an adjacent reliability problem inside an agent application. It is a standalone library built on LangChain's core agent building blocks that uses the LangGraph runtime for durable execution, streaming, and human-in-the-loop. Its documentation organizes a harness around four areas — execution environment (tools, virtual filesystem, optional sandbox, REPL), context management (skills, memory, summarization, context offloading, prompt caching), delegation (subagent spawning and optional task planning), and steering (approval and interrupts) — implemented as middleware such as `FilesystemMiddleware`, `TodoListMiddleware`, and `SubAgentMiddleware` over pluggable filesystem backends. *(Source: the linked overview page, read 2026-07-31. This project has not audited the deepagents source; claims here are limited to that page.)*
 
-mogui-ADE-orchestrator works at a different layer. Deep Agents wires an execution graph inside a process. This project wires real agent sessions, validation steps, worker contracts, git checkouts, terminal placement, and succession loops through operating discipline and scriptable entry points. The problem space overlaps, but the control plane is different.
+The four areas are a good decomposition, and this project arrives at nearly the same list. The difference is where the harness sits and what it is allowed to assume.
+
+deepagents assumes model API access from inside a Python process. The harness owns the graph, the tools, and the filesystem abstraction, so a subagent is an in-process actor, a filesystem is a pluggable backend, and an interrupt is a runtime callback.
+
+mogui-ADE-orchestrator assumes no model API at all. It never calls a model endpoint and holds no API key; its execution substrate is subscription CLI agents running in real terminals against real git checkouts. So the same four areas resolve differently: a subagent is an actual CLI session dispatched under a contract and confirmed by an artifact probe, a filesystem is a git worktree, and an interrupt is an approval gate a human holds. Succession — replacing the orchestrator session itself while the work continues — has no counterpart in the in-process model, because a process that owns the graph cannot hand the graph to its successor.
+
+Same failure modes, different control plane, and a different cost model: one is bought per token through an SDK, the other is built on top of subscriptions that were already paid for.
 
 ## Where To Go Next
 
-Start with [Getting Started](getting-started.md) for the shortest path into the repository. Read [Concepts](concepts.md) for the component mapping, [Master Lifecycle](master-lifecycle.md) for boot and succession, [Delegation and Review](delegation-and-review.md) for worker contracts and acceptance, and [Reference](reference.md) for script entry points.
+Start with [Getting Started](getting-started.md) for the shortest path into the repository. Read [Concepts](concepts.md) for the vocabulary — evidence labels, runtime units, and which mechanism covers each capability area — then [Master Lifecycle](master-lifecycle.md) for boot and succession, [Delegation and Review](delegation-and-review.md) for worker contracts and acceptance, and [Reference](reference.md) for script entry points.

@@ -379,7 +379,9 @@ def test_register_denies_ambiguous_pending_dispatch_without_contract_sha(
     assert all("job_id" not in entry for entry in _ledger_entries(tmp_path))
 
 
-def test_register_gc_removes_expired_tickets_before_matching(tmp_path: Path) -> None:
+def test_register_ignores_expired_tickets_but_preserves_them_within_grace_window(
+    tmp_path: Path,
+) -> None:
     first_contract = _contract(tmp_path, "expired dispatch")
     second_contract = _contract(tmp_path, "fresh dispatch")
     now = _MutableClock(1_000)
@@ -396,7 +398,7 @@ def test_register_gc_removes_expired_tickets_before_matching(tmp_path: Path) -> 
 
     assert decision.allow is True
     assert decision.contract_sha == _sha256(second_contract)
-    assert not (
+    assert (
         tmp_path / "dispatch-tickets" / f"codex-{_sha256(first_contract)[:12]}.json"
     ).exists()
     assert _ledger_entries(tmp_path)[-1]["contract_sha"] == _sha256(second_contract)
@@ -423,6 +425,69 @@ def test_register_without_contract_sha_requires_one_valid_ticket(
         "candidate_contract_shas="
         + ",".join(sorted([_sha256(first_contract), _sha256(second_contract)]))
     )
+
+
+def test_register_with_contract_sha_allows_expired_ticket_and_consumes_it(
+    tmp_path: Path,
+) -> None:
+    contract = _contract(tmp_path, "expired ticket can still register")
+    now = _MutableClock(1_000)
+    gate = _gate(tmp_path, clock=now)
+    gate.check(DispatchRequest("codex", contract, est_input_chars=10_000, n_agents=1))
+    contract_sha = _sha256(contract)
+    ticket = tmp_path / "dispatch-tickets" / f"codex-{contract_sha[:12]}.json"
+    now.value += 601
+
+    decision = gate.register_job(
+        "job-expired-ticket",
+        lambda job_id: job_id == "job-expired-ticket",
+        contract_sha=contract_sha,
+    )
+
+    assert decision.allow is True
+    assert decision.reason == ReasonCode.OK
+    assert decision.contract_sha == contract_sha
+    assert not ticket.exists()
+    assert _ledger_entries(tmp_path)[-1]["job_id"] == "job-expired-ticket"
+
+
+def test_register_with_contract_sha_allows_ledger_fallback_when_ticket_absent(
+    tmp_path: Path,
+) -> None:
+    contract = _contract(tmp_path, "ticket absent uses ledger fallback")
+    gate = _gate(tmp_path, now=1_000)
+    gate.check(DispatchRequest("codex", contract, est_input_chars=10_000, n_agents=1))
+    contract_sha = _sha256(contract)
+    ticket = tmp_path / "dispatch-tickets" / f"codex-{contract_sha[:12]}.json"
+    ticket.unlink()
+
+    decision = gate.register_job(
+        "job-ledger-fallback",
+        lambda job_id: job_id == "job-ledger-fallback",
+        contract_sha=contract_sha[:12],
+    )
+
+    assert decision.allow is True
+    assert decision.reason == ReasonCode.OK
+    assert decision.contract_sha == contract_sha
+    assert "ticket_absent" in decision.message
+    assert _ledger_entries(tmp_path)[-1]["job_id"] == "job-ledger-fallback"
+
+
+def test_register_with_contract_sha_denies_when_ticket_and_ledger_are_absent(
+    tmp_path: Path,
+) -> None:
+    gate = _gate(tmp_path, now=1_000)
+
+    decision = gate.register_job(
+        "job-no-evidence",
+        lambda job_id: job_id == "job-no-evidence",
+        contract_sha="a" * 12,
+    )
+
+    assert decision.allow is False
+    assert decision.reason == ReasonCode.NO_MATCHING_TICKET
+    assert decision.message == "candidate_contract_shas=<none>"
 
 
 def test_register_runtime_filter_limits_ticket_candidates(tmp_path: Path) -> None:

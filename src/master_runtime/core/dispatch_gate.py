@@ -27,6 +27,7 @@ DEFAULT_LEDGER_PATH = Path(".dispatch-gate-ledger.jsonl")
 DEFAULT_TICKET_DIR = Path(".mogui") / "dispatch-tickets"
 DEFAULT_KNOWN_ROOTS_PATH = Path(".mogui") / "known-roots.json"
 DEFAULT_TICKET_TTL_SECONDS = 600
+DEFAULT_EXPIRED_TICKET_GC_GRACE_SECONDS = 24 * 60 * 60
 RUNTIME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 USERS_ABSOLUTE_PATH_PATTERN = re.compile(r"/Users/[^\s\"'`<>{}\[\](),;:]+")
 
@@ -99,6 +100,7 @@ class DispatchGateConfig:
     duplicate_window_seconds: int = DEFAULT_DUPLICATE_WINDOW_SECONDS
     high_cost_runtimes: frozenset[str] = DEFAULT_HIGH_COST_RUNTIMES
     ticket_ttl_seconds: int = DEFAULT_TICKET_TTL_SECONDS
+    expired_ticket_gc_grace_seconds: int = DEFAULT_EXPIRED_TICKET_GC_GRACE_SECONDS
 
 
 @dataclass(frozen=True)
@@ -237,24 +239,58 @@ class DispatchGate:
                 contract_sha_filter = _normalize_contract_sha_filter(contract_sha)
                 if contract_sha_filter is None:
                     return GateDecision(False, ReasonCode.INVALID_REQUEST)
+                all_tickets = self._dispatch_tickets(
+                    runtime_filter=runtime_filter,
+                    include_expired=True,
+                )
                 matching_tickets = tuple(
                     ticket
-                    for ticket in tickets
+                    for ticket in all_tickets
                     if ticket.contract_sha.lower().startswith(contract_sha_filter)
                 )
-                if not matching_tickets:
-                    return GateDecision(
-                        False,
-                        ReasonCode.NO_MATCHING_TICKET,
-                        message=_candidate_sha_message(tickets),
-                    )
                 if len(matching_tickets) > 1:
                     return GateDecision(
                         False,
                         ReasonCode.AMBIGUOUS_TICKET,
                         message=_candidate_sha_message(matching_tickets),
                     )
-                selected_ticket = matching_tickets[0]
+                selected_ticket = matching_tickets[0] if matching_tickets else None
+                pending_dispatches = self._pending_dispatches()
+                if selected_ticket is not None:
+                    matching_pending = tuple(
+                        entry
+                        for entry in pending_dispatches
+                        if entry.get("contract_sha") == selected_ticket.contract_sha
+                        and entry.get("runtime") == selected_ticket.runtime
+                    )
+                else:
+                    if all_tickets:
+                        return GateDecision(
+                            False,
+                            ReasonCode.NO_MATCHING_TICKET,
+                            message=_candidate_sha_message(all_tickets),
+                        )
+                    matching_pending = tuple(
+                        entry
+                        for entry in pending_dispatches
+                        if _contract_sha_matches(entry.get("contract_sha"), contract_sha_filter)
+                        and (
+                            runtime_filter is None
+                            or _string_or_none(entry.get("runtime")) == runtime_filter
+                        )
+                    )
+                    if len(matching_pending) > 1:
+                        return GateDecision(
+                            False,
+                            ReasonCode.AMBIGUOUS_TICKET,
+                            message=_candidate_sha_message_from_entries(matching_pending),
+                        )
+                    if not matching_pending:
+                        return GateDecision(
+                            False,
+                            ReasonCode.NO_MATCHING_TICKET,
+                            message=_candidate_sha_message(all_tickets),
+                        )
             else:
                 if not tickets:
                     return GateDecision(
@@ -269,26 +305,36 @@ class DispatchGate:
                         message=_candidate_sha_message(tickets),
                     )
                 selected_ticket = tickets[0]
-
-            matching_pending = tuple(
-                entry
-                for entry in self._pending_dispatches()
-                if entry.get("contract_sha") == selected_ticket.contract_sha
-                and entry.get("runtime") == selected_ticket.runtime
-            )
-            if not matching_pending:
-                return GateDecision(
-                    False,
-                    ReasonCode.NO_MATCHING_TICKET,
-                    message=_candidate_sha_message(tickets),
+                matching_pending = tuple(
+                    entry
+                    for entry in self._pending_dispatches()
+                    if entry.get("contract_sha") == selected_ticket.contract_sha
+                    and entry.get("runtime") == selected_ticket.runtime
                 )
+                if not matching_pending:
+                    return GateDecision(
+                        False,
+                        ReasonCode.NO_MATCHING_TICKET,
+                        message=_candidate_sha_message(tickets),
+                    )
             pending = matching_pending[0]
+
+            if contract_sha is not None and selected_ticket is not None:
+                try:
+                    selected_ticket.path.unlink()
+                except FileNotFoundError:
+                    pass
 
             decision = GateDecision(
                 allow=True,
                 reason=ReasonCode.OK,
                 contract_sha=_string_or_none(pending.get("contract_sha")),
                 cost_proxy=_int_or_zero(pending.get("est_chars")),
+                message=(
+                    "ticket_absent"
+                    if contract_sha is not None and selected_ticket is None
+                    else ""
+                ),
             )
             self._append_entry(
                 {
@@ -442,6 +488,14 @@ class DispatchGate:
         self,
         runtime_filter: str | None = None,
     ) -> tuple[DispatchTicket, ...]:
+        return self._dispatch_tickets(runtime_filter=runtime_filter, include_expired=False)
+
+    def _dispatch_tickets(
+        self,
+        runtime_filter: str | None = None,
+        *,
+        include_expired: bool = False,
+    ) -> tuple[DispatchTicket, ...]:
         self._gc_expired_dispatch_tickets()
         ticket_dir = Path(self.config.ticket_dir)
         if not ticket_dir.exists():
@@ -454,6 +508,8 @@ class DispatchGate:
                 continue
             if runtime_filter is not None and ticket.runtime != runtime_filter:
                 continue
+            if not include_expired and self._ticket_is_expired(ticket):
+                continue
             tickets.append(ticket)
         return tuple(tickets)
 
@@ -461,7 +517,9 @@ class DispatchGate:
         ticket_dir = Path(self.config.ticket_dir)
         if not ticket_dir.exists():
             return
-        expires_before = self._clock() - self.config.ticket_ttl_seconds
+        expires_before = self._clock() - (
+            self.config.ticket_ttl_seconds + self.config.expired_ticket_gc_grace_seconds
+        )
         for path in ticket_dir.glob("*.json"):
             ticket = _decode_dispatch_ticket(path)
             if ticket is None:
@@ -471,6 +529,10 @@ class DispatchGate:
                     path.unlink()
                 except FileNotFoundError:
                     pass
+
+    def _ticket_is_expired(self, ticket: DispatchTicket) -> bool:
+        expires_before = self._clock() - self.config.ticket_ttl_seconds
+        return ticket.issued_ts < expires_before
 
     def _read_dispatch_ticket(
         self,
@@ -717,6 +779,19 @@ def _contract_sha_matches(value: object, contract_sha_filter: str) -> bool:
 
 def _candidate_sha_message(tickets: Sequence[DispatchTicket]) -> str:
     shas = sorted({ticket.contract_sha for ticket in tickets})
+    if not shas:
+        return "candidate_contract_shas=<none>"
+    return "candidate_contract_shas=" + ",".join(shas)
+
+
+def _candidate_sha_message_from_entries(entries: Sequence[Mapping[str, object]]) -> str:
+    shas = sorted(
+        {
+            contract_sha
+            for contract_sha in (_string_or_none(entry.get("contract_sha")) for entry in entries)
+            if contract_sha is not None
+        }
+    )
     if not shas:
         return "candidate_contract_shas=<none>"
     return "candidate_contract_shas=" + ",".join(shas)

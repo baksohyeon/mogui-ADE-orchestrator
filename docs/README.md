@@ -8,7 +8,7 @@ Three sets of documents live in this repository, and they are separate because t
 | [`master-ops/`](../master-ops/) | someone installing the system, and the master agent that runs afterwards | copied out and substituted into a new operations repository |
 | [`docs/internal/`](./internal/) | contributors to this repository | stays in this repository, ages fast |
 
-If a file lives under `master-ops/`, it is a **template**: `{{PLACEHOLDER}}` tokens are live and get replaced during onboarding Stage 1. Do not read it as a description of this repository, and do not fill in placeholders here.
+Files under `master-ops/` are **templates**: `{{PLACEHOLDER}}` tokens are live, and onboarding Stage 1 replaces them. Do not read them as a description of this repository, and do not fill in placeholders here.
 
 ## docs/public, the explanation
 
@@ -21,7 +21,7 @@ Read in this order:
 5. [`delegation-and-review.md`](./public/delegation-and-review.md), worker contracts, the dispatch gate, acceptance
 6. [`reference.md`](./public/reference.md), script entry points, generated from local `--help` output
 
-These pages describe the control model. Host-specific hook wiring, workspace path policy, and sensitive-lane implementation are deliberately outside this public surface.
+These pages describe the control model. Host-specific hook wiring, workspace path policy, and sensitive-lane implementation sit outside this public surface.
 
 ## master-ops, the template
 
@@ -39,10 +39,10 @@ Orca ADE is a hard prerequisite for the onboarding flow.
 | [`internal/reports/`](./internal/reports/) | worker reports for accepted ports |
 | [`internal/tooling/`](./internal/tooling/) | [`redaction-scan.md`](./internal/tooling/redaction-scan.md), run this before publishing anything |
 
-Internal documents record decisions at a point in time and are not maintained as living descriptions of the code. When an internal document and the code disagree, the code and its tests win.
+Internal documents record a decision on the day someone made it. Nobody keeps them current against the code. When an internal document and the code disagree, trust the code and its tests.
 
 ## Language
 
-Everything a reader or installer touches, `README.md`, `docs/public/`, `docs/README.md`, `master-ops/`, is English. A Korean mirror of `docs/public/` is maintained outside this repository, in the operations repository of the workspace that authors it, so a translation cannot drift silently against its English original inside the same tree.
+Everything a reader or installer touches, `README.md`, `docs/public/`, `docs/README.md`, `master-ops/`, is English. A Korean mirror of `docs/public/` is maintained outside this repository, in the operations repository of the workspace that authors it, so a translation cannot drift against its English original inside the same tree without a check catching it.
 
 Some files under `docs/internal/` are Korean, because they are dated records of decisions made in Korean and rewriting a record changes it. They are not translated on purpose.

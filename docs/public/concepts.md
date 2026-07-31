@@ -6,14 +6,14 @@ A master session is an operating role, not a process. That single choice drives 
 
 ## Evidence Labels
 
-The public docs use implementation status labels narrowly:
+The public docs use four implementation status labels:
 
 | Label | Meaning |
 | --- | --- |
 | Configured | A file, script, hook, setting, or static contract exists in the repository or workspace. |
 | Intended | The design contract is documented, but this page is not claiming live runtime evidence. |
 | Observed | Git state, local execution, logs, ledgers, process state, or probes have shown the behavior outside an agent self-report. |
-| Unknown | The current evidence does not prove the behavior, or the behavior is deliberately outside the public surface. |
+| Unknown | The current evidence does not prove the behavior, or the behavior sits outside the public surface. |
 
 The distinction matters because configured does not mean operating. A hook file, descriptor, or command can exist without proving that every worker path is forced through it. These pages keep C/I/O/U separate instead of turning "present" into "working."
 
@@ -25,8 +25,8 @@ Five areas cover what a master has to do. Each row names the mechanism in this r
 
 | Area | Mechanism here | Label | Evidence and limits |
 | --- | --- | --- | --- |
-| Execution environment | Orca terminal sessions, `scripts/` entry points, `adapter/dispatch`, git worktrees via `adapter/isolation` | Observed | Entry points and isolation planning are exercised by the unit suite; terminal placement itself is host behavior, not code in this repository. |
-| Context management | `bootstrap.py` and `bootstrap_live.py` L0/L1 block, Role State parsing, issue-tracker memory audit, compaction recall probe | Observed | Boot block, Role State parsing, and compaction suppression are exercised locally. The memory audit depends on an external tracker command; without one it degrades rather than fails. |
+| Execution environment | Orca terminal sessions, `scripts/` entry points, `adapter/dispatch`, git worktrees via `adapter/isolation` | Observed | The unit suite covers the entry points and isolation planning. Terminal placement is host behavior, not code in this repository. |
+| Context management | `bootstrap.py` and `bootstrap_live.py` L0/L1 block, Role State parsing, issue-tracker memory audit, compaction recall probe | Observed | The suite runs the boot block, Role State parsing, and compaction suppression locally. The memory audit calls an external tracker command; without one it degrades and still exits clean. |
 | Delegation | `dispatch_gate.py` check/register, worker contract file, `adapter/dispatch`, JSONL gate ledger | Observed | Gate decisions and ledger writes are observable after the fact. Whether *every* worker-creation path in a given workspace goes through the gate is Unknown from this repository alone; that is a workspace wiring property. |
 | Steering | `approval/registry.py` and `approval/gates.py`, Role State file, role lock, separated review lenses | Mixed | The approval registry is Observed (gated actions must match an approved proposal). Role lock and review lenses are Intended; they are operating policy, not enforcement code. |
 | Repository filesystem model | `context/resolver.py` path resolution, per-repository worktrees, sensitive-lane routing | Mixed | Path resolution and worktree planning are Observed. Sensitive-lane separation is Intended *in this repository*; it is a routing rule, and the blocking that enforces it lives in a workspace's own host hooks, outside this public surface. |
@@ -35,7 +35,7 @@ That last row is a deliberate split. Operating workspaces do enforce the sensiti
 
 ## Runtime Units
 
-The master is easier to test when its responsibilities are named as runtime units, even if early implementations share one process or one CLI. The unit numbers are design vocabulary; the module layout is what actually exists.
+The master is easier to test when its responsibilities are named as runtime units, even if early implementations share one process or one CLI. The unit numbers are design vocabulary. The module layout is what exists.
 
 | Unit | Name | Responsibility | Module |
 | --- | --- | --- | --- |
@@ -119,7 +119,7 @@ The operating rule is:
 Proposal -> Approval -> Execution
 ```
 
-The core approval registry enforces that gated actions must match an approved proposal before execution. The role-state file keeps exactly one active role and freezes the others until an explicit role switch.
+The core approval registry enforces that gated actions must match an approved proposal before execution. The role-state file keeps one active role and freezes the others until someone switches it.
 
 For non-trivial merges or direct shared-state changes, the operating guide recommends separated review lenses:
 
@@ -135,10 +135,10 @@ These lenses are a review discipline, not a separate consensus engine in the cur
 
 There is no virtual filesystem here. The real repository filesystem is the boundary.
 
-The context resolver observes repository paths and git worktrees. The adapter can plan a worker worktree under the target repository when isolation is needed. Sensitive lanes are separated by routing them to dedicated sessions; as noted above, the enforcement that makes that stick is host-level hook configuration in the operating workspace, not code in this repository.
+The context resolver observes repository paths and git worktrees. The adapter can plan a worker worktree under the target repository when isolation is needed. The operating rule routes sensitive lanes to dedicated sessions. What enforces that rule is host-level hook configuration in the operating workspace, not code in this repository.
 
 ## Acceptance
 
-Acceptance is a separate step from worker completion, and it has its own machinery. `acceptance/` evaluates a candidate against a casebook: raw case results and aggregated scores are distinct types, the casebook, not the evaluator, owns which split each case belongs to, and holdout visibility is decided by a single predicate so the private-holdout invariant cannot quietly drift. A candidate that changes nothing still produces a decision record, so "we looked and did nothing" stays auditable.
+Acceptance is a separate step from worker completion, and it has its own machinery. `acceptance/` evaluates a candidate against a casebook: raw case results and aggregated scores are distinct types, the casebook, not the evaluator, owns which split each case belongs to, and a single predicate decides holdout visibility, so nobody can loosen the private-holdout invariant by editing a second copy of the rule. A candidate that changes nothing still produces a decision record, so "we looked and did nothing" stays auditable.
 
 Read next: [Delegation and Review](delegation-and-review.md), then [Master Lifecycle](master-lifecycle.md). See [Reference](reference.md) for the local script entry points, and [Overview](overview.md#related-work) for how this compares to in-process agent harnesses.

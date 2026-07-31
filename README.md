@@ -17,15 +17,15 @@ Documentation in this repository is English. `master-ops/` is a template that ge
 
 If you run a single long-lived AI agent session as the *orchestrator* ("master") of a multi-repository workspace, three failure modes show up that repo-level tooling doesn't cover:
 
-1. **Sessions end, work doesn't.** Context windows fill up, sessions crash or get compacted. Handing off to a fresh session by pasting a summary loses role state, open work tracks, and standing decisions, and nobody notices what was lost until the successor repeats a question or reopens a settled decision.
+1. **Sessions end, work doesn't.** Context windows fill up, sessions crash or get compacted. Handing off to a fresh session by pasting a summary loses role state, open work tracks, and standing decisions. You find out when the successor repeats a question you already answered, or reopens a decision you already made.
 2. **A master that can spawn workers can also waste them.** Delegating work to sub-agents (worker sessions) is cheap to trigger and expensive to run. Without a gate, duplicate dispatches, oversized inputs, and dispatches into the wrong directory tree all go through, and nothing tells you.
-3. **Context loss after compaction is invisible by default.** After a compaction event the session *feels* continuous but may have silently dropped state. If the boot sequence just re-feeds everything, you can never tell what the session actually still remembers.
+3. **Context loss after compaction is invisible by default.** After a compaction event the session reads as continuous while some state is gone. Re-feed everything at boot and you lose your only chance to find out what the session still holds.
 
 This repo is a reference implementation of a runtime that treats these as first-class, testable problems: succession is a verified procedure with hard safety guards, lineage is an append-only ledger with a fixed schema, worker dispatch requires a readable contract file and passes through budget/routing checks, and the boot path withholds state after compaction to probe recall.
 
 ## Status
 
-**Experimental, under active development.** Interfaces, CLI flags, and file formats change without notice. The core is exercised by a unit test suite (270 passing, 1 skipped as of 2026-07-31) and every unit listed below exists in `src/master_runtime/core/`. Nothing here should be treated as stable API; use it as a reference for the ideas, not as a dependency.
+**Experimental, under active development.** Interfaces, CLI flags, and file formats change without notice. The unit suite covers the core (271 passing, 1 skipped as of 2026-08-01), and every unit listed below exists in `src/master_runtime/core/`. Nothing here should be treated as stable API; use it as a reference for the ideas, not as a dependency.
 
 There is no model API in this repository. The runtime manages *sessions of* AI agents through their CLIs; it never calls a model endpoint and holds no API key.
 
@@ -33,7 +33,7 @@ There is no model API in this repository. The runtime manages *sessions of* AI a
 
 ### Succession
 
-`src/master_runtime/core/succession.py` implements master-to-master handoff as an explicit, guarded procedure rather than a copy-paste. `detect_trigger()` classifies signals into `IMMEDIATE` (explicit user instruction), `ADVISORY` (context usage ratio at or above the `0.60` default, or a natural milestone; advisory triggers **never** auto-start succession, they only propose it), or `NONE`. The flow then builds a handoff, spawns the successor, verifies the successor actually booted with the inherited state (`PASS` / `PARTIAL` / `FAILED`), checks for duplicate master instances, and retires the predecessor. Hard safety violations raise `SuccessionError` instead of proceeding.
+`src/master_runtime/core/succession.py` implements master-to-master handoff as an explicit, guarded procedure rather than a copy-paste. `detect_trigger()` classifies signals into `IMMEDIATE` (explicit user instruction), `ADVISORY` (context usage ratio at or above the `0.60` default, or a natural milestone; advisory triggers **never** auto-start succession, they only propose it), or `NONE`. The flow then builds a handoff, spawns the successor, verifies the successor booted with the inherited state (`PASS` / `PARTIAL` / `FAILED`), checks for duplicate master instances, and retires the predecessor. Hard safety violations raise `SuccessionError` instead of proceeding.
 
 The advisory ratio is a code default, not a claim about what any given workspace should use; an operating charter can set its own threshold.
 
@@ -43,7 +43,7 @@ The advisory ratio is a code default, not a claim about what any given workspace
 
 ### Contract-gated dispatch
 
-`src/master_runtime/core/dispatch_gate.py` sits between the master and any worker dispatch. A `DispatchRequest` (runtime, contract file path, estimated input characters, agent count) is resolved to a `GateDecision` with a stable reason code: `OK`, `BUDGET_EXCEEDED` (defaults: 500k chars single / 1M batch), `DUPLICATE_CONTRACT` (same contract SHA within a 30-minute window), `ROUTING_VIOLATION`, `CONTRACT_UNREADABLE`, `HIGH_COST_RUNTIME`, `PATH_OUTSIDE_KNOWN_ROOTS`, `WORKTREE_AS_REPO_ROOT`, and others. Decisions are recorded in a JSONL ledger, so "what did the master dispatch, and why was it allowed" is always answerable.
+`src/master_runtime/core/dispatch_gate.py` sits between the master and any worker dispatch. A `DispatchRequest` (runtime, contract file path, estimated input characters, agent count) is resolved to a `GateDecision` with a stable reason code: `OK`, `BUDGET_EXCEEDED` (defaults: 500k chars single / 1M batch), `DUPLICATE_CONTRACT` (same contract SHA within a 30-minute window), `ROUTING_VIOLATION`, `CONTRACT_UNREADABLE`, `HIGH_COST_RUNTIME`, `PATH_OUTSIDE_KNOWN_ROOTS`, `WORKTREE_AS_REPO_ROOT`, and others. The gate writes each decision to a JSONL ledger, so you can answer what the master dispatched and why it was allowed.
 
 ### Acceptance loop
 
@@ -51,7 +51,7 @@ The advisory ratio is a code default, not a claim about what any given workspace
 
 ### Compaction-resilience probe (E12)
 
-`scripts/master-bootstrap-live` is a session-start hook that emits a small (~1KB budgeted) dynamic bootstrap block and is written to never fail the boot (any internal error degrades to a `[BOOTSTRAP-FALLBACK]` line with exit code 0). When the incoming session event reports `source == "compact"`, the hook deliberately **suppresses** the Role State and active-tracks sections from the block. The post-compaction session must recall that state from its own context first; the recalled version is then compared against the ledger. Silent context loss becomes a measurable event instead of an invisible one.
+`scripts/master-bootstrap-live` is a session-start hook that emits a small (~1KB budgeted) dynamic bootstrap block and is written to never fail the boot (any internal error degrades to a `[BOOTSTRAP-FALLBACK]` line with exit code 0). When the incoming session event reports `source == "compact"`, the hook **suppresses** the Role State and active-tracks sections. The post-compaction session has to recall that state from its own context first, and you compare what it recalled against the ledger. That turns silent context loss into a number you can read.
 
 ## Architecture
 
@@ -75,7 +75,7 @@ src/master_runtime/core/
 Two principles shape the layout:
 
 - **Core / adapter split.** `core/` modules avoid depending on any specific agent product; contact with the outside world (process spawning, ledgers, tool CLIs) goes through injected callables and the `adapter/` layer, so core logic is testable with in-memory fakes. Tool names live in `adapter/`, not in the units above it.
-- **Vendor neutrality as a direction.** The master should be able to run under different AI agent hosts. Honestly stated: the reference adapter set is narrow. `adapter/profile.py` currently ships synchronous CLI profiles for `codex` and `cursor-agent`, `adapter doctor` probes a specific set of local tools, and some Korean-language operator strings are embedded. Broadening this is ongoing work.
+- **Vendor neutrality as a direction.** The master should be able to run under different AI agent hosts. The reference adapter set is narrow. `adapter/profile.py` currently ships synchronous CLI profiles for `codex` and `cursor-agent`, `adapter doctor` probes a specific set of local tools, and some Korean-language operator strings are embedded. Broadening this is ongoing work.
 
 ## Getting started
 

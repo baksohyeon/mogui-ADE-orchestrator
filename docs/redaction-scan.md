@@ -19,6 +19,34 @@ scripts/redaction-scan.sh --range "$remote_sha..$local_sha"
 - **Tools:** `bash`, `git`, and `rg` (preferred, PCRE2) or `grep -E`.
 - **Allowlist:** `scripts/redaction-allowlist.txt` (override with `REDACTION_ALLOWLIST=`).
 
+### Organization-specific rules (`REDACTION_EXTRA_PATTERNS`)
+
+Real company, product, and personal identifiers are deliberately **not** committed to the
+scanner: this repository is public, so hardcoding them would leak what the scan protects.
+Supply them per checkout instead.
+
+```bash
+# keep this file out of version control
+cat > ~/.config/redaction-extra.txt <<'RULES'
+company_acme|Company identifier acme|(?i)acme
+personal_handle|Personal handle|(?i)(?<![A-Za-z0-9_])myhandle(?![A-Za-z0-9_])
+RULES
+
+export REDACTION_EXTRA_PATTERNS=~/.config/redaction-extra.txt
+```
+
+Each line is `id|description|regex`. Blank lines and `#` comments are ignored.
+
+When no such rules are loaded, the scan prints a warning to stderr and still exits 0, so a
+green result means "generic patterns only" — not "fully audited". In CI or before a public
+push, make that gap fail instead:
+
+```bash
+bash scripts/redaction-scan.sh --require-extra    # or REDACTION_REQUIRE_EXTRA=1
+```
+
+Exit codes: `0` clean, `1` findings or usage error, `2` required organization rules missing.
+
 ### What it flags
 
 | Class | Examples |

@@ -12,47 +12,119 @@ Use only these placeholders in the master-ops template:
 - `{{MONITOR_NS}}`
 - `{{MODEL_ID}}`
 - `{{REPO_LIST}}`
-- `{{RUNTIME_ROOT}}` — the absolute path of this orchestrator repository clone; the onboarding agent fills this itself (Step 3), no user question needed
+- `{{RUNTIME_ROOT}}` — the absolute path of this orchestrator repository clone; the onboarding agent fills this itself (Step 4), no user question needed
 
-## Step 1. Collect Workspace Facts
+## Step 0. Check Prerequisites
 
-(a) Why: the master layer operates above individual repositories, so it needs stable names, paths, and repo inventory before it can route work or verify placement.
+(a) Why: this onboarding flow depends on Orca ADE for terminal placement and founding spawn. Without Orca, the master cannot prove where it was created, so the flow must stop instead of offering a workaround.
 
 (b) Ask the user:
 
-- workspace name
+- whether they are ready for a local prerequisite check
+- which agent CLI they expect to use, such as `claude`
+
+(c) Agent action:
+
+- run `orca status`
+- if `orca status` is unavailable or does not report a usable runtime, explain that this system assumes Orca ADE, guide the user to install and start Orca, and stop the onboarding flow until Orca is available
+- do not offer a non-Orca fallback path
+- verify the agent CLI, such as `claude`, is available when the user named one
+- verify `git` is available
+
+(d) Verification:
+
+- Orca runtime status is measured, not guessed
+- agent CLI availability is measured or marked unresolved
+- `git` availability is measured
+
+## Step 1. Collect Workspace Facts
+
+(a) Why: the workspace is the integrated folder that contains the repositories the master will coordinate. The master layer operates above individual repositories, so it needs a measured workspace path and repo inventory before it can route work or verify placement.
+
+(b) Ask the user:
+
 - absolute workspace root
-- list of repositories the master will coordinate
-- preferred operations repository path
+- workspace name, defaulting to the basename of the confirmed workspace root
 - monitor namespace
 - default model identifier to measure at boot
 
 (c) Agent action:
 
 - read the current files before changing them
-- normalize paths without inventing missing repositories
+- require an absolute path for the workspace root
+- verify the path exists
+- run `ls -la "$WORKSPACE_ROOT"` and detect immediate child repositories; do not invent missing repositories
+- read back the discovered repository list to the user and ask for confirmation or exclusions
 - leave uncertain values as placeholders and ask again
 
 (d) Verification:
 
-- `{{WORKSPACE_ROOT}}` is absolute
-- `{{OPS_REPO}}` is either an absolute path or a repo name the user explicitly approved
-- `{{REPO_LIST}}` matches user-provided repositories
+- `{{WORKSPACE_ROOT}}` is absolute and exists
+- `{{WORKSPACE_NAME}}` is explicit or derived from the confirmed workspace root basename with user approval
+- `{{REPO_LIST}}` matches measured repositories after user confirmation
 
-## Step 2. Create The Ops Repository
+## Step 2. Recommend The Ops Repository Name
 
-(a) Why: product code and governance operations should not share ownership boundaries. The recommended name is `<workspace>-ops` because it keeps the orchestration layer separate from product repositories and makes dispatch, memory, and lineage records easy to locate.
+(a) Why: product code and governance operations should not share ownership boundaries. The ops repository name must make the governance role clear without looking like another product repository in shell prompts, status lines, or terminal titles.
 
 (b) Ask the user:
 
-- whether to create a new `<workspace>-ops` repository or use an existing operations repository
-- whether local git initialization is allowed
+- whether they want a new ops repository or an existing operations repository
+- whether local git initialization is allowed if a new repository is created
+
+(c) Agent action:
+
+- inspect the confirmed repository names and workspace structure from Step 1
+- propose 2 or 3 candidate ops repository names with pros and cons
+- use a structured question tool for the selection when the host provides one; otherwise ask in plain conversation
+- make `<workspace>-ops` the default recommendation
+- apply these criteria explicitly: the name reveals the governance role; the name does not mix with product scope; the name remains unambiguous when shown in a shell status line
+
+(d) Verification:
+
+- `{{OPS_REPO}}` is either an absolute path or a repo name the user explicitly approved
+- the selected name was evaluated against the confirmed repo inventory
+- the recommendation did not reuse a product repository name
+
+## Step 2.5. Register The Orca Workspace
+
+(a) Why: founding spawn needs an Orca folder-context selector for the workspace folder. A plain path is not enough when the folder has not been registered with Orca.
+
+(b) Ask the user:
+
+- open the confirmed `{{WORKSPACE_ROOT}}` folder in the Orca app
+- start one terminal inside that Orca workspace
+- provide the runtime-issued terminal handle for that terminal
+
+(c) Agent action:
+
+- run `orca terminal show --terminal <terminal handle> --json`
+- read the returned metadata and capture the folder/worktree selector for `{{WORKSPACE_ROOT}}`
+- if the terminal metadata does not prove it belongs to `{{WORKSPACE_ROOT}}`, ask the user to open the correct folder in Orca and repeat this step
+- record the captured selector for Step 8; do not add a new `{{...}}` template placeholder for it
+
+(d) Verification:
+
+- terminal metadata was measured with `orca terminal show`
+- the captured selector points to the confirmed workspace folder context
+- the selector is available before founding spawn
+
+Operational note: in production, a path selector for an unregistered folder failed with `selector_not_found`; fail-closed spawn handling prevented an invalid placement. Keep this note here so future onboarding agents use the measured folder selector from Orca instead of guessing from the filesystem path.
+
+## Step 3. Create The Ops Repository
+
+(a) Why: the selected ops repository is where workspace governance documents, lineage, memory pointers, and issue-tracker state will live.
+
+(b) Ask the user:
+
+- confirmation to create or reuse the selected `{{OPS_REPO}}`
+- confirmation before any local git initialization
 
 (c) Agent action:
 
 - if the repository does not exist and creation is approved, create it
-- run Stage 1 from the harness source:
-  `bash scripts/setup-master-ops.sh <ops-repo-path>`
+- if the repository is new or empty, copy the Stage 1 skeleton from this repository's `master-ops/` directory into it
+- if the repository already has files, read them first and merge deliberately; do not overwrite existing operations records without user approval
 - do not push unless the user explicitly asks
 
 (d) Verification:
@@ -60,9 +132,9 @@ Use only these placeholders in the master-ops template:
 - ops repository exists
 - `CLAUDE.md` and `AGENTS.md` exist in the ops repository
 - `docs/MASTER-OPERATIONS.md` exists
-- Stage 1 printed remaining placeholders and asked no questions
+- the Stage 1 skeleton is present and still contains only the allowed remaining placeholders
 
-## Step 3. Replace Template Placeholders
+## Step 4. Replace Template Placeholders
 
 (a) Why: the skeleton must become local enough to boot reliably, but still stay free of product-specific rules that belong inside product repositories.
 
@@ -84,7 +156,7 @@ Use only these placeholders in the master-ops template:
 - `CLAUDE.md` and `AGENTS.md` are identical
 - no source workspace's private names were copied accidentally
 
-## Step 4. Initialize The Issue Tracker
+## Step 5. Initialize The Issue Tracker
 
 (a) Why: execution state changes more often than documents. The issue tracker is the working-state SSOT; Git is for accepted plans, designs, decisions, and runbooks.
 
@@ -107,7 +179,7 @@ Use only these placeholders in the master-ops template:
 
 Warning: Beads and similar local trackers can keep per-repo databases. Do not reuse a product repository's database for workspace-level orchestration.
 
-## Step 5. Seed Universal User Rules
+## Step 6. Seed Universal User Rules
 
 (a) Why: the master coordinates many repositories and sessions. Stable user preferences such as address form, language, approval discipline, and scope boundaries must survive compaction and handoff.
 
@@ -129,7 +201,7 @@ Warning: Beads and similar local trackers can keep per-repo databases. Do not re
 - memory lookup returns the seeded rules
 - rules are short, actionable, and not duplicated as narrative in Git docs
 
-## Step 6. Explain The Settings Layer
+## Step 7. Explain The Settings Layer
 
 (a) Why: hooks and tool settings can enforce useful guarantees, but they also touch sensitive lanes. The master template should specify behavior without shipping hidden deny lists or environment-specific security implementation.
 
@@ -151,23 +223,22 @@ Warning: Beads and similar local trackers can keep per-repo databases. Do not re
 - no hook implementation, deny list, credentials, or secret paths were added by the onboarding agent
 - sensitive-lane owner is explicit or marked unresolved
 
-## Step 7. Founding Spawn
+## Step 8. Founding Spawn
 
-(a) Why: the master must be born as a clean, verifiably placed session — not as a continuation of the onboarding conversation. A founding spawn separates the installer (you) from the operator (the new master), so the master starts with a clean context and an auditable placement record.
+(a) Why: the master must be born as a clean, verifiably placed session — not as a continuation of the onboarding conversation. A founding spawn separates the installer from the operator, so the master starts with a clean context and an auditable placement record.
 
 (b) Ask the user:
 
 - confirmation to spawn the Generation 1 master now, or to defer
-- which terminal environment hosts the master (if the host exposes managed terminals, offer them; otherwise a plain new session works)
+- confirmation that the Step 2.5 Orca folder selector is still valid
 
 (c) Agent action:
 
 - write a kickoff file containing: generation number 1, founding origin (this onboarding session), the boot sequence (rehydrate ops docs, declare Role State, measure model and placement), and the initial queue if any
-- if the runtime's managed spawn is available, run:
-  `{{RUNTIME_ROOT}}/scripts/master-succeed spawn --workspace-selector <workspace selector> --kickoff-file <kickoff file> --root {{WORKSPACE_ROOT}} --model {{MODEL_ID}} --title "Gen-1 founding boot" --json`
-  and require the placement verification in the response to be MATCH before treating the spawn as valid
-- if managed spawn is not available on this host, open a new agent session with cwd `{{WORKSPACE_ROOT}}` and paste the kickoff file content as the first message — then verify placement manually in Step 8
-- never boot the master inside this onboarding session
+- run the Orca-managed spawn with the folder selector captured in Step 2.5:
+  `{{RUNTIME_ROOT}}/scripts/master-succeed spawn --workspace-selector <folder selector from Step 2.5> --kickoff-file <kickoff file> --root {{WORKSPACE_ROOT}} --model {{MODEL_ID}} --title "Gen-1 founding boot" --json`
+- require the placement verification in the response to be MATCH before treating the spawn as valid
+- if the command fails, keep the failure closed: do not retry with a filesystem path selector and do not boot the master inside this onboarding session
 - note: settings layers load at session start — after any settings deployment, always spawn a fresh session
 
 (d) Verification:
@@ -176,7 +247,7 @@ Warning: Beads and similar local trackers can keep per-repo databases. Do not re
 - managed spawn path: placement verification reported MATCH
 - the kickoff content the master received matches the kickoff file byte-for-byte
 
-## Step 8. Run The First Master Boot Smoke
+## Step 9. Run The First Master Boot Smoke
 
 (a) Why: the first boot proves the master can declare role state, measure its actual model, and prove it is placed in the intended workspace before it coordinates work.
 

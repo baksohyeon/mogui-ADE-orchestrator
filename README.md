@@ -2,6 +2,12 @@
 
 > A multi-repository **Master Runtime and orchestration layer** for long-lived AI engineering workspaces — role/runtime state, approval gates, succession, lineage, and cross-repo verification. Optimized for **Orca, Claude Code, and Codex** through pluggable, implementation-independent repository-runtime adapters.
 
+## Quickstart
+
+1. `git clone <repo-url>`
+2. Start an agent session in the cloned directory, for example with `claude`.
+3. The conversation will route into `master-ops/ONBOARDING.md` and guide setup.
+
 Sibling product of [mogui-agent-harness](https://github.com/baksohyeon/mogui-agent-harness):
 
 | | mogui-agent-harness | mogui-ADE-orchestrator (this repo) |

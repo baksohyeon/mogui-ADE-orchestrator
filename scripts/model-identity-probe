@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+"""Probe recent assistant model identity in a session JSONL transcript."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from collections import Counter
+from pathlib import Path
+from typing import Iterable, Mapping
+
+
+DEFAULT_EXPECTED_MODEL = "claude-fable-5"
+DEFAULT_LIMIT = 10
+DRIFT_ACTION = "새 판 승계 제안 + 민감 영역 위임 상태 점검"
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="model-identity-probe")
+    parser.add_argument("--transcript", required=True)
+    parser.add_argument("--expect", default=DEFAULT_EXPECTED_MODEL)
+    parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT)
+    args = parser.parse_args(argv)
+
+    if args.limit < 1:
+        print(
+            "MODEL-PROBE DRIFT: invalid limit - {0}".format(args.limit)
+            + " — "
+            + DRIFT_ACTION
+        )
+        return 2
+
+    try:
+        models = recent_assistant_models(Path(args.transcript), limit=args.limit)
+    except (OSError, ValueError) as exc:
+        print("MODEL-PROBE DRIFT: transcript_error={0} — {1}".format(exc, DRIFT_ACTION))
+        return 2
+
+    if models and all(model == args.expect for model in models):
+        print("MODEL-PROBE OK {0} {1}/{1}".format(args.expect, len(models)))
+        return 0
+
+    print("MODEL-PROBE DRIFT: {0} — {1}".format(_model_distribution(models), DRIFT_ACTION))
+    return 2
+
+
+def recent_assistant_models(transcript_path: Path, limit: int = DEFAULT_LIMIT) -> tuple[str, ...]:
+    models: list[str] = []
+    with transcript_path.open("r", encoding="utf-8") as transcript:
+        for line_number, raw_line in enumerate(transcript, start=1):
+            if not raw_line.strip():
+                continue
+            try:
+                event = json.loads(raw_line)
+            except json.JSONDecodeError as exc:
+                raise ValueError("invalid jsonl line {0}".format(line_number)) from exc
+            model = _assistant_model(event)
+            if model is not None:
+                models.append(model)
+    return tuple(models[-limit:])
+
+
+def _assistant_model(event: object) -> str | None:
+    saw_assistant = False
+    for candidate in _candidate_objects(event):
+        role = candidate.get("role")
+        event_type = candidate.get("type")
+        if role == "assistant" or event_type == "assistant":
+            saw_assistant = True
+        model = candidate.get("model")
+        if saw_assistant and isinstance(model, str) and model.strip():
+            return model.strip()
+    return "<missing>" if saw_assistant else None
+
+
+def _candidate_objects(event: object) -> Iterable[Mapping[str, object]]:
+    if not isinstance(event, dict):
+        return ()
+    candidates: list[Mapping[str, object]] = [event]
+    for key in ("message", "item", "payload", "response"):
+        nested = event.get(key)
+        if isinstance(nested, dict):
+            candidates.append(nested)
+    return tuple(candidates)
+
+
+def _model_distribution(models: tuple[str, ...]) -> str:
+    if not models:
+        return "<none>"
+    counts = Counter(models)
+    parts = [
+        "{0}={1}".format(model, count)
+        for model, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    ]
+    return ", ".join(parts)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

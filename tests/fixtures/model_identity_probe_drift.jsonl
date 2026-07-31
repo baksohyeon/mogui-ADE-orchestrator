@@ -1,0 +1,5 @@
+{"role":"assistant","model":"claude-fable-5","content":"1"}
+{"role":"assistant","model":"gpt-5","content":"2"}
+{"type":"assistant","model":"claude-fable-5","content":"3"}
+{"payload":{"role":"assistant","model":"cursor-agent-model","content":"4"}}
+{"response":{"role":"assistant","content":"5"}}

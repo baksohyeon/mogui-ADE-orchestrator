@@ -639,7 +639,7 @@ def test_contract_lint_accepts_paths_inside_known_roots(
     )
     contract = _contract(
         tmp_path,
-        "Inspect /Users/dev/workspace/example-product/ops-planning.",
+        "Inspect /Users/dev/workspace/example-product/example-ops.",
     )
     gate = _gate(tmp_path, now=1_000, known_roots_path=known_roots)
 
@@ -992,7 +992,7 @@ def _dispatch_contract(tmp_path: Path, runtime: str) -> Path:
                 "scripts/dispatch-gate",
             ],
             "exclude": [
-                "ops-planning dispatch-gate-warn.sh consumption",
+                "example-ops dispatch-gate-warn.sh consumption",
                 "git commit",
                 "git push",
             ],

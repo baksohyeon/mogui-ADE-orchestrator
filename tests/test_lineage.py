@@ -24,7 +24,7 @@ GEN5_FIXTURE = """# Master Lineage — 승계 계보 장부
 - **Succession reason**: Advisory 임계 (전임 컨텍스트 UI 실측 63%, Owner 지시 "승계 진행해")
 - **Recovery sources**: Charter (Git, specs/MASTER-ORCHESTRATOR-CHARTER.md) / thin handoff (docs/handoffs/2026-07-20-gen5-handoff.md) / 런 로그 (docs/drafts/2026-07-20-harness-impl-run-log.md — 임시 승계 문서, R+0~R+8) / bd (ready 15 + in_progress 6) / mogui-ADE-orchestrator 실측 (feat/u11 체크아웃·ddafcc7 확인) / 게이트 대장 ~/.mogui/dispatch-ledger.jsonl (세션 밖 SSOT, 그대로 사용) / U11 잡 companion status 실측 (running). Trace Archive 검색 0회 (miss 없음)
 - **Inherited open tracks**: 7 (U11 트리아지 정련 착륙 검증 [활성, task-mrstc9ju-5pfj7d running·verifying 실측] / U1 Bootstrap + L1 루프 배선 [다음 순서, Owner "추천대로 진행" 승인] / feat 브랜치 5개 main 머지 [Owner 결정 대기, 인질 실증 3건으로 우선순위 높음] / 블로그 3건: 하네스 후속 포스트 파킹·118 티스토리 교체 게시 대기·2편 발행 파킹 / mogui-agent-harness PR #4 머지 [Owner] / AHE 연구 Stage 2 FROZEN + rules/ 7문서 승인 대기 [파킹] / 7/17 배포 후속 bd [파킹])
-- **Verification**: **PASS** — 기준선 재실측: product-a dev=4055ed9d clean / frontend-app dev=06db83dc clean (핸드오프 "이동했을 수 있음" 추정과 달리 불변). U11 잡 running 실측 (companion status, cwd=mogui-ADE-orchestrator). 게이트 대장 실존·최신 엔트리에 U11 잡 ALLOW 기록 확인. Gen 5 드리프트 모니터 재무장 후 첫 하트비트 확인 (15:01, 무드리프트)
+- **Verification**: **PASS** — 기준선 재실측: example-api dev=4055ed9d clean / example-web dev=06db83dc clean (핸드오프 "이동했을 수 있음" 추정과 달리 불변). U11 잡 running 실측 (companion status, cwd=mogui-ADE-orchestrator). 게이트 대장 실존·최신 엔트리에 U11 잡 ALLOW 기록 확인. Gen 5 드리프트 모니터 재무장 후 첫 하트비트 확인 (15:01, 무드리프트)
 - **Repeated-question count**: 0
 - **Reopened-decision count**: 0
 - **Context-loss summary**: 없음 확인 — U11 검증 계약 4항목·파견 규율·워크트리 지도·유닛 현황판(R+7)·U12 방향 확정(R+5) 전부 핸드오프·런 로그에서 무손실 인수
@@ -105,7 +105,7 @@ class LineageRecorderTests(unittest.TestCase):
         self.assertEqual(original, self.path.read_bytes())
 
     def test_real_lineage_copy_dry_run_preserves_original_prefix(self) -> None:
-        source = Path("/Users/dev/workspace/example-product/ops-planning/docs/lineage/MASTER-LINEAGE.md")
+        source = Path("/Users/dev/workspace/example-product/example-ops/docs/lineage/MASTER-LINEAGE.md")
         if not source.exists():
             self.skipTest("real MASTER-LINEAGE.md source is unavailable")
 

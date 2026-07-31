@@ -147,6 +147,7 @@ Operational note: in production, a path selector for an unregistered folder fail
 
 - replace the placeholders consistently across the ops repository
 - fill `{{RUNTIME_ROOT}}` yourself with the absolute path of this orchestrator repository clone (your current repository root) — this one needs no user question
+- pass the ops repository's operations doc as the bootstrap charter pointer (`master-bootstrap-live --charter-pointer "Operations SSOT: {{OPS_REPO}}/docs/MASTER-OPERATIONS.md"`), so the boot block names this workspace instead of a neutral placeholder
 - keep `CLAUDE.md` and `AGENTS.md` byte-identical unless the user explicitly accepts host-specific divergence
 - do not introduce additional `{{...}}` placeholders
 

@@ -7,6 +7,7 @@ never re-publishes memory bodies; it only audits the bd prime block.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -23,9 +24,23 @@ DEFAULT_BUDGET_CHARS = 12_000
 # Self-block target ~1KB (see plan Architecture: "동적 블록(~1KB)"). The block
 # is truncated (tracks first) once it exceeds this cap.
 SELF_BLOCK_CAP = 1_000
-CHARTER_POINTER = (
-    "Operations SSOT: ops-planning/docs/MASTER-OPERATIONS.md — Role State 정본"
+# Workspace-neutral by default: the operations repository name differs per
+# installation, so a hardcoded path would print another workspace's coordinates.
+# Override with --charter-pointer (or CHARTER_POINTER env) during onboarding.
+DEFAULT_CHARTER_POINTER = (
+    "Operations SSOT: see the ops repository MASTER-OPERATIONS.md (Role State canon)"
 )
+
+
+def resolve_charter_pointer(explicit: Optional[str] = None) -> str:
+    """Return the charter pointer line: explicit arg, then env, then neutral default."""
+
+    if explicit is not None and explicit.strip():
+        return explicit.strip()
+    from_env = os.environ.get("CHARTER_POINTER", "")
+    if from_env.strip():
+        return from_env.strip()
+    return DEFAULT_CHARTER_POINTER
 _BLOCK_SPLIT = re.compile(r"(?m)^### ")
 
 BdRunner = Callable[[Sequence[str]], str]
@@ -291,6 +306,7 @@ def run_live(
     probe: Optional[ProcessProbe] = None,
     session_id: Optional[str] = None,
     budget_chars: int = DEFAULT_BUDGET_CHARS,
+    charter_pointer: Optional[str] = None,
 ) -> str:
     """Assemble the full master bootstrap block.
 
@@ -317,7 +333,7 @@ def run_live(
             audit_line,
             alerts,
             dual_line,
-            CHARTER_POINTER,
+            resolve_charter_pointer(charter_pointer),
         )
     except Exception as exc:  # noqa: BLE001 — 부팅 불사, 폴백 1줄
         return "[BOOTSTRAP-FALLBACK] " + exc.__class__.__name__ + ": " + str(exc)

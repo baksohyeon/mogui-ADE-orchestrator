@@ -18,10 +18,10 @@ Documentation in this repository is English. `master-ops/` is a template that ge
 If you run a single long-lived AI agent session as the *orchestrator* ("master") of a multi-repository workspace, three failure modes show up that repo-level tooling doesn't cover:
 
 1. **Sessions end, work doesn't.** Context windows fill up, sessions crash or get compacted. Handing off to a fresh session by pasting a summary loses role state, open work tracks, and standing decisions, and nobody notices what was lost until the successor repeats a question or reopens a settled decision.
-2. **A master that can spawn workers can also waste them.** Delegating work to sub-agents (worker sessions) is cheap to trigger and expensive to run. Without a gate, duplicate dispatches, oversized inputs, and dispatches into the wrong directory tree go through silently.
+2. **A master that can spawn workers can also waste them.** Delegating work to sub-agents (worker sessions) is cheap to trigger and expensive to run. Without a gate, duplicate dispatches, oversized inputs, and dispatches into the wrong directory tree all go through, and nothing tells you.
 3. **Context loss after compaction is invisible by default.** After a compaction event the session *feels* continuous but may have silently dropped state. If the boot sequence just re-feeds everything, you can never tell what the session actually still remembers.
 
-This repo is a reference implementation of a runtime that treats these as first-class, testable problems: succession is a verified procedure with hard safety guards, lineage is an append-only ledger with a fixed schema, worker dispatch requires a readable contract file and passes through budget/routing checks, and the boot path deliberately withholds state after compaction to probe recall.
+This repo is a reference implementation of a runtime that treats these as first-class, testable problems: succession is a verified procedure with hard safety guards, lineage is an append-only ledger with a fixed schema, worker dispatch requires a readable contract file and passes through budget/routing checks, and the boot path withholds state after compaction to probe recall.
 
 ## Status
 

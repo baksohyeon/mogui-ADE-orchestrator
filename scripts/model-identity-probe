@@ -5,13 +5,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from collections import Counter
 from pathlib import Path
 from typing import Iterable, Mapping
 
 
-DEFAULT_EXPECTED_MODEL = "claude-fable-5"
+# No model name is hardcoded: the expected model differs per workspace and per
+# host, so a baked-in default would silently assert someone else's policy.
+# Supply it with --expect or MODEL_IDENTITY_EXPECT; without either, the probe
+# reports what it measured and asserts nothing.
+DEFAULT_EXPECTED_MODEL = None
 DEFAULT_LIMIT = 10
 DRIFT_ACTION = "새 판 승계 제안 + 민감 영역 위임 상태 점검"
 
@@ -19,7 +24,7 @@ DRIFT_ACTION = "새 판 승계 제안 + 민감 영역 위임 상태 점검"
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="model-identity-probe")
     parser.add_argument("--transcript", required=True)
-    parser.add_argument("--expect", default=DEFAULT_EXPECTED_MODEL)
+    parser.add_argument("--expect", default=os.environ.get("MODEL_IDENTITY_EXPECT") or DEFAULT_EXPECTED_MODEL)
     parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT)
     args = parser.parse_args(argv)
 
@@ -36,6 +41,13 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, ValueError) as exc:
         print("MODEL-PROBE DRIFT: transcript_error={0} — {1}".format(exc, DRIFT_ACTION))
         return 2
+
+    if args.expect is None:
+        print(
+            "MODEL-PROBE INFO {0} — no expected model supplied (--expect or "
+            "MODEL_IDENTITY_EXPECT); nothing asserted".format(_model_distribution(models))
+        )
+        return 0
 
     if models and all(model == args.expect for model in models):
         print("MODEL-PROBE OK {0} {1}/{1}".format(args.expect, len(models)))

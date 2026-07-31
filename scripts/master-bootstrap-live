@@ -129,6 +129,7 @@ def main(argv=None) -> int:
         parser.add_argument("--role-state-file")
         parser.add_argument("--budget", type=int, default=DEFAULT_BUDGET_CHARS)
         parser.add_argument("--bd", default="bd")
+        parser.add_argument("--charter-pointer")
         args = parser.parse_args(argv)
         source = _session_source_from_stdin()
 
@@ -139,6 +140,7 @@ def main(argv=None) -> int:
             probe=None,
             session_id=os.environ.get("CLAUDE_SESSION_ID"),
             budget_chars=args.budget,
+            charter_pointer=args.charter_pointer,
         )
         if source == "compact":
             block = _suppress_compact_recall_leaks(block)

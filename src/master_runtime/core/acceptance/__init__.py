@@ -1,9 +1,6 @@
 """Deterministic acceptance loop for master-dispatched worker deliverables."""
 
 from master_runtime.core.acceptance.casebook import (
-    GATED_SPLITS,
-    PRIVATE_SPLITS,
-    VISIBLE_SPLITS,
     CaseBook,
     CaseBookError,
     CaseOrigin,
@@ -11,49 +8,42 @@ from master_runtime.core.acceptance.casebook import (
     RegressionLog,
     VerificationCase,
     load_casebook,
-    normalize_split,
     read_casebook,
-    render_split_markdown,
 )
 from master_runtime.core.acceptance.config import (
     AcceptanceConfigError,
     LoadedConfig,
     load_acceptance_config,
 )
-from master_runtime.core.acceptance.evaluators import command_evaluator, default_command_runner
+from master_runtime.core.acceptance.evaluators import command_evaluator
 from master_runtime.core.acceptance.layout import AcceptanceRunLayout
 from master_runtime.core.acceptance.loop import (
-    build_proposer_workspace,
     cli_proposer,
     read_candidate,
     run_acceptance_loop,
 )
 from master_runtime.core.acceptance.models import (
     BASELINE_LABEL,
-    CANDIDATE_FILENAME,
     AcceptanceConfig,
     Candidate,
     Evaluator,
     Proposer,
     ProposerContext,
+    mark_in_place,
 )
-from master_runtime.core.acceptance.report import AcceptanceReport, IterationRecord
+from master_runtime.core.acceptance.process import ProcessResult, run_process
 from master_runtime.core.acceptance.proposer import (
-    SUPPORTED_RUNTIMES,
     ProposerError,
     ProposerRequest,
-    ProposerResult,
-    build_proposer_argv,
     invoke_cli_proposer,
 )
+from master_runtime.core.acceptance.report import AcceptanceReport, IterationRecord
 from master_runtime.core.acceptance.verdict import (
     AcceptanceReason,
     AcceptanceVerdict,
     CaseResult,
     Scorecard,
-    SplitScore,
     decide,
-    failed_cases,
     score_results,
 )
 
@@ -65,7 +55,6 @@ __all__ = [
     "AcceptanceRunLayout",
     "AcceptanceVerdict",
     "BASELINE_LABEL",
-    "CANDIDATE_FILENAME",
     "Candidate",
     "CaseBook",
     "CaseBookError",
@@ -73,35 +62,26 @@ __all__ = [
     "CaseResult",
     "CaseSplit",
     "Evaluator",
-    "GATED_SPLITS",
     "IterationRecord",
-    "Proposer",
     "LoadedConfig",
-    "PRIVATE_SPLITS",
+    "ProcessResult",
+    "Proposer",
     "ProposerContext",
     "ProposerError",
     "ProposerRequest",
-    "ProposerResult",
     "RegressionLog",
-    "SUPPORTED_RUNTIMES",
     "Scorecard",
-    "SplitScore",
-    "VISIBLE_SPLITS",
     "VerificationCase",
-    "build_proposer_argv",
-    "build_proposer_workspace",
     "cli_proposer",
     "command_evaluator",
     "decide",
-    "default_command_runner",
-    "failed_cases",
     "invoke_cli_proposer",
     "load_acceptance_config",
     "load_casebook",
-    "normalize_split",
+    "mark_in_place",
     "read_candidate",
     "read_casebook",
-    "render_split_markdown",
     "run_acceptance_loop",
+    "run_process",
     "score_results",
 ]

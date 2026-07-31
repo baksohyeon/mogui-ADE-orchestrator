@@ -7,13 +7,44 @@ import pytest
 
 from master_runtime.core.acceptance.loop import read_candidate
 from master_runtime.core.acceptance.models import CANDIDATE_FILENAME
+from master_runtime.core.acceptance.process import ProcessResult
 from master_runtime.core.acceptance.proposer import (
     ProposerError,
     ProposerRequest,
-    ProposerResult,
     build_proposer_argv,
     invoke_cli_proposer,
+    require_sync_cli_profile,
 )
+from master_runtime.core.adapter.profile import (
+    SYNC_CLI_PROFILES,
+    SyncCliProfile,
+    resolve_sync_cli_profile,
+    sync_cli_runtimes,
+)
+
+ACCEPTANCE_PACKAGE = (
+    Path(__file__).resolve().parents[1] / "src" / "master_runtime" / "core" / "acceptance"
+)
+
+
+def test_every_cli_profile_lives_behind_the_adapter_contract() -> None:
+    assert sync_cli_runtimes() == ("claude", "codex", "cursor-agent")
+    for runtime, profile in SYNC_CLI_PROFILES.items():
+        assert isinstance(profile, SyncCliProfile)
+        assert profile.name == runtime
+
+
+def test_core_acceptance_package_names_no_vendor_runtime() -> None:
+    """The acceptance core stays tool-name-free; vendor flags live in core/adapter."""
+
+    offenders = {}
+    for path in sorted(ACCEPTANCE_PACKAGE.glob("*.py")):
+        text = path.read_text(encoding="utf-8").lower()
+        hits = [token for token in ("claude", "codex", "cursor", "--trust") if token in text]
+        if hits:
+            offenders[path.name] = hits
+
+    assert offenders == {}
 
 
 def test_build_argv_for_the_claude_cli() -> None:
@@ -53,6 +84,28 @@ def test_build_argv_rejects_an_unsupported_runtime() -> None:
         build_proposer_argv("gemini", "fix it")
 
 
+def test_runtime_rejection_has_one_owner() -> None:
+    """`build_proposer_argv` and config validation share the same resolver."""
+
+    assert resolve_sync_cli_profile("gemini") is None
+    with pytest.raises(ProposerError, match="unsupported proposer runtime"):
+        require_sync_cli_profile("gemini")
+
+
+def test_a_new_profile_is_usable_without_touching_the_core(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class EchoProfile(SyncCliProfile):
+        name = "echo-agent"
+
+        def build_argv(self, prompt, model=None):
+            return [self.name, prompt]
+
+    monkeypatch.setitem(SYNC_CLI_PROFILES, "echo-agent", EchoProfile())
+
+    assert build_proposer_argv("echo-agent", "fix it") == ("echo-agent", "fix it")
+
+
 def test_build_argv_rejects_an_empty_prompt() -> None:
     with pytest.raises(ProposerError, match="prompt is empty"):
         build_proposer_argv("claude", "   ")
@@ -72,7 +125,7 @@ def test_invoke_cli_proposer_uses_the_injected_runner(tmp_path: Path) -> None:
         seen["argv"] = tuple(argv)
         seen["cwd"] = cwd
         seen["timeout"] = timeout_seconds
-        return ProposerResult(runtime=argv[0], argv=tuple(argv), returncode=0, stdout="done")
+        return ProcessResult(argv=tuple(argv), returncode=0, stdout="done")
 
     result = invoke_cli_proposer(
         ProposerRequest(
@@ -90,29 +143,35 @@ def test_invoke_cli_proposer_uses_the_injected_runner(tmp_path: Path) -> None:
     assert result.ok is True
 
 
-def test_proposer_result_detail_prefers_stderr() -> None:
-    result = ProposerResult(
-        runtime="claude", argv=("claude",), returncode=1, stdout="out", stderr="boom"
-    )
-
-    assert result.ok is False
-    assert result.detail() == "boom"
-
-
 def test_read_candidate_returns_none_when_the_declaration_is_missing(tmp_path: Path) -> None:
     assert read_candidate(tmp_path, "iter-001") is None
 
 
-def test_read_candidate_fails_closed_on_an_empty_surface_list(tmp_path: Path) -> None:
+def test_read_candidate_keeps_a_declaration_that_names_no_surface(tmp_path: Path) -> None:
+    """An empty surface list is a rejectable candidate, not a missing one."""
+
     (tmp_path / CANDIDATE_FILENAME).write_text(
-        json.dumps({"surfaces": [], "summary": "nothing"}), encoding="utf-8"
+        json.dumps({"surfaces": [], "summary": "nothing to change"}), encoding="utf-8"
     )
 
-    assert read_candidate(tmp_path, "iter-001") is None
+    candidate = read_candidate(tmp_path, "iter-001")
+
+    assert candidate is not None
+    assert candidate.surfaces == ()
+    assert candidate.changed is False
+    assert candidate.summary == "nothing to change"
 
 
 def test_read_candidate_fails_closed_on_invalid_json(tmp_path: Path) -> None:
     (tmp_path / CANDIDATE_FILENAME).write_text("{broken", encoding="utf-8")
+
+    assert read_candidate(tmp_path, "iter-001") is None
+
+
+def test_read_candidate_fails_closed_when_surfaces_is_not_a_list(tmp_path: Path) -> None:
+    (tmp_path / CANDIDATE_FILENAME).write_text(
+        json.dumps({"surfaces": "src/a.py"}), encoding="utf-8"
+    )
 
     assert read_candidate(tmp_path, "iter-001") is None
 

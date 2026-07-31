@@ -6,12 +6,14 @@ from pathlib import Path
 import pytest
 
 from master_runtime.core.acceptance.casebook import (
+    VISIBLE_SPLITS,
     CaseBook,
     CaseBookError,
     CaseOrigin,
     CaseSplit,
     RegressionLog,
     VerificationCase,
+    is_visible_split,
     load_casebook,
     normalize_split,
     read_casebook,
@@ -223,3 +225,48 @@ def test_render_split_markdown_labels_visibility() -> None:
 
     assert "## train (visible)" in rendered
     assert "## holdout (private)" in rendered
+
+
+def test_is_visible_split_is_the_only_visibility_reader() -> None:
+    assert is_visible_split(CaseSplit.TRAIN) is True
+    assert is_visible_split(CaseSplit.HOLDOUT) is False
+    assert is_visible_split(CaseSplit.SCORECARD) is False
+    assert VISIBLE_SPLITS == frozenset({CaseSplit.TRAIN})
+
+
+def test_case_visibility_follows_the_predicate(monkeypatch) -> None:
+    import master_runtime.core.acceptance.casebook as casebook_module
+
+    holdout_case = _case("h1", CaseSplit.HOLDOUT)
+    assert holdout_case.is_visible is False
+
+    monkeypatch.setattr(
+        casebook_module,
+        "VISIBLE_SPLITS",
+        frozenset({CaseSplit.TRAIN, CaseSplit.HOLDOUT}),
+    )
+
+    assert holdout_case.is_visible is True
+
+
+def test_visible_manifest_is_derived_from_the_visible_cases(monkeypatch) -> None:
+    import master_runtime.core.acceptance.casebook as casebook_module
+
+    book = _valid_book()
+    assert set(book.visible_manifest()) == {"train"}
+
+    monkeypatch.setattr(
+        casebook_module,
+        "VISIBLE_SPLITS",
+        frozenset({CaseSplit.TRAIN, CaseSplit.HOLDOUT}),
+    )
+
+    assert set(book.visible_manifest()) == {"train", "holdout"}
+
+
+def test_seed_strata_excludes_pinned_regressions() -> None:
+    book = _valid_book().with_cases(
+        (_case("r1", CaseSplit.HOLDOUT, "adhoc", origin=CaseOrigin.REGRESSION),)
+    )
+
+    assert book.seed_strata(CaseSplit.HOLDOUT) == frozenset({"unit", "io"})

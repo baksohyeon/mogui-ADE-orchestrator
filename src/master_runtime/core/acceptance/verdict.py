@@ -6,7 +6,7 @@ score, no natural-language rationale participates in the decision.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Dict, Iterable, Sequence, Tuple
 
@@ -14,6 +14,7 @@ from master_runtime.core.acceptance.casebook import (
     GATED_SPLITS,
     CaseSplit,
     VerificationCase,
+    is_visible_split,
 )
 
 
@@ -38,6 +39,12 @@ class CaseResult:
     passed: bool
     detail: str = ""
     duration_s: float = 0.0
+
+    @property
+    def is_visible(self) -> bool:
+        """Return whether a candidate proposer may see this result."""
+
+        return is_visible_split(self.split)
 
     def to_dict(self) -> Dict[str, object]:
         """Serialize the result."""
@@ -118,11 +125,7 @@ class Scorecard:
     def visible_failures(self) -> Tuple[CaseResult, ...]:
         """Return only the failures a candidate proposer may be shown."""
 
-        return tuple(
-            result
-            for result in self.failed_results()
-            if result.split == CaseSplit.TRAIN
-        )
+        return tuple(result for result in self.failed_results() if result.is_visible)
 
     def to_dict(self) -> Dict[str, object]:
         """Serialize the scorecard."""
@@ -150,6 +153,12 @@ class AcceptanceVerdict:
         """Return the combined pass-count delta."""
 
         return self.candidate_combined - self.current_combined
+
+    @property
+    def decision_label(self) -> str:
+        """Return the audit-record wording for this verdict."""
+
+        return "accepted" if self.accepted else "rejected"
 
     def to_dict(self) -> Dict[str, object]:
         """Serialize the verdict."""
@@ -192,13 +201,11 @@ def score_results(
             )
         else:
             # The case book, not the evaluator, owns split and stratum.
-            result = CaseResult(
-                case_id=case.case_id,
+            result = replace(
+                result,
                 split=case.split,
                 stratum=case.stratum,
                 passed=bool(result.passed),
-                detail=result.detail,
-                duration_s=result.duration_s,
             )
         ordered.append(result)
 

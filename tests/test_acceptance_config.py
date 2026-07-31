@@ -180,3 +180,17 @@ def test_command_evaluator_reports_a_missing_binary_as_a_failure(tmp_path: Path)
 
     assert results[0].passed is False
     assert results[0].detail
+
+
+def test_load_rejects_a_config_without_a_proposer_runtime(tmp_path: Path) -> None:
+    payload = _payload()
+    payload["proposer"] = {}
+
+    with pytest.raises(AcceptanceConfigError, match="unsupported proposer runtime"):
+        load_acceptance_config(_write(tmp_path, payload))
+
+
+def test_command_evaluator_declares_in_place_mutation(tmp_path: Path) -> None:
+    from master_runtime.core.acceptance.models import mutates_workspace_in_place
+
+    assert mutates_workspace_in_place(command_evaluator(tmp_path)) is True

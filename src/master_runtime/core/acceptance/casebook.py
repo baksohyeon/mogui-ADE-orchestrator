@@ -26,19 +26,28 @@ class CaseOrigin(str, Enum):
 
 
 VISIBLE_SPLITS = frozenset({CaseSplit.TRAIN})
-PRIVATE_SPLITS = frozenset({CaseSplit.HOLDOUT, CaseSplit.SCORECARD})
 GATED_SPLITS = (CaseSplit.TRAIN, CaseSplit.HOLDOUT)
 SPLIT_ALIASES = {
     "visible": CaseSplit.TRAIN.value,
     "private": CaseSplit.HOLDOUT.value,
     "acceptance": CaseSplit.SCORECARD.value,
-    "final_eval": CaseSplit.SCORECARD.value,
 }
 REGRESSION_READMIT_SPLIT = CaseSplit.HOLDOUT
 
 
 class CaseBookError(ValueError):
     """Raised when a case book is structurally invalid."""
+
+
+def is_visible_split(split: CaseSplit) -> bool:
+    """Return whether a candidate proposer may see one split.
+
+    This is the package's only visibility predicate. Every site that routes, filters,
+    or publishes by visibility calls it, so ``VISIBLE_SPLITS`` has exactly one reader
+    and cannot be changed in one place while another place keeps leaking.
+    """
+
+    return split in VISIBLE_SPLITS
 
 
 def normalize_split(value: Union[CaseSplit, str]) -> CaseSplit:
@@ -68,7 +77,7 @@ class VerificationCase:
     def is_visible(self) -> bool:
         """Return whether a candidate proposer may see this case."""
 
-        return self.split in VISIBLE_SPLITS
+        return is_visible_split(self.split)
 
     def to_dict(self) -> Dict[str, object]:
         """Serialize the case."""
@@ -142,22 +151,13 @@ class CaseBook:
 
         return tuple(case.case_id for case in self.cases)
 
-    def has_split(self, split: Union[CaseSplit, str]) -> bool:
-        """Return whether the book defines any case for one split."""
-
-        return bool(self.cases_for_split(split))
-
-    def strata_for_split(
-        self,
-        split: Union[CaseSplit, str],
-        origin: Optional[CaseOrigin] = CaseOrigin.SEED,
-    ) -> frozenset:
-        """Return the stratum set for one split, optionally filtered by origin."""
+    def seed_strata(self, split: Union[CaseSplit, str]) -> frozenset:
+        """Return the stratum set contributed by the seed cases of one split."""
 
         return frozenset(
             case.stratum
             for case in self.cases_for_split(split)
-            if origin is None or case.origin == origin
+            if case.origin == CaseOrigin.SEED
         )
 
     def with_cases(self, extra: Iterable[VerificationCase]) -> "CaseBook":
@@ -190,8 +190,8 @@ class CaseBook:
                     "split {0} must include at least one case".format(split.value)
                 )
 
-        train_strata = self.strata_for_split(CaseSplit.TRAIN)
-        holdout_strata = self.strata_for_split(CaseSplit.HOLDOUT)
+        train_strata = self.seed_strata(CaseSplit.TRAIN)
+        holdout_strata = self.seed_strata(CaseSplit.HOLDOUT)
         if train_strata != holdout_strata:
             raise CaseBookError(
                 "train and holdout must cover the same seed strata; "
@@ -211,11 +211,16 @@ class CaseBook:
         return payload
 
     def visible_manifest(self) -> Dict[str, List[Dict[str, object]]]:
-        """Return the manifest a candidate proposer may read."""
+        """Return the manifest a candidate proposer may read.
 
-        return {
-            CaseSplit.TRAIN.value: [case.to_dict() for case in self.visible_cases()],
-        }
+        Derived from :meth:`visible_cases` rather than naming a split, so it cannot
+        drift away from the visibility predicate.
+        """
+
+        payload: Dict[str, List[Dict[str, object]]] = {}
+        for case in self.visible_cases():
+            payload.setdefault(case.split.value, []).append(case.to_dict())
+        return payload
 
 
 def load_casebook(payload: Union[Sequence[Mapping[str, object]], Mapping[str, object]]) -> CaseBook:
@@ -350,7 +355,7 @@ def render_split_markdown(casebook: CaseBook) -> str:
         cases = casebook.cases_for_split(split)
         if not cases:
             continue
-        visibility = "visible" if split in VISIBLE_SPLITS else "private"
+        visibility = "visible" if is_visible_split(split) else "private"
         lines.extend(["## {0} ({1})".format(split.value, visibility), ""])
         lines.extend(
             "- `{0}` [{1}] origin=`{2}`".format(case.stratum, case.case_id, case.origin.value)

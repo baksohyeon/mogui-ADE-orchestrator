@@ -15,7 +15,8 @@ from master_runtime.core.acceptance.casebook import CaseBook, RegressionLog, loa
 from master_runtime.core.acceptance.models import AcceptanceConfig
 from master_runtime.core.acceptance.proposer import (
     DEFAULT_PROPOSER_TIMEOUT_SECONDS,
-    SUPPORTED_RUNTIMES,
+    ProposerError,
+    require_sync_cli_profile,
 )
 
 
@@ -56,13 +57,12 @@ def load_acceptance_config(path: Union[str, Path]) -> LoadedConfig:
     proposer = payload.get("proposer", {})
     if not isinstance(proposer, Mapping):
         raise AcceptanceConfigError("'proposer' must be an object")
-    runtime = str(proposer.get("runtime", "claude")).strip().lower()
-    if runtime not in SUPPORTED_RUNTIMES:
-        raise AcceptanceConfigError(
-            "unsupported proposer runtime {0!r}; expected one of {1}".format(
-                runtime, ", ".join(SUPPORTED_RUNTIMES)
-            )
-        )
+    runtime = str(proposer.get("runtime", "")).strip().lower()
+    # One rejection rule for runtime names: does a CLI profile resolve?
+    try:
+        require_sync_cli_profile(runtime)
+    except ProposerError as exc:
+        raise AcceptanceConfigError(str(exc)) from exc
     model = proposer.get("model")
     if model is not None and not isinstance(model, str):
         raise AcceptanceConfigError("'proposer.model' must be a string or null")

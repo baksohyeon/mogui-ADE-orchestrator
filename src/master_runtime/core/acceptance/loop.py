@@ -19,7 +19,7 @@ from master_runtime.core.acceptance.casebook import (
     RegressionLog,
     VerificationCase,
 )
-from master_runtime.core.acceptance.layout import AcceptanceRunLayout, write_json
+from master_runtime.core.acceptance.layout import AcceptanceRunLayout, write_json, write_text
 from master_runtime.core.acceptance.models import (
     CANDIDATE_FILENAME,
     CANDIDATE_LABEL_FORMAT,
@@ -30,12 +30,11 @@ from master_runtime.core.acceptance.models import (
     Evaluator,
     Proposer,
     ProposerContext,
+    mark_in_place,
+    mutates_workspace_in_place,
 )
-from master_runtime.core.acceptance.proposer import (
-    CliRunner,
-    ProposerRequest,
-    invoke_cli_proposer,
-)
+from master_runtime.core.acceptance.process import ProcessRunner
+from master_runtime.core.acceptance.proposer import ProposerRequest, invoke_cli_proposer
 from master_runtime.core.acceptance.report import AcceptanceReport, IterationRecord
 from master_runtime.core.acceptance.verdict import (
     Scorecard,
@@ -52,6 +51,7 @@ def build_proposer_workspace(
     current: Candidate,
     casebook: CaseBook,
     scorecard: Scorecard,
+    iterations: Sequence[IterationRecord] = (),
 ) -> Path:
     """Materialize the visible-only workspace handed to a proposer."""
 
@@ -66,15 +66,7 @@ def build_proposer_workspace(
     write_json(workspace / "casebook_visible.json", casebook.visible_manifest())
     write_json(
         workspace / "history.json",
-        [
-            {
-                "iteration": decision.get("iteration"),
-                "decision": decision.get("decision"),
-                "reason": decision.get("reason"),
-                "changed_surfaces": decision.get("changed_surfaces", []),
-            }
-            for decision in layout.read_decisions()
-        ],
+        [_history_entry(record) for record in iterations],
     )
 
     failure_lines = [
@@ -87,7 +79,8 @@ def build_proposer_workspace(
         failure_lines.append("- No visible failures remain.")
 
     train_score = scorecard.split_score(CaseSplit.TRAIN)
-    (workspace / TASK_FILENAME).write_text(
+    write_text(
+        workspace / TASK_FILENAME,
         "\n".join(
             [
                 "# Candidate Proposal Task",
@@ -118,17 +111,17 @@ def build_proposer_workspace(
             ]
         )
         + "\n",
-        encoding="utf-8",
-    )
-    (workspace / PROPOSAL_FILENAME).write_text(
-        "# Proposal\n\n- Summary:\n- Why this should help:\n- Surfaces changed:\n",
-        encoding="utf-8",
     )
     return workspace
 
 
 def read_candidate(workspace: Path, label: str) -> Optional[Candidate]:
-    """Read the candidate a proposer declared, failing closed when it is absent."""
+    """Read the candidate a proposer declared.
+
+    Returns None only when no usable declaration exists at all. A declaration that
+    names no surface still produces a Candidate, so the loop can record why it was
+    rejected instead of letting the iteration disappear from the audit trail.
+    """
 
     candidate_path = workspace / CANDIDATE_FILENAME
     if not candidate_path.exists():
@@ -144,14 +137,16 @@ def read_candidate(workspace: Path, label: str) -> Optional[Candidate]:
     if not isinstance(surfaces, (list, tuple)):
         return None
     declared = tuple(item for item in surfaces if isinstance(item, str) and item.strip())
-    if not declared:
-        return None
 
     summary = payload.get("summary")
     ref = payload.get("ref")
     proposal_path = workspace / PROPOSAL_FILENAME
     if not isinstance(summary, str) or not summary.strip():
-        summary = proposal_path.read_text(encoding="utf-8").strip() if proposal_path.exists() else ""
+        summary = (
+            proposal_path.read_text(encoding="utf-8").strip()
+            if proposal_path.exists()
+            else ""
+        )
     return Candidate(
         label=label,
         ref=ref if isinstance(ref, str) else "",
@@ -162,9 +157,13 @@ def read_candidate(workspace: Path, label: str) -> Optional[Candidate]:
 
 def cli_proposer(
     config: AcceptanceConfig,
-    runner: Optional[CliRunner] = None,
+    runner: Optional[ProcessRunner] = None,
 ) -> Proposer:
-    """Build a proposer backed by a subscription CLI subprocess."""
+    """Build a proposer backed by a subscription CLI subprocess.
+
+    The CLI edits the target workspace directly, so the returned proposer declares
+    in-place mutation and the loop will require a restore hook to iterate.
+    """
 
     def propose(context: ProposerContext) -> Optional[Candidate]:
         prompt = (context.workspace_dir / TASK_FILENAME).read_text(encoding="utf-8")
@@ -179,12 +178,8 @@ def cli_proposer(
             runner=runner,
         )
         write_json(context.workspace_dir / "proposer_result.json", result.to_dict())
-        (context.workspace_dir / "proposer_stdout.log").write_text(
-            result.stdout, encoding="utf-8"
-        )
-        (context.workspace_dir / "proposer_stderr.log").write_text(
-            result.stderr, encoding="utf-8"
-        )
+        write_text(context.workspace_dir / "proposer_stdout.log", result.stdout)
+        write_text(context.workspace_dir / "proposer_stderr.log", result.stderr)
         if not result.ok:
             return None
         return read_candidate(
@@ -192,7 +187,7 @@ def cli_proposer(
             CANDIDATE_LABEL_FORMAT.format(context.iteration),
         )
 
-    return propose
+    return mark_in_place(propose)
 
 
 def run_acceptance_loop(
@@ -210,6 +205,9 @@ def run_acceptance_loop(
 
     if config.max_iterations < 1:
         raise ValueError("max_iterations must be at least 1")
+    _require_restore_hook(
+        config=config, proposer=proposer, evaluator=evaluator, on_reject=on_reject
+    )
 
     now = clock or time.time
     casebook.validate()
@@ -240,17 +238,16 @@ def run_acceptance_loop(
             current=current,
             casebook=casebook,
             scorecard=current_score,
+            iterations=iterations,
         )
         candidate = proposer(
             ProposerContext(
                 iteration=index,
                 workspace_dir=workspace,
                 current=current,
-                visible_cases=casebook.visible_cases(),
-                visible_failures=current_score.visible_failures(),
             )
         )
-        if candidate is None or not candidate.changed:
+        if candidate is None:
             iterations.append(
                 IterationRecord(
                     iteration=index,
@@ -261,15 +258,21 @@ def run_acceptance_loop(
             )
             break
 
-        candidate_score = _evaluate(
-            evaluator=evaluator, candidate=candidate, cases=gated, layout=layout
-        )
+        # An unchanged candidate is not worth an evaluation run: its score is the
+        # current score by definition. decide() still owns the rejection.
+        candidate_score = current_score
+        promoted: Tuple[str, ...] = ()
+        if candidate.changed:
+            candidate_score = _evaluate(
+                evaluator=evaluator, candidate=candidate, cases=gated, layout=layout
+            )
+            promoted = _promote(regression_log, gated, candidate_score, iteration=index)
+
         verdict = decide(
             current=current_score,
             candidate=candidate_score,
             candidate_changed=candidate.changed,
         )
-        promoted = _promote(regression_log, gated, candidate_score, iteration=index)
         layout.write_iteration_decision(
             iteration=index,
             starting_label=current.label,
@@ -286,6 +289,8 @@ def run_acceptance_loop(
                 promoted_regressions=promoted,
             )
         )
+        if not candidate.changed:
+            break
         if verdict.accepted:
             current = candidate
             current_score = candidate_score
@@ -302,12 +307,18 @@ def run_acceptance_loop(
             layout=layout,
             label_suffix="scorecard",
         )
-        final_scorecard = _evaluate(
-            evaluator=evaluator,
-            candidate=current,
-            cases=scorecard_cases,
-            layout=layout,
-            label_suffix="scorecard",
+        # Nothing was accepted, so the final tree is the baseline tree: re-running the
+        # scorecard would run the same commands against the same state.
+        final_scorecard = (
+            baseline_scorecard
+            if current is baseline
+            else _evaluate(
+                evaluator=evaluator,
+                candidate=current,
+                cases=scorecard_cases,
+                layout=layout,
+                label_suffix="scorecard",
+            )
         )
 
     report = AcceptanceReport(
@@ -323,6 +334,43 @@ def run_acceptance_loop(
     )
     layout.write_report(report)
     return report
+
+
+def _require_restore_hook(
+    *,
+    config: AcceptanceConfig,
+    proposer: Proposer,
+    evaluator: Evaluator,
+    on_reject: Optional[Callable[[Candidate], None]],
+) -> None:
+    if config.max_iterations < 2 or on_reject is not None:
+        return
+    in_place = [
+        name
+        for name, target in (("proposer", proposer), ("evaluator", evaluator))
+        if mutates_workspace_in_place(target)
+    ]
+    if not in_place:
+        return
+    raise ValueError(
+        "{0} {1} the workspace in place; pass on_reject to restore it after a "
+        "rejected candidate, or set max_iterations=1. Iterating past a rejection "
+        "without restoring would evaluate the rejected tree.".format(
+            " and ".join(in_place),
+            "mutates" if len(in_place) == 1 else "mutate",
+        )
+    )
+
+
+def _history_entry(record: IterationRecord) -> dict:
+    return {
+        "iteration": record.iteration,
+        "decision": None if record.verdict is None else record.verdict.decision_label,
+        "reason": None if record.verdict is None else record.verdict.reason.value,
+        "changed_surfaces": []
+        if record.candidate is None
+        else list(record.candidate.surfaces),
+    }
 
 
 def _evaluate(
@@ -354,4 +402,3 @@ def _promote(
         iteration=iteration,
     )
     return tuple(case.case_id for case in promoted)
-

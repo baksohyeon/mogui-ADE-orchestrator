@@ -12,6 +12,7 @@ from master_runtime.core.acceptance.casebook import (
     RegressionLog,
     VerificationCase,
 )
+from master_runtime.core.acceptance.evaluators import command_evaluator
 from master_runtime.core.acceptance.layout import AcceptanceRunLayout
 from master_runtime.core.acceptance.loop import cli_proposer, run_acceptance_loop
 from master_runtime.core.acceptance.models import (
@@ -19,8 +20,9 @@ from master_runtime.core.acceptance.models import (
     CANDIDATE_FILENAME,
     AcceptanceConfig,
     Candidate,
+    mark_in_place,
 )
-from master_runtime.core.acceptance.proposer import ProposerResult
+from master_runtime.core.acceptance.process import ProcessResult
 from master_runtime.core.acceptance.verdict import AcceptanceReason, CaseResult
 
 
@@ -46,6 +48,7 @@ def _config(tmp_path: Path, max_iterations: int = 1) -> AcceptanceConfig:
         run_dir=tmp_path / "run",
         workspace_root=tmp_path / "workspace",
         max_iterations=max_iterations,
+        proposer_runtime="claude",
     )
 
 
@@ -210,19 +213,45 @@ def test_loop_stops_when_the_proposer_returns_no_candidate(tmp_path: Path) -> No
     assert report.iterations[0].verdict is None
 
 
-def test_loop_stops_when_the_proposer_declares_no_changed_surface(tmp_path: Path) -> None:
-    empty = Candidate(label="iter-001", surfaces=())
+def test_an_unchanged_candidate_is_rejected_on_the_record_not_dropped(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path, max_iterations=3)
+    empty = Candidate(label="iter-001", surfaces=(), summary="nothing to change")
+    calls: list = []
 
     report = run_acceptance_loop(
-        config=_config(tmp_path, max_iterations=3),
+        config=config,
         casebook=_book(),
         baseline=Candidate(label=BASELINE_LABEL),
         proposer=_proposer([empty]),
-        evaluator=_evaluator({BASELINE_LABEL: {"t1", "h1"}}),
+        evaluator=_evaluator({BASELINE_LABEL: {"t1", "h1"}}, calls=calls),
     )
 
     assert len(report.iterations) == 1
-    assert report.iterations[0].candidate is None
+    record = report.iterations[0]
+    assert record.candidate is not None
+    assert record.candidate.label == "iter-001"
+    assert record.verdict.accepted is False
+    assert record.verdict.reason == AcceptanceReason.NO_CANDIDATE_CHANGE
+    # the baseline was scored once; the unchanged candidate cost no evaluation
+    assert len(calls) == 1
+
+    payload = json.loads(
+        (
+            Path(config.run_dir)
+            / "history"
+            / "visible"
+            / "iterations"
+            / "001"
+            / "decision.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert payload["decision"] == "rejected"
+    assert payload["reason"] == AcceptanceReason.NO_CANDIDATE_CHANGE.value
+    assert payload["candidate_label"] == "iter-001"
+    assert payload["summary"] == "nothing to change"
+    assert payload["changed_surfaces"] == []
 
 
 def test_loop_runs_no_iteration_when_the_baseline_already_passes(tmp_path: Path) -> None:
@@ -406,9 +435,7 @@ def test_cli_proposer_goes_through_the_single_invocation_seam(
             json.dumps({"surfaces": ["src/target.py"], "summary": "seam"}),
             encoding="utf-8",
         )
-        return ProposerResult(
-            runtime=request.runtime, argv=("claude", "-p", "..."), returncode=0
-        )
+        return ProcessResult(argv=("claude", "-p", "..."), returncode=0)
 
     monkeypatch.setattr(
         "master_runtime.core.acceptance.loop.invoke_cli_proposer", fake_invoke
@@ -450,12 +477,7 @@ def test_cli_proposer_produces_no_candidate_when_the_cli_fails(
 
     def fake_invoke(request, runner=None):
         del runner
-        return ProposerResult(
-            runtime=request.runtime,
-            argv=("claude",),
-            returncode=1,
-            stderr="quota exhausted",
-        )
+        return ProcessResult(argv=("claude",), returncode=1, stderr="quota exhausted")
 
     monkeypatch.setattr(
         "master_runtime.core.acceptance.loop.invoke_cli_proposer", fake_invoke
@@ -483,3 +505,204 @@ def test_layout_keeps_private_results_outside_the_visible_root(tmp_path: Path) -
     assert layout.visible_root in train_dir.parents
     assert layout.private_root in holdout_dir.parents
     assert layout.private_root in scorecard_dir.parents
+
+
+# --- r2: in-place mutation guard (P1.4) ---
+
+
+def test_loop_refuses_to_iterate_past_a_rejection_without_a_restore_hook(
+    tmp_path: Path,
+) -> None:
+    """The guard lives in the library, not in one CLI's argument parser."""
+
+    in_place_proposer = mark_in_place(_proposer([_candidate()]))
+
+    with pytest.raises(ValueError, match="mutates the workspace in place"):
+        run_acceptance_loop(
+            config=_config(tmp_path, max_iterations=2),
+            casebook=_book(),
+            baseline=Candidate(label=BASELINE_LABEL),
+            proposer=in_place_proposer,
+            evaluator=_evaluator({BASELINE_LABEL: {"t1", "h1"}}),
+        )
+
+
+def test_the_command_evaluator_also_declares_in_place_mutation(tmp_path: Path) -> None:
+    (tmp_path / "workspace").mkdir()
+
+    with pytest.raises(ValueError, match="evaluator mutates the workspace in place"):
+        run_acceptance_loop(
+            config=_config(tmp_path, max_iterations=2),
+            casebook=_book(),
+            baseline=Candidate(label=BASELINE_LABEL),
+            proposer=_proposer([_candidate()]),
+            evaluator=command_evaluator(tmp_path / "workspace"),
+        )
+
+
+def test_an_in_place_proposer_is_allowed_with_a_restore_hook(tmp_path: Path) -> None:
+    restored: list = []
+
+    report = run_acceptance_loop(
+        config=_config(tmp_path, max_iterations=2),
+        casebook=_book(),
+        baseline=Candidate(label=BASELINE_LABEL),
+        proposer=mark_in_place(_proposer([_candidate("iter-001")])),
+        evaluator=_evaluator(
+            {BASELINE_LABEL: {"t1", "h1"}, "iter-001": {"t1", "t2"}}
+        ),
+        on_reject=lambda candidate: restored.append(candidate.label),
+    )
+
+    assert restored == ["iter-001"]
+    assert report.final.label == BASELINE_LABEL
+
+
+def test_a_single_iteration_never_needs_a_restore_hook(tmp_path: Path) -> None:
+    report = run_acceptance_loop(
+        config=_config(tmp_path, max_iterations=1),
+        casebook=_book(),
+        baseline=Candidate(label=BASELINE_LABEL),
+        proposer=mark_in_place(_proposer([_candidate()])),
+        evaluator=_evaluator({BASELINE_LABEL: {"t1", "h1"}, "iter-001": {"t1", "t2"}}),
+    )
+
+    assert report.accepted_count == 0
+
+
+# --- r2: visibility predicate is single-sourced (P1.2) ---
+
+
+def test_widening_the_visible_splits_moves_every_site_at_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """VISIBLE_SPLITS has one reader; changing it must change every site together."""
+
+    import master_runtime.core.acceptance.casebook as casebook_module
+
+    monkeypatch.setattr(
+        casebook_module,
+        "VISIBLE_SPLITS",
+        frozenset({CaseSplit.TRAIN, CaseSplit.HOLDOUT}),
+    )
+    config = _config(tmp_path)
+
+    run_acceptance_loop(
+        config=config,
+        casebook=_book(),
+        baseline=Candidate(label=BASELINE_LABEL),
+        proposer=_proposer([None]),
+        evaluator=_evaluator({BASELINE_LABEL: set()}),
+    )
+
+    run_dir = Path(config.run_dir)
+    # layout routing followed the predicate
+    assert (run_dir / "history" / "visible" / "holdout" / BASELINE_LABEL / "result.json").exists()
+    assert not (run_dir / "history" / "private").exists()
+    # the manifest and the failure list followed it too
+    workspace = run_dir / "history" / "visible" / "iterations" / "001" / "proposer_workspace"
+    manifest = json.loads((workspace / "casebook_visible.json").read_text(encoding="utf-8"))
+    assert set(manifest) == {"train", "holdout"}
+    failures = json.loads((workspace / "visible_failures.json").read_text(encoding="utf-8"))
+    assert {item["case_id"] for item in failures} == {"t1", "t2", "h1", "h2"}
+
+
+# --- r2: efficiency and provenance (P2.5, P2.10) ---
+
+
+def test_scorecard_is_not_re_run_when_nothing_was_accepted(tmp_path: Path) -> None:
+    calls: list = []
+    book = _book((_case("s1", CaseSplit.SCORECARD, "unit"),))
+
+    report = run_acceptance_loop(
+        config=_config(tmp_path),
+        casebook=book,
+        baseline=Candidate(label=BASELINE_LABEL),
+        proposer=_proposer([_candidate()]),
+        evaluator=_evaluator(
+            {BASELINE_LABEL: {"t1", "h1", "s1"}, "iter-001": {"t1", "t2"}}, calls=calls
+        ),
+    )
+
+    assert report.accepted_count == 0
+    assert report.final is report.baseline
+    assert len([call for call in calls if call[1] == ("s1",)]) == 1
+    assert report.final_scorecard is report.baseline_scorecard
+
+
+def test_proposer_history_comes_from_the_live_iterations(tmp_path: Path) -> None:
+    config = _config(tmp_path, max_iterations=2)
+    workspaces = (
+        Path(config.run_dir) / "history" / "visible" / "iterations" / "{0:03d}",
+    )[0]
+
+    run_acceptance_loop(
+        config=config,
+        casebook=_book(),
+        baseline=Candidate(label=BASELINE_LABEL),
+        proposer=_proposer([_candidate("iter-001"), _candidate("iter-002")]),
+        evaluator=_evaluator(
+            {
+                BASELINE_LABEL: {"t1", "h1"},
+                "iter-001": {"t1", "t2"},
+                "iter-002": {"t1", "t2", "h1"},
+            }
+        ),
+    )
+
+    first = json.loads(
+        (Path(str(workspaces).format(1)) / "proposer_workspace" / "history.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    second = json.loads(
+        (Path(str(workspaces).format(2)) / "proposer_workspace" / "history.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert first == []
+    assert second == [
+        {
+            "iteration": 1,
+            "decision": "rejected",
+            "reason": AcceptanceReason.NO_PASS_COUNT_INCREASE.value,
+            "changed_surfaces": ["src/target.py"],
+        }
+    ]
+
+
+def test_read_decisions_stays_available_as_the_cold_audit_path(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+
+    run_acceptance_loop(
+        config=config,
+        casebook=_book(),
+        baseline=Candidate(label=BASELINE_LABEL),
+        proposer=_proposer([_candidate()]),
+        evaluator=_evaluator(
+            {BASELINE_LABEL: {"t1", "h1"}, "iter-001": {"t1", "t2", "h1"}}
+        ),
+    )
+
+    decisions = AcceptanceRunLayout(config.run_dir).read_decisions()
+
+    assert [decision["decision"] for decision in decisions] == ["accepted"]
+
+
+def test_artifacts_are_written_atomically(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+
+    run_acceptance_loop(
+        config=config,
+        casebook=_book(),
+        baseline=Candidate(label=BASELINE_LABEL),
+        proposer=_proposer([None]),
+        evaluator=_evaluator({BASELINE_LABEL: {"t1", "h1"}}),
+    )
+
+    leftovers = [
+        path.name for path in Path(config.run_dir).rglob("*") if path.name.endswith(".tmp")
+    ]
+    assert leftovers == []

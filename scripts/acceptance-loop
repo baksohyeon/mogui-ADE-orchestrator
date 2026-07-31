@@ -6,8 +6,8 @@ from __future__ import annotations
 import argparse
 import json
 import shlex
-import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 
@@ -19,14 +19,18 @@ sys.path.insert(0, str(SRC_ROOT))
 from master_runtime.core.acceptance import (  # noqa: E402
     BASELINE_LABEL,
     AcceptanceConfigError,
+    AcceptanceRunLayout,
     Candidate,
     CaseSplit,
     cli_proposer,
     command_evaluator,
     load_acceptance_config,
-    render_split_markdown,
     run_acceptance_loop,
+    run_process,
 )
+
+
+RESTORE_TIMEOUT_SECONDS = 5 * 60
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -102,15 +106,10 @@ def _split(loaded, args: argparse.Namespace) -> int:
     casebook = loaded.casebook
     if loaded.regression_log is not None:
         casebook = loaded.regression_log.apply(casebook)
-    output_dir = Path(args.output_dir) if args.output_dir else Path(loaded.config.run_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    split_path = output_dir / "split.json"
-    split_path.write_text(
-        json.dumps(casebook.manifest(), indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    (output_dir / "split.md").write_text(render_split_markdown(casebook), encoding="utf-8")
-    print(split_path)
+    root = Path(args.output_dir) if args.output_dir else Path(loaded.config.run_dir)
+    layout = AcceptanceRunLayout(root)
+    layout.write_manifest(loaded.config, casebook)
+    print(root / "split.json")
     return 0
 
 
@@ -120,15 +119,7 @@ def _run(loaded, args: argparse.Namespace) -> int:
         if args.max_iterations < 1:
             print("--max-iterations must be at least 1", file=sys.stderr)
             return 2
-        config = _with_max_iterations(config, args.max_iterations)
-
-    if config.max_iterations > 1 and not args.restore_cmd:
-        print(
-            "--restore-cmd is required when --max-iterations is greater than 1: "
-            "a rejected candidate must be rolled back before the next proposal",
-            file=sys.stderr,
-        )
-        return 2
+        config = replace(config, max_iterations=args.max_iterations)
 
     restore_hook = None
     if args.restore_cmd:
@@ -136,34 +127,33 @@ def _run(loaded, args: argparse.Namespace) -> int:
 
         def restore_hook(candidate: Candidate) -> None:
             del candidate
-            subprocess.run(restore_argv, cwd=str(config.workspace_root), check=False)
+            run_process(restore_argv, config.workspace_root, RESTORE_TIMEOUT_SECONDS)
 
-    report = run_acceptance_loop(
-        config=config,
-        casebook=loaded.casebook,
-        baseline=Candidate(label=BASELINE_LABEL, ref=args.baseline_ref),
-        proposer=cli_proposer(config),
-        evaluator=command_evaluator(config.workspace_root),
-        regression_log=loaded.regression_log,
-        on_reject=restore_hook,
-    )
+    try:
+        report = run_acceptance_loop(
+            config=config,
+            casebook=loaded.casebook,
+            baseline=Candidate(label=BASELINE_LABEL, ref=args.baseline_ref),
+            proposer=cli_proposer(config),
+            evaluator=command_evaluator(config.workspace_root),
+            regression_log=loaded.regression_log,
+            on_reject=restore_hook,
+        )
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
     print(report.to_markdown())
     return 0 if report.final_score.is_complete() else 1
 
 
 def _inspect(args: argparse.Namespace) -> int:
-    report_path = Path(args.run_dir) / "report.json"
+    report_path = AcceptanceRunLayout(args.run_dir).report_path
     if not report_path.exists():
         print("no report at {0}".format(report_path), file=sys.stderr)
         return 2
     print(report_path.read_text(encoding="utf-8"), end="")
     return 0
-
-
-def _with_max_iterations(config, max_iterations: int):
-    from dataclasses import replace
-
-    return replace(config, max_iterations=max_iterations)
 
 
 if __name__ == "__main__":

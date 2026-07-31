@@ -8,6 +8,10 @@
 Language note: this report follows the repository convention of English docs
 (`docs/planning/*`, `docs/architecture/*`); the work order itself was Korean.
 
+Sections 1–7 record the initial port (`c4203ba`). Review remediation followed in r2;
+where r2 changed a decision — notably the CLI argv table in §2.3 and the handling of a
+candidate that declares no surface — the **r2 Supplement** at the end supersedes them.
+
 ## 1. Gap Analysis
 
 The reference optimizes an *inner agent's harness surfaces* using evals. This repository
@@ -245,3 +249,160 @@ report = run_acceptance_loop(
 4. **`ToolProfile` for CLI runtimes.** Not added: `ToolProfile` is built around async
    dispatch + `job_id` + probe, which `claude -p` and `codex exec` (synchronous, no job id)
    do not have. Forcing them in would distort the existing contract.
+
+---
+
+# r2 Supplement — Review Remediation
+
+- **Job ID:** `DZ-bwh-mogui-bh-port-r2`
+- **Reviews addressed:** reuse / simplification / efficiency / altitude, against commit `c4203ba`
+- **Out of scope by instruction** (queued separately by the requester): the four
+  repo-wide core consolidations — a shared JSONL module across
+  `work_ledger`/`dispatch_gate`/`digest_loop`, `_string_or_none`-family merging,
+  a shared `_positive_int`, and folding config path resolution into `context/resolver`.
+
+## P1 — Structure and Safety
+
+### P1.1 Core boundary: vendor CLI policy moved out of core
+
+`proposer.py` held a three-branch argv table naming `claude`, `codex exec`, and
+`cursor-agent --trust --force`. That is vendor policy inside a core module the README
+declares tool-name-free.
+
+- New contract `SyncCliProfile` in `core/adapter/profile.py`, beside the existing
+  `ToolProfile`: `build_argv(prompt, model) -> argv`. It is a separate contract, not a
+  `ToolProfile` subclass, because `ToolProfile` models asynchronous dispatch with a job
+  id and a probe, which a foreground one-shot CLI does not have.
+- `ClaudeCliProfile`, `CodexExecProfile`, `CursorAgentProfile` moved behind it, with a
+  `SYNC_CLI_PROFILES` registry, `resolve_sync_cli_profile()`, and `sync_cli_runtimes()`.
+- `build_proposer_argv()` is now a registry lookup plus delegation.
+- `SUPPORTED_RUNTIMES` is gone. `require_sync_cli_profile()` is the **single** rejection
+  site; `config.py` calls it and re-raises as `AcceptanceConfigError` rather than
+  keeping its own list.
+- Also removed, though not in the review list: the default `proposer_runtime = "claude"`
+  in `AcceptanceConfig` and in `config.py`. A vendor name as a core default would have
+  defeated the whole item. The runtime is now required in config, and an unset runtime
+  fails with the list of known profiles.
+
+Regression tests: a new profile registered at runtime is usable without touching the
+core (`test_a_new_profile_is_usable_without_touching_the_core`), and a structural test
+asserts no `claude` / `codex` / `cursor` / `--trust` token appears anywhere in
+`core/acceptance/*.py`. Mutation-checked: adding `FALLBACK_RUNTIME = "claude"` back into
+`proposer.py` fails that test.
+
+### P1.2 One visibility predicate
+
+Visibility was decided in three places at three depths. `VISIBLE_SPLITS` could be
+widened while `Scorecard.visible_failures()` and `visible_manifest()` kept their `TRAIN`
+literals — a leak with green tests.
+
+- `is_visible_split(split)` in `casebook.py` is now the only reader of `VISIBLE_SPLITS`.
+- `VerificationCase.is_visible`, the new `CaseResult.is_visible`,
+  `Scorecard.visible_failures()`, `render_split_markdown()`, and
+  `AcceptanceRunLayout.split_dir()` all call it.
+- `CaseBook.visible_manifest()` is derived by grouping `visible_cases()` by split
+  instead of naming `TRAIN`.
+
+Regression test: `test_widening_the_visible_splits_moves_every_site_at_once` patches
+`VISIBLE_SPLITS` to include `HOLDOUT` and asserts that layout routing, the visible
+manifest, and the visible failure list all move together. Mutation-checked: restoring
+the hardcoded `TRAIN` key in `visible_manifest()` fails it.
+
+### P1.3 No-change gate has one owner
+
+The "candidate declared nothing" rule lived in `read_candidate()`, in the loop's break
+condition, and in `decide()`. A proposer that wrote `candidate.json` with an empty
+`surfaces` list vanished as `IterationRecord(candidate=None)` — no `decision.json`, no
+label, no summary — and `NO_CANDIDATE_CHANGE` was unreachable in any run artifact.
+
+`decide()` now owns it:
+
+- `read_candidate()` returns a real `Candidate` for an empty surface list. It still
+  returns `None` only when there is no usable declaration (absent file, invalid JSON,
+  `surfaces` not a list).
+- The loop breaks on `candidate is None` only. An unchanged candidate is passed to
+  `decide()`, gets `NO_CANDIDATE_CHANGE`, is written to `decision.json` with its label
+  and summary, is recorded as an `IterationRecord`, and only then ends the run.
+- An unchanged candidate is not evaluated: its score is the current score by
+  definition, so the loop skips the evaluator call entirely.
+
+Regression test: `test_an_unchanged_candidate_is_rejected_on_the_record_not_dropped`
+asserts the verdict, the `decision.json` contents, and that exactly one evaluation
+(the baseline) ran.
+
+### P1.4 Restore guard moved into the library
+
+The `--max-iterations > 1 requires --restore-cmd` rule lived only in the CLI argument
+parser, so the same combination assembled in Python silently evaluated a dirty tree.
+
+In-place mutation is now a declared property of the proposer/evaluator contract:
+`mark_in_place()` / `mutates_workspace_in_place()` in `models.py`. `cli_proposer()` and
+`command_evaluator()` both declare it. `run_acceptance_loop()` raises `ValueError` when
+`max_iterations > 1`, something declares in-place mutation, and no `on_reject` hook was
+given. The CLI now only supplies the hook and turns the library error into exit 2.
+
+Regression tests: the guard fires for an in-place proposer and for `command_evaluator`,
+stays silent with a restore hook, and stays silent at `max_iterations == 1`.
+
+## P2 — Efficiency and Duplication
+
+| # | Item | Change |
+|---|---|---|
+| 5 | Scorecard run twice on a zero-acceptance run | `final_scorecard` reuses `baseline_scorecard` when `current is baseline`. Test asserts one scorecard evaluation and object identity. |
+| 6 | CLI `_split` reimplemented `write_manifest` | Both `split` and `run` go through `AcceptanceRunLayout.write_manifest()`, so `split` now emits `manifest.json` too — the drift the review found. `_inspect` uses the new `layout.report_path`; the subcommand is kept because it is the only read path that does not require the caller to know the run layout. |
+| 7 | Two near-identical subprocess runners | New `acceptance/process.py` with one `ProcessResult` + `run_process()`. `ProposerResult` is deleted; the proposer seam returns `ProcessResult`. The CLI restore hook runs through `run_process` too and therefore has a timeout (it had none). |
+| 8 | Non-atomic artifact writes | `write_json()` and the new `write_text()` write to `.<name>.<pid>.tmp` then `os.replace`, matching `dispatch_gate`'s ticket write. Every artifact goes through them. Test asserts no `.tmp` residue. |
+| 9 | `strip() + splitlines()[-1]` copied whole outputs | `ProcessResult.tail()` scans backwards from the end and slices only the last line — no full-buffer copy, and it also skips trailing blank lines. |
+| 10 | `history.json` rebuilt by re-reading `decision.json` from disk | Serialized from the loop's in-memory `IterationRecord` list. `layout.read_decisions()` is kept and documented as the cold audit path, with a test. |
+
+## P3 — Dead Code and Surface
+
+Applied: `PRIVATE_SPLITS` deleted; `has_split()` deleted; `strata_for_split(origin=…)`
+collapsed into `seed_strata(split)`; the `"final_eval"` alias deleted; verdict
+relabeling in `score_results()` now uses `dataclasses.replace`; the boilerplate
+`proposal.md` template is no longer pre-written (it was being read back as a candidate's
+"summary"); `_with_max_iterations` inlined to `dataclasses.replace`; `command_evaluator`
+lost its unwired `clock` knob; layout's manual `SplitScore` serialization is now
+`{**score.to_dict(), …}`; `__init__` exports cut from 47 to 36.
+
+Kept, with reasons:
+
+- **`ProposerContext.current`.** `visible_cases` and `visible_failures` are gone — they
+  duplicate files already in the workspace. `current` stays: a library proposer needs
+  the base ref to derive its candidate ref, and nothing else carries it.
+- **`command_evaluator(runner=…)`.** Not unwired — it is the seam that lets a caller run
+  cases inside a sandbox or container, and it is now the shared `ProcessRunner` type.
+  Only `clock` was removed.
+- **`AcceptanceVerdict` and `LoadedConfig` exports.** Nothing imports them today, but
+  they are the return types of exported `decide()` and `load_acceptance_config()`;
+  callers need to be able to name them.
+- **`ProposerResult.detail()`.** Not merely deleted — the whole type is gone, and the
+  method survives as `ProcessResult.tail()`, which is now load-bearing (it produces the
+  per-case failure detail) and is where P2.9 was fixed.
+
+## r2 Tests
+
+```
+PYTHONPATH=src python3 -m pytest tests -q
+270 passed, 1 skipped in 1.86s
+```
+
+Up from `241 passed, 1 skipped` at `c4203ba`; 29 new tests, no test deleted for
+convenience. Two structural guards were mutation-checked (see P1.1 and P1.2).
+New file `tests/test_acceptance_process.py` covers the shared runner: clean exit,
+non-zero exit, missing binary → 127, timeout → 124, `tail()` semantics, runner
+injection.
+
+Also re-verified end to end with a stub CLI on `PATH`: `split` now writes
+`manifest.json`, the library guard surfaces through `acceptance-loop run` as exit 2 with
+the library's message, a rejected candidate still records `decision.json`, and the run
+directory contains no `.tmp` residue. `scripts/redaction-scan.sh` reports 0 findings.
+
+## Files Touched in r2
+
+New: `src/master_runtime/core/acceptance/process.py`,
+`tests/test_acceptance_process.py`.
+
+Modified: `core/adapter/profile.py` (CLI profile contract + three reference profiles),
+the whole `core/acceptance/` package, `scripts/acceptance-loop`, and the four existing
+acceptance test modules. No other repository module was touched.

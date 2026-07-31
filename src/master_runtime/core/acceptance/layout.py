@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Dict, List, Mapping, Sequence, Tuple, Union
 
 from master_runtime.core.acceptance.casebook import (
-    VISIBLE_SPLITS,
     CaseBook,
     CaseSplit,
+    is_visible_split,
     render_split_markdown,
 )
 from master_runtime.core.acceptance.models import AcceptanceConfig, Candidate
@@ -18,10 +19,25 @@ from master_runtime.core.acceptance.verdict import AcceptanceVerdict, Scorecard
 
 
 def write_json(path: Path, payload: object) -> None:
-    """Write one JSON artifact with stable key ordering."""
+    """Write one JSON artifact atomically, with stable key ordering.
+
+    Every artifact in a run goes through here, so a killed run leaves whole files or
+    no file, never a truncated one an auditor would read as fact.
+    """
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp_path = path.with_name(".{0}.{1}.tmp".format(path.name, os.getpid()))
+    tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(tmp_path, path)
+
+
+def write_text(path: Path, text: str) -> None:
+    """Write one text artifact atomically."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(".{0}.{1}.tmp".format(path.name, os.getpid()))
+    tmp_path.write_text(text, encoding="utf-8")
+    os.replace(tmp_path, path)
 
 
 class AcceptanceRunLayout:
@@ -55,7 +71,7 @@ class AcceptanceRunLayout:
     def split_dir(self, *, label: str, split: CaseSplit) -> Path:
         """Return the artifact directory for one candidate and split."""
 
-        base = self.visible_root if split in VISIBLE_SPLITS else self.private_root
+        base = self.visible_root if is_visible_split(split) else self.private_root
         return base / split.value / label
 
     def iteration_dir(self, iteration: int) -> Path:
@@ -68,28 +84,29 @@ class AcceptanceRunLayout:
 
         return self.iteration_dir(iteration) / "proposer_workspace"
 
+    @property
+    def report_path(self) -> Path:
+        """Return the final JSON report path."""
+
+        return self.root / "report.json"
+
     def write_manifest(self, config: AcceptanceConfig, casebook: CaseBook) -> None:
         """Write run metadata plus the master-side split manifest."""
 
-        self.root.mkdir(parents=True, exist_ok=True)
         write_json(self.root / "manifest.json", config.to_dict())
         write_json(self.root / "split.json", casebook.manifest())
-        (self.root / "split.md").write_text(render_split_markdown(casebook), encoding="utf-8")
+        write_text(self.root / "split.md", render_split_markdown(casebook))
 
     def write_split_results(self, scorecard: Scorecard) -> None:
         """Persist per-split results, routing private splits away from the proposer."""
 
         for score in scorecard.splits:
             split_dir = self.split_dir(label=scorecard.label, split=score.split)
-            split_dir.mkdir(parents=True, exist_ok=True)
             write_json(
                 split_dir / "result.json",
                 {
+                    **score.to_dict(),
                     "label": scorecard.label,
-                    "split": score.split.value,
-                    "passed": score.passed,
-                    "total": score.total,
-                    "correctness": score.correctness,
                     "results": [
                         result.to_dict()
                         for result in scorecard.results
@@ -110,8 +127,7 @@ class AcceptanceRunLayout:
         """Append one audited decision record for the iteration."""
 
         iteration_dir = self.iteration_dir(iteration)
-        iteration_dir.mkdir(parents=True, exist_ok=True)
-        decision = "accepted" if verdict.accepted else "rejected"
+        decision = verdict.decision_label
         payload: Dict[str, object] = {
             "iteration": iteration,
             "starting_label": starting_label,
@@ -145,11 +161,15 @@ class AcceptanceRunLayout:
             candidate.summary or "_No proposal summary written._",
             "",
         ]
-        (iteration_dir / "decision.md").write_text("\n".join(lines), encoding="utf-8")
+        write_text(iteration_dir / "decision.md", "\n".join(lines))
         return decision_path
 
     def read_decisions(self) -> Tuple[Mapping[str, object], ...]:
-        """Return every written decision record in iteration order."""
+        """Return every written decision record in iteration order.
+
+        Cold path: for auditing a finished run. A live loop already holds its
+        iteration records in memory and must not re-read them from disk.
+        """
 
         decisions: List[Mapping[str, object]] = []
         if not self.iterations_dir.exists():
@@ -166,6 +186,5 @@ class AcceptanceRunLayout:
     def write_report(self, report: AcceptanceReport) -> None:
         """Write the final JSON and Markdown reports."""
 
-        self.root.mkdir(parents=True, exist_ok=True)
-        write_json(self.root / "report.json", report.to_dict())
-        (self.root / "report.md").write_text(report.to_markdown(), encoding="utf-8")
+        write_json(self.report_path, report.to_dict())
+        write_text(self.root / "report.md", report.to_markdown())

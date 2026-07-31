@@ -35,7 +35,7 @@ Continue with:
 
 - [master-ops/ONBOARDING.md](../../master-ops/ONBOARDING.md)
 
-If your host supports Orca-managed terminals, onboarding can use `scripts/master-succeed spawn` to create the founding master. If it does not, open a clean agent session at the workspace root and paste the kickoff text produced during onboarding.
+Onboarding requires the Orca runtime; it is the execution substrate this system assumes. The founding master is created with `scripts/master-succeed spawn`, which fail-closes unless placement verification matches.
 
 ## First Boot Smoke
 

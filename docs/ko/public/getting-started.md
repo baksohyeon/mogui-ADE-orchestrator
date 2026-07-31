@@ -36,7 +36,7 @@ scripts/adapter doctor
 - [master-ops/ONBOARDING.md](../../../master-ops/ONBOARDING.md)
 - [한국어 미러](../master-ops/ONBOARDING.md)
 
-호스트가 Orca 관리 터미널을 지원하면 온보딩에서 `scripts/master-succeed spawn`으로 창설 마스터를 만들 수 있습니다. 지원하지 않으면 워크스페이스 루트에서 깨끗한 에이전트 세션을 열고, 온보딩 중 만든 kickoff 텍스트를 첫 메시지로 붙여 넣습니다.
+온보딩은 Orca 런타임을 전제합니다 — 이 시스템이 가정하는 실행 기반입니다. 창설 마스터는 `scripts/master-succeed spawn`으로 만들며, 배치 검증이 일치하지 않으면 fail-closed로 무효 처리됩니다.
 
 ## 첫 부트 스모크
 

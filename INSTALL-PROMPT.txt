@@ -1,0 +1,5 @@
+You are onboarding a workspace/orchestrator operations layer.
+
+This repository (mogui-ADE-orchestrator) is cloned locally. Read master-ops/ONBOARDING.md in this repository and walk the user through it step by step, in their language. Do not skip steps. Use a structured question tool if your host provides one; otherwise ask in plain conversation. Explain why each step matters before asking anything.
+
+The flow ends with a founding spawn: a fresh Generation 1 master session booted in the user's workspace root — never inside this conversation.

@@ -374,7 +374,122 @@ def test_register_denies_ambiguous_pending_dispatch_without_contract_sha(
 
     assert decision.allow is False
     assert decision.reason == ReasonCode.AMBIGUOUS_TICKET
+    assert _sha256(first_contract) in decision.message
+    assert _sha256(second_contract) in decision.message
     assert all("job_id" not in entry for entry in _ledger_entries(tmp_path))
+
+
+def test_register_gc_removes_expired_tickets_before_matching(tmp_path: Path) -> None:
+    first_contract = _contract(tmp_path, "expired dispatch")
+    second_contract = _contract(tmp_path, "fresh dispatch")
+    now = _MutableClock(1_000)
+    gate = _gate(tmp_path, clock=now)
+    gate.check(
+        DispatchRequest("codex", first_contract, est_input_chars=10_000, n_agents=1)
+    )
+    now.value += 601
+    gate.check(
+        DispatchRequest("codex", second_contract, est_input_chars=10_000, n_agents=1)
+    )
+
+    decision = gate.register_job("job-fresh", lambda job_id: job_id == "job-fresh")
+
+    assert decision.allow is True
+    assert decision.contract_sha == _sha256(second_contract)
+    assert not (
+        tmp_path / "dispatch-tickets" / f"codex-{_sha256(first_contract)[:12]}.json"
+    ).exists()
+    assert _ledger_entries(tmp_path)[-1]["contract_sha"] == _sha256(second_contract)
+
+
+def test_register_without_contract_sha_requires_one_valid_ticket(
+    tmp_path: Path,
+) -> None:
+    first_contract = _contract(tmp_path, "first valid ticket")
+    second_contract = _contract(tmp_path, "second valid ticket")
+    gate = _gate(tmp_path, now=1_000)
+    gate.check(
+        DispatchRequest("codex", first_contract, est_input_chars=10_000, n_agents=1)
+    )
+    gate.check(
+        DispatchRequest("cursor", second_contract, est_input_chars=10_000, n_agents=1)
+    )
+
+    decision = gate.register_job("job-ambiguous", lambda job_id: job_id)
+
+    assert decision.allow is False
+    assert decision.reason == ReasonCode.AMBIGUOUS_TICKET
+    assert decision.message == (
+        "candidate_contract_shas="
+        + ",".join(sorted([_sha256(first_contract), _sha256(second_contract)]))
+    )
+
+
+def test_register_runtime_filter_limits_ticket_candidates(tmp_path: Path) -> None:
+    codex_contract = _contract(tmp_path, "codex ticket")
+    cursor_contract = _contract(tmp_path, "cursor ticket")
+    gate = _gate(tmp_path, now=1_000)
+    gate.check(
+        DispatchRequest("codex", codex_contract, est_input_chars=10_000, n_agents=1)
+    )
+    gate.check(
+        DispatchRequest("cursor", cursor_contract, est_input_chars=10_000, n_agents=1)
+    )
+
+    decision = gate.register_job(
+        "job-cursor",
+        lambda job_id: job_id == "job-cursor",
+        runtime="cursor",
+    )
+
+    assert decision.allow is True
+    assert decision.contract_sha == _sha256(cursor_contract)
+
+
+def test_duplicate_check_refreshes_existing_dispatch_ticket(
+    tmp_path: Path,
+) -> None:
+    contract = _contract(tmp_path, "refresh duplicate ticket")
+    now = _MutableClock(1_000)
+    gate = _gate(tmp_path, clock=now)
+    gate.check(DispatchRequest("codex", contract, est_input_chars=10_000, n_agents=1))
+    now.value += 701
+
+    decision = gate.check(
+        DispatchRequest("codex", contract, est_input_chars=10_000, n_agents=1)
+    )
+
+    ticket = tmp_path / "dispatch-tickets" / f"codex-{_sha256(contract)[:12]}.json"
+    payload = json.loads(ticket.read_text(encoding="utf-8"))
+    assert decision.allow is False
+    assert decision.reason == ReasonCode.DUPLICATE_CONTRACT
+    assert payload["issued_ts"] == 1_701
+    assert payload["count"] == 1
+
+
+def test_register_uses_ticket_flock(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    contract = _contract(tmp_path, "locked registration")
+    gate = _gate(tmp_path, now=1_000)
+    gate.check(DispatchRequest("codex", contract, est_input_chars=10_000, n_agents=1))
+    calls: list[int] = []
+
+    class FakeFcntl:
+        LOCK_EX = 1
+        LOCK_UN = 2
+
+        @staticmethod
+        def flock(fd: int, operation: int) -> None:
+            calls.append(operation)
+
+    monkeypatch.setattr(dispatch_gate, "fcntl", FakeFcntl)
+
+    decision = gate.register_job("job-locked", lambda job_id: job_id == "job-locked")
+
+    assert decision.allow is True
+    assert calls == [FakeFcntl.LOCK_EX, FakeFcntl.LOCK_UN]
 
 
 def test_register_denies_contract_sha_without_matching_pending_dispatch(
@@ -392,6 +507,7 @@ def test_register_denies_contract_sha_without_matching_pending_dispatch(
 
     assert decision.allow is False
     assert decision.reason == ReasonCode.NO_MATCHING_TICKET
+    assert decision.message == "candidate_contract_shas=" + _sha256(contract)
     assert all("job_id" not in entry for entry in _ledger_entries(tmp_path))
 
 
@@ -408,6 +524,7 @@ def test_contract_lint_warns_for_mcp_without_trust_handling(
     assert decision.allow is True
     assert decision.reason == ReasonCode.OK
     assert ReasonCode.MCP_TRUST_UNHANDLED in decision.warnings
+    assert _ledger_entries(tmp_path)[-1]["warnings"] == ["MCP_TRUST_UNHANDLED"]
 
 
 def test_contract_lint_accepts_mcp_with_trust_handling(
@@ -632,6 +749,59 @@ def test_cli_check_creates_default_ticket_directory(tmp_path: Path) -> None:
     assert payload["contract_sha"] == contract_sha
     assert payload["count"] == 2
     assert isinstance(payload["issued_ts"], (int, float))
+
+
+def test_cli_register_ambiguous_prints_candidate_shas(tmp_path: Path) -> None:
+    first_contract = _contract(tmp_path, "first cli candidate")
+    second_contract = _contract(tmp_path, "second cli candidate")
+    ledger = tmp_path / "cli-ledger.jsonl"
+    env = os.environ.copy()
+    env["HOME"] = str(tmp_path / "home")
+
+    for contract in (first_contract, second_contract):
+        result = subprocess.run(
+            [
+                str(_script()),
+                "--ledger",
+                str(ledger),
+                "check",
+                "--runtime",
+                "codex",
+                "--contract",
+                str(contract),
+                "--agents",
+                "1",
+                "--est-chars",
+                "1000",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert result.returncode == 0, result.stderr
+
+    register_result = subprocess.run(
+        [
+            str(_script()),
+            "--ledger",
+            str(ledger),
+            "register",
+            "--job-id",
+            "job-cli-ambiguous",
+            "--probe-cmd",
+            "printf job-cli-ambiguous",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert register_result.returncode == 2
+    assert "AMBIGUOUS_TICKET: candidate_contract_shas=" in register_result.stderr
+    assert _sha256(first_contract) in register_result.stderr
+    assert _sha256(second_contract) in register_result.stderr
 
 
 def test_incident_a_fable_fanout_denied(tmp_path: Path) -> None:

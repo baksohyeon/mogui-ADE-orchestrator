@@ -54,6 +54,7 @@ def _build_parser() -> argparse.ArgumentParser:
     register_parser.add_argument("--job-id", required=True)
     register_parser.add_argument("--probe-cmd", required=True)
     register_parser.add_argument("--contract-sha")
+    register_parser.add_argument("--runtime")
 
     watch_parser = subparsers.add_parser("watch")
     watch_parser.add_argument("--log", required=True)
@@ -94,11 +95,12 @@ def _register(args: argparse.Namespace) -> int:
         args.job_id,
         lambda job_id: _probe_contains_job_id(args.probe_cmd, job_id),
         contract_sha=args.contract_sha,
+        runtime=args.runtime,
     )
     _print_decision(decision)
     if decision.allow:
         return 0
-    print(decision.reason.value, file=sys.stderr)
+    print(_decision_error(decision), file=sys.stderr)
     return 2
 
 
@@ -139,7 +141,15 @@ def _print_decision(decision: GateDecision) -> None:
         "contract_sha": decision.contract_sha,
         "cost_proxy": decision.cost_proxy,
     }
+    if decision.message:
+        payload["message"] = decision.message
     print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+
+
+def _decision_error(decision: GateDecision) -> str:
+    if decision.message:
+        return decision.reason.value + ": " + decision.message
+    return decision.reason.value
 
 
 if __name__ == "__main__":

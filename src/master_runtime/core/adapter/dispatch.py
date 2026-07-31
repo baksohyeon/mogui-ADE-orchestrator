@@ -1,5 +1,6 @@
 """Single adapter dispatch entrypoint."""
 
+import hashlib
 import importlib
 import os
 import re
@@ -125,7 +126,12 @@ class ModuleDispatchGate(DispatchGate):
         def probe_fn(registered_job_id: str) -> bool:
             return registered_job_id == job_id and probe_result.exit_code == 0
 
-        raw = register(job_id, probe_fn)
+        raw = register(
+            job_id,
+            probe_fn,
+            contract_sha=_contract_sha(request.contract_path),
+            runtime=request.runtime,
+        )
         return _coerce_gate_registration(raw)
 
     def _build_gate(self) -> Any:
@@ -402,3 +408,8 @@ def _reason_code(value: Any) -> str:
     if enum_value is not None:
         return str(enum_value)
     return str(value)
+
+
+def _contract_sha(contract_path: str) -> str:
+    with open(contract_path, "rb") as contract:
+        return hashlib.sha256(contract.read()).hexdigest()

@@ -22,6 +22,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
 
 ALLOWLIST_FILE="${REDACTION_ALLOWLIST:-${SCRIPT_DIR}/redaction-allowlist.txt}"
+REQUIRE_EXTRA="${REDACTION_REQUIRE_EXTRA:-0}"
 MODE="tracked"   # tracked | staged | range
 RANGE=""
 VERBOSE=0
@@ -46,6 +47,7 @@ while [[ $# -gt 0 ]]; do
       ALLOWLIST_FILE="${2:-}"
       shift 2
       ;;
+    --require-extra) REQUIRE_EXTRA=1; shift ;;
     -v|--verbose) VERBOSE=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *)
@@ -90,11 +92,23 @@ RULES=(
 # so committing real company or personal names to the scanner would leak what it protects.
 # Supply them per checkout via REDACTION_EXTRA_PATTERNS (newline-separated
 # "id|description|regex" entries) and keep that file outside version control.
+EXTRA_RULE_COUNT=0
 if [[ -n "${REDACTION_EXTRA_PATTERNS:-}" && -f "${REDACTION_EXTRA_PATTERNS}" ]]; then
   while IFS= read -r extra_rule; do
     [[ -z "${extra_rule}" || "${extra_rule}" == \#* ]] && continue
     RULES+=("${extra_rule}")
+    EXTRA_RULE_COUNT=$((EXTRA_RULE_COUNT + 1))
   done < "${REDACTION_EXTRA_PATTERNS}"
+fi
+
+# A green scan must not imply coverage it does not have: say so when the
+# organization-specific rules were never loaded.
+if [[ "${EXTRA_RULE_COUNT}" -eq 0 ]]; then
+  echo "redaction-scan: WARNING — organization-specific rules not loaded (REDACTION_EXTRA_PATTERNS unset or empty); this scan covers generic patterns only" >&2
+  if [[ "${REQUIRE_EXTRA}" == "1" ]]; then
+    echo "redaction-scan: FAIL — --require-extra set and no organization-specific rules were loaded" >&2
+    exit 2
+  fi
 fi
 
 PLACEHOLDER_HINTS=(

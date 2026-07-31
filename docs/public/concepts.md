@@ -27,9 +27,9 @@ Five areas cover what a master has to do. Each row names the mechanism in this r
 | --- | --- | --- | --- |
 | Execution environment | Orca terminal sessions, `scripts/` entry points, `adapter/dispatch`, git worktrees via `adapter/isolation` | Observed | Entry points and isolation planning are exercised by the unit suite; terminal placement itself is host behavior, not code in this repository. |
 | Context management | `bootstrap.py` and `bootstrap_live.py` L0/L1 block, Role State parsing, issue-tracker memory audit, compaction recall probe | Observed | Boot block, Role State parsing, and compaction suppression are exercised locally. The memory audit depends on an external tracker command; without one it degrades rather than fails. |
-| Delegation | `dispatch_gate.py` check/register, worker contract file, `adapter/dispatch`, JSONL gate ledger | Observed | Gate decisions and ledger writes are observable after the fact. Whether *every* worker-creation path in a given workspace goes through the gate is Unknown from this repository alone — that is a workspace wiring property. |
-| Steering | `approval/registry.py` and `approval/gates.py`, Role State file, role lock, separated review lenses | Mixed | The approval registry is Observed (gated actions must match an approved proposal). Role lock and review lenses are Intended — they are operating policy, not enforcement code. |
-| Repository filesystem model | `context/resolver.py` path resolution, per-repository worktrees, sensitive-lane routing | Mixed | Path resolution and worktree planning are Observed. Sensitive-lane separation is Intended *in this repository* — it is a routing rule, and the blocking that enforces it lives in a workspace's own host hooks, outside this public surface. |
+| Delegation | `dispatch_gate.py` check/register, worker contract file, `adapter/dispatch`, JSONL gate ledger | Observed | Gate decisions and ledger writes are observable after the fact. Whether *every* worker-creation path in a given workspace goes through the gate is Unknown from this repository alone; that is a workspace wiring property. |
+| Steering | `approval/registry.py` and `approval/gates.py`, Role State file, role lock, separated review lenses | Mixed | The approval registry is Observed (gated actions must match an approved proposal). Role lock and review lenses are Intended; they are operating policy, not enforcement code. |
+| Repository filesystem model | `context/resolver.py` path resolution, per-repository worktrees, sensitive-lane routing | Mixed | Path resolution and worktree planning are Observed. Sensitive-lane separation is Intended *in this repository*; it is a routing rule, and the blocking that enforces it lives in a workspace's own host hooks, outside this public surface. |
 
 That last row is a deliberate split. Operating workspaces do enforce the sensitive lane with host-level hooks, and that enforcement has been observed live; but this repository ships the rule, not the block. Claiming otherwise would put someone else's hook configuration in our status table.
 
@@ -42,7 +42,7 @@ The master is easier to test when its responsibilities are named as runtime unit
 | U1 | Bootstrap | Load the minimum L0/L1 context needed to start safely. | `bootstrap.py`, `bootstrap_live.py` |
 | U2 | Context Resolver | Decide whether a request belongs to the workspace, a repository, a worktree, or an external system. | `context/` |
 | U3 | Workspace Runtime | Own tracks, cross-repository state, and long-lived execution records. | `work_ledger.py` (`WorkspaceRuntime`) |
-| U4 | Repository Runtime Loader | Load only the Repository Harness needed for the resolved target. | none — design only |
+| U4 | Repository Runtime Loader | Load only the Repository Harness needed for the resolved target. | none (design only) |
 | U5 | Worker Scheduler | Issue worker leases, choose isolation, dispatch workers, enforce budget, and reap resources. | partial: `dispatch_gate.py`, `adapter/dispatch.py`, `adapter/isolation.py`; no lease or reap module |
 | U6 | Approval Manager | Classify action risk and bind execution to a valid approval state. | `approval/` |
 | U7 | Role Runtime | Keep one active role, role lock, and role transition state. | partial: `RoleState` is parsed in `bootstrap.py`; the lock itself is policy |
@@ -139,6 +139,6 @@ The context resolver observes repository paths and git worktrees. The adapter ca
 
 ## Acceptance
 
-Acceptance is a separate step from worker completion, and it has its own machinery. `acceptance/` evaluates a candidate against a casebook: raw case results and aggregated scores are distinct types, the casebook — not the evaluator — owns which split each case belongs to, and holdout visibility is decided by a single predicate so the private-holdout invariant cannot quietly drift. A candidate that changes nothing still produces a decision record, so "we looked and did nothing" stays auditable.
+Acceptance is a separate step from worker completion, and it has its own machinery. `acceptance/` evaluates a candidate against a casebook: raw case results and aggregated scores are distinct types, the casebook, not the evaluator, owns which split each case belongs to, and holdout visibility is decided by a single predicate so the private-holdout invariant cannot quietly drift. A candidate that changes nothing still produces a decision record, so "we looked and did nothing" stays auditable.
 
 Read next: [Delegation and Review](delegation-and-review.md), then [Master Lifecycle](master-lifecycle.md). See [Reference](reference.md) for the local script entry points, and [Overview](overview.md#related-work) for how this compares to in-process agent harnesses.

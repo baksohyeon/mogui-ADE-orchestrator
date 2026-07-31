@@ -1,6 +1,6 @@
 # mogui-ADE-orchestrator
 
-> A workspace-level **master runtime** for long-lived AI orchestrator sessions — verified succession between sessions, an append-only lineage ledger, contract-gated worker dispatch, and compaction-resilience probes. Python 3.10+, stdlib-only core.
+> A workspace-level **master runtime** for long-lived AI orchestrator sessions: verified succession between sessions, an append-only lineage ledger, contract-gated worker dispatch, and compaction-resilience probes. Python 3.10+, stdlib-only core.
 
 ## Which document do you want?
 
@@ -8,16 +8,16 @@
 | --- | --- |
 | Reading about the system for the first time | [`docs/public/overview.md`](./docs/public/overview.md) |
 | Installing it on your own workspace | [`master-ops/ONBOARDING.md`](./master-ops/ONBOARDING.md) |
-| Looking for a specific document | [`docs/README.md`](./docs/README.md) — the document index |
+| Looking for a specific document | [`docs/README.md`](./docs/README.md) (the document index) |
 | Reading the code | [Architecture](#architecture) below, then `src/master_runtime/core/` |
 
-Documentation in this repository is English. `master-ops/` is a template that gets copied and substituted during onboarding, not documentation about this repository — see the index for why the two are separate.
+Documentation in this repository is English. `master-ops/` is a template that gets copied and substituted during onboarding, not documentation about this repository. See the index for why the two are separate.
 
 ## Why this exists
 
 If you run a single long-lived AI agent session as the *orchestrator* ("master") of a multi-repository workspace, three failure modes show up that repo-level tooling doesn't cover:
 
-1. **Sessions end, work doesn't.** Context windows fill up, sessions crash or get compacted. Handing off to a fresh session by pasting a summary loses role state, open work tracks, and standing decisions — and nobody notices what was lost until the successor repeats a question or reopens a settled decision.
+1. **Sessions end, work doesn't.** Context windows fill up, sessions crash or get compacted. Handing off to a fresh session by pasting a summary loses role state, open work tracks, and standing decisions, and nobody notices what was lost until the successor repeats a question or reopens a settled decision.
 2. **A master that can spawn workers can also waste them.** Delegating work to sub-agents (worker sessions) is cheap to trigger and expensive to run. Without a gate, duplicate dispatches, oversized inputs, and dispatches into the wrong directory tree go through silently.
 3. **Context loss after compaction is invisible by default.** After a compaction event the session *feels* continuous but may have silently dropped state. If the boot sequence just re-feeds everything, you can never tell what the session actually still remembers.
 
@@ -25,7 +25,7 @@ This repo is a reference implementation of a runtime that treats these as first-
 
 ## Status
 
-**Experimental, under active development.** Interfaces, CLI flags, and file formats change without notice. The core is exercised by a unit test suite (270 passing, 1 skipped as of 2026-07-31) and every unit listed below exists in `src/master_runtime/core/`. Nothing here should be treated as stable API — use it as a reference for the ideas, not as a dependency.
+**Experimental, under active development.** Interfaces, CLI flags, and file formats change without notice. The core is exercised by a unit test suite (270 passing, 1 skipped as of 2026-07-31) and every unit listed below exists in `src/master_runtime/core/`. Nothing here should be treated as stable API; use it as a reference for the ideas, not as a dependency.
 
 There is no model API in this repository. The runtime manages *sessions of* AI agents through their CLIs; it never calls a model endpoint and holds no API key.
 
@@ -33,13 +33,13 @@ There is no model API in this repository. The runtime manages *sessions of* AI a
 
 ### Succession
 
-`src/master_runtime/core/succession.py` implements master-to-master handoff as an explicit, guarded procedure rather than a copy-paste. `detect_trigger()` classifies signals into `IMMEDIATE` (explicit user instruction), `ADVISORY` (context usage ratio at or above the `0.60` default, or a natural milestone — advisory triggers **never** auto-start succession, they only propose it), or `NONE`. The flow then builds a handoff, spawns the successor, verifies the successor actually booted with the inherited state (`PASS` / `PARTIAL` / `FAILED`), checks for duplicate master instances, and retires the predecessor. Hard safety violations raise `SuccessionError` instead of proceeding.
+`src/master_runtime/core/succession.py` implements master-to-master handoff as an explicit, guarded procedure rather than a copy-paste. `detect_trigger()` classifies signals into `IMMEDIATE` (explicit user instruction), `ADVISORY` (context usage ratio at or above the `0.60` default, or a natural milestone; advisory triggers **never** auto-start succession, they only propose it), or `NONE`. The flow then builds a handoff, spawns the successor, verifies the successor actually booted with the inherited state (`PASS` / `PARTIAL` / `FAILED`), checks for duplicate master instances, and retires the predecessor. Hard safety violations raise `SuccessionError` instead of proceeding.
 
 The advisory ratio is a code default, not a claim about what any given workspace should use; an operating charter can set its own threshold.
 
 ### Lineage
 
-`src/master_runtime/core/lineage.py` keeps an append-only markdown ledger of every succession: generation number, parent/successor session IDs, inherited role and open tracks, verification result, and honesty metrics such as `repeated_question_count`, `reopened_decision_count`, and a `context_loss_summary`. The schema is fixed (13 required fields), duplicate generations are rejected, and every write is re-verified as append-only. By design, lineage is observability metadata only — it never feeds runtime decisions.
+`src/master_runtime/core/lineage.py` keeps an append-only markdown ledger of every succession: generation number, parent/successor session IDs, inherited role and open tracks, verification result, and honesty metrics such as `repeated_question_count`, `reopened_decision_count`, and a `context_loss_summary`. The schema is fixed (13 required fields), duplicate generations are rejected, and every write is re-verified as append-only. By design, lineage is observability metadata only; it never feeds runtime decisions.
 
 ### Contract-gated dispatch
 
@@ -75,7 +75,7 @@ src/master_runtime/core/
 Two principles shape the layout:
 
 - **Core / adapter split.** `core/` modules avoid depending on any specific agent product; contact with the outside world (process spawning, ledgers, tool CLIs) goes through injected callables and the `adapter/` layer, so core logic is testable with in-memory fakes. Tool names live in `adapter/`, not in the units above it.
-- **Vendor neutrality as a direction.** The master should be able to run under different AI agent hosts. Honestly stated: the reference adapter set is narrow — `adapter/profile.py` currently ships synchronous CLI profiles for `codex` and `cursor-agent`, `adapter doctor` probes a specific set of local tools, and some Korean-language operator strings are embedded. Broadening this is ongoing work.
+- **Vendor neutrality as a direction.** The master should be able to run under different AI agent hosts. Honestly stated: the reference adapter set is narrow. `adapter/profile.py` currently ships synchronous CLI profiles for `codex` and `cursor-agent`, `adapter doctor` probes a specific set of local tools, and some Korean-language operator strings are embedded. Broadening this is ongoing work.
 
 ## Getting started
 

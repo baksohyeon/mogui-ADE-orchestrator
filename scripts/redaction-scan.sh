@@ -82,13 +82,21 @@ RULES=(
   "jira_hf|Internal Jira ticket HF-*|\\bHF-[0-9]{2,}\\b"
   "slack_url|Slack workspace/archive URL|https?://[A-Za-z0-9._-]*slack\\.com/"
   "internal_host|Internal/corp hostname|\\b[A-Za-z0-9._-]+\\.(internal|corp|local)\\b"
-  "company_polsia|Company/product identifier polsia|(?i)polsia"
-  "personal_polsia|Personal identifier polsia|(?i)(?<![A-Za-z0-9_])polsia(?![A-Za-z0-9_])"
-  "personal_dorito|Personal identifier dorito|(?i)(?<![A-Za-z0-9_])dorito(?![A-Za-z0-9_])"
 )
 
 # Values that look like placeholders / docs — never fail these lines.
 # Matched as case-insensitive substrings of the whole line.
+# Organization-specific identifiers are not hardcoded here: this repository is public,
+# so committing real company or personal names to the scanner would leak what it protects.
+# Supply them per checkout via REDACTION_EXTRA_PATTERNS (newline-separated
+# "id|description|regex" entries) and keep that file outside version control.
+if [[ -n "${REDACTION_EXTRA_PATTERNS:-}" && -f "${REDACTION_EXTRA_PATTERNS}" ]]; then
+  while IFS= read -r extra_rule; do
+    [[ -z "${extra_rule}" || "${extra_rule}" == \#* ]] && continue
+    RULES+=("${extra_rule}")
+  done < "${REDACTION_EXTRA_PATTERNS}"
+fi
+
 PLACEHOLDER_HINTS=(
   "example.com"
   "example-product"

@@ -1,0 +1,3 @@
+{"type":"user","message":{"role":"user","content":"hi"}}
+{"type":"assistant","message":{"role":"assistant","model":"claude-fable-5","content":[{"type":"text","text":"a"}]},"cwd":"/tmp"}
+{"type":"assistant","message":{"role":"assistant","model":"claude-fable-5","content":[{"type":"text","text":"b"}]},"cwd":"/tmp"}

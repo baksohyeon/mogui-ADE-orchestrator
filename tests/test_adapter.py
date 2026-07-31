@@ -1,4 +1,7 @@
+import hashlib
+import tempfile
 import unittest
+from pathlib import Path
 
 from master_runtime.core.adapter.dispatch import (
     DispatchGate,
@@ -95,8 +98,10 @@ class FakeU5Module:
             self.__class__.check_requests.append(request)
             return FakeU5Decision(True, "OK")
 
-        def register_job(self, job_id, probe_fn):
-            self.__class__.register_calls.append((job_id, probe_fn(job_id)))
+        def register_job(self, job_id, probe_fn, contract_sha=None, runtime=None):
+            self.__class__.register_calls.append(
+                (job_id, probe_fn(job_id), contract_sha, runtime)
+            )
             return FakeU5Decision(True, "OK")
 
 
@@ -159,16 +164,19 @@ class AdapterTests(unittest.TestCase):
         FakeU5Module.DispatchGate.check_requests = []
         FakeU5Module.DispatchGate.register_calls = []
         gate = ModuleDispatchGate(FakeU5Module, ledger_path="/tmp/ledger.jsonl")
-        request = DispatchRequest(
-            contract_path="/tmp/contract.md",
-            repo_path="/repo",
-            runtime="codex",
-            agents=3,
-            est_chars=42,
-        )
+        with tempfile.TemporaryDirectory() as tmp:
+            contract = Path(tmp) / "contract.md"
+            contract.write_text("adapter contract", encoding="utf-8")
+            request = DispatchRequest(
+                contract_path=str(contract),
+                repo_path="/repo",
+                runtime="codex",
+                agents=3,
+                est_chars=42,
+            )
 
-        check = gate.check(request)
-        registration = gate.register_probe(request, "job-1", ["probe", "job-1"], RunResult(exit_code=0))
+            check = gate.check(request)
+            registration = gate.register_probe(request, "job-1", ["probe", "job-1"], RunResult(exit_code=0))
 
         self.assertTrue(check.allowed)
         self.assertEqual("OK", check.code)
@@ -177,11 +185,21 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual("/tmp/ledger.jsonl", FakeU5Module.DispatchGate.configs[0].ledger_path)
         u5_request = FakeU5Module.DispatchGate.check_requests[0]
         self.assertEqual("codex", u5_request.runtime)
-        self.assertEqual("/tmp/contract.md", u5_request.contract_path)
+        self.assertEqual(str(contract), u5_request.contract_path)
         self.assertEqual(42, u5_request.est_input_chars)
         self.assertEqual(3, u5_request.n_agents)
         self.assertEqual("adapter-dispatch", u5_request.purpose)
-        self.assertEqual([("job-1", True)], FakeU5Module.DispatchGate.register_calls)
+        self.assertEqual(
+            [
+                (
+                    "job-1",
+                    True,
+                    hashlib.sha256(b"adapter contract").hexdigest(),
+                    "codex",
+                )
+            ],
+            FakeU5Module.DispatchGate.register_calls,
+        )
 
     def test_probe_failure_prevents_gate_registration(self):
         gate = FakeGate()

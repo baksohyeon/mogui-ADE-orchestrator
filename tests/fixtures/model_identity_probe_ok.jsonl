@@ -1,0 +1,12 @@
+{"role":"user","content":"start"}
+{"role":"assistant","model":"older-model","content":"old assistant turn outside limit"}
+{"role":"assistant","model":"claude-fable-5","content":"1"}
+{"type":"response_item","item":{"role":"assistant","model":"claude-fable-5","content":"2"}}
+{"message":{"role":"assistant","model":"claude-fable-5","content":"3"}}
+{"role":"assistant","model":"claude-fable-5","content":"4"}
+{"role":"assistant","model":"claude-fable-5","content":"5"}
+{"role":"assistant","model":"claude-fable-5","content":"6"}
+{"role":"assistant","model":"claude-fable-5","content":"7"}
+{"role":"assistant","model":"claude-fable-5","content":"8"}
+{"role":"assistant","model":"claude-fable-5","content":"9"}
+{"role":"assistant","model":"claude-fable-5","content":"10"}

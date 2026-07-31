@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -39,6 +40,13 @@ _COMPACT_SUPPRESSED_LINE = (
     "[E12] compact: tracks/role suppressed for recall probe "
     "(정본은 회상 기록 후 bd로 대조)"
 )
+_COMPACT_FIRST_INJECTION_BANNER = (
+    "[E12-CRITICAL] compact first-injection warning: this hook output may be "
+    "arriving after the first synthetic continuation turn. Treat the previous "
+    "synthetic turn as unrehydrated; before any tool action, Read the canonical "
+    "role-state.md, declare Role State, and stop if that Read is unavailable."
+)
+_MARKDOWN_HEADING_RE = re.compile(r"^\s{0,3}#{2,6}\s+(?P<title>.+?)\s*#*\s*$")
 
 
 def _session_source_from_stdin():
@@ -55,19 +63,30 @@ def _session_source_from_stdin():
 
 
 def _suppress_compact_recall_leaks(block):
+    try:
+        return _with_compact_first_injection_banner(
+            _suppress_compact_recall_leaks_unchecked(block)
+        )
+    except Exception:
+        if isinstance(block, str):
+            return _with_compact_first_injection_banner(block)
+        return _COMPACT_FIRST_INJECTION_BANNER
+
+
+def _suppress_compact_recall_leaks_unchecked(block):
     lines = block.splitlines()
     output = []
     suppressed = False
     skip_section = False
 
     for line in lines:
-        if line in {"## Role State", "## 활성 트랙"}:
+        if _is_compact_suppressed_heading(line):
             if not suppressed:
                 output.append(_COMPACT_SUPPRESSED_LINE)
                 suppressed = True
             skip_section = True
             continue
-        if line.startswith("## "):
+        if _is_markdown_heading(line):
             skip_section = False
         if not skip_section:
             output.append(line)
@@ -77,6 +96,25 @@ def _suppress_compact_recall_leaks(block):
     if lines and lines[0].startswith("[MASTER-BOOTSTRAP"):
         return "\n".join([lines[0], _COMPACT_SUPPRESSED_LINE] + lines[1:])
     return _COMPACT_SUPPRESSED_LINE + "\n" + block
+
+
+def _with_compact_first_injection_banner(block):
+    if block.startswith(_COMPACT_FIRST_INJECTION_BANNER):
+        return block
+    return _COMPACT_FIRST_INJECTION_BANNER + "\n" + block
+
+
+def _is_markdown_heading(line):
+    return _MARKDOWN_HEADING_RE.match(line) is not None
+
+
+def _is_compact_suppressed_heading(line):
+    match = _MARKDOWN_HEADING_RE.match(line)
+    if match is None:
+        return False
+    title = match.group("title").strip().lower()
+    compact_title = re.sub(r"\s+", "", title)
+    return title.startswith("role state") or title.startswith("active tracks") or compact_title.startswith("활성트랙")
 
 
 def main(argv=None) -> int:

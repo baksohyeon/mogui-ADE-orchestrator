@@ -7,10 +7,16 @@ import json
 import os
 import re
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Callable, Mapping, Sequence
+from typing import Callable, Iterator, Mapping, Sequence
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - non-Unix fallback keeps tests importable.
+    fcntl = None
 
 
 DEFAULT_SINGLE_DISPATCH_CHAR_LIMIT = 500_000
@@ -20,6 +26,8 @@ DEFAULT_HIGH_COST_RUNTIMES = frozenset({"fable"})
 DEFAULT_LEDGER_PATH = Path(".dispatch-gate-ledger.jsonl")
 DEFAULT_TICKET_DIR = Path(".mogui") / "dispatch-tickets"
 DEFAULT_KNOWN_ROOTS_PATH = Path(".mogui") / "known-roots.json"
+DEFAULT_TICKET_TTL_SECONDS = 600
+DEFAULT_EXPIRED_TICKET_GC_GRACE_SECONDS = 24 * 60 * 60
 RUNTIME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 USERS_ABSOLUTE_PATH_PATTERN = re.compile(r"/Users/[^\s\"'`<>{}\[\](),;:]+")
 
@@ -77,6 +85,7 @@ class GateDecision:
     warnings: tuple[ReasonCode, ...] = ()
     contract_sha: str | None = None
     cost_proxy: int = 0
+    message: str = ""
 
 
 @dataclass(frozen=True)
@@ -90,6 +99,19 @@ class DispatchGateConfig:
     batch_dispatch_char_limit: int = DEFAULT_BATCH_DISPATCH_CHAR_LIMIT
     duplicate_window_seconds: int = DEFAULT_DUPLICATE_WINDOW_SECONDS
     high_cost_runtimes: frozenset[str] = DEFAULT_HIGH_COST_RUNTIMES
+    ticket_ttl_seconds: int = DEFAULT_TICKET_TTL_SECONDS
+    expired_ticket_gc_grace_seconds: int = DEFAULT_EXPIRED_TICKET_GC_GRACE_SECONDS
+
+
+@dataclass(frozen=True)
+class DispatchTicket:
+    """Valid on-disk dispatch ticket."""
+
+    path: Path
+    runtime: str
+    contract_sha: str
+    issued_ts: float
+    count: int
 
 
 class DispatchGate:
@@ -177,6 +199,7 @@ class DispatchGate:
                 cost_proxy=cost_proxy,
             )
             self._append_decision(request, decision)
+            self._refresh_dispatch_ticket(request, contract_sha)
             return decision
 
         warnings = lint_warnings
@@ -199,52 +222,132 @@ class DispatchGate:
         job_id: str,
         probe_fn: Callable[[str], bool],
         contract_sha: str | None = None,
+        runtime: str | None = None,
     ) -> GateDecision:
         """Register a job only after independent probe verification succeeds."""
 
         if not job_id or not probe_fn(job_id):
             return GateDecision(False, ReasonCode.UNVERIFIED_JOB)
 
-        pending_dispatches = self._pending_dispatches()
-        if contract_sha is not None:
-            contract_sha_filter = _normalize_contract_sha_filter(contract_sha)
-            if contract_sha_filter is None:
-                return GateDecision(False, ReasonCode.INVALID_REQUEST)
-            matching_pending = tuple(
-                entry
-                for entry in pending_dispatches
-                if _contract_sha_matches(entry.get("contract_sha"), contract_sha_filter)
-            )
-            if not matching_pending:
-                return GateDecision(False, ReasonCode.NO_MATCHING_TICKET)
-            if len(matching_pending) > 1:
-                return GateDecision(False, ReasonCode.AMBIGUOUS_TICKET)
-            pending = matching_pending[0]
-        else:
-            if not pending_dispatches:
-                return GateDecision(False, ReasonCode.UNVERIFIED_JOB)
-            if len(pending_dispatches) > 1:
-                return GateDecision(False, ReasonCode.AMBIGUOUS_TICKET)
-            pending = pending_dispatches[0]
+        runtime_filter = _normalize_runtime_filter(runtime)
+        if runtime is not None and runtime_filter is None:
+            return GateDecision(False, ReasonCode.INVALID_REQUEST)
 
-        decision = GateDecision(
-            allow=True,
-            reason=ReasonCode.OK,
-            contract_sha=_string_or_none(pending.get("contract_sha")),
-            cost_proxy=_int_or_zero(pending.get("est_chars")),
-        )
-        self._append_entry(
-            {
-                "ts": self._clock(),
-                "contract_sha": pending["contract_sha"],
-                "runtime": pending["runtime"],
-                "n_agents": pending["n_agents"],
-                "est_chars": pending["est_chars"],
-                "decision": "ALLOW",
-                "reason": ReasonCode.OK.value,
-                "job_id": job_id,
-            }
-        )
+        with _ticket_lock(Path(self.config.ticket_dir)):
+            tickets = self._valid_dispatch_tickets(runtime_filter=runtime_filter)
+            if contract_sha is not None:
+                contract_sha_filter = _normalize_contract_sha_filter(contract_sha)
+                if contract_sha_filter is None:
+                    return GateDecision(False, ReasonCode.INVALID_REQUEST)
+                all_tickets = self._dispatch_tickets(
+                    runtime_filter=runtime_filter,
+                    include_expired=True,
+                )
+                matching_tickets = tuple(
+                    ticket
+                    for ticket in all_tickets
+                    if ticket.contract_sha.lower().startswith(contract_sha_filter)
+                )
+                if len(matching_tickets) > 1:
+                    return GateDecision(
+                        False,
+                        ReasonCode.AMBIGUOUS_TICKET,
+                        message=_candidate_sha_message(matching_tickets),
+                    )
+                selected_ticket = matching_tickets[0] if matching_tickets else None
+                pending_dispatches = self._pending_dispatches()
+                if selected_ticket is not None:
+                    matching_pending = tuple(
+                        entry
+                        for entry in pending_dispatches
+                        if entry.get("contract_sha") == selected_ticket.contract_sha
+                        and entry.get("runtime") == selected_ticket.runtime
+                    )
+                else:
+                    if all_tickets:
+                        return GateDecision(
+                            False,
+                            ReasonCode.NO_MATCHING_TICKET,
+                            message=_candidate_sha_message(all_tickets),
+                        )
+                    matching_pending = tuple(
+                        entry
+                        for entry in pending_dispatches
+                        if _contract_sha_matches(entry.get("contract_sha"), contract_sha_filter)
+                        and (
+                            runtime_filter is None
+                            or _string_or_none(entry.get("runtime")) == runtime_filter
+                        )
+                    )
+                    if len(matching_pending) > 1:
+                        return GateDecision(
+                            False,
+                            ReasonCode.AMBIGUOUS_TICKET,
+                            message=_candidate_sha_message_from_entries(matching_pending),
+                        )
+                    if not matching_pending:
+                        return GateDecision(
+                            False,
+                            ReasonCode.NO_MATCHING_TICKET,
+                            message=_candidate_sha_message(all_tickets),
+                        )
+            else:
+                if not tickets:
+                    return GateDecision(
+                        False,
+                        ReasonCode.NO_MATCHING_TICKET,
+                        message=_candidate_sha_message(tickets),
+                    )
+                if len(tickets) > 1:
+                    return GateDecision(
+                        False,
+                        ReasonCode.AMBIGUOUS_TICKET,
+                        message=_candidate_sha_message(tickets),
+                    )
+                selected_ticket = tickets[0]
+                matching_pending = tuple(
+                    entry
+                    for entry in self._pending_dispatches()
+                    if entry.get("contract_sha") == selected_ticket.contract_sha
+                    and entry.get("runtime") == selected_ticket.runtime
+                )
+                if not matching_pending:
+                    return GateDecision(
+                        False,
+                        ReasonCode.NO_MATCHING_TICKET,
+                        message=_candidate_sha_message(tickets),
+                    )
+            pending = matching_pending[0]
+
+            if contract_sha is not None and selected_ticket is not None:
+                try:
+                    selected_ticket.path.unlink()
+                except FileNotFoundError:
+                    pass
+
+            decision = GateDecision(
+                allow=True,
+                reason=ReasonCode.OK,
+                contract_sha=_string_or_none(pending.get("contract_sha")),
+                cost_proxy=_int_or_zero(pending.get("est_chars")),
+                message=(
+                    "ticket_absent"
+                    if contract_sha is not None and selected_ticket is None
+                    else ""
+                ),
+            )
+            self._append_entry(
+                {
+                    "ts": self._clock(),
+                    "contract_sha": pending["contract_sha"],
+                    "runtime": pending["runtime"],
+                    "n_agents": pending["n_agents"],
+                    "est_chars": pending["est_chars"],
+                    "decision": "ALLOW",
+                    "reason": ReasonCode.OK.value,
+                    "job_id": job_id,
+                }
+            )
         return decision
 
     def ledger_entries(self) -> tuple[Mapping[str, object], ...]:
@@ -266,6 +369,8 @@ class DispatchGate:
             "decision": "ALLOW" if decision.allow else "DENY",
             "reason": decision.reason.value,
         }
+        if decision.warnings:
+            entry["warnings"] = [warning.value for warning in decision.warnings]
         self._append_entry(entry)
 
     def _append_entry(self, entry: Mapping[str, object]) -> None:
@@ -285,19 +390,51 @@ class DispatchGate:
         if decision.contract_sha is None:
             return
 
+        self._write_dispatch_ticket(request, decision.contract_sha, request.n_agents)
+
+    def _refresh_dispatch_ticket(
+        self,
+        request: DispatchRequest,
+        contract_sha: str,
+    ) -> None:
+        runtime = request.runtime.lower()
+        if _dispatch_ticket_path(Path(self.config.ticket_dir), runtime, contract_sha) is None:
+            return
+
+        with _ticket_lock(Path(self.config.ticket_dir)):
+            existing = self._read_dispatch_ticket(runtime, contract_sha)
+            count = existing.count if existing is not None else request.n_agents
+            self._write_dispatch_ticket_unlocked(request, contract_sha, count)
+
+    def _write_dispatch_ticket(
+        self,
+        request: DispatchRequest,
+        contract_sha: str,
+        count: int,
+    ) -> None:
+        with _ticket_lock(Path(self.config.ticket_dir)):
+            self._gc_expired_dispatch_tickets()
+            self._write_dispatch_ticket_unlocked(request, contract_sha, count)
+
+    def _write_dispatch_ticket_unlocked(
+        self,
+        request: DispatchRequest,
+        contract_sha: str,
+        count: int,
+    ) -> None:
         ticket_dir = Path(self.config.ticket_dir)
         ticket_dir.mkdir(parents=True, exist_ok=True)
 
         runtime = request.runtime.lower()
-        ticket_path = _dispatch_ticket_path(ticket_dir, runtime, decision.contract_sha)
+        ticket_path = _dispatch_ticket_path(ticket_dir, runtime, contract_sha)
         if ticket_path is None:
             return
 
         payload = {
             "runtime": runtime,
-            "contract_sha": decision.contract_sha,
+            "contract_sha": contract_sha,
             "issued_ts": self._clock(),
-            "count": request.n_agents,
+            "count": max(1, count),
         }
         tmp_path = ticket_path.with_name(f".{ticket_path.name}.{os.getpid()}.tmp")
         with tmp_path.open("w", encoding="utf-8") as ticket:
@@ -346,6 +483,66 @@ class DispatchGate:
                 if line.strip():
                     entries.append(json.loads(line))
         return entries
+
+    def _valid_dispatch_tickets(
+        self,
+        runtime_filter: str | None = None,
+    ) -> tuple[DispatchTicket, ...]:
+        return self._dispatch_tickets(runtime_filter=runtime_filter, include_expired=False)
+
+    def _dispatch_tickets(
+        self,
+        runtime_filter: str | None = None,
+        *,
+        include_expired: bool = False,
+    ) -> tuple[DispatchTicket, ...]:
+        self._gc_expired_dispatch_tickets()
+        ticket_dir = Path(self.config.ticket_dir)
+        if not ticket_dir.exists():
+            return ()
+
+        tickets: list[DispatchTicket] = []
+        for path in sorted(ticket_dir.glob("*.json")):
+            ticket = _decode_dispatch_ticket(path)
+            if ticket is None:
+                continue
+            if runtime_filter is not None and ticket.runtime != runtime_filter:
+                continue
+            if not include_expired and self._ticket_is_expired(ticket):
+                continue
+            tickets.append(ticket)
+        return tuple(tickets)
+
+    def _gc_expired_dispatch_tickets(self) -> None:
+        ticket_dir = Path(self.config.ticket_dir)
+        if not ticket_dir.exists():
+            return
+        expires_before = self._clock() - (
+            self.config.ticket_ttl_seconds + self.config.expired_ticket_gc_grace_seconds
+        )
+        for path in ticket_dir.glob("*.json"):
+            ticket = _decode_dispatch_ticket(path)
+            if ticket is None:
+                continue
+            if ticket.issued_ts < expires_before:
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass
+
+    def _ticket_is_expired(self, ticket: DispatchTicket) -> bool:
+        expires_before = self._clock() - self.config.ticket_ttl_seconds
+        return ticket.issued_ts < expires_before
+
+    def _read_dispatch_ticket(
+        self,
+        runtime: str,
+        contract_sha: str,
+    ) -> DispatchTicket | None:
+        ticket_path = _dispatch_ticket_path(Path(self.config.ticket_dir), runtime, contract_sha)
+        if ticket_path is None or not ticket_path.exists():
+            return None
+        return _decode_dispatch_ticket(ticket_path)
 
 
 def _validate_request(request: DispatchRequest) -> ReasonCode | None:
@@ -494,6 +691,76 @@ def _has_worktree_as_repo_root(contract_text: str) -> bool:
     return False
 
 
+@contextmanager
+def _ticket_lock(ticket_dir: Path) -> Iterator[None]:
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = ticket_dir / ".dispatch-gate.lock"
+    with lock_path.open("a", encoding="utf-8") as lock_file:
+        if fcntl is not None:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _decode_dispatch_ticket(path: Path) -> DispatchTicket | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+
+    runtime = _string_or_none(payload.get("runtime"))
+    contract_sha = _string_or_none(payload.get("contract_sha"))
+    issued_ts = _number_or_none(payload.get("issued_ts"))
+    count = _positive_int_or_none(payload.get("count"))
+    if runtime is None or RUNTIME_PATTERN.fullmatch(runtime) is None:
+        return None
+    if contract_sha is None or re.fullmatch(r"[0-9a-f]{64}", contract_sha.lower()) is None:
+        return None
+    if issued_ts is None or count is None:
+        return None
+
+    expected_path = _dispatch_ticket_path(path.parent, runtime, contract_sha.lower())
+    if expected_path is None or expected_path.name != path.name:
+        return None
+    return DispatchTicket(
+        path=path,
+        runtime=runtime,
+        contract_sha=contract_sha.lower(),
+        issued_ts=issued_ts,
+        count=count,
+    )
+
+
+def _number_or_none(value: object) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def _positive_int_or_none(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int) and value >= 1:
+        return value
+    return None
+
+
+def _normalize_runtime_filter(runtime: str | None) -> str | None:
+    if runtime is None:
+        return None
+    runtime_filter = runtime.strip().lower()
+    if RUNTIME_PATTERN.fullmatch(runtime_filter) is None:
+        return None
+    return runtime_filter
+
+
 def _normalize_contract_sha_filter(contract_sha: str) -> str | None:
     contract_sha_filter = contract_sha.strip().lower()
     if len(contract_sha_filter) < 12:
@@ -508,3 +775,23 @@ def _contract_sha_matches(value: object, contract_sha_filter: str) -> bool:
     if contract_sha is None:
         return False
     return contract_sha.lower().startswith(contract_sha_filter)
+
+
+def _candidate_sha_message(tickets: Sequence[DispatchTicket]) -> str:
+    shas = sorted({ticket.contract_sha for ticket in tickets})
+    if not shas:
+        return "candidate_contract_shas=<none>"
+    return "candidate_contract_shas=" + ",".join(shas)
+
+
+def _candidate_sha_message_from_entries(entries: Sequence[Mapping[str, object]]) -> str:
+    shas = sorted(
+        {
+            contract_sha
+            for contract_sha in (_string_or_none(entry.get("contract_sha")) for entry in entries)
+            if contract_sha is not None
+        }
+    )
+    if not shas:
+        return "candidate_contract_shas=<none>"
+    return "candidate_contract_shas=" + ",".join(shas)

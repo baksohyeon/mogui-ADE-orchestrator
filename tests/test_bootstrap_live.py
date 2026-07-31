@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import importlib.util
+from importlib.machinery import SourceFileLoader
 import shutil
 import subprocess
 import sys
@@ -209,6 +211,63 @@ class CliTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0)
         self.assertNotEqual(proc.stdout.strip(), "")
+
+    def test_cli_compact_includes_first_injection_banner(self) -> None:
+        script = Path(__file__).resolve().parent.parent / "scripts" / "master-bootstrap-live"
+        (self._dir / "2026-07-20-gen6-handoff.md").write_text(HANDOFF, encoding="utf-8")
+        proc = subprocess.run(
+            [sys.executable, str(script), "--handoff-dir", str(self._dir)],
+            input='{"source":"compact"}',
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(proc.returncode, 0)
+        self.assertTrue(proc.stdout.startswith("[E12-CRITICAL] compact first-injection warning"))
+        self.assertIn("synthetic turn as unrehydrated", proc.stdout)
+        self.assertIn("role-state.md", proc.stdout)
+
+
+class CompactSuppressTests(unittest.TestCase):
+    def test_compact_suppress_uses_heading_regex(self) -> None:
+        module = _load_bootstrap_live_script()
+        block = "\n".join(
+            [
+                "[MASTER-BOOTSTRAP v1]",
+                "### role state",
+                "Current Role: should be suppressed",
+                "### Active Tracks",
+                "AL-secret should be suppressed",
+                "### Next",
+                "keep me",
+            ]
+        )
+
+        out = module._suppress_compact_recall_leaks(block)
+
+        self.assertTrue(out.startswith("[E12-CRITICAL] compact first-injection warning"))
+        self.assertIn("[E12] compact: tracks/role suppressed", out)
+        self.assertNotIn("should be suppressed", out)
+        self.assertNotIn("AL-secret", out)
+        self.assertIn("keep me", out)
+
+    def test_compact_suppress_fail_open_preserves_block(self) -> None:
+        module = _load_bootstrap_live_script()
+
+        out = module._suppress_compact_recall_leaks(None)
+
+        self.assertEqual(module._COMPACT_FIRST_INJECTION_BANNER, out)
+
+
+def _load_bootstrap_live_script():
+    script = Path(__file__).resolve().parent.parent / "scripts" / "master-bootstrap-live"
+    loader = SourceFileLoader("master_bootstrap_live_script", str(script))
+    spec = importlib.util.spec_from_loader("master_bootstrap_live_script", loader)
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
 
 
 if __name__ == "__main__":

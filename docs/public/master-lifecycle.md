@@ -22,11 +22,11 @@ The actual spawn entry point is `scripts/master-succeed spawn`. A dry run is the
 
 ```bash
 scripts/master-succeed spawn \
-  --workspace-selector workspace-a \
-  --kickoff-text "Generation 1 founding boot" \
+  --workspace-selector polsia \
+  --kickoff-text "Founding master boot" \
   --root . \
   --model example-model \
-  --title "Gen-1 founding boot" \
+  --title "Founding master boot" \
   --json \
   --dry-run
 ```
@@ -55,6 +55,8 @@ scripts/model-identity-probe \
 
 If the host cannot expose a measured model field, report that as unavailable. Do not infer the actual model from a launch flag.
 
+The model field is an operational measurement, not just configuration. In field use, declared model identity and measured model identity were separated because a session could drift after launch. The safe response is to record the measured value, route sensitive lanes away from the master when needed, and start a clean successor when the current session cannot be trusted to stay in the intended lane.
+
 ## Steady State
 
 Normal operation is continue-and-compact. The master should promote accepted knowledge, active tracks, and open decisions into durable stores before context pressure becomes urgent.
@@ -74,6 +76,8 @@ scripts/l1-digest tick --config ./ops/l1-digest.json
 ```
 
 > Note: The digest loop observes and records. Work and acceptance remain outside the digest module.
+
+Long-running sessions should be treated as finite. In an intentional context-limit exercise, the master kept coordinating work near the visible limit, but the next compacted turn exposed a recall and hook-coverage gap. The lesson is not that a full context window is safe. The lesson is that context pressure should be measured, accepted state must already be in durable stores, and compaction or succession should be chosen from evidence rather than from optimism.
 
 ## Clean Succession
 
@@ -114,6 +118,8 @@ scripts/master-succeed retire \
 ```
 
 Add `--execute` only when the operator intends to close the predecessor terminal.
+
+Early planned successions changed the procedure. One handoff described the predecessor as gone while the process was still alive, so runtime state is now checked separately from handoff text. Later successions added command-line and session-path matching before retirement, plus explicit cleanup and restart of monitors under the successor's ownership. A clean succession is therefore not only "the successor read the handoff"; it is a measured transfer of role, track, process ownership, and verification responsibility.
 
 ## Lineage
 

@@ -16,6 +16,10 @@ Session state is volatile. A crash, manual clear, compaction, or stale terminal 
 
 Delegation needs supervision. It is easy to start worker sessions, but the master still needs to know which contract was dispatched, where it ran, what evidence came back, and whether the result was independently accepted.
 
+Those problems became concrete in a Polsia workspace. Product work crossed planning, `polsia-api`, frontend, and `polsia-ops` repositories; API contract changes had to propagate across repository boundaries; and long-running sessions kept approaching context limits before the work was ready to stop. A separate failure mode came from unsupervised workers: a worker could claim completion, repeat a self-invented instruction, or touch a checkout outside the intended review lane unless the master treated the report as a claim and required external evidence.
+
+The harness exists because these failures combine. Context durability, repository routing, worker dispatch, evidence review, and succession are not independent conveniences when the same track outlives one session.
+
 ## The Approach
 
 This repository treats the master as a long-lived operating role rather than a single process that must last forever.
@@ -27,6 +31,12 @@ The operating state is promoted out of chat into durable stores. Execution state
 Succession is explicit. A current master can build a thin handoff, spawn a clean successor, verify that the successor recovered the inherited state, then retire the predecessor. Advisory signals can propose succession, but the current implementation does not auto-succeed a master without an explicit trigger.
 
 > Note: The public docs describe the control model. Host-specific wiring, workspace-specific path policy, and sensitive-lane implementation are intentionally outside this public surface.
+
+## When It Is Worth It
+
+This design is useful when at least two pressures show up together: tracks last longer than a single session, one task spans repositories such as `polsia-api` and `polsia-ops`, several workers can run at once, or the work touches production-facing authority. In those cases, a ledger, thin handoff, worker lease, evidence bundle, approval gate, and recovery path reduce repeated explanation and make acceptance auditable.
+
+The design is too heavy for a short task in one repository with one agent. In that case, a repository instruction file, an issue tracker entry, and a current session summary may be enough. The smallest transferable rules are: keep the source of truth outside the chat, treat succession as a normal lifecycle event, and never use an agent's self-report as completion evidence.
 
 ## Core Capabilities
 
@@ -48,4 +58,4 @@ mogui-ADE-orchestrator works at a different layer. Deep Agents wires an executio
 
 ## Where To Go Next
 
-Start with [Getting Started](getting-started.md) for the shortest path into the repository. Read [Concepts](concepts.md) for the component mapping, [Master Lifecycle](master-lifecycle.md) for boot and succession, and [Delegation and Review](delegation-and-review.md) for worker contracts and acceptance.
+Start with [Getting Started](getting-started.md) for the shortest path into the repository. Read [Concepts](concepts.md) for the component mapping, [Master Lifecycle](master-lifecycle.md) for boot and succession, [Delegation and Review](delegation-and-review.md) for worker contracts and acceptance, and [Reference](reference.md) for script entry points.

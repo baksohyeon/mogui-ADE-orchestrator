@@ -14,6 +14,8 @@ check -> dispatch -> register
 
 `check` reads the worker contract and records a decision in the dispatch ledger. `dispatch` starts or plans the worker through the adapter. `register` is valid only after a probe proves that the worker job id appears in an expected artifact.
 
+The gate exists because policy without wiring is easy to bypass. A worker launch path once ran outside the expected warning path; the absence of a warning was incorrectly treated as permission. The fix was to treat every worker launch surface as part of the dispatch boundary and to record missing or unverifiable dispatches as violations rather than retroactively accepting them.
+
 Example check:
 
 ```bash
@@ -31,7 +33,7 @@ Example dry-run dispatch:
 ```bash
 scripts/adapter dispatch \
   --contract ./contracts/job.md \
-  --repo ./product-api \
+  --repo ./polsia-api \
   --runtime codex \
   --agents 1 \
   --est-chars 2000 \
@@ -68,6 +70,8 @@ Write the contract around observable facts:
 
 Worker self-report is not evidence. Evidence should be something the master can inspect: diffs, tests, logs, generated files, deterministic probes, or authoritative documents.
 
+If a worker interprets the contract differently from the master, the answer is not to accept a partial result. The master should correct the lease, record the revision reason, redispatch or request changes, and keep acceptance separate from worker completion.
+
 ## Commit Rules
 
 Commit authority belongs in the contract. A worker should not infer whether it may commit, push, deploy, or edit shared files.
@@ -95,12 +99,16 @@ The point is not ceremony. The point is to separate failure modes. One reviewer 
 
 The master should use the majority verdict, but a serious minority finding must be addressed or explicitly rejected with evidence.
 
+This is a lens split, not a popularity contest. A three-vote review is useful because one path can focus on whether the result works, another on disproving regression, and another on contract compliance. If the contract or regression lens finds a blocking issue, the master should handle it before acceptance even when the other reviews are positive.
+
 ## Acceptance Gate
 
 Acceptance is a master decision, not a worker decision.
 
 Before acceptance, the master independently verifies the worker artifact against the contract. A narrow documentation task may need link checks and redaction scans. A code task may need targeted tests, broad tests, and direct source inspection. A cross-repository task may need evidence from each repository.
 
+The acceptance gate is deliberately skeptical of self-report. "Done" means only that the worker claims it is done. Acceptance starts when the master can connect the worker artifact to the lease, inspect the changed surface, rerun or verify the required checks, and name any gap that remains.
+
 The acceptance report should state what passed, what was not run, and which risks remain. If a result cannot be verified, it is not accepted yet.
 
-Read next: [Master Lifecycle](master-lifecycle.md).
+Read next: [Master Lifecycle](master-lifecycle.md) or [Reference](reference.md).

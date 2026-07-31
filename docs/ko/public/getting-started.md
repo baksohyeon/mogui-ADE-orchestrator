@@ -25,6 +25,8 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 scripts/adapter doctor
 ```
 
+현재 명령 표면은 [레퍼런스](reference.md)를 보세요. 이 문서는 로컬 `scripts/` help 출력에서 생성됩니다.
+
 ## 에이전트 세션 시작
 
 최초 설정에서는 installer 대화 안에서 마스터를 부트하려 하지 않습니다. 온보딩 가이드는 워크스페이스 정보 수집, 운영 레포지터리 초기화, placeholder 채우기, 이슈 트래커 선택, Generation 1 마스터 세션 창설 절차를 설명합니다.
@@ -60,4 +62,4 @@ scripts/master-bootstrap-live \
 
 > 팁: 이 문서는 짧게 유지합니다. 자세한 설치 흐름은 온보딩 가이드가, 부트와 승계 세부사항은 생애주기 문서가 맡습니다.
 
-다음 문서: [개념](concepts.md), [마스터 생애주기](master-lifecycle.md).
+다음 문서: [개념](concepts.md), [마스터 생애주기](master-lifecycle.md), [레퍼런스](reference.md).

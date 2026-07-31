@@ -12,6 +12,40 @@ Deep Agents는 에이전트 하네스를 실행, 컨텍스트, 위임, 스티어
 | Steering | `Proposal -> Approval -> Execution`, Role State, 역할 잠금, 분리된 리뷰 렌즈 | 승인 registry 구현; 역할과 리뷰 규칙은 운영 정책 |
 | Virtual Filesystem | 레포지터리 worktree, 컨텍스트 resolver, 경로 관측, 민감 레인 분리 | worktree와 경로 헬퍼 구현; 민감 레인 분리는 정책 및 설계 |
 
+## 상태 라벨
+
+공개 문서는 구현 상태 라벨을 좁게 사용합니다.
+
+| 라벨 | 의미 |
+| --- | --- |
+| Configured | 레포지터리나 워크스페이스에 파일, 스크립트, hook, 설정, 정적 계약이 존재합니다. |
+| Intended | 설계 계약은 문서화됐지만, 이 페이지가 라이브 런타임 증거를 주장하지 않습니다. |
+| Observed | Git 상태, 로컬 실행, 로그, 원장, 프로세스 상태, 프로브가 에이전트 자기 보고 밖에서 동작을 보여 줬습니다. |
+| Unknown | 현재 증거로는 동작을 증명하지 못하거나, 공개 표면 밖에 두는 동작입니다. |
+
+이 구분이 중요한 이유는 구성돼 있다는 사실이 작동한다는 뜻은 아니기 때문입니다. hook 파일, descriptor, 명령이 존재해도 모든 작업자 경로가 그 장치를 통과한다고 증명되지는 않습니다. 공개 문서는 C/I/O/U를 분리하고, "있다"를 "작동한다"로 바꾸지 않습니다.
+
+## Runtime Unit
+
+초기 구현이 하나의 프로세스나 하나의 CLI를 공유하더라도, 마스터 책임은 runtime unit으로 이름을 붙이면 테스트하기 쉬워집니다.
+
+| Unit | 이름 | 책임 |
+| --- | --- | --- |
+| U1 | Bootstrap | 안전한 시작에 필요한 최소 L0/L1 컨텍스트를 적재합니다. |
+| U2 | Context Resolver | 요청이 워크스페이스, 레포지터리, worktree, 외부 시스템 중 어디에 속하는지 판정합니다. |
+| U3 | Workspace Runtime | 트랙, 크로스레포 상태, 장수명 실행 기록을 소유합니다. |
+| U4 | Repository Runtime Loader | 확정된 대상에 필요한 Repository Harness만 적재합니다. |
+| U5 | Worker Scheduler | 작업자 lease를 발급하고, 격리를 선택하고, 작업자를 파견하며, 예산과 자원 회수를 집행합니다. |
+| U6 | Approval Manager | 행동 위험도를 분류하고 실행을 유효한 승인 상태에 묶습니다. |
+| U7 | Role Runtime | 하나의 활성 역할, 역할 잠금, 역할 전환 상태를 유지합니다. |
+| U8 | Recovery Manager | 대체 세션을 만들기 전에 재부착, 단일 resume, 상태 재구성을 판정합니다. |
+| U9 | Succession Manager | 변경 가능한 작업을 동결하고, 얇은 핸드오프를 작성하고, 후속 세션을 검증하고, 전임을 은퇴시킵니다. |
+| U10 | Lineage Recorder | 승계 품질 감사 메타데이터를 append-only로 남기되 lineage를 부트스트랩 소스로 쓰지 않습니다. |
+| U11 | Observability | 프로브, 경보, 컨텍스트 품질, 모델 정체성, 수락 증빙을 기록합니다. |
+| U12 | Adapter Layer | 제품별 CLI와 파일 형식을 공통 계약 뒤에 격리합니다. |
+
+예를 들어 Context Resolver가 요청 대상이 `polsia-api`라고 판정하거나 요청이 `polsia-api`와 `polsia-ops`에 걸친다고 판정하면, Repository Runtime Loader는 필요한 레포지터리 규칙만 page-in하고, Worker Scheduler는 범위가 제한된 lease를 만들며, Approval Manager는 프로덕션에 닿는 행동을 올바른 게이트가 충족될 때까지 거부할 수 있습니다.
+
 ## 실행 환경
 
 Deep Agents에서 실행 환경은 에이전트가 도구, 파일, 코드 실행을 사용하는 자리입니다. 이 레포지터리에서 실행 환경은 실제 워크스페이스입니다.
@@ -23,7 +57,7 @@ Deep Agents에서 실행 환경은 에이전트가 도구, 파일, 코드 실행
 ```bash
 scripts/adapter dispatch \
   --contract ./contracts/job.md \
-  --repo ./product-api \
+  --repo ./polsia-api \
   --isolation auto \
   --runtime codex \
   --agents 1 \
@@ -93,4 +127,4 @@ Deep Agents는 pluggable storage가 뒷받침하는 virtual filesystem을 노출
 
 대신 실제 레포지터리 파일시스템을 경계로 다룹니다. 컨텍스트 resolver는 레포지터리 경로와 git worktree를 관측합니다. 어댑터는 격리가 필요할 때 대상 레포지터리 아래에 작업자 worktree를 계획할 수 있습니다. 민감 레인은 공개 virtual filesystem 구현이 아니라 운영 정책과 전용 세션 라우팅으로 분리합니다.
 
-다음 문서: [위임과 리뷰](delegation-and-review.md), [마스터 생애주기](master-lifecycle.md).
+다음 문서: [위임과 리뷰](delegation-and-review.md), [마스터 생애주기](master-lifecycle.md). 로컬 스크립트 진입점은 [레퍼런스](reference.md)를 보세요.

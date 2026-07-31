@@ -25,6 +25,8 @@ Check which local adapter tools are visible:
 scripts/adapter doctor
 ```
 
+For the current command surface, see [Reference](reference.md). It is generated from the local `scripts/` help output.
+
 ## Start An Agent Session
 
 For first-time setup, do not try to boot the master inside the installer conversation. The onboarding guide explains how to collect workspace facts, initialize the operations repository, fill placeholders, choose the issue tracker, and create the Generation 1 master session.
@@ -59,4 +61,4 @@ scripts/master-bootstrap-live \
 
 > Tip: Keep this page short. The onboarding guide owns the detailed setup flow, and the lifecycle guide owns boot and succession details.
 
-Read next: [Concepts](concepts.md) or [Master Lifecycle](master-lifecycle.md).
+Read next: [Concepts](concepts.md), [Master Lifecycle](master-lifecycle.md), or [Reference](reference.md).

@@ -23,11 +23,11 @@ founding spawn -> boot measurement -> steady state -> clean succession -> lineag
 
 ```bash
 scripts/master-succeed spawn \
-  --workspace-selector workspace-a \
-  --kickoff-text "Generation 1 founding boot" \
+  --workspace-selector polsia \
+  --kickoff-text "Founding master boot" \
   --root . \
   --model example-model \
-  --title "Gen-1 founding boot" \
+  --title "Founding master boot" \
   --json \
   --dry-run
 ```
@@ -56,6 +56,8 @@ scripts/model-identity-probe \
 
 호스트가 측정된 모델 필드를 제공하지 못하면 unavailable로 보고합니다. 실행 플래그만 보고 실제 모델을 추론하지 않습니다.
 
+모델 필드는 단순 설정이 아니라 운영 실측값입니다. 현장 운영에서는 선언된 모델 정체성과 실측 모델 정체성을 분리했습니다. 세션이 시작 뒤 다른 실행 모델로 드리프트할 수 있었기 때문입니다. 안전한 대응은 실측값을 기록하고, 필요한 경우 민감 레인을 마스터 밖으로 라우팅하며, 현재 세션이 의도한 레인에 머문다고 믿기 어렵다면 깨끗한 후속 세션을 시작하는 것입니다.
+
 ## 평시 운영
 
 기본 운영은 continue-and-compact입니다. 마스터는 컨텍스트 압력이 커지기 전에 승인된 지식, 활성 트랙, 열린 결정을 지속 저장소로 승격해야 합니다.
@@ -75,6 +77,8 @@ scripts/l1-digest tick --config ./ops/l1-digest.json
 ```
 
 > 참고: digest loop는 관측하고 기록합니다. 실제 작업과 수락은 digest 모듈 밖에 있습니다.
+
+장수명 세션은 유한한 실행 단위로 다뤄야 합니다. 의도적으로 컨텍스트 한계에 가깝게 운영한 실험에서는 마스터가 표시상 한계에 가까운 상태에서도 작업 조율을 이어 갔지만, 컴팩션 직후 턴에서 회상과 hook coverage의 사각이 드러났습니다. 결론은 가득 찬 컨텍스트가 안전하다는 뜻이 아닙니다. 컨텍스트 압력을 실측하고, 수락된 상태는 이미 지속 저장소에 있어야 하며, 컴팩션과 승계 선택은 낙관이 아니라 증거로 결정해야 한다는 뜻입니다.
 
 ## 깨끗한 승계
 
@@ -115,6 +119,8 @@ scripts/master-succeed retire \
 ```
 
 운영자가 이전 터미널을 닫으려는 의도가 분명할 때만 `--execute`를 추가합니다.
+
+초기 계획 승계들은 절차 자체를 바꿨습니다. 한 핸드오프는 전임이 사라진 것처럼 적었지만 실제 프로세스는 살아 있었으므로, 런타임 상태를 핸드오프 문구와 별도로 확인하게 됐습니다. 이후 승계에서는 은퇴 전에 커맨드라인과 세션 경로를 함께 대조하고, 모니터도 후속 세션 소유로 명시적으로 정리하고 다시 시작하는 절차가 붙었습니다. 깨끗한 승계는 "후속 세션이 핸드오프를 읽었다"가 아니라 역할, 트랙, 프로세스 소유권, 검증 책임을 실측으로 넘기는 절차입니다.
 
 ## 계보
 

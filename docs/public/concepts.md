@@ -12,6 +12,40 @@ Deep Agents describes an agent harness in terms of execution, context, delegatio
 | Steering | `Proposal -> Approval -> Execution`, Role State, role lock, separated review lenses | Approval registry implemented; role and review rules are operating policy |
 | Virtual Filesystem | Repository worktrees, context resolver, path observations, sensitive lane separation | Worktree and path helpers implemented; sensitive lane separation is policy/design |
 
+## Status Labels
+
+The public docs use implementation status labels narrowly:
+
+| Label | Meaning |
+| --- | --- |
+| Configured | A file, script, hook, setting, or static contract exists in the repository or workspace. |
+| Intended | The design contract is documented, but this page is not claiming live runtime evidence. |
+| Observed | Git state, local execution, logs, ledgers, process state, or probes have shown the behavior outside an agent self-report. |
+| Unknown | The current evidence does not prove the behavior, or the behavior is deliberately outside the public surface. |
+
+The distinction matters because configured does not mean operating. A hook file, descriptor, or command can exist without proving that every worker path is forced through it. Public documentation should keep C/I/O/U separate instead of turning "present" into "working."
+
+## Runtime Units
+
+The master is easier to test when its responsibilities are named as runtime units, even if early implementations share one process or one CLI.
+
+| Unit | Name | Responsibility |
+| --- | --- | --- |
+| U1 | Bootstrap | Load the minimum L0/L1 context needed to start safely. |
+| U2 | Context Resolver | Decide whether a request belongs to the workspace, a repository, a worktree, or an external system. |
+| U3 | Workspace Runtime | Own tracks, cross-repository state, and long-lived execution records. |
+| U4 | Repository Runtime Loader | Load only the Repository Harness needed for the resolved target. |
+| U5 | Worker Scheduler | Issue worker leases, choose isolation, dispatch workers, enforce budget, and reap resources. |
+| U6 | Approval Manager | Classify action risk and bind execution to a valid approval state. |
+| U7 | Role Runtime | Keep one active role, role lock, and role transition state. |
+| U8 | Recovery Manager | Reattach, resume once, or reconstruct state before spawning a replacement session. |
+| U9 | Succession Manager | Freeze mutable work, write a thin handoff, verify the successor, and retire the predecessor. |
+| U10 | Lineage Recorder | Append audit metadata about succession quality without making lineage a bootstrap source. |
+| U11 | Observability | Record probes, alerts, context quality, model identity, and acceptance evidence. |
+| U12 | Adapter Layer | Isolate product-specific CLIs and file formats behind common contracts. |
+
+For example, Context Resolver can decide that a request targets `polsia-api` or spans `polsia-api` and `polsia-ops`, Repository Runtime Loader can page in only the needed repository rules, Worker Scheduler can create a scoped lease, and Approval Manager can refuse a production-facing action until the correct gate is satisfied.
+
 ## Execution Environment
 
 In Deep Agents, the execution environment is where the agent uses tools, files, and code execution. In this repository, the execution environment is an actual workspace.
@@ -23,7 +57,7 @@ Example:
 ```bash
 scripts/adapter dispatch \
   --contract ./contracts/job.md \
-  --repo ./product-api \
+  --repo ./polsia-api \
   --isolation auto \
   --runtime codex \
   --agents 1 \
@@ -93,4 +127,4 @@ Deep Agents exposes a virtual filesystem backed by pluggable storage. mogui-ADE-
 
 Instead, it treats the real repository filesystem as the boundary. The context resolver observes repository paths and git worktrees. The adapter can plan a worker worktree under the target repository when isolation is needed. Sensitive lanes are separated by operating policy and by routing to dedicated sessions, not by a public virtual filesystem implementation.
 
-Read next: [Delegation and Review](delegation-and-review.md), then [Master Lifecycle](master-lifecycle.md).
+Read next: [Delegation and Review](delegation-and-review.md), then [Master Lifecycle](master-lifecycle.md). See [Reference](reference.md) for the local script entry points.

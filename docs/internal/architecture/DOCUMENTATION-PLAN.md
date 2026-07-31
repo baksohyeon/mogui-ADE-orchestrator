@@ -1,7 +1,15 @@
 # mogui-ADE-orchestrator 문서화 계획 (스펙)
 
+> **Status as of 2026-07-31: partly superseded. Read [`docs/README.md`](../../README.md) for the document set that actually exists.**
+>
+> Writing happened, but not into the structure planned in §1 below. The public set landed under `docs/public/` (overview, getting-started, concepts, master-lifecycle, delegation-and-review, reference) instead of `docs/architecture/` + `docs/decisions/` + `docs/diagrams/`, and `README.md` was promoted from the `docs/README-public-draft.md` draft this plan called for. Internal material now lives under `docs/internal/`.
+>
+> What this plan still governs: the crosscutting principles in §0 (measured claims only, the exact meaning of vendor neutrality, publication safety, plain tone, and the rule that design intent must be separated from current behavior) and the acceptance criteria in §7. Those are still the standard.
+>
+> What has not been delivered: per-unit design documents (§3), ADRs (§4), and mermaid diagrams (§5). Symbol tables in §3 are a 2026-07-25 snapshot and must be re-measured before use — the module layout has changed since (`acceptance/` was added, `adapters/` never existed as a top-level package).
+
 - 작성일: 2026-07-25
-- 상태: 설계 확정, 집필 대기
+- 상태: 설계 확정, 집필 대기 (위 Status 참조 — 부분 대체됨)
 - 목적 우선순위: 내부 설계 정본(SSOT) = 포폴 = 오픈소스 공개용 (셋 다)
 
 이 문서는 "무슨 문서를, 어떤 내용으로, 어떤 순서로" 만들지의 지도다. 실제 집필은 이 스펙을 계약으로 삼아 후속 세션에서 파견한다.

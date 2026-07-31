@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+"""Command line entry point for the deterministic acceptance loop."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import shlex
+import subprocess
+import sys
+from pathlib import Path
+
+
+SCRIPT_PATH = Path(__file__).resolve()
+REPO_ROOT = SCRIPT_PATH.parent.parent
+SRC_ROOT = REPO_ROOT / "src"
+sys.path.insert(0, str(SRC_ROOT))
+
+from master_runtime.core.acceptance import (  # noqa: E402
+    BASELINE_LABEL,
+    AcceptanceConfigError,
+    Candidate,
+    CaseSplit,
+    cli_proposer,
+    command_evaluator,
+    load_acceptance_config,
+    render_split_markdown,
+    run_acceptance_loop,
+)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+
+    if args.command == "inspect":
+        return _inspect(args)
+
+    try:
+        loaded = load_acceptance_config(args.config)
+    except AcceptanceConfigError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    if args.command == "validate":
+        return _validate(loaded)
+    if args.command == "split":
+        return _split(loaded, args)
+    if args.command == "run":
+        return _run(loaded, args)
+
+    parser.print_help(sys.stderr)
+    return 2
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="acceptance-loop")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    validate_parser = subparsers.add_parser("validate")
+    validate_parser.add_argument("--config", required=True)
+
+    split_parser = subparsers.add_parser("split")
+    split_parser.add_argument("--config", required=True)
+    split_parser.add_argument("--output-dir")
+
+    run_parser = subparsers.add_parser("run")
+    run_parser.add_argument("--config", required=True)
+    run_parser.add_argument("--max-iterations", type=int)
+    run_parser.add_argument("--baseline-ref", default="")
+    run_parser.add_argument(
+        "--restore-cmd",
+        help="command run after a rejected candidate to restore the workspace",
+    )
+
+    inspect_parser = subparsers.add_parser("inspect")
+    inspect_parser.add_argument("--run-dir", required=True)
+
+    return parser
+
+
+def _validate(loaded) -> int:
+    casebook = loaded.casebook
+    payload = {
+        "name": loaded.config.name,
+        "workspace_root": str(loaded.config.workspace_root),
+        "run_dir": str(loaded.config.run_dir),
+        "proposer_runtime": loaded.config.proposer_runtime,
+        "max_iterations": loaded.config.max_iterations,
+        "train": len(casebook.cases_for_split(CaseSplit.TRAIN)),
+        "holdout": len(casebook.cases_for_split(CaseSplit.HOLDOUT)),
+        "scorecard": len(casebook.cases_for_split(CaseSplit.SCORECARD)),
+        "regression_log": None
+        if loaded.regression_log is None
+        else str(loaded.regression_log.path),
+    }
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0
+
+
+def _split(loaded, args: argparse.Namespace) -> int:
+    casebook = loaded.casebook
+    if loaded.regression_log is not None:
+        casebook = loaded.regression_log.apply(casebook)
+    output_dir = Path(args.output_dir) if args.output_dir else Path(loaded.config.run_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    split_path = output_dir / "split.json"
+    split_path.write_text(
+        json.dumps(casebook.manifest(), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    (output_dir / "split.md").write_text(render_split_markdown(casebook), encoding="utf-8")
+    print(split_path)
+    return 0
+
+
+def _run(loaded, args: argparse.Namespace) -> int:
+    config = loaded.config
+    if args.max_iterations is not None:
+        if args.max_iterations < 1:
+            print("--max-iterations must be at least 1", file=sys.stderr)
+            return 2
+        config = _with_max_iterations(config, args.max_iterations)
+
+    if config.max_iterations > 1 and not args.restore_cmd:
+        print(
+            "--restore-cmd is required when --max-iterations is greater than 1: "
+            "a rejected candidate must be rolled back before the next proposal",
+            file=sys.stderr,
+        )
+        return 2
+
+    restore_hook = None
+    if args.restore_cmd:
+        restore_argv = shlex.split(args.restore_cmd)
+
+        def restore_hook(candidate: Candidate) -> None:
+            del candidate
+            subprocess.run(restore_argv, cwd=str(config.workspace_root), check=False)
+
+    report = run_acceptance_loop(
+        config=config,
+        casebook=loaded.casebook,
+        baseline=Candidate(label=BASELINE_LABEL, ref=args.baseline_ref),
+        proposer=cli_proposer(config),
+        evaluator=command_evaluator(config.workspace_root),
+        regression_log=loaded.regression_log,
+        on_reject=restore_hook,
+    )
+    print(report.to_markdown())
+    return 0 if report.final_score.is_complete() else 1
+
+
+def _inspect(args: argparse.Namespace) -> int:
+    report_path = Path(args.run_dir) / "report.json"
+    if not report_path.exists():
+        print("no report at {0}".format(report_path), file=sys.stderr)
+        return 2
+    print(report_path.read_text(encoding="utf-8"), end="")
+    return 0
+
+
+def _with_max_iterations(config, max_iterations: int):
+    from dataclasses import replace
+
+    return replace(config, max_iterations=max_iterations)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -30,7 +30,7 @@ The operating state is promoted out of chat into durable stores. Execution state
 
 Succession is explicit. A current master can build a thin handoff, spawn a clean successor, verify that the successor recovered the inherited state, then retire the predecessor. Advisory signals can propose succession, but the current implementation does not auto-succeed a master without an explicit trigger.
 
-> Note: The public docs describe the control model. Host-specific wiring, workspace-specific path policy, and sensitive-lane implementation are intentionally outside this public surface.
+> Note: The public docs describe the control model. Host-specific wiring, workspace path policy, and sensitive-lane implementation sit outside this public surface.
 
 ## When It Is Worth It
 

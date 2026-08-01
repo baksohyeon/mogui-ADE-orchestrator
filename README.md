@@ -4,6 +4,8 @@
 
 Yes. That is what this is.
 
+Anyone running more than two agents at once hits this. Dorito hit it, got tired of it, and wrote this.
+
 Install is a clone and one sentence spoken to an agent.
 
 It runs the fleet on [Orca](https://www.onorca.dev/download). A session has to outlive its window and be addressable by handle before anything can orchestrate it. macOS only for now. Python 3.10+, stdlib-only core, MIT. No API key.

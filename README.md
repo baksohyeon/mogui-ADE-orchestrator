@@ -2,11 +2,11 @@
 
 > *I have agents running in tmux sessions. Can I still drive each one manually when I want, and at the same time orchestrate all of those sessions from above? Is tmux-based agent orchestration a thing?*
 
-Yes. That is what this is. Any mix of agents, as many as you want.
+Yes. That is what this is. Any mix of agents, as many as you want. (Claude as the master is the combination that has been run hard.)
 
 Anyone running more than two agents at once hits this. Dorito hit it, got tired of it, and wrote this.
 
-Install is a clone and one sentence spoken to an agent.
+Nothing to configure and nothing to read first. Clone it, start an agent inside the clone, tell it to wake up. The agent takes it from there and explains as it goes.
 
 It runs the fleet on [Orca](https://www.onorca.dev/download). A session has to outlive its window and be addressable by handle before anything can orchestrate it. macOS only for now. Python 3.10+, stdlib-only core, MIT. No API key.
 

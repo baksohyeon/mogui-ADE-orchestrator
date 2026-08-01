@@ -12,6 +12,7 @@ Change rule: do not change this document without explicit user approval or an ac
 
 This document is the workspace master-operations SSOT.
 
+- Template version: `{{TEMPLATE_VERSION}}` (source: `{{RUNTIME_ROOT}}/master-ops/CHANGELOG.md`)
 - Operations repository: `{{OPS_REPO}}`
 - Workspace root: `{{WORKSPACE_ROOT}}`
 - Workspace repositories: `{{REPO_LIST}}`

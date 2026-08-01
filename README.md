@@ -1,6 +1,6 @@
 # mogui-ADE-orchestrator
 
-> *Agent sessions running in tmux panes. Can I keep steering any one of them by hand and still orchestrate all of them from above?*
+> *I have agents running in tmux sessions. Can I still drive each one manually when I want, and at the same time orchestrate all of those sessions from above? Is tmux-based agent orchestration a thing?*
 
 Yes. That is what this is. Any mix of agents, as many as you want.
 

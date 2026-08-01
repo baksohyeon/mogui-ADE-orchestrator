@@ -207,10 +207,11 @@ dispatch-gate, acceptance, and compaction paths have run against real
 workspaces, and onboarding has been run start to finish by someone other than
 its author.
 
-No version tag yet. No CI: tests and the redaction scanners run locally before
-a push, so a passing count in a pull request is the author's word. Interfaces,
-CLI flags, and file formats still change without notice. Pin a commit if you
-build on it.
+Released as 0.1.0, the first tagged version. `CHANGELOG.md` records what changes
+after it. No CI: tests and the redaction scanners run locally before a push, so
+a passing count in a pull request is the author's word. While the major version
+is 0, interfaces, CLI flags, and file formats can change in a minor release.
+Pin a version if you build on it.
 
 The template that onboarding copies is versioned separately at
 `master-ops/TEMPLATE-VERSION`, currently 1. A generated operations repository

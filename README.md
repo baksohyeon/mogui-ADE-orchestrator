@@ -3,7 +3,7 @@
 > **Run one AI agent as the orchestrator of your whole workspace, on the subscription you already pay for.**
 > No API key. No model endpoint. It drives the coding-agent CLIs you already use, across every repository in one folder, and it survives the session dying.
 
-Point it at a folder that holds your product repositories. One master session plans, dispatches workers under contract, verifies their output before accepting it, and hands the role to a fresh session when the context fills up. Python 3.10+, stdlib-only core, MIT.
+Point it at a folder that holds your product repositories. One master session plans, dispatches workers under contract, verifies their output before accepting it, and hands the role to a fresh session when the context fills up. macOS only for now, other platforms planned. Python 3.10+, stdlib-only core, MIT.
 
 **If you are going to use an API key, use [LangChain deepagents](https://docs.langchain.com/oss/python/deepagents/overview).** It is well documented and it solves this problem inside your process. This project is for the other case: you already pay for coding-agent CLIs and you want one orchestrator driving all of them, with no key and no per-token bill.
 
@@ -36,12 +36,10 @@ Stage one asks nothing and scaffolds. Stage two is the conversation. You end wit
 
 <details><summary>Prefer to poke at it before installing anything</summary>
 
-The core is stdlib-only, so you can run it without Orca and without setup. You will not get a master session this way, just the pure functions.
+The core is stdlib-only, so you can call it without Orca and without setup. You will not get a master session this way, just the pure functions.
 
 ```bash
 cd mogui-ADE-orchestrator
-PYTHONPATH=src python3 -m unittest discover -s tests -q
-
 scripts/master-succeed detect "routine status update" --context-ratio 0.7 --json
 scripts/dispatch-gate --ledger /tmp/gate.jsonl check \
   --runtime codex --contract README.md --agents 1 --est-chars 1000
@@ -150,15 +148,11 @@ Two principles shape the layout:
 - **Core / adapter split.** `core/` modules avoid depending on any specific agent product; contact with the outside world (process spawning, ledgers, tool CLIs) goes through injected callables and the `adapter/` layer, so core logic is testable with in-memory fakes. Tool names live in `adapter/`, not in the units above it.
 - **Vendor neutrality as a direction.** The master should be able to run under different AI agent hosts. The reference adapter set is narrow. `adapter/profile.py` currently ships synchronous CLI profiles for `codex` and `cursor-agent`, `adapter doctor` probes a specific set of local tools, and some Korean-language operator strings are embedded. Broadening this is ongoing work.
 
-## Getting started
+## Working on the harness
 
-Prerequisites: **Python 3.10+**. The runtime is stdlib-only; there is nothing to install.
+To use the system, the [Quickstart](#quickstart) above is the whole path. This section is for changing the harness itself.
 
-Run the test suite (fastest way to see every unit exercised):
-
-```bash
-PYTHONPATH=src python3 -m unittest discover -s tests -v
-```
+Prerequisites: macOS and **Python 3.10+**. The runtime is stdlib-only; there is nothing to install.
 
 All CLI entry points live in `scripts/` and are self-contained (they insert `src/` on `sys.path` themselves):
 
@@ -180,6 +174,8 @@ scripts/master-bootstrap --charter path/to/charter.md --json
 ```
 
 Other entry points, briefly: `scripts/master-succeed` also provides `handoff`, `verify-successor`, `check-duplicates`, `retire`, and `spawn` subcommands; `scripts/master-recover` runs the recovery flow from a charter + handoff after abnormal termination; `scripts/master-bootstrap-live` is meant to be wired as a session-start hook rather than run by hand; `scripts/l1-digest tick` advances the read-only digest loop; `scripts/adapter dispatch` performs an adapter-level worker dispatch; `scripts/acceptance-loop` runs the acceptance casebook. Run any of them with `--help` for current flags.
+
+Tests are the agent's job. Ask the agent working on the harness to run them and report, the same way you ask it for anything else. There is no test step here for a person to type.
 
 Sibling product of [mogui-agent-harness](https://github.com/baksohyeon/mogui-agent-harness):
 

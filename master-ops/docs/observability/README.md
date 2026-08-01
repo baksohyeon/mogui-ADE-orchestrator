@@ -9,19 +9,23 @@ the master's behaviour, what it almost did, or what it decided not to do. Withou
 layer, the only observation channel a workspace owner has is a post-incident report — which
 arrives only after something already broke.
 
-This suite adds three voluntary, standing record genres plus one optional deep-capture
-genre. Each one captures a different layer; none replaces another, and none replaces the
-incident report.
+This suite adds two voluntary, standing record genres. They capture different layers,
+neither replaces the other, and neither replaces the incident report.
 
 | Genre | Directory | Captures | Cadence |
 |---|---|---|---|
 | Retro | `docs/retro/` | Judgment, misjudgment, near misses, temptations resisted | Track milestones, incidents, succession, on request |
 | Travelog | `docs/travelog/` | Where the master went, what it actually ran, what came back | Append per generation, as events happen |
-| Field notes | `docs/field-notes/` | Plain-language digest for the workspace owner: narrative, quoted exchanges, commands used, concepts, traps | On explicit request, or on master proposal + approval |
-| Agent journey | `docs/agent-journey/` | Turn-level harness dissection with component attribution | On demand only |
 
-Adopt the genres a workspace actually needs. Retro and travelog are the load-bearing pair;
-field notes and agent journey are optional and cost real tokens to produce.
+Retro is the one that earns its cost. It answers why a decision took the shape it
+did, which nothing else records. Travelog answers what happened, and a workspace
+that keeps a verbatim session transcript will find it redundant.
+
+The workspace that authors this template also ran two further genres, a
+plain-language digest and a turn-level harness dissection. Both are dropped
+here. They were useful while working out what the suite should be and neither
+justified its token cost afterwards. Add your own if a question keeps going
+unanswered by these two; do not start from a genre and look for a use.
 
 ## Attribution tags (shared legend — this file is the SSOT)
 
@@ -40,6 +44,17 @@ Component classes for attribution: `system-prompt`, `tool-desc`, `tool-impl`,
 
 ## Integrity rules (apply to every genre)
 
+- **Record the instruction not to record.** When someone asks for something to
+  be left out, the request goes in the record: what was asked, when, and by
+  whom. Naming what was withheld is what makes the gap visible.
+  One exception, and it is narrow. When the request carries a credential, token,
+  or key, record it as metadata only — the class of secret, where it came from,
+  the time, the requester, and a marker at the gap. Never the value, and never
+  a verbatim quote of a request that contains one. Recording the instruction
+  must not become the way a secret enters the record.
+  A verbatim transcript layer enforces the rest structurally, because a parser
+  cannot be persuaded; an interpretive genre cannot, which is why this is
+  written down.
 - **`[JUDGED]` must be falsifiable.** State the alternative that was not chosen. A smooth
   after-the-fact narrative with no alternative exposed is indistinguishable from a
   rationalization.

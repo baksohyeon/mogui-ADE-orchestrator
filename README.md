@@ -115,9 +115,9 @@ Local only.
 
 ## Limitations
 
-- **Master runs on Claude Code.** The spawn path in `core/succession.py` calls `claude`. No other host starts a master today.
+- **Master starts under Claude Code out of the box.** The spawn path in `core/succession.py` calls `claude`. Nothing in the design depends on that, and pointing the line at another CLI is a small change. Claude Code is what has been run, so it is what is recommended.
 - **Workers can be any CLI.** A worker is a terminal session in an Orca pane, so it is whatever binary starts there. Claude, Codex, Cursor, Grok, Gemini have all run this way under contract. No plugin for any of them. The typed `adapter dispatch` path is narrower and takes `codex` only.
-- **Codex as master is untested.** Nobody measured it. Report or patch welcome.
+- **Codex as master should work, and nobody has tried it.** Untested rather than unsupported. If you run it, a report or a patch is welcome.
 - **macOS only.** Other platforms planned, untested.
 - **Orca required** for live sessions. Pure functions run without it.
 
@@ -244,7 +244,7 @@ src/master_runtime/core/
 Two principles shape the layout:
 
 - **Core / adapter split.** `core/` modules avoid depending on any specific agent product; contact with the outside world (process spawning, ledgers, tool CLIs) goes through injected callables and the `adapter/` layer, so core logic is testable with in-memory fakes. Tool names live in `adapter/`, not in the units above it.
-- **Vendor neutrality as a direction.** The master should be able to run under different AI agent hosts. It does not yet: the spawn path names `claude` directly, so today a master starts under Claude Code and nothing else. The worker side is further along, with `adapter/profile.py` shipping synchronous CLI profiles for `codex` and `cursor-agent`. `adapter doctor` probes a fixed set of local tools, and some Korean-language operator strings are embedded. Broadening this is ongoing work.
+- **Vendor neutrality as a direction.** The master should run under different AI agent hosts. The spawn path still names `claude`, so Claude Code is the host that has been exercised. The worker side is further along, with `adapter/profile.py` shipping synchronous CLI profiles for `codex` and `cursor-agent`. `adapter doctor` probes a fixed set of local tools, and some Korean-language operator strings are embedded. Broadening this is ongoing work.
 
 ## Working on the harness
 

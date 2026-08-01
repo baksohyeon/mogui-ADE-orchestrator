@@ -233,6 +233,81 @@ def test_workspace_lookup_picks_the_most_recent_transcript(tmp_path) -> None:
     assert "newer.jsonl" in result.stdout
 
 
+def test_assistant_turn_without_a_model_is_recorded_not_dropped() -> None:
+    """A turn whose model cannot be read is still a turn.
+
+    Dropping it exits 0 with "no transition" for a session that may have
+    changed model inside exactly those turns. It is carried as <missing> so the
+    gap appears in the sequence.
+    """
+    result = run("--transcript", str(FIXTURES / "model_drift_audit_missing_model.jsonl"))
+
+    assert result.returncode == 1
+    assert "<missing>" in result.stdout
+    assert "claude-fable-5 -> <missing>" in result.stdout
+
+
+def test_all_missing_session_is_undecidable() -> None:
+    result = run("--transcript", str(FIXTURES / "model_drift_audit_all_missing.jsonl"))
+
+    assert result.returncode == 2
+    assert "no real model observed" in result.stderr
+
+
+def test_flat_assistant_shape_is_read_like_the_sibling_probe() -> None:
+    """Two tools reading one transcript must agree on which turns exist.
+
+    model-identity-probe accepts a top-level role field and nested message,
+    item, payload, and response objects. Requiring only a top-level type field
+    would report zero assistant turns for a transcript the sibling reads fine.
+    """
+    result = run("--transcript", str(FIXTURES / "model_drift_audit_flat_shape.jsonl"))
+
+    assert result.returncode == 1
+    assert "claude-fable-5 -> claude-opus-5" in result.stdout
+
+
+def test_invalid_utf8_is_undecidable_not_drift() -> None:
+    """UnicodeDecodeError is a ValueError, so catching OSError alone misses it.
+
+    An uncaught one exits 1, which callers read as a transition found.
+    """
+    result = run("--transcript", str(FIXTURES / "model_drift_audit_invalid_utf8.jsonl"))
+
+    assert result.returncode == 2
+    assert "cannot read transcript" in result.stderr
+
+
+def test_unreadable_lookup_candidate_is_skipped(tmp_path) -> None:
+    """A glob hit can be a dangling symlink, and stat on it raises.
+
+    Outside the read guard, that exits 1 and looks like drift.
+    """
+    projects = tmp_path / "projects"
+    workspace = projects / "workspace-a"
+    workspace.mkdir(parents=True)
+    (workspace / "dead.jsonl").symlink_to(tmp_path / "nothing-here.jsonl")
+
+    result = run("--projects-dir", str(projects), "--workspace-dir", "workspace-a")
+
+    assert result.returncode == 2
+    assert "no transcript found" in result.stderr
+
+
+def test_readable_candidate_still_wins_over_an_unreadable_one(tmp_path) -> None:
+    projects = tmp_path / "projects"
+    workspace = projects / "workspace-a"
+    workspace.mkdir(parents=True)
+    (workspace / "dead.jsonl").symlink_to(tmp_path / "nothing-here.jsonl")
+    good = workspace / "good.jsonl"
+    good.write_bytes((FIXTURES / "model_drift_audit_single.jsonl").read_bytes())
+
+    result = run("--projects-dir", str(projects), "--workspace-dir", "workspace-a")
+
+    assert result.returncode == 0
+    assert "good.jsonl" in result.stdout
+
+
 def test_lookup_without_a_projects_dir_is_undecidable() -> None:
     """No host layout is assumed, so a bare --session cannot resolve to anything."""
     result = run("--session", "sess-1")

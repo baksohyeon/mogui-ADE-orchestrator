@@ -46,6 +46,8 @@ import sys
 from datetime import datetime
 
 SYNTHETIC = "<synthetic>"
+MISSING = "<missing>"
+UNRESOLVED = (SYNTHETIC, MISSING)
 
 
 def local_time(raw: str) -> str:
@@ -79,17 +81,55 @@ def find_transcript(session_id, projects_dir, workspace_dir):
         hits = glob.glob(os.path.join(projects_dir, os.path.basename(workspace_dir), "*.jsonl"))
     else:
         return None
-    return max(hits, key=os.path.getmtime) if hits else None
+    # A glob hit can be a dangling symlink or vanish between the listing and the
+    # stat. Dropping unreadable candidates keeps the caller on the documented
+    # "no transcript found" path, which exits 2. Letting the stat raise would
+    # exit 1, and 1 already means "transition found".
+    readable = []
+    for hit in hits:
+        try:
+            readable.append((os.path.getmtime(hit), hit))
+        except OSError:
+            continue
+    return max(readable)[1] if readable else None
+
+
+def _assistant_model(event):
+    """Return the model on an assistant turn, or MISSING, or None if not one.
+
+    Transcript shapes differ by host, so the same nesting keys the sibling
+    `model-identity-probe` walks are walked here. Two tools reading one
+    transcript and disagreeing on which turns exist is its own defect.
+
+    An assistant turn with no readable model is reported as MISSING rather than
+    dropped. Dropping it exits 0 with "no transition" for a session that may
+    have changed model inside exactly those turns.
+    """
+    if not isinstance(event, dict):
+        return None
+    candidates = [event]
+    for key in ("message", "item", "payload", "response"):
+        nested = event.get(key)
+        if isinstance(nested, dict):
+            candidates.append(nested)
+
+    saw_assistant = False
+    for candidate in candidates:
+        if candidate.get("role") == "assistant" or candidate.get("type") == "assistant":
+            saw_assistant = True
+        model = candidate.get("model")
+        if saw_assistant and isinstance(model, str) and model.strip():
+            return model.strip()
+    return MISSING if saw_assistant else None
 
 
 def read_models(path):
     """Return the ordered (time, model) sequence and per-model turn counts.
 
     A transcript is an append-only log that may be written while this runs, so
-    a trailing partial line is expected. Shape is not assumed either: a line
-    can be valid JSON and still not be an object, and `message` can be present
-    without being one. Both are skipped rather than allowed to raise, because
-    an uncaught exception exits 1, and 1 already means "transition found".
+    a trailing partial line is expected, and a line can be valid JSON without
+    being an object. Those are skipped rather than allowed to raise, because an
+    uncaught exception exits 1, and 1 already means "transition found".
     """
     turns, counts = [], {}
     with open(path, encoding="utf-8") as handle:
@@ -98,13 +138,8 @@ def read_models(path):
                 event = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if not isinstance(event, dict) or event.get("type") != "assistant":
-                continue
-            message = event.get("message")
-            if not isinstance(message, dict):
-                continue
-            model = message.get("model")
-            if not isinstance(model, str) or not model:
+            model = _assistant_model(event)
+            if model is None:
                 continue
             counts[model] = counts.get(model, 0) + 1
             turns.append((local_time(event.get("timestamp")), model))
@@ -178,7 +213,9 @@ def main() -> int:
 
     try:
         turns, counts = read_models(path)
-    except OSError as exc:
+    except (OSError, UnicodeError) as exc:
+        # UnicodeDecodeError is a ValueError, so OSError alone lets a transcript
+        # with invalid bytes leave through exit 1, which reads as drift found.
         print(f"model-drift-audit: FAIL. cannot read transcript: {exc}", file=sys.stderr)
         return 2
 
@@ -189,10 +226,11 @@ def main() -> int:
     # A session whose every turn is synthetic never showed a real model. Counting
     # it as clean would report "expected X: match" while X was never observed, so
     # the answer is undecidable and the exit code has to say so.
-    if not {model for model in counts if model != SYNTHETIC}:
+    if not {model for model in counts if model not in UNRESOLVED}:
         print(
             "model-drift-audit: FAIL. no real model observed "
-            f"(all {sum(counts.values())} assistant turns are {SYNTHETIC}), undecidable",
+            f"(all {sum(counts.values())} assistant turns are "
+            f"{' or '.join(UNRESOLVED)}), undecidable",
             file=sys.stderr,
         )
         return 2
@@ -200,7 +238,7 @@ def main() -> int:
     real = transitions(turns, drop_synthetic=args.ignore_synthetic)
     full = transitions(turns)
     mismatch = bool(args.expect) and any(
-        model != args.expect for model in counts if model != SYNTHETIC
+        model != args.expect for model in counts if model not in UNRESOLVED
     )
 
     if args.json:

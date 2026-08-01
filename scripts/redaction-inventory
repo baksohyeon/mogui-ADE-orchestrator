@@ -176,7 +176,8 @@ def main():
                     print(f"  {n:5d}  {tok}")
                 if len(rows) > 40:
                     print(f"  … and {len(rows) - 40} more")
-            print(f"\nredaction-inventory: {total} uncovered candidates. "
+            print()
+            print(f"redaction-inventory: {total} uncovered candidates. "
                   "Not all of them are secrets. Pick the ones that belong in a rule.")
     return 1 if total else 0
 

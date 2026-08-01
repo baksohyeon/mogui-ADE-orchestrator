@@ -135,7 +135,9 @@ class AuditMemoriesTests(unittest.TestCase):
 
 class CollectTracksTests(unittest.TestCase):
     def test_collect_tracks_parses_titles(self) -> None:
-        fake = lambda argv: "◐ AL-3be ● P1 OPS-02: revive batch\n◐ AL-mpr ● P1 QA-01: wrap up\n"
+        def fake(argv):
+            return "◐ AL-3be ● P1 OPS-02: revive batch\n◐ AL-mpr ● P1 QA-01: wrap up\n"
+
         tracks, alerts = collect_tracks(fake)
         self.assertEqual(len(tracks), 2)
         self.assertEqual(alerts, [])

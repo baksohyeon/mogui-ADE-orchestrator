@@ -48,6 +48,19 @@ A master that outlives one session needs somewhere to live. A terminal tab is no
 
 Without this substrate you can still read the ideas here. You cannot run a master that survives its own session.
 
+### The tools this actually runs on
+
+Vendor-neutral here means the master is not tied to one *AI agent host*. It does not mean the tooling is a mystery. These are the real dependencies, by name.
+
+| Tool | What it does here | Replaceable? |
+| --- | --- | --- |
+| [Orca](https://www.onorca.dev/download) | Execution substrate. Terminal sessions that outlive the window, worktree-scoped placement, dispatch and retirement of worker panes. | No. Everything about session lifetime assumes it. |
+| [beads](https://github.com/gastownhall/beads) (`bd`) | Work ledger. Tracks, issues, dependencies, and the memory block the boot path audits. `master-bootstrap-live` shells out to `bd` for active-track lines. | Yes, through the adapter. Any tracker with a CLI that lists issues by status works. |
+| ctx | Session archive index. Lets a master search what an earlier session actually said instead of trusting a summary of it. | Yes, through the adapter. |
+| Git | Long-term source of truth. Charters, decisions, runbooks, lineage. Worktrees are also the isolation primitive for workers. | No. |
+
+The split matters: `core/` never learns these names, `adapter/` wires them, and swapping one means writing an adapter rather than editing the units. `adapter/profile.py` currently ships synchronous CLI profiles for `codex` and `cursor-agent`; that is the layer where an agent host gets named, and it is the only one.
+
 ## Which document do you want?
 
 | You are | Start here |

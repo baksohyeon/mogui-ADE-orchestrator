@@ -1,6 +1,37 @@
 # mogui-ADE-orchestrator
 
-> A workspace-level **master runtime** for long-lived AI orchestrator sessions: verified succession between sessions, an append-only lineage ledger, contract-gated worker dispatch, and compaction-resilience probes. Python 3.10+, stdlib-only core.
+> **Run one AI agent as the orchestrator of your whole workspace, on the subscription you already pay for.**
+> No API key. No model endpoint. It drives the coding-agent CLIs you already use, across every repository in one folder, and it survives the session dying.
+
+Point it at a folder that holds your product repositories. One master session plans, dispatches workers under contract, verifies their output before accepting it, and hands the role to a fresh session when the context fills up. Python 3.10+, stdlib-only core, MIT.
+
+**What makes it different from an in-process agent framework**
+
+| | in-process framework | this |
+| --- | --- | --- |
+| Cost model | API key, billed per token | your existing CLI subscription |
+| Subagent | an actor inside the process | a real CLI session under a contract |
+| Filesystem | virtual, pluggable backend | a git worktree |
+| Approval | a runtime callback | a gate a human holds |
+| Orchestrator dies | the graph dies with it | the successor takes the role and proves it |
+
+## Quickstart
+
+```bash
+git clone https://github.com/baksohyeon/mogui-ADE-orchestrator
+cd mogui-ADE-orchestrator
+
+# nothing to install. stdlib only.
+PYTHONPATH=src python3 -m unittest discover -s tests -q
+
+# try the pure functions, no setup needed
+scripts/master-succeed detect "routine status update" --context-ratio 0.7 --json
+scripts/dispatch-gate --ledger /tmp/gate.jsonl check \
+  --runtime codex --contract README.md --agents 1 --est-chars 1000
+scripts/adapter doctor
+```
+
+Then set it up on your own workspace: open the cloned folder in a coding agent and it routes into [`master-ops/ONBOARDING.md`](./master-ops/ONBOARDING.md), a two-stage flow that scaffolds an operations repository and boots your first master session. Orca ADE is a prerequisite for that flow.
 
 ## Which document do you want?
 
@@ -25,9 +56,9 @@ This repo is a reference implementation of a runtime that treats these as first-
 
 ## Status
 
-**Experimental, under active development.** Interfaces, CLI flags, and file formats change without notice. The unit suite covers the core (271 passing, 1 skipped as of 2026-08-01), and every unit listed below exists in `src/master_runtime/core/`. Nothing here should be treated as stable API; use it as a reference for the ideas, not as a dependency.
+Working and exercised: 271 unit tests pass (1 skipped, as of 2026-08-01), every unit listed below exists in `src/master_runtime/core/`, and the succession, dispatch-gate, acceptance, and compaction paths have all run against real workspaces.
 
-There is no model API in this repository. The runtime manages *sessions of* AI agents through their CLIs; it never calls a model endpoint and holds no API key.
+Moving fast: interfaces, CLI flags, and file formats still change without notice. Pin a commit if you build on it.
 
 ## Core concepts
 

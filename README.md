@@ -5,9 +5,9 @@
 
 Point it at a folder that holds your product repositories. One master session plans, dispatches workers under contract, verifies their output before accepting it, and hands the role to a fresh session when the context fills up. Python 3.10+, stdlib-only core, MIT.
 
-**What makes it different from an in-process agent framework**
+**If you are going to use an API key, use [LangChain deepagents](https://docs.langchain.com/oss/python/deepagents/overview).** It is well documented and it solves this problem inside your process. This project is for the other case: you already pay for coding-agent CLIs and you want one orchestrator driving all of them, with no key and no per-token bill.
 
-| | in-process framework | this |
+| | LangChain deepagents | this |
 | --- | --- | --- |
 | Cost model | API key, billed per token | your existing CLI subscription |
 | Subagent | an actor inside the process | a real CLI session under a contract |

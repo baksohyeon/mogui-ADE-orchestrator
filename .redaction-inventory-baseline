@@ -1,6 +1,7 @@
-# 심은 시점: 2026-08-01, 룰 9개 기준
+# 심은 시점: 2026-08-01, 룰 10개 기준
 # 갱신: 새 후보를 검토한 뒤 이 파일에 추가한다. 지우면 다시 보고된다.
 # redaction-inventory 기준선. 검토 완료해 무해 판정한 후보.
+# 2026-08-01 추가: CODE_OF_CONDUCT.md(Contributor Covenant 원문)와 SECURITY.md의 일반 영어 하이픈 단어 6건. 식별자가 아니다.
 a-z
 a-z0-9
 acceptance-loop
@@ -48,6 +49,7 @@ code-fact
 code-review-graph
 coding-agent
 command-line
+compaction-resilience
 compaction-specific
 config
 context-limit
@@ -75,12 +77,14 @@ drift-monitor
 dual-instance
 duplicate-session
 dz-bwh-demo
+e-mail
 echo-agent
 encoding
 end-to-end
 entry-point
 env-var
 environment-specific
+errors
 evaluation-case
 evaluation-loop
 evaluator-supplied
@@ -125,6 +129,8 @@ gpt-5-codex
 grok
 hand-maintained
 handoff
+hands-on
+harassment-free
 hard-restricts
 headless-browser
 held-out
@@ -356,8 +362,10 @@ session-start
 shared-state
 shell-interpolated
 short-lived
+single-maintainer
 single-sourced
 sk-ant-api03-test
+socio-economic
 source-of-truth
 source-tree
 special-cases
@@ -385,12 +393,14 @@ term-u8
 term-u8-shadow
 term-u9
 test-framework
+test-only
 third-party
 three-branch
 three-lens
 three-set
 three-vote
 timestamp
+tmux-based
 token-intensive
 tool-call
 tool-desc
@@ -418,6 +428,7 @@ vendor-neutral
 verifying
 visible-only
 well-structured
+whole-transcript
 work-ledger
 worker-creation
 worker-failed

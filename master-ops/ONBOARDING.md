@@ -13,6 +13,7 @@ Use only these placeholders in the master-ops template:
 - `{{MODEL_ID}}`
 - `{{REPO_LIST}}`
 - `{{RUNTIME_ROOT}}` — the absolute path of this orchestrator repository clone; the onboarding agent fills this itself (Step 4), no user question needed
+- `{{TEMPLATE_VERSION}}` — the contents of `master-ops/TEMPLATE-VERSION`; the onboarding agent fills this itself (Step 4), no user question needed
 
 ## Step 0. Check Prerequisites
 
@@ -124,6 +125,7 @@ Operational note: in production, a path selector for an unregistered folder fail
 
 - if the repository does not exist and creation is approved, create it
 - if the repository is new or empty, copy the Stage 1 skeleton from this repository's `master-ops/` directory into it
+- do not copy `TEMPLATE-VERSION`, `CHANGELOG.md`, or `ONBOARDING.md`. Those describe the template, not the workspace. The version the first two record lands in section 0 of the generated operations document during Step 4. `ONBOARDING.md` is this guide: copying it puts a list of placeholder names into the ops repository, and Step 4 then substitutes that list into values, which destroys the document while passing every check
 - if the repository already has files, read them first and merge deliberately; do not overwrite existing operations records without user approval
 - do not push unless the user explicitly asks
 
@@ -133,6 +135,7 @@ Operational note: in production, a path selector for an unregistered folder fail
 - `CLAUDE.md` and `AGENTS.md` exist in the ops repository
 - `docs/MASTER-OPERATIONS.md` exists
 - the Stage 1 skeleton is present and still contains only the allowed remaining placeholders
+- `TEMPLATE-VERSION`, `CHANGELOG.md`, and `ONBOARDING.md` are absent from the ops repository
 
 ## Step 4. Replace Template Placeholders
 
@@ -147,6 +150,7 @@ Operational note: in production, a path selector for an unregistered folder fail
 
 - replace the placeholders consistently across the ops repository
 - fill `{{RUNTIME_ROOT}}` yourself with the absolute path of this orchestrator repository clone (your current repository root) — this one needs no user question
+- fill `{{TEMPLATE_VERSION}}` yourself with the single line in `{{RUNTIME_ROOT}}/master-ops/TEMPLATE-VERSION`, trimmed — no user question either. The path is in the orchestrator clone because Step 3 keeps that file out of the ops repository. It records which version of the template this copy came from, which is the only way a later upgrade can tell what changed
 - pass the ops repository's operations doc as the bootstrap charter pointer (`master-bootstrap-live --charter-pointer "Operations SSOT: {{OPS_REPO}}/docs/MASTER-OPERATIONS.md"`), so the boot block names this workspace instead of a neutral placeholder
 - keep `CLAUDE.md` and `AGENTS.md` byte-identical unless the user explicitly accepts host-specific divergence
 - do not introduce additional `{{...}}` placeholders
@@ -169,16 +173,68 @@ Operational note: in production, a path selector for an unregistered folder fail
 (c) Agent action:
 
 - initialize the selected tracker only in the ops repository
+- reach the tracker from the workspace root, since that is where the master runs
 - record active work there, not in markdown TODO files
 - seed only load-bearing memory pointers and rules
 
+Reaching the tracker from the workspace root is the step that gets missed. The master's working directory is
+`{{WORKSPACE_ROOT}}`, or an orchestrator root the user approved instead. Either
+way it is not the ops repository, and the ops repository sits below it.
+
+Beads resolves from the current directory upward, and stops at a git repository
+root. It never looks downward. Measured on 1.1.0:
+
+| From | Result |
+| --- | --- |
+| two levels below a directory holding `.beads` | resolves to it |
+| a workspace root whose ops repository holds `.beads` | finds nothing |
+| a workspace root with `.beads` one level above it | resolves to the one above |
+| below a git root that has no `.beads` | stops, finds nothing |
+
+So the failure at the workspace root is an empty resolution, not a wrong one,
+unless something above the workspace happens to hold a database. That second
+case is the quiet one, because it answers.
+
+Place a link at the workspace root pointing at the database inside the ops
+repository, so the master resolves to the intended one from where it stands.
+Expand `{{OPS_REPO}}` to an absolute path first; it may be a bare repository
+name, and a relative link breaks as soon as the ops repository is not a direct
+child of the workspace root.
+
+```console
+$ { [ -e "{{WORKSPACE_ROOT}}/.beads" ] || [ -L "{{WORKSPACE_ROOT}}/.beads" ]; } \
+    && echo "already exists, inspect before linking" \
+    || ln -s "$(cd "{{OPS_REPO}}" && pwd)/.beads" "{{WORKSPACE_ROOT}}/.beads"
+```
+
+The guard matters. `ln -s` against an existing directory succeeds silently and
+creates the link inside it, so the resolution does not change and nothing says
+so.
+
+Adjust the name for the tracker in use, and confirm its own resolution rule
+rather than assuming it matches this one. Ask the user before creating the link.
+
 (d) Verification:
 
-- tracker commands run from `{{OPS_REPO}}`
-- the workspace tracker database is separate from every product repository tracker database
-- `bd where` or the selected equivalent points to the ops repository, not a product repo
+Run the checks from `{{WORKSPACE_ROOT}}`, not from the ops repository. Passing
+from inside the ops repository proves nothing about where the master will look.
 
-Warning: Beads and similar local trackers can keep per-repo databases. Do not reuse a product repository's database for workspace-level orchestration.
+- `bd where`, or the selected equivalent, resolves to the ops repository
+- the workspace tracker database is a different database from the one in any product repository
+- no tracker database sits above `{{WORKSPACE_ROOT}}` on the path to the filesystem root, since an upward search would reach it first
+- a global environment variable does not override the resolution. If your
+  tracker reads one, print it from the same shell the agent's tool calls use.
+  A value read in a different shell can be a different value, and the check
+  passes while the real path is wrong
+
+Warning: Beads and similar local trackers can keep per-repo databases. Do not
+reuse a product repository's database for workspace-level orchestration.
+
+The tracker itself does fail loudly. Beads returns `No active beads workspace
+found.` and exits 1. What is quiet is the boot path, which does not read that
+exit code, so boot continues on an empty tracker. Consider a session-start
+check that prints a warning when the workspace root has no reachable tracker
+database, or when an environment variable points outside the workspace.
 
 ## Step 6. Seed Universal User Rules
 

@@ -19,7 +19,8 @@ declaration, and stopping if the read is unavailable.
 
 The compact recall suppression block still hides Role State and active-track
 sections before emitting the recall probe. Section matching is regex-based for
-Markdown headings such as `## Role State`, `### role state`, `## Active Tracks`. If suppression logic fails, the script preserves the
+Markdown headings such as `## Role State`, `### role state`, `## Active Tracks`,
+and `## 활성 트랙`. If suppression logic fails, the script preserves the
 original block and still emits the first-injection warning.
 
 ## Required Hook Wiring

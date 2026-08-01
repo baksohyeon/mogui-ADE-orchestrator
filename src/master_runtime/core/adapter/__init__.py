@@ -1,10 +1,5 @@
 """Adapter layer public API."""
 
-from master_runtime.core.adapter.dispatch import (
-    DispatchOutcome,
-    DispatchRequest,
-    dispatch as run_dispatch,
-)
 from master_runtime.core.adapter.doctor import (
     CheckResult,
     DoctorReport,
@@ -12,30 +7,25 @@ from master_runtime.core.adapter.doctor import (
     RunResult,
     doctor as run_doctor,
 )
-from master_runtime.core.adapter.isolation import (
-    IsolationDecision,
-    IsolationMode,
-    needs_worktree,
-)
 from master_runtime.core.adapter.profile import (
-    CodexCompanionProfile,
+    ClaudeCliProfile,
+    CodexExecProfile,
+    CursorAgentProfile,
     ProfileError,
-    ToolProfile,
+    SyncCliProfile,
+    resolve_sync_cli_profile,
 )
 
 __all__ = [
     "CheckResult",
-    "CodexCompanionProfile",
-    "DispatchOutcome",
-    "DispatchRequest",
+    "ClaudeCliProfile",
+    "CodexExecProfile",
+    "CursorAgentProfile",
     "DoctorReport",
-    "IsolationDecision",
-    "IsolationMode",
     "ProbeCheck",
     "ProfileError",
     "RunResult",
-    "ToolProfile",
-    "needs_worktree",
-    "run_dispatch",
+    "SyncCliProfile",
+    "resolve_sync_cli_profile",
     "run_doctor",
 ]

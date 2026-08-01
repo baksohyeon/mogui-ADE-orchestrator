@@ -13,6 +13,15 @@ you build on it.
 
 ## [Unreleased]
 
+### Removed
+
+- The typed `adapter dispatch` path: `scripts/adapter dispatch`, `core/adapter/dispatch.py`,
+  `core/adapter/isolation.py`, `ToolProfile`, and `CodexCompanionProfile`. It reached
+  Codex through a plugin script at a version-pinned path and was the only implementation
+  of that interface, so a plugin upgrade would have broken it silently. Workers run as
+  CLI sessions in Orca panes, which is the path in actual use, and `scripts/dispatch-gate`
+  still gates them. `adapter doctor` stays and no longer probes for the plugin script.
+
 ## [0.1.0] - 2026-08-01
 
 First tagged version. The repository was already public and usable before this

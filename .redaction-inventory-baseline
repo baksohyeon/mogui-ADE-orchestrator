@@ -428,6 +428,7 @@ unknown-session
 user
 vendor-neutral
 verifying
+version-pinned
 visible-only
 well-structured
 whole-transcript

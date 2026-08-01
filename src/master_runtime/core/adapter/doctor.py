@@ -5,7 +5,6 @@ import subprocess
 from dataclasses import dataclass
 from typing import Callable, Iterable, Optional, Sequence, Tuple
 
-from master_runtime.core.adapter.profile import DEFAULT_CODEX_COMPANION_MJS
 
 
 @dataclass(frozen=True)
@@ -74,7 +73,6 @@ def default_runner(cmd: Sequence[str], cwd: Optional[str] = None) -> RunResult:
 DEFAULT_CHECKS = (
     ProbeCheck(name="git", probe_cmd=("git", "--version")),
     ProbeCheck(name="node", probe_cmd=("node", "--version")),
-    ProbeCheck(name="codex_companion_mjs", path=DEFAULT_CODEX_COMPANION_MJS),
     ProbeCheck(name="orca", probe_cmd=("orca", "--version")),
     ProbeCheck(name="bd", probe_cmd=("bd", "--version")),
 )

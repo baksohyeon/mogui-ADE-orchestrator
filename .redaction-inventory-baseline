@@ -81,6 +81,7 @@ end-to-end
 entry-point
 env-var
 environment-specific
+errors
 evaluation-case
 evaluation-loop
 evaluator-supplied
@@ -125,6 +126,7 @@ gpt-5-codex
 grok
 hand-maintained
 handoff
+hands-on
 hard-restricts
 headless-browser
 held-out
@@ -391,6 +393,7 @@ three-lens
 three-set
 three-vote
 timestamp
+tmux-based
 token-intensive
 tool-call
 tool-desc

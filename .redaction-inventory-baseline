@@ -238,6 +238,7 @@ one-shot
 one-to-one
 open-ended
 operations
+orca-ide
 organization-specific
 other-backend
 owner-prompt
@@ -369,6 +370,7 @@ source-of-truth
 source-tree
 special-cases
 src-layout
+stably-orca-bin
 standard-library-only
 state-changing
 stdout

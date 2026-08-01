@@ -8,7 +8,7 @@ Anyone running more than two agents at once hits this. Dorito hit it, got tired 
 
 Nothing to configure and nothing to read first. Clone it, start an agent inside the clone, tell it to wake up. The agent takes it from there and explains as it goes.
 
-It runs the fleet on [Orca](https://www.onorca.dev/download). A session has to outlive its window and be addressable by handle before anything can orchestrate it. macOS only for now. Python 3.10+, stdlib-only core, MIT. No API key.
+It runs the fleet on [Orca](https://www.onorca.dev/download). A session has to outlive its window and be addressable by handle before anything can orchestrate it. Built and run on macOS; Orca also ships Linux and Windows. Python 3.10+, stdlib-only core, MIT. No API key.
 
 The orchestrating session is called the master, for lack of a better word. It has no name yet. Suggestions welcome.
 
@@ -19,6 +19,10 @@ $ brew install --cask stablyai/orca/orca
 $ git clone https://github.com/baksohyeon/mogui-ADE-orchestrator
 $ cd mogui-ADE-orchestrator
 ```
+
+Not on macOS? Orca has Linux and Windows builds on its [download page](https://www.onorca.dev/download). `--cask` is macOS-only, so Homebrew is not the route there.
+
+Then open Orca once and turn on **Settings → Orca CLI → Shell command**. The runtime calls `orca` to spawn and retire master sessions. `orca status` should answer.
 
 Open that directory in Orca, start any coding agent inside it, and say:
 
@@ -125,7 +129,7 @@ Local only.
 - **Master starts under Claude Code out of the box.** The spawn path in `core/succession.py` calls `claude`. Nothing in the design depends on that, and pointing the line at another CLI is a small change. Claude Code is what has been run, so it is what is recommended.
 - **Workers can be any CLI.** A worker is a terminal session in an Orca pane, so it is whatever binary starts there. Claude, Codex, Cursor, Grok, Gemini have all run this way under contract. No plugin for any of them. The typed `adapter dispatch` path is narrower and takes `codex` only.
 - **Codex as master should work, and nobody has tried it.** Untested rather than unsupported. If you run it, a report or a patch is welcome.
-- **macOS only.** Other platforms planned, untested.
+- **macOS is what this has been run on.** Orca itself ships Linux and Windows builds, and one user has reported the install working on Linux. Neither is exercised here, so reports are useful.
 - **Orca required** for live sessions. Pure functions run without it.
 
 ## Alternatives

@@ -55,7 +55,19 @@ scripts/model-identity-probe \
 
 If the host cannot expose a measured model field, report that as unavailable. Do not infer the actual model from a launch flag.
 
-The model field is an operational measurement, not just configuration. In field use, declared model identity and measured model identity were separated because a session could drift after launch. The safe response is to record the measured value, route sensitive lanes away from the master when needed, and start a clean successor when the current session cannot be trusted to stay in the intended lane.
+That probe samples recent turns, so it answers what the model is now. It does not answer whether the model changed earlier in the session, and a tail sample reads clean whenever the tail is homogeneous. For that question, walk the whole transcript:
+
+```bash
+scripts/model-drift-audit \
+  --transcript ./sessions/example-session.jsonl \
+  --expect example-model
+```
+
+Exit 0 means no transition, 1 means a transition or an expectation mismatch, 2 means undecidable. The third is deliberately not folded into the first. A checker that reports "could not check" and "checked and fine" the same way is worse than one that refuses to answer.
+
+A boot-time measurement is a snapshot, not a guarantee for the session. Re-measure after resume, after continue, after compaction, at succession audit, and at session close. The observed causes were not only an unpropagated launch flag: a session reaching its quota and credit exhaustion both changed the model mid-session.
+
+The model field is an operational measurement, not just configuration. In field use, declared model identity and measured model identity were separated because a session could drift after launch. One first-generation master ran 319 turns on the model it declared and 164 on a different one, and the change was found at the succession audit rather than when it happened. The safe response is to record the measured value, route sensitive lanes away from the master when needed, and start a clean successor when the current session cannot be trusted to stay in the intended lane.
 
 ## Steady State
 

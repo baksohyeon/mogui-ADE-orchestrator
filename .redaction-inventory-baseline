@@ -23,6 +23,7 @@ baked-in
 batteries-included
 bd-prime
 better-harness
+boot-time
 bootstrap-live
 budget-bounded
 byte-for-byte
@@ -36,6 +37,7 @@ changed-surface
 char-budgeted
 chars
 claude-fable-5
+claude-opus-5
 claude-plugins-official
 clean-spawn
 cli-home
@@ -97,6 +99,7 @@ field-notes
 filesystem-derived
 filter-repo
 first-class
+first-generation
 first-injection
 first-run
 first-time
@@ -182,6 +185,7 @@ master-to-master
 memories
 mid-turn
 mkdocs
+model-drift-audit
 model-evaluation
 model-identity-probe
 mogui-agent-harness
@@ -222,6 +226,7 @@ observed-undeclared
 old-head
 older-model
 on-disk
+one-active-role
 one-line
 one-shot
 one-to-one
@@ -236,6 +241,7 @@ per-document
 per-entry
 per-generation
 per-iteration
+per-model
 per-prompt
 per-repo
 per-repository
@@ -291,6 +297,7 @@ re-read
 re-reading
 re-running
 re-verified
+real-model
 record-backed
 record-based
 redact-result

@@ -32,6 +32,12 @@ The master's own responsibilities are planning, repository understanding, archit
 
 Exactly one role is active at a time. The role-state source of truth is `docs/runbooks/role-state.md`. A UserPromptSubmit hook may inject the current role and lock line into every user turn, but the file remains the authoritative state.
 
+A coordinated repository's agent instruction file does not declare the master's role. Repositories in the workspace carry their own `AGENTS.md`, `CLAUDE.md`, or equivalent, and those files describe the role of an agent working inside that repository. To the master they are knowledge about a coordination target. Reading one and obeying its conventions is correct. Adopting its role as an additional identity is not, and it breaks the one-active-role rule the moment it happens.
+
+This is a structural pull rather than an occasional slip. The master must understand its repositories, understanding them means reading those files, and those files are written in the second person. Observed in a first-generation master that read a product repository's instruction file and reported itself as both the workspace master and that repository's paired developer. A human caught it.
+
+Two defenses, and the second does not replace the first. Say it here so the rule travels with the template, and configure the host to keep repository-level instruction files out of the master's automatic context so the pull is weaker to begin with.
+
 Update the role-state file only at two moments:
 
 - a role switch, immediately after Proposal -> Approval

@@ -1,0 +1,192 @@
+#!/usr/bin/env python3
+"""model-drift-audit. Decide whether the model changed anywhere in a session.
+
+`model-identity-probe` answers "what model is this right now." Its default
+sample is the last ten turns, so a switch in the middle of a session stays
+invisible whenever the tail is homogeneous. A first-generation master passed
+that way: 319 turns on one model, then 164 on another, and nobody noticed until
+the succession audit read the whole record.
+
+This script answers a different question. "Did the model change at any point in
+this session." It walks every assistant turn and reports the transitions with
+their timestamps.
+
+Exit codes
+  0  no transition (single model)
+  1  transition found, or the expected model did not match
+  2  undecidable (no transcript, unreadable, or zero assistant turns)
+
+2 is never collapsed into 0. "Could not check" and "checked and fine" are
+different states, and a checker that reports them identically is worse than one
+that refuses to answer.
+
+Usage
+  scripts/model-drift-audit --transcript <path>
+  scripts/model-drift-audit --session <id>
+  scripts/model-drift-audit --transcript <path> --expect claude-opus-5
+  scripts/model-drift-audit --transcript <path> --ignore-synthetic
+  scripts/model-drift-audit --transcript <path> --json
+
+No expected model is baked in. A default here would silently assert one
+installation's policy as everyone's.
+"""
+
+from __future__ import annotations
+
+import argparse
+import glob
+import json
+import os
+import sys
+from datetime import datetime
+
+SYNTHETIC = "<synthetic>"
+DEFAULT_PROJECTS = os.path.expanduser("~/.claude/projects")
+
+
+def local_time(raw: str) -> str:
+    """Format an ISO timestamp in the local zone. '?' when unparseable."""
+    try:
+        return (
+            datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            .astimezone()
+            .strftime("%m-%d %H:%M:%S")
+        )
+    except (ValueError, AttributeError, TypeError):
+        return "?"
+
+
+def find_transcript(session_id, projects_dir, workspace_dir):
+    """Locate a transcript. Explicit --transcript is always preferred."""
+    if session_id:
+        hits = glob.glob(os.path.join(projects_dir, "*", session_id + ".jsonl"))
+        return hits[0] if hits else None
+    if not workspace_dir:
+        return None
+    hits = glob.glob(os.path.join(projects_dir, workspace_dir, "*.jsonl"))
+    return max(hits, key=os.path.getmtime) if hits else None
+
+
+def read_models(path):
+    """Return the ordered (time, model) sequence and per-model turn counts."""
+    turns, counts = [], {}
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("type") != "assistant":
+                continue
+            model = (event.get("message") or {}).get("model")
+            if not model:
+                continue
+            counts[model] = counts.get(model, 0) + 1
+            turns.append((local_time(event.get("timestamp")), model))
+    return turns, counts
+
+
+def transitions(turns, drop_synthetic=False):
+    """Return (time, previous_model, new_model) for each change.
+
+    drop_synthetic removes synthetic turns from the sequence and counts
+    transitions across the real models that remain. It must not erase the
+    transition itself: A -> synthetic -> B is an A -> B change in real-model
+    terms, and failing to see that is exactly how the original drift was missed.
+    """
+    sequence = [t for t in turns if not (drop_synthetic and t[1] == SYNTHETIC)]
+    found, previous = [], None
+    for at, model in sequence:
+        if model != previous:
+            if previous is not None:
+                found.append((at, previous, model))
+            previous = model
+    return found
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--transcript", help="path to a session transcript")
+    parser.add_argument("--session", help="session id, resolved under --projects-dir")
+    parser.add_argument(
+        "--expect",
+        default=os.environ.get("MODEL_IDENTITY_EXPECT"),
+        help="expected model; compared against every real model observed",
+    )
+    parser.add_argument("--projects-dir", default=DEFAULT_PROJECTS)
+    parser.add_argument(
+        "--workspace-dir",
+        default=os.environ.get("MODEL_DRIFT_WORKSPACE_DIR"),
+        help="host-specific project directory used when no transcript or session is given",
+    )
+    parser.add_argument(
+        "--ignore-synthetic",
+        action="store_true",
+        help="skip synthetic turns (quota and refusal notices) when counting transitions",
+    )
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args()
+
+    path = args.transcript or find_transcript(
+        args.session, args.projects_dir, args.workspace_dir
+    )
+    if not path or not os.path.isfile(path):
+        print(
+            "model-drift-audit: FAIL. no transcript found "
+            f"(session={args.session or 'unset'}, workspace={args.workspace_dir or 'unset'})",
+            file=sys.stderr,
+        )
+        return 2
+
+    try:
+        turns, counts = read_models(path)
+    except OSError as exc:
+        print(f"model-drift-audit: FAIL. cannot read transcript: {exc}", file=sys.stderr)
+        return 2
+
+    if not counts:
+        print("model-drift-audit: FAIL. zero assistant turns, undecidable", file=sys.stderr)
+        return 2
+
+    real = transitions(turns, drop_synthetic=args.ignore_synthetic)
+    full = transitions(turns)
+    mismatch = bool(args.expect) and any(
+        model != args.expect for model in counts if model != SYNTHETIC
+    )
+
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "transcript": path,
+                    "drift": bool(real),
+                    "expect": args.expect,
+                    "expect_mismatch": mismatch,
+                    "counts": counts,
+                    "transitions": [
+                        {"at": at, "from": before, "to": after} for at, before, after in full
+                    ],
+                },
+                indent=2,
+            )
+        )
+    else:
+        distribution = " / ".join(
+            f"{model}={count}" for model, count in sorted(counts.items(), key=lambda kv: -kv[1])
+        )
+        print(f"model-drift-audit: {os.path.basename(path)}")
+        print(f"  distribution: {distribution}  (assistant turns {sum(counts.values())})")
+        if real:
+            print(f"  transitions: {len(real)}")
+            for at, before, after in real:
+                print(f"    {at}  {before} -> {after}")
+        else:
+            print("  no transition")
+        if args.expect:
+            print(f"  expected {args.expect}: {'MISMATCH' if mismatch else 'match'}")
+
+    return 1 if real or mismatch else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

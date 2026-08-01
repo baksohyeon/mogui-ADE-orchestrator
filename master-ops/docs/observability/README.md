@@ -40,6 +40,13 @@ Component classes for attribution: `system-prompt`, `tool-desc`, `tool-impl`,
 
 ## Integrity rules (apply to every genre)
 
+- **Record the instruction not to record.** When someone asks for something to
+  be left out, the request itself goes in the record: what was asked, when, and
+  by whom. Naming what was withheld is what makes the gap visible. The only
+  exception is credentials, tokens, and keys, and even those leave the gap
+  marked. A verbatim transcript layer enforces this structurally, because a
+  parser cannot be persuaded; an interpretive genre cannot, which is why the
+  rule is written here.
 - **`[JUDGED]` must be falsifiable.** State the alternative that was not chosen. A smooth
   after-the-fact narrative with no alternative exposed is indistinguishable from a
   rationalization.

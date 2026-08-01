@@ -24,6 +24,17 @@ here in the same change. Skip that and installations on different template
 states all report the same version, which is the whole thing this was meant to
 prevent.
 
+## 2
+
+One integrity rule added to `docs/observability/README.md`: an instruction to
+leave something out of the record is itself recorded, along with what was asked
+and by whom. Credentials, tokens, and keys stay excluded, and the gap is marked
+where they were.
+
+An installation on version 1 can apply this by copying the new bullet from
+`docs/observability/README.md`. Nothing else changes, and no generated file
+depends on it.
+
 ## 1
 
 First versioned template. Everything before this shipped unversioned, so an

@@ -13,17 +13,18 @@ The shortest path from a clone to a running master session. There is nothing to 
 ```bash
 brew install --cask stablyai/orca/orca      # or download: https://www.onorca.dev/download
 git clone https://github.com/baksohyeon/mogui-ADE-orchestrator
+cd mogui-ADE-orchestrator
 ```
 
 ## Wake the master
 
-Open the folder in Orca, start whichever coding agent you use, and tell it to boot the master:
+Open that directory in Orca, start whichever coding agent you use inside it, and tell it to boot the master:
 
 ```
 Wake the master.
 ```
 
-Any words work. The router keys on the absence of a task, not on a phrase, so an agent that opens this folder without an instruction becomes your onboarding guide. That is the whole setup step.
+Any words work. The router keys on the absence of a task, not on a phrase, so an agent that opens this repository without an instruction becomes your onboarding guide. That is the whole setup step.
 
 ## What happens from there
 

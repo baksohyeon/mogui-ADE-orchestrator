@@ -4,7 +4,7 @@
 
 Yes. That is what this is.
 
-Clone it, start any coding agent in the folder, say one sentence. That is the install.
+Clone this repository, `cd` into it, start any coding agent there, say one sentence. That is the install.
 
 It runs the fleet on [Orca](https://www.onorca.dev/download). A session has to outlive its window and be addressable by handle before anything can orchestrate it. macOS only for now. Python 3.10+, stdlib-only core, MIT. No API key.
 
@@ -13,9 +13,10 @@ It runs the fleet on [Orca](https://www.onorca.dev/download). A session has to o
 ```bash
 brew install --cask stablyai/orca/orca
 git clone https://github.com/baksohyeon/mogui-ADE-orchestrator
+cd mogui-ADE-orchestrator
 ```
 
-Open the folder in Orca, start any coding agent, and say:
+Open that directory in Orca, start any coding agent inside it, and say:
 
 ```
 Wake the master.

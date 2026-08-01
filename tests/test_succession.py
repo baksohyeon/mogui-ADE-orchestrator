@@ -62,6 +62,7 @@ ORCA_LIST_JSON = json.dumps(
 
 
 def test_detect_trigger_has_immediate_advisory_and_none_branches() -> None:
+    assert detect_trigger("succession now", {}).status == "IMMEDIATE"
     assert detect_trigger("handoff to successor", {}).status == "IMMEDIATE"
     assert detect_trigger("다음 마스터로 넘기자", {}).status == "IMMEDIATE"
     assert detect_trigger("승계해줘", {}).status == "IMMEDIATE"

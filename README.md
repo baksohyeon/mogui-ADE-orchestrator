@@ -9,28 +9,6 @@ This runs the fleet on [Orca](https://www.onorca.dev/download). Sessions outlive
 
 Point it at a folder that holds your product repositories. One master session plans, dispatches workers under contract, verifies their output before accepting it, and hands the role to a fresh session when the context fills up. macOS only for now, other platforms planned. Python 3.10+, stdlib-only core, MIT.
 
-## Scope
-
-Local only.
-
-- This project makes no network calls. Every import under `src/` and `scripts/` is Python standard library, and none are networking modules. `git grep -nE "^[[:space:]]*(import|from)[[:space:]]+(urllib|http|socket|ssl|requests)" -- src scripts` returns nothing.
-- No API key, no model endpoint, no telemetry.
-- It reads the folder you point it at and paths you name in configuration. Nothing walks your home directory. The redaction scanners read one repository's tracked files through `git ls-files`.
-- The CLIs it drives reach their own providers as they already did. This adds no traffic of its own.
-- The master session starts with the host's approval prompts off so it can run unattended. Shift-Tab cycles permission modes inside the session.
-
-**If you are going to use an API key, use [LangChain deepagents](https://docs.langchain.com/oss/python/deepagents/overview).** It is well documented and it solves this problem inside your process. This project is for the other case: you already pay for coding-agent CLIs and you want one orchestrator driving all of them, with no key and no per-token bill.
-
-| | LangChain deepagents | this |
-| --- | --- | --- |
-| Cost model | API key, billed per token | your existing CLI subscription |
-| Subagent | an actor inside the process | a real CLI session under a contract |
-| Filesystem | virtual, pluggable backend | a git worktree |
-| Approval | a runtime callback | a gate a human holds |
-| Orchestrator dies | the graph dies with it | the successor takes the role and proves it |
-
-The comparison came after. This was built independently and reached this shape before its author saw deepagents. `git log -S deepagents --reverse` shows the name first appearing in the same commit as the public docs, fifteen days and sixty commits in. That command dates the word in this repository. What the author knew is outside what git records.
-
 ## Quickstart
 
 ```bash
@@ -59,6 +37,28 @@ scripts/adapter doctor
 ```
 
 </details>
+
+## Scope
+
+Local only.
+
+- This project makes no network calls. Every import under `src/` and `scripts/` is Python standard library, and none are networking modules. `git grep -nE "^[[:space:]]*(import|from)[[:space:]]+(urllib|http|socket|ssl|requests)" -- src scripts` returns nothing.
+- No API key, no model endpoint, no telemetry.
+- It reads the folder you point it at and paths you name in configuration. Nothing walks your home directory. The redaction scanners read one repository's tracked files through `git ls-files`.
+- The CLIs it drives reach their own providers as they already did. This adds no traffic of its own.
+- The master session starts with the host's approval prompts off so it can run unattended. Shift-Tab cycles permission modes inside the session.
+
+**If you are going to use an API key, use [LangChain deepagents](https://docs.langchain.com/oss/python/deepagents/overview).** It is well documented and it solves this problem inside your process. This project is for the other case: you already pay for coding-agent CLIs and you want one orchestrator driving all of them, with no key and no per-token bill.
+
+| | LangChain deepagents | this |
+| --- | --- | --- |
+| Cost model | API key, billed per token | your existing CLI subscription |
+| Subagent | an actor inside the process | a real CLI session under a contract |
+| Filesystem | virtual, pluggable backend | a git worktree |
+| Approval | a runtime callback | a gate a human holds |
+| Orchestrator dies | the graph dies with it | the successor takes the role and proves it |
+
+The comparison came after. This was built independently and reached this shape before its author saw deepagents. `git log -S deepagents --reverse` shows the name first appearing in the same commit as the public docs, fifteen days and sixty commits in. That command dates the word in this repository. What the author knew is outside what git records.
 
 ### Why Orca
 

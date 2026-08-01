@@ -5,8 +5,6 @@
 
 Point it at a folder that holds your product repositories. One master session plans, dispatches workers under contract, verifies their output before accepting it, and hands the role to a fresh session when the context fills up. macOS only for now, other platforms planned. Python 3.10+, stdlib-only core, MIT.
 
-First, about the comparison below. This harness was not derived from deepagents. It was built for its own reasons, reached this shape on its own, and only afterward did its author come across deepagents and recognize the same system described from the other end. The comparison was written at publication time, looking back at two designs that had converged. The repository history shows it plainly: two weeks of commits with no mention of deepagents, then the comparison arriving on the same day as the public docs.
-
 **If you are going to use an API key, use [LangChain deepagents](https://docs.langchain.com/oss/python/deepagents/overview).** It is well documented and it solves this problem inside your process. This project is for the other case: you already pay for coding-agent CLIs and you want one orchestrator driving all of them, with no key and no per-token bill.
 
 | | LangChain deepagents | this |
@@ -16,6 +14,8 @@ First, about the comparison below. This harness was not derived from deepagents.
 | Filesystem | virtual, pluggable backend | a git worktree |
 | Approval | a runtime callback | a gate a human holds |
 | Orchestrator dies | the graph dies with it | the successor takes the role and proves it |
+
+The comparison was written after the fact. This harness was built for its own reasons and reached this shape before its author had seen deepagents; the two turned out to describe the same problem from opposite ends. The repository history is consistent with that: fifteen days and sixty commits with no mention of deepagents, then the comparison landing in the same commit as the public docs. Check it with `git log -S deepagents --reverse`. That shows when the word entered the repository, which is not the same as proving what its author knew, so take the rest as the author's account.
 
 ## Quickstart
 

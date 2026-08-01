@@ -65,7 +65,7 @@ scripts/model-drift-audit \
 
 Exit 0 means no transition, 1 means a transition or an expectation mismatch, 2 means undecidable. The third is deliberately not folded into the first. A checker that reports "could not check" and "checked and fine" the same way is worse than one that refuses to answer.
 
-A boot-time measurement is a snapshot, not a guarantee for the session. Re-measure after resume, after continue, after compaction, at succession audit, and at session close. The observed causes were not only an unpropagated launch flag: a session reaching its quota and credit exhaustion both changed the model mid-session.
+A boot measurement is a snapshot of one moment rather than a property of the session. The operating rule for when to re-measure belongs to the workspace master-operations document, which this page does not replace. What is worth recording here is why the rule exists: the observed causes were not only an unpropagated launch flag. A session reaching its quota and a credit exhaustion both changed the model mid-session, and neither announced itself.
 
 The model field is an operational measurement, not just configuration. In field use, declared model identity and measured model identity were separated because a session could drift after launch. One first-generation master ran 319 turns on the model it declared and 164 on a different one, and the change was found at the succession audit rather than when it happened. The safe response is to record the measured value, route sensitive lanes away from the master when needed, and start a clean successor when the current session cannot be trusted to stay in the intended lane.
 
@@ -90,6 +90,8 @@ scripts/l1-digest tick --config ./ops/l1-digest.json
 > Note: The digest loop observes and records. Work and acceptance remain outside the digest module.
 
 Long-running sessions should be treated as finite. In an intentional context-limit exercise, the master kept coordinating work near the visible limit, but the next compacted turn exposed a recall and hook-coverage gap. The lesson is not that a full context window is safe. The lesson is that context pressure should be measured, accepted state must already be in durable stores, and compaction or succession should be chosen from evidence rather than from optimism.
+
+Role identity erodes from a direction that looks like diligence. A first-generation master read a product repository's own agent instruction file and then reported itself as both the workspace master and that repository's paired developer. A human caught it. The pull is structural: the master has to understand its repositories, understanding them means reading those files, and those files are written in the second person. A coordinated repository's instruction file is knowledge about a coordination target, and obeying its conventions is correct; adopting its role is not. The operating rule belongs in the workspace master-operations document.
 
 ## Clean Succession
 

@@ -26,9 +26,11 @@ Use this page for command discovery. The lifecycle and delegation guides explain
 | `scripts/master-succeed` | `master-succeed check-duplicates` | Detect duplicate master instances by marker while excluding the current handle. | `--self-handle`, `--marker`, `--json`. |
 | `scripts/master-succeed` | `master-succeed retire` | Resolve and optionally close exactly one predecessor terminal or session. | `--self-handle`, `--expected`, `--target-handle`, `--target-pty-id`, `--target-session-id`, `--execute`, `--json`. |
 | `scripts/master-succeed` | `master-succeed spawn` | Spawn or dry-run a clean successor terminal for a selected workspace. | `--workspace-selector`, `--kickoff-text` or `--kickoff-file`, `--root`, `--model`, `--title`, `--dry-run`, `--json`. |
-| `scripts/model-identity-probe` | `model-identity-probe` | Read recent assistant events from a transcript and compare the measured model with an expected model when supplied. | `--transcript`, `--expect`, `--limit`. |
-| `scripts/model-drift-audit` | `model-drift-audit` | Walk every assistant turn in a transcript and report model transitions with timestamps. Answers whether the model changed at any point, which a tail sample cannot. Exit 0 no transition, 1 transition or expectation mismatch, 2 undecidable. | `--transcript`, `--session`, `--expect`, `--projects-dir`, `--workspace-dir`, `--ignore-synthetic`, `--json`. |
+| `scripts/model-identity-probe` | `model-identity-probe` | Read recent assistant events from a transcript and compare the measured model with an expected model when supplied. | `--transcript`, `--expect`, `--limit`. Exit 0 match, 2 drift or undecidable. |
+| `scripts/model-drift-audit` | `model-drift-audit` | Walk every assistant turn in a transcript and report model transitions with timestamps. | `--transcript`, `--session`, `--expect`, `--projects-dir`, `--workspace-dir`, `--ignore-synthetic`, `--json`. Exit 0 no transition, 1 transition or expectation mismatch, 2 undecidable. |
 | `scripts/redaction-scan.sh` | `redaction-scan.sh` | Scan tracked, staged, or ranged files for secrets and internal identifiers before publication. | `--staged`, `--range A..B`, `--help`; allowlist defaults to `scripts/redaction-allowlist.txt` or `REDACTION_ALLOWLIST`. |
 <!-- END AUTO-GENERATED from scripts/ --help -->
 
 The generated table intentionally lists the public command surface only. Local host routing, private paths, and sensitive-lane details are outside this reference.
+
+Exit codes are not shared vocabulary across these scripts. `model-identity-probe` reports both drift and undecidable as 2; `model-drift-audit` separates them. Read each script's codes from its own row rather than assuming a convention.

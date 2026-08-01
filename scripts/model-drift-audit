@@ -22,13 +22,18 @@ that refuses to answer.
 
 Usage
   scripts/model-drift-audit --transcript <path>
-  scripts/model-drift-audit --session <id>
-  scripts/model-drift-audit --transcript <path> --expect claude-opus-5
+  scripts/model-drift-audit --transcript <path> --expect <model>
   scripts/model-drift-audit --transcript <path> --ignore-synthetic
   scripts/model-drift-audit --transcript <path> --json
+  scripts/model-drift-audit --projects-dir <dir> --session <id>
+  scripts/model-drift-audit --projects-dir <dir> --workspace-dir <name>
 
-No expected model is baked in. A default here would silently assert one
-installation's policy as everyone's.
+Nothing host-specific is baked in. There is no default expected model and no
+default transcript location: a default for either would quietly assert one
+installation's policy, or name one agent host, on everyone's behalf. Host
+wiring belongs to the hook or wrapper that calls this. `MODEL_DRIFT_EXPECT`,
+`MODEL_DRIFT_PROJECTS_DIR`, and `MODEL_DRIFT_WORKSPACE_DIR` are read when the
+matching flag is absent.
 """
 
 from __future__ import annotations
@@ -41,7 +46,6 @@ import sys
 from datetime import datetime
 
 SYNTHETIC = "<synthetic>"
-DEFAULT_PROJECTS = os.path.expanduser("~/.claude/projects")
 
 
 def local_time(raw: str) -> str:
@@ -57,18 +61,36 @@ def local_time(raw: str) -> str:
 
 
 def find_transcript(session_id, projects_dir, workspace_dir):
-    """Locate a transcript. Explicit --transcript is always preferred."""
-    if session_id:
-        hits = glob.glob(os.path.join(projects_dir, "*", session_id + ".jsonl"))
-        return hits[0] if hits else None
-    if not workspace_dir:
+    """Locate a transcript. Explicit --transcript is always preferred.
+
+    Both lookups resolve under projects_dir and pick deterministically. A
+    session id is reduced to its basename first: it is interpolated into a
+    path, and a value carrying separators would escape the directory the
+    caller named.
+    """
+    if not projects_dir:
         return None
-    hits = glob.glob(os.path.join(projects_dir, workspace_dir, "*.jsonl"))
+    if session_id:
+        safe = os.path.basename(session_id)
+        if not safe or safe in (".", ".."):
+            return None
+        hits = glob.glob(os.path.join(projects_dir, "*", safe + ".jsonl"))
+    elif workspace_dir:
+        hits = glob.glob(os.path.join(projects_dir, os.path.basename(workspace_dir), "*.jsonl"))
+    else:
+        return None
     return max(hits, key=os.path.getmtime) if hits else None
 
 
 def read_models(path):
-    """Return the ordered (time, model) sequence and per-model turn counts."""
+    """Return the ordered (time, model) sequence and per-model turn counts.
+
+    A transcript is an append-only log that may be written while this runs, so
+    a trailing partial line is expected. Shape is not assumed either: a line
+    can be valid JSON and still not be an object, and `message` can be present
+    without being one. Both are skipped rather than allowed to raise, because
+    an uncaught exception exits 1, and 1 already means "transition found".
+    """
     turns, counts = [], {}
     with open(path, encoding="utf-8") as handle:
         for line in handle:
@@ -76,10 +98,13 @@ def read_models(path):
                 event = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if event.get("type") != "assistant":
+            if not isinstance(event, dict) or event.get("type") != "assistant":
                 continue
-            model = (event.get("message") or {}).get("model")
-            if not model:
+            message = event.get("message")
+            if not isinstance(message, dict):
+                continue
+            model = message.get("model")
+            if not isinstance(model, str) or not model:
                 continue
             counts[model] = counts.get(model, 0) + 1
             turns.append((local_time(event.get("timestamp")), model))
@@ -105,19 +130,32 @@ def transitions(turns, drop_synthetic=False):
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description=(
+            "Walk every assistant turn in a transcript and report model transitions. "
+            "Exit 0 no transition, 1 transition or expectation mismatch, 2 undecidable."
+        )
+    )
     parser.add_argument("--transcript", help="path to a session transcript")
     parser.add_argument("--session", help="session id, resolved under --projects-dir")
     parser.add_argument(
         "--expect",
-        default=os.environ.get("MODEL_IDENTITY_EXPECT"),
+        default=os.environ.get("MODEL_DRIFT_EXPECT"),
         help="expected model; compared against every real model observed",
     )
-    parser.add_argument("--projects-dir", default=DEFAULT_PROJECTS)
+    parser.add_argument(
+        "--projects-dir",
+        default=os.environ.get("MODEL_DRIFT_PROJECTS_DIR"),
+        help=(
+            "directory holding per-workspace transcript folders. Required with "
+            "--session or --workspace-dir. There is no default: the layout is "
+            "host-specific and baking one in would name an agent host here."
+        ),
+    )
     parser.add_argument(
         "--workspace-dir",
         default=os.environ.get("MODEL_DRIFT_WORKSPACE_DIR"),
-        help="host-specific project directory used when no transcript or session is given",
+        help="workspace folder under --projects-dir, used when no transcript or session is given",
     )
     parser.add_argument(
         "--ignore-synthetic",
@@ -148,6 +186,17 @@ def main() -> int:
         print("model-drift-audit: FAIL. zero assistant turns, undecidable", file=sys.stderr)
         return 2
 
+    # A session whose every turn is synthetic never showed a real model. Counting
+    # it as clean would report "expected X: match" while X was never observed, so
+    # the answer is undecidable and the exit code has to say so.
+    if not {model for model in counts if model != SYNTHETIC}:
+        print(
+            "model-drift-audit: FAIL. no real model observed "
+            f"(all {sum(counts.values())} assistant turns are {SYNTHETIC}), undecidable",
+            file=sys.stderr,
+        )
+        return 2
+
     real = transitions(turns, drop_synthetic=args.ignore_synthetic)
     full = transitions(turns)
     mismatch = bool(args.expect) and any(
@@ -163,7 +212,13 @@ def main() -> int:
                     "expect": args.expect,
                     "expect_mismatch": mismatch,
                     "counts": counts,
+                    # Matches drift and the text output. --ignore-synthetic has to
+                    # mean the same thing in both, so the unfiltered sequence goes
+                    # in its own key rather than quietly under this one.
                     "transitions": [
+                        {"at": at, "from": before, "to": after} for at, before, after in real
+                    ],
+                    "transitions_including_synthetic": [
                         {"at": at, "from": before, "to": after} for at, before, after in full
                     ],
                 },

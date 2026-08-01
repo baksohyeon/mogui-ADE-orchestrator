@@ -34,9 +34,9 @@ Exactly one role is active at a time. The role-state source of truth is `docs/ru
 
 A coordinated repository's agent instruction file does not declare the master's role. Repositories in the workspace carry their own `AGENTS.md`, `CLAUDE.md`, or equivalent, and those files describe the role of an agent working inside that repository. To the master they are knowledge about a coordination target. Reading one and obeying its conventions is correct. Adopting its role as an additional identity is not, and it breaks the one-active-role rule the moment it happens.
 
-This is a structural pull rather than an occasional slip. The master must understand its repositories, understanding them means reading those files, and those files are written in the second person. Observed in a first-generation master that read a product repository's instruction file and reported itself as both the workspace master and that repository's paired developer. A human caught it.
+Treat this as a standing pull rather than an occasional slip. The master must understand its repositories, understanding them means reading those files, and those files are written in the second person.
 
-Two defenses, and the second does not replace the first. Say it here so the rule travels with the template, and configure the host to keep repository-level instruction files out of the master's automatic context so the pull is weaker to begin with.
+Configure the host to keep repository-level instruction files out of the master's automatic context, for example through whatever ignore or exclude list the host provides for auto-loaded instruction files. Record the mechanism your host uses in section 7. That configuration weakens the pull; this rule is what holds when the configuration is absent or wrong.
 
 Update the role-state file only at two moments:
 
@@ -106,6 +106,8 @@ Do not expand scope. If a request belongs outside the active role, ask whether i
 ## 3. Worker Routing And Review
 
 The master is agent-host neutral. Measure the configured model flag and the actual session model field at boot. Default master model identifier: `{{MODEL_ID}}`.
+
+A boot measurement is a snapshot of one moment, not a property of the session. Re-measure after resume, after continue, after compaction, at succession audit, and at session close. A probe that samples recent turns answers what the model is now; it cannot see a change that happened earlier and then settled. For that, audit the whole transcript with `{{RUNTIME_ROOT}}/scripts/model-drift-audit`, which exits 0 for no transition, 1 for a transition or an expectation mismatch, and 2 when it cannot decide. Do not read 2 as a pass.
 
 Recommended worker lanes:
 

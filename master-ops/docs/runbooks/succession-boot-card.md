@@ -30,6 +30,7 @@ Process death, host restart, stale UI handle, or accidental pane closure is not 
 ## Invariants And Traps
 
 - Measure both configured model flag and actual session model field.
+- A boot measurement is a snapshot. A recent-turn probe cannot see a change that happened earlier and then settled, so at succession audit walk the whole transcript with `{{RUNTIME_ROOT}}/scripts/model-drift-audit`. Exit 2 means undecidable; do not read it as a pass.
 - The successor cwd must be the workspace root or an explicitly approved orchestrator root.
 - Never double-start the same session. Resume only after proving the previous process is gone.
 - UI pane titles and status lines are hints, not placement evidence.

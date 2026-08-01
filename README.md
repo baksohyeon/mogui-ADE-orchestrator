@@ -1,6 +1,6 @@
 # mogui-ADE-orchestrator
 
-> *Can I orchestrate the Codex sessions in my tmux panes from above, and still drive each one by hand when I want to?*
+> *Can I run Claude and Codex sessions side by side in tmux, drive any one of them by hand, and still have something orchestrating all of them from above?*
 
 Yes. That is what this is.
 
@@ -57,7 +57,7 @@ flowchart TB
         M["master session<br/>plan, dispatch, verify, retire"]
         W1["worker pane<br/>Codex"]
         W2["worker pane<br/>Claude"]
-        W3["worker pane<br/>..."]
+        W3["worker pane<br/>Cursor, Grok, Gemini"]
         M2["successor master"]
     end
 
@@ -78,11 +78,11 @@ flowchart TB
     G -.->|"boot"| M2
 ```
 
-Solid arrows are the orchestration path. Dotted arrows are yours: the panes stay real terminals and you can take any of them over at any time.
+Solid arrows are orchestration. Dotted arrows are you. The panes are real terminals, take any of them over.
 
 ## Sibling project
 
-Two layers, split by unit of operation. This repository owns the workspace. [mogui-agent-harness](https://github.com/baksohyeon/mogui-agent-harness) owns a single repository.
+Two layers, split by unit of operation. This repository owns the workspace. [mogui-agent-harness](https://github.com/baksohyeon/mogui-agent-harness) owns one repository.
 
 ```mermaid
 flowchart LR
@@ -101,17 +101,25 @@ flowchart LR
 | Unit of operation | one repository | a workspace of many repositories |
 | Owns | repo-local rules, hooks, wiki, runbooks | orchestration state, roles, succession, lineage |
 
-Either runs without the other. Use both when one track crosses repositories and each repository still needs its own rules.
+Either runs alone. Use both when a track crosses repositories and each repository still needs its own rules.
 
 ## Scope
 
 Local only.
 
-- This project makes no network calls. Every import under `src/` and `scripts/` is Python standard library, and none are networking modules. `git grep -nE "^[[:space:]]*(import|from)[[:space:]]+(urllib|http|socket|ssl|requests)" -- src scripts` returns nothing.
+- No network calls. Every import in `src/` and `scripts/` is standard library, none of them networking. `git grep -nE "^[[:space:]]*(import|from)[[:space:]]+(urllib|http|socket|ssl|requests)" -- src scripts` returns nothing.
 - No API key, no model endpoint, no telemetry.
-- It reads the folder you point it at and paths you name in configuration. Nothing walks your home directory. The redaction scanners read one repository's tracked files through `git ls-files`.
-- The CLIs it drives reach their own providers as they already did. This adds no traffic of its own.
-- The master session starts with the host's approval prompts off so it can run unattended. Shift-Tab cycles permission modes inside the session.
+- Reads the folder you point it at and paths you name in config. Nothing walks your home directory. Redaction scanners read one repository's tracked files through `git ls-files`.
+- The CLIs it drives reach their own providers as before. No traffic added.
+- Master starts with approval prompts off, to run unattended. Shift-Tab cycles the mode.
+
+## Limitations
+
+- **Master runs on Claude Code.** The spawn path in `core/succession.py` calls `claude`. No other host starts a master today.
+- **Workers can be any CLI.** A worker is a terminal session in an Orca pane, so it is whatever binary starts there. Claude, Codex, Cursor, Grok, Gemini have all run this way under contract. No plugin for any of them. The typed `adapter dispatch` path is narrower and takes `codex` only.
+- **Codex as master is untested.** Nobody measured it. Report or patch welcome.
+- **macOS only.** Other platforms planned, untested.
+- **Orca required** for live sessions. Pure functions run without it.
 
 ## Alternatives
 
@@ -156,9 +164,9 @@ The split matters: `core/` never learns these names, `adapter/` wires them, and 
 
 ### The skill layer it runs under
 
-Nothing to do before you start. Onboarding raises this during setup, explains what each one does, and asks whether you want it. Skipping all of it is a normal answer, and every script here runs with none of it installed. Orca stays the only hard dependency.
+Nothing to do before you start. Onboarding raises this during setup, explains each one, and asks. Declining all of it is a normal answer. Every script here runs with none of it installed.
 
-This section is here so the recommendation is legible before you get asked. Vendor neutrality covers agent hosts, not tooling.
+Listed here so the recommendation is readable before you are asked. Vendor neutrality covers agent hosts, not tooling.
 
 Optimized for Claude Code. These are Claude Code plugins and skills. Workers can be Codex or another CLI and the adapter ships a `codex` profile. The orchestrator side assumes Claude Code.
 
@@ -169,7 +177,7 @@ Optimized for Claude Code. These are Claude Code plugins and skills. Workers can
 | Commands | [gstack](https://github.com/garrytan/gstack) | Task commands rather than methodology: ship, review, QA, headless-browser dogfooding, plan review from CEO, engineering, and design angles, context save and restore. |
 | State | [beads](https://github.com/gastownhall/beads) | Listed in the table above. The boot path already shells out to it. |
 
-When you say yes, onboarding prints the command and you run it. GSD's installer edits `~/.claude/settings.json` and wires hooks across most lifecycle events, which an agent should not do to your configuration on your behalf.
+Say yes and onboarding prints the command for you to run. GSD's installer edits `~/.claude/settings.json` and wires hooks across most lifecycle events. An agent should not do that to your configuration.
 
 One integration note if you adopt GSD. Its context monitor warns the agent at 35% context remaining and escalates at 25%, well before the succession threshold this project recommends. Left alone, a master is told to stop and save state while its charter says to keep working. Raise the thresholds in `gsd-context-monitor.js`, or record in your charter that the warning is advisory and not a succession trigger. GSD's `/gsd-update --reapply` flow carries local edits across updates.
 
@@ -236,7 +244,7 @@ src/master_runtime/core/
 Two principles shape the layout:
 
 - **Core / adapter split.** `core/` modules avoid depending on any specific agent product; contact with the outside world (process spawning, ledgers, tool CLIs) goes through injected callables and the `adapter/` layer, so core logic is testable with in-memory fakes. Tool names live in `adapter/`, not in the units above it.
-- **Vendor neutrality as a direction.** The master should be able to run under different AI agent hosts. The reference adapter set is narrow. `adapter/profile.py` currently ships synchronous CLI profiles for `codex` and `cursor-agent`, `adapter doctor` probes a specific set of local tools, and some Korean-language operator strings are embedded. Broadening this is ongoing work.
+- **Vendor neutrality as a direction.** The master should be able to run under different AI agent hosts. It does not yet: the spawn path names `claude` directly, so today a master starts under Claude Code and nothing else. The worker side is further along, with `adapter/profile.py` shipping synchronous CLI profiles for `codex` and `cursor-agent`. `adapter doctor` probes a fixed set of local tools, and some Korean-language operator strings are embedded. Broadening this is ongoing work.
 
 ## Working on the harness
 

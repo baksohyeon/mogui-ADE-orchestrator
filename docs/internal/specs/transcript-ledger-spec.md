@@ -81,7 +81,11 @@ contradicted the expectation, and those are the ones a one-line collapse loses.
 
 ## Host Support
 
-Claude and Codex only, for now. Other hosts are planned and unsupported.
+Claude Code only, for now. Other hosts are unsupported.
+
+The reference implementation reads Claude Code session records. No other host's
+transcript format has been measured, so no other host is claimed. Adding one
+means measuring its record shape first.
 
 The parser reads a host's session record directly and that record is
 host-shaped. The reference implementation distinguishes human utterances by a

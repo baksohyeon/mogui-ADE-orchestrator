@@ -1,9 +1,11 @@
 # mogui-ADE-orchestrator
 
-> **Orchestrate a fleet of coding-agent sessions without giving up hands-on control of any one of them.**
-> Real terminal sessions running the CLIs you already pay for. Drop into any of them and type. Above them, one master session plans, hands out work under contract, and checks what comes back before accepting it. No API key, and it survives its own session dying.
+> **Orchestrate a fleet of coding-agent sessions on Orca without giving up hands-on control of any one of them.**
+> Real Orca terminal sessions running the CLIs you already pay for. Drop into any of them and type. Above them, one master session plans, hands out work under contract, and checks what comes back before accepting it. No API key, and it survives its own session dying.
 
-The usual shape of this problem: several Codex or Claude sessions running in tmux panes or an equivalent, each one individually steerable, with nothing coordinating them. This adds the layer above without taking the sessions away from you.
+The usual shape of this problem: several Codex or Claude sessions running in tmux panes, each one individually steerable, with nothing coordinating them.
+
+This runs the fleet on [Orca](https://www.onorca.dev/download). Sessions outlive the window. Every pane carries a worktree identity you can check. A session can be read, written to, and retired by handle from outside the session. Those three properties are what an orchestration layer needs to exist, and you keep the ability to open any pane and type into it.
 
 Point it at a folder that holds your product repositories. One master session plans, dispatches workers under contract, verifies their output before accepting it, and hands the role to a fresh session when the context fills up. macOS only for now, other platforms planned. Python 3.10+, stdlib-only core, MIT.
 
@@ -27,7 +29,7 @@ Local only.
 | Approval | a runtime callback | a gate a human holds |
 | Orchestrator dies | the graph dies with it | the successor takes the role and proves it |
 
-The comparison came after. This was built independently and reached this shape before its author saw deepagents. `git log -S deepagents --reverse` shows the name first appearing in the same commit as the public docs, fifteen days and sixty commits in. That dates the word in this repository, not what the author knew.
+The comparison came after. This was built independently and reached this shape before its author saw deepagents. `git log -S deepagents --reverse` shows the name first appearing in the same commit as the public docs, fifteen days and sixty commits in. That command dates the word in this repository. What the author knew is outside what git records.
 
 ## Quickstart
 

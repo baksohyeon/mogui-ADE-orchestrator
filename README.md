@@ -201,9 +201,21 @@ Documentation in this repository is English. `master-ops/` is a template that ge
 
 ## Status
 
-Working and exercised: 271 unit tests pass (1 skipped, as of 2026-08-01), every unit listed below exists in `src/master_runtime/core/`, and the succession, dispatch-gate, acceptance, and compaction paths have all run against real workspaces.
+Working and exercised, as of 2026-08-01: 295 unit tests pass, 1 skipped. Every
+unit listed below exists in `src/master_runtime/core/`. The succession,
+dispatch-gate, acceptance, and compaction paths have run against real
+workspaces, and onboarding has been run start to finish by someone other than
+its author.
 
-Moving fast: interfaces, CLI flags, and file formats still change without notice. Pin a commit if you build on it.
+No version tag yet. No CI: tests and the redaction scanners run locally before
+a push, so a passing count in a pull request is the author's word. Interfaces,
+CLI flags, and file formats still change without notice. Pin a commit if you
+build on it.
+
+The template that onboarding copies is versioned separately at
+`master-ops/TEMPLATE-VERSION`, currently 1. A generated operations repository
+does not update when the template does, so that number is how an installation
+says where it came from.
 
 ## Core concepts
 

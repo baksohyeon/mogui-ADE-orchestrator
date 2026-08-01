@@ -1,6 +1,4 @@
-# Planted 2026-08-01, against 10 rules.
-# Update: add a candidate here after reviewing it. Remove it and it is reported again.
-# Baseline for redaction-inventory: candidates reviewed and judged harmless.
+# Reviewed candidates. Removing a line makes it reported again.
 a-z
 a-z0-9
 acceptance-loop

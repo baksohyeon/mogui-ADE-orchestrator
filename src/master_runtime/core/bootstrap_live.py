@@ -21,8 +21,7 @@ from master_runtime.core.bootstrap import (
 
 DEFAULT_MEMORY_CAP = 15
 DEFAULT_BUDGET_CHARS = 12_000
-# Self-block target ~1KB (see plan Architecture: "dynamic block (~1KB)"). The block
-# is truncated (tracks first) once it exceeds this cap.
+# Block is truncated, tracks first, once it exceeds this.
 SELF_BLOCK_CAP = 1_000
 # Workspace-neutral by default: the operations repository name differs per
 # installation, so a hardcoded path would print another workspace's coordinates.
@@ -150,7 +149,7 @@ def audit_memories(
     budget_kb = round(budget_chars / 1000.0)
 
     if untagged > 0:
-        alerts.append("[AUDIT-ALERT] untagged memories " + str(untagged) + "")
+        alerts.append("[AUDIT-ALERT] untagged memories " + str(untagged))
     if count > cap:
         alerts.append("[AUDIT-ALERT] cap exceeded: " + str(count) + " > " + str(cap))
     if block_chars > budget_chars:

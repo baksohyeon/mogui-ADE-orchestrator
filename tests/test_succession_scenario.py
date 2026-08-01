@@ -26,7 +26,7 @@ class SuccessionScenarioTests(unittest.TestCase):
             WorkspaceRuntime(JsonlWorkLedger(ledger, clock=_Clock(100.0))).register_track(
                 "U9",
                 "Succession Manager",
-                ("docs/planning/unit-campaign-2026-07-20.md",),
+                ("docs/internal/specs/transcript-ledger-spec.md",),
             )
             handoff.write_text(
                 build_handoff(

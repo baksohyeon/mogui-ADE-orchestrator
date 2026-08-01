@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
 """redaction-inventory. Reports tokens no redaction rule covers.
 
-`redaction-scan.sh` matches what the rules name. This asks the inverse: which
-distinctive-looking tokens in the working tree match no rule. Scope is tracked
-files at the current commit; history is not scanned.
+`redaction-scan.sh` matches what the rules name; this asks the inverse. Scope is
+tracked files at the current commit. Reviewed tokens go in the baseline file and
+stop being reported.
 
-Reviewed tokens go in the baseline file and stop being reported.
-
-Output is a candidate list for a human to judge. A candidate is not a secret,
-and an empty result is not proof of safety. This narrows the rules' blind spot;
-it does not measure exposure.
+A candidate is not a secret, and an empty result is not proof of safety. This
+narrows the rules' blind spot; it does not measure exposure.
 
 Exit codes
   0  no uncovered candidates
@@ -51,9 +48,7 @@ NEAR_HANGUL = re.compile(
     r"|(?<![A-Za-z0-9_./-])([a-z][a-z0-9]{3,19})(?![A-Za-z0-9_.-])(?:[^\n]{0,40}?[가-힣])")
 HOMEPATH = re.compile(r"/Users/([A-Za-z0-9._-]+)")
 EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+\.[A-Za-z]{2,})")
-# Korean personal names are not detected. No signal separates them from
-# ordinary words at an acceptable false-positive rate. Cover them with
-# hand-written `person_*` rules in the pattern file.
+# Korean personal names are not detected; cover them with `person_*` rules.
 
 
 def run(cmd):

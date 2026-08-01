@@ -73,6 +73,29 @@ Vendor-neutral here means the master is not tied to one *AI agent host*. It does
 
 The split matters: `core/` never learns these names, `adapter/` wires them, and swapping one means writing an adapter rather than editing the units. `adapter/profile.py` currently ships synchronous CLI profiles for `codex` and `cursor-agent`; that is the layer where an agent host gets named, and it is the only one.
 
+### The skill layer it runs under
+
+Recommended, not required. Orca is still the only hard dependency, and every script here runs with none of this installed. This section exists because the reference master does run under a specific skill stack, and vendor-neutral should not turn into "we won't say what we use."
+
+Optimized for Claude Code. These are Claude Code plugins and skills. Workers can be Codex or another CLI, and the adapter ships a `codex` profile, but the orchestrator side assumes Claude Code.
+
+| Layer | Tool | What it does in the harness |
+| --- | --- | --- |
+| Method | [superpowers](https://github.com/obra/superpowers) | Puts process ahead of code. A SessionStart hook injects a rule that a relevant skill must be invoked before any response, including clarifying questions. Ships brainstorming, plan writing and execution, TDD, systematic debugging, code review on both sides, and verification before completion. |
+| Lifecycle | [GSD](https://github.com/open-gsd/gsd-core) | The largest harness footprint of the four. A spec to plan to execute to verify command set, plus around a dozen hooks: a statusline, a context monitor that warns the agent rather than only the user as the window fills, prompt-injection scanners over both written and read content, a guard that blocks writes outside the worktree root, and commit validation. |
+| Commands | [gstack](https://github.com/garrytan/gstack) | Task commands rather than methodology: ship, review, QA, headless-browser dogfooding, plan review from CEO, engineering, and design angles, context save and restore. |
+| State | [beads](https://github.com/gastownhall/beads) | Listed in the table above. The boot path already shells out to it. |
+
+Install them yourself. Onboarding will explain each one and print the commands; it does not run them. GSD's installer edits `~/.claude/settings.json` and wires hooks across most lifecycle events, which is not something an agent should do to your configuration on your behalf.
+
+```bash
+claude plugin install superpowers@claude-plugins-official
+```
+
+GSD ships as `@opengsd/gsd-core` on npm, and gstack installs into `~/.claude/skills/gstack`. Follow their own install instructions rather than a copy of them here, which would go stale.
+
+One integration note if you adopt GSD. Its context monitor warns the agent at 35% context remaining and escalates at 25%, which is well before the succession threshold this project recommends. Left alone, a master gets told to stop and save state while its own charter says to keep working. Either raise the thresholds in the monitor or record in your charter that the warning is advisory and not a succession trigger. The values live in `gsd-context-monitor.js`, and GSD's own `/gsd-update --reapply` flow carries local edits across updates.
+
 ## Which document do you want?
 
 | You are | Start here |

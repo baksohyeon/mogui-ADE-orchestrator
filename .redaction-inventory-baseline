@@ -36,6 +36,7 @@ changed-surface
 char-budgeted
 chars
 claude-fable-5
+claude-plugins-official
 clean-spawn
 cli-home
 closed-decisions
@@ -120,6 +121,7 @@ gpt-5-codex
 grok
 handoff
 hard-restricts
+headless-browser
 held-out
 high-cost
 high-risk
@@ -255,6 +257,7 @@ probe-required
 product-specific
 production-facing
 project-specific
+prompt-injection
 prompt-visible
 proposal-1
 proposal-2
@@ -393,6 +396,7 @@ unit-a
 unit-level
 unknown-session
 user
+vendor-neutral
 verifying
 visible-only
 well-structured

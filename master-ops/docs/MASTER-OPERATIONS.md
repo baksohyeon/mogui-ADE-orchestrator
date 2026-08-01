@@ -19,7 +19,7 @@ This document is the workspace master-operations SSOT.
 - Field cards: `docs/runbooks/succession-boot-card.md`
 - Role state SSOT: `docs/runbooks/role-state.md`
 - Observability suite: `docs/observability/README.md` — attribution legend, integrity rules, and the retro / travelog / field-notes / agent-journey genres
-- Execution state SSOT: the issue tracker selected during onboarding
+- Execution state SSOT: the issue tracker selected during onboarding, reachable from `{{WORKSPACE_ROOT}}`
 - Long-term planning and design SSOT: Git documents
 
 Issue-tracker memory should contain only load-bearing rules and pointers. Keep it curated; do not turn it into a second copy of this document.
@@ -196,6 +196,14 @@ Recommended hook spec:
 - UserPromptSubmit: inject the current role-state line from `docs/runbooks/role-state.md`
 - PreToolUse: warn when supervised dispatch is bypassed
 - PostToolUse: collect non-sensitive audit markers when locally approved
+- SessionStart: warn when the issue tracker is not reachable from `{{WORKSPACE_ROOT}}`, or when an environment variable points its database outside the workspace
+
+The last one covers a failure that is otherwise silent. The master runs at the
+workspace root, and a tracker that resolves its database from the current
+directory finds nothing there, or finds a product repository's database. Boot
+continues either way. Measure the environment variable in the same shell the
+agent's tool calls use; a login shell can define a different value, and reading
+the wrong one turns the check into a pass.
 
 Context-quality monitor namespace: `{{MONITOR_NS}}`
 

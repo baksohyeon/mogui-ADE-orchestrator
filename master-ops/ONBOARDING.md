@@ -169,16 +169,45 @@ Operational note: in production, a path selector for an unregistered folder fail
 (c) Agent action:
 
 - initialize the selected tracker only in the ops repository
+- reach the tracker from the workspace root, since that is where the master runs
 - record active work there, not in markdown TODO files
 - seed only load-bearing memory pointers and rules
 
+The second item is the one that gets missed. The master's working directory is
+`{{WORKSPACE_ROOT}}`, not the ops repository. A tracker that finds its database
+by looking in the current directory will find nothing there, or find a product
+repository's database and use that instead. Beads behaves this way: it checks
+the current directory only and does not walk upward.
+
+For that class of tracker, place a link at the workspace root pointing at the
+database inside the ops repository, so the master resolves to the right one
+from where it actually stands.
+
+```console
+$ ln -s "{{OPS_REPO}}/.beads" "{{WORKSPACE_ROOT}}/.beads"
+```
+
+Adjust the name for the tracker in use. Ask the user before creating it.
+
 (d) Verification:
 
-- tracker commands run from `{{OPS_REPO}}`
-- the workspace tracker database is separate from every product repository tracker database
-- `bd where` or the selected equivalent points to the ops repository, not a product repo
+Run the checks from `{{WORKSPACE_ROOT}}`, not from the ops repository. Passing
+from inside the ops repository proves nothing about where the master will look.
 
-Warning: Beads and similar local trackers can keep per-repo databases. Do not reuse a product repository's database for workspace-level orchestration.
+- `bd where`, or the selected equivalent, resolves to the ops repository
+- the workspace tracker database is separate from every product repository's
+- a global environment variable does not override the resolution. If your
+  tracker reads one, print it from the same shell the agent's tool calls use.
+  A value read in a different shell can be a different value, and the check
+  passes while the real path is wrong
+
+Warning: Beads and similar local trackers can keep per-repo databases. Do not
+reuse a product repository's database for workspace-level orchestration.
+
+Nothing fails loudly when this is wrong. The tracker reports no database, or it
+reports someone else's, and boot continues either way. Consider a session-start
+check that prints a warning when the workspace root has no reachable tracker
+database, or when an environment variable points outside the workspace.
 
 ## Step 6. Seed Universal User Rules
 

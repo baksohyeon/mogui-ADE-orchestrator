@@ -43,5 +43,3 @@ Planning documents and worker reports are not kept here. They record what a deci
 ## Language
 
 Everything a reader or installer touches, `README.md`, `docs/public/`, `docs/README.md`, `master-ops/`, is English. A Korean mirror of `docs/public/` is maintained outside this repository, in the operations repository of the workspace that authors it, so a translation cannot drift against its English original inside the same tree without a check catching it.
-
-Korean still appears in `src/`, `scripts/`, `tests/`, and one spec. Every instance is a matcher or the documentation of one: succession trigger phrases, the trust-handling alternation in the dispatch gate, the Hangul class in `redaction-inventory`, and the `활성트랙` heading branch. An operations repository written in Korean works without being translated first, and deleting those patterns would remove that.

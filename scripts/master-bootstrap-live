@@ -113,9 +113,7 @@ def _is_compact_suppressed_heading(line):
     if match is None:
         return False
     title = match.group("title").strip().lower()
-    compact_title = re.sub(r"\s+", "", title)
-    # The Korean alternative matches a section title in a Korean operations doc.
-    return title.startswith("role state") or title.startswith("active tracks") or compact_title.startswith("활성트랙")
+    return title.startswith("role state") or title.startswith("active tracks")
 
 
 def main(argv=None) -> int:

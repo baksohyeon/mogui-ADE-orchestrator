@@ -251,25 +251,6 @@ class CompactSuppressTests(unittest.TestCase):
         self.assertNotIn("AL-secret", out)
         self.assertIn("keep me", out)
 
-    def test_compact_suppress_matches_korean_heading(self) -> None:
-        # A Korean operations document names the section `## 활성 트랙`.
-        # Without this branch the section leaks through the recall probe.
-        module = _load_bootstrap_live_script()
-        block = "\n".join(
-            [
-                "[MASTER-BOOTSTRAP v1]",
-                "## 활성 트랙",
-                "AL-secret should be suppressed",
-                "### Next",
-                "keep me",
-            ]
-        )
-
-        out = module._suppress_compact_recall_leaks(block)
-
-        self.assertNotIn("AL-secret", out)
-        self.assertIn("keep me", out)
-
     def test_compact_suppress_fail_open_preserves_block(self) -> None:
         module = _load_bootstrap_live_script()
 

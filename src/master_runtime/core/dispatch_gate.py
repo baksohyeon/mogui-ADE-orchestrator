@@ -629,9 +629,8 @@ def _mentions_mcp_without_trust_handling(contract_text: str) -> bool:
     )
     if mentions_mcp is None:
         return False
-    # Korean alternatives are matchers for contracts written in Korean.
     mentions_trust_handling = re.search(
-        r"trust|신뢰|다이얼로그",
+        r"trust",
         contract_text,
         flags=re.IGNORECASE,
     )

@@ -128,12 +128,6 @@ Local only.
 - **macOS only.** Other platforms planned, untested.
 - **Orca required** for live sessions. Pure functions run without it.
 
-Documentation is English. Input handling is not English-only: succession
-triggers, dispatch contract text, and operations-document section headings are
-matched in Korean as well, so an operations repository written in Korean works
-without translating it first. Other languages need their patterns added
-alongside.
-
 ## Alternatives
 
 **If you are going to use an API key, use [LangChain deepagents](https://docs.langchain.com/oss/python/deepagents/overview).** It is well documented and it solves this problem inside your process. This project is for the other case: you already pay for coding-agent CLIs and you want one orchestrator driving all of them, with no key and no per-token bill.

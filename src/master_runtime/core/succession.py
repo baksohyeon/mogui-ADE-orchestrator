@@ -124,12 +124,7 @@ def detect_trigger(text: str, context: Optional[Mapping[str, object]] = None) ->
     """Classify a user or runtime signal without auto-starting advisory succession."""
 
     normalized = (text or "").strip().lower()
-    # Input matchers, not prose. The Korean entries let a Korean-speaking
-    # operator trigger succession in their own language.
     immediate_markers = (
-        "승계해줘",
-        "다음 마스터로 넘기자",
-        "승계 진행해",
         "succession now",
         "handoff to successor",
     )

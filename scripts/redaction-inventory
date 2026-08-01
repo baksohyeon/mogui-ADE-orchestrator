@@ -44,9 +44,8 @@ localhost example sample dummy placeholder polsia qfuds langchain deepagents
 # Repository and organization names appear as kebab-case. snake_case is
 # excluded because it is a code identifier.
 CANDIDATE = re.compile(r"(?<![A-Za-z0-9_./-])([a-z][a-z0-9]*(?:-[a-z0-9]+)+)(?![A-Za-z0-9_.-])")
-# Single-word proper nouns: a Latin word within 40 characters of Hangul, in
-# either order. Catches identifiers embedded in Korean prose, where no path or
-# hyphen gives them away. The `[가-힣]` class is part of the matcher.
+# A Latin word within 40 characters of Hangul, in either order. Catches
+# single-word identifiers embedded in Korean prose.
 NEAR_HANGUL = re.compile(
     r"(?:[가-힣][^\n]{0,40}?)(?<![A-Za-z0-9_./-])([a-z][a-z0-9]{3,19})(?![A-Za-z0-9_.-])"
     r"|(?<![A-Za-z0-9_./-])([a-z][a-z0-9]{3,19})(?![A-Za-z0-9_.-])(?:[^\n]{0,40}?[가-힣])")

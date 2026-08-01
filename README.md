@@ -10,6 +10,8 @@ Install is a clone and one sentence spoken to an agent.
 
 It runs the fleet on [Orca](https://www.onorca.dev/download). A session has to outlive its window and be addressable by handle before anything can orchestrate it. macOS only for now. Python 3.10+, stdlib-only core, MIT. No API key.
 
+The orchestrating session is called the master, for lack of a better word. It has no name yet. Suggestions welcome.
+
 ## Quickstart
 
 ```console

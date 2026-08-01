@@ -38,6 +38,72 @@ scripts/adapter doctor
 
 </details>
 
+## Why this exists
+
+Run one long-lived session as the orchestrator of a multi-repository workspace and three failure modes appear that repo-level tooling does not cover.
+
+1. **Sessions end, work does not.** Context fills, sessions crash, sessions get compacted. Pasting a summary into a fresh session loses role state, open tracks, and standing decisions. You find out when the successor repeats a question you answered, or reopens a decision you made.
+2. **A master that can spawn workers can waste them.** Delegation is cheap to trigger and expensive to run. Without a gate, duplicate dispatches, oversized inputs, and dispatches into the wrong tree all go through, and nothing says so.
+3. **Context loss after compaction is invisible.** The session reads as continuous while state is gone. Re-feed everything at boot and you lose the one chance to find out what it still holds.
+
+This runtime treats all three as testable. Succession is a guarded procedure. Lineage is an append-only ledger with a fixed schema. Worker dispatch needs a readable contract and passes budget and routing checks. The boot path withholds state after compaction to probe recall.
+
+## How it fits together
+
+```mermaid
+flowchart TB
+    You(["you"])
+
+    subgraph Orca["Orca"]
+        M["master session<br/>plan, dispatch, verify, retire"]
+        W1["worker pane<br/>Codex"]
+        W2["worker pane<br/>Claude"]
+        W3["worker pane<br/>..."]
+        M2["successor master"]
+    end
+
+    You -->|"one instruction"| M
+    You -.->|"open any pane and type"| W1
+    You -.-> W2
+
+    M -->|"contract"| W1
+    M -->|"contract"| W2
+    M -->|"contract"| W3
+    W1 -->|"artifact and evidence"| M
+    W2 -->|"artifact and evidence"| M
+    W3 -->|"artifact and evidence"| M
+
+    M --> T[("tracker<br/>execution state")]
+    M --> G[("git<br/>charter, decisions, lineage")]
+    M ==>|"verified handoff"| M2
+    G -.->|"boot"| M2
+```
+
+Solid arrows are the orchestration path. Dotted arrows are yours: the panes stay real terminals and you can take any of them over at any time.
+
+## Sibling project
+
+Two layers, split by unit of operation. This repository owns the workspace. [mogui-agent-harness](https://github.com/baksohyeon/mogui-agent-harness) owns a single repository.
+
+```mermaid
+flowchart LR
+    subgraph WS["workspace layer"]
+        A["mogui-ADE-orchestrator<br/>roles, succession, dispatch, lineage"]
+    end
+    subgraph RP["repository layer"]
+        B["mogui-agent-harness<br/>repo rules, hooks, wiki, runbooks"]
+    end
+    A -->|"contract, never source coupling"| B
+```
+
+| | mogui-agent-harness | mogui-ADE-orchestrator (this repo) |
+|---|---|---|
+| Layer | Repository Harness (repo-local runtime) | Workspace Master Runtime |
+| Unit of operation | one repository | a workspace of many repositories |
+| Owns | repo-local rules, hooks, wiki, runbooks | orchestration state, roles, succession, lineage |
+
+Either runs without the other. Use both when one track crosses repositories and each repository still needs its own rules.
+
 ## Scope
 
 Local only.
@@ -47,6 +113,8 @@ Local only.
 - It reads the folder you point it at and paths you name in configuration. Nothing walks your home directory. The redaction scanners read one repository's tracked files through `git ls-files`.
 - The CLIs it drives reach their own providers as they already did. This adds no traffic of its own.
 - The master session starts with the host's approval prompts off so it can run unattended. Shift-Tab cycles permission modes inside the session.
+
+## Alternatives
 
 **If you are going to use an API key, use [LangChain deepagents](https://docs.langchain.com/oss/python/deepagents/overview).** It is well documented and it solves this problem inside your process. This project is for the other case: you already pay for coding-agent CLIs and you want one orchestrator driving all of them, with no key and no per-token bill.
 
@@ -58,19 +126,21 @@ Local only.
 | Approval | a runtime callback | a gate a human holds |
 | Orchestrator dies | the graph dies with it | the successor takes the role and proves it |
 
-The comparison came after. This was built independently and reached this shape before its author saw deepagents. `git log -S deepagents --reverse` shows the name first appearing in the same commit as the public docs, fifteen days and sixty commits in. That command dates the word in this repository. What the author knew is outside what git records.
+The comparison came after. Developer Dorito built this independently and reached this shape before seeing deepagents. `git log -S deepagents --reverse` shows the name first appearing in the same commit as the public docs, fifteen days and sixty commits in. That command dates the word in the repository. It does not date what Dorito knew.
+
+## What this runs on
 
 ### Why Orca
 
-A master that outlives one session needs somewhere to live. A terminal tab is not that place. [Orca](https://www.onorca.dev/download) is, and it is the one dependency this project does not abstract away.
+A master that outlives one session needs somewhere to live. A terminal tab does not qualify. [Orca](https://www.onorca.dev/download) does, and it is the one dependency this project does not abstract away.
 
-- **Sessions outlive the window.** Close the tab, restart the app, come back tomorrow: the session is still there with a stable handle you can read, write to, and retire on purpose. Succession is only auditable because the predecessor is still addressable while you verify the successor.
-- **Warm context is money.** A long-lived session keeps its prompt cache warm. Re-spawning a fresh agent for every task pays the context tax again every time.
-- **Many agents, many accounts.** Run several CLI agents side by side, on different runtimes and different accounts, and switch when one runs out of credit. Your orchestrator does not have to die because a worker's quota did.
-- **Placement is addressable.** Every pane carries a worktree identity, so "which folder did that worker actually run in" has an answer you can check instead of infer.
-- **Reachable from anywhere.** Put it behind Tailscale and the same running sessions answer from another machine. Long jobs do not need you sitting in front of the laptop that started them.
+- **Sessions outlive the window.** Close the tab, restart the app, come back tomorrow. The session is there, with a handle you can read, write to, and retire. Succession is auditable because the predecessor stays addressable while you verify the successor.
+- **Warm context is money.** A long-lived session keeps its prompt cache warm. Respawning for every task pays the context tax again.
+- **Many agents, many accounts.** Run several CLI agents side by side on different runtimes and accounts. Switch when one runs out of credit. A worker's quota does not kill the orchestrator.
+- **Placement is addressable.** Every pane carries a worktree identity. "Which folder did that worker run in" has an answer you can check.
+- **Reachable from anywhere.** Put it behind Tailscale and the same sessions answer from another machine. Long jobs do not need you at the laptop that started them.
 
-Without this substrate you can still read the ideas here. You cannot run a master that survives its own session.
+Without this substrate you can read the ideas here. You cannot run a master that survives its own session.
 
 ### The tools this actually runs on
 
@@ -87,9 +157,9 @@ The split matters: `core/` never learns these names, `adapter/` wires them, and 
 
 ### The skill layer it runs under
 
-Recommended, not required. Orca is still the only hard dependency, and every script here runs with none of this installed. This section exists because the reference master does run under a specific skill stack, and vendor-neutral should not turn into "we won't say what we use."
+Recommended, not required. Orca stays the only hard dependency and every script here runs with none of this installed. The reference master does run under a specific skill stack, so it is named here. Vendor neutrality covers agent hosts, not tooling.
 
-Optimized for Claude Code. These are Claude Code plugins and skills. Workers can be Codex or another CLI, and the adapter ships a `codex` profile, but the orchestrator side assumes Claude Code.
+Optimized for Claude Code. These are Claude Code plugins and skills. Workers can be Codex or another CLI and the adapter ships a `codex` profile. The orchestrator side assumes Claude Code.
 
 | Layer | Tool | What it does in the harness |
 | --- | --- | --- |
@@ -106,7 +176,7 @@ claude plugin install superpowers@claude-plugins-official
 
 GSD ships as `@opengsd/gsd-core` on npm, and gstack installs into `~/.claude/skills/gstack`. Follow their own install instructions rather than a copy of them here, which would go stale.
 
-One integration note if you adopt GSD. Its context monitor warns the agent at 35% context remaining and escalates at 25%, which is well before the succession threshold this project recommends. Left alone, a master gets told to stop and save state while its own charter says to keep working. Either raise the thresholds in the monitor or record in your charter that the warning is advisory and not a succession trigger. The values live in `gsd-context-monitor.js`, and GSD's own `/gsd-update --reapply` flow carries local edits across updates.
+One integration note if you adopt GSD. Its context monitor warns the agent at 35% context remaining and escalates at 25%, well before the succession threshold this project recommends. Left alone, a master is told to stop and save state while its charter says to keep working. Raise the thresholds in `gsd-context-monitor.js`, or record in your charter that the warning is advisory and not a succession trigger. GSD's `/gsd-update --reapply` flow carries local edits across updates.
 
 ## Which document do you want?
 
@@ -118,16 +188,6 @@ One integration note if you adopt GSD. Its context monitor warns the agent at 35
 | Reading the code | [Architecture](#architecture) below, then `src/master_runtime/core/` |
 
 Documentation in this repository is English. `master-ops/` is a template that gets copied and substituted during onboarding, not documentation about this repository. See the index for why the two are separate.
-
-## Why this exists
-
-If you run a single long-lived AI agent session as the *orchestrator* ("master") of a multi-repository workspace, three failure modes show up that repo-level tooling doesn't cover:
-
-1. **Sessions end, work doesn't.** Context windows fill up, sessions crash or get compacted. Handing off to a fresh session by pasting a summary loses role state, open work tracks, and standing decisions. You find out when the successor repeats a question you already answered, or reopens a decision you already made.
-2. **A master that can spawn workers can also waste them.** Delegating work to sub-agents (worker sessions) is cheap to trigger and expensive to run. Without a gate, duplicate dispatches, oversized inputs, and dispatches into the wrong directory tree all go through, and nothing tells you.
-3. **Context loss after compaction is invisible by default.** After a compaction event the session reads as continuous while some state is gone. Re-feed everything at boot and you lose your only chance to find out what the session still holds.
-
-This repo is a reference implementation of a runtime that treats these as first-class, testable problems: succession is a verified procedure with hard safety guards, lineage is an append-only ledger with a fixed schema, worker dispatch requires a readable contract file and passes through budget/routing checks, and the boot path withholds state after compaction to probe recall.
 
 ## Status
 
@@ -211,14 +271,6 @@ scripts/master-bootstrap --charter path/to/charter.md --json
 Other entry points, briefly: `scripts/master-succeed` also provides `handoff`, `verify-successor`, `check-duplicates`, `retire`, and `spawn` subcommands; `scripts/master-recover` runs the recovery flow from a charter + handoff after abnormal termination; `scripts/master-bootstrap-live` is meant to be wired as a session-start hook rather than run by hand; `scripts/l1-digest tick` advances the read-only digest loop; `scripts/adapter dispatch` performs an adapter-level worker dispatch; `scripts/acceptance-loop` runs the acceptance casebook. Run any of them with `--help` for current flags.
 
 Tests are the agent's job. Ask the agent working on the harness to run them and report, the same way you ask it for anything else. There is no test step here for a person to type.
-
-Sibling product of [mogui-agent-harness](https://github.com/baksohyeon/mogui-agent-harness):
-
-| | mogui-agent-harness | mogui-ADE-orchestrator (this repo) |
-|---|---|---|
-| Layer | Repository Harness (repo-local runtime) | Workspace Master Runtime |
-| Unit of operation | one repository | a workspace of many repositories |
-| Owns | repo-local rules, hooks, wiki, runbooks | orchestration state, roles, succession, lineage |
 
 ## What this is not
 

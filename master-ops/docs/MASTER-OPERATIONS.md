@@ -19,7 +19,7 @@ This document is the workspace master-operations SSOT.
 - Append-only evidence: `docs/decisions/closed-decisions-and-facts.md`, `docs/lineage/MASTER-LINEAGE.md`
 - Field cards: `docs/runbooks/succession-boot-card.md`
 - Role state SSOT: `docs/runbooks/role-state.md`
-- Observability suite: `docs/observability/README.md` — attribution legend, integrity rules, and the retro / travelog / field-notes / agent-journey genres
+- Observability suite: `docs/observability/README.md` — attribution legend, integrity rules, and the retro / travelog genres
 - Execution state SSOT: the issue tracker selected during onboarding, reachable from `{{WORKSPACE_ROOT}}`
 - Long-term planning and design SSOT: Git documents
 
@@ -210,7 +210,7 @@ Context-quality monitor namespace: `{{MONITOR_NS}}`
 
 Lineage is append-only observability metadata. Do not use Lineage as the bootstrap source, priority source, or model-evaluation source.
 
-Git history and the issue tracker record what happened but cannot record what shaped the master's behaviour, what it nearly did, or what it declined to do. Without that layer the owner's only observation channel is a post-incident report, which arrives only after something broke. The observability suite (`docs/observability/README.md`) fills it with voluntary standing records: the retro ledger and travelog are the load-bearing pair, and field notes and agent-journey captures are optional and produced only on request or on approved proposal. Attribution tags, the falsifiability rule for judgment claims, freshness honesty after compaction, and the requirement to list what did not fire are specified once in that index and apply to every genre.
+Git history and the issue tracker record what happened but cannot record what shaped the master's behaviour, what it nearly did, or what it declined to do. Without that layer the owner's only observation channel is a post-incident report, which arrives only after something broke. The observability suite (`docs/observability/README.md`) fills it with voluntary standing records: the retro ledger answers why a decision took the shape it did, and the travelog answers what happened. Attribution tags, the falsifiability rule for judgment claims, freshness honesty after compaction, and the requirement to list what did not fire are specified once in that index and apply to every genre.
 
 ## 8. Closed Principles Pointer
 

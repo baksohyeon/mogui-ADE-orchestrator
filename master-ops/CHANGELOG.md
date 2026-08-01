@@ -27,13 +27,24 @@ prevent.
 ## 2
 
 One integrity rule added to `docs/observability/README.md`: an instruction to
-leave something out of the record is itself recorded, along with what was asked
-and by whom. Credentials, tokens, and keys stay excluded, and the gap is marked
-where they were.
+leave something out of the record is itself recorded, along with what was asked,
+when, and by whom. A request carrying a credential, token, or key is recorded as
+metadata only, never as a value or a verbatim quote, and the gap is marked where
+it was.
 
-An installation on version 1 can apply this by copying the new bullet from
-`docs/observability/README.md`. Nothing else changes, and no generated file
-depends on it.
+Two genres removed: `docs/field-notes/` and `docs/agent-journey/`. They were
+carried while the authoring workspace worked out what the observability suite
+should be, and neither paid for its tokens once it had. A generated repository
+gets retro and travelog, and adds its own genre if a question stays unanswered.
+
+An installation on version 1 applies this in two edits. Copy the new bullet from
+`docs/observability/README.md`, then raise the `Template version` line in
+`docs/MASTER-OPERATIONS.md` to 2. That line is how a later upgrade knows what
+this installation already has; leaving it at 1 makes the next pass offer this
+same change again.
+
+Already running field notes or an agent journey? Nothing forces you to stop. The
+template no longer ships them; your copy is yours.
 
 ## 1
 

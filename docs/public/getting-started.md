@@ -1,45 +1,35 @@
-This quickstart gets a local clone to the point where you can inspect the runtime, run tests, and start the master onboarding flow.
+The shortest path from a clone to a running master session. There is nothing to build and no test suite to run on the way.
 
 # Getting Started
 
-This repository is meant to be used as an operations harness, not as a library dependency. Start by cloning it, running the local checks, then use the onboarding guide to create or configure the operations repository for your workspace.
+## What you need
 
-## Clone
+- macOS. That is the only platform this has been built and run on. Other platforms are planned, not supported yet.
+- [Orca](https://www.onorca.dev/download). The master lives in an Orca pane, which is what lets it outlive a window.
+- A coding-agent CLI you already pay for: Claude Code, Codex, Grok CLI, or another one. Any single one is enough.
 
-```bash
-git clone <repository-url> orchestrator
-cd orchestrator
-```
-
-## Inspect The Runtime
-
-Run the test suite from the repository root:
+## Install and clone
 
 ```bash
-PYTHONPATH=src python3 -m unittest discover -s tests -v
+brew install --cask stablyai/orca/orca      # or download: https://www.onorca.dev/download
+git clone https://github.com/baksohyeon/mogui-ADE-orchestrator
 ```
 
-Check which local adapter tools are visible:
+## Wake the master
 
-```bash
-scripts/adapter doctor
+Open the cloned folder in Orca, start whichever coding agent you use, and say:
+
+```
+Wake the master.
 ```
 
-For the current command surface, see [Reference](reference.md). It is generated from the local `scripts/` help output.
+That is the setup step. The repository ships an entry-point router, so an agent that opens this folder without other instructions becomes your onboarding guide. It introduces the system in three sentences and then walks you through setup, asking rather than assuming.
 
-## Start An Agent Session
+## What happens from there
 
-For first-time setup, do not try to boot the master inside the installer conversation. The onboarding guide explains how to collect workspace facts, initialize the operations repository, fill placeholders, choose the issue tracker, and create the Generation 1 master session.
+It checks that Orca is usable, collects your workspace facts, proposes a name for your operations repository, registers the workspace folder with Orca, creates the ops repository, fills the template placeholders with your values, sets up an issue tracker, seeds the operating rules, and performs the founding spawn: a Generation 1 master session booted in your workspace root.
 
-Continue with:
-
-- [master-ops/ONBOARDING.md](../../master-ops/ONBOARDING.md)
-
-Onboarding requires the Orca runtime; it is the execution substrate this system assumes. The founding master is created with `scripts/master-succeed spawn`, which fail-closes unless placement verification matches.
-
-## First Boot Smoke
-
-After onboarding creates the operating files, the first master boot should prove three facts:
+The last step is a boot smoke test, so you watch the first master come up. Three facts should appear:
 
 ```text
 Role State is declared.
@@ -47,18 +37,14 @@ The configured model and measured model are reported separately.
 Placement evidence matches the intended workspace.
 ```
 
-The relevant script entry points are:
+You end with a master session running over your own repositories, not over this one.
 
-```bash
-scripts/master-bootstrap \
-  --charter master-ops/docs/MASTER-OPERATIONS.md \
-  --json
+The detailed flow lives in [master-ops/ONBOARDING.md](../../master-ops/ONBOARDING.md). The founding spawn uses `scripts/master-succeed spawn`, which fail-closes unless placement verification matches.
 
-scripts/master-bootstrap-live \
-  --handoff-dir ./handoffs \
-  --role-state-file master-ops/docs/runbooks/role-state.md
-```
+## If you are working on the harness itself
 
-> Tip: Keep this page short. The onboarding guide owns the detailed setup flow, and the lifecycle guide owns boot and succession details.
+Tests are the agent's job. Ask it to run them and report back, the same way you ask it for anything else. Nothing here expects you to type a test command.
+
+For the command surface, see [Reference](reference.md), generated from the local `scripts/` help output.
 
 Read next: [Concepts](concepts.md), [Master Lifecycle](master-lifecycle.md), or [Reference](reference.md).

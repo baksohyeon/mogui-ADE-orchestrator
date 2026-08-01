@@ -18,23 +18,37 @@ Point it at a folder that holds your product repositories. One master session pl
 ## Quickstart
 
 ```bash
-# Orca is the execution substrate. Install it first.
 brew install --cask stablyai/orca/orca      # or download: https://www.onorca.dev/download
-
 git clone https://github.com/baksohyeon/mogui-ADE-orchestrator
-cd mogui-ADE-orchestrator
+```
 
-# nothing else to install. stdlib only.
+Open the cloned folder in Orca, start any coding agent in it, and say:
+
+```
+Wake the master.
+```
+
+There is nothing to install and nothing to configure first. The repository ships an entry-point router, so an agent opening this folder without other instructions becomes your onboarding guide. It introduces the system in three sentences and then walks you through setup, asking rather than assuming.
+
+What it asks and does, in order: checks that Orca is usable, collects your workspace facts, proposes a name for your operations repository, registers the workspace folder with Orca, creates the ops repository, fills the template placeholders with your values, sets up an issue tracker, seeds the operating rules, explains which settings live where, and then performs the founding spawn: a fresh Generation 1 master session booted in your workspace root. The last step runs a boot smoke test so you see it come up.
+
+Stage one asks nothing and scaffolds. Stage two is the conversation. You end with a master session running over your own repositories, not over this one.
+
+<details><summary>Prefer to poke at it before installing anything</summary>
+
+The core is stdlib-only, so you can run it without Orca and without setup. You will not get a master session this way, just the pure functions.
+
+```bash
+cd mogui-ADE-orchestrator
 PYTHONPATH=src python3 -m unittest discover -s tests -q
 
-# try the pure functions, no setup needed
 scripts/master-succeed detect "routine status update" --context-ratio 0.7 --json
 scripts/dispatch-gate --ledger /tmp/gate.jsonl check \
   --runtime codex --contract README.md --agents 1 --est-chars 1000
 scripts/adapter doctor
 ```
 
-Then set it up on your own workspace: open the cloned folder in a coding agent and it routes into [`master-ops/ONBOARDING.md`](./master-ops/ONBOARDING.md), a two-stage flow that scaffolds an operations repository and boots your first master session.
+</details>
 
 ### Why Orca
 

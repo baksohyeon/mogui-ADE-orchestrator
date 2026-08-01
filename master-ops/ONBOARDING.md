@@ -13,6 +13,7 @@ Use only these placeholders in the master-ops template:
 - `{{MODEL_ID}}`
 - `{{REPO_LIST}}`
 - `{{RUNTIME_ROOT}}` — the absolute path of this orchestrator repository clone; the onboarding agent fills this itself (Step 4), no user question needed
+- `{{TEMPLATE_VERSION}}` — the contents of `master-ops/TEMPLATE-VERSION`; the onboarding agent fills this itself (Step 4), no user question needed
 
 ## Step 0. Check Prerequisites
 
@@ -124,6 +125,7 @@ Operational note: in production, a path selector for an unregistered folder fail
 
 - if the repository does not exist and creation is approved, create it
 - if the repository is new or empty, copy the Stage 1 skeleton from this repository's `master-ops/` directory into it
+- do not copy `TEMPLATE-VERSION`, `CHANGELOG.md`, or `ONBOARDING.md`. Those describe the template, not the workspace. The version the first two record lands in section 0 of the generated operations document during Step 4. `ONBOARDING.md` is this guide: copying it puts a list of placeholder names into the ops repository, and Step 4 then substitutes that list into values, which destroys the document while passing every check
 - if the repository already has files, read them first and merge deliberately; do not overwrite existing operations records without user approval
 - do not push unless the user explicitly asks
 
@@ -133,6 +135,7 @@ Operational note: in production, a path selector for an unregistered folder fail
 - `CLAUDE.md` and `AGENTS.md` exist in the ops repository
 - `docs/MASTER-OPERATIONS.md` exists
 - the Stage 1 skeleton is present and still contains only the allowed remaining placeholders
+- `TEMPLATE-VERSION`, `CHANGELOG.md`, and `ONBOARDING.md` are absent from the ops repository
 
 ## Step 4. Replace Template Placeholders
 
@@ -147,6 +150,7 @@ Operational note: in production, a path selector for an unregistered folder fail
 
 - replace the placeholders consistently across the ops repository
 - fill `{{RUNTIME_ROOT}}` yourself with the absolute path of this orchestrator repository clone (your current repository root) — this one needs no user question
+- fill `{{TEMPLATE_VERSION}}` yourself with the single line in `{{RUNTIME_ROOT}}/master-ops/TEMPLATE-VERSION`, trimmed — no user question either. The path is in the orchestrator clone because Step 3 keeps that file out of the ops repository. It records which version of the template this copy came from, which is the only way a later upgrade can tell what changed
 - pass the ops repository's operations doc as the bootstrap charter pointer (`master-bootstrap-live --charter-pointer "Operations SSOT: {{OPS_REPO}}/docs/MASTER-OPERATIONS.md"`), so the boot block names this workspace instead of a neutral placeholder
 - keep `CLAUDE.md` and `AGENTS.md` byte-identical unless the user explicitly accepts host-specific divergence
 - do not introduce additional `{{...}}` placeholders

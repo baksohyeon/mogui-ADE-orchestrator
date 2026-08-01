@@ -1,8 +1,8 @@
 # mogui-ADE-orchestrator
 
-> *Can I run Claude and Codex sessions side by side in tmux, drive any one of them by hand, and still have something orchestrating all of them from above?*
+> *Agent sessions running in tmux panes. Can I keep steering any one of them by hand and still orchestrate all of them from above?*
 
-Yes. That is what this is.
+Yes. That is what this is. Any mix of agents, as many as you want.
 
 Anyone running more than two agents at once hits this. Dorito hit it, got tired of it, and wrote this.
 

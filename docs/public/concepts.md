@@ -62,8 +62,6 @@ The execution environment is an actual workspace: real checkouts, real terminals
 
 The master can operate through script entry points such as `scripts/master-bootstrap`, `scripts/master-succeed`, `scripts/dispatch-gate`, `scripts/adapter`, `scripts/acceptance-loop`, and `scripts/l1-digest`. A worker is a CLI session started in an Orca pane, and `scripts/dispatch-gate` decides whether that dispatch may proceed.
 
-> Tip: Use `--dry-run` when you want to inspect the dispatch plan without starting a worker.
-
 ## Context Management
 
 The master starts from durable context, not only from chat history.

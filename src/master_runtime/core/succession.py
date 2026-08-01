@@ -127,6 +127,9 @@ def detect_trigger(text: str, context: Optional[Mapping[str, object]] = None) ->
     immediate_markers = (
         "succession now",
         "handoff to successor",
+        "승계해줘",
+        "다음 마스터로 넘기자",
+        "승계 진행해",
     )
     if any(marker in normalized for marker in immediate_markers):
         return TriggerDecision(TRIGGER_IMMEDIATE, "explicit succession instruction")

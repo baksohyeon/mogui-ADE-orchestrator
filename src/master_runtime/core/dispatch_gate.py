@@ -630,7 +630,7 @@ def _mentions_mcp_without_trust_handling(contract_text: str) -> bool:
     if mentions_mcp is None:
         return False
     mentions_trust_handling = re.search(
-        r"trust",
+        r"trust|신뢰|다이얼로그",
         contract_text,
         flags=re.IGNORECASE,
     )

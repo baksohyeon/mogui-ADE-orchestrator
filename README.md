@@ -190,7 +190,7 @@ Optimized for Claude Code. These are Claude Code plugins and skills. Workers can
 
 Say yes and onboarding prints the command for you to run. GSD's installer edits `~/.claude/settings.json` and wires hooks across most lifecycle events. An agent should not do that to your configuration.
 
-One integration note if you adopt GSD. Its context monitor warns the agent at 35% context remaining and escalates at 25%, well before the succession threshold this project recommends. Left alone, a master is told to stop and save state while its charter says to keep working. Raise the thresholds in `gsd-context-monitor.js`, or record in your charter that the warning is advisory and not a succession trigger. GSD's `/gsd-update --reapply` flow carries local edits across updates.
+One integration note if you adopt GSD. Its context monitor warns the agent at 35% context remaining and escalates at 25%, well before the succession threshold this project recommends. Left alone, a master is told to stop and save state while its charter says to keep working. Record in your charter that the warning is advisory and not a succession trigger. Editing the thresholds in `gsd-context-monitor.js` also works, but the file is GSD-managed and an update restores it; `/gsd-update --reapply` offers the patch back, and the offer is easy to skip. The charter line survives updates.
 
 ## Which document do you want?
 

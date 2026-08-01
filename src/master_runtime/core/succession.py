@@ -125,11 +125,11 @@ def detect_trigger(text: str, context: Optional[Mapping[str, object]] = None) ->
 
     normalized = (text or "").strip().lower()
     immediate_markers = (
+        "succession now",
+        "handoff to successor",
         "승계해줘",
         "다음 마스터로 넘기자",
         "승계 진행해",
-        "succession now",
-        "handoff to successor",
     )
     if any(marker in normalized for marker in immediate_markers):
         return TriggerDecision(TRIGGER_IMMEDIATE, "explicit succession instruction")
@@ -140,14 +140,14 @@ def detect_trigger(text: str, context: Optional[Mapping[str, object]] = None) ->
         return TriggerDecision(
             TRIGGER_ADVISORY,
             "context ratio threshold reached",
-            "컨텍스트 임계치가 높습니다. 자동 승계 금지; 승계를 제안만 합니다.",
+            "Context ratio is high. Auto-succession is not permitted; propose succession only.",
         )
     milestone = str(context.get("milestone", "")).strip()
     if milestone:
         return TriggerDecision(
             TRIGGER_ADVISORY,
             "natural milestone reached",
-            "자연 마일스톤에 도달했습니다. 자동 승계 금지; 승계를 제안만 합니다.",
+            "A natural milestone was reached. Auto-succession is not permitted; propose succession only.",
         )
     return TriggerDecision(TRIGGER_NONE, "no succession trigger")
 

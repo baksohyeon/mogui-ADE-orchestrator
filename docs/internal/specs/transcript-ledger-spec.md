@@ -52,9 +52,12 @@ Utterance text is never altered. Typos stay.
 
 Labels mark why a decision took the shape it did. Three are load-bearing:
 
-- `강제` / forced: a constraint the master did not choose
-- `형성` / shaped: an influence that narrowed the options
-- `판단` / judged: the master's own call
+- `FORCED`: a constraint the master did not choose
+- `SHAPED`: an influence that narrowed the options
+- `JUDGED`: the master's own call
+
+These match the tag names in `master-ops/docs/observability/README.md`, which is
+the shared legend for the observation genres.
 
 Labels are placed inline, adjacent to the utterance they describe, not collected
 in a header summary. A header summary answers "what happened in this workstream"

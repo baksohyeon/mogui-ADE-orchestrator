@@ -1,7 +1,4 @@
-# 심은 시점: 2026-08-01, 룰 10개 기준
-# 갱신: 새 후보를 검토한 뒤 이 파일에 추가한다. 지우면 다시 보고된다.
-# redaction-inventory 기준선. 검토 완료해 무해 판정한 후보.
-# 2026-08-01 추가: CODE_OF_CONDUCT.md(Contributor Covenant 원문)와 SECURITY.md의 일반 영어 하이픈 단어 6건. 식별자가 아니다.
+# Reviewed candidates. Removing a line makes it reported again.
 a-z
 a-z0-9
 acceptance-loop
@@ -72,6 +69,7 @@ dev
 died
 direct-push
 dispatch-tickets
+double-run
 double-start
 drift-monitor
 dual-instance
@@ -229,7 +227,6 @@ not-a-real
 not-git
 not-json
 notes
-nredaction-inventory
 observed
 observed-undeclared
 old-head
@@ -240,6 +237,7 @@ one-line
 one-shot
 one-to-one
 open-ended
+operations
 organization-specific
 other-backend
 owner-prompt
@@ -364,6 +362,7 @@ shell-interpolated
 short-lived
 single-maintainer
 single-sourced
+single-word
 sk-ant-api03-test
 socio-economic
 source-of-truth

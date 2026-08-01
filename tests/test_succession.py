@@ -62,11 +62,15 @@ ORCA_LIST_JSON = json.dumps(
 
 
 def test_detect_trigger_has_immediate_advisory_and_none_branches() -> None:
+    assert detect_trigger("succession now", {}).status == "IMMEDIATE"
+    assert detect_trigger("handoff to successor", {}).status == "IMMEDIATE"
     assert detect_trigger("다음 마스터로 넘기자", {}).status == "IMMEDIATE"
+    assert detect_trigger("승계해줘", {}).status == "IMMEDIATE"
+    assert detect_trigger("승계 진행해", {}).status == "IMMEDIATE"
     advisory = detect_trigger("", {"context_ratio": 0.72})
     assert advisory.status == "ADVISORY"
-    assert "자동 승계 금지" in advisory.message
-    assert detect_trigger("계속 진행", {}).status == "NONE"
+    assert "Auto-succession is not permitted" in advisory.message
+    assert detect_trigger("keep going", {}).status == "NONE"
 
 
 def test_freeze_roles_keeps_current_role_only() -> None:

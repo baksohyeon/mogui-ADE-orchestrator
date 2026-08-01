@@ -33,16 +33,13 @@ Orca ADE is a hard prerequisite for the onboarding flow.
 
 | Path | What it is |
 | --- | --- |
-| [`internal/architecture/`](./internal/architecture/) | the documentation plan that governs which documents exist |
-| [`internal/planning/`](./internal/planning/) | unit campaign notes and pre-implementation verification, kept as a record of how units landed |
-| [`internal/specs/`](./internal/specs/) | narrow specs for wiring gaps (compact continuation hook, model identity probe) |
-| [`internal/reports/`](./internal/reports/) | worker reports for accepted ports |
+| [`internal/specs/`](./internal/specs/) | narrow specs for wiring gaps and for behaviour not yet built |
 | [`internal/tooling/`](./internal/tooling/) | [`redaction-scan.md`](./internal/tooling/redaction-scan.md), run this before publishing anything |
 
-Internal documents record a decision on the day someone made it. Nobody keeps them current against the code. When an internal document and the code disagree, trust the code and its tests.
+These describe how something works or is meant to work. Nobody keeps them current against the code, so when a document and the code disagree, trust the code and its tests.
+
+Planning documents and worker reports are not kept here. They record what a decision looked like on one day, they go stale immediately, and git history holds them.
 
 ## Language
 
 Everything a reader or installer touches, `README.md`, `docs/public/`, `docs/README.md`, `master-ops/`, is English. A Korean mirror of `docs/public/` is maintained outside this repository, in the operations repository of the workspace that authors it, so a translation cannot drift against its English original inside the same tree without a check catching it.
-
-Some files under `docs/internal/` are Korean, because they are dated records of decisions made in Korean and rewriting a record changes it. They are not translated on purpose.

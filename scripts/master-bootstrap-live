@@ -38,7 +38,7 @@ def _make_bd_runner(bd_exe):
 
 _COMPACT_SUPPRESSED_LINE = (
     "[E12] compact: tracks/role suppressed for recall probe "
-    "(정본은 회상 기록 후 bd로 대조)"
+    "(recall first, then check against the tracker for the authoritative state)"
 )
 _COMPACT_FIRST_INJECTION_BANNER = (
     "[E12-CRITICAL] compact first-injection warning: this hook output may be "
@@ -114,7 +114,11 @@ def _is_compact_suppressed_heading(line):
         return False
     title = match.group("title").strip().lower()
     compact_title = re.sub(r"\s+", "", title)
-    return title.startswith("role state") or title.startswith("active tracks") or compact_title.startswith("활성트랙")
+    return (
+        title.startswith("role state")
+        or title.startswith("active tracks")
+        or compact_title.startswith("활성트랙")
+    )
 
 
 def main(argv=None) -> int:
@@ -148,7 +152,7 @@ def main(argv=None) -> int:
         return 0
     except SystemExit:
         raise
-    except BaseException as exc:  # noqa: BLE001 — 부팅 불사, 항상 exit 0
+    except BaseException as exc:  # noqa: BLE001 - boot must not die; always exit 0
         print("[BOOTSTRAP-FALLBACK] CLI " + exc.__class__.__name__ + ": " + str(exc))
         return 0
 

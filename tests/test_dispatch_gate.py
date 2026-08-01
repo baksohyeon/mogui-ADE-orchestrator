@@ -608,6 +608,22 @@ def test_contract_lint_accepts_mcp_with_trust_handling(
     assert ReasonCode.MCP_TRUST_UNHANDLED not in decision.warnings
 
 
+def test_contract_lint_accepts_mcp_with_korean_trust_handling(
+    tmp_path: Path,
+) -> None:
+    contract = _contract(
+        tmp_path,
+        "MCP 도구를 쓴다. 신뢰 다이얼로그는 워커가 처리한다.",
+    )
+    gate = _gate(tmp_path, now=1_000)
+
+    decision = gate.check(
+        DispatchRequest("codex", contract, est_input_chars=10_000, n_agents=1)
+    )
+
+    assert ReasonCode.MCP_TRUST_UNHANDLED not in decision.warnings
+
+
 def test_contract_lint_warns_for_path_outside_known_roots(
     tmp_path: Path,
 ) -> None:

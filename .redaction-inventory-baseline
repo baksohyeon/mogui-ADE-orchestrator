@@ -16,6 +16,7 @@ alerts
 arg-type
 argv
 audit-record
+auto-loaded
 auto-start
 auto-starting
 auto-succeed
@@ -23,6 +24,7 @@ baked-in
 batteries-included
 bd-prime
 better-harness
+boot-time
 bootstrap-live
 budget-bounded
 byte-for-byte
@@ -36,6 +38,7 @@ changed-surface
 char-budgeted
 chars
 claude-fable-5
+claude-opus-5
 claude-plugins-official
 clean-spawn
 cli-home
@@ -97,6 +100,7 @@ field-notes
 filesystem-derived
 filter-repo
 first-class
+first-generation
 first-injection
 first-run
 first-time
@@ -180,8 +184,11 @@ master-side
 master-succeed
 master-to-master
 memories
+mid-session
 mid-turn
+mid-write
 mkdocs
+model-drift-audit
 model-evaluation
 model-identity-probe
 mogui-agent-harness
@@ -222,6 +229,7 @@ observed-undeclared
 old-head
 older-model
 on-disk
+one-active-role
 one-line
 one-shot
 one-to-one
@@ -236,12 +244,14 @@ per-document
 per-entry
 per-generation
 per-iteration
+per-model
 per-prompt
 per-repo
 per-repository
 per-session
 per-split
 per-unit
+per-workspace
 perl-ish
 plain-language
 polsia-api
@@ -284,6 +294,7 @@ re-arm
 re-armed
 re-check
 re-emits
+re-measure
 re-measured
 re-publishes
 re-raises
@@ -291,6 +302,8 @@ re-read
 re-reading
 re-running
 re-verified
+real-model
+recent-turn
 record-backed
 record-based
 redact-result
@@ -334,6 +347,7 @@ self-invented
 self-report
 self-reports
 sensitive-lane
+sess-1
 session-abc
 session-level
 session-path
@@ -408,6 +422,7 @@ work-ledger
 worker-creation
 worker-failed
 working-state
+workspace-a
 workspace-level
 workspace-root
 worktree-scoped

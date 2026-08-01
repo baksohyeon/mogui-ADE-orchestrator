@@ -1,0 +1,4 @@
+{"type":"user","message":{"role":"user","content":"hi"}}
+{"type":"assistant","message":{"role":"assistant","model":"claude-fable-5","content":[]},"timestamp":"2026-08-01T00:00:01Z"}
+{"type":"assistant","message":{"role":"assistant","model":"claude-fable-5","content":[]},"timestamp":"2026-08-01T00:00:02Z"}
+{"type":"assistant","message":{"role":"assistant","model":"claude-fable-5","content":[]},"timestamp":"2026-08-01T00:00:03Z"}

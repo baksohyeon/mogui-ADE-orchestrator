@@ -78,6 +78,7 @@ end-to-end
 entry-point
 env-var
 environment-specific
+errors
 evaluation-case
 evaluation-loop
 evaluator-supplied

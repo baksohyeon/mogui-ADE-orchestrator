@@ -28,6 +28,8 @@ Wake the master.
 
 Any words work. It walks you through setup and ends by spawning your Generation 1 master. [Getting Started](docs/public/getting-started.md) has the detail.
 
+![Claude Code in Orca, opened on the cloned repository. The prompt reads "wake up, master." and the agent has started reading master-ops/ONBOARDING.md.](docs/assets/wake-up-master.png)
+
 <details><summary>Prefer to poke at it before installing anything</summary>
 
 The core is stdlib-only, so you can call it without Orca and without setup. You will not get a master session this way, just the pure functions.

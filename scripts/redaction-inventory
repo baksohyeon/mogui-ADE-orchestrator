@@ -101,10 +101,15 @@ def harvest():
     blobs = []
     for f in files.splitlines():
         try:
-            with open(f, encoding="utf-8", errors="ignore") as fh:
-                blobs.append(fh.read())
+            with open(f, "rb") as fh:
+                raw = fh.read()
         except OSError:
             continue
+        # 바이너리는 건너뛴다. errors="ignore"로 읽으면 PNG 한 장이 수십 건의
+        # 가짜 후보를 만들어 실제 사각을 덮는다. NUL 바이트로 판정한다.
+        if b"\x00" in raw[:8192]:
+            continue
+        blobs.append(raw.decode("utf-8", errors="ignore"))
     blobs.append(" ".join(files.splitlines()))
     return "\n".join(blobs)
 

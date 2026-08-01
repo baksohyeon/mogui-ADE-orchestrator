@@ -9,9 +9,8 @@ the master's behaviour, what it almost did, or what it decided not to do. Withou
 layer, the only observation channel a workspace owner has is a post-incident report — which
 arrives only after something already broke.
 
-This suite adds three voluntary, standing record genres plus one optional deep-capture
-genre. Each one captures a different layer; none replaces another, and none replaces the
-incident report.
+This suite adds two voluntary, standing record genres. They capture different layers,
+neither replaces the other, and neither replaces the incident report.
 
 | Genre | Directory | Captures | Cadence |
 |---|---|---|---|

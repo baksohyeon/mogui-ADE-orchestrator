@@ -119,6 +119,7 @@ git-worktree
 gpt-5
 gpt-5-codex
 grok
+hand-maintained
 handoff
 hard-restricts
 headless-browser
@@ -156,6 +157,7 @@ job-ledger-fallback
 job-locked
 job-mismatch
 job-no-evidence
+judged
 kebab-case
 langchain-ai
 lifecycle
@@ -178,6 +180,7 @@ master-side
 master-succeed
 master-to-master
 memories
+mid-turn
 mkdocs
 model-evaluation
 model-identity-probe
@@ -345,6 +348,7 @@ source-of-truth
 source-tree
 special-cases
 src-layout
+standard-library-only
 state-changing
 stdout
 still-tracked

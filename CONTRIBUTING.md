@@ -59,3 +59,8 @@ anyone who does are useful.
 
 Conventional commits, English. `feat(scope):`, `fix(scope):`, `docs(scope):`.
 Say what changed and what made it necessary. Pull requests are squashed.
+
+Much of this repository is written by an AI agent under a maintainer's
+direction. Where that is true the commit carries a `Co-Authored-By` trailer
+naming the model. Commits before this convention was adopted do not have one,
+so absence means "written earlier", not "written by hand".

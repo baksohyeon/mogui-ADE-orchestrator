@@ -1,0 +1,20 @@
+name: Feature request
+description: Something the harness should do and does not
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you were trying to do when you hit this. Skip the solution for now.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you have in mind
+      description: Optional. A rough shape is fine.
+  - type: textarea
+    id: workaround
+    attributes:
+      label: What you do instead today

@@ -173,7 +173,7 @@ Operational note: in production, a path selector for an unregistered folder fail
 - record active work there, not in markdown TODO files
 - seed only load-bearing memory pointers and rules
 
-The second item is the one that gets missed. The master's working directory is
+Reaching the tracker from the workspace root is the step that gets missed. The master's working directory is
 `{{WORKSPACE_ROOT}}`, or an orchestrator root the user approved instead. Either
 way it is not the ops repository, and the ops repository sits below it.
 
@@ -198,7 +198,8 @@ name, and a relative link breaks as soon as the ops repository is not a direct
 child of the workspace root.
 
 ```console
-$ [ -e "{{WORKSPACE_ROOT}}/.beads" ] && echo "already exists, inspect before linking" \
+$ { [ -e "{{WORKSPACE_ROOT}}/.beads" ] || [ -L "{{WORKSPACE_ROOT}}/.beads" ]; } \
+    && echo "already exists, inspect before linking" \
     || ln -s "$(cd "{{OPS_REPO}}" && pwd)/.beads" "{{WORKSPACE_ROOT}}/.beads"
 ```
 
@@ -225,8 +226,9 @@ from inside the ops repository proves nothing about where the master will look.
 Warning: Beads and similar local trackers can keep per-repo databases. Do not
 reuse a product repository's database for workspace-level orchestration.
 
-Nothing fails loudly when this is wrong. The tracker reports no database, or it
-reports someone else's, and boot continues either way. Consider a session-start
+The tracker itself does fail loudly. Beads returns `No active beads workspace
+found.` and exits 1. What is quiet is the boot path, which does not read that
+exit code, so boot continues on an empty tracker. Consider a session-start
 check that prints a warning when the workspace root has no reachable tracker
 database, or when an environment variable points outside the workspace.
 

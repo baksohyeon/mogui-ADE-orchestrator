@@ -144,7 +144,7 @@ Local only.
 | Approval | a runtime callback | a gate a human holds |
 | Orchestrator dies | the graph dies with it | the successor takes the role and proves it |
 
-The comparison came after. Developer Dorito built this independently and reached this shape before seeing deepagents. `git log -S deepagents --reverse` shows the name first appearing in the same commit as the public docs, fifteen days and sixty commits in. That command dates the word in the repository. It does not date what Dorito knew.
+The comparison came after. This was built before Dorito knew deepagents existed; the announcement landed two weeks in.
 
 ## What this runs on
 

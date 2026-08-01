@@ -5,6 +5,8 @@
 
 Point it at a folder that holds your product repositories. One master session plans, dispatches workers under contract, verifies their output before accepting it, and hands the role to a fresh session when the context fills up. macOS only for now, other platforms planned. Python 3.10+, stdlib-only core, MIT.
 
+First, about the comparison below. This harness was not derived from deepagents. It was built for its own reasons, reached this shape on its own, and only afterward did its author come across deepagents and recognize the same system described from the other end. The comparison was written at publication time, looking back at two designs that had converged. The repository history shows it plainly: two weeks of commits with no mention of deepagents, then the comparison arriving on the same day as the public docs.
+
 **If you are going to use an API key, use [LangChain deepagents](https://docs.langchain.com/oss/python/deepagents/overview).** It is well documented and it solves this problem inside your process. This project is for the other case: you already pay for coding-agent CLIs and you want one orchestrator driving all of them, with no key and no per-token bill.
 
 | | LangChain deepagents | this |
@@ -22,13 +24,15 @@ brew install --cask stablyai/orca/orca      # or download: https://www.onorca.de
 git clone https://github.com/baksohyeon/mogui-ADE-orchestrator
 ```
 
-Open the cloned folder in Orca, start any coding agent in it, and say:
+Open the cloned folder in Orca, start any coding agent in it, and say something like:
 
 ```
 Wake the master.
 ```
 
-There is nothing to install and nothing to configure first. The repository ships an entry-point router, so an agent opening this folder without other instructions becomes your onboarding guide. It introduces the system in three sentences and then walks you through setup, asking rather than assuming.
+The words are yours to pick. The entry-point router keys on the absence of a task, not on a phrase. An agent that opens this folder with no specific instruction becomes your onboarding guide; one that arrives carrying a contract, an issue, or a fix request gets on with that instead. So summon it however you want to.
+
+There is nothing to install and nothing to configure first. The guide introduces the system in three sentences and then walks you through setup, asking rather than assuming.
 
 What it asks and does, in order: checks that Orca is usable, collects your workspace facts, proposes a name for your operations repository, registers the workspace folder with Orca, creates the ops repository, fills the template placeholders with your values, sets up an issue tracker, seeds the operating rules, explains which settings live where, and then performs the founding spawn: a fresh Generation 1 master session booted in your workspace root. The last step runs a boot smoke test so you see it come up.
 

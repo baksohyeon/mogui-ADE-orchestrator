@@ -17,13 +17,15 @@ git clone https://github.com/baksohyeon/mogui-ADE-orchestrator
 
 ## Wake the master
 
-Open the cloned folder in Orca, start whichever coding agent you use, and say:
+Open the cloned folder in Orca, start whichever coding agent you use, and say something like:
 
 ```
 Wake the master.
 ```
 
-That is the setup step. The repository ships an entry-point router, so an agent that opens this folder without other instructions becomes your onboarding guide. It introduces the system in three sentences and then walks you through setup, asking rather than assuming.
+That is the setup step. The words are yours to pick: the entry-point router keys on the absence of a task, not on a phrase. An agent that opens this folder with no specific instruction becomes your onboarding guide, and one that arrives carrying a contract, an issue, or a fix request gets on with that instead. Summon it however you want to.
+
+The guide introduces the system in three sentences and then walks you through setup, asking rather than assuming.
 
 ## What happens from there
 

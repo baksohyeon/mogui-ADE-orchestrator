@@ -1,9 +1,21 @@
 # mogui-ADE-orchestrator
 
-> **Run one AI agent as the orchestrator of your whole workspace, on the subscription you already pay for.**
-> No API key. No model endpoint. It drives the coding-agent CLIs you already use, across every repository in one folder, and it survives the session dying.
+> **Orchestrate a fleet of coding-agent sessions without giving up hands-on control of any one of them.**
+> Real terminal sessions running the CLIs you already pay for. Drop into any of them and type. Above them, one master session plans, hands out work under contract, and checks what comes back before accepting it. No API key, and it survives its own session dying.
+
+The usual shape of this problem: several Codex or Claude sessions running in tmux panes or an equivalent, each one individually steerable, with nothing coordinating them. This adds the layer above without taking the sessions away from you.
 
 Point it at a folder that holds your product repositories. One master session plans, dispatches workers under contract, verifies their output before accepting it, and hands the role to a fresh session when the context fills up. macOS only for now, other platforms planned. Python 3.10+, stdlib-only core, MIT.
+
+## Scope
+
+Local only.
+
+- This project makes no network calls. Every import under `src/` and `scripts/` is Python standard library, and none are networking modules. `git grep -nE "^[[:space:]]*(import|from)[[:space:]]+(urllib|http|socket|ssl|requests)" -- src scripts` returns nothing.
+- No API key, no model endpoint, no telemetry.
+- It reads the folder you point it at and paths you name in configuration. Nothing walks your home directory. The redaction scanners read one repository's tracked files through `git ls-files`.
+- The CLIs it drives reach their own providers as they already did. This adds no traffic of its own.
+- The master session starts with the host's approval prompts off so it can run unattended. Shift-Tab cycles permission modes inside the session.
 
 **If you are going to use an API key, use [LangChain deepagents](https://docs.langchain.com/oss/python/deepagents/overview).** It is well documented and it solves this problem inside your process. This project is for the other case: you already pay for coding-agent CLIs and you want one orchestrator driving all of them, with no key and no per-token bill.
 
@@ -15,7 +27,7 @@ Point it at a folder that holds your product repositories. One master session pl
 | Approval | a runtime callback | a gate a human holds |
 | Orchestrator dies | the graph dies with it | the successor takes the role and proves it |
 
-The comparison was written after the fact. This harness was built for its own reasons and reached this shape before its author had seen deepagents; the two turned out to describe the same problem from opposite ends. The repository history is consistent with that: fifteen days and sixty commits with no mention of deepagents, then the comparison landing in the same commit as the public docs. Check it with `git log -S deepagents --reverse`. That shows when the word entered the repository, which is not the same as proving what its author knew, so take the rest as the author's account.
+The comparison came after. This was built independently and reached this shape before its author saw deepagents. `git log -S deepagents --reverse` shows the name first appearing in the same commit as the public docs, fifteen days and sixty commits in. That dates the word in this repository, not what the author knew.
 
 ## Quickstart
 
@@ -24,15 +36,13 @@ brew install --cask stablyai/orca/orca      # or download: https://www.onorca.de
 git clone https://github.com/baksohyeon/mogui-ADE-orchestrator
 ```
 
-Open the cloned folder in Orca, start any coding agent in it, and say something like:
+Open the folder in Orca, start any coding agent in it, and tell it to boot the master:
 
 ```
 Wake the master.
 ```
 
-The words are yours to pick. The entry-point router keys on the absence of a task, not on a phrase. An agent that opens this folder with no specific instruction becomes your onboarding guide; one that arrives carrying a contract, an issue, or a fix request gets on with that instead. So summon it however you want to.
-
-There is nothing to install and nothing to configure first. The guide introduces the system in three sentences and then walks you through setup, asking rather than assuming.
+Any words work. The router keys on the absence of a task, not on a phrase, so an agent that opens this folder without an instruction becomes your onboarding guide. Nothing to install, nothing to configure. One sentence and it takes over from there.
 
 What it asks and does, in order: checks that Orca is usable, collects your workspace facts, proposes a name for your operations repository, registers the workspace folder with Orca, creates the ops repository, fills the template placeholders with your values, sets up an issue tracker, seeds the operating rules, explains which settings live where, and then performs the founding spawn: a fresh Generation 1 master session booted in your workspace root. The last step runs a boot smoke test so you see it come up.
 

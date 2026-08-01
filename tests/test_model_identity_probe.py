@@ -50,7 +50,7 @@ def test_model_identity_probe_drift_reports_distribution() -> None:
     assert "gpt-5=1" in result.stdout
     assert "cursor-agent-model=1" in result.stdout
     assert "<missing>=1" in result.stdout
-    assert "새 판 승계 제안 + 민감 영역 위임 상태 점검" in result.stdout
+    assert "propose a clean-spawn succession" in result.stdout
 
 
 def test_model_identity_probe_limit_can_narrow_recent_turns() -> None:

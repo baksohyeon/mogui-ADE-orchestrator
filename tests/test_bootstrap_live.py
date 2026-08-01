@@ -29,7 +29,7 @@ Unlock: explicit user instruction only
 ```
 """
 
-ROLE_STATE_FILE = """# Role State (정본)
+ROLE_STATE_FILE = """# Role State (authoritative)
 
 Current Role: Maintenance
 Role Lock: ENABLED
@@ -37,7 +37,7 @@ Frozen: all other roles
 Unlock: explicit user instruction only
 
 - Generation: 20
-- Last transition: 2026-07-28 Gen-20 승계 부팅
+- Last transition: 2026-07-28 Gen-20 succession boot
 """
 
 
@@ -96,11 +96,11 @@ class LoadRoleStateTests(unittest.TestCase):
 
     def test_load_role_state_mangled_explicit_file_falls_back_with_alert(self) -> None:
         (self._dir / "2026-07-20-gen6-handoff.md").write_text(HANDOFF, encoding="utf-8")
-        # 실배선과 동일하게 role-state 파일은 핸드오프 디렉토리 밖에 둔다
+        # Same as the live wiring: the role-state file sits outside the handoff dir
         runbooks = self._dir / "runbooks"
         runbooks.mkdir()
         role_state_file = runbooks / "mangled-role-state.md"
-        role_state_file.write_text("# Role State (정본)\n\nBROKEN CONTENT\n", encoding="utf-8")
+        role_state_file.write_text("# Role State (authoritative)\n\nBROKEN CONTENT\n", encoding="utf-8")
         block, alerts = load_role_state(self._dir, role_state_file=role_state_file)
         self.assertIsNotNone(block)
         self.assertIn("Current Role: Reference Implementation", block)
@@ -108,11 +108,11 @@ class LoadRoleStateTests(unittest.TestCase):
 
 
 MEMS = """### rule-a
-내용 [L0] 규칙
+content [L0] rule
 ### ptr-b
-내용 [L1 포인터]
+content [L1 pointer]
 ### naked-c
-태그 없는 서사
+untagged narrative
 """
 
 
@@ -134,7 +134,7 @@ class AuditMemoriesTests(unittest.TestCase):
 
 class CollectTracksTests(unittest.TestCase):
     def test_collect_tracks_parses_titles(self) -> None:
-        fake = lambda argv: "◐ AL-3be ● P1 OPS-02: batch 살리기\n◐ AL-mpr ● P1 QA-01: 마감\n"
+        fake = lambda argv: "◐ AL-3be ● P1 OPS-02: revive batch\n◐ AL-mpr ● P1 QA-01: wrap up\n"
         tracks, alerts = collect_tracks(fake)
         self.assertEqual(len(tracks), 2)
         self.assertEqual(alerts, [])
@@ -149,8 +149,8 @@ class CollectTracksTests(unittest.TestCase):
 
     def test_collect_tracks_excludes_bd_footer(self) -> None:
         real = (
-            "◐ AL-3be ● P1 OPS-02: batch 살리기\n"
-            "◐ AL-mpr ● P1 QA-01: 마감\n"
+            "◐ AL-3be ● P1 OPS-02: revive batch\n"
+            "◐ AL-mpr ● P1 QA-01: wrap up\n"
             "--------------------------------------------------------------------------------\n"
             "Total: 6 issues (0 open, 6 in progress)\n"
             "Status: ○ open  ◐ in_progress  ● blocked  ✓ closed  ❄ deferred\n"
@@ -171,7 +171,7 @@ class ComposeTests(unittest.TestCase):
             "[BD-PRIME-AUDIT] ...",
             [],
             "[DUAL-INSTANCE] none",
-            "Charter: Recovery Flow 0 정독",
+            "Charter: read Recovery Flow 0 end to end",
         )
         self.assertTrue(out.startswith("[MASTER-BOOTSTRAP v1]"))
         self.assertLessEqual(len(out), 2200)
@@ -248,6 +248,25 @@ class CompactSuppressTests(unittest.TestCase):
         self.assertTrue(out.startswith("[E12-CRITICAL] compact first-injection warning"))
         self.assertIn("[E12] compact: tracks/role suppressed", out)
         self.assertNotIn("should be suppressed", out)
+        self.assertNotIn("AL-secret", out)
+        self.assertIn("keep me", out)
+
+    def test_compact_suppress_matches_korean_heading(self) -> None:
+        # A Korean operations document names the section `## 활성 트랙`.
+        # Without this branch the section leaks through the recall probe.
+        module = _load_bootstrap_live_script()
+        block = "\n".join(
+            [
+                "[MASTER-BOOTSTRAP v1]",
+                "## 활성 트랙",
+                "AL-secret should be suppressed",
+                "### Next",
+                "keep me",
+            ]
+        )
+
+        out = module._suppress_compact_recall_leaks(block)
+
         self.assertNotIn("AL-secret", out)
         self.assertIn("keep me", out)
 

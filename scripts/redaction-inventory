@@ -1,23 +1,22 @@
 #!/usr/bin/env python3
-"""redaction-inventory. 세척 룰이 무엇을 놓치고 있는지 센다.
+"""redaction-inventory. Reports tokens no redaction rule covers.
 
-`redaction-scan.sh`는 룰에 적힌 것만 잡는다. 룰은 사람이 기억해서 적으므로 빠진다.
-실제로 두 번 빠졌고 두 번 다 공개 직전에야 드러났다. 한 번은 계정 식별자, 한 번은
-내부 레포 이름이었다.
+`redaction-scan.sh` matches what the rules name. This asks the inverse: which
+distinctive-looking tokens in the working tree match no rule. Scope is tracked
+files at the current commit; history is not scanned.
 
-이 도구는 반대 방향으로 묻는다. 지금 트리에 있는 고유해 보이는 토큰 중 어느 룰에도
-걸리지 않는 것이 무엇인가. 랜딩 전에 묻는 것이 목적이므로 히스토리는 보지 않는다.
-이미 검토해 무해하다고 판정한 것은 기준선 파일에 넣어 다음부터 조용해진다.
+Reviewed tokens go in the baseline file and stop being reported.
 
-출력은 후보 목록이다. 판정은 사람이 한다. 후보 전부가 비밀은 아니고, 여기 안 나온
-것이 안전하다는 뜻도 아니다. 룰의 사각을 좁히는 용도다.
+Output is a candidate list for a human to judge. A candidate is not a secret,
+and an empty result is not proof of safety. This narrows the rules' blind spot;
+it does not measure exposure.
 
-종료 코드
-  0  미커버 후보 없음
-  1  미커버 후보 있음
-  2  판정 불가 (패턴 파일 없음, git 아님)
+Exit codes
+  0  no uncovered candidates
+  1  uncovered candidates found
+  2  cannot decide (no pattern file, not a git repository)
 
-사용법
+Usage
   REDACTION_EXTRA_PATTERNS=~/.config/redaction-extra.txt scripts/redaction-inventory
   scripts/redaction-inventory --baseline .redaction-inventory-baseline
   scripts/redaction-inventory --json
@@ -26,7 +25,7 @@
 import argparse, json, os, re, subprocess, sys
 from collections import Counter
 
-# 자주 나오는 일반 토큰. 후보에서 제외한다.
+# Frequent generic tokens. Excluded from candidates.
 COMMON = set("""
 utf-8 read-only write-only fail-open fail-closed human-in-the-loop in-process
 stdlib-only tool-name-free append-only long-lived per-token dry-run
@@ -42,18 +41,20 @@ tests src scripts docs public internal main origin head utf ascii http https
 localhost example sample dummy placeholder polsia qfuds langchain deepagents
 """.split())
 
-# 레포·조직 이름은 kebab-case로 나타난다. snake_case는 코드 식별자라 제외한다.
+# Repository and organization names appear as kebab-case. snake_case is
+# excluded because it is a code identifier.
 CANDIDATE = re.compile(r"(?<![A-Za-z0-9_./-])([a-z][a-z0-9]*(?:-[a-z0-9]+)+)(?![A-Za-z0-9_.-])")
-# 단일 단어 고유명사도 잡아야 한다. 두 번 물린 것 중 하나가 이 형태였고,
-# 경로가 아니라 한국어 산문 안에 박혀 있었다. 한글 옆에 붙은 라틴 단어를 후보로 본다.
-# 이 저장소의 내부 식별자는 한국어 서술 안에서 등장한다는 관측에 기댄 규칙이다.
+# Single-word proper nouns: a Latin word within 40 characters of Hangul, in
+# either order. Catches identifiers embedded in Korean prose, where no path or
+# hyphen gives them away. The `[가-힣]` class is part of the matcher.
 NEAR_HANGUL = re.compile(
     r"(?:[가-힣][^\n]{0,40}?)(?<![A-Za-z0-9_./-])([a-z][a-z0-9]{3,19})(?![A-Za-z0-9_.-])"
     r"|(?<![A-Za-z0-9_./-])([a-z][a-z0-9]{3,19})(?![A-Za-z0-9_.-])(?:[^\n]{0,40}?[가-힣])")
 HOMEPATH = re.compile(r"/Users/([A-Za-z0-9._-]+)")
 EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+\.[A-Za-z]{2,})")
-# 한국어 인명은 자동 탐지하지 않는다. 일반 단어와 구분할 신호가 없어 328건이 나왔다.
-# person_* 룰은 사람이 채운다.
+# Korean personal names are not detected. No signal separates them from
+# ordinary words at an acceptable false-positive rate. Cover them with
+# hand-written `person_*` rules in the pattern file.
 
 
 def run(cmd):
@@ -62,7 +63,7 @@ def run(cmd):
 
 
 def load_rules(path):
-    """패턴 파일에서 정규식만 뽑는다."""
+    """Pull just the regexes out of the pattern file."""
     pats = []
     with open(path, encoding="utf-8") as fh:
         for line in fh:
@@ -78,8 +79,8 @@ def load_rules(path):
     return pats
 
 
-def load_dictionary():  # 있으면 쓰고 없으면 빈 집합
-    """시스템 사전. 없으면 빈 집합이고, 그 경우 후보가 늘어난다."""
+def load_dictionary():  # use it if present, empty set if not
+    """System dictionary. Empty set when absent, which widens the candidate list."""
     for p in ("/usr/share/dict/words", "/usr/dict/words"):
         try:
             with open(p, encoding="utf-8", errors="ignore") as fh:
@@ -94,7 +95,7 @@ def covered(token, rules):
 
 
 def harvest():
-    """검사 대상 텍스트를 모은다."""
+    """Collect the text to be scanned."""
     rc, files = run(["git", "ls-files"])
     if rc != 0:
         return None
@@ -105,8 +106,8 @@ def harvest():
                 raw = fh.read()
         except OSError:
             continue
-        # 바이너리는 건너뛴다. errors="ignore"로 읽으면 PNG 한 장이 수십 건의
-        # 가짜 후보를 만들어 실제 사각을 덮는다. NUL 바이트로 판정한다.
+        # Skip binaries, judged by a NUL byte in the first 8 KB. Decoding them
+        # with errors="ignore" yields fake candidates that bury real ones.
         if b"\x00" in raw[:8192]:
             continue
         blobs.append(raw.decode("utf-8", errors="ignore"))
@@ -117,25 +118,25 @@ def harvest():
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--baseline", default=".redaction-inventory-baseline",
-                    help="검토 완료한 후보 목록. 여기 없는 것만 보고한다")
+                    help="reviewed candidates; only tokens absent from it are reported")
     ap.add_argument("--min-count", type=int, default=1)
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args()
 
     path = os.environ.get("REDACTION_EXTRA_PATTERNS", "")
     if not path or not os.path.isfile(os.path.expanduser(path)):
-        print("redaction-inventory: FAIL. REDACTION_EXTRA_PATTERNS가 없다. "
-              "룰 없이 사각을 잴 수 없다.", file=sys.stderr)
+        print("redaction-inventory: FAIL. REDACTION_EXTRA_PATTERNS is unset. "
+              "A blind spot cannot be measured without rules.", file=sys.stderr)
         return 2
     rules = load_rules(os.path.expanduser(path))
     if not rules:
-        print("redaction-inventory: FAIL. 패턴 파일에서 룰을 하나도 읽지 못했다.", file=sys.stderr)
+        print("redaction-inventory: FAIL. No rules could be read from the pattern file.", file=sys.stderr)
         return 2
 
     words = load_dictionary()
     text = harvest()
     if text is None:
-        print("redaction-inventory: FAIL. git 저장소가 아니다.", file=sys.stderr)
+        print("redaction-inventory: FAIL. Not a git repository.", file=sys.stderr)
         return 2
 
     buckets = {
@@ -171,18 +172,18 @@ def main():
                          ensure_ascii=False, indent=2))
     else:
         scope = "tracked"
-        print(f"redaction-inventory: 룰 {len(rules)}개 / 범위 {scope} / 기준선 {len(base)}건")
+        print(f"redaction-inventory: {len(rules)} rules / scope {scope} / baseline {len(base)}")
         if not total:
-            print("redaction-inventory: OK. 미커버 후보 0건")
+            print("redaction-inventory: OK. 0 uncovered candidates")
         else:
             for kind, rows in uncovered.items():
-                print(f"\n[{kind}] {len(rows)}건")
+                print(f"\n[{kind}] {len(rows)}")
                 for tok, n in rows[:40]:
                     print(f"  {n:5d}  {tok}")
                 if len(rows) > 40:
-                    print(f"  … 그 외 {len(rows) - 40}건")
-            print(f"\nredaction-inventory: 미커버 후보 {total}건. "
-                  "전부가 비밀은 아니다. 룰에 넣을 것만 골라라.")
+                    print(f"  … and {len(rows) - 40} more")
+            print(f"\nredaction-inventory: {total} uncovered candidates. "
+                  "Not all of them are secrets. Pick the ones that belong in a rule.")
     return 1 if total else 0
 
 

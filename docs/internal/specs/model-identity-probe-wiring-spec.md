@@ -30,7 +30,7 @@ Exit behavior:
 Output:
 
 - Success: `MODEL-PROBE OK <model> n/n`
-- Drift: `MODEL-PROBE DRIFT: <observed model distribution> — 새 판 승계 제안 + 민감 영역 위임 상태 점검`
+- Drift: `MODEL-PROBE DRIFT: <observed model distribution> — propose a clean-spawn succession and review delegation state for sensitive areas`
 
 ## UserPromptSubmit Wiring
 

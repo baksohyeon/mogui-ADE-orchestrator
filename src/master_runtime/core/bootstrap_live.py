@@ -21,7 +21,7 @@ from master_runtime.core.bootstrap import (
 
 DEFAULT_MEMORY_CAP = 15
 DEFAULT_BUDGET_CHARS = 12_000
-# Self-block target ~1KB (see plan Architecture: "동적 블록(~1KB)"). The block
+# Self-block target ~1KB (see plan Architecture: "dynamic block (~1KB)"). The block
 # is truncated (tracks first) once it exceeds this cap.
 SELF_BLOCK_CAP = 1_000
 # Workspace-neutral by default: the operations repository name differs per
@@ -65,12 +65,12 @@ def _read_role_state_block(path: Path, source: str) -> Tuple[Optional[str], List
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
-        alerts.append("[AUDIT-ALERT] " + source + ": 읽기 실패 " + exc.__class__.__name__)
+        alerts.append("[AUDIT-ALERT] " + source + ": read failed " + exc.__class__.__name__)
         return None, alerts
 
     block = _role_state_block(text)
     if block is None:
-        alerts.append("[AUDIT-ALERT] " + source + ": Role State 블록 없음 (" + path.name + ")")
+        alerts.append("[AUDIT-ALERT] " + source + ": no Role State block (" + path.name + ")")
         return None, alerts
 
     return block, alerts
@@ -95,9 +95,9 @@ def load_role_state(
     if role_state_file is not None:
         explicit = Path(role_state_file)
         if not explicit.exists():
-            alerts.append("[AUDIT-ALERT] role-state-file: 부재 (" + str(explicit) + ")")
+            alerts.append("[AUDIT-ALERT] role-state-file: missing (" + str(explicit) + ")")
         elif not explicit.is_file():
-            alerts.append("[AUDIT-ALERT] role-state-file: 파일 아님 (" + str(explicit) + ")")
+            alerts.append("[AUDIT-ALERT] role-state-file: not a file (" + str(explicit) + ")")
         else:
             block, file_alerts = _read_role_state_block(explicit, "role-state-file")
             if block is not None:
@@ -106,7 +106,7 @@ def load_role_state(
 
     path = latest_handoff(handoff_dir)
     if path is None:
-        alerts.append("[AUDIT-ALERT] role-state: handoff 부재 (" + str(handoff_dir) + ")")
+        alerts.append("[AUDIT-ALERT] role-state: handoff dir missing (" + str(handoff_dir) + ")")
         return None, alerts
 
     block, handoff_alerts = _read_role_state_block(path, "role-state")
@@ -150,12 +150,12 @@ def audit_memories(
     budget_kb = round(budget_chars / 1000.0)
 
     if untagged > 0:
-        alerts.append("[AUDIT-ALERT] untagged 메모리 " + str(untagged) + "건")
+        alerts.append("[AUDIT-ALERT] untagged memories " + str(untagged) + "")
     if count > cap:
-        alerts.append("[AUDIT-ALERT] cap 초과: " + str(count) + " > " + str(cap))
+        alerts.append("[AUDIT-ALERT] cap exceeded: " + str(count) + " > " + str(cap))
     if block_chars > budget_chars:
         alerts.append(
-            "[BUDGET-ALERT] bd-prime 블록 "
+            "[BUDGET-ALERT] bd-prime block "
             + str(block_chars)
             + " chars > "
             + str(budget_chars)
@@ -203,8 +203,8 @@ def collect_tracks(runner: Optional[BdRunner] = None) -> Tuple[List[str], List[s
     run = runner or _default_bd_runner
     try:
         output = run(("bd", "list", "--status", "in_progress"))
-    except Exception as exc:  # noqa: BLE001 — 부팅은 어떤 실패에도 죽지 않는다
-        alerts.append("[AUDIT-ALERT] tracks: 수집 실패 " + exc.__class__.__name__)
+    except Exception as exc:  # noqa: BLE001 - boot survives any failure
+        alerts.append("[AUDIT-ALERT] tracks: collection failed " + exc.__class__.__name__)
         return [], alerts
 
     tracks: List[str] = []
@@ -231,7 +231,7 @@ def compose(
 ) -> str:
     """Assemble the master bootstrap block in fixed section order.
 
-    Order: header / Role State / 활성 트랙 / Charter pointer / audit / dual /
+    Order: header / Role State / active tracks / Charter pointer / audit / dual /
     alerts. If the rendered block exceeds ``SELF_BLOCK_CAP`` the tracks section
     is truncated first and a ``[BUDGET-ALERT] self-block`` line is appended.
     """
@@ -239,7 +239,7 @@ def compose(
     def render(track_list: Sequence[str], extra_alerts: Sequence[str]) -> str:
         lines = ["[MASTER-BOOTSTRAP v1]", "## Role State"]
         lines.append(role_block if role_block else "(role-state unavailable)")
-        lines.append("## 활성 트랙")
+        lines.append("## Active tracks")
         if track_list:
             lines.extend(track_list)
         else:
@@ -259,7 +259,7 @@ def compose(
         return out
 
     truncated = list(tracks)
-    extra = ["[BUDGET-ALERT] self-block 트랙 절단"]
+    extra = ["[BUDGET-ALERT] self-block tracks truncated"]
     while truncated and len(render(truncated, extra)) > SELF_BLOCK_CAP:
         if len(truncated) > 4:
             truncated = truncated[: len(truncated) // 2]
@@ -275,10 +275,10 @@ def _audit_bd_prime(
     run = bd_runner or _default_bd_runner
     try:
         text = run(("bd", "prime", "--memories-only"))
-    except Exception as exc:  # noqa: BLE001 — 부팅 불사
+    except Exception as exc:  # noqa: BLE001 - boot survives
         return (
             "[BD-PRIME-AUDIT] unavailable (" + exc.__class__.__name__ + ")",
-            ["[AUDIT-ALERT] bd-prime: 수집 실패 " + exc.__class__.__name__],
+            ["[AUDIT-ALERT] bd-prime: collection failed " + exc.__class__.__name__],
         )
     return audit_memories(text, budget_chars=budget_chars)
 
@@ -289,10 +289,10 @@ def _dual_line(
 ) -> Tuple[str, List[str]]:
     try:
         warnings = _detect_dual_instances(session_id, probe)
-    except Exception as exc:  # noqa: BLE001 — 부팅 불사
+    except Exception as exc:  # noqa: BLE001 - boot survives
         return (
             "[DUAL-INSTANCE] probe-failed (" + exc.__class__.__name__ + ")",
-            ["[AUDIT-ALERT] dual-instance: 탐지 실패 " + exc.__class__.__name__],
+            ["[AUDIT-ALERT] dual-instance: detection failed " + exc.__class__.__name__],
         )
     if warnings:
         return "[DUAL-INSTANCE] " + ", ".join(warnings), list(warnings)
@@ -335,5 +335,5 @@ def run_live(
             dual_line,
             resolve_charter_pointer(charter_pointer),
         )
-    except Exception as exc:  # noqa: BLE001 — 부팅 불사, 폴백 1줄
+    except Exception as exc:  # noqa: BLE001 - boot survives; one fallback line
         return "[BOOTSTRAP-FALLBACK] " + exc.__class__.__name__ + ": " + str(exc)

@@ -1,4 +1,4 @@
-처음 클론한 사용자가 별다른 지시 없이 세션을 열었다면, 너는 이 시스템의 온보딩 안내자다 — 먼저 이 시스템이 무엇인지 3문장으로 소개하고 master-ops/ONBOARDING.md 절차를 시작하라. 반면 명시적 작업 지시(계약·이슈·수정 요청)를 받고 왔다면 그 지시가 우선이다 — 온보딩을 시작하지 마라.
+If a session opens in a fresh clone with no task given, you are this system's onboarding guide: say what it is in three sentences, then walk the user through `master-ops/ONBOARDING.md`. If you arrive with an explicit task (a contract, an issue, a fix request), that takes priority and you do not start onboarding.
 
 # mogui-ADE-orchestrator Agent Entry Point
 

@@ -18,7 +18,7 @@ from typing import Iterable, Mapping
 # reports what it measured and asserts nothing.
 DEFAULT_EXPECTED_MODEL = None
 DEFAULT_LIMIT = 10
-DRIFT_ACTION = "새 판 승계 제안 + 민감 영역 위임 상태 점검"
+DRIFT_ACTION = "propose a clean-spawn succession and review delegation state for sensitive areas"
 
 
 def main(argv: list[str] | None = None) -> int:

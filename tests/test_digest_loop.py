@@ -194,7 +194,7 @@ def test_job_log_triage_classifies_dormant_finished_and_stalled(tmp_path: Path) 
     finished = tmp_path / "finished.log"
     stalled = tmp_path / "stalled.log"
     dormant.write_text("still old\n", encoding="utf-8")
-    finished.write_text("한국어 완료 요약만 있는 로그 꼬리\n", encoding="utf-8")
+    finished.write_text("log tail with only a completion summary\n", encoding="utf-8")
     finished.with_suffix(".json").write_text(
         json.dumps({"status": "completed"}),
         encoding="utf-8",
@@ -238,7 +238,7 @@ def test_collect_jobs_excludes_dormant_and_finished_logs(tmp_path: Path) -> None
     finished = tmp_path / "finished.output"
     stalled = tmp_path / "stalled.output"
     dormant.write_text("old progress\n", encoding="utf-8")
-    finished.write_text("한국어 완료 요약\n", encoding="utf-8")
+    finished.write_text("completion summary\n", encoding="utf-8")
     finished.with_suffix(".json").write_text(
         json.dumps({"status": "failed"}),
         encoding="utf-8",
@@ -270,7 +270,7 @@ def test_collect_jobs_excludes_dormant_and_finished_logs(tmp_path: Path) -> None
 def test_job_log_sidecar_status_marks_finished_before_text_or_mtime(tmp_path: Path) -> None:
     log_path = tmp_path / "task-mrsjvxwx-jxyb81.log"
     sidecar_path = tmp_path / "task-mrsjvxwx-jxyb81.json"
-    log_path.write_text("한국어 완료 요약만 있는 로그 꼬리\n", encoding="utf-8")
+    log_path.write_text("log tail with only a completion summary\n", encoding="utf-8")
     sidecar_path.write_text(
         json.dumps({"status": "completed", "phase": "done"}),
         encoding="utf-8",
@@ -313,7 +313,7 @@ def test_collect_jobs_uses_json_sidecar_and_falls_back_when_absent(
 ) -> None:
     finished = tmp_path / "finished.log"
     stalled = tmp_path / "stalled.log"
-    finished.write_text("한국어 완료 요약\n", encoding="utf-8")
+    finished.write_text("completion summary\n", encoding="utf-8")
     stalled.write_text("active but idle\n", encoding="utf-8")
     finished.with_suffix(".json").write_text(
         json.dumps({"status": "cancelled"}),

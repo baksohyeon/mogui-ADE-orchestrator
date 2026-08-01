@@ -62,10 +62,12 @@ ORCA_LIST_JSON = json.dumps(
 
 
 def test_detect_trigger_has_immediate_advisory_and_none_branches() -> None:
+    # Korean inputs are the subject of this assertion: a Korean instruction has
+    # to trigger, and Korean text that is not an instruction has to not trigger.
     assert detect_trigger("다음 마스터로 넘기자", {}).status == "IMMEDIATE"
     advisory = detect_trigger("", {"context_ratio": 0.72})
     assert advisory.status == "ADVISORY"
-    assert "자동 승계 금지" in advisory.message
+    assert "Auto-succession is not permitted" in advisory.message
     assert detect_trigger("계속 진행", {}).status == "NONE"
 
 

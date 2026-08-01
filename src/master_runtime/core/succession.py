@@ -124,6 +124,8 @@ def detect_trigger(text: str, context: Optional[Mapping[str, object]] = None) ->
     """Classify a user or runtime signal without auto-starting advisory succession."""
 
     normalized = (text or "").strip().lower()
+    # Input matchers, not prose. The Korean entries let a Korean-speaking
+    # operator trigger succession in their own language.
     immediate_markers = (
         "승계해줘",
         "다음 마스터로 넘기자",
@@ -140,14 +142,14 @@ def detect_trigger(text: str, context: Optional[Mapping[str, object]] = None) ->
         return TriggerDecision(
             TRIGGER_ADVISORY,
             "context ratio threshold reached",
-            "컨텍스트 임계치가 높습니다. 자동 승계 금지; 승계를 제안만 합니다.",
+            "Context ratio is high. Auto-succession is not permitted; propose succession only.",
         )
     milestone = str(context.get("milestone", "")).strip()
     if milestone:
         return TriggerDecision(
             TRIGGER_ADVISORY,
             "natural milestone reached",
-            "자연 마일스톤에 도달했습니다. 자동 승계 금지; 승계를 제안만 합니다.",
+            "A natural milestone was reached. Auto-succession is not permitted; propose succession only.",
         )
     return TriggerDecision(TRIGGER_NONE, "no succession trigger")
 

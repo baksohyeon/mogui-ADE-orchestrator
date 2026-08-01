@@ -1,6 +1,7 @@
-# redaction-inventory 기준선. 검토 완료해 무해 판정한 후보.
-# 갱신: 새 후보를 검토한 뒤 이 파일에 추가한다. 지우면 다시 보고된다.
 # 심은 시점: 2026-08-01, 룰 9개 기준
+# 갱신: 새 후보를 검토한 뒤 이 파일에 추가한다. 지우면 다시 보고된다.
+# redaction-inventory 기준선. 검토 완료해 무해 판정한 후보.
+a-z
 a-z0-9
 acceptance-loop
 active-track
@@ -73,6 +74,7 @@ dz-bwh-demo
 echo-agent
 encoding
 end-to-end
+entry-point
 env-var
 environment-specific
 evaluation-case
@@ -152,6 +154,7 @@ job-ledger-fallback
 job-locked
 job-mismatch
 job-no-evidence
+kebab-case
 langchain-ai
 lifecycle
 list-item
@@ -208,6 +211,7 @@ not-a-real
 not-git
 not-json
 notes
+nredaction-inventory
 observed
 observed-undeclared
 old-head
@@ -285,6 +289,7 @@ record-backed
 record-based
 redact-result
 redaction-extra
+redaction-inventory
 redaction-report
 redaction-scan
 ref-1
@@ -304,6 +309,7 @@ rev-parse
 role-state
 role-state-file
 role-transition
+rows
 rule-a
 rules
 runner

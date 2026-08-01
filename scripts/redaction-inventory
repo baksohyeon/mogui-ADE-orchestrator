@@ -44,7 +44,7 @@ localhost example sample dummy placeholder polsia qfuds langchain deepagents
 
 # 레포·조직 이름은 kebab-case로 나타난다. snake_case는 코드 식별자라 제외한다.
 CANDIDATE = re.compile(r"(?<![A-Za-z0-9_./-])([a-z][a-z0-9]*(?:-[a-z0-9]+)+)(?![A-Za-z0-9_.-])")
-# 단일 단어 고유명사도 잡아야 한다. 두 번 물린 것 중 하나가 이 형태였고(product-a),
+# 단일 단어 고유명사도 잡아야 한다. 두 번 물린 것 중 하나가 이 형태였고,
 # 경로가 아니라 한국어 산문 안에 박혀 있었다. 한글 옆에 붙은 라틴 단어를 후보로 본다.
 # 이 저장소의 내부 식별자는 한국어 서술 안에서 등장한다는 관측에 기댄 규칙이다.
 NEAR_HANGUL = re.compile(

@@ -54,7 +54,7 @@ Filesystem model: this project does not provide a virtual filesystem. Its analog
 
 LangChain's [deepagents](https://docs.langchain.com/oss/python/deepagents/overview) solves an adjacent reliability problem inside an agent application. It is a standalone library built on LangChain's core agent building blocks that uses the LangGraph runtime for durable execution, streaming, and human-in-the-loop. Its documentation organizes a harness around four areas: execution environment (tools, virtual filesystem, optional sandbox, REPL), context management (skills, memory, summarization, context offloading, prompt caching), delegation (subagent spawning and optional task planning), and steering (approval and interrupts). These are implemented as middleware such as `FilesystemMiddleware`, `TodoListMiddleware`, and `SubAgentMiddleware` over pluggable filesystem backends. *(Source: the linked overview page, read 2026-07-31. This project has not audited the deepagents source; claims here are limited to that page.)*
 
-The four areas are a good decomposition, and this project arrives at nearly the same list. The difference is where the harness sits and what it is allowed to assume.
+The four areas are a good decomposition, and this project arrives at nearly the same list. If you are willing to hold an API key, deepagents is the better answer and this page is not trying to talk you out of it. The difference below matters only if you are not.
 
 deepagents assumes model API access from inside a Python process. The harness owns the graph, the tools, and the filesystem abstraction, so a subagent is an in-process actor, a filesystem is a pluggable backend, and an interrupt is a runtime callback.
 

@@ -9,11 +9,20 @@ template does. To bring an existing installation forward, read the entries
 between its version and the current one and apply what applies. Local edits win
 where they conflict; that is the point of a copy.
 
-Check what an installation is on:
+Check what an installation is on, from the root of the generated operations
+repository:
 
 ```console
 $ grep 'Template version' docs/MASTER-OPERATIONS.md
 ```
+
+This file is not in that repository. Step 3 keeps it out, so it stays in the
+orchestrator clone alongside the template it describes.
+
+When a change touches `master-ops/`, raise `TEMPLATE-VERSION` and add an entry
+here in the same change. Skip that and installations on different template
+states all report the same version, which is the whole thing this was meant to
+prevent.
 
 ## 1
 
@@ -21,6 +30,10 @@ First versioned template. Everything before this shipped unversioned, so an
 installation created earlier will not carry a version line. Add one by hand
 after applying whatever entries look relevant, and treat its starting point as
 unknown.
+
+The list below covers changes since the public release, not the whole history
+of the template. An installation older than that should diff against
+`master-ops/` directly rather than trust this list to be complete.
 
 Notable content at this version:
 

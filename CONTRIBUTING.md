@@ -8,7 +8,7 @@ Small repository, one maintainer. Issues and pull requests are both welcome.
 $ PYTHONPATH=src python3 -m pytest tests -q
 ```
 
-Standard library only. Nothing to install. CI runs the same command on macOS.
+Standard library only. Nothing to install. There is no CI yet, so run this before opening a pull request and paste the count.
 
 ## What gets merged
 

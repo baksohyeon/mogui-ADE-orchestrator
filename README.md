@@ -18,10 +18,13 @@ Point it at a folder that holds your product repositories. One master session pl
 ## Quickstart
 
 ```bash
+# Orca is the execution substrate. Install it first.
+brew install --cask stablyai/orca/orca      # or download: https://www.onorca.dev/download
+
 git clone https://github.com/baksohyeon/mogui-ADE-orchestrator
 cd mogui-ADE-orchestrator
 
-# nothing to install. stdlib only.
+# nothing else to install. stdlib only.
 PYTHONPATH=src python3 -m unittest discover -s tests -q
 
 # try the pure functions, no setup needed
@@ -31,7 +34,19 @@ scripts/dispatch-gate --ledger /tmp/gate.jsonl check \
 scripts/adapter doctor
 ```
 
-Then set it up on your own workspace: open the cloned folder in a coding agent and it routes into [`master-ops/ONBOARDING.md`](./master-ops/ONBOARDING.md), a two-stage flow that scaffolds an operations repository and boots your first master session. Orca ADE is a prerequisite for that flow.
+Then set it up on your own workspace: open the cloned folder in a coding agent and it routes into [`master-ops/ONBOARDING.md`](./master-ops/ONBOARDING.md), a two-stage flow that scaffolds an operations repository and boots your first master session.
+
+### Why Orca
+
+A master that outlives one session needs somewhere to live. A terminal tab is not that place. [Orca](https://www.onorca.dev/download) is, and it is the one dependency this project does not abstract away.
+
+- **Sessions outlive the window.** Close the tab, restart the app, come back tomorrow: the session is still there with a stable handle you can read, write to, and retire on purpose. Succession is only auditable because the predecessor is still addressable while you verify the successor.
+- **Warm context is money.** A long-lived session keeps its prompt cache warm. Re-spawning a fresh agent for every task pays the context tax again every time.
+- **Many agents, many accounts.** Run several CLI agents side by side, on different runtimes and different accounts, and switch when one runs out of credit. Your orchestrator does not have to die because a worker's quota did.
+- **Placement is addressable.** Every pane carries a worktree identity, so "which folder did that worker actually run in" has an answer you can check instead of infer.
+- **Reachable from anywhere.** Put it behind Tailscale and the same running sessions answer from another machine. Long jobs do not need you sitting in front of the laptop that started them.
+
+Without this substrate you can still read the ideas here. You cannot run a master that survives its own session.
 
 ## Which document do you want?
 

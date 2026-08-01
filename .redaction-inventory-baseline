@@ -175,7 +175,6 @@ long-term
 longest-path
 ls-files
 machine-readable
-macos-latest
 master-bootstrap-live
 master-dispatched
 master-lifecycle
@@ -290,7 +289,6 @@ pty-u8-shadow
 pty-u9
 public-release
 pytest
-python-version
 python3
 re-admitted
 re-admitting
@@ -336,7 +334,6 @@ rows
 rule-a
 rules
 runner
-runs-on
 runtime-issued
 same-marker
 same-session

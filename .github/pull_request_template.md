@@ -16,6 +16,8 @@ If you ran a review, automated or otherwise, say what it flagged and what you di
 
 Does this touch `master-ops/`? Generated operations repositories are copies made at onboarding and do not pick up template changes. Say what an existing install has to do. Otherwise write `none`.
 
+If it does touch `master-ops/`, raise `master-ops/TEMPLATE-VERSION` and add an entry to `master-ops/CHANGELOG.md`. Without that, installs on different template states all report the same version and the version stops meaning anything.
+
 ## Notes
 
 Platform, follow-up work, anything a reviewer should know.

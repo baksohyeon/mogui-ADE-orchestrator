@@ -8,7 +8,9 @@ Small repository, one maintainer. Issues and pull requests are both welcome.
 $ PYTHONPATH=src python3 -m pytest tests -q
 ```
 
-Standard library only. Nothing to install. There is no CI yet, so run this before opening a pull request and paste the count.
+The runtime is standard library only. The test run needs pytest (`python3 -m pip install pytest`).
+
+There is no CI yet, so run this before opening a pull request. Name the test that fails without your change, or say why none was needed. A passing count on its own says nothing: it is the same number on every branch that adds no test.
 
 ## What gets merged
 
@@ -22,12 +24,19 @@ Documentation changes need no test. Say what was wrong with the old wording.
 **Exit codes carry meaning here.** Several scripts use 0 for a clean result, 1
 for a finding, and 2 for "could not decide". An unhandled exception exits 1,
 which reads as a finding, so a crash and a verdict look the same to a caller.
-When you add a failure path, make sure it lands on 2. Most of the review
-findings on this repository so far have been instances of that one mistake.
+When you add a failure path, make sure it lands on 2. That single mistake is
+the largest class of review findings this repository has had.
+
+`redaction-scan.sh` is an exception it declares in its own header: it folds a
+usage or tool error into 1. Read each script's codes rather than assuming.
 
 **The redaction scanners read tracked files.** An unstaged new file is
 invisible to them, and the run comes back green without having looked at it.
 Stage first, then scan. These run locally before publishing, not in CI.
+
+`redaction-inventory` also skips binary files, judged by a NUL byte in the
+first 8 KB. That is a heuristic and it is silent: the output still says the
+scope was every tracked file.
 
 **`master-ops/` is a template**, copied into a user's own operations repository
 during onboarding. It is not documentation about this repository. Changes there

@@ -174,20 +174,40 @@ Operational note: in production, a path selector for an unregistered folder fail
 - seed only load-bearing memory pointers and rules
 
 The second item is the one that gets missed. The master's working directory is
-`{{WORKSPACE_ROOT}}`, not the ops repository. A tracker that finds its database
-by looking in the current directory will find nothing there, or find a product
-repository's database and use that instead. Beads behaves this way: it checks
-the current directory only and does not walk upward.
+`{{WORKSPACE_ROOT}}`, or an orchestrator root the user approved instead. Either
+way it is not the ops repository, and the ops repository sits below it.
 
-For that class of tracker, place a link at the workspace root pointing at the
-database inside the ops repository, so the master resolves to the right one
-from where it actually stands.
+Beads resolves from the current directory upward, and stops at a git repository
+root. It never looks downward. Measured on 1.1.0:
+
+| From | Result |
+| --- | --- |
+| two levels below a directory holding `.beads` | resolves to it |
+| a workspace root whose ops repository holds `.beads` | finds nothing |
+| a workspace root with `.beads` one level above it | resolves to the one above |
+| below a git root that has no `.beads` | stops, finds nothing |
+
+So the failure at the workspace root is an empty resolution, not a wrong one,
+unless something above the workspace happens to hold a database. That second
+case is the quiet one, because it answers.
+
+Place a link at the workspace root pointing at the database inside the ops
+repository, so the master resolves to the intended one from where it stands.
+Expand `{{OPS_REPO}}` to an absolute path first; it may be a bare repository
+name, and a relative link breaks as soon as the ops repository is not a direct
+child of the workspace root.
 
 ```console
-$ ln -s "{{OPS_REPO}}/.beads" "{{WORKSPACE_ROOT}}/.beads"
+$ [ -e "{{WORKSPACE_ROOT}}/.beads" ] && echo "already exists, inspect before linking" \
+    || ln -s "$(cd "{{OPS_REPO}}" && pwd)/.beads" "{{WORKSPACE_ROOT}}/.beads"
 ```
 
-Adjust the name for the tracker in use. Ask the user before creating it.
+The guard matters. `ln -s` against an existing directory succeeds silently and
+creates the link inside it, so the resolution does not change and nothing says
+so.
+
+Adjust the name for the tracker in use, and confirm its own resolution rule
+rather than assuming it matches this one. Ask the user before creating the link.
 
 (d) Verification:
 
@@ -196,6 +216,7 @@ from inside the ops repository proves nothing about where the master will look.
 
 - `bd where`, or the selected equivalent, resolves to the ops repository
 - the workspace tracker database is a different database from the one in any product repository
+- no tracker database sits above `{{WORKSPACE_ROOT}}` on the path to the filesystem root, since an upward search would reach it first
 - a global environment variable does not override the resolution. If your
   tracker reads one, print it from the same shell the agent's tool calls use.
   A value read in a different shell can be a different value, and the check

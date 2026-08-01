@@ -51,9 +51,10 @@ This repository owns workspace-level orchestration: roles, succession, worker
 dispatch, lineage. Repository-local rules, hooks, and runbooks belong to
 [mogui-agent-harness](https://github.com/baksohyeon/mogui-agent-harness).
 
-Supported platform is macOS. The master has only been run under Claude Code.
-Other hosts and platforms should work and have not been tried, so reports from
-anyone who does are useful.
+Developed and run on macOS, under Claude Code. Orca ships Linux and Windows
+builds and one user has reported the Linux install working, but nothing here is
+exercised on either. Other hosts and platforms should work and have not been
+tried, so reports from anyone who does are useful.
 
 ## Commits
 

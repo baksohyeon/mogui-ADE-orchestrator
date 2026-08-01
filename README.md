@@ -1,13 +1,12 @@
 # mogui-ADE-orchestrator
 
-> **Orchestrate a fleet of coding-agent sessions on Orca without giving up hands-on control of any one of them.**
-> Real Orca terminal sessions running the CLIs you already pay for. Drop into any of them and type. Above them, one master session plans, hands out work under contract, and checks what comes back before accepting it. No API key, and it survives its own session dying.
+> *Can I orchestrate the Codex sessions in my tmux panes from above, and still drive each one by hand when I want to?*
 
-The usual shape of this problem: several Codex or Claude sessions running in tmux panes, each one individually steerable, with nothing coordinating them.
+Yes. That is what this is.
 
-This runs the fleet on [Orca](https://www.onorca.dev/download). Sessions outlive the window. Every pane carries a worktree identity you can check. A session can be read, written to, and retired by handle from outside the session. Those three properties are what an orchestration layer needs to exist, and you keep the ability to open any pane and type into it.
+Clone it, start any coding agent in the folder, say one sentence. That is the install.
 
-Point it at a folder that holds your product repositories. One master session plans, dispatches workers under contract, verifies their output before accepting it, and hands the role to a fresh session when the context fills up. macOS only for now, other platforms planned. Python 3.10+, stdlib-only core, MIT.
+It runs the fleet on [Orca](https://www.onorca.dev/download). A session has to outlive its window and be addressable by handle before anything can orchestrate it. macOS only for now. Python 3.10+, stdlib-only core, MIT. No API key.
 
 ## Quickstart
 

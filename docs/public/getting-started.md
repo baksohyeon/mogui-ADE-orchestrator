@@ -10,17 +10,17 @@ The shortest path from a clone to a running master session. There is nothing to 
 
 ## Install and clone
 
-```bash
-brew install --cask stablyai/orca/orca      # or download: https://www.onorca.dev/download
-git clone https://github.com/baksohyeon/mogui-ADE-orchestrator
-cd mogui-ADE-orchestrator
+```console
+$ brew install --cask stablyai/orca/orca      # or download: https://www.onorca.dev/download
+$ git clone https://github.com/baksohyeon/mogui-ADE-orchestrator
+$ cd mogui-ADE-orchestrator
 ```
 
 ## Wake the master
 
 Open that directory in Orca, start whichever coding agent you use inside it, and tell it to boot the master:
 
-```
+```text
 Wake the master.
 ```
 

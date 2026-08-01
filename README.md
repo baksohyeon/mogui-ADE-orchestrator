@@ -4,21 +4,21 @@
 
 Yes. That is what this is.
 
-Clone this repository, `cd` into it, start any coding agent there, say one sentence. That is the install.
+Install is a clone and one sentence spoken to an agent.
 
 It runs the fleet on [Orca](https://www.onorca.dev/download). A session has to outlive its window and be addressable by handle before anything can orchestrate it. macOS only for now. Python 3.10+, stdlib-only core, MIT. No API key.
 
 ## Quickstart
 
-```bash
-brew install --cask stablyai/orca/orca
-git clone https://github.com/baksohyeon/mogui-ADE-orchestrator
-cd mogui-ADE-orchestrator
+```console
+$ brew install --cask stablyai/orca/orca
+$ git clone https://github.com/baksohyeon/mogui-ADE-orchestrator
+$ cd mogui-ADE-orchestrator
 ```
 
 Open that directory in Orca, start any coding agent inside it, and say:
 
-```
+```text
 Wake the master.
 ```
 
@@ -28,12 +28,12 @@ Any words work. It walks you through setup and ends by spawning your Generation 
 
 The core is stdlib-only, so you can call it without Orca and without setup. You will not get a master session this way, just the pure functions.
 
-```bash
-cd mogui-ADE-orchestrator
-scripts/master-succeed detect "routine status update" --context-ratio 0.7 --json
-scripts/dispatch-gate --ledger /tmp/gate.jsonl check \
+```console
+$ cd mogui-ADE-orchestrator
+$ scripts/master-succeed detect "routine status update" --context-ratio 0.7 --json
+$ scripts/dispatch-gate --ledger /tmp/gate.jsonl check \
   --runtime codex --contract README.md --agents 1 --est-chars 1000
-scripts/adapter doctor
+$ scripts/adapter doctor
 ```
 
 </details>
@@ -255,21 +255,21 @@ Prerequisites: macOS and **Python 3.10+**. The runtime is stdlib-only; there is 
 
 All CLI entry points live in `scripts/` and are self-contained (they insert `src/` on `sys.path` themselves):
 
-```bash
+```console
 # Classify a succession trigger signal (pure function, safe to try)
-scripts/master-succeed detect "routine status update" --context-ratio 0.7 --json
+$ scripts/master-succeed detect "routine status update" --context-ratio 0.7 --json
 # → {"status": "ADVISORY", "reason": "context ratio threshold reached", ...}
 
 # Ask the dispatch gate whether a worker dispatch may proceed
-scripts/dispatch-gate --ledger ./gate-ledger.jsonl check \
+$ scripts/dispatch-gate --ledger ./gate-ledger.jsonl check \
   --runtime codex --contract ./job-contract.md --agents 1 --est-chars 1000
 # → {"allow": true, "reason": "OK", "contract_sha": "...", "cost_proxy": 1000}
 
 # Check which adapter-layer tools are present on this machine
-scripts/adapter doctor
+$ scripts/adapter doctor
 
 # Boot a master session from a charter document (add --handoff for a handoff file)
-scripts/master-bootstrap --charter path/to/charter.md --json
+$ scripts/master-bootstrap --charter path/to/charter.md --json
 ```
 
 Other entry points, briefly: `scripts/master-succeed` also provides `handoff`, `verify-successor`, `check-duplicates`, `retire`, and `spawn` subcommands; `scripts/master-recover` runs the recovery flow from a charter + handoff after abnormal termination; `scripts/master-bootstrap-live` is meant to be wired as a session-start hook rather than run by hand; `scripts/l1-digest tick` advances the read-only digest loop; `scripts/adapter dispatch` performs an adapter-level worker dispatch; `scripts/acceptance-loop` runs the acceptance casebook. Run any of them with `--help` for current flags.

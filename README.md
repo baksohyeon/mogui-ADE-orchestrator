@@ -34,21 +34,17 @@ The comparison came after. This was built independently and reached this shape b
 ## Quickstart
 
 ```bash
-brew install --cask stablyai/orca/orca      # or download: https://www.onorca.dev/download
+brew install --cask stablyai/orca/orca
 git clone https://github.com/baksohyeon/mogui-ADE-orchestrator
 ```
 
-Open the folder in Orca, start any coding agent in it, and tell it to boot the master:
+Open the folder in Orca, start any coding agent, and say:
 
 ```
 Wake the master.
 ```
 
-Any words work. The router keys on the absence of a task, not on a phrase, so an agent that opens this folder without an instruction becomes your onboarding guide. Nothing to install, nothing to configure. One sentence and it takes over from there.
-
-What it asks and does, in order: checks that Orca is usable, collects your workspace facts, proposes a name for your operations repository, registers the workspace folder with Orca, creates the ops repository, fills the template placeholders with your values, sets up an issue tracker, seeds the operating rules, explains which settings live where, and then performs the founding spawn: a fresh Generation 1 master session booted in your workspace root. The last step runs a boot smoke test so you see it come up.
-
-Stage one asks nothing and scaffolds. Stage two is the conversation. You end with a master session running over your own repositories, not over this one.
+Any words work. It walks you through setup and ends by spawning your Generation 1 master. [Getting Started](docs/public/getting-started.md) has the detail.
 
 <details><summary>Prefer to poke at it before installing anything</summary>
 

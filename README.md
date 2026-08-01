@@ -157,7 +157,9 @@ The split matters: `core/` never learns these names, `adapter/` wires them, and 
 
 ### The skill layer it runs under
 
-Recommended, not required. Orca stays the only hard dependency and every script here runs with none of this installed. The reference master does run under a specific skill stack, so it is named here. Vendor neutrality covers agent hosts, not tooling.
+Nothing to do before you start. Onboarding raises this during setup, explains what each one does, and asks whether you want it. Skipping all of it is a normal answer, and every script here runs with none of it installed. Orca stays the only hard dependency.
+
+This section is here so the recommendation is legible before you get asked. Vendor neutrality covers agent hosts, not tooling.
 
 Optimized for Claude Code. These are Claude Code plugins and skills. Workers can be Codex or another CLI and the adapter ships a `codex` profile. The orchestrator side assumes Claude Code.
 
@@ -168,13 +170,7 @@ Optimized for Claude Code. These are Claude Code plugins and skills. Workers can
 | Commands | [gstack](https://github.com/garrytan/gstack) | Task commands rather than methodology: ship, review, QA, headless-browser dogfooding, plan review from CEO, engineering, and design angles, context save and restore. |
 | State | [beads](https://github.com/gastownhall/beads) | Listed in the table above. The boot path already shells out to it. |
 
-Install them yourself. Onboarding will explain each one and print the commands; it does not run them. GSD's installer edits `~/.claude/settings.json` and wires hooks across most lifecycle events, which is not something an agent should do to your configuration on your behalf.
-
-```bash
-claude plugin install superpowers@claude-plugins-official
-```
-
-GSD ships as `@opengsd/gsd-core` on npm, and gstack installs into `~/.claude/skills/gstack`. Follow their own install instructions rather than a copy of them here, which would go stale.
+When you say yes, onboarding prints the command and you run it. GSD's installer edits `~/.claude/settings.json` and wires hooks across most lifecycle events, which an agent should not do to your configuration on your behalf.
 
 One integration note if you adopt GSD. Its context monitor warns the agent at 35% context remaining and escalates at 25%, well before the succession threshold this project recommends. Left alone, a master is told to stop and save state while its charter says to keep working. Raise the thresholds in `gsd-context-monitor.js`, or record in your charter that the warning is advisory and not a succession trigger. GSD's `/gsd-update --reapply` flow carries local edits across updates.
 

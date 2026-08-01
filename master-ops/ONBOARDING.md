@@ -224,6 +224,29 @@ Warning: Beads and similar local trackers can keep per-repo databases. Do not re
 - no hook implementation, deny list, credentials, or secret paths were added by the onboarding agent
 - sensitive-lane owner is explicit or marked unresolved
 
+## Step 7.5. Offer The Skill Layer
+
+(a) Why: the master is born in the next step and inherits whatever skill layer is present at that moment. The runtime works without any of it, so this is an offer rather than a requirement. It comes before the spawn so the founding master starts under the stack the user chose instead of acquiring it later.
+
+(b) Ask the user:
+
+- whether to install the recommended skill stack, and which parts
+- explain each one first, in a sentence, so the choice is informed rather than a yes to a list of names
+
+The stack and what each part does in the harness is in the repository README under "The skill layer it runs under." Do not paste install commands without the explanation.
+
+(c) Agent action:
+
+- print the install commands and stop there
+- do not run them, and do not edit the user's `settings.json`, hooks, or plugin configuration
+- GSD in particular wires hooks across most lifecycle events through its own installer, which is a change the user should make deliberately
+
+(d) Verification:
+
+- the user was told what each tool does before being shown a command
+- the agent installed nothing and modified no host configuration
+- the user's answer is recorded, including a decision to install nothing
+
 ## Step 8. Founding Spawn
 
 (a) Why: the master must be born as a clean, verifiably placed session — not as a continuation of the onboarding conversation. A founding spawn separates the installer from the operator, so the master starts with a clean context and an auditable placement record.

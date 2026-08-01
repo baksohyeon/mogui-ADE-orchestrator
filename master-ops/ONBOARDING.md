@@ -195,7 +195,7 @@ Run the checks from `{{WORKSPACE_ROOT}}`, not from the ops repository. Passing
 from inside the ops repository proves nothing about where the master will look.
 
 - `bd where`, or the selected equivalent, resolves to the ops repository
-- the workspace tracker database is separate from every product repository's
+- the workspace tracker database is a different database from the one in any product repository
 - a global environment variable does not override the resolution. If your
   tracker reads one, print it from the same shell the agent's tool calls use.
   A value read in a different shell can be a different value, and the check

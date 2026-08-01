@@ -69,7 +69,6 @@ dev
 died
 direct-push
 dispatch-tickets
-distinctive-looking
 double-run
 double-start
 drift-monitor
@@ -98,7 +97,6 @@ executing-plans
 execution-state
 extended-regex
 fail-closes
-false-positive
 fan-out
 field-notes
 filesystem-derived
@@ -128,7 +126,6 @@ gpt-5
 gpt-5-codex
 grok
 hand-maintained
-hand-written
 handoff
 hands-on
 harassment-free
@@ -242,7 +239,6 @@ one-shot
 one-to-one
 open-ended
 operations
-operations-document
 organization-specific
 other-backend
 owner-prompt
@@ -418,7 +414,6 @@ track-a
 track-b
 track-c
 tracks
-trust-handling
 two-stage
 u10-test-successor
 u5-ticket-impl-mogui-20260723

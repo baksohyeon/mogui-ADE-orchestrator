@@ -113,7 +113,12 @@ def _is_compact_suppressed_heading(line):
     if match is None:
         return False
     title = match.group("title").strip().lower()
-    return title.startswith("role state") or title.startswith("active tracks")
+    compact_title = re.sub(r"\s+", "", title)
+    return (
+        title.startswith("role state")
+        or title.startswith("active tracks")
+        or compact_title.startswith("활성트랙")
+    )
 
 
 def main(argv=None) -> int:

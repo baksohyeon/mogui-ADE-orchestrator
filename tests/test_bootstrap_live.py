@@ -95,13 +95,14 @@ class LoadRoleStateTests(unittest.TestCase):
         self.assertTrue(any("role-state-file" in a for a in alerts))
 
     def test_load_role_state_mangled_explicit_file_falls_back_with_alert(self) -> None:
-        (self._dir / "2026-07-20-gen6-handoff.md").write_text(HANDOFF, encoding="utf-8")
-        # Same as the live wiring: the role-state file sits outside the handoff dir
+        handoff_dir = self._dir / "handoff"
+        handoff_dir.mkdir()
+        (handoff_dir / "2026-07-20-gen6-handoff.md").write_text(HANDOFF, encoding="utf-8")
         runbooks = self._dir / "runbooks"
         runbooks.mkdir()
         role_state_file = runbooks / "mangled-role-state.md"
         role_state_file.write_text("# Role State (authoritative)\n\nBROKEN CONTENT\n", encoding="utf-8")
-        block, alerts = load_role_state(self._dir, role_state_file=role_state_file)
+        block, alerts = load_role_state(handoff_dir, role_state_file=role_state_file)
         self.assertIsNotNone(block)
         self.assertIn("Current Role: Reference Implementation", block)
         self.assertTrue(any("role-state-file" in a for a in alerts))
@@ -248,6 +249,23 @@ class CompactSuppressTests(unittest.TestCase):
         self.assertTrue(out.startswith("[E12-CRITICAL] compact first-injection warning"))
         self.assertIn("[E12] compact: tracks/role suppressed", out)
         self.assertNotIn("should be suppressed", out)
+        self.assertNotIn("AL-secret", out)
+        self.assertIn("keep me", out)
+
+    def test_compact_suppress_matches_korean_heading(self) -> None:
+        module = _load_bootstrap_live_script()
+        block = "\n".join(
+            [
+                "[MASTER-BOOTSTRAP v1]",
+                "## 활성 트랙",
+                "AL-secret should be suppressed",
+                "### Next",
+                "keep me",
+            ]
+        )
+
+        out = module._suppress_compact_recall_leaks(block)
+
         self.assertNotIn("AL-secret", out)
         self.assertIn("keep me", out)
 

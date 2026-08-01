@@ -12,7 +12,6 @@ Use this page for command discovery. The lifecycle and delegation guides explain
 | `scripts/acceptance-loop` | `acceptance-loop run` | Run the deterministic acceptance loop against a proposer command. | `--max-iterations`, `--baseline-ref`, `--restore-cmd`. |
 | `scripts/acceptance-loop` | `acceptance-loop inspect` | Report suite and holdout composition without running the loop. | None beyond `-h` or `--help`. |
 | `scripts/adapter` | `adapter doctor` | Report visible adapter tools and whether required local dependencies are present. | None beyond `-h` or `--help`. |
-| `scripts/adapter` | `adapter dispatch` | Plan or start a worker through the adapter layer. | `--contract`, `--repo`, `--isolation {auto,shared,worktree}`, `--runtime {codex}`, `--agents`, `--est-chars`, `--ledger`, `--dry-run`. |
 | `scripts/dispatch-gate` | `dispatch-gate check` | Evaluate a worker contract and record an allow or deny decision in the dispatch ledger. | Global `--ledger`; command options `--runtime`, `--contract`, `--agents`, `--est-chars`. |
 | `scripts/dispatch-gate` | `dispatch-gate register` | Register a worker job only after a probe confirms the job id appears in an expected artifact. | Global `--ledger`; command options `--job-id`, `--probe-cmd`, `--contract-sha`, `--runtime`. |
 | `scripts/dispatch-gate` | `dispatch-gate watch` | Check a worker log for stall conditions. | Global `--ledger`; command options `--log`, `--max-idle`. |

@@ -28,19 +28,6 @@ scripts/dispatch-gate \
   --est-chars 2000
 ```
 
-Example dry-run dispatch:
-
-```bash
-scripts/adapter dispatch \
-  --contract ./contracts/job.md \
-  --repo ./polsia-api \
-  --runtime codex \
-  --agents 1 \
-  --est-chars 2000 \
-  --ledger ./.dispatch-ledger.jsonl \
-  --dry-run
-```
-
 Example registration:
 
 ```bash

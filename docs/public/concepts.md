@@ -60,22 +60,7 @@ For example, Context Resolver can decide that a request targets `polsia-api` or 
 
 The execution environment is an actual workspace: real checkouts, real terminals, real CLI agent sessions.
 
-The master can operate through script entry points such as `scripts/master-bootstrap`, `scripts/master-succeed`, `scripts/dispatch-gate`, `scripts/adapter`, `scripts/acceptance-loop`, and `scripts/l1-digest`. Worker execution is routed through the adapter layer. When parallel writes, branch anchoring, tree contention, or branch switching make shared checkout work risky, the adapter can plan a git worktree for isolation.
-
-Example:
-
-```bash
-scripts/adapter dispatch \
-  --contract ./contracts/job.md \
-  --repo ./polsia-api \
-  --isolation auto \
-  --runtime codex \
-  --agents 1 \
-  --est-chars 2000 \
-  --dry-run
-```
-
-> Tip: Use `--dry-run` when you want to inspect the dispatch plan without starting a worker.
+The master can operate through script entry points such as `scripts/master-bootstrap`, `scripts/master-succeed`, `scripts/dispatch-gate`, `scripts/adapter`, `scripts/acceptance-loop`, and `scripts/l1-digest`. A worker is a CLI session started in an Orca pane, and `scripts/dispatch-gate` decides whether that dispatch may proceed.
 
 ## Context Management
 

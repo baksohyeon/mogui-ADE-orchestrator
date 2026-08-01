@@ -127,7 +127,7 @@ Local only.
 ## Limitations
 
 - **Master starts under Claude Code out of the box.** The spawn path in `core/succession.py` calls `claude`. Nothing in the design depends on that, and pointing the line at another CLI is a small change. Claude Code is what has been run, so it is what is recommended.
-- **Workers can be any CLI.** A worker is a terminal session in an Orca pane, so it is whatever binary starts there. Claude, Codex, Cursor, Grok, Gemini have all run this way under contract. No plugin for any of them. The typed `adapter dispatch` path is narrower and takes `codex` only.
+- **Workers can be any CLI.** A worker is a terminal session in an Orca pane, so it is whatever binary starts there. Claude, Codex, Cursor, Grok, Gemini have all run this way under contract. No plugin for any of them.
 - **Codex as master should work, and nobody has tried it.** Untested rather than unsupported. If you run it, a report or a patch is welcome.
 - **macOS is what this has been run on.** Orca itself ships Linux and Windows builds, and one user has reported the install working on Linux. Neither is exercised here, so reports are useful.
 - **Orca required** for live sessions. Pure functions run without it.
@@ -295,7 +295,7 @@ $ scripts/adapter doctor
 $ scripts/master-bootstrap --charter path/to/charter.md --json
 ```
 
-Other entry points, briefly: `scripts/master-succeed` also provides `handoff`, `verify-successor`, `check-duplicates`, `retire`, and `spawn` subcommands; `scripts/master-recover` runs the recovery flow from a charter + handoff after abnormal termination; `scripts/master-bootstrap-live` is meant to be wired as a session-start hook rather than run by hand; `scripts/l1-digest tick` advances the read-only digest loop; `scripts/adapter dispatch` performs an adapter-level worker dispatch; `scripts/acceptance-loop` runs the acceptance casebook. Run any of them with `--help` for current flags.
+Other entry points, briefly: `scripts/master-succeed` also provides `handoff`, `verify-successor`, `check-duplicates`, `retire`, and `spawn` subcommands; `scripts/master-recover` runs the recovery flow from a charter + handoff after abnormal termination; `scripts/master-bootstrap-live` is meant to be wired as a session-start hook rather than run by hand; `scripts/l1-digest tick` advances the read-only digest loop; `scripts/acceptance-loop` runs the acceptance casebook. Run any of them with `--help` for current flags.
 
 Tests are the agent's job. Ask the agent working on the harness to run them and report, the same way you ask it for anything else. There is no test step here for a person to type.
 

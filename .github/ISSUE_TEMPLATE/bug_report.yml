@@ -1,0 +1,32 @@
+name: Bug report
+description: Something behaved differently from what the docs say
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: Command run, output, exit code. Paste rather than summarise.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Commit
+      description: Output of `git rev-parse --short HEAD`
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: OS, Python, agent host
+      placeholder: macOS 15.2, Python 3.11.9, Claude Code
+    validations:
+      required: true

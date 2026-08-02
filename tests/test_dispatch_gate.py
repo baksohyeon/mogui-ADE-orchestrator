@@ -225,6 +225,65 @@ def test_unparseable_tier_policy_fails_closed(tmp_path: Path) -> None:
     assert decision.reason == ReasonCode.TIER_POLICY_UNAVAILABLE
 
 
+def test_noncanonical_denied_tier_never_fails_open(tmp_path: Path) -> None:
+    for unknown_model in ("deny", "warn"):
+        case_dir = tmp_path / unknown_model
+        case_dir.mkdir()
+        contract = _contract(case_dir, f"noncanonical denied tier {unknown_model}")
+        policy = case_dir / "model-tier-policy.json"
+        policy.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "worker_allowed": [],
+                    "worker_denied_tiers": ["gpt-5.6-sol "],
+                    "unknown_model": unknown_model,
+                }
+            ),
+            encoding="utf-8",
+        )
+        gate = _gate(case_dir, now=1_000, tier_policy_path=policy)
+
+        decision = gate.check(
+            DispatchRequest(
+                runtime="codex",
+                model="gpt-5.6-sol",
+                contract_path=contract,
+                est_input_chars=10_000,
+                n_agents=1,
+            )
+        )
+
+        assert decision.allow is False
+        assert decision.reason == ReasonCode.TIER_POLICY_UNAVAILABLE
+        assert _ledger_entries(case_dir)[-1]["reason"] == "TIER_POLICY_UNAVAILABLE"
+        assert not (case_dir / "dispatch-tickets").exists()
+
+
+def test_noncanonical_requested_model_never_bypasses_deny(tmp_path: Path) -> None:
+    contract = _contract(tmp_path, "noncanonical requested model")
+    gate = _gate(
+        tmp_path,
+        now=1_000,
+        tier_policy_path=_tier_policy(tmp_path, unknown_model="warn"),
+    )
+
+    decision = gate.check(
+        DispatchRequest(
+            runtime="codex",
+            model="gpt-5.6-sol ",
+            contract_path=contract,
+            est_input_chars=10_000,
+            n_agents=1,
+        )
+    )
+
+    assert decision.allow is False
+    assert decision.reason == ReasonCode.TIER_POLICY_UNAVAILABLE
+    assert _ledger_entries(tmp_path)[-1]["reason"] == "TIER_POLICY_UNAVAILABLE"
+    assert not (tmp_path / "dispatch-tickets").exists()
+
+
 def test_unknown_model_follows_policy_setting(tmp_path: Path) -> None:
     deny_dir = tmp_path / "deny"
     deny_dir.mkdir()

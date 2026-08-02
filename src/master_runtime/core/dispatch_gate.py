@@ -632,6 +632,8 @@ def _validate_request(request: DispatchRequest) -> ReasonCode | None:
         return ReasonCode.NO_COMPLETION_CHANNEL
     if not isinstance(request.model, str) or not request.model.strip():
         return ReasonCode.NO_MODEL
+    if request.model != request.model.strip():
+        return ReasonCode.TIER_POLICY_UNAVAILABLE
     if request.tier_override is not None and (
         not isinstance(request.tier_override, str)
         or not request.tier_override.strip()
@@ -676,6 +678,8 @@ def _model_list(value: object) -> frozenset[str]:
         raise ValueError("model lists must be arrays")
     if any(not isinstance(model, str) or not model.strip() for model in value):
         raise ValueError("model identifiers must be non-empty strings")
+    if any(model != model.strip() for model in value):
+        raise ValueError("model identifiers must not have surrounding whitespace")
     return frozenset(value)
 
 

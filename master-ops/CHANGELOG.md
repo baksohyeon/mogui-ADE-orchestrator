@@ -27,9 +27,11 @@ between releases this file keeps whatever the last release left in it.
 
 Skew is decided by comparing that string with the latest release tag for
 equality, never by comparing magnitudes. The integers 3 through 6 in the entries
-below are transitional numbers from before this file tracked releases; an
-installation still reporting one of them is caught the same way as any other
-mismatch, by not equalling the latest tag.
+below are transitional numbers from before this file tracked releases, and
+`0.2.0` without the `v` is one more: the v0.2.0 release wrote the number instead
+of the tag string, so an installation reporting it is caught the same way as any
+other mismatch, by not equalling the latest tag. From v0.3.0 the file holds the
+tag string exactly.
 
 One consequence to keep in mind while reading an installation's version line: an
 installation onboarded between releases carries unreleased entries while

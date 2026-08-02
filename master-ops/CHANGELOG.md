@@ -39,6 +39,72 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+Onboarding gains a Step 10 that ends the session properly.
+
+Everything installed is worthless if the user does not know the handful of
+sentences that operate it, so the installer prints an operating card as plain text
+and tells the user to keep it under a name they will find again. The card is written
+to be pasted into any agent, so it depends on nothing about the installer session:
+how to ask for role state, how to propose and approve, how to delegate, which gates
+run before publishing and what they do not cover, how to ask for succession, and
+which components were declined at install so behaviour that looks like a defect can
+be checked against that first. A blank decline line is not allowed, because blank
+reads as unknown rather than as none.
+
+The step also verifies the conversation rather than the artifacts. The earlier steps
+ask questions, and a run that produced files without answers guessed; the check is
+that facts were confirmed rather than inferred and that each essential decline was
+re-asked once.
+
+Then it asks the user to close the installer terminal, with the reason: two agents
+holding one repository is how uncommitted work gets lost, and the installer has no
+further role. The installer does not close anything itself.
+
+Onboarding now names the stack this template was built against, with each
+component's role and the boundary it is deliberately kept inside. A tool adopted
+without its boundary becomes the next thing to unwind, so the table states both:
+the tracker's memory is a pointer cache toward Git rather than the knowledge source
+of truth, the history index is a trace archive rather than routine boot context,
+the review graph earns its place on token cost rather than correctness, and the
+worker runtime plugin is one wiring of the adapter layer rather than a harness
+requirement. The same boundaries are recorded in `docs/MASTER-OPERATIONS.md`, where
+the master reads them daily.
+
+The preflight checks the behaviour-shaping layers, methodology and restraint. Both
+are skill packs rather than one agent's plugins, so detection is agent-neutral and
+accepts either packaging: a skill directory under any known root, or an agent's
+plugin manifest, which is the same content wrapped differently. Only the install
+hint varies by host. They warn rather than fail, with the consequence attached to
+the warning: without the methodology layer the charter reads as advice rather than
+procedure, and without the restraint layer expect larger diffs and more speculative
+structure.
+
+Onboarding also records the five questions that decided the stack, so the same test
+applies to what an installer chooses to install: does it require an API key, does it
+force or over-collect telemetry, does it add a management point, does it survive the
+operation growing past one person, and what does it resolve beyond the agent-context
+help that every tool claims. The maintainer-facing version of the same bar lives in
+`CONTRIBUTING.md`, since an installation receives a stack rather than choosing one.
+
+Declining an essential component now gets one re-ask. Not a nag: the consequence is
+restated and the question is asked again, once, then the answer is final. The first
+no usually answers a different question, because a component list reads as
+preferences: the first pass answers "do I want this" while the question that matters
+is "am I accepting this behaviour". The confirmed decline is recorded together with
+what it accepts. Where the agent has no interactive query interface the re-ask cannot
+happen, so the contract carries the confirmed declines up front and the record says
+they were confirmed in advance rather than asked.
+
+The preflight summary repeats every missing essential component with its consequence
+in a block of its own, because fifteen lines of check output is exactly the length at
+which the important line gets skimmed past.
+
+And one asymmetry is written down rather than left to be discovered: an agent with
+no interactive query interface cannot run the steps that ask the user a question.
+Onboarding is a conversation, so either run it from an agent that can ask, or supply
+every answer in the dispatch contract and record that they were answered in advance
+rather than asked.
+
 The redaction gate now runs on gitleaks. `scripts/redaction-scan.sh` keeps only
 what gitleaks does not do: scoping to tracked content, scanning commit messages,
 translating the organization rules file, and stating what was covered. The file

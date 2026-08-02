@@ -235,6 +235,43 @@ Verify the hook spec is documented, no sensitive implementation was added, and i
 
 Explain each component in one sentence before showing any command. Print approved install commands and stop; do not run them or edit `settings.json`, hooks, or plugin configuration.
 
+These five questions decided what is in the stack, and they are worth repeating when a component is proposed later:
+
+1. does it require an API key
+2. does it force telemetry, or collect more than the job needs
+3. does it add a management point
+4. does it still work if the operation grows past one person
+5. every tool claims to help with agent context. What else does this one actually resolve
+
+A component that fails the first three is usually a subscription pretending to be a dependency. A component that passes them but answers nothing for the fifth is a preference, and should be labelled as one.
+
+The stack this template was built against, with what each one is for and what it is deliberately not used for. Name the role before the install command, because a tool adopted without its boundary becomes the next thing to unwind:
+
+| component | role here | not used for |
+|---|---|---|
+| Orca | execution substrate: worktrees, terminals, sessions, supervised dispatch | required infrastructure, not a swappable preference |
+| tracker (Beads) | execution state that survives a session, as an issue graph | its memory is a short pointer cache toward Git, not the knowledge source of truth |
+| `ctx` | trace archive: cross-provider session history, queryable when handoff, ledger, and Git do not answer | not part of routine boot context |
+| `gitleaks` | matching engine for the publish gate | not the scope decision, which the wrapper keeps |
+| methodology skills | how the master plans and verifies | without them the charter reads as advice rather than procedure |
+| restraint skills | how much the master builds | pairs with the methodology layer rather than competing |
+| review graph | impact radius and review context, locally parsed | optional; its value is token cost, not correctness |
+| spec-driven framework | phase discipline from research through verification | installs lifecycle hooks, so it needs a deliberate yes |
+| worker runtime plugin | lets the master delegate implementation from inside its own session | one wiring of the adapter layer, not a harness requirement |
+
+Claude Code is the recommended host for the master, and a worker runtime such as Codex is a first-class executor rather than a fallback. Expect the preference to split hard between the two camps; the contracts hold either way, which is the point of an agent-neutral template.
+
+One asymmetry to plan around rather than discover: an agent without an interactive query interface cannot run the steps of this document that ask the user a question. Onboarding is a conversation. Run it from an agent that can ask, or supply every answer in the dispatch contract up front and record that the questions were answered in advance rather than asked.
+
+Install commands for the Claude Code case, printed and not run:
+
+```console
+$ /plugin marketplace add openai/codex-plugin-cc
+$ /plugin install codex@openai-codex
+$ /reload-plugins
+$ /codex:setup
+```
+
 Say which of them are optional in name only. The template carries documents and scripts; it cannot carry the host layer that makes a master behave the way the documents describe, so a component listed here as recommended is often load-bearing. State the consequence of declining each one in a sentence, in the same breath as the offer, rather than leaving the user to discover it later:
 
 - a methodology skill layer changes how the master plans and verifies; without it the master still runs, and reads the charter as advice rather than procedure
@@ -242,9 +279,15 @@ Say which of them are optional in name only. The template carries documents and 
 - a tracker skill layer is what makes execution state survive a session; without it, state lives only in the transcript
 - a worker runtime is what makes delegation possible at all; without at least one, the master does every task itself
 
-Record the user's answer per component, including a decline. A declined component is a fact about the installation, and later behaviour that looks like a master defect is often a declined component instead.
+When the user declines a component the preflight treats as essential, ask once more. Not as a nag: restate the specific behaviour that changes, then ask whether to proceed without it. One re-ask, then take the answer as final.
 
-Verify the explanation preceded commands, nothing was installed or configured by the agent, and the user's choice—including no installation—is recorded.
+The reason to ask twice is that the first no is usually answering a different question. A component list reads as preferences, so the first pass is "do I want this", while the question that matters is "am I accepting this behaviour". Restating the consequence is what turns one into the other.
+
+Record the confirmed decline together with what is being accepted, in the user's own terms where possible. A declined component is a fact about the installation, and later behaviour that looks like a master defect is often a declined component instead.
+
+Where the agent running onboarding has no interactive query interface, the re-ask cannot happen at all. In that case the dispatch contract carries the confirmed declines up front, and the record says they were confirmed in advance rather than asked.
+
+Verify the explanation preceded commands, nothing was installed or configured by the agent, every essential decline was re-asked once with its consequence restated, and the user's choice—including no installation—is recorded with what it accepts.
 
 ## Step 7.6. State What The Publish Gates Do Not Cover
 
@@ -333,3 +376,53 @@ Verify:
 - placement evidence includes the host pane/worktree selector, process cwd under `{{WORKSPACE_ROOT}}`, and session artifact/log namespace
 - no placeholders remain unless the user intentionally deferred them
 - the founding Task and Dispatch complete through `worker_done`
+
+## Step 10. Hand The Human A Card, Then Close The Installer
+
+**Position and action:** Step 10 runs after the master reports a clean boot: verify the conversation actually happened, hand the user something portable, and ask them to close the installer terminal.
+
+**Why/caution:** Everything installed here is worthless if the user does not know the four or five sentences that operate it, and an installer session left running is a second agent holding the same repository.
+
+First verify the conversation, not just the artifacts. The steps above ask questions; a run that produced files without answers is a run that guessed. Check that the workspace facts were confirmed rather than inferred, that the component choices are recorded including declines, and that each essential decline was re-asked once. If any answer is missing, ask now rather than recording an assumption as a decision.
+
+Then write the operating card. Print it, and tell the user to keep it wherever they keep notes, as plain text under a name they will find again, such as `llm.txt`. It is written to be pasted into any agent, so it must not depend on this session existing:
+
+```text
+# Operating this workspace
+
+Master lives in: {{WORKSPACE_ROOT}}          Ops repository: {{OPS_REPO}}
+State: the issue tracker in the ops repository. Long-term decisions: Git.
+
+To start work, tell the master:
+  "Role State?"                     it reports its active role and lock
+  "Propose <goal>"                  it plans, then waits for your approval
+  "Approved, execute"               it executes only what you approved
+
+To delegate, tell the master:
+  "Dispatch <task> to a worker"     it runs the gate, dispatches, and verifies
+                                     the result before accepting it
+
+Before publishing anything, the master runs:
+  the test suite, the redaction scan, the redaction inventory
+  A green scan covers repository content only. Pull request text,
+  release notes, and issue prose are not scanned by anything.
+
+When a session gets long:
+  "Propose succession"              it audits, spawns a clean successor,
+                                     and freezes itself
+
+If the master behaves unlike the documents, check what was declined at
+onboarding before assuming a defect. Declined at install:
+  <declined components, or the word none>
+```
+
+Fill the last line from the recorded choices. If nothing was declined, write the word none rather than leaving it blank, because a blank line reads as unknown. The angle-bracket slots in the card are filled by hand at print time; do not introduce a new `{{...}}` placeholder for them, since Step 4 verifies that only the eight allowed placeholders remain anywhere in this document.
+
+Finally, ask the user to close this installer terminal now that the master is running. Say why in one sentence: two agents holding one repository is how uncommitted work gets lost, and the installer has no further role. Do not close it yourself, and do not close the master's terminal.
+
+Verify:
+
+- the card was printed in full, with placeholders replaced and the declined line filled or explicitly none
+- the user was told where to keep it and that it works when pasted into any agent
+- the user was asked to close the installer terminal, with the reason given
+- the master's terminal was left running

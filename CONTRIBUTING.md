@@ -2,6 +2,20 @@
 
 Small repository, one maintainer. Issues and pull requests are both welcome.
 
+## Adding a component to the harness
+
+Answer these five before proposing any tool, and put the answers in the pull request. A component that arrives without them is one nobody can argue out later.
+
+1. Does it require an API key?
+2. Does it force telemetry, or collect more than the job needs?
+3. Does it add a management point?
+4. Does it still work if the operation grows past one person?
+5. Every tool claims to help with agent context. What else does this one actually resolve?
+
+The first three are usually disqualifying on their own: a component that fails them is a subscription presenting itself as a dependency. A component that passes them and answers nothing for the fifth is a preference. Preferences are allowed, and they get labelled as preferences, and nothing gates on them.
+
+This is a maintainer question rather than an operator one. An installation does not choose the stack; it receives one, and `master-ops/ONBOARDING.md` carries the same five questions for the narrower decision an installer does make, which is what to install of what is offered.
+
 ## Running it
 
 ```console

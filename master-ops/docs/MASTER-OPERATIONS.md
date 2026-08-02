@@ -251,6 +251,17 @@ Measure: run the probe and read its output, not just its exit code. A probe whos
 Observed: pull request bodies, review comments, release notes, and issue text are not in the repository, so no scanner in this template reads them. An audit of one day's outgoing text found none, which is the point: it took a separate grep to know.
 Measure: before posting outgoing text, grep it for organization identifiers the way the scan greps files. A green publish gate says nothing about prose written into a forge.
 
+### Tool Boundaries
+
+Each tool has a role and an edge. The edge is the part that gets lost first.
+
+- The execution substrate owns worktrees, terminals, sessions, and supervised dispatch. Placement checks read its state; they are not a dispatch mechanism.
+- The tracker owns execution state across sessions. Its memory is a pointer cache toward Git, kept small and curated; it is not the knowledge source of truth, and it is not a second copy of this document.
+- The history index is a trace archive. Query it when the handoff, the ledger, and Git together do not answer a question. It does not belong in routine boot context.
+- The secret scanner is a matching engine. Scope, commit messages, and what the run covered stay with the wrapper, because those are decisions rather than matches.
+- The review graph earns its place on token cost and impact radius, not on correctness. Nothing gates on it.
+- Documentation stays plain Markdown in Git. No format lock means any tool can read it, including the next one.
+
 ## 8. Incident-Derived Rules
 
 Every rule below was paid for. Each one names the observation that produced it and the measurement that settles it, because a rule without its evidence gets argued away by the next reader, and a rule without a measurement cannot be checked. Add to this section the same way: rule, what was observed, how to measure it. Do not add a rule you cannot measure.

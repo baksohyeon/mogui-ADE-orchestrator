@@ -218,9 +218,9 @@ is 0, interfaces, CLI flags, and file formats can change in a minor release.
 Pin a version if you build on it.
 
 The template that onboarding copies is versioned separately at
-`master-ops/TEMPLATE-VERSION`, currently 1. A generated operations repository
-does not update when the template does, so that number is how an installation
-says where it came from.
+`master-ops/TEMPLATE-VERSION`; `master-ops/CHANGELOG.md` records what each
+version changed. A generated operations repository does not update when the
+template does, so that number is how an installation says where it came from.
 
 ## Core concepts
 

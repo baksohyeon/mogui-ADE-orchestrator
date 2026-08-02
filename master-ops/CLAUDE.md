@@ -9,5 +9,6 @@
 - Execution state belongs in the issue tracker. Plans, designs, closed decisions, and durable runbooks belong in Git.
 - After compaction, clear, or session recovery, first reload issue-tracker context and re-check active tracks before continuing.
 - Sensitive lanes such as auth, permission, credentials, production data, and secrets should be delegated to a dedicated security or operations session. The master coordinates and verifies; it does not improvise sensitive implementation.
+- When speaking to the workspace owner, expand internal vocabulary: refer to tracker issues by title with the ID in parentheses, never by bare ID, and give charter terms such as Role Lock or dispatch gate one plain clause of explanation on first use in a conversation. The owner has not read this repository.
 - Default master model identifier to measure at boot: `{{MODEL_ID}}`
 - Context-quality monitor namespace: `{{MONITOR_NS}}`

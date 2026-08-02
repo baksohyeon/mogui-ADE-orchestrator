@@ -24,6 +24,46 @@ here in the same change. Skip that and installations on different template
 states all report the same version, which is the whole thing this was meant to
 prevent.
 
+## 4
+
+The Step 8 spawn gate accepts MATCH_REISSUED alongside MATCH (in `ONBOARDING.md`
+only, not copied into installations). The runtime's spawn now verifies the
+returned terminal handle is live, because Orca reissues handles between creation
+and first use — observed on both founding spawns of 2026-08-02. When the
+reported handle is stale and exactly one new terminal in the requested worktree
+carries the pane title, the spawn adopts that handle and reports
+MATCH_REISSUED with `handle_reissued: true`; a gate that requires the literal
+MATCH would reject exactly the case the verification exists to survive.
+
+Installations copy nothing for this version; only the onboarding flow changed.
+An installation on version 3 raises the `Template version` line in
+`docs/MASTER-OPERATIONS.md` to 4 if it wants to record currency.
+
+The Step 8 failure contract is fail-closed: it does not retry with a filesystem
+path selector and does not boot the master in the installer session.
+Disconnected, zero-candidate, or ambiguous (2+) candidates fail closed without
+terminal cleanup.
+
+## 3
+
+The operations card (`CLAUDE.md`/`AGENTS.md`) gains an owner-communication
+rule: tracker issues are referred to by title with the ID in parentheses, never
+by bare ID, and charter vocabulary gets one plain clause of explanation on
+first use. Added after a production master proposed "Maintenance 범위에서 74m
+착수 승인" and the owner's reply was to ask, twice, what that meant.
+
+Onboarding changes in the same spirit, in `ONBOARDING.md` (not copied into
+installations, listed for completeness): an Orientation section before Step 0
+that explains the system, the three layers, the step map, and the end state
+before any question is asked; a position line opening every step; and Step 5
+now explains the tracker's role and asks the user to choose the issue prefix
+instead of silently taking the tracker's repo-name default.
+
+An installation on version 2 applies this in two edits. Copy the new
+communication bullet into both `CLAUDE.md` and `AGENTS.md` (they stay
+byte-identical), then raise the `Template version` line in
+`docs/MASTER-OPERATIONS.md` to 3.
+
 ## 2
 
 One integrity rule added to `docs/observability/README.md`: an instruction to

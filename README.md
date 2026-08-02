@@ -14,6 +14,21 @@ It runs the fleet on [Orca](https://www.onorca.dev/download). A session has to o
 
 The orchestrating session is called the master, for lack of a better word. It has no name yet. Suggestions welcome.
 
+
+## Why these tools
+
+Five questions decided the stack, and they are the bar for anything proposed later:
+
+1. Does it require an API key?
+2. Does it force telemetry, or collect more than the job needs?
+3. Does it add a management point?
+4. Does it still work if the operation grows past one person?
+5. Every tool claims to help with agent context. What else does this one actually resolve?
+
+Failing the first three usually means a subscription presenting itself as a dependency. Passing them while answering nothing for the fifth means a preference, which is allowed and labelled as one, and nothing gates on it.
+
+The maintainer-facing version of this bar is in `CONTRIBUTING.md`; the installer-facing one is in `master-ops/ONBOARDING.md`.
+
 ## Quickstart
 
 ```console

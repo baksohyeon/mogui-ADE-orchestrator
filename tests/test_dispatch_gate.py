@@ -2181,6 +2181,135 @@ def test_v2_policy_validation_fails_closed(tmp_path: Path) -> None:
         assert decision.reason == ReasonCode.TIER_POLICY_UNAVAILABLE, payload
 
 
+def _registered(
+    tmp_path: Path,
+    policy: Path,
+    declared: str | None,
+    measured: str | None,
+    probe_failed: bool = False,
+    dispatch_model: str = "gpt-5.6-luna",
+    label: str = "job",
+):
+    """Issue a ticket with check, then register with a measured model."""
+
+    gate = _gate(tmp_path, now=1_000, tier_policy_path=policy)
+    gate.check(
+        DispatchRequest(
+            runtime="codex",
+            model=dispatch_model,
+            contract_path=_contract(tmp_path, f"{label} contract"),
+            est_input_chars=10_000,
+            n_agents=1,
+        )
+    )
+    return gate.register_job(
+        label,
+        lambda job_id: job_id == label,
+        declared_model=declared,
+        measured_model=measured,
+        model_probe_failed=probe_failed,
+    )
+
+
+def test_register_without_a_declared_model_warns_rather_than_denies(
+    tmp_path: Path,
+) -> None:
+    """A runtime that cannot report its model must still be able to dispatch."""
+
+    decision = _registered(tmp_path, _tier_policy_v2(tmp_path), None, None)
+
+    assert decision.allow is True
+    assert ReasonCode.MODEL_UNVERIFIED in decision.warnings
+    entry = _ledger_entries(tmp_path)[-1]
+    assert entry["model_verified"] is False
+    assert entry["warnings"] == ["MODEL_UNVERIFIED"]
+
+
+def test_register_records_a_failed_model_probe_distinctly(tmp_path: Path) -> None:
+    """Not declared and declared-but-unanswered are different states."""
+
+    decision = _registered(
+        tmp_path, _tier_policy_v2(tmp_path), "gpt-5.6-luna", None, probe_failed=True
+    )
+
+    assert decision.allow is True
+    assert ReasonCode.MODEL_PROBE_FAILED in decision.warnings
+    assert _ledger_entries(tmp_path)[-1]["model_verified"] is False
+
+
+def test_register_records_a_verified_match(tmp_path: Path) -> None:
+    decision = _registered(
+        tmp_path, _tier_policy_v2(tmp_path), "gpt-5.6-luna", "GPT-5.6-Luna"
+    )
+
+    assert decision.allow is True
+    assert decision.warnings == ()
+    entry = _ledger_entries(tmp_path)[-1]
+    assert entry["model_verified"] is True
+    assert entry["model_declared"] == "gpt-5.6-luna"
+    assert entry["model_measured"] == "GPT-5.6-Luna"
+
+
+def test_register_denies_a_measured_model_in_a_stricter_tier(tmp_path: Path) -> None:
+    """The incident was a worker inheriting a tier nobody asked for."""
+
+    decision = _registered(
+        tmp_path, _tier_policy_v2(tmp_path), "gpt-5.6-luna", "claude-opus-5"
+    )
+
+    assert decision.allow is False
+    assert decision.reason == ReasonCode.MODEL_TIER_ESCALATION
+    assert "measured=claude-opus-5" in decision.message
+    entry = _ledger_entries(tmp_path)[-1]
+    assert entry["decision"] == "DENY"
+    assert entry["model_declared"] == "gpt-5.6-luna"
+    assert entry["model_measured"] == "claude-opus-5"
+
+
+def test_register_allows_a_measured_model_in_a_looser_tier_with_a_warning(
+    tmp_path: Path,
+) -> None:
+    """Running cheaper than declared is not the failure this guards."""
+
+    decision = _registered(
+        tmp_path,
+        _tier_policy_v2(tmp_path),
+        "claude-opus-5",
+        "gpt-5.6-luna",
+        dispatch_model="claude-opus-5",
+    )
+
+    assert decision.allow is True
+    assert ReasonCode.MODEL_MISMATCH in decision.warnings
+
+
+def test_register_under_a_v1_policy_warns_but_cannot_rank(tmp_path: Path) -> None:
+    """Version 1 has no tiers to compare, so a mismatch is all it can say."""
+
+    decision = _registered(
+        tmp_path, _tier_policy(tmp_path), "gpt-5.6-luna", "gpt-5.6-sol"
+    )
+
+    assert decision.allow is True
+    assert ReasonCode.MODEL_MISMATCH in decision.warnings
+
+
+def test_cli_model_probe_separates_no_command_from_a_failed_one(
+    tmp_path: Path,
+) -> None:
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
+    measure = script["_measure_worker_model"]
+
+    assert measure(None) == (None, False)
+    assert measure("echo claude-haiku-4-5") == ("claude-haiku-4-5", False)
+    assert measure("printf 'noise\nclaude-haiku-4-5\n'") == (
+        "claude-haiku-4-5",
+        False,
+    )
+    assert measure("exit 3") == (None, True)
+    assert measure("true") == (None, True)
+
+
 def _gate(
     tmp_path: Path,
     now: float | None = None,

@@ -86,6 +86,9 @@ def _build_parser() -> argparse.ArgumentParser:
     register_parser.add_argument("--contract-sha")
     register_parser.add_argument("--runtime")
     register_parser.add_argument("--orchestration-task")
+    # register ranks the measured tier against the declared one, so it needs the
+    # same policy check used, and by the same resolution rules.
+    register_parser.add_argument("--tier-policy")
     register_parser.add_argument("--declared-model")
     register_parser.add_argument("--model-probe-cmd")
 

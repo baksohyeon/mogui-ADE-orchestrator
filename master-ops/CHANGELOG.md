@@ -37,6 +37,35 @@ reporting the last released tag, so that value names the release it came from an
 not the exact body it received. When the difference matters, record the commit the
 installation was taken from alongside the tag.
 
+## Unreleased
+
+`register` now compares the model a dispatch declared with the model the worker
+actually ran. Until now the gate enforced the declaration at `check` and
+`register` took no model at all, so a worker inheriting a tier nobody asked for
+registered clean: the incident the tier policy exists for lives one step past the
+declaration.
+
+Declare the measurement per dispatch with `--model-probe-cmd`, alongside
+`--declared-model`. The command must read an artifact the agent itself produced,
+such as its session transcript; `scripts/model-identity-probe` is the reference
+implementation. A TUI status line is not a measurement source, because it is what
+a renderer drew rather than what the session recorded, and authenticating against
+it would leave a verification stamp with nothing behind it.
+
+The verdict is graded rather than absolute. No declared model warns as
+`MODEL_UNVERIFIED`, a probe that returns nothing warns as `MODEL_PROBE_FAILED`,
+and both still register: a runtime with no way to report its model would
+otherwise be unable to dispatch, and a check nobody can satisfy is a check nobody
+enables. A measured model in a tier the policy watches more closely than the
+declared one denies with `MODEL_TIER_ESCALATION`. Running looser than declared
+warns as `MODEL_MISMATCH`. Every registration records `model_declared`,
+`model_measured`, and `model_verified`, so an unverified one is distinguishable
+from a verified one.
+
+Tier ranking reuses the policy's own per-window caps rather than a new ordering
+field, so the two cannot disagree about which tier is trusted less. Version 1
+policies have no tiers to rank, so a mismatch there is recorded and not ranked.
+
 ## v0.2.0
 
 `docs/MASTER-OPERATIONS.md` gains an Incident-Derived Rules section: eleven

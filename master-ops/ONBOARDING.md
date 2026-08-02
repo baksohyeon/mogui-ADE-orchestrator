@@ -331,14 +331,14 @@ The stack and what each part does in the harness is in the repository README und
 - write a kickoff file containing: generation number 1, founding origin (this onboarding session), the boot sequence (rehydrate ops docs, declare Role State, measure model and placement), and the initial queue if any
 - run the Orca-managed spawn with the folder selector captured in Step 2.5:
   `{{RUNTIME_ROOT}}/scripts/master-succeed spawn --workspace-selector <folder selector from Step 2.5> --kickoff-file <kickoff file> --root {{WORKSPACE_ROOT}} --model {{MODEL_ID}} --title "Gen-1 founding boot" --json`
-- require the placement verification in the response to be MATCH before treating the spawn as valid
+- require the placement verification in the response to be MATCH or MATCH_REISSUED before treating the spawn as valid; MATCH_REISSUED (paired with `handle_reissued: true`) means the host reissued the terminal handle after creation and the handle in the response is the adopted live one, not the one the create call first printed
 - if the command fails, keep the failure closed: do not retry with a filesystem path selector and do not boot the master inside this onboarding session
 - note: settings layers load at session start — after any settings deployment, always spawn a fresh session
 
 (d) Verification:
 
 - exactly one new master process/session exists (no double boot)
-- managed spawn path: placement verification reported MATCH
+- managed spawn path: placement verification reported MATCH or MATCH_REISSUED
 - the kickoff content the master received matches the kickoff file byte-for-byte
 
 ## Step 9. Run The First Master Boot Smoke

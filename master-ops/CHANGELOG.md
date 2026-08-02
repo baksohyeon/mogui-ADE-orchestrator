@@ -24,6 +24,21 @@ here in the same change. Skip that and installations on different template
 states all report the same version, which is the whole thing this was meant to
 prevent.
 
+## 4
+
+The Step 8 spawn gate accepts MATCH_REISSUED alongside MATCH (in `ONBOARDING.md`
+only, not copied into installations). The runtime's spawn now verifies the
+returned terminal handle is live, because Orca reissues handles between creation
+and first use — observed on both founding spawns of 2026-08-02. When the
+reported handle is stale and exactly one new terminal in the requested worktree
+carries the pane title, the spawn adopts that handle and reports
+MATCH_REISSUED with `handle_reissued: true`; a gate that requires the literal
+MATCH would reject exactly the case the verification exists to survive.
+
+Installations copy nothing for this version; only the onboarding flow changed.
+An installation on version 3 raises the `Template version` line in
+`docs/MASTER-OPERATIONS.md` to 4 if it wants to record currency.
+
 ## 3
 
 The operations card (`CLAUDE.md`/`AGENTS.md`) gains an owner-communication

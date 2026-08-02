@@ -488,7 +488,16 @@ def spawn_successor(
         )
         raise
 
-    if any(session.handle == handle for session in live_sessions):
+    # A handle seen before the create cannot belong to the terminal the create
+    # made, even if it is live now (handle recycling would point at a user's
+    # pre-existing terminal).
+    handle_is_live_and_new = any(
+        session.handle == handle
+        and session.handle not in snapshot_handles
+        and session.worktree_id == selector
+        for session in live_sessions
+    )
+    if handle_is_live_and_new:
         return SpawnReport(
             "CREATED",
             handle,
@@ -509,7 +518,8 @@ def spawn_successor(
         candidates = _new_worktree_sessions(live_sessions, snapshot_handles, selector)
         raise SuccessionError(
             "spawn handle stale: reported handle {0} is not live and {1} new terminal(s) "
-            "in worktree {2} cannot be resolved to exactly one: {3}".format(
+            "in worktree {2} cannot be resolved to exactly one: {3}; the created terminal "
+            "may still be running unmanaged, reconcile via orca terminal list".format(
                 handle,
                 len(candidates),
                 selector,
@@ -555,14 +565,12 @@ def _resolve_reissued_terminal(
     pane_title: str,
 ) -> Optional[SessionInfo]:
     candidates = _new_worktree_sessions(live_sessions, snapshot_handles, selector)
-    if len(candidates) > 1:
-        # Orca prefixes live titles with status glyphs, so match by containment.
-        narrowed = tuple(session for session in candidates if pane_title in session.title)
-        if len(narrowed) == 1:
-            return narrowed[0]
-        return None
-    if len(candidates) == 1:
-        return candidates[0]
+    # Orca prefixes live titles with status glyphs, so match by containment. The
+    # created terminal was given pane_title, so even a lone candidate must carry
+    # it; adopting an untitled stranger would target a user's terminal later.
+    narrowed = tuple(session for session in candidates if pane_title in session.title)
+    if len(narrowed) == 1:
+        return narrowed[0]
     return None
 
 

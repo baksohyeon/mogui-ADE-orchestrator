@@ -147,7 +147,7 @@ $ ORCA repo add --path "{{OPS_REPO}}" --json
 $ ORCA terminal show --terminal <terminal handle> --json
 ```
 
-Capture the returned selector only when the terminal metadata proves it belongs to the `{{OPS_REPO}}` worktree. Before continuing, persist a durable placement result in the ops repository (or in the active tracker when one already exists) containing the selector, terminal handle, `{{OPS_REPO}}` path, and the `terminal show` worktree proof; do not rely on conversation state. Carry the same fields into the tracker during Step 5. Do not register `{{WORKSPACE_ROOT}}` or substitute a filesystem path for the measured ops-repository worktree selector.
+Capture the returned selector only when the terminal metadata proves it belongs to the `{{OPS_REPO}}` worktree. Before continuing, persist a durable placement result in an ops-repository file containing the selector, terminal handle, `{{OPS_REPO}}` path, and the `terminal show` worktree proof; do not rely on conversation state. Step 5 initializes the issue tracker independently and does not require a second placement copy; it may record a pointer to this result. Do not register `{{WORKSPACE_ROOT}}` or substitute a filesystem path for the measured ops-repository worktree selector.
 
 Verify:
 
@@ -238,7 +238,7 @@ Verify the explanation preceded commands, nothing was installed or configured by
 
 **Why/caution:** Supervised dispatch is Orca orchestration only; raw terminal polling and vendor-direct CLIs are non-compliant, and failures remain closed.
 
-Ask for confirmation to spawn now or defer, reload the durable placement result from Step 3.5 (and its tracker copy when available), re-run `terminal show`, and confirm that the selector, live handle, and `{{OPS_REPO}}` worktree proof still match. Write a kickoff file containing Generation 1, this installer as founding origin, the boot sequence (rehydrate ops docs, declare Role State, measure model and placement), the initial queue, and the requirement to report the orchestration Task complete.
+Ask for confirmation to spawn now or defer, reload the durable placement result from Step 3.5, re-run `terminal show`, and confirm that the selector, live handle, and `{{OPS_REPO}}` worktree proof still match. Write a kickoff file containing Generation 1, this installer as founding origin, the boot sequence (rehydrate ops docs, declare Role State, measure model and placement), the initial queue, and the requirement to report the orchestration Task complete.
 
 Run this supervised path with the resolved `ORCA` executable:
 

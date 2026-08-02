@@ -477,6 +477,16 @@ def spawn_successor(
             "spawn precheck list failed: " + str(exc),
             SPAWN_LIST_ERROR,
         ) from exc
+    global_snapshot_handles = None
+    try:
+        # A scoped snapshot cannot prove that a mismatch handle is new in a
+        # different worktree. Best-effort global capture supplies that proof;
+        # if the host rejects the global list, mismatch cleanup stays closed.
+        global_snapshot_handles = frozenset(
+            session.handle for session in find_sessions(runner)
+        )
+    except SuccessionError:
+        pass
 
     code, stdout, stderr = runner(create_command)
     if code != 0:
@@ -490,7 +500,13 @@ def spawn_successor(
         terminal = _created_terminal(stdout)
     except SuccessionError as exc:
         _raise_spawn_error_after_cleanup(
-            runner, handle_hint, exc, snapshot_handles, pane_title, list_worktree=selector
+            runner,
+            handle_hint,
+            exc,
+            snapshot_handles,
+            pane_title,
+            list_worktree=selector,
+            global_snapshot_handles=global_snapshot_handles,
         )
         raise
 
@@ -499,7 +515,13 @@ def spawn_successor(
         worktree_id = _spawn_field(terminal, ("worktreeId",), "worktreeId")
     except SuccessionError as exc:
         _raise_spawn_error_after_cleanup(
-            runner, handle, exc, snapshot_handles, pane_title, list_worktree=selector
+            runner,
+            handle,
+            exc,
+            snapshot_handles,
+            pane_title,
+            list_worktree=selector,
+            global_snapshot_handles=global_snapshot_handles,
         )
         raise
     if not _worktrees_match(worktree_id, selector):
@@ -522,6 +544,7 @@ def spawn_successor(
             snapshot_handles,
             pane_title,
             list_worktree=selector,
+            global_snapshot_handles=global_snapshot_handles,
         ):
             raise SuccessionError(
                 "spawn worktree mismatch; closed terminal {0}: requested {1}, got {2}".format(
@@ -548,6 +571,7 @@ def spawn_successor(
             snapshot_handles,
             pane_title,
             list_worktree=selector,
+            global_snapshot_handles=global_snapshot_handles,
         )
         raise
 
@@ -718,6 +742,7 @@ def _raise_spawn_error_after_cleanup(
     snapshot_handles: frozenset,
     pane_title: str,
     list_worktree: Optional[str] = None,
+    global_snapshot_handles: Optional[frozenset] = None,
 ) -> None:
     if not handle:
         raise error
@@ -736,6 +761,7 @@ def _raise_spawn_error_after_cleanup(
         snapshot_handles,
         pane_title,
         list_worktree=list_worktree,
+        global_snapshot_handles=global_snapshot_handles,
     ):
         raise SuccessionError(
             "{0}; closed terminal {1}".format(str(error), handle),
@@ -756,16 +782,21 @@ def _close_spawned_terminal(
     snapshot_handles: frozenset,
     pane_title: str,
     list_worktree: Optional[str] = None,
+    global_snapshot_handles: Optional[frozenset] = None,
 ) -> bool:
+    confirmed_from_global = False
     try:
         confirmed_sessions = find_sessions(runner, list_worktree=list_worktree)
     except SuccessionError:
         if not list_worktree:
             return False
+        if global_snapshot_handles is None:
+            return False
         try:
             # A scoped list can be unavailable on older hosts; the global list
-            # is still safe here because ownership is checked below.
+            # is safe only when the pre-create global snapshot proves newness.
             confirmed_sessions = find_sessions(runner)
+            confirmed_from_global = True
         except SuccessionError:
             return False
     confirmed = next(
@@ -773,17 +804,22 @@ def _close_spawned_terminal(
         None,
     )
     if confirmed is None and list_worktree:
+        if global_snapshot_handles is None:
+            return False
         try:
             # A mismatch terminal is intentionally outside the requested
             # worktree, so scoped confirmation cannot see it. Retry globally
-            # before giving up, while retaining handle/title/liveness checks.
+            # before giving up, but only with a global pre-create snapshot.
             confirmed_sessions = find_sessions(runner)
+            confirmed_from_global = True
         except SuccessionError:
             return False
         confirmed = next(
             (session for session in confirmed_sessions if session.handle == handle),
             None,
         )
+    if confirmed_from_global and handle in global_snapshot_handles:
+        return False
     if (
         confirmed is None
         or handle in snapshot_handles

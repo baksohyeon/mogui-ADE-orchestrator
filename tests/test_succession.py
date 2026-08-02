@@ -63,6 +63,7 @@ ORCA_LIST_JSON = json.dumps(
     }
 )
 _LIST_COMMAND = ("orca", "terminal", "list", "--json")
+_GLOBAL_SNAPSHOT_FIXTURE = object()
 
 
 def test_detect_trigger_has_immediate_advisory_and_none_branches() -> None:
@@ -513,6 +514,44 @@ def test_spawn_successor_mismatch_closes_terminal_and_fails_closed() -> None:
 
     assert raised.exception.exit_code == 22
     assert close_command in calls
+
+
+def test_spawn_successor_mismatch_does_not_close_preexisting_cross_worktree_handle() -> None:
+    calls = []
+    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    close_command = ("orca", "terminal", "close", "--terminal", "term-recycled", "--json")
+    scoped_list_command = (
+        "orca",
+        "terminal",
+        "list",
+        "--worktree",
+        "folder:unit-a",
+        "--json",
+    )
+    preexisting = _list_terminal("term-recycled", "folder:wrong", "✳ successor")
+    runner = _recording_runner(
+        {
+            scoped_list_command: (0, _orca_json_from_terminals(), ""),
+            _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(preexisting), ""),
+            _LIST_COMMAND: (0, _orca_json_from_terminals(preexisting), ""),
+            create_command: (0, _orca_create_json("term-recycled", "folder:wrong"), ""),
+        },
+        calls,
+    )
+
+    with unittest.TestCase().assertRaisesRegex(
+        SuccessionError,
+        "terminal not closed; ownership unconfirmed",
+    ):
+        spawn_successor(
+            workspace_selector="folder:unit-a",
+            kickoff_text="start here",
+            root="/repo/example",
+            title="successor",
+            orca_runner=runner,
+        )
+
+    assert close_command not in calls
 
 
 def test_spawn_startup_command_covers_agent_variants_and_shell_quoting() -> None:
@@ -1497,18 +1536,31 @@ def test_cli_retire_accepts_explicit_target_handle() -> None:
 
 
 def _runner(responses):
+    last_scoped_response = None
+    global_snapshot_reused = False
+
     def run(command: Sequence[str]) -> Tuple[int, str, str]:
+        nonlocal global_snapshot_reused, last_scoped_response
         key = tuple(command)
+        if key == _LIST_COMMAND and last_scoped_response is not None and not global_snapshot_reused:
+            # spawn_successor takes a best-effort global pre-create snapshot
+            # immediately after its scoped precheck; reuse that precheck
+            # response without consuming the fixture sequence.
+            global_snapshot_reused = True
+            return responses.get(_GLOBAL_SNAPSHOT_FIXTURE, last_scoped_response)
         if key not in responses and _is_scoped_terminal_list(command) and _LIST_COMMAND in responses:
             # Reuse bare-list fixtures only after applying the requested
             # worktree selector, so tests cannot hide a wrong selector.
             response = responses[_LIST_COMMAND]
             if isinstance(response, list):
                 response = response.pop(0)
+            last_scoped_response = response
             return _filter_scoped_response(response, command[4])
         response = responses[key]
         if isinstance(response, list):
-            return response.pop(0)
+            response = response.pop(0)
+        if _is_scoped_terminal_list(command):
+            last_scoped_response = response
         return response
 
     return run

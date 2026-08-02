@@ -120,7 +120,7 @@ Recommended worker lanes:
 - Local code work: a worker lane bound to the relevant repository checkout
 - Sensitive areas such as auth, permissions, secrets, credentials, production data, and incident material: a dedicated security or operations session
 
-The installation-specific worker tier mapping lives in `model-tier-policy.json`; use the lowest sufficient model listed there for each worker lane.
+The installation-specific worker tier mapping lives in `model-tier-policy.json`, which groups installed model identifiers into tiers; use the lowest sufficient tier for each worker lane. Measure what this host actually offers before filling it in: a template default lists models a machine may not have, and a model the file has never heard of is not blocked, it is capped as `unknown`.
 
 ### Worker Launch Approval Posture
 
@@ -164,7 +164,9 @@ L=~/.mogui/dispatch-ledger.jsonl
 "$G" --ledger "$L" register --job-id <job-id> --probe-cmd "<command proving the job-id appears in an artifact>" --orchestration-task <task-id>
 ```
 
-The gate enforces `model-tier-policy.json`; an exceptional denied-tier dispatch requires `--tier-override "<reason>"`, and every accepted override is recorded in the ledger. Model identifiers match casefolded, so a denied tier spelled in another case is the same tier. Each decision records the policy path and its `sha256`, because that path is caller-supplied; `dispatch-gate report` lists every policy a span was judged against, and more than one row means the span was not judged against one policy.
+The gate enforces `model-tier-policy.json`. A version 2 policy gates on tier multiplied by fan-out rather than on identity, because the incident it exists for was a top tier spread across ten workers: each tier carries a cap on agents dispatched inside a window, an unlisted model falls in the `unknown` tier and is capped there rather than denied, and exceeding a cap requires `--tier-override "<reason>"`. The window counts accumulation, not concurrency, so ten sequential single-agent dispatches reach the same cap as one fan-out of ten; an override passes one request without refunding what the window already counted. Version 1 policies keep their identity-based behaviour unchanged. Model identifiers match casefolded, so a tier spelled in another case is the same tier. Each decision records the policy path, its `sha256`, and the tier that decided, because that path is caller-supplied; `dispatch-gate report` lists every policy a span was judged against and every tier it spent agents in, including `unknown`, and more than one policy row means the span was not judged against one policy.
+
+The gate writes its verdict as JSON on stdout and human diagnostics on stderr. Do not merge them: `2>&1` piped into a JSON parser fails, and the failure reads like malformed output rather than like two streams. Use `2>/dev/null` for machine use, and read stderr separately when a person needs the reason.
 
 Before attaching a Codex worker, run `scripts/codex-worker-pretrust <worktree-path>` so startup never blocks on the trust prompt.
 

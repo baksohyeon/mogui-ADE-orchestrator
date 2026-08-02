@@ -305,7 +305,7 @@ Two principles shape the layout:
 
 To use the system, the [Quickstart](#quickstart) above is the whole path. This section is for changing the harness itself.
 
-Prerequisites: macOS and the `python3` it already has. The runtime is stdlib-only; there is nothing to install, and no version floor is enforced: the core imports and runs on the 3.9.6 a bare Mac ends up with. A tool that needs a newer interpreter states its own requirement at runtime, and the [Reference](docs/public/reference.md) table carries each one's floor in its own row. The suite's collection imports `tomllib` (3.11+), so tests reach an older interpreter through `uv` — and tests are the agent's job either way.
+Prerequisites: macOS and the `python3` it already has. The runtime is stdlib-only; there is nothing to install, and no version floor is enforced: the core imports and runs on the 3.9.6 a bare Mac ends up with. A tool that needs a more capable interpreter locates one itself at runtime, and the [Reference](docs/public/reference.md) table states each tool's behavior in its own row. The suite's collection imports `tomllib` (3.11+), so tests reach an older interpreter through `uv` — and tests are the agent's job either way.
 
 All CLI entry points live in `scripts/` and are self-contained (they insert `src/` on `sys.path` themselves):
 

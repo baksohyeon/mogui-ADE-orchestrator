@@ -410,7 +410,7 @@ test_hint='PYTHONPATH=src uv run --with pytest --no-project python3 -m pytest te
 # not as an onboarding blocker for hosts that never run that tool.
 if command -v python3 >/dev/null 2>&1; then
   python_version=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:3])))' 2>/dev/null)
-  pass "python3" "Python ${python_version:-unknown} present; no version floor is enforced here, a tool that needs a newer interpreter states that itself at runtime (today: codex-worker-pretrust, 3.11+ for tomllib)"
+  pass "python3" "Python ${python_version:-unknown} present; no version floor is enforced here, a tool that needs a more capable interpreter locates one itself at runtime (codex-worker-pretrust probes python3, newer versioned names, then python, and skips loudly when none has tomllib)"
 else
   fail "python3" "missing; the runtime's entry points are python3 scripts, so nothing here runs without it"
 fi

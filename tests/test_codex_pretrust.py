@@ -205,9 +205,15 @@ def test_unparseable_config_aborts_without_writing(tmp_path: Path) -> None:
     assert config.read_bytes() == original
 
 
-def test_tomllib_unavailable_requires_python_311_without_writing(
-    tmp_path: Path,
-) -> None:
+def test_no_tomllib_interpreter_skips_without_writing(tmp_path: Path) -> None:
+    """No suitable interpreter is a stated skip, not an error.
+
+    The script's job is removing a trust prompt; failing hard would block the
+    dispatch that the prompt merely inconveniences. What must still hold:
+    nothing is written, and the consequence is said out loud. The PYTHONPATH
+    shim breaks tomllib for every candidate the resolver probes.
+    """
+
     accounts_dir = tmp_path / "accounts"
     original = b'model = "gpt"\n'
     config = make_config(accounts_dir, "primary", original)
@@ -222,9 +228,10 @@ def test_tomllib_unavailable_requires_python_311_without_writing(
 
     result = run_pretrust("/tmp/worktree", accounts_dir, env=env)
 
-    assert result.returncode == 2
-    assert f"ERROR {config}: Python 3.11+ is required" in result.stderr
-    assert "codex-worker-pretrust requires tomllib" in result.stderr
+    assert result.returncode == 0
+    assert "SKIP no Python with tomllib found" in result.stderr
+    assert "trust prompt" in result.stderr
+    assert "Summary: 0 added, 0 updated, 0 already trusted" in result.stdout
     assert config.read_bytes() == original
 
 

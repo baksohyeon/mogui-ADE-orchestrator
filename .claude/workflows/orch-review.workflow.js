@@ -181,7 +181,7 @@ const securityNeeded = SECURITY_TRIGGER.test(haystack);
 const dimensions = [
   { key: 'quality', label: 'correctness & quality', agentType: 'code-reviewer' },
   ...(langReviewer ? [{ key: `lang:${input.language}`, label: `${input.language} idioms & pitfalls`, agentType: langReviewer }] : []),
-  ...(securityNeeded ? [{ key: 'security', label: 'security (OWASP, secrets, injection)', agentType: 'silent-failure-hunter' }] : [])
+  ...(securityNeeded ? [{ key: 'security', label: 'silent-failure and error-path risk review', agentType: 'silent-failure-hunter' }] : [])
 ];
 if (securityNeeded) {
   log('Security trigger matched — adding silent-failure-hunter dimension.');

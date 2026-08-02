@@ -44,7 +44,8 @@ fragments, and trailing slashes first. Then:
 
 - If input is a GitHub PR URL, extract `<OWNER>`, `<REPO>`, and `<NUMBER>`.
 - If input is a bare integer, treat it as `<NUMBER>` in the **current checkout
-  repository only**.
+  repository only**, and derive `<OWNER>/<REPO>` from `git remote get-url origin`
+  (normalize SSH/HTTPS form to `owner/repo` and reject if derivation fails).
 - Reject anything else (extra text, shell metacharacters, a non-PR URL) and
   stop with an error.
 

@@ -16,7 +16,9 @@ If no PR is specified, review the current branch's PR. If no focus is specified,
    - if `$ARGUMENTS` is provided, derive a **safe PR target** first
    - normalize URL input by stripping query/hash/trailing slash
    - if URL input: extract `<OWNER>`, `<REPO>`, `<NUMBER>`
-   - if bare integer input: use `<NUMBER>` in the **current checkout repository only**
+- if bare integer input: use `<NUMBER>` in the **current checkout repository only**,
+  and derive `<OWNER>/<REPO>` from `git remote get-url origin` (normalize
+  SSH/HTTPS form to `owner/repo`; reject if derivation fails)
    - reject anything else; never pass raw `$ARGUMENTS` into shell commands
    - use:
      - `gh pr view <NUMBER> --repo <OWNER>/<REPO> --json files` for changed files metadata

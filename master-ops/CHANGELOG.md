@@ -49,13 +49,34 @@ re-running `bash scripts/onboarding-preflight.sh`, and raising the installed
 
 Onboarding now requires Orca infrastructure and uses Orca orchestration for all
 supervised dispatch. A new read-only-by-default `scripts/onboarding-preflight.sh`
-checks Orca status, the orchestration RPC, the global `orca-cli` and
+checks Orca status, orchestration capability, the `orca-cli` and
 `orchestration` skills, Beads resolution when an ops repository exists, and
-Python before onboarding proceeds. `ONBOARDING.md` is rewritten as a token-lean
-script-and-command flow while retaining its questions, safeguards, and
-verification gates; `--fix` may add or refresh only the required global skills.
-Template v5 also adds the append-only `scripts/codex-worker-pretrust` helper so
-every Orca Codex account trusts a worker worktree before dispatch.
+Python before onboarding proceeds. It also gates the rest of the tool surface a
+master and its workers actually invoke: the named agent CLI, the worker runtimes
+dispatch targets, Git, an authenticated `gh`, a runnable test entry point, a
+writable dispatch ledger directory, and the organization rules file.
+`ONBOARDING.md` is rewritten as a token-lean script-and-command flow while
+retaining its questions, safeguards, and verification gates; `--fix` may add or
+refresh only the required global skills. Template v5 also adds the append-only
+`scripts/codex-worker-pretrust` helper so every Orca Codex account trusts a
+worker worktree before dispatch.
+
+Two of those checks measure differently than a first reading suggests, because
+both were wrong in the first cut. Orchestration is judged by capability, not
+reachability: a retained legacy coordinator answers reads and drops writes with
+`effectsApplied:false`, so `run-current` must report a bound non-legacy Run.
+Skills are judged by the artifact, not the installer: the required skills can
+resolve on a host that has no `skills` package manager at all, and an installer
+listing that cannot run is not evidence of absence.
+
+The organization rules file moves from optional to required, since two of the
+three publish gates refuse to run without it. The preflight validates its format
+and reports counts only. It never prints a rule, an identifier, or a match,
+because that file's contents are what the scanner protects. The format is one
+rule per line as `id|description|regex`, `#` comments and blank lines skipped,
+split on the first two pipes only so the regex may contain `|`, and every regex
+must compile: the inventory drops uncompilable rules without reporting them, so
+a malformed rule narrows coverage while the file still looks populated.
 
 The minimum Python version is now 3.11 because the pre-trust helper uses the
 standard-library `tomllib` parser to make config edits safely.
@@ -73,7 +94,8 @@ Upgrade an existing installation in this order:
 2. Run `bash scripts/onboarding-preflight.sh` from that clone and fix every FAIL;
    re-collect and confirm the workspace facts before routing work.
 3. Before each Codex worker attach, run `scripts/codex-worker-pretrust <worktree-path>` from the orchestrator clone.
-4. Enable Orca orchestration, then verify the preflight reports its RPC reachable.
+4. Enable Orca orchestration and bind a Run with `orca orchestration run-create`,
+   then verify the preflight reports a non-legacy Run bound to this terminal.
 5. Select or create the approved ops repository, then verify `bd where` from the
    workspace root resolves to it and no tracker root is selected above it.
 6. Replace all template placeholders, verify `CLAUDE.md` and `AGENTS.md` are

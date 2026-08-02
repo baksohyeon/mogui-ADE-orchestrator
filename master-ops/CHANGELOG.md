@@ -39,6 +39,27 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+`scripts/redaction-inventory` gets its first tests, and two ways it could report
+a clean result without having read anything are closed.
+
+Rule lines that are malformed or whose regex does not compile were dropped in
+silence, so the printed rule count described what loaded rather than what the file
+held: coverage narrowed while the file still looked populated. The scope line and
+the JSON output now report how many lines were considered and how many were
+unusable.
+
+A repository with no tracked files reported OK. Reading nothing is not a clean
+result, so that case now exits 2 as undecidable, the same as a missing pattern
+file or a non-repository.
+
+Nine tests drive the real script in temporary git repositories and assert exit
+codes, since the exit code is what the publish gate consumes: unset pattern file,
+a file with no usable rule, unusable lines reported, no tracked files, outside a
+repository, an uncovered candidate, a rule that covers it, a baseline that
+suppresses it, and the JSON scope fields. Two mutations confirmed they bite:
+restoring the silent drop fails two of them, and letting an empty repository pass
+fails another.
+
 `register` now compares the model a dispatch declared with the model the worker
 actually ran. Until now the gate enforced the declaration at `check` and
 `register` took no model at all, so a worker inheriting a tier nobody asked for

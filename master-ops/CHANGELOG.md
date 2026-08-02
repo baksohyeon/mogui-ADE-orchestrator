@@ -59,7 +59,7 @@ interpreter on the host) leaves the trust prompt in place and says so on
 stdout. The attach instruction now says to confirm the summary is not
 `skipped`, instead of promising unconditionally that startup never blocks.
 
-ONBOARDING's Step 0 verification matches the retiered preflight: `gitleaks`
+ONBOARDING's Step 0 verification matches the re-tiered preflight: `gitleaks`
 and `ctx` are measured and warn without blocking when absent, with the
 consequence attached (the redaction gate cannot decide without its engine; the
 records practice cannot query cross-provider history), so an install that will

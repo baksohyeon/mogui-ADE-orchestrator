@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  printf 'Usage: %s <worktree-path> [--accounts-dir <dir>]\n' "${0##*/}" >&2
+}
+
+if [[ $# -ne 1 && $# -ne 3 ]]; then
+  usage
+  exit 2
+fi
+
+worktree_path=$1
+if [[ "$worktree_path" != /* ]]; then
+  printf 'ERROR worktree path must be absolute: %s\n' "$worktree_path" >&2
+  usage
+  exit 2
+fi
+
+if [[ $# -eq 3 ]]; then
+  if [[ "$2" != "--accounts-dir" || -z "$3" ]]; then
+    usage
+    exit 2
+  fi
+  accounts_dir=$3
+elif [[ -n "${CODEX_ACCOUNTS_DIR:-}" ]]; then
+  accounts_dir=$CODEX_ACCOUNTS_DIR
+else
+  case "$(uname -s 2>/dev/null || printf unknown)" in
+    Darwin)
+      accounts_dir="$HOME/Library/Application Support/orca/codex-accounts"
+      ;;
+    *)
+      accounts_dir="$HOME/.local/share/orca/codex-accounts"
+      ;;
+  esac
+fi
+
+if [[ ! -d "$accounts_dir" ]]; then
+  printf 'INFO accounts directory not found: %s; nothing to pre-trust\n' "$accounts_dir"
+  printf 'Summary: 0 added, 0 already trusted\n'
+  exit 0
+fi
+
+# TOML basic strings escape backslashes and double quotes. Worktree paths with
+# line breaks cannot be represented safely as a single-line table name.
+if [[ "$worktree_path" == *$'\n'* || "$worktree_path" == *$'\r'* ]]; then
+  printf 'ERROR worktree path must not contain a line break\n' >&2
+  exit 2
+fi
+escaped_path=${worktree_path//\\/\\\\}
+escaped_path=${escaped_path//\"/\\\"}
+project_header="[projects.\"$escaped_path\"]"
+
+shopt -s nullglob
+config_files=("$accounts_dir"/*/home/config.toml)
+added=0
+already_trusted=0
+
+for config_file in "${config_files[@]}"; do
+  if grep -Fqx -- "$project_header" "$config_file"; then
+    printf '%s: already trusted\n' "$config_file"
+    already_trusted=$((already_trusted + 1))
+    continue
+  fi
+
+  printf '\n%s\ntrust_level = "trusted"\n' "$project_header" >> "$config_file"
+  printf '%s: trusted (added)\n' "$config_file"
+  added=$((added + 1))
+done
+
+printf 'Summary: %d added, %d already trusted\n' "$added" "$already_trusted"

@@ -120,6 +120,17 @@ Recommended worker lanes:
 - Local code work: a worker lane bound to the relevant repository checkout
 - Sensitive areas such as auth, permissions, secrets, credentials, production data, and incident material: a dedicated security or operations session
 
+### Worker Launch Approval Posture
+
+Workers launched into isolated worktrees must start with the agent's non-interactive approval flag, or the measured Codex pre-trust posture below, so allowlist or trust prompts cannot block them mid-task. At every dispatch, the master MEASURES the installed CLI's `--help` output and uses only flags present there; it never guesses flags from memory.
+
+MEASURED examples from 2026-08-02:
+
+- Grok: `--always-approve`.
+- Claude Code: `--dangerously-skip-permissions`.
+- Cursor Agent: `--force` (also exposed as `--yolo`) to force-allow commands unless explicitly denied, plus `--trust` to trust the current workspace without prompting.
+- Codex: run `scripts/codex-worker-pretrust <worktree-path>` and retain the account-wide hooks trust posture; Codex uses this pre-trust path instead of a launch approval flag.
+
 Three-vote review is the default for non-trivial merges or direct-push changes. Split review lenses:
 
 - general correctness
@@ -150,6 +161,8 @@ L=~/.mogui/dispatch-ledger.jsonl
 <supervised dispatch command>
 "$G" --ledger "$L" register --job-id <job-id> --probe-cmd "<command proving the job-id appears in an artifact>"
 ```
+
+Before attaching a Codex worker, run `scripts/codex-worker-pretrust <worktree-path>` so startup never blocks on the trust prompt.
 
 `register` without a prior successful `check` is invalid. Register only after the artifact exists, and before the final evidence report. Promote dispatch acceptance and verification results into the issue tracker.
 
@@ -194,6 +207,8 @@ Do not store credentials, secrets, raw environment values, or secret-dependent i
 ## 7. Boot, Hooks, And Observability
 
 Hook wiring is a specification here. Apply concrete hook configuration through a human or dedicated security/operations session.
+
+Orca command and orchestration references are grounded through `docs/orca-docs-grounding.md`; start there and never guess Orca flags.
 
 Recommended hook spec:
 

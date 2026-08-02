@@ -240,6 +240,10 @@ Verify the explanation preceded commands, nothing was installed or configured by
 
 Ask for confirmation to spawn now or defer, reload the durable placement result from Step 3.5, re-run `terminal show`, and confirm that the selector, live handle, and `{{OPS_REPO}}` worktree proof still match. Write a kickoff file containing Generation 1, this installer as founding origin, the boot sequence (rehydrate ops docs, declare Role State, measure model and placement), the initial queue, and the requirement to report the orchestration Task complete.
 
+Before launching any worker, follow `docs/MASTER-OPERATIONS.md` §3: MEASURE the installed agent CLI's non-interactive approval flags from `--help` and never guess them.
+
+Before attaching a Codex worker, run `scripts/codex-worker-pretrust <worktree-path>` as the pre-trust step.
+
 Run this supervised path with the resolved `ORCA` executable:
 
 ```console

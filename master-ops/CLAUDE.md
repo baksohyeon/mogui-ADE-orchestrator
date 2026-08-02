@@ -6,6 +6,7 @@
 - Workspace repositories: `{{REPO_LIST}}`
 - Master operations SSOT: `docs/MASTER-OPERATIONS.md`
 - Role state SSOT: `docs/runbooks/role-state.md`
+- Orca docs grounding: `docs/orca-docs-grounding.md`; never guess Orca flags.
 - Execution state belongs in the issue tracker. Plans, designs, closed decisions, and durable runbooks belong in Git.
 - After compaction, clear, or session recovery, first reload issue-tracker context and re-check active tracks before continuing.
 - Sensitive lanes such as auth, permission, credentials, production data, and secrets should be delegated to a dedicated security or operations session. The master coordinates and verifies; it does not improvise sensitive implementation.

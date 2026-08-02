@@ -33,6 +33,8 @@ checks Orca status, the orchestration RPC, the global `orca-cli` and
 Python before onboarding proceeds. `ONBOARDING.md` is rewritten as a token-lean
 script-and-command flow while retaining its questions, safeguards, and
 verification gates; `--fix` may add or refresh only the required global skills.
+Template v5 also adds the append-only `scripts/codex-worker-pretrust` helper so
+every Orca Codex account trusts a worker worktree before dispatch.
 
 The v5 upgrade contract also adds governance rules to the template: Orca is
 required infrastructure, neutrality covers only artifact formats and agent
@@ -46,17 +48,18 @@ Upgrade an existing installation in this order:
 1. Pull template v5 in the orchestrator clone.
 2. Run `bash scripts/onboarding-preflight.sh` from that clone and fix every FAIL;
    re-collect and confirm the workspace facts before routing work.
-3. Enable Orca orchestration, then verify the preflight reports its RPC reachable.
-4. Select or create the approved ops repository, then verify `bd where` from the
+3. Before each Codex worker attach, run `scripts/codex-worker-pretrust <worktree-path>` from the orchestrator clone.
+4. Enable Orca orchestration, then verify the preflight reports its RPC reachable.
+5. Select or create the approved ops repository, then verify `bd where` from the
    workspace root resolves to it and no tracker root is selected above it.
-5. Replace all template placeholders, verify `CLAUDE.md` and `AGENTS.md` are
+6. Replace all template placeholders, verify `CLAUDE.md` and `AGENTS.md` are
    byte-identical, and make settings and security-sensitive hook ownership
    explicit before enabling anything.
-6. Install only the required skills with
+7. Install only the required skills with
    `npx skills add stablyai/orca -g --skill orca-cli --skill orchestration`;
    refresh the orchestration skill with `npx skills update orchestration -g`
    when needed.
-7. Raise the installation's `Template version` line in
+8. Raise the installation's `Template version` line in
    `docs/MASTER-OPERATIONS.md` to 5 after applying the relevant local changes.
 
 Existing local edits still win. From this version onward, raw terminal polling

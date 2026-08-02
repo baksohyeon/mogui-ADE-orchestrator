@@ -12,7 +12,7 @@ The supervised flow is:
 check -> dispatch -> register
 ```
 
-`check` reads the worker contract and records a decision in the dispatch ledger. `dispatch` starts or plans the worker through the adapter. `register` is valid only after a probe proves that the worker job id appears in an expected artifact.
+`check` reads the worker contract and records a decision in the dispatch ledger. `dispatch` is the launch itself: the master starts the worker on the runtime the contract names, and the harness does not wrap that step — the typed adapter path that once did was removed. `register` is valid only after a probe proves that the worker job id appears in an expected artifact.
 
 The gate exists because policy without wiring is easy to bypass. A worker launch path once ran outside the expected warning path; the absence of a warning was incorrectly treated as permission. The fix was to treat every worker launch surface as part of the dispatch boundary and to record missing or unverifiable dispatches as violations rather than retroactively accepting them.
 

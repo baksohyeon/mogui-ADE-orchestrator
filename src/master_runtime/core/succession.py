@@ -266,7 +266,11 @@ def find_sessions(
     )
     if code != 0:
         raise SuccessionError(stderr.strip() or stdout.strip() or "orca terminal list failed")
-    sessions = tuple(_parse_session(item) for item in _terminal_items(stdout))
+    # A single malformed entry must not take every list consumer down; entries
+    # without a handle are unaddressable anyway.
+    sessions = tuple(
+        _parse_session(item) for item in _terminal_items(stdout) if item.get("handle")
+    )
     if selector is None:
         return sessions
     return tuple(session for session in sessions if _session_matches(session, selector))
@@ -397,7 +401,7 @@ def spawn_successor(
     orca_runner: Optional[OrcaRunner] = None,
     dry_run: bool = False,
 ) -> SpawnReport:
-    """Create a successor terminal and fail closed if Orca places it elsewhere."""
+    """Create a successor terminal and fail closed on worktree or handle-liveness mismatch."""
 
     selector = _require_substr(workspace_selector, "workspace_selector")
     kickoff = _require_substr(kickoff_text, "kickoff_text")
@@ -421,6 +425,7 @@ def spawn_successor(
         "requested_worktree": selector,
         "expected_response_field": "worktreeId",
         "fail_closed_action": "terminal close on mismatch",
+        "liveness_check": "reported handle must be live+new+connected in requested worktree, else adopt unique titled candidate or fail closed without closing",
     }
     if dry_run:
         return SpawnReport(
@@ -454,20 +459,32 @@ def spawn_successor(
     try:
         terminal = _created_terminal(stdout)
     except SuccessionError as exc:
-        _raise_spawn_error_after_cleanup(runner, handle_hint, exc)
+        _raise_spawn_error_after_cleanup(runner, handle_hint, exc, snapshot_handles)
         raise
 
     handle = _spawn_field(terminal, ("handle", "terminal", "terminalHandle"), "handle")
     try:
         worktree_id = _spawn_field(terminal, ("worktreeId",), "worktreeId")
     except SuccessionError as exc:
-        _raise_spawn_error_after_cleanup(runner, handle, exc)
+        _raise_spawn_error_after_cleanup(runner, handle, exc, snapshot_handles)
         raise
     if worktree_id != selector:
+        mismatch = SuccessionError(
+            "spawn worktree mismatch: requested {0}, got {1}".format(selector, worktree_id),
+            SPAWN_WORKTREE_MISMATCH,
+        )
+        if handle in snapshot_handles:
+            raise SuccessionError(
+                "{0}; reported handle {1} is pre-existing; terminal not closed".format(
+                    str(mismatch),
+                    handle,
+                ),
+                mismatch.exit_code,
+            ) from mismatch
         _close_spawned_terminal(
             runner,
             handle,
-            "spawn worktree mismatch: requested {0}, got {1}".format(selector, worktree_id),
+            str(mismatch),
         )
         raise SuccessionError(
             "spawn worktree mismatch; closed terminal {0}: requested {1}, got {2}".format(
@@ -485,19 +502,25 @@ def spawn_successor(
             runner,
             handle,
             SuccessionError("spawn liveness list failed: " + str(exc), SPAWN_LIST_ERROR),
+            snapshot_handles,
         )
         raise
 
     # A handle seen before the create cannot belong to the terminal the create
     # made, even if it is live now (handle recycling would point at a user's
     # pre-existing terminal).
-    handle_is_live_and_new = any(
-        session.handle == handle
-        and session.handle not in snapshot_handles
-        and session.worktree_id == selector
-        for session in live_sessions
+    matched_live_session = next(
+        (
+            session
+            for session in live_sessions
+            if session.handle == handle
+            and session.handle not in snapshot_handles
+            and session.worktree_id == selector
+            and session.connected
+        ),
+        None,
     )
-    if handle_is_live_and_new:
+    if matched_live_session is not None:
         return SpawnReport(
             "CREATED",
             handle,
@@ -509,20 +532,29 @@ def spawn_successor(
             {
                 "requested_worktree": selector,
                 "actual_worktree": worktree_id,
+                "liveness_check": "reported handle is live+new+connected in requested worktree",
+                "title_matched": pane_title in matched_live_session.title,
                 "result": "MATCH",
             },
         )
 
-    reissued = _resolve_reissued_terminal(live_sessions, snapshot_handles, selector, pane_title)
+    candidates, narrowed = _reissued_terminal_candidates(
+        live_sessions,
+        snapshot_handles,
+        selector,
+        pane_title,
+    )
+    reissued = narrowed[0] if len(narrowed) == 1 else None
     if reissued is None:
-        candidates = _new_worktree_sessions(live_sessions, snapshot_handles, selector)
         raise SuccessionError(
-            "spawn handle stale: reported handle {0} is not live and {1} new terminal(s) "
-            "in worktree {2} cannot be resolved to exactly one: {3}; the created terminal "
+            "spawn handle stale: reported handle {0} is not trusted as live; {1} new connected "
+            "terminal(s) exist in worktree {2}, {3} carry pane title {4}: {5}; the created terminal "
             "may still be running unmanaged, reconcile via orca terminal list".format(
                 handle,
                 len(candidates),
                 selector,
+                len(narrowed),
+                repr(pane_title),
                 [session.handle for session in candidates],
             ),
             SPAWN_HANDLE_STALE,
@@ -554,24 +586,24 @@ def _new_worktree_sessions(
     return tuple(
         session
         for session in live_sessions
-        if session.worktree_id == selector and session.handle not in snapshot_handles
+        if session.worktree_id == selector
+        and session.handle not in snapshot_handles
+        and session.connected
     )
 
 
-def _resolve_reissued_terminal(
+def _reissued_terminal_candidates(
     live_sessions: Sequence[SessionInfo],
     snapshot_handles: frozenset,
     selector: str,
     pane_title: str,
-) -> Optional[SessionInfo]:
+) -> Tuple[Tuple[SessionInfo, ...], Tuple[SessionInfo, ...]]:
     candidates = _new_worktree_sessions(live_sessions, snapshot_handles, selector)
     # Orca prefixes live titles with status glyphs, so match by containment. The
     # created terminal was given pane_title, so even a lone candidate must carry
     # it; adopting an untitled stranger would target a user's terminal later.
     narrowed = tuple(session for session in candidates if pane_title in session.title)
-    if len(narrowed) == 1:
-        return narrowed[0]
-    return None
+    return candidates, narrowed
 
 
 def _terminal_items(stdout: str) -> Tuple[Mapping[str, object], ...]:
@@ -637,9 +669,18 @@ def _raise_spawn_error_after_cleanup(
     runner: OrcaRunner,
     handle: Optional[str],
     error: SuccessionError,
+    snapshot_handles: frozenset,
 ) -> None:
     if not handle:
         raise error
+    if handle in snapshot_handles:
+        raise SuccessionError(
+            "{0}; reported handle {1} is pre-existing; terminal not closed".format(
+                str(error),
+                handle,
+            ),
+            error.exit_code,
+        ) from error
     _close_spawned_terminal(runner, handle, str(error))
     raise SuccessionError(
         "{0}; closed terminal {1}".format(str(error), handle),

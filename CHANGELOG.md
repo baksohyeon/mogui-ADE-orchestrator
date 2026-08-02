@@ -30,7 +30,12 @@ you build on it.
   and needs manual reconciliation via `orca terminal list`. A list failure before
   the create blocks the create with exit code 25 (`SPAWN_LIST_ERROR`); a list
   failure after it attempts a cleanup close first and exits 25 on success or 23
-  (`SPAWN_CLOSE_ERROR`) if that close also fails.
+  (`SPAWN_CLOSE_ERROR`) if that close also fails. Cleanup closes are skipped
+  entirely — the error says "pre-existing; terminal not closed" — whenever the
+  reported handle already appeared in the pre-create snapshot, because closing it
+  could kill a user's terminal that the handle was recycled from. Disconnected
+  list entries never count as live, and entries without a handle are skipped
+  rather than failing the whole list.
 
 ### Removed
 

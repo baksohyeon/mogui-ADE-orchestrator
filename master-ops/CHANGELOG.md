@@ -19,10 +19,51 @@ $ grep 'Template version' docs/MASTER-OPERATIONS.md
 This file is not in that repository. Step 3 keeps it out, so it stays in the
 orchestrator clone alongside the template it describes.
 
-When a change touches `master-ops/`, raise `TEMPLATE-VERSION` and add an entry
-here in the same change. Skip that and installations on different template
-states all report the same version, which is the whole thing this was meant to
-prevent.
+When a change touches `master-ops/`, add an entry under `## Unreleased` in the
+same change. `TEMPLATE-VERSION` moves only when a release is cut, and it holds
+that release's tag string. The repository's existing scheme continues, so the
+release after `v0.1.0` is `v0.2.0`. Merging a change is not releasing it, and
+between releases this file keeps whatever the last release left in it.
+
+Skew is decided by comparing that string with the latest release tag for
+equality, never by comparing magnitudes. The integers 3 through 6 in the entries
+below are transitional numbers from before this file tracked releases; an
+installation still reporting one of them is caught the same way as any other
+mismatch, by not equalling the latest tag.
+
+One consequence to keep in mind while reading an installation's version line: an
+installation onboarded between releases carries unreleased entries while
+reporting the last released tag, so that value names the release it came from and
+not the exact body it received. When the difference matters, record the commit the
+installation was taken from alongside the tag.
+
+## Unreleased
+
+`docs/MASTER-OPERATIONS.md` gains an Incident-Derived Rules section: eleven
+rules, each carrying the observation that produced it and the measurement that settles
+it. The Closed Principles Pointer moves from section 8 to section 9.
+
+The rules were already being applied across the preceding versions; what was
+missing was their evidence. A rule stated bare gets argued away by the next
+reader, who has not seen the failure it came from, and a rule with no
+measurement cannot be checked at all. Both halves are therefore mandatory for
+anything added to that section.
+
+The rules cover what the recent template versions were built against:
+reachability is not capability and a record is not an effect; silence is not a
+pass; a declaration is not a measurement; put the guard where the incident was;
+say whether a constraint came from availability or from policy; fix the pair or
+the survivor lies; a green light must name its scope; a gate nobody can pass is
+a gate nobody runs; do not read a blocker, test it. Two are about the work
+itself rather than the system: a squash merge erases the base a stacked branch
+was built on, and reverting a file discards work that was never committed.
+
+Upgrade an existing installation by copying the new section into its operations
+SSOT and renumbering the Closed Principles Pointer. The installed `Template
+version` line moves at the next release tag rather than here. An installation
+that has its own incidents should
+append them in the same form rather than replacing these: the section is meant
+to accumulate, and a rule earned locally outranks one inherited from a template.
 
 ## 6
 

@@ -130,7 +130,7 @@ if [[ "$orca_ready" == true ]]; then
     || ! grep -Eq '"ok"[[:space:]]*:[[:space:]]*true' <<<"$orchestration_output"; then
     fail "orchestration" "RPC unavailable; enable Orca orchestration and retry"
   elif grep -Eq '"run"[[:space:]]*:[[:space:]]*null' <<<"$orchestration_output"; then
-    fail "orchestration" "RPC reachable but no Run is bound to this terminal, so dispatch effects have nowhere to land; run: $orca_command orchestration run-create"
+    fail "orchestration" "RPC reachable but no Run is bound to this terminal: the task family fails with run_required until one is, and a binding that drops later does so without a signal, after which check returns count:0 and an empty mailbox looks the same as a missing binding; run: $orca_command orchestration run-create"
   elif grep -Eq '"legacy"[[:space:]]*:[[:space:]]*1' <<<"$orchestration_output"; then
     fail "orchestration" "the bound Run is legacy and inspect-only; create a fresh one: $orca_command orchestration run-create"
   else

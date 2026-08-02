@@ -10,7 +10,7 @@ Anyone running more than two agents at once hits this. Dorito hit it, got tired 
 
 Nothing to configure and nothing to read first. Clone it, start an agent inside the clone, tell it to wake up. The agent takes it from there and explains as it goes.
 
-It runs the fleet on [Orca](https://www.onorca.dev/download). A session has to outlive its window and be addressable by handle before anything can orchestrate it. Built and run on macOS; Orca also ships Linux and Windows. Python 3.10+, stdlib-only core, MIT. No API key.
+It runs the fleet on [Orca](https://www.onorca.dev/download). A session has to outlive its window and be addressable by handle before anything can orchestrate it. Built and run on macOS; Orca also ships Linux and Windows. Python 3.11+, stdlib-only core, MIT. No API key.
 
 The orchestrating session is called the master, for lack of a better word. It has no name yet. Suggestions welcome.
 
@@ -290,7 +290,7 @@ Two principles shape the layout:
 
 To use the system, the [Quickstart](#quickstart) above is the whole path. This section is for changing the harness itself.
 
-Prerequisites: macOS and **Python 3.10+**. The runtime is stdlib-only; there is nothing to install.
+Prerequisites: macOS and **Python 3.11+**. The runtime is stdlib-only; there is nothing to install.
 
 All CLI entry points live in `scripts/` and are self-contained (they insert `src/` on `sys.path` themselves):
 

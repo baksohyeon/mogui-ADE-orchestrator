@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 import subprocess
 import tomllib
@@ -6,12 +7,18 @@ import tomllib
 SCRIPT = Path(__file__).parents[1] / "scripts" / "codex-worker-pretrust"
 
 
-def run_pretrust(worktree_path: str, accounts_dir: Path) -> subprocess.CompletedProcess[str]:
+def run_pretrust(
+    worktree_path: str,
+    accounts_dir: Path,
+    *,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [str(SCRIPT), worktree_path, "--accounts-dir", str(accounts_dir)],
         capture_output=True,
         text=True,
         check=False,
+        env=env,
     )
 
 
@@ -195,6 +202,29 @@ def test_unparseable_config_aborts_without_writing(tmp_path: Path) -> None:
 
     assert result.returncode == 2
     assert f"ERROR {config}: cannot parse TOML" in result.stderr
+    assert config.read_bytes() == original
+
+
+def test_tomllib_unavailable_requires_python_311_without_writing(
+    tmp_path: Path,
+) -> None:
+    accounts_dir = tmp_path / "accounts"
+    original = b'model = "gpt"\n'
+    config = make_config(accounts_dir, "primary", original)
+    import_shim = tmp_path / "import-shim"
+    import_shim.mkdir()
+    (import_shim / "tomllib.py").write_text(
+        'raise ImportError("tomllib unavailable for regression test")\n',
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(import_shim)
+
+    result = run_pretrust("/tmp/worktree", accounts_dir, env=env)
+
+    assert result.returncode == 2
+    assert f"ERROR {config}: Python 3.11+ is required" in result.stderr
+    assert "codex-worker-pretrust requires tomllib" in result.stderr
     assert config.read_bytes() == original
 
 

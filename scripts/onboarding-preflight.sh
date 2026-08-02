@@ -217,10 +217,10 @@ fi
 
 test_hint='PYTHONPATH=src uv run --with pytest --no-project python3 -m pytest tests -q'
 if command -v python3 >/dev/null 2>&1 \
-  && python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1; then
-  pass "python3" "present; test suite: $test_hint"
+  && python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' >/dev/null 2>&1; then
+  pass "python3" "Python 3.11+ present; codex-worker-pretrust uses tomllib for safe TOML editing; test suite: $test_hint"
 else
-  fail "python3" "missing; install Python 3.10+; test suite: $test_hint"
+  fail "python3" "missing or too old; install Python 3.11+ because codex-worker-pretrust uses tomllib for safe TOML editing; test suite: $test_hint"
 fi
 
 printf '\nPreflight summary\n'

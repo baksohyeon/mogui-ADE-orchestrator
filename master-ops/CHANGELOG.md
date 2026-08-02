@@ -36,6 +36,9 @@ verification gates; `--fix` may add or refresh only the required global skills.
 Template v5 also adds the append-only `scripts/codex-worker-pretrust` helper so
 every Orca Codex account trusts a worker worktree before dispatch.
 
+The minimum Python version is now 3.11 because the pre-trust helper uses the
+standard-library `tomllib` parser to make config edits safely.
+
 The v5 upgrade contract also adds governance rules to the template: Orca is
 required infrastructure, neutrality covers only artifact formats and agent
 swappability, PR review-bot threads are worker-handled by standing delegation,

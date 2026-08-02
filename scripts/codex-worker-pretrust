@@ -64,13 +64,23 @@ for config_file in "${config_files[@]}"; do
 import copy
 import re
 import sys
-import tomllib
 from pathlib import Path
 
 
 config_path = Path(sys.argv[1])
 worktree_path = sys.argv[2]
 project_header = sys.argv[3].encode("utf-8")
+
+try:
+    import tomllib
+except ImportError:
+    print(
+        f"ERROR {config_path}: Python 3.11+ is required for safe TOML editing "
+        "because codex-worker-pretrust requires tomllib",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
+
 original_content = config_path.read_bytes()
 
 

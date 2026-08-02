@@ -39,6 +39,11 @@ Installations copy nothing for this version; only the onboarding flow changed.
 An installation on version 3 raises the `Template version` line in
 `docs/MASTER-OPERATIONS.md` to 4 if it wants to record currency.
 
+The Step 8 failure contract is fail-closed: it does not retry with a filesystem
+path selector and does not boot the master in the installer session.
+Disconnected, zero-candidate, or ambiguous (2+) candidates fail closed without
+terminal cleanup.
+
 ## 3
 
 The operations card (`CLAUDE.md`/`AGENTS.md`) gains an owner-communication

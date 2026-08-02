@@ -39,6 +39,24 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+Onboarding now states consequences instead of listing options.
+
+Step 7.5 offered a skill layer as optional. The template carries documents and
+scripts and cannot carry the host layer that makes a master behave the way those
+documents describe, so several of those components are optional in name only. Each
+one now comes with the consequence of declining it, said in the same breath as the
+offer, and the user's answer is recorded per component including a decline. A
+declined component is a fact about the installation; later behaviour that looks
+like a master defect is often a declined component instead.
+
+New Step 7.6 states what the publish gates do not cover: pull request titles and
+bodies, review comments, release notes, issue text, and anything typed into a
+forge web interface. None of it is in the repository, so no scanner here reads it,
+and it is where internal names arrive most easily because it is prose rather than
+code. A gate trusted beyond its scope is worse than no gate, since it turns an
+unchecked surface into a believed-clean one. The same rule is added to the
+incident-derived rules section with the grep that settles it.
+
 The redaction gate starts moving onto gitleaks as its matching engine, and this
 release carries the preparation rather than the swap.
 

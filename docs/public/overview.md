@@ -40,15 +40,17 @@ The design is too heavy for a short task in one repository with one agent. In th
 
 ## Core Capabilities
 
-Execution environment: Orca-managed terminals and git worktrees are the real execution boundary. The adapter layer can decide whether a worker can share a checkout or needs a separate worktree.
+Sessions and placement: Orca-managed terminals and git worktrees are the real execution boundary. The adapter layer decides whether a worker can share a checkout or needs a separate worktree, and a spawned session counts as placed only when Orca's response proves the requested worktree, fail-closed on mismatch.
 
-Context management: bootstrap code loads a bounded L0/L1 context block, parses Role State, audits issue-tracker memory summaries when available, and includes compaction-specific recall probes.
+Durable operating state: bootstrap code loads a bounded L0/L1 context block, parses Role State, audits issue-tracker memory summaries when available, and includes compaction-specific recall probes. Execution state lives in the tracker; decisions and runbooks live in git; chat is never the only copy.
 
-Delegation: the dispatch gate follows `check -> dispatch -> register`. A readable worker contract is checked before dispatch, and a job is registered only after a probe verifies the job identity.
+Supervised dispatch: the dispatch gate follows `check -> dispatch -> register`. A readable worker contract is checked before dispatch, and a job is registered only after a probe verifies the job identity.
 
-Steering: the operating rule is `Proposal -> Approval -> Execution`. Role State limits which kind of work the master may perform, and non-trivial acceptance can use separated review lenses.
+Approval and roles: the operating rule is `Proposal -> Approval -> Execution`. Role State limits which kind of work the master may perform, and non-trivial acceptance can use separated review lenses.
 
-Filesystem model: this project does not provide a virtual filesystem. Its analogue is repository-level isolation: path resolution, per-repository worktrees, and operating rules that keep sensitive lanes separate from ordinary implementation work.
+Succession and lineage: the master session itself is replaceable while the work continues. A handoff is built, a successor is spawned with placement proof, its boot is verified against the inherited state, the predecessor is retired, and the whole event lands in an append-only lineage ledger.
+
+Repository isolation: this project does not provide a virtual filesystem. Isolation is repository-level: path resolution, per-repository worktrees, and operating rules that keep sensitive lanes separate from ordinary implementation work.
 
 ## Related Work
 
@@ -56,7 +58,7 @@ This section was written after this project was built, not as a starting point f
 
 LangChain's [deepagents](https://docs.langchain.com/oss/python/deepagents/overview) solves an adjacent reliability problem inside an agent application. It is a standalone library built on LangChain's core agent building blocks that uses the LangGraph runtime for durable execution, streaming, and human-in-the-loop. Its documentation organizes a harness around four areas: execution environment (tools, virtual filesystem, optional sandbox, REPL), context management (skills, memory, summarization, context offloading, prompt caching), delegation (subagent spawning and optional task planning), and steering (approval and interrupts). These are implemented as middleware such as `FilesystemMiddleware`, `TodoListMiddleware`, and `SubAgentMiddleware` over pluggable filesystem backends. *(Source: the linked overview page, read 2026-07-31. This project has not audited the deepagents source; claims here are limited to that page.)*
 
-The four areas are a good decomposition, and this project arrives at nearly the same list. If you are willing to hold an API key, deepagents is the better answer and this page is not trying to talk you out of it. The difference below matters only if you are not.
+Read side by side, the two decompositions map onto each other: their execution environment to sessions and placement, their context management to durable operating state, their delegation to supervised dispatch, their steering to approval and roles. The mapping is a convergence of two teams staring at the same failure modes, not a lineage. The choice between them is an architecture fact rather than a ranking: deepagents fits when your application holds a model API key and wants the harness in-process; this project fits when your substrate is subscription CLI agents in real terminals and nothing holds a key.
 
 deepagents assumes model API access from inside a Python process. The harness owns the graph, the tools, and the filesystem abstraction, so a subagent is an in-process actor, a filesystem is a pluggable backend, and an interrupt is a runtime callback.
 

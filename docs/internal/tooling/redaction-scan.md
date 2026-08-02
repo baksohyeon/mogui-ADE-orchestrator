@@ -11,13 +11,31 @@ scripts/redaction-scan.sh
 # Staged index only
 scripts/redaction-scan.sh --staged
 
-# Commits about to be pushed (pre-push)
+# Commits about to be pushed, and those commits' messages (pre-push)
 scripts/redaction-scan.sh --range "$remote_sha..$local_sha"
+
+# Commit messages for any range, in any mode
+scripts/redaction-scan.sh --commit-messages "$remote_sha..$local_sha"
 ```
 
-- **Fail-closed:** any unallowlisted match → exit 1.
-- **Tools:** `bash`, `git`, and `rg` (preferred, PCRE2) or `grep -E`.
-- **Allowlist:** `scripts/redaction-allowlist.txt` (override with `REDACTION_ALLOWLIST=`).
+- **Fail-closed:** any match that is not exempted → exit 1.
+- **Engine:** gitleaks does the matching. The script scopes the scan to tracked content, scans commit messages, translates the organization rules, and reports what it covered.
+- **Tools:** `bash`, `git`, `python3`, and `gitleaks` on `PATH`. The former `rg` and `grep -E` paths are gone.
+- **Committed rules:** `config/gitleaks.toml`, extending gitleaks' maintained default set.
+- **Exemptions:** a `.gitleaksignore` fingerprint for one finding, or an allowlist block in `config/gitleaks.toml` for a class. The old `scripts/redaction-allowlist.txt` format is retired, and a file still holding entries in it exits 2 rather than being ignored.
+
+### Scope is stated in the output
+
+A green line that does not name its scope cannot be told apart from a full audit, so every run says what it read:
+
+```console
+$ scripts/redaction-scan.sh
+redaction-scan: OK — 0 findings (mode=tracked, files=144, commit-messages=not-scanned, org-rules=10)
+```
+
+`commit-messages=not-scanned` is the honest reading in tracked and staged modes. gitleaks does not read commit messages: a key present only in a message returns no findings while the same key in file content is found. That is measured, and it is why the message loop lives in this script.
+
+`org-rules=N` counts rules actually loaded into the run, not lines the file happens to hold.
 
 ### Organization-specific rules (`REDACTION_EXTRA_PATTERNS`)
 
@@ -35,7 +53,9 @@ RULES
 export REDACTION_EXTRA_PATTERNS=~/.config/redaction-extra.txt
 ```
 
-Each line is `id|description|regex`. Blank lines and `#` comments are ignored.
+Each line is `id|description|regex`. Blank lines and `#` comments are ignored. Only the first two pipes separate fields, so a regex may contain a pipe.
+
+The file is translated into a gitleaks config that extends the committed one, so this format is unchanged and no checkout converts anything. A line that is malformed, or whose regex does not compile, is skipped with a warning that counts it rather than dropped in silence.
 
 When no such rules are loaded, the scan prints a warning to stderr and still exits 0, so a
 green result means "generic patterns only" — not "fully audited". In CI or before a public
@@ -45,7 +65,13 @@ push, make that gap fail instead:
 bash scripts/redaction-scan.sh --require-extra    # or REDACTION_REQUIRE_EXTRA=1
 ```
 
-Exit codes: `0` clean, `1` findings or usage error, `2` required organization rules missing.
+Exit codes: `0` clean, `1` findings, `2` cannot decide — `gitleaks` missing, required organization rules missing, retired allowlist entries present, or a usage error.
+
+## What this scan does not cover
+
+The scan reads repository content. It does not read pull request titles or bodies, review comments, release notes, or issue text, because none of that is in the repository. Those are also where internal names arrive most easily, since they are prose rather than code. Grep outgoing text before posting it.
+
+`scripts/redaction-inventory` answers the inverse question, which tokens no rule covers, and has no gitleaks equivalent.
 
 ### What it flags
 

@@ -1,21 +1,16 @@
-"""Parity between the hand-written scanner and gitleaks with this repository's config.
+"""Rule coverage for the redaction gate, now that gitleaks is the matching engine.
 
-The matching half of `scripts/redaction-scan.sh` is a reimplementation of what
-gitleaks already does, and better: hundreds of maintained provider rules, entropy
-checks, baselines, allowlists, and output redaction. The plan is to hand matching
-to gitleaks and keep only what gitleaks does not do, which is commit-message
-scanning and the inverse blind-spot inventory.
+This began as a parity test between the hand-written scanner and gitleaks, and it
+did its job: three translation errors surfaced before the engine was swapped.
+Synthetic home prefixes had become gitleaks `paths`, which skips files rather than
+content, so 18 fixtures turned into findings. The placeholder list had become
+`stopwords`, which excused nothing here while `regexes` does. And the home-path
+rule had been widened from /Users to /home, which added a false positive.
 
-This test is the safety net for that swap. It runs both engines over the same
-fixtures and requires them to agree, so the engine can be replaced without the
-replacement quietly covering less. Two divergences were found and fixed while
-writing it: synthetic home prefixes had been translated into gitleaks `paths`,
-which skips files rather than content, and the placeholder list had been
-translated into `stopwords`, which did not excuse anything here while `regexes`
-does.
-
-Zero findings on both sides proves nothing on its own, so every rule gets a
-positive fixture that must be flagged and the excused classes get negatives.
+With the swap done, comparing the wrapper against gitleaks would compare gitleaks
+with itself. What remains worth pinning is coverage: every rule keeps a positive
+fixture that must be flagged, and the excused classes keep negatives that must
+not. Zero findings proves nothing on its own, which is why the positives exist.
 """
 
 from __future__ import annotations
@@ -83,6 +78,8 @@ def _fixture_repo(tmp_path: Path) -> Path:
     shutil.copy(SCANNER, repo / "scripts" / "redaction-scan.sh")
     (repo / "scripts" / "redaction-allowlist.txt").write_text("", encoding="utf-8")
     shutil.copy(CONFIG, repo / "config" / "gitleaks.toml")
+    # The gate reads config from the repository it lives in, so the fixture repo
+    # carries both, which is the shape an installation has.
     for name, body in {**MUST_FLAG, **MUST_EXCUSE}.items():
         (repo / f"{name}.txt").write_text(body + "\n", encoding="utf-8")
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True, env=env)
@@ -132,39 +129,29 @@ def _gitleaks_files(repo: Path, tmp_path: Path) -> set[str]:
 
 
 @requires_gitleaks
-def test_both_engines_flag_every_positive_fixture(tmp_path: Path) -> None:
+def test_the_gate_flags_every_positive_fixture(tmp_path: Path) -> None:
     repo = _fixture_repo(tmp_path)
-    scanner = _scanner_files(repo)
-    gitleaks = _gitleaks_files(repo, tmp_path)
-
-    missed_by_scanner = sorted(set(MUST_FLAG) - scanner)
-    missed_by_gitleaks = sorted(set(MUST_FLAG) - gitleaks)
-    assert not missed_by_scanner, missed_by_scanner
-    assert not missed_by_gitleaks, missed_by_gitleaks
+    missed = sorted(set(MUST_FLAG) - _scanner_files(repo))
+    assert not missed, missed
 
 
 @requires_gitleaks
-def test_both_engines_excuse_placeholders_and_synthetic_paths(tmp_path: Path) -> None:
+def test_the_gate_excuses_placeholders_and_synthetic_paths(tmp_path: Path) -> None:
     repo = _fixture_repo(tmp_path)
-    scanner = _scanner_files(repo)
-    gitleaks = _gitleaks_files(repo, tmp_path)
-
-    wrongly_flagged_by_scanner = sorted(set(MUST_EXCUSE) & scanner)
-    wrongly_flagged_by_gitleaks = sorted(set(MUST_EXCUSE) & gitleaks)
-    assert not wrongly_flagged_by_scanner, wrongly_flagged_by_scanner
-    assert not wrongly_flagged_by_gitleaks, wrongly_flagged_by_gitleaks
+    wrongly_flagged = sorted(set(MUST_EXCUSE) & _scanner_files(repo))
+    assert not wrongly_flagged, wrongly_flagged
 
 
 @requires_gitleaks
-def test_the_two_engines_do_not_diverge_on_any_fixture(tmp_path: Path) -> None:
-    """The property the engine swap depends on."""
+def test_the_wrapper_and_a_direct_gitleaks_run_agree(tmp_path: Path) -> None:
+    """The wrapper must not narrow what the engine finds, only scope it."""
 
     repo = _fixture_repo(tmp_path)
-    scanner = _scanner_files(repo)
-    gitleaks = _gitleaks_files(repo, tmp_path)
-    assert scanner == gitleaks, {
-        "only_scanner": sorted(scanner - gitleaks),
-        "only_gitleaks": sorted(gitleaks - scanner),
+    through_wrapper = _scanner_files(repo)
+    direct = _gitleaks_files(repo, tmp_path)
+    assert through_wrapper == direct, {
+        "only_wrapper": sorted(through_wrapper - direct),
+        "only_direct": sorted(direct - through_wrapper),
     }
 
 

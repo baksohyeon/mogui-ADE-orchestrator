@@ -24,6 +24,33 @@ here in the same change. Skip that and installations on different template
 states all report the same version, which is the whole thing this was meant to
 prevent.
 
+## 7
+
+`docs/MASTER-OPERATIONS.md` gains an Incident-Derived Rules section: eleven
+rules, each carrying the observation that produced it and the measurement that settles
+it. The Closed Principles Pointer moves from section 8 to section 9.
+
+The rules were already being applied across the preceding versions; what was
+missing was their evidence. A rule stated bare gets argued away by the next
+reader, who has not seen the failure it came from, and a rule with no
+measurement cannot be checked at all. Both halves are therefore mandatory for
+anything added to that section.
+
+The rules cover what the recent template versions were built against:
+reachability is not capability and a record is not an effect; silence is not a
+pass; a declaration is not a measurement; put the guard where the incident was;
+say whether a constraint came from availability or from policy; fix the pair or
+the survivor lies; a green light must name its scope; a gate nobody can pass is
+a gate nobody runs; do not read a blocker, test it. Two are about the work
+itself rather than the system: a squash merge erases the base a stacked branch
+was built on, and reverting a file discards work that was never committed.
+
+Upgrade an existing installation by copying the new section into its operations
+SSOT, renumbering the Closed Principles Pointer, and raising the installed
+`Template version` line to 7. An installation that has its own incidents should
+append them in the same form rather than replacing these: the section is meant
+to accumulate, and a rule earned locally outranks one inherited from a template.
+
 ## 6
 
 The dispatch gate now enforces the installation-specific

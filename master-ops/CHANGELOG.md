@@ -39,6 +39,33 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+## v0.3.0
+
+The charter's review-bot rule gains its missing half. The v5 rule said who
+handles bot threads (workers, without per-round owner instruction); it did not
+say when a merge may proceed. Now, on a repository with review bots attached,
+zero unresolved threads is a merge precondition: every thread gets a reply
+stating what was done or why not, and the merge waits for the bots' pass over
+the latest push. A bot finding is verified against the code before it is acted
+on, because bots produce false positives and a thread resolved without
+measuring is silence dressed as review. Repositories without bots inherit no
+ceremony. Generalized from field use: one pull request ran the full cycle with
+five threads from two bots, all answered and resolved before merge.
+
+The charter's Codex pre-trust posture stops overstating what the tool
+guarantees. Pre-trust holds when the summary reports the worktree added,
+updated, or already trusted; the skip path (`Summary: skipped`, no TOML-capable
+interpreter on the host) leaves the trust prompt in place and says so on
+stdout. The attach instruction now says to confirm the summary is not
+`skipped`, instead of promising unconditionally that startup never blocks.
+
+ONBOARDING's Step 0 verification matches the retiered preflight: `gitleaks`
+and `ctx` are measured and warn without blocking when absent, with the
+consequence attached (the redaction gate cannot decide without its engine; the
+records practice cannot query cross-provider history), so an install that will
+publish treats the warning as a real item while a host that does neither
+onboards without ceremony.
+
 Onboarding gains a Step 10 that ends the session properly.
 
 Everything installed is worthless if the user does not know the handful of

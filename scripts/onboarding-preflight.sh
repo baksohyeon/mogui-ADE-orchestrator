@@ -10,6 +10,7 @@ esac
 
 failures=0
 passes=0
+warnings=0
 
 pass() {
   passes=$((passes + 1))
@@ -19,6 +20,11 @@ pass() {
 fail() {
   failures=$((failures + 1))
   printf 'FAIL %-14s %s\n' "$1" "$2"
+}
+
+warn() {
+  warnings=$((warnings + 1))
+  printf 'WARN %-14s %s\n' "$1" "$2"
 }
 
 strip_ansi() {
@@ -170,6 +176,13 @@ else
   printf 'INFO %-14s %s\n' "codex-plugin" "skipped because Claude Code is not the selected agent"
 fi
 
+redaction_extra="${HOME}/.config/redaction-extra.txt"
+if [[ -f "$redaction_extra" ]]; then
+  pass "redaction-extra" "optional organization-specific rules file present: $redaction_extra"
+else
+  warn "redaction-extra" "optional organization-specific rules file missing: $redaction_extra; create with: mkdir -p ~/.config && touch ~/.config/redaction-extra.txt"
+fi
+
 if command -v bd >/dev/null 2>&1; then
   bd_output=""
   if bd_output=$(bd where 2>&1); then
@@ -212,6 +225,7 @@ fi
 
 printf '\nPreflight summary\n'
 printf '  PASS: %d\n' "$passes"
+printf '  WARN: %d\n' "$warnings"
 printf '  FAIL: %d\n' "$failures"
 if [[ $failures -eq 0 ]]; then
   printf '  READY: all required checks passed\n'

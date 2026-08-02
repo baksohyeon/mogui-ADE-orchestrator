@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import time
+from enum import Enum
 from pathlib import Path
 
 
@@ -28,6 +29,15 @@ from master_runtime.core.watchdog import StallStatus, check_stall  # noqa: E402
 
 
 ORCHESTRATION_PROBE_TIMEOUT_SECONDS = 30
+
+
+class ProbeFailure(str, Enum):
+    """Stable ledger values for failed orchestration verification probes."""
+
+    ORCA_MISSING = "orca_missing"
+    PROBE_TIMEOUT = "probe_timeout"
+    PROBE_UNPARSEABLE = "probe_unparseable"
+    TASK_NOT_FOUND = "task_not_found"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -93,7 +103,7 @@ def _check(args: argparse.Namespace) -> int:
                     contract_path.read_text(encoding="utf-8", errors="replace")
                 )
             except OSError:
-                est_chars = 0
+                est_chars = None
 
     decision = _gate(args).check(
         DispatchRequest(
@@ -114,11 +124,10 @@ def _check(args: argparse.Namespace) -> int:
 
 def _register(args: argparse.Namespace) -> int:
     if not args.orchestration_task:
-        return _deny_unverified_orchestration(args)
-    if not _probe_orchestration_task(
-        args.orchestration_task
-    ):
-        return _deny_unverified_orchestration(args)
+        return _deny_unverified_orchestration(args, ProbeFailure.TASK_NOT_FOUND)
+    probe_failure = _probe_orchestration_task(args.orchestration_task)
+    if probe_failure is not None:
+        return _deny_unverified_orchestration(args, probe_failure)
 
     decision = _gate(args).register_job(
         args.job_id,
@@ -163,7 +172,7 @@ def _probe_contains_job_id(probe_cmd: str, job_id: str) -> bool:
     return result.returncode == 0 and job_id in result.stdout
 
 
-def _probe_orchestration_task(orchestration_task: str) -> bool:
+def _probe_orchestration_task(orchestration_task: str) -> ProbeFailure | None:
     try:
         result = subprocess.run(
             [
@@ -179,29 +188,39 @@ def _probe_orchestration_task(orchestration_task: str) -> bool:
             text=True,
             timeout=ORCHESTRATION_PROBE_TIMEOUT_SECONDS,
         )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
+    except subprocess.TimeoutExpired:
+        return ProbeFailure.PROBE_TIMEOUT
+    except OSError:
+        return ProbeFailure.ORCA_MISSING
     if result.returncode != 0:
-        return False
+        return ProbeFailure.TASK_NOT_FOUND
     try:
         payload = json.loads(result.stdout)
     except (TypeError, json.JSONDecodeError):
-        return False
-    if not isinstance(payload, dict) or payload.get("ok") is not True:
-        return False
+        return ProbeFailure.PROBE_UNPARSEABLE
+    if not isinstance(payload, dict):
+        return ProbeFailure.PROBE_UNPARSEABLE
+    if payload.get("ok") is not True:
+        return ProbeFailure.TASK_NOT_FOUND
     payload_result = payload.get("result")
-    return isinstance(payload_result, dict) and isinstance(
-        payload_result.get("dispatch"), dict
-    )
+    if not isinstance(payload_result, dict):
+        return ProbeFailure.PROBE_UNPARSEABLE
+    if not isinstance(payload_result.get("dispatch"), dict):
+        return ProbeFailure.TASK_NOT_FOUND
+    return None
 
 
-def _deny_unverified_orchestration(args: argparse.Namespace) -> int:
+def _deny_unverified_orchestration(
+    args: argparse.Namespace,
+    probe_failure: ProbeFailure,
+) -> int:
     decision = GateDecision(False, ReasonCode.ORCHESTRATION_UNVERIFIED)
     entry: dict[str, object] = {
         "ts": time.time(),
         "decision": "DENY",
         "reason": decision.reason.value,
         "job_id": args.job_id,
+        "probe_failure": probe_failure.value,
     }
     if args.orchestration_task:
         entry["orchestration_task"] = args.orchestration_task

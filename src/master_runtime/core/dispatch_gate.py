@@ -75,7 +75,7 @@ class DispatchRequest:
 
     runtime: str
     contract_path: str | Path
-    est_input_chars: int
+    est_input_chars: int | None
     n_agents: int
     purpose: str = ""
     completion_channel: str | None = None
@@ -134,6 +134,16 @@ class DispatchGate:
     def check(self, request: DispatchRequest) -> GateDecision:
         """Return a gate decision and append it to the ledger."""
 
+        # None is the fail-closed sentinel for an input whose size could not be
+        # measured. Handle it before every other validation or budget check so
+        # reordering the remaining checks cannot turn an unreadable contract
+        # into a zero-cost dispatch.
+        est_input_chars = request.est_input_chars
+        if est_input_chars is None:
+            decision = GateDecision(False, ReasonCode.CONTRACT_UNREADABLE)
+            self._append_decision(request, decision)
+            return decision
+
         validation_error = _validate_request(request)
         if validation_error is not None:
             decision = GateDecision(False, validation_error)
@@ -151,7 +161,7 @@ class DispatchGate:
             contract_content.decode("utf-8", errors="replace"),
             Path(self.config.known_roots_path),
         )
-        cost_proxy = request.n_agents * request.est_input_chars
+        cost_proxy = request.n_agents * est_input_chars
         if (
             _dispatch_ticket_path(
                 Path(self.config.ticket_dir),
@@ -171,7 +181,7 @@ class DispatchGate:
             return decision
 
         if (
-            request.est_input_chars > self.config.single_dispatch_char_limit
+            est_input_chars > self.config.single_dispatch_char_limit
             or cost_proxy > self.config.batch_dispatch_char_limit
         ):
             decision = GateDecision(
@@ -567,7 +577,7 @@ def _validate_request(request: DispatchRequest) -> ReasonCode | None:
         return ReasonCode.INVALID_REQUEST
     if RUNTIME_PATTERN.fullmatch(request.runtime) is None:
         return ReasonCode.INVALID_REQUEST
-    if request.est_input_chars < 0:
+    if request.est_input_chars is not None and request.est_input_chars < 0:
         return ReasonCode.INVALID_REQUEST
     if request.n_agents < 1:
         return ReasonCode.INVALID_REQUEST

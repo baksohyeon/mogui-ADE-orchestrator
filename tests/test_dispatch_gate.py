@@ -177,6 +177,27 @@ def test_r1_denies_batch_cost_over_limit(tmp_path: Path) -> None:
     assert decision.cost_proxy == 1_200_000
 
 
+def test_unmeasured_contract_fails_closed_before_validation_and_budget(
+    tmp_path: Path,
+) -> None:
+    contract = _contract(tmp_path, "readable but deliberately unmeasured")
+    gate = _gate(tmp_path, now=1_000)
+
+    decision = gate.check(
+        _DispatchRequest(
+            runtime="codex",
+            contract_path=contract,
+            est_input_chars=None,
+            n_agents=1_000_000,
+        )
+    )
+
+    assert decision.allow is False
+    assert decision.reason == ReasonCode.CONTRACT_UNREADABLE
+    assert decision.cost_proxy == 0
+    assert _ledger_entries(tmp_path)[-1]["est_chars"] is None
+
+
 def test_r2_allows_single_high_cost_runtime_with_warning(tmp_path: Path) -> None:
     contract = _contract(tmp_path, "single fable contract")
     gate = _gate(tmp_path, now=1_000)
@@ -526,9 +547,9 @@ def test_cli_register_requires_orchestration_task(tmp_path: Path, capsys) -> Non
     output = capsys.readouterr()
     assert '"reason":"ORCHESTRATION_UNVERIFIED"' in output.out
     assert "ORCHESTRATION_UNVERIFIED" in output.err
-    assert json.loads(ledger.read_text(encoding="utf-8"))["reason"] == (
-        "ORCHESTRATION_UNVERIFIED"
-    )
+    ledger_entry = json.loads(ledger.read_text(encoding="utf-8"))
+    assert ledger_entry["reason"] == "ORCHESTRATION_UNVERIFIED"
+    assert ledger_entry["probe_failure"] == "task_not_found"
 
 
 def test_cli_register_denies_unverified_orchestration_task_with_ledger_entry(
@@ -598,6 +619,7 @@ def test_cli_register_denies_unverified_orchestration_task_with_ledger_entry(
     assert any(
         entry.get("job_id") == "job-orch-failed"
         and entry.get("reason") == "ORCHESTRATION_UNVERIFIED"
+        and entry.get("probe_failure") == "task_not_found"
         for entry in _ledger_entries(tmp_path)
     )
 
@@ -630,10 +652,20 @@ def test_cli_orchestration_probe_requires_success_ok_true_and_dispatch(
     )
     monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: next(results))
 
-    assert script["_probe_orchestration_task"]("task-nonzero") is False
-    assert script["_probe_orchestration_task"]("task-not-ok") is False
-    assert script["_probe_orchestration_task"]("task-null-dispatch") is False
-    assert script["_probe_orchestration_task"]("task-with-dispatch") is True
+    probe_failure = script["ProbeFailure"]
+    assert (
+        script["_probe_orchestration_task"]("task-nonzero")
+        == probe_failure.TASK_NOT_FOUND
+    )
+    assert (
+        script["_probe_orchestration_task"]("task-not-ok")
+        == probe_failure.TASK_NOT_FOUND
+    )
+    assert (
+        script["_probe_orchestration_task"]("task-null-dispatch")
+        == probe_failure.TASK_NOT_FOUND
+    )
+    assert script["_probe_orchestration_task"]("task-with-dispatch") is None
 
 
 def test_cli_orchestration_probe_uses_resolved_command_and_timeout(monkeypatch) -> None:
@@ -654,7 +686,7 @@ def test_cli_orchestration_probe_uses_resolved_command_and_timeout(monkeypatch) 
     monkeypatch.setenv("ORCA_CLI_COMMAND", "orca-custom")
     monkeypatch.setattr(subprocess, "run", successful_probe)
 
-    assert script["_probe_orchestration_task"]("task-timeout") is True
+    assert script["_probe_orchestration_task"]("task-timeout") is None
     assert calls[0][0][0] == "orca-custom"
     assert calls[0][1]["timeout"] == script["ORCHESTRATION_PROBE_TIMEOUT_SECONDS"]
 
@@ -667,7 +699,68 @@ def test_cli_orchestration_probe_treats_timeout_as_unverified(monkeypatch) -> No
 
     monkeypatch.setattr(subprocess, "run", timed_out_probe)
 
-    assert script["_probe_orchestration_task"]("task-timeout") is False
+    assert (
+        script["_probe_orchestration_task"]("task-timeout")
+        == script["ProbeFailure"].PROBE_TIMEOUT
+    )
+
+
+def test_cli_register_records_distinct_orchestration_probe_failures(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
+    cases = (
+        (
+            "orca_missing",
+            lambda command, **kwargs: (_ for _ in ()).throw(
+                FileNotFoundError(command[0])
+            ),
+        ),
+        (
+            "probe_timeout",
+            lambda command, **kwargs: (_ for _ in ()).throw(
+                subprocess.TimeoutExpired(command, kwargs["timeout"])
+            ),
+        ),
+        (
+            "probe_unparseable",
+            lambda command, **kwargs: subprocess.CompletedProcess(
+                command, 0, stdout="not-json", stderr=""
+            ),
+        ),
+        (
+            "task_not_found",
+            lambda command, **kwargs: subprocess.CompletedProcess(
+                command, 1, stdout="", stderr="task not found"
+            ),
+        ),
+    )
+
+    for failure_reason, probe in cases:
+        ledger = tmp_path / f"{failure_reason}.jsonl"
+        monkeypatch.setattr(subprocess, "run", probe)
+        assert (
+            script["main"](
+                [
+                    "--ledger",
+                    str(ledger),
+                    "register",
+                    "--job-id",
+                    f"job-{failure_reason}",
+                    "--probe-cmd",
+                    f"printf job-{failure_reason}",
+                    "--orchestration-task",
+                    f"task-{failure_reason}",
+                ]
+            )
+            == 2
+        )
+        capsys.readouterr()
+        entry = json.loads(ledger.read_text(encoding="utf-8"))
+        assert entry["reason"] == "ORCHESTRATION_UNVERIFIED"
+        assert entry["probe_failure"] == failure_reason
 
 
 def test_cli_check_missing_contract_without_estimate_returns_gate_denial(
@@ -675,10 +768,13 @@ def test_cli_check_missing_contract_without_estimate_returns_gate_denial(
 ) -> None:
     script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
     missing_contract = tmp_path / "missing-contract.md"
+    ledger = tmp_path / "ledger.jsonl"
 
     assert (
         script["main"](
             [
+                "--ledger",
+                str(ledger),
                 "check",
                 "--runtime",
                 "codex",
@@ -697,6 +793,7 @@ def test_cli_check_missing_contract_without_estimate_returns_gate_denial(
     output = capsys.readouterr()
     assert '"reason":"CONTRACT_UNREADABLE"' in output.out
     assert "Traceback" not in output.err
+    assert json.loads(ledger.read_text(encoding="utf-8"))["est_chars"] is None
 
 
 def test_register_consumes_matching_pending_dispatch_by_contract_sha(

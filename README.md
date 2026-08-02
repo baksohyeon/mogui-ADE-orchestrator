@@ -175,7 +175,7 @@ Local only.
 | Approval | a runtime callback | a gate a human holds |
 | Orchestrator dies | the graph dies with it | the successor takes the role and proves it |
 
-The comparison came after. This was built before Dorito knew deepagents existed; the announcement landed two weeks in.
+The order of events matters for reading this table. This system was designed and built first; Dorito learned deepagents existed when its announcement landed two weeks into the work. The comparison was then run deliberately — their code and documentation were analyzed and this system was checked against their published spec — and the two turned out to decompose the same problem the same way. Convergence of two teams staring at the same failure modes, not lineage in either direction. The repository history is consistent with that reading: `git log -S deepagents --reverse` shows when the comparison entered, well after the architecture did.
 
 ## What this runs on
 
@@ -236,14 +236,14 @@ Documentation in this repository is English. `master-ops/` is a template that ge
 
 ## Status
 
-Working and exercised, as of 2026-08-01: 295 unit tests pass, 1 skipped. Every
+Working and exercised, as of 2026-08-03: 416 unit tests pass, 1 skipped. Every
 unit listed below exists in `src/master_runtime/core/`. The succession,
 dispatch-gate, acceptance, and compaction paths have run against real
 workspaces, and onboarding has been run start to finish by someone other than
 its author.
 
-Released as 0.1.0, the first tagged version. `CHANGELOG.md` records what changes
-after it. No CI: tests and the redaction scanners run locally before a push, so
+The current release is in `CHANGELOG.md`, which records every version since
+0.1.0. No CI: tests and the redaction scanners run locally before a push, so
 a passing count in a pull request is the author's word. While the major version
 is 0, interfaces, CLI flags, and file formats can change in a minor release.
 Pin a version if you build on it.
@@ -267,7 +267,7 @@ The advisory ratio is a code default, not a claim about what any given workspace
 
 ### Contract-gated dispatch
 
-`src/master_runtime/core/dispatch_gate.py` sits between the master and any worker dispatch. A `DispatchRequest` (runtime, contract file path, estimated input characters, agent count) is resolved to a `GateDecision` with a stable reason code: `OK`, `BUDGET_EXCEEDED` (defaults: 500k chars single / 1M batch), `DUPLICATE_CONTRACT` (same contract SHA within a 30-minute window), `ROUTING_VIOLATION`, `CONTRACT_UNREADABLE`, `HIGH_COST_RUNTIME`, `PATH_OUTSIDE_KNOWN_ROOTS`, `WORKTREE_AS_REPO_ROOT`, and others. The gate writes each decision to a JSONL ledger, so you can answer what the master dispatched and why it was allowed.
+`src/master_runtime/core/dispatch_gate.py` sits between the master and any worker dispatch. A dispatch request (runtime, model, contract file path, estimated input characters, agent count, completion channel) is resolved to a `GateDecision` with a stable reason code: `OK`, `BUDGET_EXCEEDED` (defaults: 500k chars single / 1M batch), `DUPLICATE_CONTRACT` (same contract SHA within a 30-minute window), `TIER_FANOUT_CAP` (the model's tier has a fan-out cap measured over a rolling window; overrides are ledgered), `NO_COMPLETION_CHANNEL`, `CONTRACT_UNREADABLE`, `PATH_OUTSIDE_KNOWN_ROOTS`, and others. `register` verifies the job id against an artifact probe and measures the worker's actual model rather than trusting the declaration. The gate writes each decision to a JSONL ledger, so you can answer what the master dispatched and why it was allowed.
 
 ### Acceptance loop
 
@@ -293,7 +293,7 @@ src/master_runtime/core/
 ├── context/            # pure filesystem context resolver (path -> ContextDescriptor)
 ├── approval/           # approval gates and registry
 ├── acceptance/         # casebook-driven acceptance loop and scorecards
-└── adapter/            # adapter layer: dispatch, doctor, isolation, profile
+└── adapter/            # adapter layer: doctor, sync CLI profiles
 ```
 
 Two principles shape the layout:
@@ -316,7 +316,8 @@ $ scripts/master-succeed detect "routine status update" --context-ratio 0.7 --js
 
 # Ask the dispatch gate whether a worker dispatch may proceed
 $ scripts/dispatch-gate --ledger ./gate-ledger.jsonl check \
-  --runtime codex --contract ./job-contract.md --agents 1 --est-chars 1000
+  --runtime codex --model grok-4.5 --contract ./job-contract.md \
+  --agents 1 --est-chars 1000 --completion-channel orchestration
 # → {"allow": true, "reason": "OK", "contract_sha": "...", "cost_proxy": 1000}
 
 # Check which adapter-layer tools are present on this machine

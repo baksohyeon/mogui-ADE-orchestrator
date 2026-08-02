@@ -247,7 +247,7 @@ Measure: `orca orchestration run-current --json`, with the CLI resolved the way 
 
 **Silence is not a pass.**
 Observed: three consecutive hook experiments produced no output, for three different reasons, and one of those silences was reported as "applied".
-Measure: first create the condition that produces output, and prove the instrument reaches the subject. Only then does absence of output mean anything.
+Measure: feed the instrument a case it must object to, and watch it object. Until you have seen it speak, its silence is unmeasured; after that, absence of output is a result. Prevention, which is to arrange that one such case exists before trusting any quiet run, follows from the measurement rather than replacing it.
 
 **A declaration is not a measurement.**
 Observed: the dispatch gate enforces the model identifier a caller declares at `check`, and `register` takes no model at all. The incident that motivated the tier policy was a worker default-inheriting a top-tier model, which a compliant declaration does not prevent.
@@ -255,19 +255,19 @@ Measure: `{{RUNTIME_ROOT}}/scripts/model-identity-probe` for what a session runs
 
 **Put the guard where the incident was.**
 Observed: ten workers were fanned out at once and every one of them silently inherited the runtime's default top tier. That cost incident is why the tier policy exists. The policy encodes model identifiers, so it stops neither half of what happened: a single top-tier dispatch passes it, and `unknown_model: "deny"` blocks any model the file has not been hand-edited to name, including cheaper or stronger ones released later.
-Measure: name the variable the incident actually turned on, here tier multiplied by fan-out size rather than identity, and check that the guard's condition contains that variable. This gate already computes `n_agents × est_chars`; a ceiling expressed in those terms sits closer to the incident than a list of names does.
+Measure: replay the incident's shape against the guard and read the verdict. Ten agents at a top tier must deny, and so must ten single-agent dispatches at that tier one after another; a guard that permits either is attached to the wrong variable however reasonable its condition reads. This gate already computes `n_agents × est_chars`, so a ceiling in those terms is measurable against both replays.
 
 **Say whether a constraint came from availability or from policy.**
 Observed: a worker reported that one model "is the only available model and matches the policy". The single option came from the CLI offering exactly one model, and the policy merely also allowed it; an earlier attempt failed because the requested identifier does not exist in this installation at all. Read quickly, that sentence blames the policy for a host fact.
-Measure: report the candidate set with a reason per exclusion, keeping what the host does not provide separate from what the policy forbids. A policy answers whether a model is permitted; it never answers which model fits, and it is not the reason a host has only one.
+Measure: read the output and try to answer, from it alone, which candidates the host lacks and which the policy forbids. If the two cannot be told apart without opening the policy file, the report does not distinguish them. A policy answers whether a model is permitted; it never answers which model fits, and it is not the reason a host has only one.
 
 **Fix the pair, or the survivor lies.**
 Observed: repeatedly, in one working day, code lost a claim its documentation still made, or documentation kept describing behaviour the code had dropped. Grepping a removed identifier finds the code and misses the prose, because prose names the same thing in different words.
-Measure: after changing behaviour, grep both the identifier and the words that describe it, then read the surviving side aloud against the new behaviour.
+Measure: after changing behaviour, grep the identifier and grep the words that describe it, then count the surviving mentions that still assert the old behaviour. That count must be zero. It is rarely zero on the first grep, because prose names the same thing in different words than code does.
 
 **A green light must name its scope.**
 Observed: a redaction scan reports success with organization-specific rules absent, covering generic patterns only, and the inventory silently drops rules that fail to compile. Both look identical to a clean result.
-Measure: require the rules file, and report counts. A gate that can narrow its own coverage must say what it covered.
+Measure: look at the green line and try to tell "checked everything and found nothing" from "checked almost nothing". If the output carries no scope, files scanned and rules loaded, the two are indistinguishable and the green is not a pass. A gate that can narrow its own coverage must print what it covered.
 
 **A gate nobody can pass is a gate nobody runs.**
 Observed: an onboarding preflight blocked a host the harness had been operating on all day, with two of three failures false. The pressure that creates is to skip the preflight, which discards every other check with it.
@@ -283,7 +283,7 @@ Measure: after the base merges, `git rebase --onto origin/main <old-base-sha>`, 
 
 **Reverting a file discards work that was never committed.**
 Observed: `git checkout --` was used to undo a deliberate mutation during testing, and it also removed uncommitted work in the same file, which had to be reconstructed.
-Measure: commit a checkpoint before mutating anything, so revert has a floor. The safety of a procedure depends on state that can change between uses; re-check the state, not the procedure's reputation.
+Measure: before reverting a path, run `git status --porcelain <path>` and read it. Every line there is work the revert will discard, so an empty result is the only state in which revert is safe. The same procedure was safe an hour earlier because that result was empty then; the safety belonged to the state, not to the procedure.
 
 ## 9. Closed Principles Pointer
 

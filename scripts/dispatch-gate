@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
@@ -23,6 +25,9 @@ from master_runtime.core.dispatch_gate import (  # noqa: E402
     ReasonCode,
 )
 from master_runtime.core.watchdog import StallStatus, check_stall  # noqa: E402
+
+
+ORCHESTRATION_PROBE_TIMEOUT_SECONDS = 30
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -47,7 +52,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     check_parser = subparsers.add_parser("check")
     check_parser.add_argument("--runtime", required=True)
-    check_parser.add_argument("--model", required=True)
+    check_parser.add_argument("--model")
     check_parser.add_argument("--contract", required=True)
     check_parser.add_argument("--agents", required=True, type=int)
     check_parser.add_argument("--est-chars", type=int)
@@ -80,11 +85,15 @@ def _check(args: argparse.Namespace) -> int:
     contract_path = Path(args.contract)
     est_chars = args.est_chars
     if est_chars is None:
-        est_chars = (
-            0
-            if args.completion_channel is None
-            else len(contract_path.read_text(encoding="utf-8"))
-        )
+        if args.completion_channel is None:
+            est_chars = 0
+        else:
+            try:
+                est_chars = len(
+                    contract_path.read_text(encoding="utf-8", errors="replace")
+                )
+            except OSError:
+                est_chars = 0
 
     decision = _gate(args).check(
         DispatchRequest(
@@ -104,13 +113,12 @@ def _check(args: argparse.Namespace) -> int:
 
 
 def _register(args: argparse.Namespace) -> int:
-    if args.orchestration_task is not None and not _probe_orchestration_task(
+    if not args.orchestration_task:
+        return _deny_unverified_orchestration(args)
+    if not _probe_orchestration_task(
         args.orchestration_task
     ):
-        decision = GateDecision(False, ReasonCode.ORCHESTRATION_UNVERIFIED)
-        _print_decision(decision)
-        print(_decision_error(decision), file=sys.stderr)
-        return 2
+        return _deny_unverified_orchestration(args)
 
     decision = _gate(args).register_job(
         args.job_id,
@@ -159,7 +167,7 @@ def _probe_orchestration_task(orchestration_task: str) -> bool:
     try:
         result = subprocess.run(
             [
-                "orca",
+                _resolved_orca_command(),
                 "orchestration",
                 "dispatch-show",
                 "--task",
@@ -169,8 +177,9 @@ def _probe_orchestration_task(orchestration_task: str) -> bool:
             check=False,
             capture_output=True,
             text=True,
+            timeout=ORCHESTRATION_PROBE_TIMEOUT_SECONDS,
         )
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         return False
     if result.returncode != 0:
         return False
@@ -184,6 +193,37 @@ def _probe_orchestration_task(orchestration_task: str) -> bool:
     return isinstance(payload_result, dict) and isinstance(
         payload_result.get("dispatch"), dict
     )
+
+
+def _deny_unverified_orchestration(args: argparse.Namespace) -> int:
+    decision = GateDecision(False, ReasonCode.ORCHESTRATION_UNVERIFIED)
+    entry: dict[str, object] = {
+        "ts": time.time(),
+        "decision": "DENY",
+        "reason": decision.reason.value,
+        "job_id": args.job_id,
+    }
+    if args.orchestration_task:
+        entry["orchestration_task"] = args.orchestration_task
+    ledger_path = Path(_gate(args).config.ledger_path)
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    with ledger_path.open("a", encoding="utf-8") as ledger:
+        ledger.write(json.dumps(entry, sort_keys=True, separators=(",", ":")))
+        ledger.write("\n")
+    _print_decision(decision)
+    print(_decision_error(decision), file=sys.stderr)
+    return 2
+
+
+def _resolved_orca_command() -> str:
+    """Resolve the Orca executable using the onboarding environment contract."""
+
+    explicit = os.environ.get("ORCA_CLI_COMMAND")
+    if explicit:
+        return explicit
+    if os.environ.get("ORCA_DEV_REPO_ROOT"):
+        return "orca-dev"
+    return "orca"
 
 
 def _print_decision(decision: GateDecision) -> None:

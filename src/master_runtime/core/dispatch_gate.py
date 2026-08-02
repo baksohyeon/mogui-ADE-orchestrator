@@ -137,11 +137,7 @@ class DispatchGate:
         validation_error = _validate_request(request)
         if validation_error is not None:
             decision = GateDecision(False, validation_error)
-            if validation_error not in {
-                ReasonCode.NO_COMPLETION_CHANNEL,
-                ReasonCode.NO_MODEL,
-            }:
-                self._append_decision(request, decision)
+            self._append_decision(request, decision)
             return decision
 
         try:

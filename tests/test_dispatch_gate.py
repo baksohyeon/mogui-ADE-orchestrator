@@ -24,7 +24,7 @@ def DispatchRequest(*args, **kwargs):
     return _DispatchRequest(*args, **kwargs)
 
 
-def test_check_without_completion_channel_denies_without_ledger_write(
+def test_check_without_completion_channel_records_denial_in_ledger(
     tmp_path: Path,
 ) -> None:
     contract = _contract(tmp_path, "missing completion channel")
@@ -42,7 +42,7 @@ def test_check_without_completion_channel_denies_without_ledger_write(
 
     assert decision.allow is False
     assert decision.reason == ReasonCode.NO_COMPLETION_CHANNEL
-    assert not (tmp_path / "ledger.jsonl").exists()
+    assert _ledger_entries(tmp_path)[-1]["reason"] == "NO_COMPLETION_CHANNEL"
 
 
 def test_check_records_orchestration_completion_channel(tmp_path: Path) -> None:
@@ -64,7 +64,7 @@ def test_check_records_orchestration_completion_channel(tmp_path: Path) -> None:
     assert _ledger_entries(tmp_path)[-1]["completion_channel"] == "orchestration"
 
 
-def test_check_without_model_denies_without_ledger_write(tmp_path: Path) -> None:
+def test_check_without_model_records_denial_in_ledger(tmp_path: Path) -> None:
     contract = _contract(tmp_path, "missing model")
     gate = _gate(tmp_path, now=1_000)
 
@@ -80,7 +80,7 @@ def test_check_without_model_denies_without_ledger_write(tmp_path: Path) -> None
 
     assert decision.allow is False
     assert decision.reason == ReasonCode.NO_MODEL
-    assert not (tmp_path / "ledger.jsonl").exists()
+    assert _ledger_entries(tmp_path)[-1]["reason"] == "NO_MODEL"
 
 
 def test_check_records_model(tmp_path: Path) -> None:
@@ -505,7 +505,33 @@ def test_cli_register_with_verified_orchestration_task_records_task(
     assert _ledger_entries(tmp_path)[-1]["orchestration_task"] == "task-orch-123"
 
 
-def test_cli_register_denies_unverified_orchestration_task_without_ledger_entry(
+def test_cli_register_requires_orchestration_task(tmp_path: Path, capsys) -> None:
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
+    ledger = tmp_path / "ledger.jsonl"
+
+    assert (
+        script["main"](
+            [
+                "--ledger",
+                str(ledger),
+                "register",
+                "--job-id",
+                "job-without-task",
+                "--probe-cmd",
+                "printf job-without-task",
+            ]
+        )
+        == 2
+    )
+    output = capsys.readouterr()
+    assert '"reason":"ORCHESTRATION_UNVERIFIED"' in output.out
+    assert "ORCHESTRATION_UNVERIFIED" in output.err
+    assert json.loads(ledger.read_text(encoding="utf-8"))["reason"] == (
+        "ORCHESTRATION_UNVERIFIED"
+    )
+
+
+def test_cli_register_denies_unverified_orchestration_task_with_ledger_entry(
     tmp_path: Path,
     monkeypatch,
     capsys,
@@ -569,8 +595,10 @@ def test_cli_register_denies_unverified_orchestration_task_without_ledger_entry(
     output = capsys.readouterr()
     assert '"reason":"ORCHESTRATION_UNVERIFIED"' in output.out
     assert "ORCHESTRATION_UNVERIFIED" in output.err
-    assert all(
-        entry.get("job_id") != "job-orch-failed" for entry in _ledger_entries(tmp_path)
+    assert any(
+        entry.get("job_id") == "job-orch-failed"
+        and entry.get("reason") == "ORCHESTRATION_UNVERIFIED"
+        for entry in _ledger_entries(tmp_path)
     )
 
 
@@ -606,6 +634,69 @@ def test_cli_orchestration_probe_requires_success_ok_true_and_dispatch(
     assert script["_probe_orchestration_task"]("task-not-ok") is False
     assert script["_probe_orchestration_task"]("task-null-dispatch") is False
     assert script["_probe_orchestration_task"]("task-with-dispatch") is True
+
+
+def test_cli_orchestration_probe_uses_resolved_command_and_timeout(monkeypatch) -> None:
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
+    calls = []
+
+    def successful_probe(command, **kwargs):
+        calls.append((command, kwargs))
+        return type(
+            "Result",
+            (),
+            {
+                "returncode": 0,
+                "stdout": '{"ok": true, "result": {"dispatch": {"id": "d1"}}}',
+            },
+        )()
+
+    monkeypatch.setenv("ORCA_CLI_COMMAND", "orca-custom")
+    monkeypatch.setattr(subprocess, "run", successful_probe)
+
+    assert script["_probe_orchestration_task"]("task-timeout") is True
+    assert calls[0][0][0] == "orca-custom"
+    assert calls[0][1]["timeout"] == script["ORCHESTRATION_PROBE_TIMEOUT_SECONDS"]
+
+
+def test_cli_orchestration_probe_treats_timeout_as_unverified(monkeypatch) -> None:
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
+
+    def timed_out_probe(command, **kwargs):
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    monkeypatch.setattr(subprocess, "run", timed_out_probe)
+
+    assert script["_probe_orchestration_task"]("task-timeout") is False
+
+
+def test_cli_check_missing_contract_without_estimate_returns_gate_denial(
+    tmp_path: Path, capsys
+) -> None:
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
+    missing_contract = tmp_path / "missing-contract.md"
+
+    assert (
+        script["main"](
+            [
+                "check",
+                "--runtime",
+                "codex",
+                "--model",
+                "gpt-5.6-luna",
+                "--contract",
+                str(missing_contract),
+                "--agents",
+                "1",
+                "--completion-channel",
+                "orchestration",
+            ]
+        )
+        == 2
+    )
+    output = capsys.readouterr()
+    assert '"reason":"CONTRACT_UNREADABLE"' in output.out
+    assert "Traceback" not in output.err
 
 
 def test_register_consumes_matching_pending_dispatch_by_contract_sha(
@@ -1008,6 +1099,13 @@ def test_cli_check_register_and_watch_commands(tmp_path: Path) -> None:
     home = tmp_path / "cli-home"
     env = os.environ.copy()
     env["HOME"] = str(home)
+    orca = tmp_path / "orca"
+    orca.write_text(
+        '#!/bin/sh\nprintf \'%s\\n\' \'{"ok":true,"result":{"dispatch":{"id":"d1"}}}\'\n',
+        encoding="utf-8",
+    )
+    orca.chmod(0o755)
+    env["ORCA_CLI_COMMAND"] = str(orca)
 
     check_result = subprocess.run(
         [
@@ -1043,6 +1141,8 @@ def test_cli_check_register_and_watch_commands(tmp_path: Path) -> None:
             "job-cli",
             "--probe-cmd",
             "printf job-cli",
+            "--orchestration-task",
+            "task-cli",
         ],
         check=False,
         capture_output=True,
@@ -1122,6 +1222,13 @@ def test_cli_register_ambiguous_prints_candidate_shas(tmp_path: Path) -> None:
     ledger = tmp_path / "cli-ledger.jsonl"
     env = os.environ.copy()
     env["HOME"] = str(tmp_path / "home")
+    orca = tmp_path / "orca"
+    orca.write_text(
+        '#!/bin/sh\nprintf \'%s\\n\' \'{"ok":true,"result":{"dispatch":{"id":"d1"}}}\'\n',
+        encoding="utf-8",
+    )
+    orca.chmod(0o755)
+    env["ORCA_CLI_COMMAND"] = str(orca)
 
     for contract in (first_contract, second_contract):
         result = subprocess.run(
@@ -1160,6 +1267,8 @@ def test_cli_register_ambiguous_prints_candidate_shas(tmp_path: Path) -> None:
             "job-cli-ambiguous",
             "--probe-cmd",
             "printf job-cli-ambiguous",
+            "--orchestration-task",
+            "task-cli-ambiguous",
         ],
         check=False,
         capture_output=True,

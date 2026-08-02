@@ -37,17 +37,27 @@ verification gates; `--fix` may add or refresh only the required global skills.
 Upgrade an existing installation in this order:
 
 1. Pull template v5 in the orchestrator clone.
-2. Run `bash scripts/onboarding-preflight.sh` from that clone and fix every FAIL.
+2. Run `bash scripts/onboarding-preflight.sh` from that clone and fix every FAIL;
+   re-collect and confirm the workspace facts before routing work.
 3. Enable Orca orchestration, then verify the preflight reports its RPC reachable.
-4. Install the required skills with `npx skills add stablyai/orca -g`; refresh the
-   orchestration skill with `npx skills update orchestration -g` when needed.
-5. Raise the installation's `Template version` line in
+4. Select or create the approved ops repository, then verify `bd where` from the
+   workspace root resolves to it and no tracker root is selected above it.
+5. Replace all template placeholders, verify `CLAUDE.md` and `AGENTS.md` are
+   byte-identical, and make settings and security-sensitive hook ownership
+   explicit before enabling anything.
+6. Install only the required skills with
+   `npx skills add stablyai/orca -g --skill orca-cli --skill orchestration`;
+   refresh the orchestration skill with `npx skills update orchestration -g`
+   when needed.
+7. Raise the installation's `Template version` line in
    `docs/MASTER-OPERATIONS.md` to 5 after applying the relevant local changes.
 
 Existing local edits still win. From this version onward, raw terminal polling
 and vendor-direct agent CLIs do not satisfy supervised dispatch: bind a Run,
 create a Task, attach a worker Dispatch, and wait for `worker_done` through Orca
-orchestration.
+orchestration. Finish by spawning exactly one verified Generation 1 master
+through Orca and have that master perform the Step 9 first-boot smoke, including
+role, model, placement, lineage, and completion evidence.
 
 ## 4
 

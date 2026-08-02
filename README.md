@@ -1,7 +1,7 @@
 # mogui-ADE-orchestrator
 
 > Existing installations: follow the [template v5 upgrade steps](master-ops/CHANGELOG.md#5) for mandatory Orca orchestration and the onboarding preflight.
-
+>
 > *I have agents running in tmux sessions. Can I still drive each one manually when I want, and at the same time orchestrate all of those sessions from above? Is tmux-based agent orchestration a thing?*
 
 Yes. That is what this is. Any mix of agents, as many as you want. (Claude as the master is the combination that has been run hard.)

@@ -19,12 +19,23 @@ $ grep 'Template version' docs/MASTER-OPERATIONS.md
 This file is not in that repository. Step 3 keeps it out, so it stays in the
 orchestrator clone alongside the template it describes.
 
-When a change touches `master-ops/`, raise `TEMPLATE-VERSION` and add an entry
-here in the same change. Skip that and installations on different template
-states all report the same version, which is the whole thing this was meant to
-prevent.
+When a change touches `master-ops/`, add an entry under `## Unreleased` in the
+same change. `TEMPLATE-VERSION` rises only when a release is cut, and the release
+is marked with the git tag `template/vN`. Merging a change is not releasing it.
 
-## 7
+Version numbers stay monotonic across that switch: the next release is 7, not a
+restart at a lower number, because an installation that already reports 6 would
+otherwise measure itself as newer than the template it came from and the skew
+check would go quiet.
+
+One consequence to keep in mind while reading an installation's version line: an
+installation onboarded between releases carries unreleased entries while
+reporting the last released number, so that number describes the release it came
+from and not the exact body it received. Compare against the latest release tag,
+and when the difference matters, record the commit the installation was taken
+from alongside the number.
+
+## Unreleased
 
 `docs/MASTER-OPERATIONS.md` gains an Incident-Derived Rules section: eleven
 rules, each carrying the observation that produced it and the measurement that settles
@@ -46,8 +57,9 @@ itself rather than the system: a squash merge erases the base a stacked branch
 was built on, and reverting a file discards work that was never committed.
 
 Upgrade an existing installation by copying the new section into its operations
-SSOT, renumbering the Closed Principles Pointer, and raising the installed
-`Template version` line to 7. An installation that has its own incidents should
+SSOT and renumbering the Closed Principles Pointer. The installed `Template
+version` line moves at the next release tag rather than here. An installation
+that has its own incidents should
 append them in the same form rather than replacing these: the section is meant
 to accumulate, and a rule earned locally outranks one inherited from a template.
 

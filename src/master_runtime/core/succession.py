@@ -102,6 +102,7 @@ class SpawnReport:
     command: Tuple[str, ...]
     startup_command: str
     verification: Mapping[str, object]
+    handle_reissued: bool = False
 
     def to_dict(self) -> dict:
         payload = asdict(self)
@@ -116,6 +117,8 @@ SPAWN_CREATE_ERROR = 20
 SPAWN_PARSE_ERROR = 21
 SPAWN_WORKTREE_MISMATCH = 22
 SPAWN_CLOSE_ERROR = 23
+SPAWN_HANDLE_STALE = 24
+SPAWN_LIST_ERROR = 25
 
 _SPAWN_HANDLE_HINT = re.compile(r'"(?:handle|terminal|terminalHandle)"\s*:\s*"([^"]+)"')
 
@@ -432,6 +435,14 @@ def spawn_successor(
         )
 
     runner = orca_runner or _default_orca_runner
+    try:
+        snapshot_handles = frozenset(session.handle for session in find_sessions(runner))
+    except SuccessionError as exc:
+        raise SuccessionError(
+            "spawn precheck list failed: " + str(exc),
+            SPAWN_LIST_ERROR,
+        ) from exc
+
     code, stdout, stderr = runner(create_command)
     if code != 0:
         raise SuccessionError(
@@ -467,20 +478,92 @@ def spawn_successor(
             SPAWN_WORKTREE_MISMATCH,
         )
 
+    try:
+        live_sessions = find_sessions(runner)
+    except SuccessionError as exc:
+        _raise_spawn_error_after_cleanup(
+            runner,
+            handle,
+            SuccessionError("spawn liveness list failed: " + str(exc), SPAWN_LIST_ERROR),
+        )
+        raise
+
+    if any(session.handle == handle for session in live_sessions):
+        return SpawnReport(
+            "CREATED",
+            handle,
+            worktree_id,
+            selector,
+            True,
+            create_command,
+            startup_command,
+            {
+                "requested_worktree": selector,
+                "actual_worktree": worktree_id,
+                "result": "MATCH",
+            },
+        )
+
+    reissued = _resolve_reissued_terminal(live_sessions, snapshot_handles, selector, pane_title)
+    if reissued is None:
+        candidates = _new_worktree_sessions(live_sessions, snapshot_handles, selector)
+        raise SuccessionError(
+            "spawn handle stale: reported handle {0} is not live and {1} new terminal(s) "
+            "in worktree {2} cannot be resolved to exactly one: {3}".format(
+                handle,
+                len(candidates),
+                selector,
+                [session.handle for session in candidates],
+            ),
+            SPAWN_HANDLE_STALE,
+        )
+
     return SpawnReport(
         "CREATED",
-        handle,
-        worktree_id,
+        reissued.handle,
+        reissued.worktree_id,
         selector,
         True,
         create_command,
         startup_command,
         {
             "requested_worktree": selector,
-            "actual_worktree": worktree_id,
-            "result": "MATCH",
+            "actual_worktree": reissued.worktree_id,
+            "reported_handle": handle,
+            "result": "MATCH_REISSUED",
         },
+        handle_reissued=True,
     )
+
+
+def _new_worktree_sessions(
+    live_sessions: Sequence[SessionInfo],
+    snapshot_handles: frozenset,
+    selector: str,
+) -> Tuple[SessionInfo, ...]:
+    return tuple(
+        session
+        for session in live_sessions
+        if session.worktree_id == selector and session.handle not in snapshot_handles
+    )
+
+
+def _resolve_reissued_terminal(
+    live_sessions: Sequence[SessionInfo],
+    snapshot_handles: frozenset,
+    selector: str,
+    pane_title: str,
+) -> Optional[SessionInfo]:
+    candidates = _new_worktree_sessions(live_sessions, snapshot_handles, selector)
+    if len(candidates) > 1:
+        # Orca prefixes live titles with status glyphs, so match by containment.
+        narrowed = tuple(session for session in candidates if pane_title in session.title)
+        if len(narrowed) == 1:
+            return narrowed[0]
+        return None
+    if len(candidates) == 1:
+        return candidates[0]
+    return None
 
 
 def _terminal_items(stdout: str) -> Tuple[Mapping[str, object], ...]:

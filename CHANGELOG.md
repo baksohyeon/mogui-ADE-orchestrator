@@ -13,6 +13,19 @@ you build on it.
 
 ## [Unreleased]
 
+### Added
+
+- Spawn liveness verification against reissued terminal handles. Orca reissues a
+  terminal's handle between creation and first use (observed twice on 2026-08-02,
+  once per spawned master), so the handle a spawn returns can be stale on arrival.
+  `spawn_successor` now snapshots the terminal list before creating, re-queries it
+  after, and when the reported handle is not live it adopts a replacement handle
+  only if exactly one new terminal exists in the requested worktree, narrowing by
+  pane title when several appear. Zero or multiple unresolvable candidates fail
+  closed with exit code 24 (`SPAWN_HANDLE_STALE`) without closing anything; a
+  terminal-list failure around the create fails closed with exit code 25
+  (`SPAWN_LIST_ERROR`). `SpawnReport` gains a `handle_reissued` flag.
+
 ### Removed
 
 - The typed `adapter dispatch` path: `scripts/adapter dispatch`, `core/adapter/dispatch.py`,

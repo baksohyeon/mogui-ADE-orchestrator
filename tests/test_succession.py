@@ -451,7 +451,13 @@ def test_spawn_successor_creates_and_verifies_worktree() -> None:
     calls = []
     create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
     runner = _recording_runner(
-        {create_command: (0, _orca_create_json("term-new", "folder:unit-a"), "")},
+        {
+            _LIST_COMMAND: [
+                (0, _orca_json_from_terminals(), ""),
+                (0, _orca_json_from_terminals(_list_terminal("term-new", "folder:unit-a", "successor")), ""),
+            ],
+            create_command: (0, _orca_create_json("term-new", "folder:unit-a"), ""),
+        },
         calls,
     )
 
@@ -476,6 +482,7 @@ def test_spawn_successor_mismatch_closes_terminal_and_fails_closed() -> None:
     close_command = ("orca", "terminal", "close", "--terminal", "term-new", "--json")
     runner = _recording_runner(
         {
+            _LIST_COMMAND: (0, _orca_json_from_terminals(), ""),
             create_command: (0, _orca_create_json("term-new", "folder:wrong"), ""),
             close_command: (0, '{"ok":true}', ""),
         },
@@ -500,6 +507,7 @@ def test_spawn_successor_close_failure_is_reported() -> None:
     close_command = ("orca", "terminal", "close", "--terminal", "term-new", "--json")
     runner = _runner(
         {
+            _LIST_COMMAND: (0, _orca_json_from_terminals(), ""),
             create_command: (0, _orca_create_json("term-new", "folder:wrong"), ""),
             close_command: (1, "", "close denied"),
         }
@@ -523,6 +531,7 @@ def test_spawn_successor_parse_error_after_handle_closes_terminal() -> None:
     close_command = ("orca", "terminal", "close", "--terminal", "term-new", "--json")
     runner = _recording_runner(
         {
+            _LIST_COMMAND: (0, _orca_json_from_terminals(), ""),
             create_command: (0, '{"ok":true,"result":{"terminal":{"handle":"term-new",', ""),
             close_command: (0, '{"ok":true}', ""),
         },
@@ -547,6 +556,7 @@ def test_spawn_successor_parse_error_close_failure_is_reported() -> None:
     close_command = ("orca", "terminal", "close", "--terminal", "term-new", "--json")
     runner = _runner(
         {
+            _LIST_COMMAND: (0, _orca_json_from_terminals(), ""),
             create_command: (0, '{"ok":true,"result":{"terminal":{"handle":"term-new",', ""),
             close_command: (1, "", "close denied"),
         }
@@ -570,6 +580,7 @@ def test_spawn_successor_missing_worktree_after_handle_closes_terminal() -> None
     close_command = ("orca", "terminal", "close", "--terminal", "term-new", "--json")
     runner = _recording_runner(
         {
+            _LIST_COMMAND: (0, _orca_json_from_terminals(), ""),
             create_command: (
                 0,
                 json.dumps({"ok": True, "result": {"terminal": {"handle": "term-new"}}}),
@@ -595,7 +606,12 @@ def test_spawn_successor_missing_worktree_after_handle_closes_terminal() -> None
 
 def test_spawn_successor_rejects_invalid_create_json() -> None:
     create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
-    runner = _runner({create_command: (0, "not json", "")})
+    runner = _runner(
+        {
+            _LIST_COMMAND: (0, _orca_json_from_terminals(), ""),
+            create_command: (0, "not json", ""),
+        }
+    )
 
     with unittest.TestCase().assertRaisesRegex(SuccessionError, "invalid spawn JSON") as raised:
         spawn_successor(
@@ -626,6 +642,208 @@ def test_spawn_successor_dry_run_only_builds_plan() -> None:
     assert report.verified is False
     assert report.command == _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
     assert calls == []
+
+
+def test_spawn_successor_reissued_handle_resolves_via_list() -> None:
+    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    runner = _runner(
+        {
+            _LIST_COMMAND: [
+                (0, _orca_json_from_terminals(_list_terminal("term-user", "folder:other", "shell")), ""),
+                (
+                    0,
+                    _orca_json_from_terminals(
+                        _list_terminal("term-user", "folder:other", "shell"),
+                        _list_terminal("term-reissued", "folder:unit-a", "⠂ successor"),
+                    ),
+                    "",
+                ),
+            ],
+            create_command: (0, _orca_create_json("term-old", "folder:unit-a"), ""),
+        }
+    )
+
+    report = spawn_successor(
+        workspace_selector="folder:unit-a",
+        kickoff_text="start here",
+        root="/repo/example",
+        title="successor",
+        orca_runner=runner,
+    )
+
+    assert report.status == "CREATED"
+    assert report.handle == "term-reissued"
+    assert report.handle_reissued is True
+    assert report.verified is True
+    assert report.verification["result"] == "MATCH_REISSUED"
+
+
+def test_spawn_successor_live_handle_is_not_reissued() -> None:
+    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    runner = _runner(
+        {
+            _LIST_COMMAND: [
+                (0, _orca_json_from_terminals(), ""),
+                (0, _orca_json_from_terminals(_list_terminal("term-new", "folder:unit-a", "successor")), ""),
+            ],
+            create_command: (0, _orca_create_json("term-new", "folder:unit-a"), ""),
+        }
+    )
+
+    report = spawn_successor(
+        workspace_selector="folder:unit-a",
+        kickoff_text="start here",
+        root="/repo/example",
+        title="successor",
+        orca_runner=runner,
+    )
+
+    assert report.status == "CREATED"
+    assert report.handle == "term-new"
+    assert report.handle_reissued is False
+    assert report.verification["result"] == "MATCH"
+
+
+def test_spawn_successor_stale_handle_zero_candidates_fails_closed() -> None:
+    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    runner = _runner(
+        {
+            _LIST_COMMAND: [
+                (0, _orca_json_from_terminals(), ""),
+                (0, _orca_json_from_terminals(), ""),
+            ],
+            create_command: (0, _orca_create_json("term-old", "folder:unit-a"), ""),
+        }
+    )
+
+    with unittest.TestCase().assertRaisesRegex(SuccessionError, "stale") as raised:
+        spawn_successor(
+            workspace_selector="folder:unit-a",
+            kickoff_text="start here",
+            root="/repo/example",
+            title="successor",
+            orca_runner=runner,
+        )
+
+    assert raised.exception.exit_code == 24
+
+
+def test_spawn_successor_stale_handle_ambiguous_candidates_fails_closed_without_close() -> None:
+    calls = []
+    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    runner = _recording_runner(
+        {
+            _LIST_COMMAND: [
+                (0, _orca_json_from_terminals(), ""),
+                (
+                    0,
+                    _orca_json_from_terminals(
+                        _list_terminal("term-a", "folder:unit-a", "successor"),
+                        _list_terminal("term-b", "folder:unit-a", "successor"),
+                    ),
+                    "",
+                ),
+            ],
+            create_command: (0, _orca_create_json("term-old", "folder:unit-a"), ""),
+        },
+        calls,
+    )
+
+    with unittest.TestCase().assertRaisesRegex(SuccessionError, "stale") as raised:
+        spawn_successor(
+            workspace_selector="folder:unit-a",
+            kickoff_text="start here",
+            root="/repo/example",
+            title="successor",
+            orca_runner=runner,
+        )
+
+    assert raised.exception.exit_code == 24
+    assert not any(command[:3] == ("orca", "terminal", "close") for command in calls)
+
+
+def test_spawn_successor_stale_handle_title_narrows_candidates() -> None:
+    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    runner = _runner(
+        {
+            _LIST_COMMAND: [
+                (0, _orca_json_from_terminals(), ""),
+                (
+                    0,
+                    _orca_json_from_terminals(
+                        _list_terminal("term-shell", "folder:unit-a", "plain shell"),
+                        _list_terminal("term-master", "folder:unit-a", "✳ successor"),
+                    ),
+                    "",
+                ),
+            ],
+            create_command: (0, _orca_create_json("term-old", "folder:unit-a"), ""),
+        }
+    )
+
+    report = spawn_successor(
+        workspace_selector="folder:unit-a",
+        kickoff_text="start here",
+        root="/repo/example",
+        title="successor",
+        orca_runner=runner,
+    )
+
+    assert report.handle == "term-master"
+    assert report.handle_reissued is True
+
+
+def test_spawn_successor_precheck_list_failure_blocks_create() -> None:
+    calls = []
+    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    runner = _recording_runner(
+        {
+            _LIST_COMMAND: (1, "", "orca offline"),
+            create_command: (0, _orca_create_json("term-new", "folder:unit-a"), ""),
+        },
+        calls,
+    )
+
+    with unittest.TestCase().assertRaisesRegex(SuccessionError, "spawn precheck list failed") as raised:
+        spawn_successor(
+            workspace_selector="folder:unit-a",
+            kickoff_text="start here",
+            root="/repo/example",
+            title="successor",
+            orca_runner=runner,
+        )
+
+    assert raised.exception.exit_code == 25
+    assert create_command not in calls
+
+
+def test_spawn_successor_liveness_list_failure_closes_terminal() -> None:
+    calls = []
+    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    close_command = ("orca", "terminal", "close", "--terminal", "term-new", "--json")
+    runner = _recording_runner(
+        {
+            _LIST_COMMAND: [
+                (0, _orca_json_from_terminals(), ""),
+                (1, "", "orca offline"),
+            ],
+            create_command: (0, _orca_create_json("term-new", "folder:unit-a"), ""),
+            close_command: (0, '{"ok":true}', ""),
+        },
+        calls,
+    )
+
+    with unittest.TestCase().assertRaisesRegex(SuccessionError, "spawn liveness list failed.*closed terminal") as raised:
+        spawn_successor(
+            workspace_selector="folder:unit-a",
+            kickoff_text="start here",
+            root="/repo/example",
+            title="successor",
+            orca_runner=runner,
+        )
+
+    assert raised.exception.exit_code == 25
+    assert close_command in calls
 
 
 def test_cli_check_duplicates_outputs_json() -> None:
@@ -757,8 +975,21 @@ def _orca_json_with_handles(*items) -> str:
     )
 
 
+_LIST_COMMAND = ("orca", "terminal", "list", "--json")
+
+
 def _orca_json_from_terminals(*terminals) -> str:
     return json.dumps({"ok": True, "result": {"terminals": list(terminals)}})
+
+
+def _list_terminal(handle: str, worktree_id: str, title: str) -> dict:
+    return {
+        "handle": handle,
+        "worktreeId": worktree_id,
+        "worktreePath": "/repo/example",
+        "connected": True,
+        "title": title,
+    }
 
 
 def _orca_create_json(handle: str, worktree_id: str) -> str:

@@ -33,6 +33,8 @@ scripts/master-succeed spawn \
 
 When the host supports managed terminal creation, a non-dry-run spawn verifies that the returned worktree identifier matches the requested workspace selector. If it does not match, the code fails closed and closes the newly created terminal when possible.
 
+The returned terminal handle is also verified as live, because the host may reissue handles between creation and first use. Spawn snapshots the terminal list before creating, re-queries it after, and if the reported handle is missing from the live list it accepts a replacement handle only when exactly one new terminal exists in the requested worktree (narrowed by pane title when several appear). Zero or multiple unresolvable candidates fail closed without touching any terminal, and the spawn report carries a `handle_reissued` flag when a replacement handle was adopted.
+
 ## Boot Measurement
 
 Boot is a measurement step, not a guess. The bootstrap command reads the charter, optional handoff, role state, budget usage, and duplicate-session warnings.

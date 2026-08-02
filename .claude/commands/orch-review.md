@@ -39,10 +39,11 @@ If the diff is empty, stop: "Nothing to review."
 **PR Mode:**
 
 First derive a **safe numeric PR id** from `$ARGUMENTS` — never pass the raw
-argument to the shell. Accept either a bare integer, or the trailing number of a
-`https://github.com/<owner>/<repo>/pull/<N>` URL. Reject anything else (extra
-text, shell metacharacters, a non-PR URL) and stop with an error. Use only the
-extracted integer `<NUMBER>` below:
+argument to the shell. Normalize URL input by stripping query strings, hash
+fragments, and trailing slashes first. Then accept either a bare integer, or the
+trailing number of a normalized `https://github.com/<owner>/<repo>/pull/<N>`
+URL. Reject anything else (extra text, shell metacharacters, a non-PR URL) and
+stop with an error. Use only the extracted integer `<NUMBER>` below:
 
 ```bash
 gh pr diff <NUMBER>                       # diff text

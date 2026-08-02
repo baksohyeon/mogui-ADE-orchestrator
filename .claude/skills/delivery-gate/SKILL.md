@@ -22,7 +22,8 @@ This is the same pattern as CI pipeline gates — automated, deterministic check
 |-------|-----------|--------|
 | Rationalization patterns | Regex on transcript tail | **Warning only** (never blocks) |
 | Stale learning libraries | mtime on 5 configurable paths | Warning if some stale; **Block** if >=3 stale OR growth-log stale + complex task |
-| Disk space < 50GB | `shutil.disk_usage` | Warning |
+| Disk space < 50GB | `shutil.disk_usage` | Reminder |
+| Disk space < 30GB | `shutil.disk_usage` | Warning |
 | Disk space < 15GB | `shutil.disk_usage` | **Block** (exit 2) |
 
 Rationalization detection warns about patterns like "skip tests for now" and "pre-existing bug" — surface signals that thinking may have been cut short. It never blocks on its own, because regex heuristics can false-positive. The blocking conditions are: disk critical, `>=3 learning libs stale`, OR `growth-log` specifically stale (all require complex task >=3 edits).
@@ -36,7 +37,7 @@ Over many sessions of "ship and forget," the human hasn't grown. This hook enfor
 ## Install
 
 ```bash
-cp quality-gate.py ~/.claude/scripts/
+cp .claude/skills/delivery-gate/hooks/quality-gate.py ~/.claude/scripts/
 ```
 
 Add to `~/.claude/settings.json`:
@@ -78,7 +79,8 @@ Edit `quality-gate.py`:
 | `RATIONALIZE` | 4 patterns | Regex patterns for rationalization detection |
 | `LIBS` | 5 libraries | Files/dirs to check for today's updates |
 | `COMPLEX_THRESHOLD` | 3 | Edit/Write calls to classify as complex |
-| `DISK_WARN_GB` | 50 | Warn below this |
+| `DISK_REMIND_GB` | 50 | Reminder below this |
+| `DISK_WARN_GB` | 30 | Warn below this |
 | `DISK_CRIT_GB` | 15 | Block below this |
 
 ## Examples
@@ -107,7 +109,7 @@ stderr: "Blocked: disk space at 12GB (threshold: 15GB)."
 
 ## Limitations
 
-The hook enforces the **habit** of touching learning libraries, not the **quality** of what was recorded. If `output-index.md` is updated but `growth-log` is skipped, the hook passes (1 of 5 libraries touched). This is by design: mechanical gates check machine-verifiable facts. For content quality verification, pair with `self-audit`.
+The hook enforces the **habit** of touching learning libraries, not the **quality** of what was recorded. It blocks complex sessions when `growth-log` is stale (even if another library changed), and it also blocks when 3 or more libraries are stale. This is by design: mechanical gates check machine-verifiable facts. For content quality verification, pair with `self-audit`.
 
 ## Compatibility
 

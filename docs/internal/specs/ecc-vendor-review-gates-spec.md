@@ -48,3 +48,16 @@ hooks into user-global settings.
 
 - No modification of `~/.claude/settings.json` by repository code.
 - No automatic hook registration during install or onboarding.
+
+## Upstream vs Local Changes
+
+For this harness, vendored ECC assets include the following local behavior changes:
+
+- `orch-review.workflow.js`: reviewer `agentType` values are remapped to locally vendored agents (`code-reviewer`, `silent-failure-hunter`) so the workflow runs self-contained without requiring external `ecc:` namespace registration.
+- `orch-review.workflow.js`: security trigger keywords are expanded to include request/input access patterns (`req`, `params`, `body`, `input`, and related terms).
+- `orch-review.workflow.js`: dedup identity now uses evidence plus location keying to avoid collapsing distinct repeated snippets in the same file.
+- `orch-review.workflow.js`: severity merge now preserves the strictest finding payload/proof when dimensions disagree on severity.
+- `commands/review-pr.md`: PR argument handling now requires safe numeric-id extraction and rejects raw shell interpolation; diff retrieval uses `gh pr diff` (with `gh pr view --json files` for file metadata).
+- `commands/orch-review.md`: PR URL parsing guidance now explicitly allows normalized URLs with trailing slash/query/hash stripped before id extraction.
+- `skills/delivery-gate/SKILL.md`: install path and enforcement docs are aligned to the vendored hook payload and current script behavior (disk reminder/warn/critical tiers and growth-log blocking rule).
+- `workflows/README.md`: workflow narrative is aligned to local agent mappings and fail-closed verifier behavior.

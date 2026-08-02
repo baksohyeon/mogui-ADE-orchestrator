@@ -31,32 +31,32 @@ export const meta = {
 //     stats: { dimensions, failed, raw, unique, confirmed, unverified, uncertain, refuted } }
 // ---------------------------------------------------------------------------
 
-// Language → ECC reviewer agent. Mirrors the agents present in agents/.
+// Language → locally vendored reviewer agent map.
 const LANGUAGE_REVIEWER = {
-  typescript: 'ecc:typescript-reviewer',
-  javascript: 'ecc:typescript-reviewer',
-  python: 'ecc:python-reviewer',
-  go: 'ecc:go-reviewer',
-  rust: 'ecc:rust-reviewer',
-  java: 'ecc:java-reviewer',
-  kotlin: 'ecc:kotlin-reviewer',
-  swift: 'ecc:swift-reviewer',
-  php: 'ecc:php-reviewer',
-  csharp: 'ecc:csharp-reviewer',
-  fsharp: 'ecc:fsharp-reviewer',
-  react: 'ecc:react-reviewer',
-  vue: 'ecc:vue-reviewer',
-  flutter: 'ecc:flutter-reviewer',
-  dart: 'ecc:flutter-reviewer',
-  django: 'ecc:django-reviewer',
-  fastapi: 'ecc:fastapi-reviewer',
-  cpp: 'ecc:cpp-reviewer'
+  typescript: 'code-reviewer',
+  javascript: 'code-reviewer',
+  python: 'code-reviewer',
+  go: 'code-reviewer',
+  rust: 'code-reviewer',
+  java: 'code-reviewer',
+  kotlin: 'code-reviewer',
+  swift: 'code-reviewer',
+  php: 'code-reviewer',
+  csharp: 'code-reviewer',
+  fsharp: 'code-reviewer',
+  react: 'code-reviewer',
+  vue: 'code-reviewer',
+  flutter: 'code-reviewer',
+  dart: 'code-reviewer',
+  django: 'code-reviewer',
+  fastapi: 'code-reviewer',
+  cpp: 'code-reviewer'
 };
 
 // orch-pipeline security trigger: auth/authz, user input, db queries, fs paths,
 // external calls, crypto, secrets. Matched against the diff text + file paths.
 const SECURITY_TRIGGER =
-  /\b(auth|login|password|passwd|token|secret|credential|api[_-]?key|session|jwt|oauth|cookie|sql|query|exec|eval|crypto|cipher|hash|hmac|sign|fs\.|readFile|writeFile|fetch|axios|request|subprocess|os\.system)\b/i;
+  /\b(auth|login|password|passwd|token|secret|credential|api[_-]?key|session|jwt|oauth|cookie|sql|query|exec|eval|crypto|cipher|hash|hmac|sign|fs\.|readFile|writeFile|fetch|axios|request|subprocess|os\.system|req|params|query|body|input|payload|userInput)\b/i;
 
 // A reviewer agent must emit findings in this shape — validated at the tool layer.
 const FINDINGS_SCHEMA = {
@@ -179,12 +179,12 @@ const haystack = `${diff}\n${(input.changedFiles || []).join('\n')}`;
 const langReviewer = input.language && LANGUAGE_REVIEWER[String(input.language).toLowerCase()];
 const securityNeeded = SECURITY_TRIGGER.test(haystack);
 const dimensions = [
-  { key: 'quality', label: 'correctness & quality', agentType: 'ecc:code-reviewer' },
+  { key: 'quality', label: 'correctness & quality', agentType: 'code-reviewer' },
   ...(langReviewer ? [{ key: `lang:${input.language}`, label: `${input.language} idioms & pitfalls`, agentType: langReviewer }] : []),
-  ...(securityNeeded ? [{ key: 'security', label: 'security (OWASP, secrets, injection)', agentType: 'ecc:security-reviewer' }] : [])
+  ...(securityNeeded ? [{ key: 'security', label: 'security (OWASP, secrets, injection)', agentType: 'silent-failure-hunter' }] : [])
 ];
 if (securityNeeded) {
-  log('Security trigger matched — adding security-reviewer dimension.');
+  log('Security trigger matched — adding silent-failure-hunter dimension.');
 }
 
 log(`Reviewing across ${dimensions.length} dimension(s): ${dimensions.map(d => d.key).join(', ')}`);
@@ -219,19 +219,29 @@ if (failedDimensions.length > 0) {
 const tagged = reviews.filter(r => r && r.ok).flatMap(r => r.findings.map(f => ({ ...f, dimension: r.dim })));
 const byKey = new Map();
 for (const f of tagged) {
-  // Prefer the evidence snippet; fall back to title+line so empty-evidence
-  // findings in the same file don't all collapse onto one `${file}::` key.
+  // Use evidence + location for non-empty evidence so repeated snippets in one
+  // file do not collapse into one finding; keep title+line fallback when needed.
   const evidenceKey = normalize(f.evidence);
-  const key = evidenceKey ? `${f.file}::${evidenceKey}` : `${f.file}::${normalize(f.title)}::${f.line ?? 'na'}`;
+  const lineKey = Number.isInteger(f.line) ? String(f.line) : 'na';
+  const key = evidenceKey ? `${f.file}::${lineKey}::${evidenceKey}` : `${f.file}::${normalize(f.title)}::${lineKey}`;
   const prev = byKey.get(key);
   if (!prev) {
     byKey.set(key, { ...f, dimensions: [f.dimension] });
   } else {
-    // Merge without mutating prev: build a new record with the union of
-    // dimensions and the strictest severity seen.
+    // Keep the strictest-severity payload so HIGH/CRITICAL proof is not lost.
     const dimensions = prev.dimensions.includes(f.dimension) ? prev.dimensions : [...prev.dimensions, f.dimension];
-    const severity = SEVERITY_RANK[f.severity] > SEVERITY_RANK[prev.severity] ? f.severity : prev.severity;
-    byKey.set(key, { ...prev, dimensions, severity });
+    const prevRank = SEVERITY_RANK[prev.severity] ?? -1;
+    const currentRank = SEVERITY_RANK[f.severity] ?? -1;
+    const preferred = currentRank > prevRank ? f : prev;
+    const secondary = preferred === f ? prev : f;
+    const merged = { ...secondary, ...preferred, dimensions };
+    if ((!merged.proof || merged.proof.trim() === '') && secondary.proof) {
+      merged.proof = secondary.proof;
+    }
+    if ((merged.line == null) && secondary.line != null) {
+      merged.line = secondary.line;
+    }
+    byKey.set(key, merged);
   }
 }
 const unique = [...byKey.values()];

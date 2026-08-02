@@ -11,11 +11,11 @@ A native port of **orch-pipeline Phase 5 (Review)**.
 The gated outer loop (Gate 1 after Plan, Gate 2 before Commit) **stays in the main conversation** — native workflows run autonomously in the background and cannot pause for interactive approval. This script owns only the segment *between* the gates:
 
 1. **Review** — one reviewer agent per dimension, in parallel:
-   - `ecc:code-reviewer` (correctness & quality) — always
-   - the matching `ecc:<language>-reviewer` — when `args.language` maps to one
-   - `ecc:security-reviewer` — only when the orch-pipeline security trigger matches the diff/paths
-2. **Dedup** — independent reviewers routinely flag the same line, so findings are merged across dimensions keyed on the normalized `evidence` snippet (titles and line numbers drift per reviewer; the offending code does not). Each surviving finding records which `dimensions` reported it and keeps the strictest severity.
-3. **Verify** — every *unique* `CRITICAL`/`HIGH` finding is handed to an independent adversarial verifier that defaults to *refuted* on uncertainty. `MEDIUM`/`LOW` pass through as advisory.
+   - `code-reviewer` (correctness & quality) — always
+   - language dimension uses the vendored `code-reviewer` map when `args.language` is provided
+   - `silent-failure-hunter` — only when the security trigger matches the diff/paths
+2. **Dedup** — independent reviewers routinely flag the same line, so findings are merged across dimensions keyed on evidence plus location identity. Each surviving finding records which `dimensions` reported it and keeps the strictest-severity payload.
+3. **Verify** — every *unique* `CRITICAL`/`HIGH` finding is handed to an independent adversarial verifier that keeps uncertain findings **blocking** (fail closed) rather than refuting them. `MEDIUM`/`LOW` pass through as advisory.
 
 The Review→Verify barrier is deliberate: deduping before verification is exactly the case the Workflow guidance calls a justified barrier — it stops the verifier running N times on the same bug (in local testing, 11 raw findings collapsed to 4 unique, roughly halving verifier cost).
 
@@ -46,7 +46,7 @@ Invalid input throws (the gate **fails closed**): a missing/empty `diff`, malfor
                            "agent returned null (terminal failure or skip)" | "review agent failed" */ ],
   "blocking": [ /* confirmed CRITICAL/HIGH + unverifiable ones — must clear before Gate 2 */ ],
   "advisory": [ /* MEDIUM/LOW + adversarially-refuted findings */ ],
-  "stats": { "dimensions": 3, "failed": 0, "raw": 11, "unique": 4, "confirmed": 4, "unverified": 0, "refuted": 0 }
+  "stats": { "dimensions": 3, "failed": 0, "raw": 11, "unique": 4, "confirmed": 4, "unverified": 0, "uncertain": 0, "refuted": 0 }
 }
 ```
 

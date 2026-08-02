@@ -234,7 +234,34 @@ Verify the hook spec is documented, no sensitive implementation was added, and i
 
 Explain each component in one sentence before showing any command. Print approved install commands and stop; do not run them or edit `settings.json`, hooks, or plugin configuration.
 
+Say which of them are optional in name only. The template carries documents and scripts; it cannot carry the host layer that makes a master behave the way the documents describe, so a component listed here as recommended is often load-bearing. State the consequence of declining each one in a sentence, in the same breath as the offer, rather than leaving the user to discover it later:
+
+- a methodology skill layer changes how the master plans and verifies; without it the master still runs, and reads the charter as advice rather than procedure
+- a restraint skill layer keeps the master from over-building; without it, expect larger diffs and more speculative structure. It pairs with the methodology layer rather than competing with it: one decides how to approach work, the other decides how much to build
+- a tracker skill layer is what makes execution state survive a session; without it, state lives only in the transcript
+- a worker runtime is what makes delegation possible at all; without at least one, the master does every task itself
+
+Record the user's answer per component, including a decline. A declined component is a fact about the installation, and later behaviour that looks like a master defect is often a declined component instead.
+
 Verify the explanation preceded commands, nothing was installed or configured by the agent, and the user's choice—including no installation—is recorded.
+
+## Step 7.6. State What The Publish Gates Do Not Cover
+
+**Position and action:** Step 7.6 follows immediately, while the gates are fresh: tell the user what the redaction gates check and, more importantly, where they are silent.
+
+**Why/caution:** A gate that is trusted beyond its scope is worse than no gate, because it converts an unchecked surface into a believed-clean one.
+
+The gates read repository content. Name the surfaces they do not read, so nobody assumes coverage that does not exist:
+
+- pull request titles, bodies, and review comments
+- release notes and issue text
+- anything typed into a forge web interface
+
+None of those are in the repository, so no scanner in this template sees them. They are also where internal names most easily arrive, because they are written in prose rather than code. The habit that works is to grep your own outgoing text for organization identifiers before posting it, exactly as the scan does for files.
+
+Tell the user that organization-specific patterns live in a file outside version control, that the gates fail closed without it, and that its format is one rule per line as `id|description|regex`. That file is what makes the gates able to catch a workspace name; the shipped rules only catch generic provider secrets.
+
+Verify the user can state one surface the gates do not cover, and that the organization rules file exists or its absence is recorded as a known gap.
 
 ## Step 8. Spawn The Founding Master Through Orchestration
 

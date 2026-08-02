@@ -1421,12 +1421,25 @@ def test_cli_retire_accepts_explicit_target_handle() -> None:
 
 def _runner(responses):
     def run(command: Sequence[str]) -> Tuple[int, str, str]:
-        response = responses[tuple(command)]
+        key = tuple(command)
+        if key not in responses and _is_scoped_terminal_list(command) and _LIST_COMMAND in responses:
+            # spawn scopes list to --worktree; reuse bare-list fixtures in unit tests
+            key = _LIST_COMMAND
+        response = responses[key]
         if isinstance(response, list):
             return response.pop(0)
         return response
 
     return run
+
+
+def _is_scoped_terminal_list(command: Sequence[str]) -> bool:
+    return (
+        len(command) >= 5
+        and tuple(command[:3]) == ("orca", "terminal", "list")
+        and command[3] == "--worktree"
+        and command[-1] == "--json"
+    )
 
 
 def _recording_runner(responses, calls):

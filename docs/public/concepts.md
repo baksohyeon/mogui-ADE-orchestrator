@@ -43,7 +43,7 @@ The master is easier to test when its responsibilities are named as runtime unit
 | U2 | Context Resolver | Decide whether a request belongs to the workspace, a repository, a worktree, or an external system. | `context/` |
 | U3 | Workspace Runtime | Own tracks, cross-repository state, and long-lived execution records. | `work_ledger.py` (`WorkspaceRuntime`) |
 | U4 | Repository Runtime Loader | Load only the Repository Harness needed for the resolved target. | none (design only) |
-| U5 | Worker Scheduler | Issue worker leases, choose isolation, dispatch workers, enforce budget, and reap resources. | partial: `dispatch_gate.py`, `adapter/dispatch.py`, `adapter/isolation.py`; no lease or reap module |
+| U5 | Worker Scheduler | Issue worker leases, choose isolation, dispatch workers, enforce budget, and reap resources. | partial: `dispatch_gate.py` budgets and brackets the dispatch; isolation and the launch moved to the host after the typed adapter path was removed in #14; no lease or reap module |
 | U6 | Approval Manager | Classify action risk and bind execution to a valid approval state. | `approval/` |
 | U7 | Role Runtime | Keep one active role, role lock, and role transition state. | partial: `RoleState` is parsed in `bootstrap.py`; the lock itself is policy |
 | U8 | Recovery Manager | Reattach, resume once, or reconstruct state before spawning a replacement session. | `recovery.py` |

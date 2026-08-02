@@ -26,6 +26,7 @@ DEFAULT_HIGH_COST_RUNTIMES = frozenset({"fable"})
 DEFAULT_LEDGER_PATH = Path(".dispatch-gate-ledger.jsonl")
 DEFAULT_TICKET_DIR = Path(".mogui") / "dispatch-tickets"
 DEFAULT_KNOWN_ROOTS_PATH = Path(".mogui") / "known-roots.json"
+DEFAULT_TIER_POLICY_RELATIVE_PATH = Path("master-ops") / "model-tier-policy.json"
 DEFAULT_TICKET_TTL_SECONDS = 600
 DEFAULT_EXPIRED_TICKET_GC_GRACE_SECONDS = 24 * 60 * 60
 RUNTIME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
@@ -48,6 +49,13 @@ def _default_known_roots_path() -> Path:
     return Path.home() / DEFAULT_KNOWN_ROOTS_PATH
 
 
+def _default_tier_policy_path() -> Path:
+    value = os.environ.get("DISPATCH_TIER_POLICY")
+    if value:
+        return Path(value)
+    return Path(__file__).resolve().parents[3] / DEFAULT_TIER_POLICY_RELATIVE_PATH
+
+
 class ReasonCode(str, Enum):
     """Stable gate decision reason codes."""
 
@@ -67,6 +75,8 @@ class ReasonCode(str, Enum):
     MCP_TRUST_UNHANDLED = "MCP_TRUST_UNHANDLED"
     PATH_OUTSIDE_KNOWN_ROOTS = "PATH_OUTSIDE_KNOWN_ROOTS"
     WORKTREE_AS_REPO_ROOT = "WORKTREE_AS_REPO_ROOT"
+    TIER_POLICY = "TIER_POLICY"
+    TIER_POLICY_UNAVAILABLE = "TIER_POLICY_UNAVAILABLE"
 
 
 @dataclass(frozen=True)
@@ -80,6 +90,7 @@ class DispatchRequest:
     purpose: str = ""
     completion_channel: str | None = None
     model: str | None = None
+    tier_override: str | None = None
 
 
 @dataclass(frozen=True)
@@ -92,6 +103,7 @@ class GateDecision:
     contract_sha: str | None = None
     cost_proxy: int = 0
     message: str = ""
+    tier_override: str | None = None
 
 
 @dataclass(frozen=True)
@@ -107,6 +119,7 @@ class DispatchGateConfig:
     high_cost_runtimes: frozenset[str] = DEFAULT_HIGH_COST_RUNTIMES
     ticket_ttl_seconds: int = DEFAULT_TICKET_TTL_SECONDS
     expired_ticket_gc_grace_seconds: int = DEFAULT_EXPIRED_TICKET_GC_GRACE_SECONDS
+    tier_policy_path: str | Path = field(default_factory=_default_tier_policy_path)
 
 
 @dataclass(frozen=True)
@@ -118,6 +131,15 @@ class DispatchTicket:
     contract_sha: str
     issued_ts: float
     count: int
+
+
+@dataclass(frozen=True)
+class ModelTierPolicy:
+    """Validated per-installation worker model policy."""
+
+    worker_allowed: frozenset[str]
+    worker_denied_tiers: frozenset[str]
+    unknown_model: str
 
 
 class DispatchGate:
@@ -151,6 +173,38 @@ class DispatchGate:
             return decision
 
         try:
+            tier_policy = _load_tier_policy(Path(self.config.tier_policy_path))
+        except (OSError, ValueError, json.JSONDecodeError):
+            decision = GateDecision(
+                False,
+                ReasonCode.TIER_POLICY_UNAVAILABLE,
+                message=f"tier_policy={self.config.tier_policy_path}",
+            )
+            self._append_decision(request, decision)
+            return decision
+
+        tier_policy_warning = False
+        tier_override: str | None = None
+        model = request.model.strip() if request.model is not None else ""
+        if model not in tier_policy.worker_allowed:
+            policy_denies = (
+                model in tier_policy.worker_denied_tiers
+                or tier_policy.unknown_model == "deny"
+            )
+            if policy_denies:
+                if request.tier_override is None:
+                    decision = GateDecision(
+                        False,
+                        ReasonCode.TIER_POLICY,
+                        message=f"model={model}",
+                    )
+                    self._append_decision(request, decision)
+                    return decision
+                tier_override = request.tier_override.strip()
+            else:
+                tier_policy_warning = True
+
+        try:
             contract_content = _contract_content(request.contract_path)
         except FileNotFoundError:
             decision = GateDecision(False, ReasonCode.CONTRACT_UNREADABLE)
@@ -161,6 +215,8 @@ class DispatchGate:
             contract_content.decode("utf-8", errors="replace"),
             Path(self.config.known_roots_path),
         )
+        if tier_policy_warning:
+            lint_warnings = (*lint_warnings, ReasonCode.TIER_POLICY)
         cost_proxy = request.n_agents * est_input_chars
         if (
             _dispatch_ticket_path(
@@ -228,6 +284,7 @@ class DispatchGate:
             warnings=warnings,
             contract_sha=contract_sha,
             cost_proxy=cost_proxy,
+            tier_override=tier_override,
         )
         self._append_decision(request, decision)
         self._issue_dispatch_ticket(request, decision)
@@ -386,11 +443,14 @@ class DispatchGate:
             "est_chars": request.est_input_chars,
             "decision": "ALLOW" if decision.allow else "DENY",
             "reason": decision.reason.value,
+            "cost_proxy": decision.cost_proxy,
             "completion_channel": request.completion_channel,
             "model": request.model,
         }
         if decision.warnings:
             entry["warnings"] = [warning.value for warning in decision.warnings]
+        if decision.tier_override is not None:
+            entry["tier_override"] = decision.tier_override
         self._append_entry(entry)
 
     def _append_entry(self, entry: Mapping[str, object]) -> None:
@@ -573,6 +633,13 @@ def _validate_request(request: DispatchRequest) -> ReasonCode | None:
         return ReasonCode.NO_COMPLETION_CHANNEL
     if not isinstance(request.model, str) or not request.model.strip():
         return ReasonCode.NO_MODEL
+    if request.model != request.model.strip():
+        return ReasonCode.INVALID_REQUEST
+    if request.tier_override is not None and (
+        not isinstance(request.tier_override, str)
+        or not request.tier_override.strip()
+    ):
+        return ReasonCode.INVALID_REQUEST
     if not request.runtime:
         return ReasonCode.INVALID_REQUEST
     if RUNTIME_PATTERN.fullmatch(request.runtime) is None:
@@ -582,6 +649,39 @@ def _validate_request(request: DispatchRequest) -> ReasonCode | None:
     if request.n_agents < 1:
         return ReasonCode.INVALID_REQUEST
     return None
+
+
+def _load_tier_policy(path: Path) -> ModelTierPolicy:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if (
+        not isinstance(payload, dict)
+        or isinstance(payload.get("version"), bool)
+        or payload.get("version") != 1
+    ):
+        raise ValueError("tier policy must be a version 1 object")
+
+    worker_allowed = _model_list(payload.get("worker_allowed"))
+    worker_denied_tiers = _model_list(payload.get("worker_denied_tiers"))
+    unknown_model = payload.get("unknown_model")
+    if not isinstance(unknown_model, str) or unknown_model not in {"deny", "warn"}:
+        raise ValueError("unknown_model must be deny or warn")
+    if worker_allowed & worker_denied_tiers:
+        raise ValueError("tier policy model sets must not overlap")
+    return ModelTierPolicy(
+        worker_allowed=worker_allowed,
+        worker_denied_tiers=worker_denied_tiers,
+        unknown_model=unknown_model,
+    )
+
+
+def _model_list(value: object) -> frozenset[str]:
+    if not isinstance(value, list):
+        raise ValueError("model lists must be arrays")
+    if any(not isinstance(model, str) or not model.strip() for model in value):
+        raise ValueError("model identifiers must be non-empty strings")
+    if any(model != model.strip() for model in value):
+        raise ValueError("model identifiers must not have surrounding whitespace")
+    return frozenset(value)
 
 
 def _dispatch_ticket_path(

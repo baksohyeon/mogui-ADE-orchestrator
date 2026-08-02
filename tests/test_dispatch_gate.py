@@ -24,6 +24,28 @@ def DispatchRequest(*args, **kwargs):
     return _DispatchRequest(*args, **kwargs)
 
 
+def test_dispatch_gate_config_preserves_old_positional_arity(tmp_path: Path) -> None:
+    config = DispatchGateConfig(
+        tmp_path / "ledger.jsonl",
+        tmp_path / "tickets",
+        tmp_path / "known-roots.json",
+        101,
+        202,
+        303,
+        frozenset({"premium"}),
+        404,
+        505,
+    )
+
+    assert config.single_dispatch_char_limit == 101
+    assert config.batch_dispatch_char_limit == 202
+    assert config.duplicate_window_seconds == 303
+    assert config.high_cost_runtimes == frozenset({"premium"})
+    assert config.ticket_ttl_seconds == 404
+    assert config.expired_ticket_gc_grace_seconds == 505
+    assert config.tier_policy_path == dispatch_gate._default_tier_policy_path()
+
+
 def test_check_without_completion_channel_records_denial_in_ledger(
     tmp_path: Path,
 ) -> None:
@@ -99,7 +121,234 @@ def test_check_records_model(tmp_path: Path) -> None:
     )
 
     assert decision.allow is True
-    assert _ledger_entries(tmp_path)[-1]["model"] == "gpt-5.6-luna"
+    entry = _ledger_entries(tmp_path)[-1]
+    assert entry["model"] == "gpt-5.6-luna"
+    assert entry["cost_proxy"] == 10_000
+
+
+def test_tier_policy_allows_worker_model(tmp_path: Path) -> None:
+    contract = _contract(tmp_path, "allowed tier model")
+    gate = _gate(tmp_path, now=1_000)
+
+    decision = gate.check(
+        DispatchRequest(
+            runtime="codex",
+            model="gpt-5.6-luna",
+            contract_path=contract,
+            est_input_chars=10_000,
+            n_agents=1,
+        )
+    )
+
+    assert decision.allow is True
+    assert decision.reason == ReasonCode.OK
+
+
+def test_tier_policy_denies_top_tier_and_ledgers_model(tmp_path: Path) -> None:
+    contract = _contract(tmp_path, "denied tier model")
+    gate = _gate(tmp_path, now=1_000)
+
+    decision = gate.check(
+        DispatchRequest(
+            runtime="codex",
+            model="gpt-5.6-sol",
+            contract_path=contract,
+            est_input_chars=10_000,
+            n_agents=1,
+        )
+    )
+
+    entry = _ledger_entries(tmp_path)[-1]
+    assert decision.allow is False
+    assert decision.reason == ReasonCode.TIER_POLICY
+    assert entry["reason"] == "TIER_POLICY"
+    assert entry["model"] == "gpt-5.6-sol"
+
+
+def test_tier_override_allows_top_tier_and_ledgers_reason(tmp_path: Path) -> None:
+    contract = _contract(tmp_path, "overridden tier model")
+    gate = _gate(tmp_path, now=1_000)
+
+    decision = gate.check(
+        DispatchRequest(
+            runtime="codex",
+            model="gpt-5.6-sol",
+            contract_path=contract,
+            est_input_chars=10_000,
+            n_agents=1,
+            tier_override="owner approved incident response",
+        )
+    )
+
+    entry = _ledger_entries(tmp_path)[-1]
+    assert decision.allow is True
+    assert decision.tier_override == "owner approved incident response"
+    assert entry["model"] == "gpt-5.6-sol"
+    assert entry["tier_override"] == "owner approved incident response"
+
+
+def test_empty_tier_override_is_invalid(tmp_path: Path) -> None:
+    contract = _contract(tmp_path, "empty tier override")
+    gate = _gate(tmp_path, now=1_000)
+
+    decision = gate.check(
+        DispatchRequest(
+            runtime="codex",
+            model="gpt-5.6-sol",
+            contract_path=contract,
+            est_input_chars=10_000,
+            n_agents=1,
+            tier_override="   ",
+        )
+    )
+
+    assert decision.allow is False
+    assert decision.reason == ReasonCode.INVALID_REQUEST
+
+
+def test_missing_tier_policy_fails_closed(tmp_path: Path) -> None:
+    contract = _contract(tmp_path, "missing tier policy")
+    gate = _gate(
+        tmp_path,
+        now=1_000,
+        tier_policy_path=tmp_path / "missing-policy.json",
+    )
+
+    decision = gate.check(
+        DispatchRequest(
+            runtime="codex",
+            model="gpt-5.6-luna",
+            contract_path=contract,
+            est_input_chars=10_000,
+            n_agents=1,
+        )
+    )
+
+    assert decision.allow is False
+    assert decision.reason == ReasonCode.TIER_POLICY_UNAVAILABLE
+    assert _ledger_entries(tmp_path)[-1]["reason"] == "TIER_POLICY_UNAVAILABLE"
+
+
+def test_unparseable_tier_policy_fails_closed(tmp_path: Path) -> None:
+    contract = _contract(tmp_path, "unparseable tier policy")
+    policy = tmp_path / "broken-policy.json"
+    policy.write_text("not-json\n", encoding="utf-8")
+    gate = _gate(tmp_path, now=1_000, tier_policy_path=policy)
+
+    decision = gate.check(
+        DispatchRequest(
+            runtime="codex",
+            model="gpt-5.6-luna",
+            contract_path=contract,
+            est_input_chars=10_000,
+            n_agents=1,
+        )
+    )
+
+    assert decision.allow is False
+    assert decision.reason == ReasonCode.TIER_POLICY_UNAVAILABLE
+
+
+def test_noncanonical_denied_tier_never_fails_open(tmp_path: Path) -> None:
+    for unknown_model in ("deny", "warn"):
+        case_dir = tmp_path / unknown_model
+        case_dir.mkdir()
+        contract = _contract(case_dir, f"noncanonical denied tier {unknown_model}")
+        policy = case_dir / "model-tier-policy.json"
+        policy.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "worker_allowed": [],
+                    "worker_denied_tiers": ["gpt-5.6-sol "],
+                    "unknown_model": unknown_model,
+                }
+            ),
+            encoding="utf-8",
+        )
+        gate = _gate(case_dir, now=1_000, tier_policy_path=policy)
+
+        decision = gate.check(
+            DispatchRequest(
+                runtime="codex",
+                model="gpt-5.6-sol",
+                contract_path=contract,
+                est_input_chars=10_000,
+                n_agents=1,
+            )
+        )
+
+        assert decision.allow is False
+        assert decision.reason == ReasonCode.TIER_POLICY_UNAVAILABLE
+        assert _ledger_entries(case_dir)[-1]["reason"] == "TIER_POLICY_UNAVAILABLE"
+        assert not (case_dir / "dispatch-tickets").exists()
+
+
+def test_noncanonical_requested_model_is_invalid_request(tmp_path: Path) -> None:
+    contract = _contract(tmp_path, "noncanonical requested model")
+    gate = _gate(
+        tmp_path,
+        now=1_000,
+        tier_policy_path=_tier_policy(tmp_path, unknown_model="warn"),
+    )
+
+    decision = gate.check(
+        DispatchRequest(
+            runtime="codex",
+            model="gpt-5.6-sol ",
+            contract_path=contract,
+            est_input_chars=10_000,
+            n_agents=1,
+        )
+    )
+
+    assert decision.allow is False
+    assert decision.reason == ReasonCode.INVALID_REQUEST
+    assert _ledger_entries(tmp_path)[-1]["reason"] == "INVALID_REQUEST"
+    assert not (tmp_path / "dispatch-tickets").exists()
+
+
+def test_unknown_model_follows_policy_setting(tmp_path: Path) -> None:
+    deny_dir = tmp_path / "deny"
+    deny_dir.mkdir()
+    deny_contract = _contract(deny_dir, "unknown model denied")
+    deny_gate = _gate(
+        deny_dir,
+        now=1_000,
+        tier_policy_path=_tier_policy(deny_dir, unknown_model="deny"),
+    )
+    deny_decision = deny_gate.check(
+        DispatchRequest(
+            runtime="codex",
+            model="future-model",
+            contract_path=deny_contract,
+            est_input_chars=10_000,
+            n_agents=1,
+        )
+    )
+
+    warn_dir = tmp_path / "warn"
+    warn_dir.mkdir()
+    warn_contract = _contract(warn_dir, "unknown model warned")
+    warn_gate = _gate(
+        warn_dir,
+        now=1_000,
+        tier_policy_path=_tier_policy(warn_dir, unknown_model="warn"),
+    )
+    warn_decision = warn_gate.check(
+        DispatchRequest(
+            runtime="codex",
+            model="future-model",
+            contract_path=warn_contract,
+            est_input_chars=10_000,
+            n_agents=1,
+        )
+    )
+
+    assert deny_decision.allow is False
+    assert deny_decision.reason == ReasonCode.TIER_POLICY
+    assert warn_decision.allow is True
+    assert warn_decision.warnings == (ReasonCode.TIER_POLICY,)
 
 
 def test_check_records_sentinel_log_completion_channel(tmp_path: Path) -> None:
@@ -175,6 +424,7 @@ def test_r1_denies_batch_cost_over_limit(tmp_path: Path) -> None:
     assert decision.allow is False
     assert decision.reason == ReasonCode.BUDGET_EXCEEDED
     assert decision.cost_proxy == 1_200_000
+    assert _ledger_entries(tmp_path)[-1]["cost_proxy"] == 1_200_000
 
 
 def test_unmeasured_contract_fails_closed_before_validation_and_budget(
@@ -1268,6 +1518,124 @@ def test_cli_check_register_and_watch_commands(tmp_path: Path) -> None:
     assert watch_result.returncode == 0, watch_result.stderr
 
 
+def test_cli_report_rolls_up_models_denials_and_overrides(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
+    ledger = tmp_path / "report-ledger.jsonl"
+    policy = _tier_policy(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+    cases = (
+        ("gpt-5.6-luna", "allowed report model", 2, None, 0),
+        ("gpt-5.6-sol", "denied report model", 1, None, 2),
+        (
+            "gpt-5.6-sol",
+            "overridden report model",
+            3,
+            "owner approved benchmark",
+            0,
+        ),
+    )
+    for model, content, agents, override, expected_status in cases:
+        command = [
+            "--ledger",
+            str(ledger),
+            "check",
+            "--runtime",
+            "codex",
+            "--model",
+            model,
+            "--tier-policy",
+            str(policy),
+            "--contract",
+            str(_contract(tmp_path, content)),
+            "--agents",
+            str(agents),
+            "--est-chars",
+            "1000",
+            "--completion-channel",
+            "orchestration",
+        ]
+        if override is not None:
+            command.extend(("--tier-override", override))
+        assert script["main"](command) == expected_status
+        capsys.readouterr()
+
+    assert script["main"](["--ledger", str(ledger), "report"]) == 0
+    output = capsys.readouterr().out
+    assert "Dispatch gate report" in output
+    assert "gpt-5.6-luna: dispatches=1 est_cost_proxy=2000" in output
+    assert "gpt-5.6-sol: dispatches=1 est_cost_proxy=3000" in output
+    assert "TIER_POLICY: 1" in output
+    assert (
+        'gpt-5.6-sol: reason="owner approved benchmark" count=1' in output
+    )
+
+
+def test_cli_report_uses_stored_cost_and_labels_legacy_computation(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
+    ledger = tmp_path / "report-ledger.jsonl"
+    entries = (
+        {
+            "ts": 1_000,
+            "decision": "ALLOW",
+            "model": "stored-model",
+            "cost_proxy": 7,
+            "est_chars": 999,
+            "n_agents": 999,
+        },
+        {
+            "ts": 2_000,
+            "decision": "ALLOW",
+            "model": "legacy-model",
+            "est_chars": 20,
+            "n_agents": 3,
+        },
+    )
+    ledger.write_text(
+        "".join(json.dumps(entry) + "\n" for entry in entries),
+        encoding="utf-8",
+    )
+
+    assert script["main"](["--ledger", str(ledger), "report"]) == 0
+    output = capsys.readouterr().out
+
+    assert "stored-model: dispatches=1 est_cost_proxy=7" in output
+    assert "legacy-model: dispatches=1 est_cost_proxy=60" in output
+    assert "legacy-model: dispatches=1 est_cost_proxy=60 computed_legacy_entries=1" in output
+
+
+def test_cli_report_skips_non_object_and_invalid_timestamps(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
+    ledger = tmp_path / "damaged-ledger.jsonl"
+    ledger.write_text(
+        "[]\n"
+        '{"ts":1e309,"decision":"DENY","reason":"BAD_TS"}\n'
+        f'{{"ts":{10**400},"decision":"ALLOW","model":"damaged-model",'
+        '"cost_proxy":12}\n'
+        '{"ts":0,"decision":"ALLOW","model":"healthy-model","cost_proxy":3}\n',
+        encoding="utf-8",
+    )
+
+    assert script["main"](["--ledger", str(ledger), "report"]) == 0
+    output = capsys.readouterr().out
+
+    assert "Skipped malformed: 1" in output
+    assert "Time span: 1970-01-01T00:00:00Z to 1970-01-01T00:00:00Z" in output
+    assert "BAD_TS: 1" in output
+    assert "damaged-model: dispatches=1 est_cost_proxy=12" in output
+    assert "healthy-model: dispatches=1 est_cost_proxy=3" in output
+
+
 def test_cli_check_creates_default_ticket_directory(tmp_path: Path) -> None:
     contract = _dispatch_contract(tmp_path, runtime="codex")
     ledger = tmp_path / "cli-ledger.jsonl"
@@ -1472,15 +1840,35 @@ def _gate(
     now: float | None = None,
     clock: _MutableClock | None = None,
     known_roots_path: Path | None = None,
+    tier_policy_path: Path | None = None,
 ) -> DispatchGate:
     return DispatchGate(
         DispatchGateConfig(
             ledger_path=tmp_path / "ledger.jsonl",
             ticket_dir=tmp_path / "dispatch-tickets",
             known_roots_path=known_roots_path or tmp_path / "missing-known-roots.json",
+            tier_policy_path=tier_policy_path or _tier_policy(tmp_path),
         ),
         clock=clock or (lambda: now if now is not None else 1_000),
     )
+
+
+def _tier_policy(tmp_path: Path, unknown_model: str = "deny") -> Path:
+    policy = tmp_path / "model-tier-policy.json"
+    policy.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "worker_allowed": ["gpt-5.6-luna"],
+                "worker_denied_tiers": ["gpt-5.6-sol"],
+                "unknown_model": unknown_model,
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return policy
 
 
 def _contract(tmp_path: Path, content: str) -> Path:

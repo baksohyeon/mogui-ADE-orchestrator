@@ -24,6 +24,26 @@ here in the same change. Skip that and installations on different template
 states all report the same version, which is the whole thing this was meant to
 prevent.
 
+## 3
+
+The operations card (`CLAUDE.md`/`AGENTS.md`) gains an owner-communication
+rule: tracker issues are referred to by title with the ID in parentheses, never
+by bare ID, and charter vocabulary gets one plain clause of explanation on
+first use. Added after a production master proposed "Maintenance 범위에서 74m
+착수 승인" and the owner's reply was to ask, twice, what that meant.
+
+Onboarding changes in the same spirit, in `ONBOARDING.md` (not copied into
+installations, listed for completeness): an Orientation section before Step 0
+that explains the system, the three layers, the step map, and the end state
+before any question is asked; a position line opening every step; and Step 5
+now explains the tracker's role and asks the user to choose the issue prefix
+instead of silently taking the tracker's repo-name default.
+
+An installation on version 2 applies this in two edits. Copy the new
+communication bullet into both `CLAUDE.md` and `AGENTS.md` (they stay
+byte-identical), then raise the `Template version` line in
+`docs/MASTER-OPERATIONS.md` to 3.
+
 ## 2
 
 One integrity rule added to `docs/observability/README.md`: an instruction to

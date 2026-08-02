@@ -4,6 +4,19 @@ This is the Stage 2 guide for turning the Stage 1 skeleton into a working worksp
 
 Stage 1 asks nothing. It lays down the skeleton and prints the remaining placeholders. Stage 2 is conversational: use a structured question tool when your host provides one; otherwise ask normal questions. At every step, explain why the information is needed before asking.
 
+## Orientation, Before Step 0
+
+Before asking the user anything, tell them where they are. A user who has to ask "what is happening and why" mid-flow was failed by this protocol, not by their own attention. Cover, in their language, in this order:
+
+1. What this system is: one master session per workspace that coordinates work across the workspace's repositories, spawned and placement-verified through Orca, with governance state kept in a dedicated ops repository.
+2. The three layers and which one is talking: this orchestrator repository (runtime and template, owned by its maintainer), the ops repository this flow will create (the workspace's own governance record), and the master session this flow will spawn (the operator). The session running this guide is the installer; it is none of the three, and it retires when Step 8 hands off.
+3. The step map: Steps 0–7.5 measure facts and build the ops repository, Step 8 spawns the master, Step 9 is the master's first-boot smoke — run by the master in its own session, not here.
+4. What exists at the end: an ops repository with a filled-in operations document, an issue tracker reachable from the workspace root, seeded user rules, and exactly one verified Generation 1 master.
+
+Then keep the user oriented for the rest of the flow. Open every step with one line of position: the step number, its purpose, and what just changed. The per-step "(a) Why" text explains the step; the position line explains the journey.
+
+Plain-language rule, for this flow and for the master it produces: expand internal identifiers and charter vocabulary on first use when talking to the user. A tracker issue is "<title> (<id>)", never a bare ID; a term like Role Lock gets one clause of explanation before it is leaned on. This rule exists because a production master once proposed "Maintenance 범위에서 74m 착수 승인" to an owner who could not know what either term meant.
+
 Use only these placeholders in the master-ops template:
 
 - `{{WORKSPACE_NAME}}`
@@ -167,12 +180,13 @@ Operational note: in production, a path selector for an unregistered folder fail
 
 (b) Ask the user:
 
-- which issue tracker to use, such as Beads (`bd`) or another local tracker
+- which issue tracker to use, such as Beads (`bd`) or another local tracker — explain first what the tracker is for in this system: it is the working-state SSOT the master reloads at every boot and after every compaction, not a to-do convenience
 - whether the tracker database should be initialized now
+- which issue ID prefix to use. Explain that every issue ID starts with it and that the master will say these IDs out loud in conversation, then propose a short one (two or three characters, such as initials of the workspace) alongside the tracker's default. Do not silently accept the default: a repo-name default like `mogui-ops` produced IDs like `mogui-ops-74m` in production, and the owner's first reaction to hearing one was to ask what it meant
 
 (c) Agent action:
 
-- initialize the selected tracker only in the ops repository
+- initialize the selected tracker only in the ops repository, with the prefix the user chose (Beads: `bd init --prefix <prefix>`; a wrong choice is recoverable later via `bd rename-prefix`, which rewrites IDs and references in the database but not in markdown documents)
 - reach the tracker from the workspace root, since that is where the master runs
 - record active work there, not in markdown TODO files
 - seed only load-bearing memory pointers and rules

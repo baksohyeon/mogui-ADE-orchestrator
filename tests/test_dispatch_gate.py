@@ -20,6 +20,7 @@ from master_runtime.core.watchdog import StallStatus, check_stall
 
 def DispatchRequest(*args, **kwargs):
     kwargs.setdefault("completion_channel", "sentinel-log")
+    kwargs.setdefault("model", "gpt-5.6-luna")
     return _DispatchRequest(*args, **kwargs)
 
 
@@ -35,6 +36,7 @@ def test_check_without_completion_channel_denies_without_ledger_write(
             contract_path=contract,
             est_input_chars=10_000,
             n_agents=1,
+            model="gpt-5.6-luna",
         )
     )
 
@@ -54,11 +56,50 @@ def test_check_records_orchestration_completion_channel(tmp_path: Path) -> None:
             est_input_chars=10_000,
             n_agents=1,
             completion_channel="orchestration",
+            model="gpt-5.6-luna",
         )
     )
 
     assert decision.allow is True
     assert _ledger_entries(tmp_path)[-1]["completion_channel"] == "orchestration"
+
+
+def test_check_without_model_denies_without_ledger_write(tmp_path: Path) -> None:
+    contract = _contract(tmp_path, "missing model")
+    gate = _gate(tmp_path, now=1_000)
+
+    decision = gate.check(
+        _DispatchRequest(
+            runtime="codex",
+            contract_path=contract,
+            est_input_chars=10_000,
+            n_agents=1,
+            completion_channel="orchestration",
+        )
+    )
+
+    assert decision.allow is False
+    assert decision.reason == ReasonCode.NO_MODEL
+    assert not (tmp_path / "ledger.jsonl").exists()
+
+
+def test_check_records_model(tmp_path: Path) -> None:
+    contract = _contract(tmp_path, "model recorded")
+    gate = _gate(tmp_path, now=1_000)
+
+    decision = gate.check(
+        _DispatchRequest(
+            runtime="codex",
+            contract_path=contract,
+            est_input_chars=10_000,
+            n_agents=1,
+            completion_channel="orchestration",
+            model="gpt-5.6-luna",
+        )
+    )
+
+    assert decision.allow is True
+    assert _ledger_entries(tmp_path)[-1]["model"] == "gpt-5.6-luna"
 
 
 def test_check_records_sentinel_log_completion_channel(tmp_path: Path) -> None:
@@ -72,6 +113,7 @@ def test_check_records_sentinel_log_completion_channel(tmp_path: Path) -> None:
             est_input_chars=10_000,
             n_agents=1,
             completion_channel="sentinel-log",
+            model="gpt-5.6-luna",
         )
     )
 
@@ -412,6 +454,8 @@ def test_cli_register_with_verified_orchestration_task_records_task(
                 "check",
                 "--runtime",
                 "codex",
+                "--model",
+                "gpt-5.6-luna",
                 "--contract",
                 str(contract),
                 "--agents",
@@ -480,6 +524,8 @@ def test_cli_register_denies_unverified_orchestration_task_without_ledger_entry(
                 "check",
                 "--runtime",
                 "codex",
+                "--model",
+                "gpt-5.6-luna",
                 "--contract",
                 str(contract),
                 "--agents",
@@ -971,6 +1017,8 @@ def test_cli_check_register_and_watch_commands(tmp_path: Path) -> None:
             "check",
             "--runtime",
             "codex",
+            "--model",
+            "gpt-5.6-luna",
             "--contract",
             str(contract),
             "--agents",
@@ -1038,6 +1086,8 @@ def test_cli_check_creates_default_ticket_directory(tmp_path: Path) -> None:
             "check",
             "--runtime",
             "codex",
+            "--model",
+            "gpt-5.6-luna",
             "--contract",
             str(contract),
             "--agents",
@@ -1082,6 +1132,8 @@ def test_cli_register_ambiguous_prints_candidate_shas(tmp_path: Path) -> None:
                 "check",
                 "--runtime",
                 "codex",
+                "--model",
+                "gpt-5.6-luna",
                 "--contract",
                 str(contract),
                 "--agents",

@@ -47,6 +47,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     check_parser = subparsers.add_parser("check")
     check_parser.add_argument("--runtime", required=True)
+    check_parser.add_argument("--model", required=True)
     check_parser.add_argument("--contract", required=True)
     check_parser.add_argument("--agents", required=True, type=int)
     check_parser.add_argument("--est-chars", type=int)
@@ -88,6 +89,7 @@ def _check(args: argparse.Namespace) -> int:
     decision = _gate(args).check(
         DispatchRequest(
             runtime=args.runtime,
+            model=args.model,
             contract_path=contract_path,
             est_input_chars=est_chars,
             n_agents=args.agents,

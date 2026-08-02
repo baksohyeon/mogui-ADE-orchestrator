@@ -58,6 +58,7 @@ class ReasonCode(str, Enum):
     UNVERIFIED_JOB = "UNVERIFIED_JOB"
     INVALID_REQUEST = "INVALID_REQUEST"
     NO_COMPLETION_CHANNEL = "NO_COMPLETION_CHANNEL"
+    NO_MODEL = "NO_MODEL"
     ORCHESTRATION_UNVERIFIED = "ORCHESTRATION_UNVERIFIED"
     CONTRACT_UNREADABLE = "CONTRACT_UNREADABLE"
     HIGH_COST_RUNTIME = "HIGH_COST_RUNTIME"
@@ -78,6 +79,7 @@ class DispatchRequest:
     n_agents: int
     purpose: str = ""
     completion_channel: str | None = None
+    model: str | None = None
 
 
 @dataclass(frozen=True)
@@ -135,7 +137,10 @@ class DispatchGate:
         validation_error = _validate_request(request)
         if validation_error is not None:
             decision = GateDecision(False, validation_error)
-            if validation_error != ReasonCode.NO_COMPLETION_CHANNEL:
+            if validation_error not in {
+                ReasonCode.NO_COMPLETION_CHANNEL,
+                ReasonCode.NO_MODEL,
+            }:
                 self._append_decision(request, decision)
             return decision
 
@@ -376,6 +381,7 @@ class DispatchGate:
             "decision": "ALLOW" if decision.allow else "DENY",
             "reason": decision.reason.value,
             "completion_channel": request.completion_channel,
+            "model": request.model,
         }
         if decision.warnings:
             entry["warnings"] = [warning.value for warning in decision.warnings]
@@ -559,6 +565,8 @@ def _validate_request(request: DispatchRequest) -> ReasonCode | None:
         or request.completion_channel not in COMPLETION_CHANNELS
     ):
         return ReasonCode.NO_COMPLETION_CHANNEL
+    if not isinstance(request.model, str) or not request.model.strip():
+        return ReasonCode.NO_MODEL
     if not request.runtime:
         return ReasonCode.INVALID_REQUEST
     if RUNTIME_PATTERN.fullmatch(request.runtime) is None:

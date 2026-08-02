@@ -1,0 +1,138 @@
+# Gitleaks configuration for this repository.
+#
+# gitleaks is the matching engine. These rules are what this repository needs
+# beyond the maintained default set, which covers provider secrets far better
+# than a hand-written list does.
+#
+# Organization-specific patterns are deliberately absent. This repository is
+# public, so committing them would publish exactly what they protect. Supply
+# them through a second config named by GITLEAKS_CONFIG, kept outside version
+# control; scripts/redaction-scan.sh fails closed when it is required and
+# missing, the same contract REDACTION_EXTRA_PATTERNS had.
+
+title = "mogui-ADE-orchestrator"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "private_key"
+description = "PEM or OpenSSH private key header"
+regex = '''BEGIN (RSA |OPENSSH |EC |DSA )?PRIVATE KEY'''
+
+[[rules]]
+id = "aws_access_key"
+description = "AWS access key id"
+regex = '''AKIA[0-9A-Z]{16}'''
+
+[[rules]]
+id = "github_token"
+description = "GitHub personal or access token"
+regex = '''gh[pousr]_[A-Za-z0-9]{20,}'''
+
+[[rules]]
+id = "slack_token"
+description = "Slack API token"
+regex = '''xox[baprs]-[A-Za-z0-9-]{10,}'''
+
+[[rules]]
+id = "openai_sk"
+description = "OpenAI-style secret key"
+regex = '''sk-[A-Za-z0-9]{20,}'''
+
+[[rules]]
+id = "anthropic_key"
+description = "Anthropic-style key"
+regex = '''sk-ant-[A-Za-z0-9_-]{20,}'''
+
+[[rules]]
+id = "bearer_token"
+description = "Bearer credential literal"
+regex = '''Bearer [A-Za-z0-9._\-]{24,}'''
+
+[[rules]]
+id = "assignment_secret"
+description = "Hardcoded secret assignment"
+regex = '''(?i)(api[_-]?key|secret[_-]?key|access[_-]?token|auth[_-]?token|password|passwd)\s*[=:]\s*['"][^'"\s]{8,}['"]'''
+
+[[rules]]
+id = "dotenv_export"
+description = "Exported env secret"
+regex = '''(?i)export\s+(API_KEY|SECRET_KEY|ACCESS_TOKEN|PASSWORD|AWS_SECRET_ACCESS_KEY|ANTHROPIC_API_KEY|OPENAI_API_KEY)\s*='''
+
+[[rules]]
+id = "home_path"
+description = "Absolute home path with a user name"
+regex = '''/Users/[A-Za-z0-9._-]+'''
+
+  # These prefixes are fixtures used on purpose in tests and documentation.
+  # They are content rather than file paths, so they cannot go in the global
+  # `paths` list, and they are scoped to this rule so they cannot excuse a
+  # finding from any other one.
+  [rules.allowlist]
+  regexTarget = "match"
+  regexes = [
+    '''^/Users/(dev|user|example|runner|you)$''',
+  ]
+
+[[rules]]
+id = "internal_ip"
+description = "Private RFC1918 address"
+regex = '''\b(10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|192\.168\.[0-9]{1,3}\.[0-9]{1,3}|172\.(1[6-9]|2[0-9]|3[0-1])\.[0-9]{1,3}\.[0-9]{1,3})\b'''
+
+[[rules]]
+id = "jira_hf"
+description = "Internal ticket identifier"
+regex = '''\bHF-[0-9]{2,}\b'''
+
+[[rules]]
+id = "slack_url"
+description = "Slack workspace or archive URL"
+regex = '''https?://[A-Za-z0-9._-]*slack\.com/'''
+
+[[rules]]
+id = "internal_host"
+description = "Internal or corp hostname"
+regex = '''\b[A-Za-z0-9._-]+\.(internal|corp|local)\b'''
+
+[allowlist]
+# A line naming a placeholder is documentation, not exposure. Carried over from
+# the previous scanner because the documentation depends on it.
+# Measured, not assumed: `stopwords` did not excuse these and `regexes` does,
+# so the placeholder list is expressed as case-insensitive line regexes.
+regexTarget = "line"
+regexes = [
+  '''(?i)example\.com''',
+  '''(?i)example\-product''',
+  '''(?i)your_api_key''',
+  '''(?i)your\-api\-key''',
+  '''(?i)changeme''',
+  '''(?i)placeholder''',
+  '''(?i)redacted''',
+  '''(?i)xxx''',
+  '''(?i)todo''',
+  '''(?i)insert_''',
+  '''(?i)replace_me''',
+  '''(?i)dummy''',
+  '''(?i)fake_''',
+  '''(?i)test_secret''',
+  '''(?i)sk\-test\-''',
+  '''(?i)sk\-ant\-api03\-test''',
+  '''(?i)ghp_example''',
+  '''(?i)xoxb\-example''',
+  '''(?i)AKIAIOSFODNN7EXAMPLE''',
+  '''(?i)not\-a\-real''',
+  '''(?i)sample\ only''',
+]
+paths = [
+  # Files whose whole purpose is to carry patterns.
+  '''scripts/redaction-scan\.sh''',
+  '''scripts/redaction-allowlist\.txt''',
+  '''config/gitleaks\.toml''',
+  # Build products. `gitleaks dir` walks the working tree including untracked
+  # output, and compiled bytecode yields matches that are noise: measured as 57
+  # findings from __pycache__ against 0 in tracked content.
+  '''__pycache__/''',
+  '''\.pyc$''',
+  '''\.orca/''',
+]

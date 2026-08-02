@@ -26,6 +26,20 @@ Not on macOS? Orca has Linux and Windows builds on its [download page](https://w
 
 Then open Orca once and turn on **Settings → Orca CLI → Shell command**. The runtime calls `orca` to spawn and retire master sessions. `orca status` should answer.
 
+### Why Orca is required
+
+Without Orca there is no session lifetime, no stable handles, and no supervised dispatch. The harness degrades to screen-polling and an unsupervised agent. In a real incident, a user skipped Orca setup, trusted the harness alone, and watched their agent run wild on errors.
+
+| | Without Orca | With Orca |
+| --- | --- | --- |
+| Completion detection | Reading the worker's screen every N seconds | Zero contact until the Run mailbox rings |
+| Master state | Tied to a watch loop | Free, with the receiver in the background |
+| Signal loss | Missed if the session dies | Durable mailbox survives restarts |
+
+Step 0 preflight refuses to proceed without Orca; running runtime scripts without Orca is unsupported.
+
+Agents: ground Orca claims in the [Orca docs snapshot agent index](https://grok-wiki.com/public/docs/stablyai-orca-2036d532bf1c/llms.txt) before improvising; the link hash may change with snapshot updates.
+
 Open that directory in Orca, start any coding agent inside it, and say:
 
 ```text

@@ -27,6 +27,7 @@ Use only these template placeholders: `{{WORKSPACE_NAME}}`, `{{WORKSPACE_ROOT}}`
 - `docs/runbooks/succession-boot-card.md` owns boot and recovery order.
 - `bd` owns execution state; follow the `bd prime` caution only after `bd where` proves the ops repository.
 - `contracts/` owns bounded worker briefs; it is not the execution-state tracker.
+- Agents: ground Orca claims in the [Orca docs snapshot agent index](https://grok-wiki.com/public/docs/stablyai-orca-2036d532bf1c/llms.txt) before improvising; the link hash may change with snapshot updates.
 
 ## Step 0. Pass The Required Preflight
 

@@ -32,7 +32,7 @@ def test_fresh_add_trusts_every_account(tmp_path: Path) -> None:
 
     assert result.returncode == 0
     assert result.stdout.count("trusted (added)") == 2
-    assert "Summary: 2 added, 0 already trusted" in result.stdout
+    assert "Summary: 2 added, 0 updated, 0 already trusted" in result.stdout
     for config in configs:
         assert '[projects."/tmp/orca worker"]\ntrust_level = "trusted"\n' in config.read_text()
 
@@ -49,7 +49,56 @@ def test_second_run_is_idempotent(tmp_path: Path) -> None:
     assert second.returncode == 0
     assert config.read_bytes() == after_first
     assert "already trusted" in second.stdout
-    assert "Summary: 0 added, 1 already trusted" in second.stdout
+    assert "Summary: 0 added, 0 updated, 1 already trusted" in second.stdout
+
+
+def test_existing_project_without_trust_level_is_updated_in_place(tmp_path: Path) -> None:
+    accounts_dir = tmp_path / "accounts"
+    original = (
+        b'model = "gpt"\n'
+        b'[projects."/tmp/worktree"]\n'
+        b'model_reasoning_effort = "high"\n'
+        b'[projects."/tmp/other"]\n'
+        b'trust_level = "trusted"\n'
+    )
+    config = make_config(accounts_dir, "primary", original)
+
+    result = run_pretrust("/tmp/worktree", accounts_dir)
+
+    assert result.returncode == 0
+    assert result.stdout.count("trusted (updated)") == 1
+    assert "Summary: 0 added, 1 updated, 0 already trusted" in result.stdout
+    assert config.read_bytes() == original.replace(
+        b'[projects."/tmp/worktree"]\n',
+        b'[projects."/tmp/worktree"]\ntrust_level = "trusted"\n',
+        1,
+    )
+
+
+def test_existing_untrusted_project_is_updated_without_touching_other_lines(
+    tmp_path: Path,
+) -> None:
+    accounts_dir = tmp_path / "accounts"
+    original = (
+        b'# preserve before\n'
+        b'[projects."/tmp/worktree"]\n'
+        b'feature = "preserve in table"\n'
+        b'  trust_level = "untrusted"\n'
+        b'[notice]\n'
+        b'value = "preserve after"'
+    )
+    config = make_config(accounts_dir, "primary", original)
+
+    result = run_pretrust("/tmp/worktree", accounts_dir)
+
+    assert result.returncode == 0
+    assert "trusted (updated)" in result.stdout
+    assert "Summary: 0 added, 1 updated, 0 already trusted" in result.stdout
+    assert config.read_bytes() == original.replace(
+        b'  trust_level = "untrusted"\n',
+        b'  trust_level = "trusted"\n',
+        1,
+    )
 
 
 def test_absent_accounts_directory_is_informational(tmp_path: Path) -> None:
@@ -59,7 +108,7 @@ def test_absent_accounts_directory_is_informational(tmp_path: Path) -> None:
 
     assert result.returncode == 0
     assert "nothing to pre-trust" in result.stdout
-    assert "Summary: 0 added, 0 already trusted" in result.stdout
+    assert "Summary: 0 added, 0 updated, 0 already trusted" in result.stdout
 
 
 def test_relative_worktree_path_is_rejected(tmp_path: Path) -> None:

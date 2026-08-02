@@ -157,9 +157,9 @@ Use the workspace's approved dispatch gate command and ledger. The template form
 G={{RUNTIME_ROOT}}/scripts/dispatch-gate
 L=~/.mogui/dispatch-ledger.jsonl
 
-"$G" --ledger "$L" check --runtime <runtime> --contract <contract-file> --agents <n> --est-chars <n>
+"$G" --ledger "$L" check --runtime <runtime> --model <model-id> --contract <contract-file> --agents <n> --est-chars <n> --completion-channel orchestration
 <supervised dispatch command>
-"$G" --ledger "$L" register --job-id <job-id> --probe-cmd "<command proving the job-id appears in an artifact>"
+"$G" --ledger "$L" register --job-id <job-id> --probe-cmd "<command proving the job-id appears in an artifact>" --orchestration-task <task-id>
 ```
 
 Before attaching a Codex worker, run `scripts/codex-worker-pretrust <worktree-path>` so startup never blocks on the trust prompt.

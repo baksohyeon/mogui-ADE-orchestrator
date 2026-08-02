@@ -38,7 +38,7 @@ fi
 
 if [[ ! -d "$accounts_dir" ]]; then
   printf 'INFO accounts directory not found: %s; nothing to pre-trust\n' "$accounts_dir"
-  printf 'Summary: 0 added, 0 already trusted\n'
+  printf 'Summary: 0 added, 0 updated, 0 already trusted\n'
   exit 0
 fi
 
@@ -55,18 +55,99 @@ project_header="[projects.\"$escaped_path\"]"
 shopt -s nullglob
 config_files=("$accounts_dir"/*/home/config.toml)
 added=0
+updated=0
 already_trusted=0
 
 for config_file in "${config_files[@]}"; do
-  if grep -Fqx -- "$project_header" "$config_file"; then
-    printf '%s: already trusted\n' "$config_file"
-    already_trusted=$((already_trusted + 1))
-    continue
-  fi
+  status=$(
+    python3 - "$config_file" "$project_header" <<'PY'
+import re
+import sys
+from pathlib import Path
 
-  printf '\n%s\ntrust_level = "trusted"\n' "$project_header" >> "$config_file"
-  printf '%s: trusted (added)\n' "$config_file"
-  added=$((added + 1))
+
+config_path = Path(sys.argv[1])
+project_header = sys.argv[2].encode("utf-8")
+lines = config_path.read_bytes().splitlines(keepends=True)
+
+
+def split_ending(line: bytes) -> tuple[bytes, bytes]:
+    if line.endswith(b"\r\n"):
+        return line[:-2], b"\r\n"
+    if line.endswith(b"\n"):
+        return line[:-1], b"\n"
+    return line, b""
+
+
+header_index = next(
+    (
+        index
+        for index, line in enumerate(lines)
+        if split_ending(line)[0] == project_header
+    ),
+    None,
+)
+if header_index is None:
+    print("missing")
+    raise SystemExit(0)
+
+table_end = len(lines)
+for index in range(header_index + 1, len(lines)):
+    content, _ = split_ending(lines[index])
+    if content.lstrip(b" \t").startswith(b"["):
+        table_end = index
+        break
+
+assignment_pattern = re.compile(rb"^[ \t]*trust_level[ \t]*=")
+trusted_pattern = re.compile(
+    rb'''^[ \t]*trust_level[ \t]*=[ \t]*(?:"trusted"|'trusted')[ \t]*(?:#.*)?$'''
+)
+for index in range(header_index + 1, table_end):
+    content, ending = split_ending(lines[index])
+    if not assignment_pattern.match(content):
+        continue
+    if trusted_pattern.fullmatch(content):
+        print("already")
+        raise SystemExit(0)
+    indentation = content[: len(content) - len(content.lstrip(b" \t"))]
+    lines[index] = indentation + b'trust_level = "trusted"' + ending
+    config_path.write_bytes(b"".join(lines))
+    print("updated")
+    raise SystemExit(0)
+
+header_content, header_ending = split_ending(lines[header_index])
+newline = header_ending or next(
+    (ending for line in lines if (ending := split_ending(line)[1])),
+    b"\n",
+)
+if not header_ending:
+    lines[header_index] = header_content + newline
+lines.insert(header_index + 1, b'trust_level = "trusted"' + newline)
+config_path.write_bytes(b"".join(lines))
+print("updated")
+PY
+  )
+
+  case "$status" in
+    already)
+      printf '%s: already trusted\n' "$config_file"
+      already_trusted=$((already_trusted + 1))
+      ;;
+    updated)
+      printf '%s: trusted (updated)\n' "$config_file"
+      updated=$((updated + 1))
+      ;;
+    missing)
+      printf '\n%s\ntrust_level = "trusted"\n' "$project_header" >> "$config_file"
+      printf '%s: trusted (added)\n' "$config_file"
+      added=$((added + 1))
+      ;;
+    *)
+      printf 'ERROR unexpected pre-trust status for %s: %s\n' "$config_file" "$status" >&2
+      exit 2
+      ;;
+  esac
 done
 
-printf 'Summary: %d added, %d already trusted\n' "$added" "$already_trusted"
+printf 'Summary: %d added, %d updated, %d already trusted\n' \
+  "$added" "$updated" "$already_trusted"

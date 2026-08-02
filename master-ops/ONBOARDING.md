@@ -40,10 +40,10 @@ Ask whether the user is ready for local read-only checks and which agent CLI the
 Run:
 
 ```console
-$ cd "{{RUNTIME_ROOT}}"
-$ ORCA_AGENT_CLI="<user-named agent CLI>" bash scripts/onboarding-preflight.sh
-$ command -v "<user-named agent CLI>"
-$ command -v git
+cd "{{RUNTIME_ROOT}}"
+ORCA_AGENT_CLI="<user-named agent CLI>" bash scripts/onboarding-preflight.sh
+command -v "<user-named agent CLI>"
+command -v git
 ```
 
 Use `bash scripts/onboarding-preflight.sh --fix` only with approval; it may add or refresh the global Orca skills, while application installs remain manual.
@@ -90,8 +90,8 @@ Measure and offer numbered workspace-root candidates before asking: the parent d
 Run:
 
 ```console
-$ test "${WORKSPACE_ROOT#/}" != "$WORKSPACE_ROOT" && test -d "$WORKSPACE_ROOT"
-$ ls -la "$WORKSPACE_ROOT"
+test "${WORKSPACE_ROOT#/}" != "$WORKSPACE_ROOT" && test -d "$WORKSPACE_ROOT"
+ls -la "$WORKSPACE_ROOT"
 ```
 
 Read current files first, detect immediate child repositories, read the measured list back for confirmation or exclusions, and ask again rather than inventing uncertain values.
@@ -143,8 +143,8 @@ Verify:
 Ask the user to open `{{OPS_REPO}}` in Orca, start the master terminal in that ops repository worktree, and provide its runtime-issued terminal handle. Resolve `ORCA` exactly as Step 0's preflight does, then run:
 
 ```console
-$ ORCA repo add --path "{{OPS_REPO}}" --json
-$ ORCA terminal show --terminal <terminal handle> --json
+ORCA repo add --path "{{OPS_REPO}}" --json
+ORCA terminal show --terminal <terminal handle> --json
 ```
 
 Capture the returned selector only when the terminal metadata proves it belongs to the `{{OPS_REPO}}` worktree. Before continuing, persist a durable placement result in an ops-repository file containing the selector, terminal handle, `{{OPS_REPO}}` path, and the `terminal show` worktree proof; do not rely on conversation state. Step 5 initializes the issue tracker independently and does not require a second placement copy; it may record a pointer to this result. Do not register `{{WORKSPACE_ROOT}}` or substitute a filesystem path for the measured ops-repository worktree selector.
@@ -167,8 +167,8 @@ Ask for each unresolved value and any coordination exclusions. Fill `{{RUNTIME_R
 Verify:
 
 ```console
-$ ! rg '\{\{[^}]+\}\}' "{{OPS_REPO}}"
-$ cmp "{{OPS_REPO}}/CLAUDE.md" "{{OPS_REPO}}/AGENTS.md"
+! rg '\{\{[^}]+\}\}' "{{OPS_REPO}}"
+cmp "{{OPS_REPO}}/CLAUDE.md" "{{OPS_REPO}}/AGENTS.md"
 ```
 
 Also verify no source workspace's private names were copied accidentally.
@@ -184,11 +184,11 @@ Explain that the tracker is working-state SSOT reloaded at boot and after compac
 For Beads, run only after approval:
 
 ```console
-$ cd "{{OPS_REPO}}" && bd init --prefix <approved prefix>
-$ { [ -e "{{WORKSPACE_ROOT}}/.beads" ] || [ -L "{{WORKSPACE_ROOT}}/.beads" ]; } \
+cd "{{OPS_REPO}}" && bd init --prefix <approved prefix>
+{ [ -e "{{WORKSPACE_ROOT}}/.beads" ] || [ -L "{{WORKSPACE_ROOT}}/.beads" ]; } \
     && echo "already exists, inspect before linking" \
     || ln -s "$(cd "{{OPS_REPO}}" && pwd)/.beads" "{{WORKSPACE_ROOT}}/.beads"
-$ cd "{{WORKSPACE_ROOT}}" && bd where
+cd "{{WORKSPACE_ROOT}}" && bd where
 ```
 
 Immediately after `bd init`, perform the byte/semantic comparison before continuing. If `CLAUDE.md` and `AGENTS.md` differ only at the byte level (whitespace or block order) while their semantic content is the same, normalize the shared blocks, write the same resulting common block to both files, and say once: `CLAUDE.md and AGENTS.md differed only byte-wise; re-unified automatically.` Do not ask the user in that case. If any substantive line or block is present in only one file, stop and ask the user whether to accept host-specific divergence before proceeding.
@@ -242,24 +242,39 @@ Ask for confirmation to spawn now or defer, reload the durable placement result 
 
 Before launching any worker, follow `docs/MASTER-OPERATIONS.md` §3: MEASURE the installed agent CLI's non-interactive approval flags from `--help` and never guess them.
 
-Before attaching a Codex worker, run `scripts/codex-worker-pretrust <worktree-path>` as the pre-trust step.
+Before attaching a Codex worker, run `{{RUNTIME_ROOT}}/scripts/codex-worker-pretrust <worktree-path>` as the pre-trust step.
 
 Run this supervised path with the resolved `ORCA` executable:
 
 ```console
-$ ORCA orchestration run-create --objective "Found and verify the Generation 1 master" --json
-$ ORCA orchestration task-create --spec "Run the byte-identical founding kickoff file and complete Step 9 boot smoke" --json
-$ "{{RUNTIME_ROOT}}/scripts/master-succeed" spawn \
+G={{RUNTIME_ROOT}}/scripts/dispatch-gate
+L=~/.mogui/dispatch-ledger.jsonl
+"$G" --ledger "$L" check \
+    --runtime <runtime> \
+    --model "{{MODEL_ID}}" \
+    --contract <contract file> \
+    --agents 1 \
+    --est-chars <estimated input chars> \
+    --completion-channel orchestration
+ORCA orchestration run-create --objective "Found and verify the Generation 1 master" --json
+ORCA orchestration task-create --spec "Run the byte-identical founding kickoff file and complete Step 9 boot smoke" --json
+"{{RUNTIME_ROOT}}/scripts/master-succeed" spawn \
     --workspace-selector <measured ops-repository worktree selector> \
     --kickoff-file <kickoff file> \
     --root "{{WORKSPACE_ROOT}}" \
     --model "{{MODEL_ID}}" \
     --title "Gen-1 founding boot" \
     --json
-$ ORCA terminal wait --terminal <verified live handle> --for tui-idle --timeout-ms 60000 --json
-$ ORCA orchestration dispatch --task <task id> --to <verified live handle> --inject --json
-$ ORCA orchestration check --wait --types worker_done,escalation,question --timeout-ms 900000 --json
+ORCA terminal wait --terminal <verified live handle> --for tui-idle --timeout-ms 60000 --json
+ORCA orchestration dispatch --task <task id> --to <verified live handle> --inject --json
+"$G" --ledger "$L" register \
+    --job-id <job id> \
+    --probe-cmd "<command proving the job-id appears in an artifact>" \
+    --orchestration-task <task id>
+ORCA orchestration check --wait --types worker_done,escalation,question --timeout-ms 900000 --json
 ```
+
+Require the gate `check` to return `allow: true` before spawning or attaching the worker. After the Dispatch artifact exists, run `register` with that exact orchestration Task ID before waiting for final completion evidence.
 
 Require placement verification `MATCH` or `MATCH_REISSUED`; the latter must include `handle_reissued: true` and its adopted live handle. On any failure, do not retry with a filesystem path selector, do not boot the master in this installer, and do not create a second session. After settings changes, always spawn a fresh session.
 

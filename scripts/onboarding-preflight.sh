@@ -405,12 +405,12 @@ fi
 test_hint='PYTHONPATH=src uv run --with pytest --no-project python3 -m pytest tests -q'
 # No version floor is enforced here. The core runs on the interpreter the host
 # already has (measured down to the CLT 3.9.6 a bare Mac ends up with). A tool
-# that needs a newer one states its own requirement at runtime and exits with
-# its own error, which keeps interpreter floors where they belong: per tool,
-# not as an onboarding blocker for hosts that never run that tool.
+# that needs a more capable one locates it itself at runtime, which keeps
+# interpreter concerns where they belong: per tool, not as an onboarding
+# blocker for hosts that never run that tool.
 if command -v python3 >/dev/null 2>&1; then
   python_version=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:3])))' 2>/dev/null)
-  pass "python3" "Python ${python_version:-unknown} present; no version floor is enforced here, a tool that needs a newer interpreter states that itself at runtime (today: codex-worker-pretrust, 3.11+ for tomllib)"
+  pass "python3" "Python ${python_version:-unknown} present; no version floor is enforced here, a tool that needs a more capable interpreter locates one itself at runtime (codex-worker-pretrust; detail in its Reference row)"
 else
   fail "python3" "missing; the runtime's entry points are python3 scripts, so nothing here runs without it"
 fi

@@ -205,9 +205,7 @@ def test_unparseable_config_aborts_without_writing(tmp_path: Path) -> None:
     assert config.read_bytes() == original
 
 
-def test_tomllib_unavailable_requires_python_311_without_writing(
-    tmp_path: Path,
-) -> None:
+def test_no_tomllib_interpreter_skips_without_writing(tmp_path: Path) -> None:
     accounts_dir = tmp_path / "accounts"
     original = b'model = "gpt"\n'
     config = make_config(accounts_dir, "primary", original)
@@ -222,10 +220,57 @@ def test_tomllib_unavailable_requires_python_311_without_writing(
 
     result = run_pretrust("/tmp/worktree", accounts_dir, env=env)
 
-    assert result.returncode == 2
-    assert f"ERROR {config}: Python 3.11+ is required" in result.stderr
-    assert "codex-worker-pretrust requires tomllib" in result.stderr
+    assert result.returncode == 0
+    assert "SKIP no Python with tomllib found" in result.stdout
+    assert "SKIP no Python with tomllib found" in result.stderr
+    assert "trust prompt" in result.stderr
+    assert "Summary: skipped — 0 added, 0 updated, 0 already trusted" in result.stdout
     assert config.read_bytes() == original
+
+
+def test_resolver_skips_disqualified_candidate_and_first_qualifier_wins(
+    tmp_path: Path,
+) -> None:
+    import sys
+
+    accounts_dir = tmp_path / "accounts"
+    config = make_config(accounts_dir, "primary", b'model = "gpt"\n')
+
+    # A PATH where python3 exists but cannot import tomllib, python3.14/13 do
+    # not exist, and python3.12 is the first qualifier. Each shim records being
+    # probed, which is what pins the candidate order: reordering the loop so a
+    # later name wins leaves the python3 marker unwritten and fails below.
+    shim_bin = tmp_path / "bin"
+    shim_bin.mkdir()
+    probe_log = tmp_path / "probes.log"
+    for disqualified in ("python3", "python3.14", "python3.13"):
+        failing = shim_bin / disqualified
+        failing.write_text(
+            f'#!/bin/sh\necho {disqualified} >> "{probe_log}"\nexit 1\n',
+            encoding="utf-8",
+        )
+        failing.chmod(0o755)
+    qualifying = shim_bin / "python3.12"
+    qualifying.write_text(
+        f'#!/bin/sh\necho python3.12 >> "{probe_log}"\nexec "{sys.executable}" "$@"\n',
+        encoding="utf-8",
+    )
+    qualifying.chmod(0o755)
+
+    env = os.environ.copy()
+    env["PATH"] = f"{shim_bin}:/usr/bin:/bin"
+
+    result = run_pretrust("/tmp/worktree", accounts_dir, env=env)
+
+    assert result.returncode == 0, result.stderr
+    assert "trusted (added)" in result.stdout
+    assert "Summary: 1 added, 0 updated, 0 already trusted" in result.stdout
+    probes = probe_log.read_text(encoding="utf-8").split()
+    # The qualifier is probed once and then runs again for the edit, so the
+    # first four entries pin the exact candidate order.
+    assert probes[:4] == ["python3", "python3.14", "python3.13", "python3.12"], probes
+    parsed = tomllib.loads(config.read_bytes().decode("utf-8"))
+    assert parsed["projects"]["/tmp/worktree"]["trust_level"] == "trusted"
 
 
 def test_unverifiable_byte_edit_aborts_without_writing(tmp_path: Path) -> None:

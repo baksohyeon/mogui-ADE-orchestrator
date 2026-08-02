@@ -124,7 +124,7 @@ The installation-specific worker tier mapping lives in `model-tier-policy.json`,
 
 ### Worker Launch Approval Posture
 
-Workers launched into isolated worktrees must start with the agent's non-interactive approval flag, or the measured Codex pre-trust posture below, so allowlist or trust prompts cannot block them mid-task. At every dispatch, the master MEASURES the installed CLI's `--help` output and uses only flags present there; it never guesses flags from memory.
+Workers launched into isolated worktrees must start with the agent's non-interactive approval flag, or the measured Codex pre-trust posture below, so allowlist or trust prompts cannot block them mid-task. Pre-trust holds when the summary reports the worktree added, updated, or already trusted; the skip path (no TOML-capable interpreter, `Summary: skipped`) leaves the trust prompt in place and says so on stdout, so read the summary line before relying on it. At every dispatch, the master MEASURES the installed CLI's `--help` output and uses only flags present there; it never guesses flags from memory.
 
 MEASURED examples from 2026-08-02:
 
@@ -172,7 +172,7 @@ The gate writes its verdict as JSON on stdout and human diagnostics on stderr. D
 
 The verdict is graded. No declared model, or a probe that returns nothing, warns as `MODEL_UNVERIFIED` or `MODEL_PROBE_FAILED` and still registers, because a runtime with no way to report its model would otherwise be unable to dispatch at all and the check would simply be turned off. A measured model in a tier the policy watches more closely than the declared one denies with `MODEL_TIER_ESCALATION`. Running looser than declared warns as `MODEL_MISMATCH`. Every case records `model_declared`, `model_measured`, and `model_verified` in the ledger, so an unverified registration is distinguishable from a verified one instead of being assumed.
 
-Before attaching a Codex worker, run `scripts/codex-worker-pretrust <worktree-path>` so startup never blocks on the trust prompt.
+Before attaching a Codex worker, run `scripts/codex-worker-pretrust <worktree-path>` and confirm the summary is not `skipped`, so startup does not block on the trust prompt.
 
 `register` without a prior successful `check` is invalid. Register only after the artifact exists, and before the final evidence report. Promote dispatch acceptance and verification results into the issue tracker.
 

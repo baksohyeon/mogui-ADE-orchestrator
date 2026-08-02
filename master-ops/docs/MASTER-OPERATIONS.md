@@ -124,7 +124,7 @@ The installation-specific worker tier mapping lives in `model-tier-policy.json`,
 
 ### Worker Launch Approval Posture
 
-Workers launched into isolated worktrees must start with the agent's non-interactive approval flag, or the measured Codex pre-trust posture below, so allowlist or trust prompts cannot block them mid-task. At every dispatch, the master MEASURES the installed CLI's `--help` output and uses only flags present there; it never guesses flags from memory.
+Workers launched into isolated worktrees must start with the agent's non-interactive approval flag, or the measured Codex pre-trust posture below, so allowlist or trust prompts cannot block them mid-task. Pre-trust holds only when `codex-worker-pretrust` reported edits; its skip path (no TOML-capable interpreter) leaves the trust prompt in place and says so on stdout, so read its summary line before relying on it. At every dispatch, the master MEASURES the installed CLI's `--help` output and uses only flags present there; it never guesses flags from memory.
 
 MEASURED examples from 2026-08-02:
 

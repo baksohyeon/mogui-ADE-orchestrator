@@ -9,7 +9,7 @@ Everything in this list serves one goal, a running master session. The core libr
 - [Orca](https://www.onorca.dev/download). The master lives in an Orca pane, which is what lets it outlive a window. Orca ships macOS, Linux, and Windows builds.
 - The `orca` shell command. The runtime calls it to spawn, list, and retire master sessions, so succession does not work without it. Registering it is a step in Orca's settings, covered below.
 - A coding-agent CLI you already pay for: Claude Code, Codex, Grok CLI, or another one. Any single one is enough.
-- `python3` on `PATH` — whichever one the machine already has. The core is stdlib-only and no version floor is enforced: the preflight measures presence, not version. A tool that needs a newer interpreter states that itself when it runs, with its own error; the [Reference](reference.md) table names each tool's requirement in its own row.
+- `python3` on `PATH` — whichever one the machine already has. The core is stdlib-only and no version floor is enforced: the preflight measures presence, not version. A tool that needs a more capable interpreter locates one itself at runtime and skips loudly when the host has none; the [Reference](reference.md) table states each tool's behavior in its own row.
 - macOS is what this project has been developed and run on. One user has reported the install working on Linux. Windows is untested.
 
 Two more tools are recommended rather than required, and the preflight warns on their absence instead of blocking:

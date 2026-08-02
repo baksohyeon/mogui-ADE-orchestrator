@@ -424,9 +424,23 @@ def test_cli_register_with_verified_orchestration_task_records_task(
         )
         == 0
     )
-    monkeypatch.setitem(
-        script["main"].__globals__, "_probe_orchestration_task", lambda task_id: True
-    )
+
+    def successful_probe(command, **kwargs):
+        if isinstance(command, list):
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout='{"ok": true, "result": {"dispatch": {"id": "d1"}}}',
+                stderr="",
+            )
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="job-orch",
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", successful_probe)
 
     assert (
         script["main"](
@@ -450,6 +464,7 @@ def test_cli_register_with_verified_orchestration_task_records_task(
 def test_cli_register_denies_unverified_orchestration_task_without_ledger_entry(
     tmp_path: Path,
     monkeypatch,
+    capsys,
 ) -> None:
     contract = _contract(tmp_path, "failed orchestration registration")
     ledger = tmp_path / "ledger.jsonl"
@@ -477,9 +492,17 @@ def test_cli_register_denies_unverified_orchestration_task_without_ledger_entry(
         )
         == 0
     )
-    monkeypatch.setitem(
-        script["main"].__globals__, "_probe_orchestration_task", lambda task_id: False
-    )
+    capsys.readouterr()
+
+    def null_dispatch_probe(command, **kwargs):
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout='{"ok": true, "result": {"dispatch": null}}',
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", null_dispatch_probe)
 
     assert (
         script["main"](
@@ -497,12 +520,15 @@ def test_cli_register_denies_unverified_orchestration_task_without_ledger_entry(
         )
         == 2
     )
+    output = capsys.readouterr()
+    assert '"reason":"ORCHESTRATION_UNVERIFIED"' in output.out
+    assert "ORCHESTRATION_UNVERIFIED" in output.err
     assert all(
         entry.get("job_id") != "job-orch-failed" for entry in _ledger_entries(tmp_path)
     )
 
 
-def test_cli_orchestration_probe_requires_success_and_ok_true(
+def test_cli_orchestration_probe_requires_success_ok_true_and_dispatch(
     monkeypatch,
 ) -> None:
     script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
@@ -510,12 +536,30 @@ def test_cli_orchestration_probe_requires_success_and_ok_true(
         (
             type("Result", (), {"returncode": 1, "stdout": '{"ok": true}'})(),
             type("Result", (), {"returncode": 0, "stdout": '{"ok": false}'})(),
+            type(
+                "Result",
+                (),
+                {
+                    "returncode": 0,
+                    "stdout": '{"ok": true, "result": {"dispatch": null}}',
+                },
+            )(),
+            type(
+                "Result",
+                (),
+                {
+                    "returncode": 0,
+                    "stdout": '{"ok": true, "result": {"dispatch": {"id": "d1"}}}',
+                },
+            )(),
         )
     )
     monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: next(results))
 
     assert script["_probe_orchestration_task"]("task-nonzero") is False
     assert script["_probe_orchestration_task"]("task-not-ok") is False
+    assert script["_probe_orchestration_task"]("task-null-dispatch") is False
+    assert script["_probe_orchestration_task"]("task-with-dispatch") is True
 
 
 def test_register_consumes_matching_pending_dispatch_by_contract_sha(

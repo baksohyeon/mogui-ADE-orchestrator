@@ -176,7 +176,12 @@ def _probe_orchestration_task(orchestration_task: str) -> bool:
         payload = json.loads(result.stdout)
     except (TypeError, json.JSONDecodeError):
         return False
-    return isinstance(payload, dict) and payload.get("ok") is True
+    if not isinstance(payload, dict) or payload.get("ok") is not True:
+        return False
+    payload_result = payload.get("result")
+    return isinstance(payload_result, dict) and isinstance(
+        payload_result.get("dispatch"), dict
+    )
 
 
 def _print_decision(decision: GateDecision) -> None:

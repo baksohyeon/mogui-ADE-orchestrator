@@ -261,23 +261,30 @@ def test_no_worker_runtime_at_all_fails(tmp_path: Path) -> None:
     assert "cannot delegate" in result.stdout
 
 
-def test_missing_gitleaks_fails(tmp_path: Path) -> None:
-    """The redaction gate's matching engine is a host fact, not an assumption."""
+def test_missing_gitleaks_warns_without_blocking(tmp_path: Path) -> None:
+    """Publishing needs gitleaks; running a master does not, so its absence warns.
+
+    The essential block still repeats the consequence, because a warning that only
+    scrolls past is how this requirement got overstated in the first place.
+    """
 
     env = _host(tmp_path, sanitized_path=True)
     (tmp_path / "bin" / "gitleaks").unlink()
     result = _run(env, tmp_path)
-    assert "gitleaks" in _labels(result.stdout, "FAIL"), result.stdout
+    assert "gitleaks" in _labels(result.stdout, "WARN"), result.stdout
+    assert "gitleaks" not in _labels(result.stdout, "FAIL"), result.stdout
     assert "brew install gitleaks" in result.stdout
+    assert "ESSENTIAL COMPONENTS MISSING" in result.stdout
 
 
-def test_missing_ctx_fails(tmp_path: Path) -> None:
-    """Agent history across providers is what the records practice queries."""
+def test_missing_ctx_warns_without_blocking(tmp_path: Path) -> None:
+    """Agent history is what the records practice queries; a master runs without it."""
 
     env = _host(tmp_path, sanitized_path=True)
     (tmp_path / "bin" / "ctx").unlink()
     result = _run(env, tmp_path)
-    assert "ctx" in _labels(result.stdout, "FAIL"), result.stdout
+    assert "ctx" in _labels(result.stdout, "WARN"), result.stdout
+    assert "ctx" not in _labels(result.stdout, "FAIL"), result.stdout
     assert "ctx.rs" in result.stdout
 
 

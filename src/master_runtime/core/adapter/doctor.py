@@ -73,7 +73,11 @@ def default_runner(cmd: Sequence[str], cwd: Optional[str] = None) -> RunResult:
 DEFAULT_CHECKS = (
     ProbeCheck(name="git", probe_cmd=("git", "--version")),
     ProbeCheck(name="node", probe_cmd=("node", "--version")),
-    ProbeCheck(name="orca", probe_cmd=("orca", "--version")),
+    # Not `orca --version`: that flag does not exist. On this host it prints the
+    # usage banner and exits 0, so the check passed while proving nothing, and a
+    # Linux user reported the same command launching the GUI application instead.
+    # `status --json` is the documented probe and fails cleanly when unavailable.
+    ProbeCheck(name="orca", probe_cmd=("orca", "status", "--json")),
     ProbeCheck(name="bd", probe_cmd=("bd", "--version")),
 )
 

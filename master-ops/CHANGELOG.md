@@ -39,6 +39,44 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+The redaction gate now runs on gitleaks. `scripts/redaction-scan.sh` keeps only
+what gitleaks does not do: scoping to tracked content, scanning commit messages,
+translating the organization rules file, and stating what was covered. The file
+went from 440 lines to 304, and the rule list, allowlist parser, and masking
+plumbing are gone.
+
+The operator interface does not change. `REDACTION_EXTRA_PATTERNS` still names a
+file of `id|description|regex` lines outside version control, and the wrapper
+translates it into a gitleaks config that extends the committed one, so no host
+converts anything. `REDACTION_REQUIRE_EXTRA=1` still exits 2 when those rules are
+absent.
+
+Two behaviours are new because the engine changed. Exemptions move to gitleaks'
+own mechanisms, a `.gitleaksignore` fingerprint or a config allowlist, and an
+allowlist file still holding entries in the retired format now exits 2 rather than
+being ignored: an installation whose exemptions stopped applying should hear it
+from the gate. Scanning is one path per invocation, because gitleaks scopes a
+single path argument reliably and falls back to the whole directory when given
+several, which would make a tracked scan depend on untracked local scratch.
+
+The reported organization-rule count now describes what was loaded rather than what
+the file held. A mutation that kept the count while dropping the generated config
+from the run was invisible, since a clean tree stays clean either way. A test now
+plants a token no shipped rule matches and requires it to be found with the rules
+and missed without them.
+
+The adapter's health check no longer probes Orca with `orca --version`. That flag
+does not exist: on one host it prints the usage banner and exits 0, so the check
+passed while proving nothing, and a Linux user reported the same command launching
+the GUI application. It now uses `orca status --json`, the documented probe, which
+is what the onboarding preflight already used. Added to the incident-derived rules
+as its own entry, since the shape generalizes past this one tool.
+
+The preflight also requires `ctx`, the cross-provider agent history index, with a
+reachable local index. The records practice asks what happened across sessions and
+providers, which no single provider's transcript can answer. Waivable like any
+other check for a host that does no history work.
+
 Onboarding now states consequences instead of listing options.
 
 Step 7.5 offered a skill layer as optional. The template carries documents and

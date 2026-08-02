@@ -14,6 +14,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCAN = REPO_ROOT / "scripts" / "redaction-scan.sh"
+CONFIG = REPO_ROOT / "config" / "gitleaks.toml"
 
 # Matches the scanner's own aws_access_key rule. The canonical
 # AKIAIOSFODNN7EXAMPLE cannot be used because the placeholder list excuses it on
@@ -48,7 +49,12 @@ def _repo_with_commits(tmp_path: Path, messages: list[str]) -> Path:
         SCAN.read_text(encoding="utf-8"), encoding="utf-8"
     )
     (repo / "scripts" / "redaction-allowlist.txt").write_text("", encoding="utf-8")
-    _git(repo, "add", "scripts")
+    # The wrapper reads its gitleaks config from the repository it lives in.
+    (repo / "config").mkdir()
+    (repo / "config" / "gitleaks.toml").write_text(
+        CONFIG.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    _git(repo, "add", "scripts", "config")
     _git(repo, "commit", "-q", "-m", "carry the scanner")
     for index, message in enumerate(messages):
         (repo / f"f{index}.md").write_text(f"file {index}\n", encoding="utf-8")

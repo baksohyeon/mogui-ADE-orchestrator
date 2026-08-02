@@ -1,40 +1,67 @@
 #!/usr/bin/env bash
 # redaction-scan.sh — fail-closed pre-push / CI scan for secrets and internal identifiers.
 #
+# gitleaks is the matching engine. This script is what gitleaks does not do: scope
+# the scan to tracked content, scan commit messages, translate the organization
+# rules file into a gitleaks config, and state what was covered.
+#
 # Usage:
-#   scripts/redaction-scan.sh                 # scan all tracked files (default)
+#   scripts/redaction-scan.sh                 # all tracked files (default)
 #   scripts/redaction-scan.sh --staged        # index / staged only
-#   scripts/redaction-scan.sh --range A..B    # files changed in git range, and those commits' messages (pre-push)
-#   scripts/redaction-scan.sh --commit-messages A..B  # message scan in any mode
+#   scripts/redaction-scan.sh --range A..B    # files changed in a range, and those commits' messages
+#   scripts/redaction-scan.sh --commit-messages A..B   # message scan in any mode
 #   scripts/redaction-scan.sh --help
 #
-# Exit: 0 clean, 1 findings (or usage/tool error), 2 internal error
+# Exit: 0 clean, 1 findings, 2 cannot decide (missing tool, missing required rules, usage)
 #
-# Allowlist: scripts/redaction-allowlist.txt (or REDACTION_ALLOWLIST env path)
-#   # comment
-#   path/to/file:LINE          # silence that file:line
-#   path/to/file               # silence whole file
-#   PREFIX:/Users/dev/         # silence matches whose text contains this prefix
-#   RULE:rule_id               # silence a whole rule (use sparingly)
+# Organization-specific rules (REDACTION_EXTRA_PATTERNS)
+#   Real company, product, and personal identifiers are deliberately not committed
+#   here: this repository is public, so committing them would publish what they
+#   protect. Supply them per checkout, one rule per line:
+#
+#     id|description|regex
+#
+#   Blank lines and lines beginning with # are skipped. Only the first two pipes
+#   separate fields, so a regex may contain a pipe. Every regex must compile.
+#   With REDACTION_REQUIRE_EXTRA=1, a missing or empty file exits 2 instead of
+#   scanning with generic rules only.
+#
+# Exemptions use gitleaks' own mechanisms: a .gitleaksignore fingerprint for one
+# finding, or config/gitleaks.toml for a whole class.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
 
-ALLOWLIST_FILE="${REDACTION_ALLOWLIST:-${SCRIPT_DIR}/redaction-allowlist.txt}"
-REQUIRE_EXTRA="${REDACTION_REQUIRE_EXTRA:-0}"
-MODE="tracked"   # tracked | staged | range
+BASE_CONFIG="${REPO_ROOT}/config/gitleaks.toml"
+LEGACY_ALLOWLIST="${REDACTION_ALLOWLIST:-${SCRIPT_DIR}/redaction-allowlist.txt}"
+MODE="tracked"
 RANGE=""
+COMMIT_RANGE=""
 VERBOSE=0
+REQUIRE_EXTRA="${REDACTION_REQUIRE_EXTRA:-0}"
+COMMIT_MESSAGES_SCANNED="not-scanned"
+EXTRA_RULE_COUNT=0
+EXTRA_UNUSABLE=0
+EXTRA_CONSIDERED=0
 
 usage() {
-  sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --staged) MODE="staged"; shift ;;
+    --range)
+      MODE="range"
+      RANGE="${2:-}"
+      if [[ -z "${RANGE}" || "${RANGE}" != *..* ]]; then
+        echo "redaction-scan: --range requires A..B" >&2
+        exit 2
+      fi
+      shift 2
+      ;;
     --commit-messages)
       COMMIT_RANGE="${2:-}"
       if [[ -z "${COMMIT_RANGE}" ]]; then
@@ -43,398 +70,240 @@ while [[ $# -gt 0 ]]; do
       fi
       shift 2
       ;;
-    --range)
-      MODE="range"
-      RANGE="${2:-}"
-      if [[ -z "${RANGE}" ]]; then
-        echo "redaction-scan: --range requires A..B" >&2
-        exit 1
-      fi
-      shift 2
-      ;;
     --allowlist)
-      ALLOWLIST_FILE="${2:-}"
+      LEGACY_ALLOWLIST="${2:-}"
       shift 2
       ;;
     --require-extra) REQUIRE_EXTRA=1; shift ;;
     -v|--verbose) VERBOSE=1; shift ;;
     -h|--help) usage; exit 0 ;;
-    *)
-      echo "redaction-scan: unknown arg: $1" >&2
-      usage >&2
-      exit 1
-      ;;
+    *) echo "redaction-scan: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 
-if ! command -v git >/dev/null 2>&1; then
-  echo "redaction-scan: git is required" >&2
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "redaction-scan: FAIL — gitleaks is not on PATH; install it (brew install gitleaks) or see https://gitleaks.io" >&2
   exit 2
 fi
-if ! command -v rg >/dev/null 2>&1 && ! command -v grep >/dev/null 2>&1; then
-  echo "redaction-scan: grep or rg is required" >&2
+if [[ ! -f "${BASE_CONFIG}" ]]; then
+  echo "redaction-scan: FAIL — missing ${BASE_CONFIG}" >&2
   exit 2
 fi
 
-# --- rules: id|description|extended-regex (ERE) ---
-# Keep secret patterns specific enough that docs saying "tokens" (LLM budget) pass.
-RULES=(
-  "private_key|PEM/OpenSSH private key header|BEGIN (RSA |OPENSSH |EC |DSA |OPENSSH )?PRIVATE KEY"
-  "aws_access_key|AWS access key id|AKIA[0-9A-Z]{16}"
-  "github_token|GitHub personal/access token|gh[pousr]_[A-Za-z0-9]{20,}"
-  "slack_token|Slack API token|xox[baprs]-[A-Za-z0-9-]{10,}"
-  "openai_sk|OpenAI-style secret key|sk-[A-Za-z0-9]{20,}"
-  "anthropic_key|Anthropic-style key|sk-ant-[A-Za-z0-9_-]{20,}"
-  "bearer_token|Bearer credential literal|Bearer [A-Za-z0-9._\\-]{24,}"
-  "assignment_secret|Hardcoded secret assignment|(?i)(api[_-]?key|secret[_-]?key|access[_-]?token|auth[_-]?token|password|passwd)\\s*[=:]\\s*['\\\"][^'\\\"\\s]{8,}['\\\"]"
-  "dotenv_export|Exported env secret|(?i)export\\s+(API_KEY|SECRET_KEY|ACCESS_TOKEN|PASSWORD|AWS_SECRET_ACCESS_KEY|ANTHROPIC_API_KEY|OPENAI_API_KEY)\\s*="
-  "home_path|Absolute home path /Users/<name>|/Users/[A-Za-z0-9._-]+"
-  "internal_ip|Private RFC1918 IP|\\b(10\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}|192\\.168\\.[0-9]{1,3}\\.[0-9]{1,3}|172\\.(1[6-9]|2[0-9]|3[0-1])\\.[0-9]{1,3}\\.[0-9]{1,3})\\b"
-  "jira_hf|Internal Jira ticket HF-*|\\bHF-[0-9]{2,}\\b"
-  "slack_url|Slack workspace/archive URL|https?://[A-Za-z0-9._-]*slack\\.com/"
-  "internal_host|Internal/corp hostname|\\b[A-Za-z0-9._-]+\\.(internal|corp|local)\\b"
-)
+# The previous allowlist format is no longer interpreted. Refuse loudly rather
+# than ignore it: an installation whose exemptions stopped applying should hear it
+# from the gate, not discover it when a finding it had accepted comes back.
+if [[ -f "${LEGACY_ALLOWLIST}" ]] \
+  && grep -qvE '^[[:space:]]*(#|$)' "${LEGACY_ALLOWLIST}" 2>/dev/null; then
+  echo "redaction-scan: FAIL — ${LEGACY_ALLOWLIST} has entries in the retired format." >&2
+  echo "redaction-scan: migrate each to a .gitleaksignore fingerprint, or to an allowlist in config/gitleaks.toml, then empty this file." >&2
+  exit 2
+fi
 
-# Values that look like placeholders / docs — never fail these lines.
-# Matched as case-insensitive substrings of the whole line.
-# Organization-specific identifiers are not hardcoded here: this repository is public,
-# so committing real company or personal names to the scanner would leak what it protects.
-# Supply them per checkout via REDACTION_EXTRA_PATTERNS (newline-separated
-# "id|description|regex" entries) and keep that file outside version control.
-EXTRA_RULE_COUNT=0
+WORK_DIR="$(mktemp -d)"
+trap 'rm -rf "${WORK_DIR}"' EXIT
+CONFIG="${BASE_CONFIG}"
+
+# Translate the organization rules file into a gitleaks config that extends the
+# committed one. The operator-facing format does not change, so no host has to
+# convert anything, and the patterns stay outside version control.
 if [[ -n "${REDACTION_EXTRA_PATTERNS:-}" && -f "${REDACTION_EXTRA_PATTERNS}" ]]; then
-  while IFS= read -r extra_rule; do
-    [[ -z "${extra_rule}" || "${extra_rule}" == \#* ]] && continue
-    RULES+=("${extra_rule}")
-    EXTRA_RULE_COUNT=$((EXTRA_RULE_COUNT + 1))
-  done < "${REDACTION_EXTRA_PATTERNS}"
+  ORG_CONFIG="${WORK_DIR}/org.toml"
+  if python3 - "${REDACTION_EXTRA_PATTERNS}" "${BASE_CONFIG}" "${ORG_CONFIG}" > "${WORK_DIR}/counts" <<'PY'
+import re
+import sys
+
+source, base, target = sys.argv[1], sys.argv[2], sys.argv[3]
+rules, unusable, considered = [], 0, 0
+with open(source, encoding="utf-8") as handle:
+    for line in handle:
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        considered += 1
+        parts = line.split("|", 2)
+        if len(parts) != 3:
+            unusable += 1
+            continue
+        rule_id, description, regex = (part.strip() for part in parts)
+        try:
+            re.compile(regex)
+        except re.error:
+            unusable += 1
+            continue
+        rules.append((rule_id or f"org_rule_{len(rules)}", description, regex))
+
+with open(target, "w", encoding="utf-8") as out:
+    out.write('title = "organization rules"\n\n')
+    out.write('[extend]\npath = "%s"\n\n' % base)
+    for rule_id, description, regex in rules:
+        out.write("[[rules]]\n")
+        out.write('id = "%s"\n' % rule_id.replace('"', ""))
+        out.write('description = "%s"\n' % description.replace('"', ""))
+        out.write("regex = '''%s'''\n\n" % regex)
+
+# Counts only. This file's contents are what the scan protects, so nothing from it
+# is printed here or anywhere else.
+print(f"{len(rules)} {unusable} {considered}")
+PY
+  then
+    read -r EXTRA_RULE_COUNT EXTRA_UNUSABLE EXTRA_CONSIDERED < "${WORK_DIR}/counts"
+  else
+    echo "redaction-scan: FAIL — could not read the organization rules file" >&2
+    exit 2
+  fi
+  if [[ "${EXTRA_RULE_COUNT}" -gt 0 ]]; then
+    CONFIG="${ORG_CONFIG}"
+  else
+    # The count describes what was loaded, never what the file happened to hold.
+    # Reporting a number the scan did not use is the same defect this gate exists
+    # to catch, one level up.
+    EXTRA_RULE_COUNT=0
+  fi
+  if [[ "${EXTRA_UNUSABLE}" -gt 0 ]]; then
+    echo "redaction-scan: WARNING — ${EXTRA_UNUSABLE} of ${EXTRA_CONSIDERED} organization rule lines are unusable and were skipped" >&2
+  fi
 fi
 
-# A green scan must not imply coverage it does not have: say so when the
-# organization-specific rules were never loaded.
+# A green scan must not imply coverage it does not have.
 if [[ "${EXTRA_RULE_COUNT}" -eq 0 ]]; then
   echo "redaction-scan: WARNING — organization-specific rules not loaded (REDACTION_EXTRA_PATTERNS unset or empty); this scan covers generic patterns only" >&2
   if [[ "${REQUIRE_EXTRA}" == "1" ]]; then
-    echo "redaction-scan: FAIL — --require-extra set and no organization-specific rules were loaded" >&2
+    echo "redaction-scan: FAIL — required organization rules were not loaded" >&2
     exit 2
   fi
 fi
 
-PLACEHOLDER_HINTS=(
-  "example.com"
-  "example-product"
-  "your_api_key"
-  "your-api-key"
-  "changeme"
-  "placeholder"
-  "redacted"
-  "xxx"
-  "todo"
-  "insert_"
-  "replace_me"
-  "dummy"
-  "fake_"
-  "test_secret"
-  "sk-test-"
-  "sk-ant-api03-test"
-  "ghp_example"
-  "xoxb-example"
-  "AKIAIOSFODNN7EXAMPLE"
-  "not-a-real"
-  "sample only"
-)
-
-# Synthetic path prefixes intentionally used as fixtures (still reported under allowlist PREFIX:).
-DEFAULT_SYNTHETIC_PREFIXES=(
-  "/Users/dev/"
-  "/Users/user/"
-  "/Users/example/"
-  "/Users/runner/"
-  "/Users/you/"
-  "/home/dev/"
-  "/home/user/"
-)
-
-declare -a ALLOW_PATHS=()
-declare -a ALLOW_PATH_LINES=()
-declare -a ALLOW_PREFIXES=()
-declare -a ALLOW_RULES=()
-
-load_allowlist() {
-  ALLOW_PREFIXES=("${DEFAULT_SYNTHETIC_PREFIXES[@]}")
-  [[ -f "${ALLOWLIST_FILE}" ]] || return 0
-  while IFS= read -r raw || [[ -n "${raw}" ]]; do
-    local line
-    line="$(printf '%s' "${raw}" | sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
-    [[ -z "${line}" ]] && continue
-    case "${line}" in
-      PREFIX:*)
-        ALLOW_PREFIXES+=("${line#PREFIX:}")
-        ;;
-      RULE:*)
-        ALLOW_RULES+=("${line#RULE:}")
-        ;;
-      *:*)
-        # path:LINE
-        ALLOW_PATH_LINES+=("${line}")
-        ;;
-      *)
-        ALLOW_PATHS+=("${line}")
-        ;;
-    esac
-  done < "${ALLOWLIST_FILE}"
-}
-
-rule_allowed() {
-  local rule_id="$1"
-  local r
-  for r in "${ALLOW_RULES[@]+"${ALLOW_RULES[@]}"}"; do
-    [[ "${r}" == "${rule_id}" ]] && return 0
-  done
-  return 1
-}
-
-path_allowed() {
-  local path="$1"
-  local p
-  for p in "${ALLOW_PATHS[@]+"${ALLOW_PATHS[@]}"}"; do
-    [[ "${p}" == "${path}" ]] && return 0
-  done
-  return 1
-}
-
-path_line_allowed() {
-  local key="$1"
-  local p
-  for p in "${ALLOW_PATH_LINES[@]+"${ALLOW_PATH_LINES[@]}"}"; do
-    [[ "${p}" == "${key}" ]] && return 0
-  done
-  return 1
-}
-
-line_is_placeholder() {
-  local text_lc
-  text_lc="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
-  local h
-  for h in "${PLACEHOLDER_HINTS[@]}"; do
-    local hl
-    hl="$(printf '%s' "${h}" | tr '[:upper:]' '[:lower:]')"
-    [[ "${text_lc}" == *"${hl}"* ]] && return 0
-  done
-  return 1
-}
-
-line_has_allowed_prefix() {
-  local text="$1"
-  local pref
-  for pref in "${ALLOW_PREFIXES[@]+"${ALLOW_PREFIXES[@]}"}"; do
-    # home_path rule: if the only /Users hits are synthetic prefixes, skip.
-    if [[ "${text}" == *"${pref}"* ]]; then
-      # If text also contains another /Users/<other> not covered by prefixes, still fail later.
-      return 0
-    fi
-  done
-  return 1
-}
-
-# For home_path: true if every /Users/<name> occurrence is under an allowed prefix.
-home_path_only_synthetic() {
-  local text="$1"
-  # Extract /Users/name occurrences
-  local matches
-  matches="$(printf '%s\n' "${text}" | grep -oE '/Users/[A-Za-z0-9._-]+' || true)"
-  [[ -z "${matches}" ]] && return 1
-  local m
-  while IFS= read -r m; do
-    [[ -z "${m}" ]] && continue
-    local ok=0
-    local pref
-    for pref in "${ALLOW_PREFIXES[@]+"${ALLOW_PREFIXES[@]}"}"; do
-      # pref is like /Users/dev/ — match path start /Users/dev
-      local base="${pref%/}"
-      if [[ "${m}" == "${base}" || "${text}" == *"${pref}"* ]]; then
-        # Check this specific match is under base
-        case "${m}" in
-          "${base}"|"${base}"/*) ok=1; break ;;
-        esac
-        # /Users/dev matches /Users/dev/...
-        if [[ "${m}" == "${base}"* ]]; then
-          ok=1
-          break
-        fi
-      fi
-    done
-    if [[ "${ok}" -eq 0 ]]; then
-      return 1
-    fi
-  done <<< "${matches}"
-  return 0
-}
-
 list_scan_files() {
   case "${MODE}" in
-    tracked)
-      git ls-files -z
-      ;;
-    staged)
-      git diff --cached --name-only -z --diff-filter=ACMR
-      ;;
-    range)
-      git diff --name-only -z --diff-filter=ACMR "${RANGE}"
-      ;;
+    tracked) git ls-files -z ;;
+    staged)  git diff --cached --name-only -z --diff-filter=ACMR ;;
+    range)   git diff --name-only -z --diff-filter=ACMR "${RANGE}" ;;
   esac
 }
 
-COMMIT_MESSAGES_SCANNED="not-scanned"
+REPORTS="${WORK_DIR}/reports"
+mkdir -p "${REPORTS}"
+report_index=0
+
+scan_path() {
+  # One path per invocation. gitleaks scopes a single path argument reliably and
+  # falls back to the whole directory when given several, which would drag in
+  # untracked files and make a tracked scan depend on local scratch.
+  local path="$1"
+  [[ -f "${path}" ]] || return 0
+  report_index=$((report_index + 1))
+  gitleaks dir "${path}" \
+    --config "${CONFIG}" \
+    --no-banner \
+    --exit-code 0 \
+    --report-format json \
+    --report-path "${REPORTS}/${report_index}.json" \
+    >/dev/null 2>&1 || true
+}
 
 scan_commit_messages() {
-  # Commit messages are content this repository publishes and the file scan never
-  # sees them. An internal workspace name sat in four of them here while the gate
-  # stayed green, and a person found it by eye.
+  # gitleaks does not read commit messages: a key present only in a message
+  # returns no findings while the same key in file content is found. Measured,
+  # which is why this loop exists.
   local range="$1"
-  local count=0 sha tmp
+  local count=0 sha
   while IFS= read -r sha; do
     [[ -z "${sha}" ]] && continue
-    tmp="$(mktemp)"
-    git log -1 --format=%B "${sha}" > "${tmp}" 2>/dev/null || true
-    scan_file "${tmp}" "commit:${sha:0:12}"
-    rm -f "${tmp}"
+    report_index=$((report_index + 1))
+    git log -1 --format=%B "${sha}" \
+      | gitleaks stdin \
+          --config "${CONFIG}" \
+          --no-banner \
+          --exit-code 0 \
+          --report-format json \
+          --report-path "${REPORTS}/${report_index}.json" \
+          >/dev/null 2>&1 || true
+    if [[ -s "${REPORTS}/${report_index}.json" ]]; then
+      python3 - "${REPORTS}/${report_index}.json" "commit:${sha:0:12}" <<'PY'
+import json
+import sys
+
+path, label = sys.argv[1], sys.argv[2]
+with open(path, encoding="utf-8") as handle:
+    rows = json.load(handle)
+for row in rows:
+    row["File"] = label
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(rows, handle)
+PY
+    fi
     count=$((count + 1))
   done < <(git log --format=%H "${range}" 2>/dev/null || true)
   COMMIT_MESSAGES_SCANNED="${count}"
 }
 
-is_binary_or_skip() {
-  local path="$1"
-  case "${path}" in
-    *.png|*.jpg|*.jpeg|*.gif|*.webp|*.ico|*.pdf|*.zip|*.gz|*.tgz|*.whl|*.so|*.dylib|*.o|*.a|*.pyc|*.db|*.sqlite)
-      return 0
-      ;;
-  esac
-  # skip the scanner / allowlist / result reports themselves if present
-  case "${path}" in
-    scripts/redaction-scan.sh|scripts/redaction-allowlist.txt|mogui-redact-result.md|mogui-redaction-result.md)
-      return 0
-      ;;
-  esac
-  return 1
-}
+if [[ -z "${COMMIT_RANGE}" && "${MODE}" == "range" ]]; then
+  COMMIT_RANGE="${RANGE}"
+fi
+if [[ -n "${COMMIT_RANGE}" ]]; then
+  scan_commit_messages "${COMMIT_RANGE}"
+fi
 
-FINDINGS=0
-declare -a FINDING_LINES=()
+file_count=0
+while IFS= read -r -d '' path; do
+  [[ -z "${path}" ]] && continue
+  file_count=$((file_count + 1))
+  scan_path "${path}"
+done < <(list_scan_files)
 
-record_finding() {
-  local rule_id="$1"
-  local desc="$2"
-  local path="$3"
-  local line_no="$4"
-  local snippet="$5"
-  # Mask: keep structure, strip long secret-looking runs
-  local masked
-  masked="$(printf '%s' "${snippet}" \
-    | sed -E \
-      -e 's/(AKIA)[0-9A-Z]{16}/\1****************/g' \
-      -e 's/(gh[pousr]_)[A-Za-z0-9]{8,}/\1********/g' \
-      -e 's/(xox[baprs]-)[A-Za-z0-9-]{8,}/\1********/g' \
-      -e 's/(sk-ant-)[A-Za-z0-9_-]{8,}/\1********/g' \
-      -e 's/(sk-)[A-Za-z0-9]{8,}/\1********/g' \
-      -e 's/(Bearer )[A-Za-z0-9._-]{8,}/\1********/g' \
-      -e 's/(=[[:space:]]*["'"'"'])[^"'"'"']{8,}(["'"'"'])/\1***\2/g' \
-    | cut -c1-160)"
-  FINDING_LINES+=("${path}:${line_no}  [${rule_id}] ${desc}  :: ${masked}")
-  FINDINGS=$((FINDINGS + 1))
-}
+FINDINGS_FILE="${WORK_DIR}/findings.txt"
+python3 - "${REPORTS}" "${FINDINGS_FILE}" > /dev/null <<'PY'
+import json
+import pathlib
+import re
+import sys
 
-scan_file() {
-  # $1 is the file to read, $2 is what findings are reported as. They differ when
-  # the text did not come from a tracked file, such as a commit message.
-  local path="$1"
-  local label="${2:-$1}"
-  [[ -f "${path}" ]] || return 0
-  is_binary_or_skip "${label}" && return 0
-  path_allowed "${label}" && return 0
+reports, out_path = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+MASKS = (
+    (re.compile(r"(AKIA)[0-9A-Z]{16}"), r"\1****************"),
+    (re.compile(r"(gh[pousr]_)[A-Za-z0-9]{8,}"), r"\1********"),
+    (re.compile(r"(xox[baprs]-)[A-Za-z0-9-]{8,}"), r"\1********"),
+    (re.compile(r"(sk-ant-)[A-Za-z0-9_-]{8,}"), r"\1********"),
+    (re.compile(r"(sk-)[A-Za-z0-9]{8,}"), r"\1********"),
+    (re.compile(r"(Bearer )[A-Za-z0-9._-]{8,}"), r"\1********"),
+    (re.compile(r"""(=\s*["'])[^"']{8,}(["'])"""), r"\1***\2"),
+)
 
-  local rule
-  for rule in "${RULES[@]}"; do
-    IFS='|' read -r rule_id desc regex <<< "${rule}"
-    rule_allowed "${rule_id}" && continue
+lines = set()
+for report in sorted(reports.glob("*.json")):
+    try:
+        rows = json.loads(report.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        continue
+    for row in rows:
+        snippet = (row.get("Match") or "").strip()
+        for pattern, replacement in MASKS:
+            snippet = pattern.sub(replacement, snippet)
+        lines.add(
+            "  {file}:{line}  [{rule}] {desc}  :: {snippet}".format(
+                file=row.get("File", "?"),
+                line=row.get("StartLine", 0),
+                rule=row.get("RuleID", "?"),
+                desc=row.get("Description", ""),
+                snippet=snippet[:160],
+            )
+        )
+out_path.write_text("".join(f"{line}\n" for line in sorted(lines)), encoding="utf-8")
+PY
 
-    # Prefer rg for PCRE (?i); fall back to grep -E (drop unsupported lookarounds lightly).
-    local matches=""
-    if command -v rg >/dev/null 2>&1; then
-      # rg: path with line numbers; PCRE2 for lookaround rules
-      matches="$(rg -n --pcre2 -e "${regex}" -- "${path}" 2>/dev/null || true)"
-    else
-      local gre_regex="${regex}"
-      # strip perl-ish (?i) and lookarounds for basic grep -E
-      gre_regex="$(printf '%s' "${gre_regex}" | sed -E 's/\(\?i\)//g; s/\(\?<![^)]*\)//g; s/\(\?![^)]*\)//g')"
-      matches="$(grep -n -E -e "${gre_regex}" -- "${path}" 2>/dev/null || true)"
-    fi
-    [[ -z "${matches}" ]] && continue
+FINDINGS="$(wc -l < "${FINDINGS_FILE}" | tr -d ' ')"
 
-    while IFS= read -r hit; do
-      [[ -z "${hit}" ]] && continue
-      local line_no="${hit%%:*}"
-      local text="${hit#*:}"
-      # Some greps include path:line:text when multi-file; we scan single file.
-      if [[ "${text}" == *:* ]] && [[ "${line_no}" == "${path}" ]]; then
-        # path:line:text form
-        local rest="${hit#*:}"
-        line_no="${rest%%:*}"
-        text="${rest#*:}"
-      fi
+if [[ "${VERBOSE}" -eq 1 ]]; then
+  echo "redaction-scan: mode=${MODE} range=${RANGE:-none} files=${file_count} commit-messages=${COMMIT_MESSAGES_SCANNED} org-rules=${EXTRA_RULE_COUNT} config=$(basename "${CONFIG}") engine=$(gitleaks version 2>/dev/null | head -1)"
+fi
 
-      path_line_allowed "${label}:${line_no}" && continue
-      line_is_placeholder "${text}" && continue
+if [[ "${FINDINGS}" -gt 0 ]]; then
+  echo "redaction-scan: FAIL — ${FINDINGS} finding(s) (fail-closed)" >&2
+  cat "${FINDINGS_FILE}" >&2
+  echo "redaction-scan: fix, or exempt with a .gitleaksignore fingerprint, then re-run." >&2
+  exit 1
+fi
 
-      if [[ "${rule_id}" == "home_path" ]]; then
-        if home_path_only_synthetic "${text}"; then
-          continue
-        fi
-        # also skip if line only mentions allowed prefixes
-        if line_has_allowed_prefix "${text}" && home_path_only_synthetic "${text}"; then
-          continue
-        fi
-      fi
-
-      record_finding "${rule_id}" "${desc}" "${label}" "${line_no}" "${text}"
-    done <<< "${matches}"
-  done
-}
-
-main() {
-  load_allowlist
-
-  if [[ -z "${COMMIT_RANGE:-}" && "${MODE}" == "range" ]]; then
-    COMMIT_RANGE="${RANGE}"
-  fi
-  if [[ -n "${COMMIT_RANGE:-}" ]]; then
-    scan_commit_messages "${COMMIT_RANGE}"
-  fi
-
-  local file_count=0
-  while IFS= read -r -d '' path; do
-    [[ -z "${path}" ]] && continue
-    file_count=$((file_count + 1))
-    scan_file "${path}"
-  done < <(list_scan_files)
-
-  if [[ "${VERBOSE}" -eq 1 ]]; then
-    echo "redaction-scan: mode=${MODE} range=${RANGE:-none} files=${file_count} commit-messages=${COMMIT_MESSAGES_SCANNED} allowlist=${ALLOWLIST_FILE}"
-  fi
-
-  if [[ "${FINDINGS}" -gt 0 ]]; then
-    echo "redaction-scan: FAIL — ${FINDINGS} finding(s) (fail-closed)" >&2
-    local line
-    for line in "${FINDING_LINES[@]}"; do
-      echo "  ${line}" >&2
-    done
-    echo "redaction-scan: fix or allowlist (path:line / PREFIX: / RULE:) then re-run." >&2
-    exit 1
-  fi
-
-  echo "redaction-scan: OK — 0 findings (mode=${MODE}, files=${file_count}, commit-messages=${COMMIT_MESSAGES_SCANNED})"
-  exit 0
-}
-
-main
+echo "redaction-scan: OK — 0 findings (mode=${MODE}, files=${file_count}, commit-messages=${COMMIT_MESSAGES_SCANNED}, org-rules=${EXTRA_RULE_COUNT})"
+exit 0

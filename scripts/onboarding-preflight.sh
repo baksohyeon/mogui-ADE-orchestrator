@@ -387,6 +387,20 @@ else
   fail "gitleaks" "gitleaks is not on PATH; install it (brew install gitleaks, or see https://gitleaks.io) because the redaction gate's matching engine is moving to it"
 fi
 
+# ctx indexes agent history from every provider on the host into one queryable
+# store. The records practice depends on being able to ask what happened across
+# sessions and agents, which a single provider's transcript cannot answer.
+if command -v ctx >/dev/null 2>&1; then
+  ctx_status=""
+  if ctx_status=$(ctx status 2>&1); then
+    pass "ctx" "$(ctx --version 2>&1 | head -1); index reachable"
+  else
+    fail "ctx" "ctx is installed but 'ctx status' failed; run 'ctx setup' to create the local index"
+  fi
+else
+  fail "ctx" "ctx is not on PATH; install it (see https://ctx.rs) because the records practice queries agent history across providers, and waive this check if this host does no history work"
+fi
+
 for repo_tool in git gh; do
   if command -v "$repo_tool" >/dev/null 2>&1; then
     pass "$repo_tool" "present"

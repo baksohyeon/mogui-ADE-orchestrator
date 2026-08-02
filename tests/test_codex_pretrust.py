@@ -1,5 +1,6 @@
 from pathlib import Path
 import subprocess
+import tomllib
 
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "codex-worker-pretrust"
@@ -131,3 +132,79 @@ def test_unrelated_content_is_preserved_byte_for_byte(tmp_path: Path) -> None:
         + b'\n[projects."/tmp/quoted \\"worker\\""]\n'
         + b'trust_level = "trusted"\n'
     )
+
+
+def test_multiline_strings_with_table_like_lines_are_not_edited(
+    tmp_path: Path,
+) -> None:
+    accounts_dir = tmp_path / "accounts"
+    basic_original = (
+        b'banner = """\n'
+        b'[projects."/tmp/worktree"]\n'
+        b'trust_level = "untrusted"\n'
+        b'"""\n'
+        b'[projects."/tmp/worktree"]\n'
+        b'note = """\n'
+        b'[not.a.real.table]\n'
+        b'keep this basic string intact\n'
+        b'"""\n'
+        b'trust_level = "untrusted"\n'
+    )
+    literal_original = (
+        b"banner = '''\n"
+        b'[projects."/tmp/worktree"]\n'
+        b'trust_level = "untrusted"\n'
+        b"'''\n"
+        b'[projects."/tmp/worktree"]\n'
+        b"note = '''\n"
+        b"[not.a.real.table]\n"
+        b"keep this literal string intact\n"
+        b"'''\n"
+        b'trust_level = "untrusted"\n'
+    )
+    configs = (
+        (make_config(accounts_dir, "basic", basic_original), basic_original),
+        (make_config(accounts_dir, "literal", literal_original), literal_original),
+    )
+
+    result = run_pretrust("/tmp/worktree", accounts_dir)
+
+    assert result.returncode == 0
+    assert "Summary: 0 added, 2 updated, 0 already trusted" in result.stdout
+    for config, original in configs:
+        updated = config.read_bytes()
+        assert updated == original.rsplit(
+            b'trust_level = "untrusted"', 1
+        )[0] + b'trust_level = "trusted"\n'
+        parsed = tomllib.loads(updated.decode("utf-8"))
+        assert parsed["projects"]["/tmp/worktree"]["trust_level"] == "trusted"
+        assert parsed["banner"] == tomllib.loads(original.decode("utf-8"))["banner"]
+        assert parsed["projects"]["/tmp/worktree"]["note"] == (
+            tomllib.loads(original.decode("utf-8"))["projects"]["/tmp/worktree"][
+                "note"
+            ]
+        )
+
+
+def test_unparseable_config_aborts_without_writing(tmp_path: Path) -> None:
+    accounts_dir = tmp_path / "accounts"
+    original = b'model = "unterminated\n'
+    config = make_config(accounts_dir, "primary", original)
+
+    result = run_pretrust("/tmp/worktree", accounts_dir)
+
+    assert result.returncode == 2
+    assert f"ERROR {config}: cannot parse TOML" in result.stderr
+    assert config.read_bytes() == original
+
+
+def test_unverifiable_byte_edit_aborts_without_writing(tmp_path: Path) -> None:
+    accounts_dir = tmp_path / "accounts"
+    original = b"[ projects . '/tmp/worktree' ]\nsetting = 'keep'\n"
+    config = make_config(accounts_dir, "primary", original)
+
+    result = run_pretrust("/tmp/worktree", accounts_dir)
+
+    assert result.returncode == 2
+    assert "could not produce exactly one verified pre-trust edit" in result.stderr
+    assert config.read_bytes() == original

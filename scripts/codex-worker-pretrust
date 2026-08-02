@@ -60,15 +60,69 @@ already_trusted=0
 
 for config_file in "${config_files[@]}"; do
   status=$(
-    python3 - "$config_file" "$project_header" <<'PY'
+    python3 - "$config_file" "$worktree_path" "$project_header" <<'PY'
+import copy
 import re
 import sys
+import tomllib
 from pathlib import Path
 
 
 config_path = Path(sys.argv[1])
-project_header = sys.argv[2].encode("utf-8")
-lines = config_path.read_bytes().splitlines(keepends=True)
+worktree_path = sys.argv[2]
+project_header = sys.argv[3].encode("utf-8")
+original_content = config_path.read_bytes()
+
+
+def abort(message: str) -> None:
+    print(f"ERROR {config_path}: {message}", file=sys.stderr)
+    raise SystemExit(2)
+
+
+def parse_content(content: bytes):
+    return tomllib.loads(content.decode("utf-8"))
+
+
+try:
+    original_document = parse_content(original_content)
+except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+    abort(f"cannot parse TOML before pre-trust edit: {error}")
+
+projects = original_document.get("projects")
+if projects is None:
+    project_status = "missing"
+elif not isinstance(projects, dict):
+    abort("top-level projects value is not a table")
+elif worktree_path not in projects:
+    project_status = "missing"
+else:
+    project = projects[worktree_path]
+    if not isinstance(project, dict):
+        abort(f"projects[{worktree_path!r}] is not a table")
+    if "trust_level" not in project:
+        project_status = "trust_missing"
+    elif project["trust_level"] == "trusted":
+        print("already")
+        raise SystemExit(0)
+    else:
+        project_status = "untrusted"
+
+expected_document = copy.deepcopy(original_document)
+expected_projects = expected_document.get("projects")
+if expected_projects is None:
+    expected_projects = {}
+    expected_document["projects"] = expected_projects
+if not isinstance(expected_projects, dict):
+    abort("cannot construct the expected projects table")
+expected_project = expected_projects.get(worktree_path)
+if expected_project is None:
+    expected_project = {}
+    expected_projects[worktree_path] = expected_project
+if not isinstance(expected_project, dict):
+    abort(f"cannot update projects[{worktree_path!r}]")
+expected_project["trust_level"] = "trusted"
+
+lines = original_content.splitlines(keepends=True)
 
 
 def split_ending(line: bytes) -> tuple[bytes, bytes]:
@@ -79,52 +133,83 @@ def split_ending(line: bytes) -> tuple[bytes, bytes]:
     return line, b""
 
 
-header_index = next(
-    (
-        index
-        for index, line in enumerate(lines)
-        if split_ending(line)[0] == project_header
-    ),
-    None,
-)
-if header_index is None:
-    print("missing")
-    raise SystemExit(0)
-
-table_end = len(lines)
-for index in range(header_index + 1, len(lines)):
-    content, _ = split_ending(lines[index])
-    if content.lstrip(b" \t").startswith(b"["):
-        table_end = index
-        break
-
 assignment_pattern = re.compile(rb"^[ \t]*trust_level[ \t]*=")
-trusted_pattern = re.compile(
-    rb'''^[ \t]*trust_level[ \t]*=[ \t]*(?:"trusted"|'trusted')[ \t]*(?:#.*)?$'''
-)
-for index in range(header_index + 1, table_end):
-    content, ending = split_ending(lines[index])
-    if not assignment_pattern.match(content):
-        continue
-    if trusted_pattern.fullmatch(content):
-        print("already")
-        raise SystemExit(0)
-    indentation = content[: len(content) - len(content.lstrip(b" \t"))]
-    lines[index] = indentation + b'trust_level = "trusted"' + ending
-    config_path.write_bytes(b"".join(lines))
-    print("updated")
-    raise SystemExit(0)
+candidates: list[bytes] = []
 
-header_content, header_ending = split_ending(lines[header_index])
-newline = header_ending or next(
-    (ending for line in lines if (ending := split_ending(line)[1])),
-    b"\n",
+if project_status == "missing":
+    candidates.append(
+        original_content
+        + b"\n"
+        + project_header
+        + b'\ntrust_level = "trusted"\n'
+    )
+elif project_status == "trust_missing":
+    for header_index, line in enumerate(lines):
+        header_content, header_ending = split_ending(line)
+        if header_content != project_header:
+            continue
+        candidate_lines = lines.copy()
+        newline = header_ending or next(
+            (ending for item in lines if (ending := split_ending(item)[1])),
+            b"\n",
+        )
+        if not header_ending:
+            candidate_lines[header_index] = header_content + newline
+        candidate_lines.insert(
+            header_index + 1,
+            b'trust_level = "trusted"' + newline,
+        )
+        candidates.append(b"".join(candidate_lines))
+else:
+    for assignment_index, line in enumerate(lines):
+        content, ending = split_ending(line)
+        if not assignment_pattern.match(content):
+            continue
+        candidate_lines = lines.copy()
+        indentation = content[: len(content) - len(content.lstrip(b" \t"))]
+        candidate_lines[assignment_index] = (
+            indentation + b'trust_level = "trusted"' + ending
+        )
+        candidates.append(b"".join(candidate_lines))
+
+
+def candidate_matches_expected(content: bytes) -> bool:
+    try:
+        return parse_content(content) == expected_document
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return False
+
+
+valid_candidates = [
+    candidate for candidate in candidates if candidate_matches_expected(candidate)
+]
+if len(valid_candidates) != 1:
+    abort(
+        "could not produce exactly one verified pre-trust edit "
+        f"(found {len(valid_candidates)})"
+    )
+
+proposed_content = valid_candidates[0]
+try:
+    proposed_document = parse_content(proposed_content)
+except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+    abort(f"proposed pre-trust edit is not valid TOML: {error}")
+
+proposed_projects = proposed_document.get("projects")
+proposed_project = (
+    proposed_projects.get(worktree_path)
+    if isinstance(proposed_projects, dict)
+    else None
 )
-if not header_ending:
-    lines[header_index] = header_content + newline
-lines.insert(header_index + 1, b'trust_level = "trusted"' + newline)
-config_path.write_bytes(b"".join(lines))
-print("updated")
+if not isinstance(proposed_project, dict):
+    abort("proposed pre-trust edit did not create the target project table")
+if proposed_project.get("trust_level") != "trusted":
+    abort("proposed pre-trust edit did not set trust_level to trusted")
+if proposed_document != expected_document:
+    abort("proposed pre-trust edit changed unrelated TOML data")
+
+config_path.write_bytes(proposed_content)
+print("added" if project_status == "missing" else "updated")
 PY
   )
 
@@ -137,8 +222,7 @@ PY
       printf '%s: trusted (updated)\n' "$config_file"
       updated=$((updated + 1))
       ;;
-    missing)
-      printf '\n%s\ntrust_level = "trusted"\n' "$project_header" >> "$config_file"
+    added)
       printf '%s: trusted (added)\n' "$config_file"
       added=$((added + 1))
       ;;

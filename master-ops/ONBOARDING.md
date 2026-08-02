@@ -2,7 +2,7 @@
 
 > The master exists to maximize Orca infrastructure productivity. Orca is REQUIRED infrastructure. Supervised dispatch = orca orchestration only.
 
-Use this Stage 2 guide to turn the Stage 1 skeleton into a working workspace/orchestrator operations repository. Ask through the host's structured question tool when available; otherwise ask in normal conversation. Explain why before every question. This file is terse to save agent tokens; user-facing dialogue must NOT be terse — speak to the user warmly, in full sentences, with reasons and cautions.
+Use this Stage 2 guide to turn the Stage 1 skeleton into a working workspace/orchestrator operations repository. Ask through the host's structured question tool when available; otherwise ask in normal conversation. The prose fallback must match the structured path in quality: for every question, show measured candidate values as numbered options when available, mark one recommendation and explain why, and include a free-form option; never ask the user to simply provide a value when measurable candidates exist. Explain why before every question. This file is terse to save agent tokens; user-facing dialogue must NOT be terse — speak to the user warmly, in full sentences, with reasons and cautions.
 
 ## Orientation, Before Step 0
 
@@ -59,7 +59,14 @@ Verify:
 
 **Why/caution:** The master operates above repositories and needs a confirmed absolute root and inventory.
 
-Ask for the absolute workspace root, workspace name (default: confirmed root basename), monitor namespace, and default model identifier to measure at boot; explain why each is needed.
+Before asking, say these plain definitions in the user's language:
+
+- “Workspace (root)” is simply the folder that groups the repositories this master will manage—nothing more special than that.
+- “Workspace name” is a display label; by default, it is that folder's name.
+- “Monitor namespace” is a short tag that keeps this workspace's session artifacts separate from other workspaces.
+- “Default model identifier” is the model the master session is expected to run as; it is measured at boot, not guessed.
+
+Measure and offer numbered workspace-root candidates before asking: the parent directory of `{{RUNTIME_ROOT}}`, `{{RUNTIME_ROOT}}`'s grandparent when it groups repositories, and a user-named new folder. Make creating that new workspace folder and placing or cloning repositories into it a first-class option when no suitable folder exists; recommend the existing candidate that groups the intended repositories when available, otherwise recommend creating the new folder, and explain why. Then ask for the absolute workspace root, workspace name (default: confirmed root basename), monitor namespace, and default model identifier to measure at boot, with measured candidate values, a recommendation and reason, and a free-form option for each when available; explain why each is needed.
 
 Run:
 

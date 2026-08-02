@@ -4,6 +4,8 @@ The shortest path from a clone to a running master session. There is nothing to 
 
 ## What you need
 
+Everything in this list serves one goal, a running master session. The core library itself stays callable with none of it: stdlib-only imports, no Orca, no setup, and it imports on a stock macOS Python 3.9. That path gives you the pure functions and nothing else, as the README says, and nothing below walks it back.
+
 - [Orca](https://www.onorca.dev/download). The master lives in an Orca pane, which is what lets it outlive a window. Orca ships macOS, Linux, and Windows builds.
 - The `orca` shell command. The runtime calls it to spawn, list, and retire master sessions, so succession does not work without it. Registering it is a step in Orca's settings, covered below.
 - A coding-agent CLI you already pay for: Claude Code, Codex, Grok CLI, or another one. Any single one is enough.

@@ -267,7 +267,11 @@ if [[ "${ORCA_AGENT_CLI:-}" == "claude" || "${ORCA_AGENT_CLI:-}" == "claude-code
     && grep -Fq 'codex@openai-codex' "$claude_plugins_file"; then
     pass "codex-plugin" "official Codex plugin is installed for Claude Code"
   else
-    fail "codex-plugin" "official Codex plugin missing from $claude_plugins_file; in Claude Code run: /plugin marketplace add openai/codex-plugin-cc; /plugin install codex@openai-codex; /reload-plugins; verify /codex:setup"
+    # A routing policy that sends heavy work to Codex is one workspace's choice,
+    # not a property of every Claude Code master. Wiring stays, enforcement does
+    # not: the install path is stated, and a host that never dispatches Codex
+    # workers onboards without it.
+    warn "codex-plugin" "official Codex plugin missing from $claude_plugins_file; hosts that dispatch Codex workers need it. In Claude Code: /plugin marketplace add openai/codex-plugin-cc; /plugin install codex@openai-codex; /reload-plugins; verify /codex:setup"
   fi
 elif command -v claude >/dev/null 2>&1; then
   printf 'INFO %-14s %s\n' "codex-plugin" "skipped because Claude Code is installed but ORCA_AGENT_CLI does not select it"
@@ -406,7 +410,7 @@ test_hint='PYTHONPATH=src uv run --with pytest --no-project python3 -m pytest te
 # not as an onboarding blocker for hosts that never run that tool.
 if command -v python3 >/dev/null 2>&1; then
   python_version=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:3])))' 2>/dev/null)
-  pass "python3" "Python ${python_version:-unknown} present; no version floor is enforced here, a tool that needs a newer interpreter states that itself at runtime"
+  pass "python3" "Python ${python_version:-unknown} present; no version floor is enforced here, a tool that needs a newer interpreter states that itself at runtime (today: codex-worker-pretrust, 3.11+ for tomllib)"
 else
   fail "python3" "missing; the runtime's entry points are python3 scripts, so nothing here runs without it"
 fi

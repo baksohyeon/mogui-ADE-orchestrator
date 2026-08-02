@@ -4,10 +4,20 @@ The shortest path from a clone to a running master session. There is nothing to 
 
 ## What you need
 
+Everything in this list serves one goal, a running master session. The core library itself stays callable with none of it: stdlib-only imports, no Orca, no setup, and it imports on a stock macOS Python 3.9. That path gives you the pure functions and nothing else, as the README says, and nothing below walks it back.
+
 - [Orca](https://www.onorca.dev/download). The master lives in an Orca pane, which is what lets it outlive a window. Orca ships macOS, Linux, and Windows builds.
 - The `orca` shell command. The runtime calls it to spawn, list, and retire master sessions, so succession does not work without it. Registering it is a step in Orca's settings, covered below.
 - A coding-agent CLI you already pay for: Claude Code, Codex, Grok CLI, or another one. Any single one is enough.
+- Python 3.11 or newer. The core is stdlib-only, but `scripts/codex-worker-pretrust` reads TOML through `tomllib`, which arrived in 3.11. `uv` covers the test suite on an older host and does not cover this script, which calls the host `python3` directly.
 - macOS is what this project has been developed and run on. One user has reported the install working on Linux. Windows is untested.
+
+Two more tools are recommended rather than required, and the preflight warns on their absence instead of blocking:
+
+- [`gitleaks`](https://gitleaks.io). The redaction gate uses it as its matching engine and exits 2 without it, so a host that publishes anything needs it. `brew install gitleaks` on macOS.
+- [`ctx`](https://ctx.rs), with `ctx status` answering. The records practice queries agent history across providers through it. A host that does no history work loses nothing by skipping it.
+
+`bash scripts/onboarding-preflight.sh` checks every item on this page. A missing required one exits 1 with `BLOCKED`, a missing recommended one warns and is repeated in the closing summary, and a `PREFLIGHT_WAIVE` entry downgrades a check rather than satisfying it, which the summary says out loud. Onboarding runs this as Step 0, so you do not have to audit the list by hand.
 
 ## Install and clone
 

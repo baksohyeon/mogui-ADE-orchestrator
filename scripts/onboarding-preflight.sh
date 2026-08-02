@@ -446,27 +446,28 @@ for worker_runtime in "${worker_runtimes[@]}"; do
   fi
 done
 
-# gitleaks is the matching engine the publish gate is moving onto, and the
-# organization rules it needs live outside version control, so both the binary and
-# the config path are host facts onboarding has to measure.
+# gitleaks is the redaction gate's matching engine, so publishing needs it: the
+# gate exits 2 rather than guessing when it is absent. Running a master does not,
+# which is why this warns instead of blocking. It stays in ESSENTIAL_LABELS so the
+# summary repeats the consequence instead of letting a warning scroll past.
 if command -v gitleaks >/dev/null 2>&1; then
   pass "gitleaks" "$(gitleaks version 2>&1 | head -1)"
 else
-  fail "gitleaks" "gitleaks is not on PATH; install it (brew install gitleaks, or see https://gitleaks.io) because the redaction gate's matching engine is moving to it"
+  warn "gitleaks" "gitleaks is not on PATH; the redaction gate cannot decide without it and exits 2, so install it before publishing anything (brew install gitleaks, or see https://gitleaks.io)"
 fi
 
 # ctx indexes agent history from every provider on the host into one queryable
-# store. The records practice depends on being able to ask what happened across
-# sessions and agents, which a single provider's transcript cannot answer.
+# store. The records practice depends on it; a master runs without it, so a host
+# that does no history work loses nothing. Warn, and let the summary carry it.
 if command -v ctx >/dev/null 2>&1; then
   ctx_status=""
   if ctx_status=$(ctx status 2>&1); then
     pass "ctx" "$(ctx --version 2>&1 | head -1); index reachable"
   else
-    fail "ctx" "ctx is installed but 'ctx status' failed; run 'ctx setup' to create the local index"
+    warn "ctx" "ctx is installed but 'ctx status' failed; run 'ctx setup' to create the local index, or the records practice cannot query history"
   fi
 else
-  fail "ctx" "ctx is not on PATH; install it (see https://ctx.rs) because the records practice queries agent history across providers, and waive this check if this host does no history work"
+  warn "ctx" "ctx is not on PATH; the records practice queries agent history across providers and cannot without it (see https://ctx.rs); ignore this on a host that does no history work"
 fi
 
 for repo_tool in git gh; do

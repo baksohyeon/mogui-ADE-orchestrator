@@ -55,6 +55,17 @@ Python before onboarding proceeds. It also gates the rest of the tool surface a
 master and its workers actually invoke: the named agent CLI, the worker runtimes
 dispatch targets, Git, an authenticated `gh`, a runnable test entry point, a
 writable dispatch ledger directory, and the organization rules file.
+
+Enforcement is graded rather than absolute, because a check that cannot be
+satisfied and cannot be waived teaches the operator to skip the whole preflight
+and lose every other check with it. `PREFLIGHT_WAIVE=<labels>` downgrades named
+failures to printed, counted waivers, and the summary then reads READY WITH
+WAIVERS and lists them: a waived required check was not satisfied. Entries that
+match no check are named as well, since a misspelled waiver leaves the check
+enforced while the operator believes otherwise. Two checks are graded on their
+own: a missing worker runtime warns when another listed runtime resolves, and
+`gh` blocks only when the binary is absent, while unauthenticated or a missing
+`workflow` scope warns.
 `ONBOARDING.md` is rewritten as a token-lean script-and-command flow while
 retaining its questions, safeguards, and verification gates; `--fix` may add or
 refresh only the required global skills. Template v5 also adds the append-only

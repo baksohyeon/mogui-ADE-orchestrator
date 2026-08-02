@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -55,7 +56,13 @@ def _write_stub(path: Path, body: str) -> None:
     path.chmod(0o755)
 
 
-def _host(tmp_path: Path, *, rules: str | None = "id|description|abc[0-9]+") -> dict:
+def _host(
+    tmp_path: Path,
+    *,
+    rules: str | None = "id|description|abc[0-9]+",
+    worker_runtimes: tuple[str, ...] = ("codex", "cursor-agent"),
+    sanitized_path: bool = False,
+) -> dict:
     """Provision a stub host and return the env for running the preflight."""
 
     home = tmp_path / "home"
@@ -80,14 +87,22 @@ def _host(tmp_path: Path, *, rules: str | None = "id|description|abc[0-9]+") -> 
     _write_stub(bin_dir / "orca", ORCA_STUB)
     _write_stub(bin_dir / "bd", BD_STUB)
     _write_stub(bin_dir / "gh", GH_STUB)
-    for name in ("codex", "cursor-agent", "claude", "git"):
+    for name in ("claude", "git", *worker_runtimes):
         _write_stub(bin_dir / name, TRUE_STUB)
 
     env = dict(os.environ)
+    # Sanitized PATH keeps a runtime absent even when the developer's machine has
+    # it installed; the system directories stay because the script uses sed,
+    # grep, dirname, realpath, and python3.
+    path = (
+        f"{bin_dir}:{Path(sys.executable).parent}:/usr/bin:/bin"
+        if sanitized_path
+        else f"{bin_dir}:{env['PATH']}"
+    )
     env.update(
         {
             "HOME": str(home),
-            "PATH": f"{bin_dir}:{env['PATH']}",
+            "PATH": path,
             "ORCA_AGENT_CLI": "claude",
             "ORCA_CLI_COMMAND": "",
             "ORCA_DEV_REPO_ROOT": "",
@@ -202,3 +217,45 @@ def test_malformed_rule_fails_and_nothing_from_the_file_is_printed(
     assert "1 of 2" in output, output
     for leaked in ("canary", "abc(unclosed", "xyz[0-9]"):
         assert leaked not in output, output
+
+
+def test_waived_failure_is_labeled_and_stops_blocking(tmp_path: Path) -> None:
+    """The escape exists so the whole preflight is not skipped, and it is loud."""
+
+    env = _host(tmp_path, rules=None)
+    env["PREFLIGHT_WAIVE"] = "redaction-extra, python3"
+    result = _run(env, tmp_path)
+    assert "redaction-extra" not in _labels(result.stdout, "FAIL"), result.stdout
+    assert "WAIVED" in result.stdout
+    assert "downgraded from FAIL by PREFLIGHT_WAIVE" in result.stdout
+    assert "READY WITH WAIVERS" in result.stdout
+    assert "downgraded, not satisfied" in result.stdout
+    assert result.returncode == 0, result.stdout
+
+
+def test_waiver_that_matched_nothing_keeps_the_check_enforced(tmp_path: Path) -> None:
+    """A typo'd waiver must not read as a waiver."""
+
+    env = _host(tmp_path, rules=None)
+    env["PREFLIGHT_WAIVE"] = "redaction-extras"
+    result = _run(env, tmp_path)
+    assert "redaction-extra" in _labels(result.stdout, "FAIL"), result.stdout
+    assert "named checks that did not run: redaction-extras" in result.stdout
+    assert "still enforced" in result.stdout
+    assert result.returncode == 1
+
+
+def test_one_missing_worker_runtime_warns_when_another_is_present(
+    tmp_path: Path,
+) -> None:
+    env = _host(tmp_path, worker_runtimes=("codex",), sanitized_path=True)
+    result = _run(env, tmp_path)
+    assert "worker-runtime" in _labels(result.stdout, "WARN"), result.stdout
+    assert "worker-runtime" not in _labels(result.stdout, "FAIL"), result.stdout
+
+
+def test_no_worker_runtime_at_all_fails(tmp_path: Path) -> None:
+    env = _host(tmp_path, worker_runtimes=(), sanitized_path=True)
+    result = _run(env, tmp_path)
+    assert "worker-runtime" in _labels(result.stdout, "FAIL"), result.stdout
+    assert "cannot delegate" in result.stdout

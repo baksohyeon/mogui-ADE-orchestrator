@@ -137,7 +137,22 @@ if command -v bd >/dev/null 2>&1; then
       fail "bd" "bd where resolves outside an ops repo: $bd_path"
     fi
   else
-    pass "bd" "binary present; ops repo not confirmed from this cwd; run from the approved workspace or ops repo to verify"
+    ops_repo_marker_found=false
+    home_dir=$(cd "$HOME" && pwd -P)
+    marker_dir=$(pwd -P)
+    while [[ "$marker_dir" != "$home_dir" && "$marker_dir" != "/" ]]; do
+      if [[ -d "$marker_dir/.beads" ]]; then
+        ops_repo_marker_found=true
+        break
+      fi
+      marker_dir=${marker_dir%/*}
+      [[ -z "$marker_dir" ]] && marker_dir=/
+    done
+    if [[ "$ops_repo_marker_found" == true ]]; then
+      fail "bd" "ops repo marker found but bd where fails — fix bd or run from the ops repo"
+    else
+      pass "bd" "binary present; ops repo not confirmed from this cwd; run from the approved workspace or ops repo to verify"
+    fi
   fi
 else
   fail "bd" "binary missing; install Beads before onboarding"

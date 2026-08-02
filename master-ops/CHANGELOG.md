@@ -24,6 +24,31 @@ here in the same change. Skip that and installations on different template
 states all report the same version, which is the whole thing this was meant to
 prevent.
 
+## 5
+
+Onboarding now requires Orca infrastructure and uses Orca orchestration for all
+supervised dispatch. A new read-only-by-default `scripts/onboarding-preflight.sh`
+checks Orca status, the orchestration RPC, the global `orca-cli` and
+`orchestration` skills, Beads resolution when an ops repository exists, and
+Python before onboarding proceeds. `ONBOARDING.md` is rewritten as a token-lean
+script-and-command flow while retaining its questions, safeguards, and
+verification gates; `--fix` may add or refresh only the required global skills.
+
+Upgrade an existing installation in this order:
+
+1. Pull template v5 in the orchestrator clone.
+2. Run `bash scripts/onboarding-preflight.sh` from that clone and fix every FAIL.
+3. Enable Orca orchestration, then verify the preflight reports its RPC reachable.
+4. Install the required skills with `npx skills add stablyai/orca -g`; refresh the
+   orchestration skill with `npx skills update orchestration -g` when needed.
+5. Raise the installation's `Template version` line in
+   `docs/MASTER-OPERATIONS.md` to 5 after applying the relevant local changes.
+
+Existing local edits still win. From this version onward, raw terminal polling
+and vendor-direct agent CLIs do not satisfy supervised dispatch: bind a Run,
+create a Task, attach a worker Dispatch, and wait for `worker_done` through Orca
+orchestration.
+
 ## 4
 
 The Step 8 spawn gate accepts MATCH_REISSUED alongside MATCH (in `ONBOARDING.md`

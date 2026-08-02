@@ -1,367 +1,254 @@
 # Master-Ops Onboarding
 
-This is the Stage 2 guide for turning the Stage 1 skeleton into a working workspace/orchestrator operations repository.
+> The master exists to maximize Orca infrastructure productivity. Orca is REQUIRED infrastructure. Supervised dispatch = orca orchestration only.
 
-Stage 1 asks nothing. It lays down the skeleton and prints the remaining placeholders. Stage 2 is conversational: use a structured question tool when your host provides one; otherwise ask normal questions. At every step, explain why the information is needed before asking.
+Use this Stage 2 guide to turn the Stage 1 skeleton into a working workspace/orchestrator operations repository. Ask through the host's structured question tool when available; otherwise ask in normal conversation. Explain why before every question.
 
 ## Orientation, Before Step 0
 
-Before asking the user anything, tell them where they are. A user who has to ask "what is happening and why" mid-flow was failed by this protocol, not by their own attention. Cover, in their language, in this order:
+Tell the user, in their language and before asking anything:
 
-1. What this system is: one master session per workspace that coordinates work across the workspace's repositories, spawned and placement-verified through Orca, with governance state kept in a dedicated ops repository.
-2. The three layers and which one is talking: this orchestrator repository (runtime and template, owned by its maintainer), the ops repository this flow will create (the workspace's own governance record), and the master session this flow will spawn (the operator). The session running this guide is the installer; it is none of the three, and it retires when Step 8 hands off.
-3. The step map: Steps 0–7.5 measure facts and build the ops repository, Step 8 spawns the master, Step 9 is the master's first-boot smoke — run by the master in its own session, not here.
-4. What exists at the end: an ops repository with a filled-in operations document, an issue tracker reachable from the workspace root, seeded user rules, and exactly one verified Generation 1 master.
+1. This system runs one master session per workspace to coordinate its repositories; Orca spawns and placement-verifies it, and a dedicated ops repository keeps governance state.
+2. Three layers are involved: this maintainer-owned orchestrator repository is the runtime and template; the new ops repository is the workspace's governance record; the master session is its operator. This installer session is none of them and retires after Step 8.
+3. Steps 0 through 7.5 measure facts and build the ops repository; Step 8 spawns the master; Step 9 is the master's first-boot smoke in its own session.
+4. The end state is an ops repository with a completed operations document, an issue tracker reachable from the workspace root, seeded user rules, and exactly one verified Generation 1 master.
 
-Then keep the user oriented for the rest of the flow. Open every step with one line of position: the step number, its purpose, and what just changed. The per-step "(a) Why" text explains the step; the position line explains the journey.
+Keep the user oriented with the opening line in every step. In owner-facing conversation, say a tracker issue as "<title> (<id>)", never a bare ID, and explain charter terms such as Role Lock in one plain clause on first use.
 
-Plain-language rule, for this flow and for the master it produces: expand internal identifiers and charter vocabulary on first use when talking to the user. A tracker issue is "<title> (<id>)", never a bare ID; a term like Role Lock gets one clause of explanation before it is leaned on. This rule exists because a production master once proposed "Maintenance 범위에서 74m 착수 승인" to an owner who could not know what either term meant.
+Use only these template placeholders: `{{WORKSPACE_NAME}}`, `{{WORKSPACE_ROOT}}`, `{{OPS_REPO}}`, `{{MONITOR_NS}}`, `{{MODEL_ID}}`, `{{REPO_LIST}}`, `{{RUNTIME_ROOT}}`, and `{{TEMPLATE_VERSION}}`. The installer measures the last two in Step 4 rather than asking the user.
 
-Use only these placeholders in the master-ops template:
+## Map
 
-- `{{WORKSPACE_NAME}}`
-- `{{WORKSPACE_ROOT}}`
-- `{{OPS_REPO}}`
-- `{{MONITOR_NS}}`
-- `{{MODEL_ID}}`
-- `{{REPO_LIST}}`
-- `{{RUNTIME_ROOT}}` — the absolute path of this orchestrator repository clone; the onboarding agent fills this itself (Step 4), no user question needed
-- `{{TEMPLATE_VERSION}}` — the contents of `master-ops/TEMPLATE-VERSION`; the onboarding agent fills this itself (Step 4), no user question needed
+- Orchestrator layer: this repository owns the runtime, template, and onboarding flow.
+- Ops layer: the generated operations repository owns workspace governance records.
+- Session layer: one Orca-hosted master operates the workspace and retires through succession.
+- `docs/MASTER-OPERATIONS.md` owns durable rules as the master-operations SSOT.
+- `docs/runbooks/role-state.md` owns the master's current role and Role Lock state.
+- `docs/runbooks/succession-boot-card.md` owns boot and recovery order.
+- `bd` owns execution state; follow the `bd prime` caution only after `bd where` proves the ops repository.
+- `contracts/` owns bounded worker briefs; it is not the execution-state tracker.
 
-## Step 0. Check Prerequisites
+## Step 0. Pass The Required Preflight
 
-(a) Why: this onboarding flow depends on Orca ADE for terminal placement and founding spawn. Without Orca, the master cannot prove where it was created, so the flow must stop instead of offering a workaround.
+**Position and action:** Step 0 starts after orientation, with no workspace state changed: run `bash scripts/onboarding-preflight.sh` from `{{RUNTIME_ROOT}}` and fix every FAIL before continuing.
 
-(b) Ask the user:
+**Why/caution:** Orca, orchestration, the Orca skills, Beads, and Python are required; do not offer a non-Orca fallback.
 
-- whether they are ready for a local prerequisite check
-- which agent CLI they expect to use, such as `claude`
+Ask whether the user is ready for local read-only checks and which agent CLI they expect to use, such as `claude`.
 
-(c) Agent action:
+Run:
 
-- run `orca status`
-- if `orca status` is unavailable or does not report a usable runtime, explain that this system assumes Orca ADE, guide the user to install and start Orca, and stop the onboarding flow until Orca is available
-- do not offer a non-Orca fallback path
-- verify the agent CLI, such as `claude`, is available when the user named one
-- verify `git` is available
+```console
+$ cd "{{RUNTIME_ROOT}}"
+$ bash scripts/onboarding-preflight.sh
+$ command -v "<user-named agent CLI>"
+$ command -v git
+```
 
-(d) Verification:
+Use `bash scripts/onboarding-preflight.sh --fix` only with approval; it may add or refresh the global Orca skills, while application installs remain manual.
 
-- Orca runtime status is measured, not guessed
-- agent CLI availability is measured or marked unresolved
-- `git` availability is measured
+Verify:
+
+- the preflight exits zero, Orca status was measured, orchestration RPC is reachable, required skills are present, `bd` is present and resolves to the ops repo when one exists, and Python is present
+- the named agent CLI is measured or explicitly unresolved
+- Git is measured
 
 ## Step 1. Collect Workspace Facts
 
-(a) Why: the workspace is the integrated folder that contains the repositories the master will coordinate. The master layer operates above individual repositories, so it needs a measured workspace path and repo inventory before it can route work or verify placement.
+**Position and action:** Step 1 begins after prerequisites pass: collect and measure the workspace facts before routing any work.
 
-(b) Ask the user:
+**Why/caution:** The master operates above repositories and needs a confirmed absolute root and inventory.
 
-- absolute workspace root
-- workspace name, defaulting to the basename of the confirmed workspace root
-- monitor namespace
-- default model identifier to measure at boot
+Ask for the absolute workspace root, workspace name (default: confirmed root basename), monitor namespace, and default model identifier to measure at boot; explain why each is needed.
 
-(c) Agent action:
+Run:
 
-- read the current files before changing them
-- require an absolute path for the workspace root
-- verify the path exists
-- run `ls -la "$WORKSPACE_ROOT"` and detect immediate child repositories; do not invent missing repositories
-- read back the discovered repository list to the user and ask for confirmation or exclusions
-- leave uncertain values as placeholders and ask again
+```console
+$ test "${WORKSPACE_ROOT#/}" != "$WORKSPACE_ROOT" && test -d "$WORKSPACE_ROOT"
+$ ls -la "$WORKSPACE_ROOT"
+```
 
-(d) Verification:
+Read current files first, detect immediate child repositories, read the measured list back for confirmation or exclusions, and ask again rather than inventing uncertain values.
+
+Verify:
 
 - `{{WORKSPACE_ROOT}}` is absolute and exists
-- `{{WORKSPACE_NAME}}` is explicit or derived from the confirmed workspace root basename with user approval
+- `{{WORKSPACE_NAME}}` is explicit or is the confirmed root basename approved by the user
 - `{{REPO_LIST}}` matches measured repositories after user confirmation
 
-## Step 2. Recommend The Ops Repository Name
+## Step 2. Choose The Ops Repository
 
-(a) Why: product code and governance operations should not share ownership boundaries. The ops repository name must make the governance role clear without looking like another product repository in shell prompts, status lines, or terminal titles.
+**Position and action:** Step 2 begins with a confirmed workspace inventory: recommend and obtain approval for the ops repository.
 
-(b) Ask the user:
+**Why/caution:** Governance needs a visible ownership boundary that cannot be confused with product code.
 
-- whether they want a new ops repository or an existing operations repository
-- whether local git initialization is allowed if a new repository is created
+Ask whether to create a new repository or reuse an existing operations repository, and whether local Git initialization is allowed for a new one.
 
-(c) Agent action:
+Inspect the confirmed names; propose two or three candidates with pros and cons; recommend `<workspace>-ops`; evaluate governance clarity, separation from product scope, and shell-title ambiguity; use a structured choice when available.
 
-- inspect the confirmed repository names and workspace structure from Step 1
-- propose 2 or 3 candidate ops repository names with pros and cons
-- use a structured question tool for the selection when the host provides one; otherwise ask in plain conversation
-- make `<workspace>-ops` the default recommendation
-- apply these criteria explicitly: the name reveals the governance role; the name does not mix with product scope; the name remains unambiguous when shown in a shell status line
+Verify:
 
-(d) Verification:
-
-- `{{OPS_REPO}}` is either an absolute path or a repo name the user explicitly approved
-- the selected name was evaluated against the confirmed repo inventory
-- the recommendation did not reuse a product repository name
+- `{{OPS_REPO}}` is an approved absolute path or repository name
+- the selection was evaluated against the confirmed inventory
+- no product repository name was reused
 
 ## Step 2.5. Register The Orca Workspace
 
-(a) Why: founding spawn needs an Orca folder-context selector for the workspace folder. A plain path is not enough when the folder has not been registered with Orca.
+**Position and action:** Step 2.5 begins with the ops repository selected: open `{{WORKSPACE_ROOT}}` in Orca, start a terminal there, and measure its runtime-issued handle.
 
-(b) Ask the user:
+**Why/caution:** A filesystem path is not a valid substitute for an Orca folder selector; guessed paths can fail with `selector_not_found`.
 
-- open the confirmed `{{WORKSPACE_ROOT}}` folder in the Orca app
-- start one terminal inside that Orca workspace
-- provide the runtime-issued terminal handle for that terminal
+Ask the user to provide that Orca terminal handle, then run:
 
-(c) Agent action:
+```console
+$ ORCA terminal show --terminal <terminal handle> --json
+```
 
-- run `orca terminal show --terminal <terminal handle> --json`
-- read the returned metadata and capture the folder/worktree selector for `{{WORKSPACE_ROOT}}`
-- if the terminal metadata does not prove it belongs to `{{WORKSPACE_ROOT}}`, ask the user to open the correct folder in Orca and repeat this step
-- record the captured selector for Step 8; do not add a new `{{...}}` template placeholder for it
+Resolve `ORCA` exactly as Step 0's preflight does. Capture the returned folder/worktree selector only if the metadata proves it belongs to `{{WORKSPACE_ROOT}}`; otherwise repeat with the correct Orca folder. Keep the selector for Step 8 without adding a template placeholder.
 
-(d) Verification:
+Verify:
 
-- terminal metadata was measured with `orca terminal show`
-- the captured selector points to the confirmed workspace folder context
+- `terminal show` measured the terminal metadata
+- the selector points to the confirmed workspace folder context
 - the selector is available before founding spawn
-
-Operational note: in production, a path selector for an unregistered folder failed with `selector_not_found`; fail-closed spawn handling prevented an invalid placement. Keep this note here so future onboarding agents use the measured folder selector from Orca instead of guessing from the filesystem path.
 
 ## Step 3. Create The Ops Repository
 
-(a) Why: the selected ops repository is where workspace governance documents, lineage, memory pointers, and issue-tracker state will live.
+**Position and action:** Step 3 begins with an approved name and measured Orca context: create or deliberately reuse the ops repository.
 
-(b) Ask the user:
+**Why/caution:** Read and merge existing files; never overwrite operations records or initialize Git without approval.
 
-- confirmation to create or reuse the selected `{{OPS_REPO}}`
-- confirmation before any local git initialization
+Ask for confirmation to create or reuse `{{OPS_REPO}}` and separate confirmation before local Git initialization.
 
-(c) Agent action:
+If new or empty, copy the Stage 1 skeleton from `{{RUNTIME_ROOT}}/master-ops/`, excluding `TEMPLATE-VERSION`, `CHANGELOG.md`, and `ONBOARDING.md`; if existing, merge deliberately after reading it. Do not push unless explicitly asked.
 
-- if the repository does not exist and creation is approved, create it
-- if the repository is new or empty, copy the Stage 1 skeleton from this repository's `master-ops/` directory into it
-- do not copy `TEMPLATE-VERSION`, `CHANGELOG.md`, or `ONBOARDING.md`. Those describe the template, not the workspace. The version the first two record lands in section 0 of the generated operations document during Step 4. `ONBOARDING.md` is this guide: copying it puts a list of placeholder names into the ops repository, and Step 4 then substitutes that list into values, which destroys the document while passing every check
-- if the repository already has files, read them first and merge deliberately; do not overwrite existing operations records without user approval
-- do not push unless the user explicitly asks
+Verify:
 
-(d) Verification:
-
-- ops repository exists
-- `CLAUDE.md` and `AGENTS.md` exist in the ops repository
-- `docs/MASTER-OPERATIONS.md` exists
-- the Stage 1 skeleton is present and still contains only the allowed remaining placeholders
-- `TEMPLATE-VERSION`, `CHANGELOG.md`, and `ONBOARDING.md` are absent from the ops repository
+- the ops repository exists with `CLAUDE.md`, `AGENTS.md`, `docs/MASTER-OPERATIONS.md`, and the Stage 1 skeleton
+- only the allowed remaining placeholders are present
+- `TEMPLATE-VERSION`, `CHANGELOG.md`, and `ONBOARDING.md` are absent from the generated repository
 
 ## Step 4. Replace Template Placeholders
 
-(a) Why: the skeleton must become local enough to boot reliably, but still stay free of product-specific rules that belong inside product repositories.
+**Position and action:** Step 4 begins with the skeleton in place: replace every placeholder with confirmed or measured local facts.
 
-(b) Ask the user:
+**Why/caution:** Keep product-specific rules in product repositories and keep `CLAUDE.md` and `AGENTS.md` byte-identical unless the user accepts host-specific divergence.
 
-- confirmation for each unresolved placeholder value
-- whether any repository should be excluded from master coordination
+Ask for each unresolved value and any coordination exclusions. Fill `{{RUNTIME_ROOT}}` from the current repository root and `{{TEMPLATE_VERSION}}` from its single-line `master-ops/TEMPLATE-VERSION`; do not ask for either. Pass `{{OPS_REPO}}/docs/MASTER-OPERATIONS.md` as `master-bootstrap-live --charter-pointer "Operations SSOT: {{OPS_REPO}}/docs/MASTER-OPERATIONS.md"`. Add no placeholders.
 
-(c) Agent action:
+Verify:
 
-- replace the placeholders consistently across the ops repository
-- fill `{{RUNTIME_ROOT}}` yourself with the absolute path of this orchestrator repository clone (your current repository root) — this one needs no user question
-- fill `{{TEMPLATE_VERSION}}` yourself with the single line in `{{RUNTIME_ROOT}}/master-ops/TEMPLATE-VERSION`, trimmed — no user question either. The path is in the orchestrator clone because Step 3 keeps that file out of the ops repository. It records which version of the template this copy came from, which is the only way a later upgrade can tell what changed
-- pass the ops repository's operations doc as the bootstrap charter pointer (`master-bootstrap-live --charter-pointer "Operations SSOT: {{OPS_REPO}}/docs/MASTER-OPERATIONS.md"`), so the boot block names this workspace instead of a neutral placeholder
-- keep `CLAUDE.md` and `AGENTS.md` byte-identical unless the user explicitly accepts host-specific divergence
-- do not introduce additional `{{...}}` placeholders
+```console
+$ ! rg '\{\{[^}]+\}\}' "{{OPS_REPO}}"
+$ cmp "{{OPS_REPO}}/CLAUDE.md" "{{OPS_REPO}}/AGENTS.md"
+```
 
-(d) Verification:
-
-- no `{{...}}` placeholders remain after the user has provided values
-- `CLAUDE.md` and `AGENTS.md` are identical
-- no source workspace's private names were copied accidentally
+Also verify no source workspace's private names were copied accidentally.
 
 ## Step 5. Initialize The Issue Tracker
 
-(a) Why: execution state changes more often than documents. The issue tracker is the working-state SSOT; Git is for accepted plans, designs, decisions, and runbooks.
+**Position and action:** Step 5 begins with a localized ops repository: initialize the chosen tracker there and make it resolve from `{{WORKSPACE_ROOT}}`.
 
-(b) Ask the user:
+**Why/caution:** Execution state belongs in the tracker, but upward resolution can silently select a database above the workspace or stop at the wrong Git root.
 
-- which issue tracker to use, such as Beads (`bd`) or another local tracker — explain first what the tracker is for in this system: it is the working-state SSOT the master reloads at every boot and after every compaction, not a to-do convenience
-- whether the tracker database should be initialized now
-- which issue ID prefix to use. Explain that every issue ID starts with it and that the master will say these IDs out loud in conversation, then propose a short one (two or three characters, such as initials of the workspace) alongside the tracker's default. Do not silently accept the default: a repo-name default like `mogui-ops` produced IDs like `mogui-ops-74m` in production, and the owner's first reaction to hearing one was to ask what it meant
+Explain that the tracker is working-state SSOT reloaded at boot and after compaction. Ask which tracker to use, whether to initialize it now, and which short issue prefix to use; propose a two- or three-character prefix beside the default and explain that IDs are spoken to the owner.
 
-(c) Agent action:
-
-- initialize the selected tracker only in the ops repository, with the prefix the user chose (Beads: `bd init --prefix <prefix>`; a wrong choice is recoverable later via `bd rename-prefix`, which rewrites IDs and references in the database but not in markdown documents)
-- reach the tracker from the workspace root, since that is where the master runs
-- record active work there, not in markdown TODO files
-- seed only load-bearing memory pointers and rules
-
-Reaching the tracker from the workspace root is the step that gets missed. The master's working directory is
-`{{WORKSPACE_ROOT}}`, or an orchestrator root the user approved instead. Either
-way it is not the ops repository, and the ops repository sits below it.
-
-Beads resolves from the current directory upward, and stops at a git repository
-root. It never looks downward. Measured on 1.1.0:
-
-| From | Result |
-| --- | --- |
-| two levels below a directory holding `.beads` | resolves to it |
-| a workspace root whose ops repository holds `.beads` | finds nothing |
-| a workspace root with `.beads` one level above it | resolves to the one above |
-| below a git root that has no `.beads` | stops, finds nothing |
-
-So the failure at the workspace root is an empty resolution, not a wrong one,
-unless something above the workspace happens to hold a database. That second
-case is the quiet one, because it answers.
-
-Place a link at the workspace root pointing at the database inside the ops
-repository, so the master resolves to the intended one from where it stands.
-Expand `{{OPS_REPO}}` to an absolute path first; it may be a bare repository
-name, and a relative link breaks as soon as the ops repository is not a direct
-child of the workspace root.
+For Beads, run only after approval:
 
 ```console
+$ cd "{{OPS_REPO}}" && bd init --prefix <approved prefix>
 $ { [ -e "{{WORKSPACE_ROOT}}/.beads" ] || [ -L "{{WORKSPACE_ROOT}}/.beads" ]; } \
     && echo "already exists, inspect before linking" \
     || ln -s "$(cd "{{OPS_REPO}}" && pwd)/.beads" "{{WORKSPACE_ROOT}}/.beads"
+$ cd "{{WORKSPACE_ROOT}}" && bd where
 ```
 
-The guard matters. `ln -s` against an existing directory succeeds silently and
-creates the link inside it, so the resolution does not change and nothing says
-so.
+Ask before creating the link. If the prefix is wrong, `bd rename-prefix` rewrites database IDs and references but not Markdown. For another tracker, measure its resolution rules. Record active work in the tracker and seed only load-bearing memory pointers and rules.
 
-Adjust the name for the tracker in use, and confirm its own resolution rule
-rather than assuming it matches this one. Ask the user before creating the link.
+Verify from `{{WORKSPACE_ROOT}}`, not inside the ops repository:
 
-(d) Verification:
-
-Run the checks from `{{WORKSPACE_ROOT}}`, not from the ops repository. Passing
-from inside the ops repository proves nothing about where the master will look.
-
-- `bd where`, or the selected equivalent, resolves to the ops repository
-- the workspace tracker database is a different database from the one in any product repository
-- no tracker database sits above `{{WORKSPACE_ROOT}}` on the path to the filesystem root, since an upward search would reach it first
-- a global environment variable does not override the resolution. If your
-  tracker reads one, print it from the same shell the agent's tool calls use.
-  A value read in a different shell can be a different value, and the check
-  passes while the real path is wrong
-
-Warning: Beads and similar local trackers can keep per-repo databases. Do not
-reuse a product repository's database for workspace-level orchestration.
-
-The tracker itself does fail loudly. Beads returns `No active beads workspace
-found.` and exits 1. What is quiet is the boot path, which does not read that
-exit code, so boot continues on an empty tracker. Consider a session-start
-check that prints a warning when the workspace root has no reachable tracker
-database, or when an environment variable points outside the workspace.
+- `bd where` or its equivalent resolves to the ops repository
+- this workspace database differs from every product repository database
+- no tracker database exists above `{{WORKSPACE_ROOT}}` on the path to the filesystem root
+- any tracker environment override printed from the agent's actual shell is empty or points inside the workspace
 
 ## Step 6. Seed Universal User Rules
 
-(a) Why: the master coordinates many repositories and sessions. Stable user preferences such as address form, language, approval discipline, and scope boundaries must survive compaction and handoff.
+**Position and action:** Step 6 begins with execution state reachable: store the user's durable, workspace-wide operating rules in the selected memory system.
 
-(b) Ask the user:
+**Why/caution:** Keep private details out of public documents and product conventions out of the master layer.
 
-- preferred name or form of address
-- primary response language
-- approval rules before execution, dispatch, branch creation, commit, push, or deployment
-- any standing "do not do" rules
+Ask for preferred address, primary response language, approval requirements before execution/dispatch/branch/commit/push/deploy, and standing prohibitions. Write short actionable rules without narrative duplication.
 
-(c) Agent action:
-
-- write universal operating rules to the selected memory system
-- keep private or sensitive details out of public documents
-- keep product-specific conventions in each product repository, not the master layer
-
-(d) Verification:
-
-- memory lookup returns the seeded rules
-- rules are short, actionable, and not duplicated as narrative in Git docs
+Verify that memory lookup returns the seeded rules and that the rules are concise and not duplicated in Git documents.
 
 ## Step 7. Explain The Settings Layer
 
-(a) Why: hooks and tool settings can enforce useful guarantees, but they also touch sensitive lanes. The master template should specify behavior without shipping hidden deny lists or environment-specific security implementation.
+**Position and action:** Step 7 begins with durable user rules seeded: identify the host and the owner of settings and sensitive configuration.
 
-(b) Ask the user:
+**Why/caution:** The template specifies hook behavior but does not ship hidden deny lists, credentials, secret paths, or environment-specific security implementation.
 
-- which host or hosts will run the master
-- who owns hook installation and security-sensitive configuration
-- whether dispatch warning, role-state injection, and compaction probe hooks should be enabled
+Ask which hosts run the master, who owns hooks/security-sensitive configuration, and whether dispatch warning, role-state injection, and compaction probe hooks should be enabled. Present the hook wiring spec from `docs/MASTER-OPERATIONS.md`; delegate auth, permission, secrets, credentials, and production-data work to a dedicated security/operations session.
 
-(c) Agent action:
-
-- present the hook wiring spec from `docs/MASTER-OPERATIONS.md`
-- leave implementation to a human or dedicated security/operations session
-- keep auth, permission, secret, production data, and credentials work in a separate sensitive lane
-
-(d) Verification:
-
-- hook spec is documented
-- no hook implementation, deny list, credentials, or secret paths were added by the onboarding agent
-- sensitive-lane owner is explicit or marked unresolved
+Verify the hook spec is documented, no sensitive implementation was added, and its owner is explicit or unresolved.
 
 ## Step 7.5. Offer The Skill Layer
 
-(a) Why: the master is born in the next step and inherits whatever skill layer is present at that moment. The runtime works without any of it, so this is an offer rather than a requirement. It comes before the spawn so the founding master starts under the stack the user chose instead of acquiring it later.
+**Position and action:** Step 7.5 begins before the master is born: explain the optional stack in README, then ask which parts the user wants.
 
-(b) Ask the user:
+**Why/caution:** Skills load into the founding session; some installers, especially GSD, modify lifecycle hooks and require deliberate user choice.
 
-- whether to install the recommended skill stack, and which parts
-- explain each one first, in a sentence, so the choice is informed rather than a yes to a list of names
+Explain each component in one sentence before showing any command. Print approved install commands and stop; do not run them or edit `settings.json`, hooks, or plugin configuration.
 
-The stack and what each part does in the harness is in the repository README under "The skill layer it runs under." Do not paste install commands without the explanation.
+Verify the explanation preceded commands, nothing was installed or configured by the agent, and the user's choice—including no installation—is recorded.
 
-(c) Agent action:
+## Step 8. Spawn The Founding Master Through Orchestration
 
-- print the install commands and stop there
-- do not run them, and do not edit the user's `settings.json`, hooks, or plugin configuration
-- GSD in particular wires hooks across most lifecycle events through its own installer, which is a change the user should make deliberately
+**Position and action:** Step 8 begins with the workspace prepared: create a Run and Task, spawn exactly one placement-verified Generation 1 master, attach its worker Dispatch, and wait for `worker_done`.
 
-(d) Verification:
+**Why/caution:** Supervised dispatch is Orca orchestration only; raw terminal polling and vendor-direct CLIs are non-compliant, and failures remain closed.
 
-- the user was told what each tool does before being shown a command
-- the agent installed nothing and modified no host configuration
-- the user's answer is recorded, including a decision to install nothing
+Ask for confirmation to spawn now or defer, and confirm the Step 2.5 Orca selector is still valid. Write a kickoff file containing Generation 1, this installer as founding origin, the boot sequence (rehydrate ops docs, declare Role State, measure model and placement), the initial queue, and the requirement to report the orchestration Task complete.
 
-## Step 8. Founding Spawn
+Run this supervised path with the resolved `ORCA` executable:
 
-(a) Why: the master must be born as a clean, verifiably placed session — not as a continuation of the onboarding conversation. A founding spawn separates the installer from the operator, so the master starts with a clean context and an auditable placement record.
+```console
+$ ORCA orchestration run-create --objective "Found and verify the Generation 1 master" --json
+$ ORCA orchestration task-create --spec "Run the byte-identical founding kickoff file and complete Step 9 boot smoke" --json
+$ "{{RUNTIME_ROOT}}/scripts/master-succeed" spawn \
+    --workspace-selector <measured folder selector> \
+    --kickoff-file <kickoff file> \
+    --root "{{WORKSPACE_ROOT}}" \
+    --model "{{MODEL_ID}}" \
+    --title "Gen-1 founding boot" \
+    --json
+$ ORCA terminal wait --terminal <verified live handle> --for tui-idle --timeout-ms 60000 --json
+$ ORCA orchestration dispatch --task <task id> --to <verified live handle> --inject --json
+$ ORCA orchestration check --wait --types worker_done,escalation,question --timeout-ms 900000 --json
+```
 
-(b) Ask the user:
+Require placement verification `MATCH` or `MATCH_REISSUED`; the latter must include `handle_reissued: true` and its adopted live handle. On any failure, do not retry with a filesystem path selector, do not boot the master in this installer, and do not create a second session. After settings changes, always spawn a fresh session.
 
-- confirmation to spawn the Generation 1 master now, or to defer
-- confirmation that the Step 2.5 Orca folder selector is still valid
+Verify:
 
-(c) Agent action:
-
-- write a kickoff file containing: generation number 1, founding origin (this onboarding session), the boot sequence (rehydrate ops docs, declare Role State, measure model and placement), and the initial queue if any
-- run the Orca-managed spawn with the folder selector captured in Step 2.5:
-  `{{RUNTIME_ROOT}}/scripts/master-succeed spawn --workspace-selector <folder selector from Step 2.5> --kickoff-file <kickoff file> --root {{WORKSPACE_ROOT}} --model {{MODEL_ID}} --title "Gen-1 founding boot" --json`
-- require the placement verification in the response to be MATCH or MATCH_REISSUED before treating the spawn as valid; MATCH_REISSUED (paired with `handle_reissued: true`) means the host reissued the terminal handle after creation and the handle in the response is the adopted live one, not the one the create call first printed
-- if the command fails, keep the failure closed: do not retry with a filesystem path selector and do not boot the master inside this onboarding session
-- note: settings layers load at session start — after any settings deployment, always spawn a fresh session
-
-(d) Verification:
-
-- exactly one new master process/session exists (no double boot)
-- managed spawn path: placement verification reported MATCH or MATCH_REISSUED
-- the kickoff content the master received matches the kickoff file byte-for-byte
+- a Run is bound, one Task exists, and its Dispatch is attached to the verified worker
+- exactly one new master process/session exists
+- placement is `MATCH` or valid `MATCH_REISSUED`
+- kickoff content received by the master matches the kickoff file byte-for-byte
+- the coordinator processes and acknowledges deliveries, answers questions through orchestration, and waits until that Task's `worker_done`
 
 ## Step 9. Run The First Master Boot Smoke
 
-(a) Why: the first boot proves the master can declare role state, measure its actual model, and prove it is placed in the intended workspace before it coordinates work.
+**Position and action:** Step 9 runs inside the new master session: declare its role, measure identity and placement, record lineage, and report completion.
 
-(b) Ask the user:
+**Why/caution:** Model identity is measured, unavailable, or unsupported—never guessed—and the installer does not perform this boot on the master's behalf.
 
-- initial role, or approval to start in Maintenance until a concrete track is selected
-- permission to run local read-only probes for model and placement evidence
+Ask for the initial role or approval to start in Maintenance, plus permission for local read-only model and placement probes. Update `docs/runbooks/role-state.md` for Generation 1, declare Role State in conversation, measure configured and actual model when exposed, capture placement evidence, append Generation 1 to `docs/lineage/MASTER-LINEAGE.md`, then send `worker_done` exactly once for the active Dispatch.
 
-(c) Agent action:
-
-- update `docs/runbooks/role-state.md` for Generation 1
-- declare the Role State in the conversation
-- measure configured model and actual session model when the host exposes that data
-- capture the placement evidence three-set
-- append Generation 1 to `docs/lineage/MASTER-LINEAGE.md`
-
-(d) Verification:
+Verify:
 
 - Role State has one active role and Role Lock is enabled
-- model measurement is reported as measured, unavailable, or unsupported; never guessed
-- placement evidence three-set is present:
-  host pane or worktree selector, process cwd under `{{WORKSPACE_ROOT}}`, and session artifact or log namespace
-- the first boot leaves no unresolved placeholders unless the user intentionally deferred them
+- model measurement is reported as measured, unavailable, or unsupported
+- placement evidence includes the host pane/worktree selector, process cwd under `{{WORKSPACE_ROOT}}`, and session artifact/log namespace
+- no placeholders remain unless the user intentionally deferred them
+- the founding Task and Dispatch complete through `worker_done`

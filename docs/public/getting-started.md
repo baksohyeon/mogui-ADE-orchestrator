@@ -7,7 +7,12 @@ The shortest path from a clone to a running master session. There is nothing to 
 - [Orca](https://www.onorca.dev/download). The master lives in an Orca pane, which is what lets it outlive a window. Orca ships macOS, Linux, and Windows builds.
 - The `orca` shell command. The runtime calls it to spawn, list, and retire master sessions, so succession does not work without it. Registering it is a step in Orca's settings, covered below.
 - A coding-agent CLI you already pay for: Claude Code, Codex, Grok CLI, or another one. Any single one is enough.
+- Python 3.11 or newer. The core is stdlib-only, but `scripts/codex-worker-pretrust` reads TOML through `tomllib`, which arrived in 3.11. `uv` covers the test suite on an older host and does not cover this script, which calls the host `python3` directly.
+- [`gitleaks`](https://gitleaks.io) on `PATH`. It is the matching engine behind the redaction gate, so that gate cannot decide without it. `brew install gitleaks` on macOS.
+- [`ctx`](https://ctx.rs) on `PATH`, with `ctx status` answering. It indexes agent history across providers, which is what the records practice queries. Waive this one if this host does no history work.
 - macOS is what this project has been developed and run on. One user has reported the install working on Linux. Windows is untested.
+
+`bash scripts/onboarding-preflight.sh` checks every item above. A missing required one exits 1 with `BLOCKED`, and a `PREFLIGHT_WAIVE` entry downgrades a check rather than satisfying it, which the summary says out loud. Onboarding runs this as Step 0, so you do not have to audit the list by hand.
 
 ## Install and clone
 

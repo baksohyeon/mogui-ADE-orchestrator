@@ -24,6 +24,14 @@ here in the same change. Skip that and installations on different template
 states all report the same version, which is the whole thing this was meant to
 prevent.
 
+## Unreleased
+
+The dispatch gate now enforces the installation-specific
+`model-tier-policy.json` fail closed, records justified tier overrides in its
+ledger, and provides a stable plain-text `report` rollup for model use, cost
+proxy, denials, overrides, and time span. Existing installations should copy
+and customize the policy file before adopting this gate version.
+
 ## 5
 
 Onboarding now requires Orca infrastructure and uses Orca orchestration for all

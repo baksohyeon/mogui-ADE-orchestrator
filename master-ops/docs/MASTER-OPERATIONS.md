@@ -120,6 +120,8 @@ Recommended worker lanes:
 - Local code work: a worker lane bound to the relevant repository checkout
 - Sensitive areas such as auth, permissions, secrets, credentials, production data, and incident material: a dedicated security or operations session
 
+The installation-specific worker tier mapping lives in `model-tier-policy.json`; use the lowest sufficient model listed there for each worker lane.
+
 ### Worker Launch Approval Posture
 
 Workers launched into isolated worktrees must start with the agent's non-interactive approval flag, or the measured Codex pre-trust posture below, so allowlist or trust prompts cannot block them mid-task. At every dispatch, the master MEASURES the installed CLI's `--help` output and uses only flags present there; it never guesses flags from memory.
@@ -161,6 +163,8 @@ L=~/.mogui/dispatch-ledger.jsonl
 <supervised dispatch command>
 "$G" --ledger "$L" register --job-id <job-id> --probe-cmd "<command proving the job-id appears in an artifact>" --orchestration-task <task-id>
 ```
+
+The gate enforces `model-tier-policy.json`; an exceptional denied-tier dispatch requires `--tier-override "<reason>"`, and every accepted override is recorded in the ledger.
 
 Before attaching a Codex worker, run `scripts/codex-worker-pretrust <worktree-path>` so startup never blocks on the trust prompt.
 

@@ -9,6 +9,8 @@ import os
 import subprocess
 import sys
 import time
+from collections import Counter
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 
@@ -51,6 +53,8 @@ def main(argv: list[str] | None = None) -> int:
         return _register(args)
     if args.command == "watch":
         return _watch(args)
+    if args.command == "report":
+        return _report(args)
 
     parser.print_help(sys.stderr)
     return 2
@@ -64,6 +68,8 @@ def _build_parser() -> argparse.ArgumentParser:
     check_parser = subparsers.add_parser("check")
     check_parser.add_argument("--runtime", required=True)
     check_parser.add_argument("--model")
+    check_parser.add_argument("--tier-policy")
+    check_parser.add_argument("--tier-override")
     check_parser.add_argument("--contract", required=True)
     check_parser.add_argument("--agents", required=True, type=int)
     check_parser.add_argument("--est-chars", type=int)
@@ -83,12 +89,21 @@ def _build_parser() -> argparse.ArgumentParser:
     watch_parser.add_argument("--log", required=True)
     watch_parser.add_argument("--max-idle", type=int, default=360)
 
+    report_parser = subparsers.add_parser("report")
+    report_parser.add_argument("--today", action="store_true")
+
     return parser
 
 
 def _gate(args: argparse.Namespace) -> DispatchGate:
+    config_values: dict[str, object] = {}
     if args.ledger:
-        return DispatchGate(DispatchGateConfig(ledger_path=args.ledger))
+        config_values["ledger_path"] = args.ledger
+    tier_policy = getattr(args, "tier_policy", None)
+    if tier_policy:
+        config_values["tier_policy_path"] = tier_policy
+    if config_values:
+        return DispatchGate(DispatchGateConfig(**config_values))
     return DispatchGate()
 
 
@@ -114,6 +129,7 @@ def _check(args: argparse.Namespace) -> int:
             est_input_chars=est_chars,
             n_agents=args.agents,
             completion_channel=args.completion_channel,
+            tier_override=args.tier_override,
         )
     )
     _print_decision(decision)
@@ -160,6 +176,123 @@ def _watch(args: argparse.Namespace) -> int:
         print(decision.reason, file=sys.stderr)
         return 2
     return 0
+
+
+def _report(args: argparse.Namespace) -> int:
+    try:
+        entries = _gate(args).ledger_entries()
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"REPORT_UNAVAILABLE: {exc}", file=sys.stderr)
+        return 2
+
+    if args.today:
+        today = datetime.now(timezone.utc).date()
+        entries = tuple(
+            entry
+            for entry in entries
+            if (entry_date := _entry_date(entry)) is not None and entry_date == today
+        )
+
+    model_stats: dict[str, list[int]] = {}
+    denial_counts: Counter[str] = Counter()
+    override_counts: Counter[tuple[str, str]] = Counter()
+    timestamps: list[float] = []
+    for entry in entries:
+        timestamp = _number(entry.get("ts"))
+        if timestamp is not None:
+            timestamps.append(timestamp)
+
+        decision = entry.get("decision")
+        reason = entry.get("reason")
+        if decision == "DENY" and isinstance(reason, str):
+            denial_counts[reason] += 1
+
+        model = entry.get("model")
+        if decision != "ALLOW" or not isinstance(model, str) or not model:
+            continue
+        stats = model_stats.setdefault(model, [0, 0])
+        stats[0] += 1
+        stats[1] += _entry_cost_proxy(entry)
+        tier_override = entry.get("tier_override")
+        if isinstance(tier_override, str) and tier_override:
+            override_counts[(model, tier_override)] += 1
+
+    print("Dispatch gate report")
+    print(f"Scope: {'today (UTC)' if args.today else 'all ledger entries'}")
+    if timestamps:
+        print(
+            "Time span: "
+            f"{_format_timestamp(min(timestamps))} to {_format_timestamp(max(timestamps))}"
+        )
+    else:
+        print("Time span: none")
+
+    print("Models:")
+    if model_stats:
+        for model in sorted(model_stats):
+            count, cost_proxy = model_stats[model]
+            print(
+                f"  {model}: dispatches={count} est_cost_proxy={cost_proxy}"
+            )
+    else:
+        print("  <none>")
+
+    print("Denials:")
+    if denial_counts:
+        for reason in sorted(denial_counts):
+            print(f"  {reason}: {denial_counts[reason]}")
+    else:
+        print("  <none>")
+
+    print("Tier overrides:")
+    if override_counts:
+        for model, reason in sorted(override_counts):
+            print(
+                f"  {model}: reason={json.dumps(reason, ensure_ascii=False)} "
+                f"count={override_counts[(model, reason)]}"
+            )
+    else:
+        print("  <none>")
+    return 0
+
+
+def _entry_date(entry: object):
+    if not isinstance(entry, dict):
+        return None
+    timestamp = _number(entry.get("ts"))
+    if timestamp is None:
+        return None
+    try:
+        return datetime.fromtimestamp(timestamp, timezone.utc).date()
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _entry_cost_proxy(entry: object) -> int:
+    if not isinstance(entry, dict):
+        return 0
+    est_chars = entry.get("est_chars")
+    n_agents = entry.get("n_agents")
+    if (
+        isinstance(est_chars, bool)
+        or not isinstance(est_chars, int)
+        or isinstance(n_agents, bool)
+        or not isinstance(n_agents, int)
+    ):
+        return 0
+    return max(0, est_chars) * max(0, n_agents)
+
+
+def _number(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def _format_timestamp(timestamp: float) -> str:
+    return datetime.fromtimestamp(timestamp, timezone.utc).isoformat().replace(
+        "+00:00", "Z"
+    )
 
 
 def _probe_contains_job_id(probe_cmd: str, job_id: str) -> bool:
@@ -256,6 +389,8 @@ def _print_decision(decision: GateDecision) -> None:
     }
     if decision.message:
         payload["message"] = decision.message
+    if decision.tier_override is not None:
+        payload["tier_override"] = decision.tier_override
     print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
 
 

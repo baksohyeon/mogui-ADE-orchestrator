@@ -20,6 +20,7 @@ from master_runtime.core.dispatch_gate import (  # noqa: E402
     DispatchGateConfig,
     DispatchRequest,
     GateDecision,
+    ReasonCode,
 )
 from master_runtime.core.watchdog import StallStatus, check_stall  # noqa: E402
 
@@ -49,12 +50,17 @@ def _build_parser() -> argparse.ArgumentParser:
     check_parser.add_argument("--contract", required=True)
     check_parser.add_argument("--agents", required=True, type=int)
     check_parser.add_argument("--est-chars", type=int)
+    check_parser.add_argument(
+        "--completion-channel",
+        choices=("orchestration", "sentinel-log"),
+    )
 
     register_parser = subparsers.add_parser("register")
     register_parser.add_argument("--job-id", required=True)
     register_parser.add_argument("--probe-cmd", required=True)
     register_parser.add_argument("--contract-sha")
     register_parser.add_argument("--runtime")
+    register_parser.add_argument("--orchestration-task")
 
     watch_parser = subparsers.add_parser("watch")
     watch_parser.add_argument("--log", required=True)
@@ -73,7 +79,11 @@ def _check(args: argparse.Namespace) -> int:
     contract_path = Path(args.contract)
     est_chars = args.est_chars
     if est_chars is None:
-        est_chars = len(contract_path.read_text(encoding="utf-8"))
+        est_chars = (
+            0
+            if args.completion_channel is None
+            else len(contract_path.read_text(encoding="utf-8"))
+        )
 
     decision = _gate(args).check(
         DispatchRequest(
@@ -81,6 +91,7 @@ def _check(args: argparse.Namespace) -> int:
             contract_path=contract_path,
             est_input_chars=est_chars,
             n_agents=args.agents,
+            completion_channel=args.completion_channel,
         )
     )
     _print_decision(decision)
@@ -91,11 +102,20 @@ def _check(args: argparse.Namespace) -> int:
 
 
 def _register(args: argparse.Namespace) -> int:
+    if args.orchestration_task is not None and not _probe_orchestration_task(
+        args.orchestration_task
+    ):
+        decision = GateDecision(False, ReasonCode.ORCHESTRATION_UNVERIFIED)
+        _print_decision(decision)
+        print(_decision_error(decision), file=sys.stderr)
+        return 2
+
     decision = _gate(args).register_job(
         args.job_id,
         lambda job_id: _probe_contains_job_id(args.probe_cmd, job_id),
         contract_sha=args.contract_sha,
         runtime=args.runtime,
+        orchestration_task=args.orchestration_task,
     )
     _print_decision(decision)
     if decision.allow:
@@ -131,6 +151,32 @@ def _probe_contains_job_id(probe_cmd: str, job_id: str) -> bool:
         text=True,
     )
     return result.returncode == 0 and job_id in result.stdout
+
+
+def _probe_orchestration_task(orchestration_task: str) -> bool:
+    try:
+        result = subprocess.run(
+            [
+                "orca",
+                "orchestration",
+                "dispatch-show",
+                "--task",
+                orchestration_task,
+                "--json",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return False
+    if result.returncode != 0:
+        return False
+    try:
+        payload = json.loads(result.stdout)
+    except (TypeError, json.JSONDecodeError):
+        return False
+    return isinstance(payload, dict) and payload.get("ok") is True
 
 
 def _print_decision(decision: GateDecision) -> None:

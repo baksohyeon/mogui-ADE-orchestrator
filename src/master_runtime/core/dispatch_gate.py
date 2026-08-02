@@ -30,6 +30,7 @@ DEFAULT_TICKET_TTL_SECONDS = 600
 DEFAULT_EXPIRED_TICKET_GC_GRACE_SECONDS = 24 * 60 * 60
 RUNTIME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 USERS_ABSOLUTE_PATH_PATTERN = re.compile(r"/Users/[^\s\"'`<>{}\[\](),;:]+")
+COMPLETION_CHANNELS = frozenset({"orchestration", "sentinel-log"})
 
 
 def _default_ledger_path() -> Path:
@@ -56,6 +57,8 @@ class ReasonCode(str, Enum):
     DUPLICATE_CONTRACT = "DUPLICATE_CONTRACT"
     UNVERIFIED_JOB = "UNVERIFIED_JOB"
     INVALID_REQUEST = "INVALID_REQUEST"
+    NO_COMPLETION_CHANNEL = "NO_COMPLETION_CHANNEL"
+    ORCHESTRATION_UNVERIFIED = "ORCHESTRATION_UNVERIFIED"
     CONTRACT_UNREADABLE = "CONTRACT_UNREADABLE"
     HIGH_COST_RUNTIME = "HIGH_COST_RUNTIME"
     AMBIGUOUS_TICKET = "AMBIGUOUS_TICKET"
@@ -74,6 +77,7 @@ class DispatchRequest:
     est_input_chars: int
     n_agents: int
     purpose: str = ""
+    completion_channel: str | None = None
 
 
 @dataclass(frozen=True)
@@ -131,7 +135,8 @@ class DispatchGate:
         validation_error = _validate_request(request)
         if validation_error is not None:
             decision = GateDecision(False, validation_error)
-            self._append_decision(request, decision)
+            if validation_error != ReasonCode.NO_COMPLETION_CHANNEL:
+                self._append_decision(request, decision)
             return decision
 
         try:
@@ -223,6 +228,7 @@ class DispatchGate:
         probe_fn: Callable[[str], bool],
         contract_sha: str | None = None,
         runtime: str | None = None,
+        orchestration_task: str | None = None,
     ) -> GateDecision:
         """Register a job only after independent probe verification succeeds."""
 
@@ -336,18 +342,19 @@ class DispatchGate:
                     else ""
                 ),
             )
-            self._append_entry(
-                {
-                    "ts": self._clock(),
-                    "contract_sha": pending["contract_sha"],
-                    "runtime": pending["runtime"],
-                    "n_agents": pending["n_agents"],
-                    "est_chars": pending["est_chars"],
-                    "decision": "ALLOW",
-                    "reason": ReasonCode.OK.value,
-                    "job_id": job_id,
-                }
-            )
+            entry: dict[str, object] = {
+                "ts": self._clock(),
+                "contract_sha": pending["contract_sha"],
+                "runtime": pending["runtime"],
+                "n_agents": pending["n_agents"],
+                "est_chars": pending["est_chars"],
+                "decision": "ALLOW",
+                "reason": ReasonCode.OK.value,
+                "job_id": job_id,
+            }
+            if orchestration_task is not None:
+                entry["orchestration_task"] = orchestration_task
+            self._append_entry(entry)
         return decision
 
     def ledger_entries(self) -> tuple[Mapping[str, object], ...]:
@@ -368,6 +375,7 @@ class DispatchGate:
             "est_chars": request.est_input_chars,
             "decision": "ALLOW" if decision.allow else "DENY",
             "reason": decision.reason.value,
+            "completion_channel": request.completion_channel,
         }
         if decision.warnings:
             entry["warnings"] = [warning.value for warning in decision.warnings]
@@ -546,6 +554,11 @@ class DispatchGate:
 
 
 def _validate_request(request: DispatchRequest) -> ReasonCode | None:
+    if (
+        not isinstance(request.completion_channel, str)
+        or request.completion_channel not in COMPLETION_CHANNELS
+    ):
+        return ReasonCode.NO_COMPLETION_CHANNEL
     if not request.runtime:
         return ReasonCode.INVALID_REQUEST
     if RUNTIME_PATTERN.fullmatch(request.runtime) is None:

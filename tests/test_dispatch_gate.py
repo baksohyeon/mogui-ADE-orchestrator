@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import runpy
 import subprocess
 from pathlib import Path
 
@@ -10,11 +11,72 @@ import master_runtime.core.dispatch_gate as dispatch_gate
 from master_runtime.core.dispatch_gate import (
     DispatchGate,
     DispatchGateConfig,
-    DispatchRequest,
+    DispatchRequest as _DispatchRequest,
     GateDecision,
     ReasonCode,
 )
 from master_runtime.core.watchdog import StallStatus, check_stall
+
+
+def DispatchRequest(*args, **kwargs):
+    kwargs.setdefault("completion_channel", "sentinel-log")
+    return _DispatchRequest(*args, **kwargs)
+
+
+def test_check_without_completion_channel_denies_without_ledger_write(
+    tmp_path: Path,
+) -> None:
+    contract = _contract(tmp_path, "missing completion channel")
+    gate = _gate(tmp_path, now=1_000)
+
+    decision = gate.check(
+        _DispatchRequest(
+            runtime="codex",
+            contract_path=contract,
+            est_input_chars=10_000,
+            n_agents=1,
+        )
+    )
+
+    assert decision.allow is False
+    assert decision.reason == ReasonCode.NO_COMPLETION_CHANNEL
+    assert not (tmp_path / "ledger.jsonl").exists()
+
+
+def test_check_records_orchestration_completion_channel(tmp_path: Path) -> None:
+    contract = _contract(tmp_path, "orchestration completion channel")
+    gate = _gate(tmp_path, now=1_000)
+
+    decision = gate.check(
+        _DispatchRequest(
+            runtime="codex",
+            contract_path=contract,
+            est_input_chars=10_000,
+            n_agents=1,
+            completion_channel="orchestration",
+        )
+    )
+
+    assert decision.allow is True
+    assert _ledger_entries(tmp_path)[-1]["completion_channel"] == "orchestration"
+
+
+def test_check_records_sentinel_log_completion_channel(tmp_path: Path) -> None:
+    contract = _contract(tmp_path, "sentinel-log completion channel")
+    gate = _gate(tmp_path, now=1_000)
+
+    decision = gate.check(
+        _DispatchRequest(
+            runtime="codex",
+            contract_path=contract,
+            est_input_chars=10_000,
+            n_agents=1,
+            completion_channel="sentinel-log",
+        )
+    )
+
+    assert decision.allow is True
+    assert _ledger_entries(tmp_path)[-1]["completion_channel"] == "sentinel-log"
 
 
 def test_r1_allows_dispatch_under_budget(tmp_path: Path) -> None:
@@ -330,6 +392,130 @@ def test_r4_registers_verified_job_id(tmp_path: Path) -> None:
     assert decision.allow is True
     assert decision.reason == ReasonCode.OK
     assert _ledger_entries(tmp_path)[-1]["job_id"] == "job-123"
+
+
+def test_cli_register_with_verified_orchestration_task_records_task(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    contract = _contract(tmp_path, "orchestration registration")
+    ledger = tmp_path / "ledger.jsonl"
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
+
+    assert (
+        script["main"](
+            [
+                "--ledger",
+                str(ledger),
+                "check",
+                "--runtime",
+                "codex",
+                "--contract",
+                str(contract),
+                "--agents",
+                "1",
+                "--est-chars",
+                "1000",
+                "--completion-channel",
+                "orchestration",
+            ]
+        )
+        == 0
+    )
+    monkeypatch.setitem(
+        script["main"].__globals__, "_probe_orchestration_task", lambda task_id: True
+    )
+
+    assert (
+        script["main"](
+            [
+                "--ledger",
+                str(ledger),
+                "register",
+                "--job-id",
+                "job-orch",
+                "--probe-cmd",
+                "printf job-orch",
+                "--orchestration-task",
+                "task-orch-123",
+            ]
+        )
+        == 0
+    )
+    assert _ledger_entries(tmp_path)[-1]["orchestration_task"] == "task-orch-123"
+
+
+def test_cli_register_denies_unverified_orchestration_task_without_ledger_entry(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    contract = _contract(tmp_path, "failed orchestration registration")
+    ledger = tmp_path / "ledger.jsonl"
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
+
+    assert (
+        script["main"](
+            [
+                "--ledger",
+                str(ledger),
+                "check",
+                "--runtime",
+                "codex",
+                "--contract",
+                str(contract),
+                "--agents",
+                "1",
+                "--est-chars",
+                "1000",
+                "--completion-channel",
+                "orchestration",
+            ]
+        )
+        == 0
+    )
+    monkeypatch.setitem(
+        script["main"].__globals__, "_probe_orchestration_task", lambda task_id: False
+    )
+
+    assert (
+        script["main"](
+            [
+                "--ledger",
+                str(ledger),
+                "register",
+                "--job-id",
+                "job-orch-failed",
+                "--probe-cmd",
+                "printf job-orch-failed",
+                "--orchestration-task",
+                "task-orch-failed",
+            ]
+        )
+        == 2
+    )
+    assert all(
+        entry.get("job_id") != "job-orch-failed" for entry in _ledger_entries(tmp_path)
+    )
+
+
+def test_cli_orchestration_probe_requires_success_and_ok_true(
+    monkeypatch,
+) -> None:
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
+    results = iter(
+        (
+            type("Result", (), {"returncode": 1, "stdout": '{"ok": true}'})(),
+            type("Result", (), {"returncode": 0, "stdout": '{"ok": false}'})(),
+        )
+    )
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: next(results))
+
+    assert script["_probe_orchestration_task"]("task-nonzero") is False
+    assert script["_probe_orchestration_task"]("task-not-ok") is False
 
 
 def test_register_consumes_matching_pending_dispatch_by_contract_sha(
@@ -747,6 +933,8 @@ def test_cli_check_register_and_watch_commands(tmp_path: Path) -> None:
             "1",
             "--est-chars",
             "1000",
+            "--completion-channel",
+            "sentinel-log",
         ],
         check=False,
         capture_output=True,
@@ -812,6 +1000,8 @@ def test_cli_check_creates_default_ticket_directory(tmp_path: Path) -> None:
             "2",
             "--est-chars",
             "24000",
+            "--completion-channel",
+            "sentinel-log",
         ],
         check=False,
         capture_output=True,
@@ -854,6 +1044,8 @@ def test_cli_register_ambiguous_prints_candidate_shas(tmp_path: Path) -> None:
                 "1",
                 "--est-chars",
                 "1000",
+                "--completion-channel",
+                "sentinel-log",
             ],
             check=False,
             capture_output=True,

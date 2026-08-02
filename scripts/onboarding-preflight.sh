@@ -25,6 +25,28 @@ fi
 waived_labels=()
 seen_labels=()
 
+# Checks whose absence changes what the harness can do at all. A missing one is
+# repeated at the end with its consequence, because fifteen lines of output is
+# exactly the length at which the important line gets skimmed past.
+ESSENTIAL_LABELS=(
+  orca orchestration skills agent-cli worker-runtime bd python3
+  gitleaks ctx redaction-extra skill-stack
+)
+essential_gaps=()
+
+is_essential() {
+  local candidate
+  for candidate in "${ESSENTIAL_LABELS[@]}"; do
+    [[ "${candidate}" == "$1" ]] && return 0
+  done
+  return 1
+}
+
+note_gap() {
+  is_essential "$1" || return 0
+  essential_gaps+=("$1|$2")
+}
+
 is_waived() {
   local candidate
   for candidate in ${waive_list[@]+"${waive_list[@]}"}; do
@@ -42,17 +64,22 @@ pass() {
 fail() {
   seen_labels+=("$1")
   if is_waived "$1"; then
+    # A waiver is an explicit decision the summary already names. Repeating it in
+    # the essential block would make that block noise, and a block that is noise
+    # stops being read, which is the only thing it had going for it.
     waived=$((waived + 1))
     waived_labels+=("$1")
     printf 'WAIVED %-12s %s (downgraded from FAIL by PREFLIGHT_WAIVE)\n' "$1" "$2"
     return
   fi
+  note_gap "$1" "$2"
   failures=$((failures + 1))
   printf 'FAIL %-14s %s\n' "$1" "$2"
 }
 
 warn() {
   seen_labels+=("$1")
+  note_gap "$1" "$2"
   warnings=$((warnings + 1))
   printf 'WARN %-14s %s\n' "$1" "$2"
 }
@@ -247,6 +274,47 @@ elif command -v claude >/dev/null 2>&1; then
 else
   printf 'INFO %-14s %s\n' "codex-plugin" "skipped because Claude Code is not the selected agent"
 fi
+
+# The behaviour-shaping layer: methodology and restraint. Both are distributed as
+# skill packs and are not tied to one agent, so the check is agent-neutral and only
+# the install hint differs. Detection accepts either packaging: a skill directory
+# under any known root, or an agent's plugin manifest, which is the same content
+# wrapped differently.
+#
+# They warn rather than fail. A master runs without them; it runs differently, and
+# the warning carries that cost so the operator learns it here instead of later.
+behaviour_packs=(
+  "superpowers|methodology|without it the master reads the charter as advice rather than procedure"
+  "ponytail|restraint|without it expect larger diffs and more speculative structure; it pairs with the methodology layer rather than competing"
+)
+claude_plugins_file="${HOME}/.claude/plugins/installed_plugins.json"
+for pack_entry in "${behaviour_packs[@]}"; do
+  IFS='|' read -r pack_id pack_name pack_cost <<<"${pack_entry}"
+  pack_found=""
+  for skills_root in ${skills_roots[@]+"${skills_roots[@]}"}; do
+    if [[ -e "${skills_root}/${pack_id}" ]]; then
+      pack_found="${skills_root}/${pack_id}"
+      break
+    fi
+  done
+  if [[ -z "${pack_found}" && -f "${claude_plugins_file}" ]] \
+    && grep -Fq "\"${pack_id}@" "${claude_plugins_file}"; then
+    pack_found="agent plugin manifest"
+  fi
+  if [[ -n "${pack_found}" ]]; then
+    pass "skill-stack" "${pack_id} (${pack_name}) resolves via ${pack_found}"
+  else
+    case "${ORCA_AGENT_CLI:-}" in
+      claude|claude-code)
+        pack_install="/plugin install ${pack_id}@<marketplace>, after /plugin marketplace add"
+        ;;
+      *)
+        pack_install="install the ${pack_id} skill pack for ${ORCA_AGENT_CLI:-your agent}, or place it under one of: ${skills_roots[*]}"
+        ;;
+    esac
+    warn "skill-stack" "${pack_id} (${pack_name}) missing: ${pack_cost}. Install with: ${pack_install}"
+  fi
+done
 
 # Required, not optional: REDACTION_REQUIRE_EXTRA=1 scanning exits 2 with no
 # rules loaded, and redaction-inventory exits 2 when this file is unset or
@@ -481,6 +549,16 @@ if [[ ${#unmatched_waivers[@]} -gt 0 ]]; then
   printf '  NOTE: PREFLIGHT_WAIVE named checks that did not run: %s; those checks are still enforced\n' \
     "$(IFS=,; printf '%s' "${unmatched_waivers[*]}")"
 fi
+if [[ ${#essential_gaps[@]} -gt 0 ]]; then
+  printf '\n'
+  printf '  !! ESSENTIAL COMPONENTS MISSING (%d) — the harness will not behave as documented\n' "${#essential_gaps[@]}"
+  for gap_entry in "${essential_gaps[@]}"; do
+    printf '  !!   %-14s %s\n' "${gap_entry%%|*}" "${gap_entry#*|}"
+  done
+  printf '  !! These are not preferences. Install them, or record the decline and the\n'
+  printf '  !! behaviour you are accepting, before spawning a master.\n'
+fi
+
 if [[ $failures -eq 0 ]]; then
   if [[ $waived -gt 0 ]]; then
     printf '  READY WITH WAIVERS: %d required check(s) were downgraded, not satisfied\n' "$waived"

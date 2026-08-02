@@ -279,3 +279,86 @@ def test_missing_ctx_fails(tmp_path: Path) -> None:
     result = _run(env, tmp_path)
     assert "ctx" in _labels(result.stdout, "FAIL"), result.stdout
     assert "ctx.rs" in result.stdout
+
+
+def test_missing_behaviour_packs_warn_with_their_cost(tmp_path: Path) -> None:
+    """Behaviour-shaping layers warn: a master runs without them, differently."""
+
+    env = _host(tmp_path)
+    home = tmp_path / "home"
+    (home / ".claude" / "plugins" / "installed_plugins.json").write_text(
+        '{"plugins":{"codex@openai-codex":[{"scope":"user"}]}}', encoding="utf-8"
+    )
+    result = _run(env, tmp_path)
+    assert "skill-stack" in _labels(result.stdout, "WARN"), result.stdout
+    assert "skill-stack" not in _labels(result.stdout, "FAIL"), result.stdout
+    assert "superpowers" in result.stdout
+    assert "ponytail" in result.stdout
+    # The consequence travels with the warning, not in a separate document.
+    assert "advice rather than procedure" in result.stdout
+    assert "pairs with the methodology layer" in result.stdout
+
+
+def test_present_behaviour_packs_pass(tmp_path: Path) -> None:
+    env = _host(tmp_path)
+    home = tmp_path / "home"
+    (home / ".claude" / "plugins" / "installed_plugins.json").write_text(
+        '{"plugins":{"codex@openai-codex":[{}],"superpowers@official":[{}],'
+        '"ponytail@ponytail":[{}]}}',
+        encoding="utf-8",
+    )
+    result = _run(env, tmp_path)
+    assert "skill-stack" in _labels(result.stdout, "PASS"), result.stdout
+    assert "skill-stack" not in _labels(result.stdout, "WARN"), result.stdout
+
+
+def test_behaviour_packs_resolve_from_a_neutral_skill_root(tmp_path: Path) -> None:
+    """These packs are not one agent's plugins, so detection must not assume that."""
+
+    env = _host(tmp_path)
+    home = tmp_path / "home"
+    (home / ".claude" / "plugins" / "installed_plugins.json").write_text(
+        "{}", encoding="utf-8"
+    )
+    for pack in ("superpowers", "ponytail"):
+        (home / ".claude" / "skills" / pack).mkdir(parents=True, exist_ok=True)
+    result = _run(env, tmp_path)
+    assert "skill-stack" in _labels(result.stdout, "PASS"), result.stdout
+    assert "skill-stack" not in _labels(result.stdout, "WARN"), result.stdout
+
+
+def test_install_hint_follows_the_selected_agent(tmp_path: Path) -> None:
+    env = _host(tmp_path)
+    (tmp_path / "home" / ".claude" / "plugins" / "installed_plugins.json").write_text(
+        "{}", encoding="utf-8"
+    )
+    env["ORCA_AGENT_CLI"] = "codex"
+    (tmp_path / "bin" / "codex").chmod(0o755)
+    result = _run(env, tmp_path)
+    assert "skill-stack" in _labels(result.stdout, "WARN"), result.stdout
+    assert "/plugin install" not in result.stdout, result.stdout
+    assert "skill pack for codex" in result.stdout, result.stdout
+
+
+def test_essential_gaps_are_repeated_loudly_with_their_consequence(
+    tmp_path: Path,
+) -> None:
+    """Fifteen lines of output is where the important line gets skimmed past."""
+
+    env = _host(tmp_path, rules=None)
+    result = _run(env, tmp_path)
+    assert "ESSENTIAL COMPONENTS MISSING" in result.stdout, result.stdout
+    assert "redaction-extra" in result.stdout
+    assert "not preferences" in result.stdout
+
+
+def test_no_essential_block_when_nothing_essential_is_missing(tmp_path: Path) -> None:
+    """The loud block must stay rare, or it becomes decoration."""
+
+    env = _host(tmp_path)
+    home = tmp_path / "home"
+    for pack in ("superpowers", "ponytail"):
+        (home / ".claude" / "skills" / pack).mkdir(parents=True, exist_ok=True)
+    env["PREFLIGHT_WAIVE"] = "python3"
+    result = _run(env, tmp_path)
+    assert "ESSENTIAL COMPONENTS MISSING" not in result.stdout, result.stdout

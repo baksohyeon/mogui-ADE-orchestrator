@@ -161,12 +161,16 @@ L=~/.mogui/dispatch-ledger.jsonl
 
 "$G" --ledger "$L" check --runtime <runtime> --model <model-id> --contract <contract-file> --agents <n> --est-chars <n> --completion-channel orchestration
 <supervised dispatch command>
-"$G" --ledger "$L" register --job-id <job-id> --probe-cmd "<command proving the job-id appears in an artifact>" --orchestration-task <task-id>
+"$G" --ledger "$L" register --job-id <job-id> --probe-cmd "<command proving the job-id appears in an artifact>" --orchestration-task <task-id> --declared-model <model-id> --model-probe-cmd "<command printing the worker's actual model id>"
 ```
 
 The gate enforces `model-tier-policy.json`. A version 2 policy gates on tier multiplied by fan-out rather than on identity, because the incident it exists for was a top tier spread across ten workers: each tier carries a cap on agents dispatched inside a window, an unlisted model falls in the `unknown` tier and is capped there rather than denied, and exceeding a cap requires `--tier-override "<reason>"`. The window counts accumulation, not concurrency, so ten sequential single-agent dispatches reach the same cap as one fan-out of ten; an override passes one request without refunding what the window already counted. Version 1 policies keep their identity-based behaviour unchanged. Model identifiers match casefolded, so a tier spelled in another case is the same tier. Each decision records the policy path, its `sha256`, and the tier that decided, because that path is caller-supplied; `dispatch-gate report` lists every policy a span was judged against and every tier it spent agents in, including `unknown`, and more than one policy row means the span was not judged against one policy.
 
 The gate writes its verdict as JSON on stdout and human diagnostics on stderr. Do not merge them: `2>&1` piped into a JSON parser fails, and the failure reads like malformed output rather than like two streams. Use `2>/dev/null` for machine use, and read stderr separately when a person needs the reason.
+
+`register` compares the model the dispatch declared with the model the worker actually ran. Declare the measurement per dispatch with `--model-probe-cmd`, because every runtime reports differently and this gate is agent-neutral; the command must read an artifact the agent itself produced, such as its session transcript, for which `{{RUNTIME_ROOT}}/scripts/model-identity-probe` is the reference implementation. Do not scrape a TUI status line: that measures what a renderer drew, and authenticating a model against it leaves a verification stamp with no verification behind it.
+
+The verdict is graded. No declared model, or a probe that returns nothing, warns as `MODEL_UNVERIFIED` or `MODEL_PROBE_FAILED` and still registers, because a runtime with no way to report its model would otherwise be unable to dispatch at all and the check would simply be turned off. A measured model in a tier the policy watches more closely than the declared one denies with `MODEL_TIER_ESCALATION`. Running looser than declared warns as `MODEL_MISMATCH`. Every case records `model_declared`, `model_measured`, and `model_verified` in the ledger, so an unverified registration is distinguishable from a verified one instead of being assumed.
 
 Before attaching a Codex worker, run `scripts/codex-worker-pretrust <worktree-path>` so startup never blocks on the trust prompt.
 

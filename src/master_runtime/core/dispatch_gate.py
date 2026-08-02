@@ -83,6 +83,10 @@ class ReasonCode(str, Enum):
     TIER_POLICY_UNAVAILABLE = "TIER_POLICY_UNAVAILABLE"
     TIER_FANOUT_CAP = "TIER_FANOUT_CAP"
     TIER_UNKNOWN_MODEL = "TIER_UNKNOWN_MODEL"
+    MODEL_TIER_ESCALATION = "MODEL_TIER_ESCALATION"
+    MODEL_MISMATCH = "MODEL_MISMATCH"
+    MODEL_UNVERIFIED = "MODEL_UNVERIFIED"
+    MODEL_PROBE_FAILED = "MODEL_PROBE_FAILED"
 
 
 @dataclass(frozen=True)
@@ -176,6 +180,18 @@ class ModelTierPolicy:
 
         cap = self.fanout_caps.get(tier)
         return cap if isinstance(cap, int) else None
+
+    def strictness_of(self, tier: str) -> float:
+        """How closely the policy watches a tier, as its per-window cap.
+
+        Smaller is stricter. An uncapped tier is the loosest thing the policy
+        knows, so it sorts last. This is deliberately the cap rather than a
+        separate ordering field: the policy already says how much it trusts each
+        tier, and inventing a second ranking would let the two disagree.
+        """
+
+        cap = self.cap_for(tier)
+        return float("inf") if cap is None else float(cap)
 
 
 class DispatchGate:
@@ -370,11 +386,40 @@ class DispatchGate:
         contract_sha: str | None = None,
         runtime: str | None = None,
         orchestration_task: str | None = None,
+        declared_model: str | None = None,
+        measured_model: str | None = None,
+        model_probe_failed: bool = False,
     ) -> GateDecision:
         """Register a job only after independent probe verification succeeds."""
 
         if not job_id or not probe_fn(job_id):
             return GateDecision(False, ReasonCode.UNVERIFIED_JOB)
+
+        # check gates the model a caller declares; nothing until here compared
+        # that declaration with what the worker actually runs. The incident this
+        # policy exists for was a worker inheriting a tier nobody asked for, and
+        # a compliant declaration does not prevent it.
+        model_warning, escalation = self._model_verification(
+            declared_model, measured_model, model_probe_failed
+        )
+        if escalation is not None:
+            decision = GateDecision(
+                False,
+                ReasonCode.MODEL_TIER_ESCALATION,
+                message=escalation,
+            )
+            self._append_entry(
+                {
+                    "ts": self._clock(),
+                    "decision": "DENY",
+                    "reason": decision.reason.value,
+                    "job_id": job_id,
+                    "model_declared": declared_model,
+                    "model_measured": measured_model,
+                    "model_verified": True,
+                }
+            )
+            return decision
 
         runtime_filter = _normalize_runtime_filter(runtime)
         if runtime is not None and runtime_filter is None:
@@ -495,13 +540,79 @@ class DispatchGate:
             }
             if orchestration_task is not None:
                 entry["orchestration_task"] = orchestration_task
+            # Say what was verified and how, so a later reader can tell an
+            # unverified registration from a verified one instead of assuming.
+            entry["model_declared"] = declared_model
+            entry["model_measured"] = measured_model
+            entry["model_verified"] = bool(
+                declared_model and measured_model and not model_probe_failed
+            )
+            if model_warning is not None:
+                entry["warnings"] = [
+                    *entry.get("warnings", []),
+                    model_warning.value,
+                ]
             self._append_entry(entry)
+        if model_warning is not None:
+            decision = GateDecision(
+                decision.allow,
+                decision.reason,
+                warnings=(*decision.warnings, model_warning),
+                contract_sha=decision.contract_sha,
+                cost_proxy=decision.cost_proxy,
+                message=decision.message,
+                tier_override=decision.tier_override,
+            )
         return decision
 
     def ledger_entries(self) -> tuple[Mapping[str, object], ...]:
         """Return parsed ledger entries in append order."""
 
         return tuple(self._read_entries())
+
+    def _model_verification(
+        self,
+        declared_model: str | None,
+        measured_model: str | None,
+        probe_failed: bool,
+    ) -> tuple[ReasonCode | None, str | None]:
+        """Compare a declared worker model with a measured one.
+
+        Returns a warning code and, when the measured model sits in a tier the
+        policy watches more closely than the declared one, the message for a
+        denial. An absent measurement is a warning rather than a denial on
+        purpose: a runtime with no way to report its model would otherwise be
+        unable to dispatch at all, and a check nobody can satisfy is a check
+        nobody enables. What is never allowed to pass quietly is the case where a
+        measurement exists and disagrees upward.
+        """
+
+        if not declared_model:
+            return ReasonCode.MODEL_UNVERIFIED, None
+        if probe_failed:
+            return ReasonCode.MODEL_PROBE_FAILED, None
+        if not measured_model:
+            return ReasonCode.MODEL_UNVERIFIED, None
+        if measured_model.strip().casefold() == declared_model.strip().casefold():
+            return None, None
+
+        try:
+            policy = _load_tier_policy(Path(self.config.tier_policy_path))
+        except (OSError, ValueError, json.JSONDecodeError):
+            # Cannot rank the two without a policy, and a mismatch is still a
+            # mismatch worth recording.
+            return ReasonCode.MODEL_MISMATCH, None
+        if policy.version < 2:
+            return ReasonCode.MODEL_MISMATCH, None
+
+        declared_tier = policy.tier_of(declared_model.strip().casefold())
+        measured_tier = policy.tier_of(measured_model.strip().casefold())
+        if policy.strictness_of(measured_tier) < policy.strictness_of(declared_tier):
+            return None, (
+                f"declared={declared_model} tier={declared_tier} "
+                f"measured={measured_model} tier={measured_tier}"
+            )
+        return ReasonCode.MODEL_MISMATCH, None
 
     def _tier_window_agents(self, tier: str, policy: ModelTierPolicy) -> int:
         """Agents already dispatched in this tier inside the policy window.

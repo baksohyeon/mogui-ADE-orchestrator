@@ -32,6 +32,7 @@ from master_runtime.core.watchdog import StallStatus, check_stall  # noqa: E402
 
 
 ORCHESTRATION_PROBE_TIMEOUT_SECONDS = 30
+MODEL_PROBE_TIMEOUT_SECONDS = 30
 
 
 class ProbeFailure(str, Enum):
@@ -85,6 +86,11 @@ def _build_parser() -> argparse.ArgumentParser:
     register_parser.add_argument("--contract-sha")
     register_parser.add_argument("--runtime")
     register_parser.add_argument("--orchestration-task")
+    # register ranks the measured tier against the declared one, so it needs the
+    # same policy check used, and by the same resolution rules.
+    register_parser.add_argument("--tier-policy")
+    register_parser.add_argument("--declared-model")
+    register_parser.add_argument("--model-probe-cmd")
 
     watch_parser = subparsers.add_parser("watch")
     watch_parser.add_argument("--log", required=True)
@@ -147,12 +153,16 @@ def _register(args: argparse.Namespace) -> int:
     if probe_failure is not None:
         return _deny_unverified_orchestration(args, probe_failure)
 
+    measured_model, model_probe_failed = _measure_worker_model(args.model_probe_cmd)
     decision = _gate(args).register_job(
         args.job_id,
         lambda job_id: _probe_contains_job_id(args.probe_cmd, job_id),
         contract_sha=args.contract_sha,
         runtime=args.runtime,
         orchestration_task=args.orchestration_task,
+        declared_model=args.declared_model,
+        measured_model=measured_model,
+        model_probe_failed=model_probe_failed,
     )
     _print_decision(decision)
     if decision.allow:
@@ -378,6 +388,41 @@ def _probe_contains_job_id(probe_cmd: str, job_id: str) -> bool:
         text=True,
     )
     return result.returncode == 0 and job_id in result.stdout
+
+
+def _measure_worker_model(probe_cmd: str | None) -> tuple[str | None, bool]:
+    """Run a caller-declared command that prints the worker's actual model id.
+
+    The command is declared per dispatch rather than guessed, because every
+    runtime reports its model differently and this gate is agent-neutral. It must
+    read an artifact the agent itself produced, such as a session transcript;
+    scraping a TUI status line measures what a renderer drew, which is not the
+    same fact and cannot be trusted to authenticate anything.
+
+    Returns the measured id and whether the measurement itself failed, which are
+    different states: no declaration at all, and a declaration that did not
+    produce an answer.
+    """
+
+    if not probe_cmd:
+        return None, False
+    try:
+        result = subprocess.run(
+            probe_cmd,
+            shell=True,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=MODEL_PROBE_TIMEOUT_SECONDS,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None, True
+    if result.returncode != 0:
+        return None, True
+    lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if not lines:
+        return None, True
+    return lines[-1], False
 
 
 def _probe_orchestration_task(orchestration_task: str) -> ProbeFailure | None:

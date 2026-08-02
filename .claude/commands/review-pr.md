@@ -13,12 +13,14 @@ If no PR is specified, review the current branch's PR. If no focus is specified,
 ## Steps
 
 1. Identify the PR:
-   - if `$ARGUMENTS` is provided, derive a **safe numeric PR id** first
-   - accept either a bare integer or a GitHub PR URL, after stripping query/hash/trailing slash
+   - if `$ARGUMENTS` is provided, derive a **safe PR target** first
+   - normalize URL input by stripping query/hash/trailing slash
+   - if URL input: extract `<OWNER>`, `<REPO>`, `<NUMBER>`
+   - if bare integer input: use `<NUMBER>` in the **current checkout repository only**
    - reject anything else; never pass raw `$ARGUMENTS` into shell commands
    - use:
-     - `gh pr view <NUMBER> --json files` for changed files metadata
-     - `gh pr diff <NUMBER>` for unified diff text
+     - `gh pr view <NUMBER> --repo <OWNER>/<REPO> --json files` for changed files metadata
+     - `gh pr diff <NUMBER> --repo <OWNER>/<REPO>` for unified diff text
    - if no argument is provided, resolve current branch PR with `gh pr view` and then read diff via `gh pr diff`
 2. Find project guidance:
    - look for `CLAUDE.md`, lint config, TypeScript config, repo conventions

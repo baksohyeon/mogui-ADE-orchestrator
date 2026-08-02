@@ -38,18 +38,25 @@ If the diff is empty, stop: "Nothing to review."
 
 **PR Mode:**
 
-First derive a **safe numeric PR id** from `$ARGUMENTS` — never pass the raw
+First derive a **safe PR target** from `$ARGUMENTS` — never pass the raw
 argument to the shell. Normalize URL input by stripping query strings, hash
-fragments, and trailing slashes first. Then accept either a bare integer, or the
-trailing number of a normalized `https://github.com/<owner>/<repo>/pull/<N>`
-URL. Reject anything else (extra text, shell metacharacters, a non-PR URL) and
-stop with an error. Use only the extracted integer `<NUMBER>` below:
+fragments, and trailing slashes first. Then:
+
+- If input is a GitHub PR URL, extract `<OWNER>`, `<REPO>`, and `<NUMBER>`.
+- If input is a bare integer, treat it as `<NUMBER>` in the **current checkout
+  repository only**.
+- Reject anything else (extra text, shell metacharacters, a non-PR URL) and
+  stop with an error.
+
+Use the parsed target only:
 
 ```bash
-gh pr diff <NUMBER>                       # diff text
-gh pr view <NUMBER> --json files \
+gh pr diff <NUMBER> --repo <OWNER>/<REPO>          # diff text
+gh pr view <NUMBER> --repo <OWNER>/<REPO> --json files \
   --jq '.files[].path'                    # changedFiles
 ```
+
+When bare integer mode is used, `<OWNER>/<REPO>` is the current checkout repo.
 
 If the PR is not found, stop with an error.
 

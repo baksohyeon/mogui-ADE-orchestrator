@@ -58,6 +58,8 @@ For this harness, vendored ECC assets include the following local behavior chang
 - `orch-review.workflow.js`: dedup identity now uses evidence plus location keying to avoid collapsing distinct repeated snippets in the same file.
 - `orch-review.workflow.js`: severity merge now preserves the strictest finding payload/proof when dimensions disagree on severity.
 - `commands/review-pr.md`: PR argument handling now requires safe numeric-id extraction and rejects raw shell interpolation; diff retrieval uses `gh pr diff` (with `gh pr view --json files` for file metadata).
-- `commands/orch-review.md`: PR URL parsing guidance now explicitly allows normalized URLs with trailing slash/query/hash stripped before id extraction.
+- `commands/review-pr.md`: cross-repository PR URLs now preserve parsed `<owner>/<repo>` and pass `--repo` in all `gh` PR calls to avoid reviewing the wrong repository.
+- `commands/orch-review.md`: PR URL parsing guidance now explicitly allows normalized URLs with trailing slash/query/hash stripped before id extraction, and preserves `<owner>/<repo>` with `--repo` for all PR-mode `gh` calls.
 - `skills/delivery-gate/SKILL.md`: install path and enforcement docs are aligned to the vendored hook payload and current script behavior (disk reminder/warn/critical tiers and growth-log blocking rule).
 - `workflows/README.md`: workflow narrative is aligned to local agent mappings and fail-closed verifier behavior.
+- `vendor/ecc/LICENSE-ECC`: removed local absolute clone path from attribution notice; source attribution remains via upstream repository URL.

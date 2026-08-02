@@ -136,13 +136,12 @@ def _labels(output: str, verdict: str) -> set[str]:
 def test_provisioned_host_reports_no_failure_it_can_act_on(tmp_path: Path) -> None:
     """A correctly provisioned host must be able to pass.
 
-    python3 is exempted from the assertion because the interpreter running the
-    suite is not under this test's control, and the check compares it against
-    the floor README declares.
+    python3 no longer needs an exemption here: presence is the whole check, and
+    version floors belong to the tools that have them, stated at their runtime.
     """
 
     result = _run(_host(tmp_path), tmp_path)
-    assert _labels(result.stdout, "FAIL") <= {"python3"}, result.stdout
+    assert not _labels(result.stdout, "FAIL"), result.stdout
     assert {
         "orchestration",
         "skills",
@@ -223,7 +222,7 @@ def test_waived_failure_is_labeled_and_stops_blocking(tmp_path: Path) -> None:
     """The escape exists so the whole preflight is not skipped, and it is loud."""
 
     env = _host(tmp_path, rules=None)
-    env["PREFLIGHT_WAIVE"] = "redaction-extra, python3"
+    env["PREFLIGHT_WAIVE"] = "redaction-extra"
     result = _run(env, tmp_path)
     assert "redaction-extra" not in _labels(result.stdout, "FAIL"), result.stdout
     assert "WAIVED" in result.stdout
@@ -366,6 +365,5 @@ def test_no_essential_block_when_nothing_essential_is_missing(tmp_path: Path) ->
     home = tmp_path / "home"
     for pack in ("superpowers", "ponytail"):
         (home / ".claude" / "skills" / pack).mkdir(parents=True, exist_ok=True)
-    env["PREFLIGHT_WAIVE"] = "python3"
     result = _run(env, tmp_path)
     assert "ESSENTIAL COMPONENTS MISSING" not in result.stdout, result.stdout

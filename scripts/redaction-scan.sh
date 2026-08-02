@@ -4,7 +4,8 @@
 # Usage:
 #   scripts/redaction-scan.sh                 # scan all tracked files (default)
 #   scripts/redaction-scan.sh --staged        # index / staged only
-#   scripts/redaction-scan.sh --range A..B    # files changed in git range (pre-push)
+#   scripts/redaction-scan.sh --range A..B    # files changed in git range, and those commits' messages (pre-push)
+#   scripts/redaction-scan.sh --commit-messages A..B  # message scan in any mode
 #   scripts/redaction-scan.sh --help
 #
 # Exit: 0 clean, 1 findings (or usage/tool error), 2 internal error
@@ -34,6 +35,14 @@ usage() {
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --staged) MODE="staged"; shift ;;
+    --commit-messages)
+      COMMIT_RANGE="${2:-}"
+      if [[ -z "${COMMIT_RANGE}" ]]; then
+        echo "redaction-scan: --commit-messages requires a git range" >&2
+        exit 2
+      fi
+      shift 2
+      ;;
     --range)
       MODE="range"
       RANGE="${2:-}"
@@ -276,6 +285,25 @@ list_scan_files() {
   esac
 }
 
+COMMIT_MESSAGES_SCANNED="not-scanned"
+
+scan_commit_messages() {
+  # Commit messages are content this repository publishes and the file scan never
+  # sees them. An internal workspace name sat in four of them here while the gate
+  # stayed green, and a person found it by eye.
+  local range="$1"
+  local count=0 sha tmp
+  while IFS= read -r sha; do
+    [[ -z "${sha}" ]] && continue
+    tmp="$(mktemp)"
+    git log -1 --format=%B "${sha}" > "${tmp}" 2>/dev/null || true
+    scan_file "${tmp}" "commit:${sha:0:12}"
+    rm -f "${tmp}"
+    count=$((count + 1))
+  done < <(git log --format=%H "${range}" 2>/dev/null || true)
+  COMMIT_MESSAGES_SCANNED="${count}"
+}
+
 is_binary_or_skip() {
   local path="$1"
   case "${path}" in
@@ -318,10 +346,13 @@ record_finding() {
 }
 
 scan_file() {
+  # $1 is the file to read, $2 is what findings are reported as. They differ when
+  # the text did not come from a tracked file, such as a commit message.
   local path="$1"
+  local label="${2:-$1}"
   [[ -f "${path}" ]] || return 0
-  is_binary_or_skip "${path}" && return 0
-  path_allowed "${path}" && return 0
+  is_binary_or_skip "${label}" && return 0
+  path_allowed "${label}" && return 0
 
   local rule
   for rule in "${RULES[@]}"; do
@@ -353,7 +384,7 @@ scan_file() {
         text="${rest#*:}"
       fi
 
-      path_line_allowed "${path}:${line_no}" && continue
+      path_line_allowed "${label}:${line_no}" && continue
       line_is_placeholder "${text}" && continue
 
       if [[ "${rule_id}" == "home_path" ]]; then
@@ -366,13 +397,20 @@ scan_file() {
         fi
       fi
 
-      record_finding "${rule_id}" "${desc}" "${path}" "${line_no}" "${text}"
+      record_finding "${rule_id}" "${desc}" "${label}" "${line_no}" "${text}"
     done <<< "${matches}"
   done
 }
 
 main() {
   load_allowlist
+
+  if [[ -z "${COMMIT_RANGE:-}" && "${MODE}" == "range" ]]; then
+    COMMIT_RANGE="${RANGE}"
+  fi
+  if [[ -n "${COMMIT_RANGE:-}" ]]; then
+    scan_commit_messages "${COMMIT_RANGE}"
+  fi
 
   local file_count=0
   while IFS= read -r -d '' path; do
@@ -382,7 +420,7 @@ main() {
   done < <(list_scan_files)
 
   if [[ "${VERBOSE}" -eq 1 ]]; then
-    echo "redaction-scan: mode=${MODE} range=${RANGE:-none} files=${file_count} allowlist=${ALLOWLIST_FILE}"
+    echo "redaction-scan: mode=${MODE} range=${RANGE:-none} files=${file_count} commit-messages=${COMMIT_MESSAGES_SCANNED} allowlist=${ALLOWLIST_FILE}"
   fi
 
   if [[ "${FINDINGS}" -gt 0 ]]; then
@@ -395,7 +433,7 @@ main() {
     exit 1
   fi
 
-  echo "redaction-scan: OK — 0 findings (mode=${MODE}, files=${file_count})"
+  echo "redaction-scan: OK — 0 findings (mode=${MODE}, files=${file_count}, commit-messages=${COMMIT_MESSAGES_SCANNED})"
   exit 0
 }
 

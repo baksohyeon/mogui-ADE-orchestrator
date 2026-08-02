@@ -39,6 +39,25 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+`scripts/redaction-scan.sh` now scans commit messages, which it never did.
+
+The scan read tracked file contents, so a message was outside its scope while a
+green result read as a full check. An internal workspace name sat in four commit
+messages of this public repository and the scanner never objected; a person found
+it by eye, and the cleanup needed a history rewrite.
+
+`--range A..B` now also scans the messages of the commits in that range, and
+`--commit-messages A..B` does it in any mode. Findings are reported against
+`commit:<sha>` with the line number inside the message, so they can be allowlisted
+the same way a file line can. Both summary lines state the count, and say
+`commit-messages=not-scanned` where messages were not in scope, because a green
+line that does not name what it skipped is indistinguishable from a full check.
+
+Five tests drive the scanner inside temporary repositories that carry a copy of
+it, which is also the shape a real installation has. Two mutations confirmed they
+bite: disabling the message scan fails three, and dropping the scope from the OK
+line fails four.
+
 `scripts/redaction-inventory` gets its first tests, and two ways it could report
 a clean result without having read anything are closed.
 

@@ -37,7 +37,7 @@ reporting the last released tag, so that value names the release it came from an
 not the exact body it received. When the difference matters, record the commit the
 installation was taken from alongside the tag.
 
-## Unreleased
+## v0.2.0
 
 `docs/MASTER-OPERATIONS.md` gains an Incident-Derived Rules section: eleven
 rules, each carrying the observation that produced it and the measurement that settles

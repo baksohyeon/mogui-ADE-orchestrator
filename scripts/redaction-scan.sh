@@ -154,6 +154,11 @@ PY
   fi
   if [[ "${EXTRA_RULE_COUNT}" -gt 0 ]]; then
     CONFIG="${ORG_CONFIG}"
+  else
+    # The count describes what was loaded, never what the file happened to hold.
+    # Reporting a number the scan did not use is the same defect this gate exists
+    # to catch, one level up.
+    EXTRA_RULE_COUNT=0
   fi
   if [[ "${EXTRA_UNUSABLE}" -gt 0 ]]; then
     echo "redaction-scan: WARNING — ${EXTRA_UNUSABLE} of ${EXTRA_CONSIDERED} organization rule lines are unusable and were skipped" >&2
@@ -290,7 +295,7 @@ PY
 FINDINGS="$(wc -l < "${FINDINGS_FILE}" | tr -d ' ')"
 
 if [[ "${VERBOSE}" -eq 1 ]]; then
-  echo "redaction-scan: mode=${MODE} range=${RANGE:-none} files=${file_count} commit-messages=${COMMIT_MESSAGES_SCANNED} org-rules=${EXTRA_RULE_COUNT} engine=$(gitleaks version 2>/dev/null | head -1)"
+  echo "redaction-scan: mode=${MODE} range=${RANGE:-none} files=${file_count} commit-messages=${COMMIT_MESSAGES_SCANNED} org-rules=${EXTRA_RULE_COUNT} config=$(basename "${CONFIG}") engine=$(gitleaks version 2>/dev/null | head -1)"
 fi
 
 if [[ "${FINDINGS}" -gt 0 ]]; then

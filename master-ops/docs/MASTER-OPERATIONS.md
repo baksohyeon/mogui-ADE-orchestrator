@@ -243,6 +243,10 @@ Lineage is append-only observability metadata. Do not use Lineage as the bootstr
 
 Git history and the issue tracker record what happened but cannot record what shaped the master's behaviour, what it nearly did, or what it declined to do. Without that layer the owner's only observation channel is a post-incident report, which arrives only after something broke. The observability suite (`docs/observability/README.md`) fills it with voluntary standing records: the retro ledger answers why a decision took the shape it did, and the travelog answers what happened. Attribution tags, the falsifiability rule for judgment claims, freshness honesty after compaction, and the requirement to list what did not fire are specified once in that index and apply to every genre.
 
+**Probe a tool with a subcommand it must have, not a flag you assume.**
+Observed: a health check ran `orca --version`. That flag does not exist: on one host it printed the usage banner and exited 0, so the check passed while proving nothing, and a Linux user reported the same command launching the GUI application instead of answering.
+Measure: run the probe and read its output, not just its exit code. A probe whose output does not contain the fact you wanted is not a probe. Prefer the documented subcommand, here `status --json`, which fails cleanly when the tool is unusable.
+
 **Publish gates read repository content and nothing else.**
 Observed: pull request bodies, review comments, release notes, and issue text are not in the repository, so no scanner in this template reads them. An audit of one day's outgoing text found none, which is the point: it took a separate grep to know.
 Measure: before posting outgoing text, grep it for organization identifiers the way the scan greps files. A green publish gate says nothing about prose written into a forge.

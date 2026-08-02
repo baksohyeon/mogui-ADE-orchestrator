@@ -87,7 +87,7 @@ def _host(
     _write_stub(bin_dir / "orca", ORCA_STUB)
     _write_stub(bin_dir / "bd", BD_STUB)
     _write_stub(bin_dir / "gh", GH_STUB)
-    for name in ("claude", "git", "gitleaks", *worker_runtimes):
+    for name in ("claude", "git", "gitleaks", "ctx", *worker_runtimes):
         _write_stub(bin_dir / name, TRUE_STUB)
 
     env = dict(os.environ)
@@ -269,3 +269,13 @@ def test_missing_gitleaks_fails(tmp_path: Path) -> None:
     result = _run(env, tmp_path)
     assert "gitleaks" in _labels(result.stdout, "FAIL"), result.stdout
     assert "brew install gitleaks" in result.stdout
+
+
+def test_missing_ctx_fails(tmp_path: Path) -> None:
+    """Agent history across providers is what the records practice queries."""
+
+    env = _host(tmp_path, sanitized_path=True)
+    (tmp_path / "bin" / "ctx").unlink()
+    result = _run(env, tmp_path)
+    assert "ctx" in _labels(result.stdout, "FAIL"), result.stdout
+    assert "ctx.rs" in result.stdout

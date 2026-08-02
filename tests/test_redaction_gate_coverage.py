@@ -61,6 +61,19 @@ requires_gitleaks = pytest.mark.skipif(
 )
 
 
+def _git(repo: Path, *args: str) -> None:
+    env = {
+        **os.environ,
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_SYSTEM": "/dev/null",
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@example.com",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@example.com",
+    }
+    subprocess.run(["git", *args], cwd=repo, check=True, env=env, capture_output=True)
+
+
 def _fixture_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     (repo / "scripts").mkdir(parents=True)
@@ -168,3 +181,70 @@ def test_config_does_not_carry_organization_patterns(tmp_path: Path) -> None:
     assert "GITLEAKS_CONFIG" in text, "the config must say where org rules live"
     for marker in ("person_", "company_", "org_"):
         assert marker not in text, marker
+
+
+@requires_gitleaks
+def test_organization_rules_reach_the_engine(tmp_path: Path) -> None:
+    """A count of loaded rules must mean the rules were used.
+
+    A mutation that kept the count but dropped the generated config from the run
+    was invisible: the tracked tree is clean either way, and the scope line still
+    said ten rules. The only thing that settles it is a token no shipped rule
+    matches.
+    """
+
+    repo = _fixture_repo(tmp_path)
+    token = "quokka" + "-ledger-9"
+    (repo / "org_only.txt").write_text(f"internal {token} here\n", encoding="utf-8")
+    # Tracked-mode scanning reads git ls-files, so an uncommitted fixture is out of
+    # scope. Finding that out here is the scoping working.
+    _git(repo, "add", "org_only.txt")
+    _git(repo, "commit", "-q", "-m", "org fixture")
+    rules = tmp_path / "org-rules.txt"
+    rules.write_text(f"org_codename|internal codename|{token}\n", encoding="utf-8")
+
+    env = {**os.environ, "REDACTION_EXTRA_PATTERNS": str(rules)}
+    result = subprocess.run(
+        ["bash", "scripts/redaction-scan.sh", "-v"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    output = result.stdout + result.stderr
+    assert "org_codename" in output, output
+    assert "org-rules=1" in output, output
+
+    # And without them the same token is invisible, which is what makes the
+    # previous assertion evidence rather than coincidence.
+    bare = subprocess.run(
+        ["bash", "scripts/redaction-scan.sh", "-v"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        env={k: v for k, v in os.environ.items() if k != "REDACTION_EXTRA_PATTERNS"},
+        check=False,
+    )
+    assert "org_codename" not in (bare.stdout + bare.stderr)
+    assert "org-rules=0" in (bare.stdout + bare.stderr)
+
+
+@requires_gitleaks
+def test_retired_allowlist_entries_fail_closed(tmp_path: Path) -> None:
+    """An exemption that stopped applying must be heard from the gate."""
+
+    repo = _fixture_repo(tmp_path)
+    (repo / "scripts" / "redaction-allowlist.txt").write_text(
+        "some/file.md:12\n", encoding="utf-8"
+    )
+    result = subprocess.run(
+        ["bash", "scripts/redaction-scan.sh"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        env={k: v for k, v in os.environ.items() if k != "REDACTION_EXTRA_PATTERNS"},
+        check=False,
+    )
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "retired format" in (result.stdout + result.stderr)

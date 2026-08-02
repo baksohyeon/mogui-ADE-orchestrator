@@ -399,16 +399,16 @@ else
 fi
 
 test_hint='PYTHONPATH=src uv run --with pytest --no-project python3 -m pytest tests -q'
-python_floor_ok=false
-if ! command -v python3 >/dev/null 2>&1; then
-  fail "python3" "missing; install Python 3.11+ because codex-worker-pretrust uses tomllib for safe TOML editing; test suite: $test_hint"
-elif python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' >/dev/null 2>&1; then
-  python_floor_ok=true
-  pass "python3" "Python 3.11+ present; codex-worker-pretrust uses tomllib for safe TOML editing; test suite: $test_hint"
+# No version floor is enforced here. The core runs on the interpreter the host
+# already has (measured down to the CLT 3.9.6 a bare Mac ends up with). A tool
+# that needs a newer one states its own requirement at runtime and exits with
+# its own error, which keeps interpreter floors where they belong: per tool,
+# not as an onboarding blocker for hosts that never run that tool.
+if command -v python3 >/dev/null 2>&1; then
+  python_version=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:3])))' 2>/dev/null)
+  pass "python3" "Python ${python_version:-unknown} present; no version floor is enforced here, a tool that needs a newer interpreter states that itself at runtime"
 else
-  # Present but below the floor. Reporting an old interpreter as "missing" sends
-  # the operator looking for the wrong thing.
-  fail "python3" "present but $(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:3])))' 2>/dev/null) is below the required 3.11, which codex-worker-pretrust needs for tomllib; install Python 3.11+ or run the suite through uv: $test_hint"
+  fail "python3" "missing; the runtime's entry points are python3 scripts, so nothing here runs without it"
 fi
 
 # --- harness and worker tool surface --------------------------------------
@@ -494,15 +494,15 @@ if command -v gh >/dev/null 2>&1; then
   fi
 fi
 
-# pytest resolving is not the same as the suite running: below the floor,
-# collection fails on tomllib before a single test executes, so an interpreter
-# under 3.11 has to reach the suite through uv.
-if [[ "$python_floor_ok" == true ]] && python3 -m pytest --version >/dev/null 2>&1; then
-  pass "pytest" "python3 -m pytest is runnable at the required interpreter version"
+# Tests are the agent's job, so how they would run is reported rather than
+# enforced. Note the wrinkle: suite collection imports tomllib, so an interpreter
+# under 3.11 reaches the suite through uv, not through python3 -m pytest.
+if python3 -c 'import sys, pytest; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' >/dev/null 2>&1; then
+  pass "pytest" "python3 -m pytest is runnable on this interpreter"
 elif command -v uv >/dev/null 2>&1; then
   pass "pytest" "uv present; the suite runs through: $test_hint"
 else
-  fail "pytest" "no way to run the test gate: pytest is not available on a 3.11+ interpreter and uv is missing; install either"
+  warn "pytest" "neither pytest on a 3.11+ interpreter nor uv is present; the agent that runs the test gate will need one of them, and this host currently offers neither"
 fi
 
 # The gate writes its ledger outside the repository. Check writability without

@@ -9,7 +9,7 @@ Everything in this list serves one goal, a running master session. The core libr
 - [Orca](https://www.onorca.dev/download). The master lives in an Orca pane, which is what lets it outlive a window. Orca ships macOS, Linux, and Windows builds.
 - The `orca` shell command. The runtime calls it to spawn, list, and retire master sessions, so succession does not work without it. Registering it is a step in Orca's settings, covered below.
 - A coding-agent CLI you already pay for: Claude Code, Codex, Grok CLI, or another one. Any single one is enough.
-- Python 3.11 or newer. The core is stdlib-only, but `scripts/codex-worker-pretrust` reads TOML through `tomllib`, which arrived in 3.11. `uv` covers the test suite on an older host and does not cover this script, which calls the host `python3` directly.
+- `python3` on `PATH` — whichever one the machine already has. The core is stdlib-only and no version floor is enforced: the preflight measures presence, not version. A tool that needs a newer interpreter states that itself when it runs, with its own error; the [Reference](reference.md) table names each tool's requirement in its own row.
 - macOS is what this project has been developed and run on. One user has reported the install working on Linux. Windows is untested.
 
 Two more tools are recommended rather than required, and the preflight warns on their absence instead of blocking:
@@ -84,6 +84,6 @@ The detailed flow lives in [master-ops/ONBOARDING.md](../../master-ops/ONBOARDIN
 
 Tests are the agent's job. Ask it to run them and report back, the same way you ask it for anything else. Nothing here expects you to type a test command.
 
-For the command surface, see [Reference](reference.md), generated from the local `scripts/` help output.
+For the command surface, see [Reference](reference.md), written from the local `scripts/` help output and pinned to it by a test that fails on drift in either direction.
 
 Read next: [Concepts](concepts.md), [Master Lifecycle](master-lifecycle.md), or [Reference](reference.md).

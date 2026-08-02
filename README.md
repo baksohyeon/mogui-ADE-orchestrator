@@ -10,7 +10,7 @@ Anyone running more than two agents at once hits this. Dorito hit it, got tired 
 
 Nothing to configure and nothing to read first. Clone it, start an agent inside the clone, tell it to wake up. The agent takes it from there and explains as it goes.
 
-It runs the fleet on [Orca](https://www.onorca.dev/download). A session has to outlive its window and be addressable by handle before anything can orchestrate it. Built and run on macOS; Orca also ships Linux and Windows. Python 3.11+, stdlib-only core, MIT. No API key.
+It runs the fleet on [Orca](https://www.onorca.dev/download). A session has to outlive its window and be addressable by handle before anything can orchestrate it. Built and run on macOS; Orca also ships Linux and Windows. Python 3, stdlib-only core, MIT. No API key.
 
 The orchestrating session is called the master, for lack of a better word. It has no name yet. Suggestions welcome.
 
@@ -305,7 +305,7 @@ Two principles shape the layout:
 
 To use the system, the [Quickstart](#quickstart) above is the whole path. This section is for changing the harness itself.
 
-Prerequisites: macOS and **Python 3.11+**. The runtime is stdlib-only; there is nothing to install.
+Prerequisites: macOS and the `python3` it already has. The runtime is stdlib-only; there is nothing to install, and no version floor is enforced: the core imports and runs on the 3.9.6 a bare Mac ends up with. A tool that needs a newer interpreter states its own requirement at runtime, and the [Reference](docs/public/reference.md) table carries each one's floor in its own row. The suite's collection imports `tomllib` (3.11+), so tests reach an older interpreter through `uv` — and tests are the agent's job either way.
 
 All CLI entry points live in `scripts/` and are self-contained (they insert `src/` on `sys.path` themselves):
 

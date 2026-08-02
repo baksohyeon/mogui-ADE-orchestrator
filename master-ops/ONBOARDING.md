@@ -33,7 +33,7 @@ Use only these template placeholders: `{{WORKSPACE_NAME}}`, `{{WORKSPACE_ROOT}}`
 
 **Position and action:** Step 0 starts after orientation, with no workspace state changed: run `bash scripts/onboarding-preflight.sh` from `{{RUNTIME_ROOT}}` and fix every FAIL before continuing.
 
-**Why/caution:** Orca, orchestration, the Orca skills, Beads, and Python are required; do not offer a non-Orca fallback.
+**Why/caution:** Orca, an orchestration Run bound to this terminal, the Orca skills, Beads, Python, the named agent CLI, the worker runtimes it dispatches to, Git, `gh`, and the organization rules file are all required; do not offer a non-Orca fallback. Orchestration is measured by capability rather than reachability: a retained legacy coordinator answers reads and drops writes with `effectsApplied:false`, so a dispatch record can survive while the worker receives nothing. If the preflight reports that, bind a fresh Run with `orca orchestration run-create` and measure again; restarting the app does not clear it.
 
 Ask whether the user is ready for local read-only checks and which agent CLI they expect to use, such as `claude`.
 
@@ -50,9 +50,11 @@ Use `bash scripts/onboarding-preflight.sh --fix` only with approval; it may add 
 
 Verify:
 
-- the preflight exits zero, Orca status was measured, orchestration RPC is reachable, required skills are present, `bd` is present and resolves to the ops repo when one exists, and Python is present
-- the named agent CLI is measured or explicitly unresolved
-- Git is measured
+- the preflight exits zero, Orca status was measured, a non-legacy orchestration Run is bound to this terminal, required skills resolve, `bd` is present and resolves to the ops repo when one exists, and Python is present
+- the named agent CLI is set and resolves on `PATH`; an unset selection is a FAIL, because it silently downgrades the agent-specific checks to INFO
+- the worker runtimes this master dispatches to resolve on `PATH`
+- Git and `gh` are present, `gh` is authenticated, and a missing `workflow` scope was reported
+- the organization rules file loads at least one rule and no rule is malformed; the preflight reports counts only and never the file's contents
 
 ## Step 1. Collect Workspace Facts
 

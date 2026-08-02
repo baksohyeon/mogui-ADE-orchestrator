@@ -85,16 +85,26 @@ else
   fi
 fi
 
+# A reachable RPC does not mean a dispatch will land. Measure the capability
+# the master actually depends on: a non-legacy Run bound to this terminal.
+# Observed failure this check exists for: a retained legacy coordinator answers
+# reads normally and drops writes with effectsApplied:false, so the dispatch
+# record survives while the worker receives nothing.
 if [[ "$orca_ready" == true ]]; then
   orchestration_output=""
   orchestration_status=0
-  orchestration_output=$("$orca_command" orchestration task-list --json 2>&1) || orchestration_status=$?
-  if { [[ $orchestration_status -eq 0 ]] \
-    && grep -Eq '"ok"[[:space:]]*:[[:space:]]*true' <<<"$orchestration_output"; } \
-    || grep -Eq '"code"[[:space:]]*:[[:space:]]*"run_required"' <<<"$orchestration_output"; then
-    pass "orchestration" "RPC reachable (run_required is expected before a Run is bound)"
-  else
+  orchestration_output=$("$orca_command" orchestration run-current --json 2>&1) || orchestration_status=$?
+  if grep -Eq '"code"[[:space:]]*:[[:space:]]*"legacy_read_only"' <<<"$orchestration_output"; then
+    fail "orchestration" "retained legacy coordinator: calls answer and writes are dropped (effectsApplied:false); bind a fresh Run with '$orca_command orchestration run-create', then re-run this preflight; restarting the app does not clear it"
+  elif [[ $orchestration_status -ne 0 ]] \
+    || ! grep -Eq '"ok"[[:space:]]*:[[:space:]]*true' <<<"$orchestration_output"; then
     fail "orchestration" "RPC unavailable; enable Orca orchestration and retry"
+  elif grep -Eq '"run"[[:space:]]*:[[:space:]]*null' <<<"$orchestration_output"; then
+    fail "orchestration" "RPC reachable but no Run is bound to this terminal, so dispatch effects have nowhere to land; run: $orca_command orchestration run-create"
+  elif grep -Eq '"legacy"[[:space:]]*:[[:space:]]*1' <<<"$orchestration_output"; then
+    fail "orchestration" "the bound Run is legacy and inspect-only; create a fresh one: $orca_command orchestration run-create"
+  else
+    pass "orchestration" "RPC reachable and a non-legacy Run is bound to this terminal"
   fi
 else
   fail "orchestration" "not checked because Orca status failed"
@@ -103,6 +113,37 @@ fi
 skills_output=""
 skills_status=0
 runtime_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+
+# Measure the artifact before the installer. The required skills can be present
+# without the `skills` package manager being installed at all, and an installer
+# listing that cannot run is not evidence that the skills are missing.
+# ORCA_SKILLS_DIRS overrides the search for agent layouts not listed here.
+skills_artifact_ok=false
+skills_roots=()
+if [[ -n "${ORCA_SKILLS_DIRS:-}" ]]; then
+  IFS=':' read -r -a skills_roots <<<"$ORCA_SKILLS_DIRS"
+else
+  skills_roots=(
+    "$HOME/.claude/skills"
+    "$HOME/.agents/skills"
+    "$HOME/.codex/skills"
+    "$HOME/.config/skills"
+    "$HOME/.local/share/skills"
+  )
+fi
+skills_found_root=""
+for skills_root in "${skills_roots[@]}"; do
+  [[ -d "$skills_root" ]] || continue
+  if [[ -e "$skills_root/orca-cli" && -e "$skills_root/orchestration" ]]; then
+    skills_artifact_ok=true
+    skills_found_root="$skills_root"
+    break
+  fi
+done
+if [[ "$skills_artifact_ok" == true ]]; then
+  pass "skills" "orca-cli and orchestration resolve under $skills_found_root"
+fi
+
 skills_command=()
 skills_display=""
 skills_candidate=$(command -v skills 2>/dev/null || true)
@@ -124,7 +165,9 @@ if [[ ${#skills_command[@]} -eq 0 ]] && command -v npx >/dev/null 2>&1; then
   skills_display="npx --no-install skills"
 fi
 
-if [[ ${#skills_command[@]} -eq 0 ]]; then
+if [[ "$skills_artifact_ok" == true ]]; then
+  skills_status=0
+elif [[ ${#skills_command[@]} -eq 0 ]]; then
   skills_status=127
 else
   skills_output=$("${skills_command[@]}" list -g 2>&1 | strip_ansi) || skills_status=$?
@@ -175,11 +218,54 @@ else
   printf 'INFO %-14s %s\n' "codex-plugin" "skipped because Claude Code is not the selected agent"
 fi
 
-redaction_extra="${HOME}/.config/redaction-extra.txt"
-if [[ -f "$redaction_extra" ]]; then
-  pass "redaction-extra" "optional organization-specific rules file present: $redaction_extra"
+# Required, not optional: REDACTION_REQUIRE_EXTRA=1 scanning exits 2 with no
+# rules loaded, and redaction-inventory exits 2 when this file is unset or
+# yields no readable rule. A missing file is a blocked publish path.
+# Honor the variable both consumers read before falling back to the default path.
+redaction_extra="${REDACTION_EXTRA_PATTERNS:-${HOME}/.config/redaction-extra.txt}"
+redaction_format='format: one rule per line as "id|description|regex"; blank lines and lines beginning with # are skipped; only the first two pipes separate fields, so the regex may contain "|"; the regex must compile, because redaction-inventory drops uncompilable rules without reporting them; keep the file out of version control'
+if [[ ! -f "$redaction_extra" ]]; then
+  fail "redaction-extra" "organization rules file missing: $redaction_extra; two of the three publish gates refuse to run without it; $redaction_format"
 else
-  warn "redaction-extra" "optional organization-specific rules file missing: $redaction_extra; create with: mkdir -p ~/.config && touch ~/.config/redaction-extra.txt"
+  # Counts only. This file's contents are what the scanner protects, so the
+  # check must never print a rule, an identifier, or a match.
+  redaction_counts=""
+  redaction_counts=$(python3 - "$redaction_extra" <<'PY' 2>/dev/null || true
+import re
+import sys
+
+total = valid = malformed = 0
+with open(sys.argv[1], encoding="utf-8") as handle:
+    for line in handle:
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        total += 1
+        parts = line.split("|", 2)
+        if len(parts) != 3:
+            malformed += 1
+            continue
+        try:
+            re.compile(parts[2])
+        except re.error:
+            malformed += 1
+            continue
+        valid += 1
+print(total, valid, malformed)
+PY
+  )
+  if [[ -z "$redaction_counts" ]]; then
+    fail "redaction-extra" "could not read $redaction_extra; $redaction_format"
+  else
+    read -r rx_total rx_valid rx_malformed <<<"$redaction_counts"
+    if [[ "$rx_valid" -eq 0 ]]; then
+      fail "redaction-extra" "$redaction_extra yields no usable rule out of $rx_total non-comment lines; $redaction_format"
+    elif [[ "$rx_malformed" -gt 0 ]]; then
+      fail "redaction-extra" "$rx_malformed of $rx_total rules in $redaction_extra are malformed or do not compile, so coverage is narrower than the file looks; $redaction_format"
+    else
+      pass "redaction-extra" "$rx_valid rules load from $redaction_extra"
+    fi
+  fi
 fi
 
 if command -v bd >/dev/null 2>&1; then
@@ -215,11 +301,92 @@ else
 fi
 
 test_hint='PYTHONPATH=src uv run --with pytest --no-project python3 -m pytest tests -q'
-if command -v python3 >/dev/null 2>&1 \
-  && python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' >/dev/null 2>&1; then
+python_floor_ok=false
+if ! command -v python3 >/dev/null 2>&1; then
+  fail "python3" "missing; install Python 3.11+ because codex-worker-pretrust uses tomllib for safe TOML editing; test suite: $test_hint"
+elif python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' >/dev/null 2>&1; then
+  python_floor_ok=true
   pass "python3" "Python 3.11+ present; codex-worker-pretrust uses tomllib for safe TOML editing; test suite: $test_hint"
 else
-  fail "python3" "missing or too old; install Python 3.11+ because codex-worker-pretrust uses tomllib for safe TOML editing; test suite: $test_hint"
+  # Present but below the floor. Reporting an old interpreter as "missing" sends
+  # the operator looking for the wrong thing.
+  fail "python3" "present but $(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:3])))' 2>/dev/null) is below the required 3.11, which codex-worker-pretrust needs for tomllib; install Python 3.11+ or run the suite through uv: $test_hint"
+fi
+
+# --- harness and worker tool surface --------------------------------------
+# Every entry below is a tool the master or a dispatched worker invokes during
+# normal operation. The template ships prose and scripts; the parts that make a
+# master work live in host configuration, so onboarding measures them instead of
+# assuming them. Trim the lists if your routing policy uses different executors.
+
+agent_cli="${ORCA_AGENT_CLI:-}"
+if [[ -z "$agent_cli" ]]; then
+  fail "agent-cli" "ORCA_AGENT_CLI is unset; name the agent CLI this master runs so agent-specific checks are measured instead of skipped"
+elif ! command -v "$agent_cli" >/dev/null 2>&1; then
+  fail "agent-cli" "ORCA_AGENT_CLI=$agent_cli is not on PATH; install it or correct the value"
+else
+  pass "agent-cli" "$agent_cli resolves on PATH"
+fi
+
+worker_runtimes=(codex cursor-agent)
+for worker_runtime in "${worker_runtimes[@]}"; do
+  if command -v "$worker_runtime" >/dev/null 2>&1; then
+    pass "worker-runtime" "$worker_runtime present"
+  else
+    fail "worker-runtime" "$worker_runtime is not on PATH; a master that cannot reach its executors cannot delegate"
+  fi
+done
+
+for repo_tool in git gh; do
+  if command -v "$repo_tool" >/dev/null 2>&1; then
+    pass "$repo_tool" "present"
+  else
+    fail "$repo_tool" "$repo_tool is required; this repository is managed through pull requests"
+  fi
+done
+
+if command -v gh >/dev/null 2>&1; then
+  gh_status=$(gh auth status 2>&1) || true
+  if printf '%s\n' "$gh_status" | grep -q 'Logged in'; then
+    if printf '%s\n' "$gh_status" | grep -q 'workflow'; then
+      pass "gh-auth" "authenticated with workflow scope"
+    else
+      # Not fatal for ordinary PR work; fatal the moment a workflow file moves.
+      warn "gh-auth" "authenticated without the workflow scope; pushing or editing GitHub Actions workflows will fail; run: gh auth refresh -h github.com -s workflow"
+    fi
+  else
+    fail "gh-auth" "gh is not authenticated; run: gh auth login"
+  fi
+fi
+
+# pytest resolving is not the same as the suite running: below the floor,
+# collection fails on tomllib before a single test executes, so an interpreter
+# under 3.11 has to reach the suite through uv.
+if [[ "$python_floor_ok" == true ]] && python3 -m pytest --version >/dev/null 2>&1; then
+  pass "pytest" "python3 -m pytest is runnable at the required interpreter version"
+elif command -v uv >/dev/null 2>&1; then
+  pass "pytest" "uv present; the suite runs through: $test_hint"
+else
+  fail "pytest" "no way to run the test gate: pytest is not available on a 3.11+ interpreter and uv is missing; install either"
+fi
+
+# The gate writes its ledger outside the repository. Check writability without
+# creating anything: this script must not change state before --fix.
+gate_ledger="${DISPATCH_GATE_LEDGER:-.mogui/dispatch-ledger.jsonl}"
+gate_ledger_dir=$(dirname "$gate_ledger")
+if [[ -d "$gate_ledger_dir" ]]; then
+  if [[ -w "$gate_ledger_dir" ]]; then
+    pass "gate-ledger" "dispatch ledger directory is writable: $gate_ledger_dir"
+  else
+    fail "gate-ledger" "dispatch ledger directory is not writable: $gate_ledger_dir; set DISPATCH_GATE_LEDGER to a writable path"
+  fi
+else
+  gate_ledger_parent=$(dirname "$gate_ledger_dir")
+  if [[ -d "$gate_ledger_parent" && -w "$gate_ledger_parent" ]]; then
+    pass "gate-ledger" "dispatch ledger directory will be created under $(cd "$gate_ledger_parent" && pwd -P)"
+  else
+    fail "gate-ledger" "cannot create the dispatch ledger directory under $gate_ledger_parent; set DISPATCH_GATE_LEDGER to a writable path"
+  fi
 fi
 
 printf '\nPreflight summary\n'

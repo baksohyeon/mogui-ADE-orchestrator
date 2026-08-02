@@ -11,18 +11,48 @@ esac
 failures=0
 passes=0
 warnings=0
+waived=0
+
+# A required check that cannot be waived pushes the operator toward skipping the
+# whole preflight, which loses every other check with it. PREFLIGHT_WAIVE names
+# checks to downgrade from FAIL to WARN, and a waiver is always printed and
+# counted: the escape exists, and it is never silent. Same shape as the gate's
+# ledgered --tier-override.
+waive_list=()
+if [[ -n "${PREFLIGHT_WAIVE:-}" ]]; then
+  IFS=',' read -r -a waive_list <<<"$PREFLIGHT_WAIVE"
+fi
+waived_labels=()
+seen_labels=()
+
+is_waived() {
+  local candidate
+  for candidate in ${waive_list[@]+"${waive_list[@]}"}; do
+    [[ "${candidate// /}" == "$1" ]] && return 0
+  done
+  return 1
+}
 
 pass() {
+  seen_labels+=("$1")
   passes=$((passes + 1))
   printf 'PASS %-14s %s\n' "$1" "$2"
 }
 
 fail() {
+  seen_labels+=("$1")
+  if is_waived "$1"; then
+    waived=$((waived + 1))
+    waived_labels+=("$1")
+    printf 'WAIVED %-12s %s (downgraded from FAIL by PREFLIGHT_WAIVE)\n' "$1" "$2"
+    return
+  fi
   failures=$((failures + 1))
   printf 'FAIL %-14s %s\n' "$1" "$2"
 }
 
 warn() {
+  seen_labels+=("$1")
   warnings=$((warnings + 1))
   printf 'WARN %-14s %s\n' "$1" "$2"
 }
@@ -328,10 +358,21 @@ else
   pass "agent-cli" "$agent_cli resolves on PATH"
 fi
 
+# One reachable executor is enough to delegate. Requiring every listed runtime
+# blocks a host that routes all work through one of them, which is a normal
+# setup, so a missing runtime is a WARN and no runtime at all is the failure.
 worker_runtimes=(codex cursor-agent)
+worker_runtime_found=false
+for worker_runtime in "${worker_runtimes[@]}"; do
+  if command -v "$worker_runtime" >/dev/null 2>&1; then
+    worker_runtime_found=true
+  fi
+done
 for worker_runtime in "${worker_runtimes[@]}"; do
   if command -v "$worker_runtime" >/dev/null 2>&1; then
     pass "worker-runtime" "$worker_runtime present"
+  elif [[ "$worker_runtime_found" == true ]]; then
+    warn "worker-runtime" "$worker_runtime is not on PATH; another listed runtime is, so dispatch is still possible on this host"
   else
     fail "worker-runtime" "$worker_runtime is not on PATH; a master that cannot reach its executors cannot delegate"
   fi
@@ -355,7 +396,9 @@ if command -v gh >/dev/null 2>&1; then
       warn "gh-auth" "authenticated without the workflow scope; pushing or editing GitHub Actions workflows will fail; run: gh auth refresh -h github.com -s workflow"
     fi
   else
-    fail "gh-auth" "gh is not authenticated; run: gh auth login"
+    # Local-only work needs no forge credentials; the block belongs at push time,
+    # not at onboarding. Waive-able as gh-auth if the host never pushes.
+    warn "gh-auth" "gh is not authenticated, so pushing branches and opening pull requests will fail; run: gh auth login"
   fi
 fi
 
@@ -389,12 +432,38 @@ else
   fi
 fi
 
+# A waiver that matched nothing is a typo, and a typo'd waiver leaves the check
+# enforced while the operator believes otherwise. Name the ones that never fired.
+unmatched_waivers=()
+for waive_label in ${waive_list[@]+"${waive_list[@]}"}; do
+  waive_label="${waive_label// /}"
+  [[ -z "$waive_label" ]] && continue
+  waive_matched=false
+  for seen_label in ${seen_labels[@]+"${seen_labels[@]}"}; do
+    [[ "$seen_label" == "$waive_label" ]] && waive_matched=true && break
+  done
+  [[ "$waive_matched" == false ]] && unmatched_waivers+=("$waive_label")
+done
+
 printf '\nPreflight summary\n'
 printf '  PASS: %d\n' "$passes"
 printf '  WARN: %d\n' "$warnings"
 printf '  FAIL: %d\n' "$failures"
+printf '  WAIVED: %d' "$waived"
+if [[ ${#waived_labels[@]} -gt 0 ]]; then
+  printf ' (%s)' "$(IFS=,; printf '%s' "${waived_labels[*]}")"
+fi
+printf '\n'
+if [[ ${#unmatched_waivers[@]} -gt 0 ]]; then
+  printf '  NOTE: PREFLIGHT_WAIVE named checks that did not run: %s; those checks are still enforced\n' \
+    "$(IFS=,; printf '%s' "${unmatched_waivers[*]}")"
+fi
 if [[ $failures -eq 0 ]]; then
-  printf '  READY: all required checks passed\n'
+  if [[ $waived -gt 0 ]]; then
+    printf '  READY WITH WAIVERS: %d required check(s) were downgraded, not satisfied\n' "$waived"
+  else
+    printf '  READY: all required checks passed\n'
+  fi
 else
   printf '  BLOCKED: fix every FAIL before onboarding\n'
   exit 1

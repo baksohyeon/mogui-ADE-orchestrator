@@ -33,7 +33,7 @@ Use only these template placeholders: `{{WORKSPACE_NAME}}`, `{{WORKSPACE_ROOT}}`
 
 **Position and action:** Step 0 starts after orientation, with no workspace state changed: run `bash scripts/onboarding-preflight.sh` from `{{RUNTIME_ROOT}}` and fix every FAIL before continuing.
 
-**Why/caution:** Orca, an orchestration Run bound to this terminal, the Orca skills, Beads, Python, the named agent CLI, the worker runtimes it dispatches to, Git, `gh`, and the organization rules file are all required; do not offer a non-Orca fallback. Orchestration is measured by capability rather than reachability: a retained legacy coordinator answers reads and drops writes with `effectsApplied:false`, so a dispatch record can survive while the worker receives nothing. If the preflight reports that, bind a fresh Run with `orca orchestration run-create` and measure again; restarting the app does not clear it.
+**Why/caution:** Orca, an orchestration Run bound to this terminal, the Orca skills, Beads, Python, the named agent CLI, at least one worker runtime to dispatch to, Git, and the organization rules file are all required; do not offer a non-Orca fallback. A host that legitimately cannot satisfy one required check sets `PREFLIGHT_WAIVE=<check-label>`, which downgrades that FAIL to a printed and counted waiver; the summary then reads READY WITH WAIVERS and names them, because a required check that was waived was not satisfied. Never suggest skipping the preflight itself: that discards every other check with it. Orchestration is measured by capability rather than reachability: a retained legacy coordinator answers reads and drops writes with `effectsApplied:false`, so a dispatch record can survive while the worker receives nothing. If the preflight reports that, bind a fresh Run with `orca orchestration run-create` and measure again; restarting the app does not clear it.
 
 Ask whether the user is ready for local read-only checks and which agent CLI they expect to use, such as `claude`.
 
@@ -52,8 +52,9 @@ Verify:
 
 - the preflight exits zero, Orca status was measured, a non-legacy orchestration Run is bound to this terminal, required skills resolve, `bd` is present and resolves to the ops repo when one exists, and Python is present
 - the named agent CLI is set and resolves on `PATH`; an unset selection is a FAIL, because it silently downgrades the agent-specific checks to INFO
-- the worker runtimes this master dispatches to resolve on `PATH`
-- Git and `gh` are present, `gh` is authenticated, and a missing `workflow` scope was reported
+- at least one of the worker runtimes this master dispatches to resolves on `PATH`; the others are reported as warnings, since routing every lane through one executor is a normal setup
+- Git is present, and `gh` state was reported: a missing binary blocks, while unauthenticated or a missing `workflow` scope warns, because local-only work needs no forge credentials
+- every waiver in the summary was intended, and `PREFLIGHT_WAIVE` entries that matched no check are corrected rather than left, since a misspelled waiver leaves the check enforced
 - the organization rules file loads at least one rule and no rule is malformed; the preflight reports counts only and never the file's contents
 
 ## Step 1. Collect Workspace Facts

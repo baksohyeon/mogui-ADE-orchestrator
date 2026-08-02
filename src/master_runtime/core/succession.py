@@ -733,6 +733,7 @@ def _close_spawned_terminal(
     if (
         confirmed is None
         or handle in snapshot_handles
+        or not confirmed.connected
         or not _title_matches(pane_title, confirmed.title)
     ):
         return False

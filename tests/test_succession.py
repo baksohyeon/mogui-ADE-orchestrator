@@ -1256,6 +1256,45 @@ def test_spawn_successor_cleanup_closes_recycled_handle_with_confirmed_title_own
     assert close_command in calls
 
 
+def test_spawn_successor_cleanup_does_not_close_disconnected_confirmed_handle() -> None:
+    calls = []
+    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    close_command = ("orca", "terminal", "close", "--terminal", "term-recycled", "--json")
+    disconnected_confirmed = {
+        "handle": "term-recycled",
+        "worktreeId": "folder:unit-a",
+        "worktreePath": "/repo/example",
+        "connected": False,
+        "title": "✳ successor",
+    }
+    runner = _recording_runner(
+        {
+            _LIST_COMMAND: [
+                (0, _orca_json_from_terminals(), ""),
+                (1, "", "orca offline"),
+                (0, _orca_json_from_terminals(disconnected_confirmed), ""),
+            ],
+            create_command: (0, _orca_create_json("term-recycled", "folder:unit-a"), ""),
+        },
+        calls,
+    )
+
+    with unittest.TestCase().assertRaisesRegex(
+        SuccessionError,
+        "spawn liveness list failed.*not closed",
+    ) as raised:
+        spawn_successor(
+            workspace_selector="folder:unit-a",
+            kickoff_text="start here",
+            root="/repo/example",
+            title="successor",
+            orca_runner=runner,
+        )
+
+    assert raised.exception.exit_code == 25
+    assert close_command not in calls
+
+
 def test_spawn_successor_liveness_list_failure_does_not_close_preexisting_handle() -> None:
     calls = []
     create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")

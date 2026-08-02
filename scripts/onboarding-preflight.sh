@@ -74,7 +74,7 @@ elif [[ "$orca_basename" != "orca" \
 else
   status_output=""
   if status_output=$("$orca_command" status --json 2>&1); then
-    if printf '%s\n' "$status_output" | grep -Eq '"ok"[[:space:]]*:[[:space:]]*true'; then
+    if grep -Eq '"ok"[[:space:]]*:[[:space:]]*true' <<<"$status_output"; then
       pass "orca" "$orca_command status --json returned ok:true"
       orca_ready=true
     else
@@ -90,9 +90,8 @@ if [[ "$orca_ready" == true ]]; then
   orchestration_status=0
   orchestration_output=$("$orca_command" orchestration task-list --json 2>&1) || orchestration_status=$?
   if { [[ $orchestration_status -eq 0 ]] \
-    && printf '%s\n' "$orchestration_output" \
-      | grep -Eq '"ok"[[:space:]]*:[[:space:]]*true'; } \
-    || printf '%s\n' "$orchestration_output" | grep -Eq '"code"[[:space:]]*:[[:space:]]*"run_required"'; then
+    && grep -Eq '"ok"[[:space:]]*:[[:space:]]*true' <<<"$orchestration_output"; } \
+    || grep -Eq '"code"[[:space:]]*:[[:space:]]*"run_required"' <<<"$orchestration_output"; then
     pass "orchestration" "RPC reachable (run_required is expected before a Run is bound)"
   else
     fail "orchestration" "RPC unavailable; enable Orca orchestration and retry"
@@ -130,8 +129,8 @@ if [[ ${#skills_command[@]} -eq 0 ]]; then
 else
   skills_output=$("${skills_command[@]}" list -g 2>&1 | strip_ansi) || skills_status=$?
   if [[ $skills_status -eq 0 ]] \
-    && printf '%s\n' "$skills_output" | grep -Eq '(^|[[:space:]])orca-cli([[:space:]]|$)' \
-    && printf '%s\n' "$skills_output" | grep -Eq '(^|[[:space:]])orchestration([[:space:]]|$)'; then
+    && grep -Eq '(^|[[:space:]])orca-cli([[:space:]]|$)' <<<"$skills_output" \
+    && grep -Eq '(^|[[:space:]])orchestration([[:space:]]|$)' <<<"$skills_output"; then
     pass "skills" "global orca-cli and orchestration skills are present"
   else
     skills_status=1
@@ -148,8 +147,8 @@ elif [[ "$fix" == true && ${#skills_command[@]} -gt 0 ]]; then
     "${skills_command[@]}" update orchestration -g || fix_status=$?
     skills_output=$("${skills_command[@]}" list -g 2>&1 | strip_ansi) || fix_status=$?
     if [[ $fix_status -eq 0 ]] \
-      && printf '%s\n' "$skills_output" | grep -Eq '(^|[[:space:]])orca-cli([[:space:]]|$)' \
-      && printf '%s\n' "$skills_output" | grep -Eq '(^|[[:space:]])orchestration([[:space:]]|$)'; then
+      && grep -Eq '(^|[[:space:]])orca-cli([[:space:]]|$)' <<<"$skills_output" \
+      && grep -Eq '(^|[[:space:]])orchestration([[:space:]]|$)' <<<"$skills_output"; then
       pass "skills" "installed global orca-cli and orchestration skills"
     else
       fail "skills" "required skills still missing after --fix"

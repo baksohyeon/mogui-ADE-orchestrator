@@ -65,7 +65,7 @@ that has its own incidents should
 append them in the same form rather than replacing these: the section is meant
 to accumulate, and a rule earned locally outranks one inherited from a template.
 
-## 8
+## Unreleased
 
 The tier policy gains a version 2 shape that gates on tier multiplied by fan-out
 instead of on model identity. The incident this policy exists for was a top tier
@@ -100,9 +100,9 @@ prefixed with `dispatch-gate: `. Callers must not merge the streams, since
 malformed output rather than a second stream.
 
 Upgrade an existing installation by rewriting `master-ops/model-tier-policy.json`
-in the version 2 shape, re-reading the dispatch section of
-`docs/MASTER-OPERATIONS.md`, and raising the installed `Template version` line to
-8.
+in the version 2 shape and re-reading the dispatch section of
+`docs/MASTER-OPERATIONS.md`. The installed `Template version` line moves at the
+next release tag rather than here.
 
 ## 6
 

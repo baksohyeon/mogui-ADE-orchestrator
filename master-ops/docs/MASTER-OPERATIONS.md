@@ -10,6 +10,8 @@ Change rule: do not change this document without explicit user approval or an ac
 
 ## 0. Document Map
 
+Orca is REQUIRED infrastructure. Supervised dispatch = orca orchestration only. (charter rule since template v5)
+
 This document is the workspace master-operations SSOT.
 
 - Template version: `{{TEMPLATE_VERSION}}` (source: `{{RUNTIME_ROOT}}/master-ops/CHANGELOG.md`)
@@ -106,7 +108,7 @@ Do not expand scope. If a request belongs outside the active role, ask whether i
 
 ## 3. Worker Routing And Review
 
-The master is agent-host neutral. Measure the configured model flag and the actual session model field at boot. Default master model identifier: `{{MODEL_ID}}`.
+The master is agent-host neutral. Neutrality covers artifact formats and agent swappability only; it is never an excuse to avoid required infrastructure. For dispatch and terminal or session operations, prefer Orca's stable IDs (handles, worktrees, RPC) over raw OS utilities. The process-cwd and session-artifact checks in §5 are placement evidence, not dispatch mechanisms. (charter rule since template v5) Measure the configured model flag and the actual session model field at boot. Default master model identifier: `{{MODEL_ID}}`.
 
 A boot measurement is a snapshot of one moment, not a property of the session. Re-measure after resume, after continue, after compaction, at succession audit, and at session close. A probe that samples recent turns answers what the model is now; it cannot see a change that happened earlier and then settled. For that, audit the whole transcript with `{{RUNTIME_ROOT}}/scripts/model-drift-audit`, which exits 0 for no transition, 1 for a transition or an expectation mismatch, and 2 when it cannot decide. Do not read 2 as a pass.
 
@@ -118,6 +120,17 @@ Recommended worker lanes:
 - Local code work: a worker lane bound to the relevant repository checkout
 - Sensitive areas such as auth, permissions, secrets, credentials, production data, and incident material: a dedicated security or operations session
 
+### Worker Launch Approval Posture
+
+Workers launched into isolated worktrees must start with the agent's non-interactive approval flag, or the measured Codex pre-trust posture below, so allowlist or trust prompts cannot block them mid-task. At every dispatch, the master MEASURES the installed CLI's `--help` output and uses only flags present there; it never guesses flags from memory.
+
+MEASURED examples from 2026-08-02:
+
+- Grok: `--always-approve`.
+- Claude Code: `--dangerously-skip-permissions`.
+- Cursor Agent: `--force` (also exposed as `--yolo`) to force-allow commands unless explicitly denied, plus `--trust` to trust the current workspace without prompting.
+- Codex: run `scripts/codex-worker-pretrust <worktree-path>` and retain the account-wide hooks trust posture; Codex uses this pre-trust path instead of a launch approval flag.
+
 Three-vote review is the default for non-trivial merges or direct-push changes. Split review lenses:
 
 - general correctness
@@ -125,6 +138,8 @@ Three-vote review is the default for non-trivial merges or direct-push changes. 
 - contract and scope
 
 Use the majority verdict, but a minority P1 `FIX_FIRST` finding must be addressed or explicitly rejected with evidence.
+
+PR review-bot threads are always worker-handled without per-round owner instruction: dispatch a fix worker on arrival, the master verifies, the worker replies and resolves, and the master judges rejections only. (charter rule since template v5)
 
 Do not run large fan-out from the master workflow by default. If it is unavoidable, report scale and estimated cost first.
 
@@ -142,12 +157,16 @@ Use the workspace's approved dispatch gate command and ledger. The template form
 G={{RUNTIME_ROOT}}/scripts/dispatch-gate
 L=~/.mogui/dispatch-ledger.jsonl
 
-"$G" --ledger "$L" check --runtime <runtime> --contract <contract-file> --agents <n> --est-chars <n>
+"$G" --ledger "$L" check --runtime <runtime> --model <model-id> --contract <contract-file> --agents <n> --est-chars <n> --completion-channel orchestration
 <supervised dispatch command>
-"$G" --ledger "$L" register --job-id <job-id> --probe-cmd "<command proving the job-id appears in an artifact>"
+"$G" --ledger "$L" register --job-id <job-id> --probe-cmd "<command proving the job-id appears in an artifact>" --orchestration-task <task-id>
 ```
 
+Before attaching a Codex worker, run `scripts/codex-worker-pretrust <worktree-path>` so startup never blocks on the trust prompt.
+
 `register` without a prior successful `check` is invalid. Register only after the artifact exists, and before the final evidence report. Promote dispatch acceptance and verification results into the issue tracker.
+
+The supervised dispatch command is vendor-neutral Orca orchestration: bind a Run, create the Task with `orca orchestration task-create`, attach the worker with `orca orchestration worker-start` (or `dispatch --inject`), then wait event-driven with `check --wait --types worker_done,escalation,question`. Raw terminal polling and vendor-direct CLIs bypass task and Dispatch provenance and `worker_done` authority and are non-compliant dispatch paths. Vendor plugins are allowed for non-dispatch uses such as second-opinion review. Record accidental work outside orchestration plainly as non-orchestrated; never relabel it orchestrated. (charter rule since template v5)
 
 If the workspace uses a warning hook for direct worker invocations, it should warn on missing gate evidence and log suppressions. This document specifies the behavior only; hook implementation and deny lists belong to the security or operations owner.
 
@@ -188,6 +207,8 @@ Do not store credentials, secrets, raw environment values, or secret-dependent i
 ## 7. Boot, Hooks, And Observability
 
 Hook wiring is a specification here. Apply concrete hook configuration through a human or dedicated security/operations session.
+
+Orca command and orchestration references are grounded through `docs/orca-docs-grounding.md`; start there and never guess Orca flags.
 
 Recommended hook spec:
 

@@ -1,7 +1,7 @@
 """JSON config loading for acceptance runs.
 
-JSON rather than TOML: this repository targets Python 3.10+ and stays stdlib-only,
-so `tomllib` is not available across the supported range.
+The JSON format predates the Python 3.11 floor; switching to TOML would churn
+existing acceptance configs for no functional gain. The module stays stdlib-only.
 """
 
 from __future__ import annotations

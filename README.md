@@ -1,5 +1,7 @@
 # mogui-ADE-orchestrator
 
+> Existing installations: follow the [template v5 upgrade steps](master-ops/CHANGELOG.md#5) for mandatory Orca orchestration and the onboarding preflight.
+>
 > *I have agents running in tmux sessions. Can I still drive each one manually when I want, and at the same time orchestrate all of those sessions from above? Is tmux-based agent orchestration a thing?*
 
 Yes. That is what this is. Any mix of agents, as many as you want. (Claude as the master is the combination that has been run hard.)
@@ -8,7 +10,7 @@ Anyone running more than two agents at once hits this. Dorito hit it, got tired 
 
 Nothing to configure and nothing to read first. Clone it, start an agent inside the clone, tell it to wake up. The agent takes it from there and explains as it goes.
 
-It runs the fleet on [Orca](https://www.onorca.dev/download). A session has to outlive its window and be addressable by handle before anything can orchestrate it. Built and run on macOS; Orca also ships Linux and Windows. Python 3.10+, stdlib-only core, MIT. No API key.
+It runs the fleet on [Orca](https://www.onorca.dev/download). A session has to outlive its window and be addressable by handle before anything can orchestrate it. Built and run on macOS; Orca also ships Linux and Windows. Python 3.11+, stdlib-only core, MIT. No API key.
 
 The orchestrating session is called the master, for lack of a better word. It has no name yet. Suggestions welcome.
 
@@ -23,6 +25,20 @@ $ cd mogui-ADE-orchestrator
 Not on macOS? Orca has Linux and Windows builds on its [download page](https://www.onorca.dev/download). `--cask` is macOS-only, so Homebrew is not the route there.
 
 Then open Orca once and turn on **Settings → Orca CLI → Shell command**. The runtime calls `orca` to spawn and retire master sessions. `orca status` should answer.
+
+### Why Orca is required
+
+Without Orca there is no session lifetime, no stable handles, and no supervised dispatch. The harness degrades to screen-polling and an unsupervised agent. In a real incident, a user skipped Orca setup, trusted the harness alone, and watched their agent run wild on errors.
+
+| | Without Orca | With Orca |
+| --- | --- | --- |
+| Completion detection | Reading the worker's screen every N seconds | Zero contact until the Run mailbox rings |
+| Master state | Tied to a watch loop | Free, with the receiver in the background |
+| Signal loss | Missed if the session dies | Durable mailbox survives restarts |
+
+Step 0 preflight refuses to proceed without Orca; running runtime scripts without Orca is unsupported.
+
+Agents: ground Orca claims in the [Orca docs snapshot agent index](https://grok-wiki.com/public/docs/stablyai-orca-2036d532bf1c/llms.txt) before improvising; the link hash may change with snapshot updates.
 
 Open that directory in Orca, start any coding agent inside it, and say:
 
@@ -274,7 +290,7 @@ Two principles shape the layout:
 
 To use the system, the [Quickstart](#quickstart) above is the whole path. This section is for changing the harness itself.
 
-Prerequisites: macOS and **Python 3.10+**. The runtime is stdlib-only; there is nothing to install.
+Prerequisites: macOS and **Python 3.11+**. The runtime is stdlib-only; there is nothing to install.
 
 All CLI entry points live in `scripts/` and are self-contained (they insert `src/` on `sys.path` themselves):
 

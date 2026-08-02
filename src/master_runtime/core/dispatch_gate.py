@@ -30,6 +30,7 @@ DEFAULT_TICKET_TTL_SECONDS = 600
 DEFAULT_EXPIRED_TICKET_GC_GRACE_SECONDS = 24 * 60 * 60
 RUNTIME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 USERS_ABSOLUTE_PATH_PATTERN = re.compile(r"/Users/[^\s\"'`<>{}\[\](),;:]+")
+COMPLETION_CHANNELS = frozenset({"orchestration", "sentinel-log"})
 
 
 def _default_ledger_path() -> Path:
@@ -56,6 +57,9 @@ class ReasonCode(str, Enum):
     DUPLICATE_CONTRACT = "DUPLICATE_CONTRACT"
     UNVERIFIED_JOB = "UNVERIFIED_JOB"
     INVALID_REQUEST = "INVALID_REQUEST"
+    NO_COMPLETION_CHANNEL = "NO_COMPLETION_CHANNEL"
+    NO_MODEL = "NO_MODEL"
+    ORCHESTRATION_UNVERIFIED = "ORCHESTRATION_UNVERIFIED"
     CONTRACT_UNREADABLE = "CONTRACT_UNREADABLE"
     HIGH_COST_RUNTIME = "HIGH_COST_RUNTIME"
     AMBIGUOUS_TICKET = "AMBIGUOUS_TICKET"
@@ -71,9 +75,11 @@ class DispatchRequest:
 
     runtime: str
     contract_path: str | Path
-    est_input_chars: int
+    est_input_chars: int | None
     n_agents: int
     purpose: str = ""
+    completion_channel: str | None = None
+    model: str | None = None
 
 
 @dataclass(frozen=True)
@@ -128,6 +134,16 @@ class DispatchGate:
     def check(self, request: DispatchRequest) -> GateDecision:
         """Return a gate decision and append it to the ledger."""
 
+        # None is the fail-closed sentinel for an input whose size could not be
+        # measured. Handle it before every other validation or budget check so
+        # reordering the remaining checks cannot turn an unreadable contract
+        # into a zero-cost dispatch.
+        est_input_chars = request.est_input_chars
+        if est_input_chars is None:
+            decision = GateDecision(False, ReasonCode.CONTRACT_UNREADABLE)
+            self._append_decision(request, decision)
+            return decision
+
         validation_error = _validate_request(request)
         if validation_error is not None:
             decision = GateDecision(False, validation_error)
@@ -145,7 +161,7 @@ class DispatchGate:
             contract_content.decode("utf-8", errors="replace"),
             Path(self.config.known_roots_path),
         )
-        cost_proxy = request.n_agents * request.est_input_chars
+        cost_proxy = request.n_agents * est_input_chars
         if (
             _dispatch_ticket_path(
                 Path(self.config.ticket_dir),
@@ -165,7 +181,7 @@ class DispatchGate:
             return decision
 
         if (
-            request.est_input_chars > self.config.single_dispatch_char_limit
+            est_input_chars > self.config.single_dispatch_char_limit
             or cost_proxy > self.config.batch_dispatch_char_limit
         ):
             decision = GateDecision(
@@ -223,6 +239,7 @@ class DispatchGate:
         probe_fn: Callable[[str], bool],
         contract_sha: str | None = None,
         runtime: str | None = None,
+        orchestration_task: str | None = None,
     ) -> GateDecision:
         """Register a job only after independent probe verification succeeds."""
 
@@ -336,18 +353,19 @@ class DispatchGate:
                     else ""
                 ),
             )
-            self._append_entry(
-                {
-                    "ts": self._clock(),
-                    "contract_sha": pending["contract_sha"],
-                    "runtime": pending["runtime"],
-                    "n_agents": pending["n_agents"],
-                    "est_chars": pending["est_chars"],
-                    "decision": "ALLOW",
-                    "reason": ReasonCode.OK.value,
-                    "job_id": job_id,
-                }
-            )
+            entry: dict[str, object] = {
+                "ts": self._clock(),
+                "contract_sha": pending["contract_sha"],
+                "runtime": pending["runtime"],
+                "n_agents": pending["n_agents"],
+                "est_chars": pending["est_chars"],
+                "decision": "ALLOW",
+                "reason": ReasonCode.OK.value,
+                "job_id": job_id,
+            }
+            if orchestration_task is not None:
+                entry["orchestration_task"] = orchestration_task
+            self._append_entry(entry)
         return decision
 
     def ledger_entries(self) -> tuple[Mapping[str, object], ...]:
@@ -368,6 +386,8 @@ class DispatchGate:
             "est_chars": request.est_input_chars,
             "decision": "ALLOW" if decision.allow else "DENY",
             "reason": decision.reason.value,
+            "completion_channel": request.completion_channel,
+            "model": request.model,
         }
         if decision.warnings:
             entry["warnings"] = [warning.value for warning in decision.warnings]
@@ -546,11 +566,18 @@ class DispatchGate:
 
 
 def _validate_request(request: DispatchRequest) -> ReasonCode | None:
+    if (
+        not isinstance(request.completion_channel, str)
+        or request.completion_channel not in COMPLETION_CHANNELS
+    ):
+        return ReasonCode.NO_COMPLETION_CHANNEL
+    if not isinstance(request.model, str) or not request.model.strip():
+        return ReasonCode.NO_MODEL
     if not request.runtime:
         return ReasonCode.INVALID_REQUEST
     if RUNTIME_PATTERN.fullmatch(request.runtime) is None:
         return ReasonCode.INVALID_REQUEST
-    if request.est_input_chars < 0:
+    if request.est_input_chars is not None and request.est_input_chars < 0:
         return ReasonCode.INVALID_REQUEST
     if request.n_agents < 1:
         return ReasonCode.INVALID_REQUEST

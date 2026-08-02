@@ -13,6 +13,7 @@ from master_runtime.core.succession import (
     SessionInfo,
     SuccessionError,
     _reissued_terminal_candidates,
+    _spawn_startup_command,
     build_handoff,
     detect_duplicate_instances,
     detect_trigger,
@@ -62,6 +63,7 @@ ORCA_LIST_JSON = json.dumps(
     }
 )
 _LIST_COMMAND = ("orca", "terminal", "list", "--json")
+_GLOBAL_SNAPSHOT_FIXTURE = object()
 
 
 def test_detect_trigger_has_immediate_advisory_and_none_branches() -> None:
@@ -455,6 +457,7 @@ def test_spawn_successor_creates_and_verifies_worktree() -> None:
     create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
     runner = _recording_runner(
         {
+            _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(), ""),
             _LIST_COMMAND: [
                 (0, _orca_json_from_terminals(), ""),
                 (0, _orca_json_from_terminals(_list_terminal("term-new", "folder:unit-a", "successor")), ""),
@@ -483,16 +486,19 @@ def test_spawn_successor_mismatch_closes_terminal_and_fails_closed() -> None:
     calls = []
     create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
     close_command = ("orca", "terminal", "close", "--terminal", "term-new", "--json")
+    scoped_list_command = (
+        "orca",
+        "terminal",
+        "list",
+        "--worktree",
+        "folder:unit-a",
+        "--json",
+    )
     runner = _recording_runner(
         {
-            _LIST_COMMAND: [
-                (0, _orca_json_from_terminals(), ""),
-                (
-                    0,
-                    _orca_json_from_terminals(_list_terminal("term-new", "folder:wrong", "✳ successor")),
-                    "",
-                ),
-            ],
+            scoped_list_command: (0, _orca_json_from_terminals(), ""),
+            _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(), ""),
+            _LIST_COMMAND: (0, _orca_json_from_terminals(_list_terminal("term-new", "folder:wrong", "✳ successor")), ""),
             create_command: (0, _orca_create_json("term-new", "folder:wrong"), ""),
             close_command: (0, '{"ok":true}', ""),
         },
@@ -512,19 +518,78 @@ def test_spawn_successor_mismatch_closes_terminal_and_fails_closed() -> None:
     assert close_command in calls
 
 
+def test_spawn_successor_mismatch_does_not_close_preexisting_cross_worktree_handle() -> None:
+    calls = []
+    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    close_command = ("orca", "terminal", "close", "--terminal", "term-recycled", "--json")
+    scoped_list_command = (
+        "orca",
+        "terminal",
+        "list",
+        "--worktree",
+        "folder:unit-a",
+        "--json",
+    )
+    preexisting = _list_terminal("term-recycled", "folder:wrong", "✳ successor")
+    runner = _recording_runner(
+        {
+            scoped_list_command: (0, _orca_json_from_terminals(), ""),
+            _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(preexisting), ""),
+            _LIST_COMMAND: (0, _orca_json_from_terminals(preexisting), ""),
+            create_command: (0, _orca_create_json("term-recycled", "folder:wrong"), ""),
+        },
+        calls,
+    )
+
+    with unittest.TestCase().assertRaisesRegex(
+        SuccessionError,
+        "terminal not closed; ownership unconfirmed",
+    ):
+        spawn_successor(
+            workspace_selector="folder:unit-a",
+            kickoff_text="start here",
+            root="/repo/example",
+            title="successor",
+            orca_runner=runner,
+        )
+
+    assert close_command not in calls
+
+
+def test_spawn_startup_command_covers_agent_variants_and_shell_quoting() -> None:
+    root = "/repo/with space"
+    kickoff = "start; $(touch should-not-run)"
+
+    assert _spawn_startup_command(root, "grok-4.5", kickoff, "grok") == (
+        "cd '/repo/with space' && exec grok --model grok-4.5 --always-approve "
+        "--cwd '/repo/with space' 'start; $(touch should-not-run)'"
+    )
+    assert _spawn_startup_command(root, "gpt-5.6-sol", kickoff, "codex") == (
+        "cd '/repo/with space' && exec codex --model gpt-5.6-sol "
+        "'start; $(touch should-not-run)'"
+    )
+    assert _spawn_startup_command(root, "custom-model", kickoff, "custom agent; touch") == (
+        "cd '/repo/with space' && exec 'custom agent; touch' --model custom-model "
+        "'start; $(touch should-not-run)'"
+    )
+
+
 def test_spawn_successor_close_failure_is_reported() -> None:
     create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
     close_command = ("orca", "terminal", "close", "--terminal", "term-new", "--json")
+    scoped_list_command = (
+        "orca",
+        "terminal",
+        "list",
+        "--worktree",
+        "folder:unit-a",
+        "--json",
+    )
     runner = _runner(
         {
-            _LIST_COMMAND: [
-                (0, _orca_json_from_terminals(), ""),
-                (
-                    0,
-                    _orca_json_from_terminals(_list_terminal("term-new", "folder:wrong", "✳ successor")),
-                    "",
-                ),
-            ],
+            scoped_list_command: (0, _orca_json_from_terminals(), ""),
+            _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(), ""),
+            _LIST_COMMAND: (0, _orca_json_from_terminals(_list_terminal("term-new", "folder:wrong", "✳ successor")), ""),
             create_command: (0, _orca_create_json("term-new", "folder:wrong"), ""),
             close_command: (1, "", "close denied"),
         }
@@ -548,6 +613,7 @@ def test_spawn_successor_parse_error_after_handle_closes_terminal() -> None:
     close_command = ("orca", "terminal", "close", "--terminal", "term-new", "--json")
     runner = _recording_runner(
         {
+            _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(), ""),
             _LIST_COMMAND: [
                 (0, _orca_json_from_terminals(), ""),
                 (
@@ -580,6 +646,7 @@ def test_spawn_successor_parse_error_close_failure_is_reported() -> None:
     close_command = ("orca", "terminal", "close", "--terminal", "term-new", "--json")
     runner = _runner(
         {
+            _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(), ""),
             _LIST_COMMAND: [
                 (0, _orca_json_from_terminals(), ""),
                 (
@@ -611,6 +678,7 @@ def test_spawn_successor_missing_worktree_after_handle_closes_terminal() -> None
     close_command = ("orca", "terminal", "close", "--terminal", "term-new", "--json")
     runner = _recording_runner(
         {
+            _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(), ""),
             _LIST_COMMAND: [
                 (0, _orca_json_from_terminals(), ""),
                 (
@@ -686,6 +754,11 @@ def test_spawn_successor_reissued_handle_resolves_via_list() -> None:
     create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
     runner = _runner(
         {
+            _GLOBAL_SNAPSHOT_FIXTURE: (
+                0,
+                _orca_json_from_terminals(_list_terminal("term-user", "folder:other", "shell")),
+                "",
+            ),
             _LIST_COMMAND: [
                 (0, _orca_json_from_terminals(_list_terminal("term-user", "folder:other", "shell")), ""),
                 (
@@ -723,6 +796,7 @@ def test_spawn_successor_live_handle_is_not_reissued() -> None:
     create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
     runner = _runner(
         {
+            _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(), ""),
             _LIST_COMMAND: [
                 (0, _orca_json_from_terminals(), ""),
                 (0, _orca_json_from_terminals(_list_terminal("term-new", "folder:unit-a", "successor")), ""),
@@ -751,6 +825,7 @@ def test_spawn_successor_stale_handle_zero_candidates_fails_closed() -> None:
     create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
     runner = _recording_runner(
         {
+            _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(), ""),
             _LIST_COMMAND: [
                 (0, _orca_json_from_terminals(), ""),
                 (0, _orca_json_from_terminals(), ""),
@@ -778,6 +853,7 @@ def test_spawn_successor_stale_handle_ambiguous_candidates_fails_closed_without_
     create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
     runner = _recording_runner(
         {
+            _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(), ""),
             _LIST_COMMAND: [
                 (0, _orca_json_from_terminals(), ""),
                 (
@@ -811,6 +887,7 @@ def test_spawn_successor_stale_handle_title_narrows_candidates() -> None:
     create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
     runner = _runner(
         {
+            _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(), ""),
             _LIST_COMMAND: [
                 (0, _orca_json_from_terminals(), ""),
                 (
@@ -843,6 +920,7 @@ def test_spawn_successor_snapshot_handle_is_not_trusted_as_live() -> None:
     preexisting = _list_terminal("term-recycled", "folder:unit-a", "user shell")
     runner = _runner(
         {
+            _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(preexisting), ""),
             _LIST_COMMAND: [
                 (0, _orca_json_from_terminals(preexisting), ""),
                 (0, _orca_json_from_terminals(preexisting), ""),
@@ -867,6 +945,7 @@ def test_spawn_successor_single_candidate_without_title_match_fails_closed() -> 
     create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
     runner = _runner(
         {
+            _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(), ""),
             _LIST_COMMAND: [
                 (0, _orca_json_from_terminals(), ""),
                 (0, _orca_json_from_terminals(_list_terminal("term-other", "folder:unit-a", "plain shell")), ""),
@@ -891,6 +970,7 @@ def test_spawn_successor_new_terminal_in_other_worktree_is_not_adopted() -> None
     create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
     runner = _runner(
         {
+            _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(), ""),
             _LIST_COMMAND: [
                 (0, _orca_json_from_terminals(), ""),
                 (0, _orca_json_from_terminals(_list_terminal("term-elsewhere", "folder:other", "successor")), ""),
@@ -915,6 +995,7 @@ def test_spawn_successor_title_containment_collision_fails_closed() -> None:
     create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "master-gen2")
     runner = _runner(
         {
+            _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(), ""),
             _LIST_COMMAND: [
                 (0, _orca_json_from_terminals(), ""),
                 (
@@ -950,6 +1031,7 @@ def test_spawn_successor_lone_substring_title_is_not_adopted() -> None:
     create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "master-gen2")
     runner = _runner(
         {
+            _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(), ""),
             _LIST_COMMAND: [
                 (0, _orca_json_from_terminals(), ""),
                 (0, _orca_json_from_terminals(_list_terminal("term-copy", "folder:unit-a", "master-gen2-copy")), ""),
@@ -993,6 +1075,7 @@ def test_spawn_successor_disconnected_reported_handle_is_not_live() -> None:
     dead = dict(_list_terminal("term-new", "folder:unit-a", "successor"), connected=False)
     runner = _runner(
         {
+            _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(), ""),
             _LIST_COMMAND: [
                 (0, _orca_json_from_terminals(), ""),
                 (0, _orca_json_from_terminals(dead), ""),
@@ -1018,6 +1101,7 @@ def test_spawn_successor_disconnected_candidate_is_not_adopted() -> None:
     dead = dict(_list_terminal("term-dead", "folder:unit-a", "✳ successor"), connected=False)
     runner = _runner(
         {
+            _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(), ""),
             _LIST_COMMAND: [
                 (0, _orca_json_from_terminals(), ""),
                 (0, _orca_json_from_terminals(dead), ""),
@@ -1042,6 +1126,7 @@ def test_spawn_successor_live_reported_handle_beats_ambient_candidates() -> None
     create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
     runner = _runner(
         {
+            _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(), ""),
             _LIST_COMMAND: [
                 (0, _orca_json_from_terminals(), ""),
                 (
@@ -1076,6 +1161,7 @@ def test_spawn_successor_liveness_list_failure_close_failure_is_reported() -> No
     close_command = ("orca", "terminal", "close", "--terminal", "term-new", "--json")
     runner = _runner(
         {
+            _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(), ""),
             _LIST_COMMAND: [
                 (0, _orca_json_from_terminals(), ""),
                 (1, "", "orca offline"),
@@ -1151,6 +1237,7 @@ def test_spawn_successor_liveness_list_failure_closes_terminal() -> None:
     close_command = ("orca", "terminal", "close", "--terminal", "term-new", "--json")
     runner = _recording_runner(
         {
+            _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(), ""),
             _LIST_COMMAND: [
                 (0, _orca_json_from_terminals(), ""),
                 (1, "", "orca offline"),
@@ -1185,6 +1272,7 @@ def test_spawn_successor_cleanup_does_not_close_recycled_handle_without_title_ow
     close_command = ("orca", "terminal", "close", "--terminal", "term-recycled", "--json")
     runner = _recording_runner(
         {
+            _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(), ""),
             _LIST_COMMAND: [
                 (0, _orca_json_from_terminals(), ""),
                 (1, "", "orca offline"),
@@ -1223,6 +1311,7 @@ def test_spawn_successor_cleanup_closes_recycled_handle_with_confirmed_title_own
     close_command = ("orca", "terminal", "close", "--terminal", "term-recycled", "--json")
     runner = _recording_runner(
         {
+            _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(), ""),
             _LIST_COMMAND: [
                 (0, _orca_json_from_terminals(), ""),
                 (1, "", "orca offline"),
@@ -1269,6 +1358,7 @@ def test_spawn_successor_cleanup_does_not_close_disconnected_confirmed_handle() 
     }
     runner = _recording_runner(
         {
+            _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(), ""),
             _LIST_COMMAND: [
                 (0, _orca_json_from_terminals(), ""),
                 (1, "", "orca offline"),
@@ -1302,6 +1392,7 @@ def test_spawn_successor_liveness_list_failure_does_not_close_preexisting_handle
     preexisting = _list_terminal("term-recycled", "folder:unit-a", "user shell")
     runner = _recording_runner(
         {
+            _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(preexisting), ""),
             _LIST_COMMAND: [
                 (0, _orca_json_from_terminals(preexisting), ""),
                 (1, "", "orca offline"),
@@ -1377,6 +1468,60 @@ def test_cli_spawn_dry_run_outputs_json() -> None:
     assert payload["verification"]["fail_closed_action"] == "terminal close on mismatch"
 
 
+def test_cli_spawn_uses_agent_specific_default_model() -> None:
+    result = subprocess.run(
+        [
+            str(Path(__file__).resolve().parent.parent / "scripts" / "master-succeed"),
+            "spawn",
+            "--workspace-selector",
+            "folder:unit-a",
+            "--kickoff-text",
+            "start here",
+            "--root",
+            "/repo/example",
+            "--agent",
+            "codex",
+            "--title",
+            "successor",
+            "--dry-run",
+            "--json",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    assert "codex --model gpt-5.6-sol" in payload["startup_command"]
+
+
+def test_cli_spawn_requires_model_for_unknown_agent() -> None:
+    result = subprocess.run(
+        [
+            str(Path(__file__).resolve().parent.parent / "scripts" / "master-succeed"),
+            "spawn",
+            "--workspace-selector",
+            "folder:unit-a",
+            "--kickoff-text",
+            "start here",
+            "--root",
+            "/repo/example",
+            "--agent",
+            "custom-agent",
+            "--title",
+            "successor",
+            "--dry-run",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "--model is required for agent custom-agent" in result.stderr
+
+
 def test_cli_retire_accepts_explicit_target_handle() -> None:
     fixture = _orca_json_from_terminals(
         {
@@ -1420,13 +1565,99 @@ def test_cli_retire_accepts_explicit_target_handle() -> None:
 
 
 def _runner(responses):
+    last_scoped_response = None
+    global_snapshot_reused = False
+
     def run(command: Sequence[str]) -> Tuple[int, str, str]:
-        response = responses[tuple(command)]
+        nonlocal global_snapshot_reused, last_scoped_response
+        key = tuple(command)
+        if (
+            key == _LIST_COMMAND
+            and _GLOBAL_SNAPSHOT_FIXTURE in responses
+            and last_scoped_response is not None
+            and not global_snapshot_reused
+        ):
+            # Tests that exercise spawn_successor's global pre-create snapshot
+            # opt in explicitly, without consuming the bare-list sequence.
+            global_snapshot_reused = True
+            return responses[_GLOBAL_SNAPSHOT_FIXTURE]
+        if key not in responses and _is_scoped_terminal_list(command) and _LIST_COMMAND in responses:
+            # Reuse bare-list fixtures only after applying the requested
+            # worktree selector, so tests cannot hide a wrong selector.
+            response = responses[_LIST_COMMAND]
+            if isinstance(response, list):
+                response = response.pop(0)
+            last_scoped_response = response
+            return _filter_scoped_response(response, command[4])
+        response = responses[key]
         if isinstance(response, list):
-            return response.pop(0)
+            response = response.pop(0)
+        if _is_scoped_terminal_list(command):
+            last_scoped_response = response
         return response
 
     return run
+
+
+def test_runner_does_not_shadow_explicit_global_list_fixture() -> None:
+    scoped_list_command = (
+        "orca",
+        "terminal",
+        "list",
+        "--worktree",
+        "folder:unit-a",
+        "--json",
+    )
+    scoped_response = (0, _orca_json_from_terminals(), "")
+    first_global_response = (
+        0,
+        _orca_json_from_terminals(_list_terminal("term-global", "folder:other", "shell")),
+        "",
+    )
+    runner = _runner(
+        {
+            scoped_list_command: scoped_response,
+            _LIST_COMMAND: [first_global_response],
+        }
+    )
+
+    assert runner(scoped_list_command) == scoped_response
+    assert runner(_LIST_COMMAND) == first_global_response
+
+
+def _is_scoped_terminal_list(command: Sequence[str]) -> bool:
+    return (
+        len(command) >= 5
+        and tuple(command[:3]) == ("orca", "terminal", "list")
+        and command[3] == "--worktree"
+        and command[-1] == "--json"
+    )
+
+
+def _filter_scoped_response(response, selector: str):
+    code, stdout, stderr = response
+    if code != 0:
+        return response
+    payload = json.loads(stdout)
+    result = payload.get("result")
+    terminals = result.get("terminals") if isinstance(result, dict) else None
+    if not isinstance(terminals, list):
+        return response
+    payload["result"]["terminals"] = [
+        terminal
+        for terminal in terminals
+        if _fixture_worktree_matches(terminal, selector)
+    ]
+    return code, json.dumps(payload), stderr
+
+
+def _fixture_worktree_matches(terminal: dict, selector: str) -> bool:
+    requested = selector.removeprefix("id:")
+    for key in ("worktreeId", "worktree_id", "worktreePath", "worktree_path"):
+        value = terminal.get(key)
+        if value and str(value).removeprefix("id:") == requested:
+            return True
+    return False
 
 
 def _recording_runner(responses, calls):

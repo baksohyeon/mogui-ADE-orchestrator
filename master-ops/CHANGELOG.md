@@ -24,6 +24,54 @@ here in the same change. Skip that and installations on different template
 states all report the same version, which is the whole thing this was meant to
 prevent.
 
+## 5
+
+Onboarding now requires Orca infrastructure and uses Orca orchestration for all
+supervised dispatch. A new read-only-by-default `scripts/onboarding-preflight.sh`
+checks Orca status, the orchestration RPC, the global `orca-cli` and
+`orchestration` skills, Beads resolution when an ops repository exists, and
+Python before onboarding proceeds. `ONBOARDING.md` is rewritten as a token-lean
+script-and-command flow while retaining its questions, safeguards, and
+verification gates; `--fix` may add or refresh only the required global skills.
+Template v5 also adds the append-only `scripts/codex-worker-pretrust` helper so
+every Orca Codex account trusts a worker worktree before dispatch.
+
+The minimum Python version is now 3.11 because the pre-trust helper uses the
+standard-library `tomllib` parser to make config edits safely.
+
+The v5 upgrade contract also adds governance rules to the template: Orca is
+required infrastructure, neutrality covers only artifact formats and agent
+swappability, PR review-bot threads are worker-handled by standing delegation,
+and supervised dispatch is vendor-neutral Orca orchestration only. Existing
+installations should add these rules to their operations SSOT when applying the
+v5 upgrade; accidental out-of-orchestration work must remain plainly recorded.
+
+Upgrade an existing installation in this order:
+
+1. Pull template v5 in the orchestrator clone.
+2. Run `bash scripts/onboarding-preflight.sh` from that clone and fix every FAIL;
+   re-collect and confirm the workspace facts before routing work.
+3. Before each Codex worker attach, run `scripts/codex-worker-pretrust <worktree-path>` from the orchestrator clone.
+4. Enable Orca orchestration, then verify the preflight reports its RPC reachable.
+5. Select or create the approved ops repository, then verify `bd where` from the
+   workspace root resolves to it and no tracker root is selected above it.
+6. Replace all template placeholders, verify `CLAUDE.md` and `AGENTS.md` are
+   byte-identical, and make settings and security-sensitive hook ownership
+   explicit before enabling anything.
+7. Install only the required skills with
+   `npx skills add stablyai/orca -g --skill orca-cli --skill orchestration`;
+   refresh the orchestration skill with `npx skills update orchestration -g`
+   when needed.
+8. Raise the installation's `Template version` line in
+   `docs/MASTER-OPERATIONS.md` to 5 after applying the relevant local changes.
+
+Existing local edits still win. From this version onward, raw terminal polling
+and vendor-direct agent CLIs do not satisfy supervised dispatch: bind a Run,
+create a Task, attach a worker Dispatch, and wait for `worker_done` through Orca
+orchestration. Finish by spawning exactly one verified Generation 1 master
+through Orca and have that master perform the Step 9 first-boot smoke, including
+role, model, placement, lineage, and completion evidence.
+
 ## 4
 
 The Step 8 spawn gate accepts MATCH_REISSUED alongside MATCH (in `ONBOARDING.md`

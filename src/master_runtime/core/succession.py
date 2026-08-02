@@ -268,12 +268,27 @@ def verify_successor(recover_report: object) -> VerificationReport:
 def find_sessions(
     orca_runner: Optional[OrcaRunner] = None,
     selector: Optional[str] = None,
+    list_worktree: Optional[str] = None,
 ) -> Tuple[SessionInfo, ...]:
-    """Return Orca-managed terminal sessions from ``orca terminal list --json``."""
+    """Return Orca-managed terminal sessions from ``orca terminal list --json``.
 
-    code, stdout, stderr = (orca_runner or _default_orca_runner)(
-        ("orca", "terminal", "list", "--json")
-    )
+    When ``list_worktree`` is set, list only that worktree. Some Orca builds
+    reject a bare global list with ``folder_workspace_not_found``; spawn always
+    has a workspace selector and must use the scoped form.
+    """
+
+    if list_worktree:
+        command: Tuple[str, ...] = (
+            "orca",
+            "terminal",
+            "list",
+            "--worktree",
+            list_worktree,
+            "--json",
+        )
+    else:
+        command = ("orca", "terminal", "list", "--json")
+    code, stdout, stderr = (orca_runner or _default_orca_runner)(command)
     if code != 0:
         raise SuccessionError(stderr.strip() or stdout.strip() or "orca terminal list failed")
     # A single malformed entry must not take every list consumer down; entries
@@ -408,6 +423,7 @@ def spawn_successor(
     root: str,
     title: str,
     model: str = "claude-fable-5",
+    agent: str = "claude",
     orca_runner: Optional[OrcaRunner] = None,
     dry_run: bool = False,
 ) -> SpawnReport:
@@ -418,7 +434,8 @@ def spawn_successor(
     cwd = _require_substr(root, "root")
     pane_title = _require_substr(title, "title")
     model_name = _require_substr(model, "model")
-    startup_command = _spawn_startup_command(cwd, model_name, kickoff)
+    agent_name = _require_substr(agent, "agent")
+    startup_command = _spawn_startup_command(cwd, model_name, kickoff, agent_name)
     create_command = (
         "orca",
         "terminal",
@@ -436,6 +453,7 @@ def spawn_successor(
         "expected_response_field": "worktreeId",
         "fail_closed_action": "terminal close on mismatch",
         "liveness_check": "reported handle must be live+new+connected in requested worktree, else adopt unique titled candidate or fail closed without closing",
+        "agent": agent_name,
     }
     if dry_run:
         return SpawnReport(
@@ -451,7 +469,9 @@ def spawn_successor(
 
     runner = orca_runner or _default_orca_runner
     try:
-        snapshot_handles = frozenset(session.handle for session in find_sessions(runner))
+        snapshot_handles = frozenset(
+            session.handle for session in find_sessions(runner, list_worktree=selector)
+        )
     except SuccessionError as exc:
         raise SuccessionError(
             "spawn precheck list failed: " + str(exc),
@@ -469,16 +489,20 @@ def spawn_successor(
     try:
         terminal = _created_terminal(stdout)
     except SuccessionError as exc:
-        _raise_spawn_error_after_cleanup(runner, handle_hint, exc, snapshot_handles, pane_title)
+        _raise_spawn_error_after_cleanup(
+            runner, handle_hint, exc, snapshot_handles, pane_title, list_worktree=selector
+        )
         raise
 
     handle = _spawn_field(terminal, ("handle", "terminal", "terminalHandle"), "handle")
     try:
         worktree_id = _spawn_field(terminal, ("worktreeId",), "worktreeId")
     except SuccessionError as exc:
-        _raise_spawn_error_after_cleanup(runner, handle, exc, snapshot_handles, pane_title)
+        _raise_spawn_error_after_cleanup(
+            runner, handle, exc, snapshot_handles, pane_title, list_worktree=selector
+        )
         raise
-    if worktree_id != selector:
+    if not _worktrees_match(worktree_id, selector):
         mismatch = SuccessionError(
             "spawn worktree mismatch: requested {0}, got {1}".format(selector, worktree_id),
             SPAWN_WORKTREE_MISMATCH,
@@ -497,6 +521,7 @@ def spawn_successor(
             str(mismatch),
             snapshot_handles,
             pane_title,
+            list_worktree=selector,
         ):
             raise SuccessionError(
                 "spawn worktree mismatch; closed terminal {0}: requested {1}, got {2}".format(
@@ -514,7 +539,7 @@ def spawn_successor(
         ) from mismatch
 
     try:
-        live_sessions = find_sessions(runner)
+        live_sessions = find_sessions(runner, list_worktree=selector)
     except SuccessionError as exc:
         _raise_spawn_error_after_cleanup(
             runner,
@@ -522,6 +547,7 @@ def spawn_successor(
             SuccessionError("spawn liveness list failed: " + str(exc), SPAWN_LIST_ERROR),
             snapshot_handles,
             pane_title,
+            list_worktree=selector,
         )
         raise
 
@@ -534,7 +560,7 @@ def spawn_successor(
             for session in live_sessions
             if session.handle == handle
             and session.handle not in snapshot_handles
-            and session.worktree_id == selector
+            and _worktrees_match(session.worktree_id, selector)
             and session.connected
         ),
         None,
@@ -609,7 +635,7 @@ def _new_worktree_sessions(
     return tuple(
         session
         for session in live_sessions
-        if session.worktree_id == selector
+        if _worktrees_match(session.worktree_id, selector)
         and session.handle not in snapshot_handles
         and session.connected
     )
@@ -691,6 +717,7 @@ def _raise_spawn_error_after_cleanup(
     error: SuccessionError,
     snapshot_handles: frozenset,
     pane_title: str,
+    list_worktree: Optional[str] = None,
 ) -> None:
     if not handle:
         raise error
@@ -702,7 +729,14 @@ def _raise_spawn_error_after_cleanup(
             ),
             error.exit_code,
         ) from error
-    if _close_spawned_terminal(runner, handle, str(error), snapshot_handles, pane_title):
+    if _close_spawned_terminal(
+        runner,
+        handle,
+        str(error),
+        snapshot_handles,
+        pane_title,
+        list_worktree=list_worktree,
+    ):
         raise SuccessionError(
             "{0}; closed terminal {1}".format(str(error), handle),
             error.exit_code,
@@ -721,9 +755,10 @@ def _close_spawned_terminal(
     failure_message: str,
     snapshot_handles: frozenset,
     pane_title: str,
+    list_worktree: Optional[str] = None,
 ) -> bool:
     try:
-        confirmed_sessions = find_sessions(runner)
+        confirmed_sessions = find_sessions(runner, list_worktree=list_worktree)
     except SuccessionError:
         return False
     confirmed = next(
@@ -758,11 +793,63 @@ def _spawn_field(item: Mapping[str, object], keys: Sequence[str], label: str) ->
     raise SuccessionError("spawn JSON missing " + label, SPAWN_PARSE_ERROR)
 
 
-def _spawn_startup_command(root: str, model: str, kickoff_text: str) -> str:
-    return "cd {0} && exec claude --model {1} --dangerously-skip-permissions {2}".format(
-        shlex.quote(root),
-        shlex.quote(model),
-        shlex.quote(kickoff_text),
+def _normalize_worktree_selector(value: str) -> str:
+    """Normalize Orca worktree selectors for equality checks.
+
+    Create/list payloads often return ``repoId::path`` while callers may pass
+    ``id:repoId::path``. Treat those as the same worktree identity.
+    """
+
+    text = value.strip()
+    if text.startswith("id:"):
+        return text[3:]
+    return text
+
+
+def _worktrees_match(actual: str, requested: str) -> bool:
+    if not actual or not requested:
+        return False
+    if actual == requested:
+        return True
+    return _normalize_worktree_selector(actual) == _normalize_worktree_selector(requested)
+
+
+def _spawn_startup_command(
+    root: str,
+    model: str,
+    kickoff_text: str,
+    agent: str = "claude",
+) -> str:
+    """Build the agent TUI command for a founding/successor terminal."""
+
+    agent_key = agent.strip().lower()
+    quoted_root = shlex.quote(root)
+    quoted_model = shlex.quote(model)
+    quoted_kickoff = shlex.quote(kickoff_text)
+    if agent_key in ("claude", "claude-code"):
+        return "cd {0} && exec claude --model {1} --dangerously-skip-permissions {2}".format(
+            quoted_root,
+            quoted_model,
+            quoted_kickoff,
+        )
+    if agent_key in ("grok", "grok-build"):
+        return "cd {0} && exec grok --model {1} --always-approve --cwd {0} {2}".format(
+            quoted_root,
+            quoted_model,
+            quoted_kickoff,
+        )
+    if agent_key in ("codex",):
+        return "cd {0} && exec codex --model {1} {2}".format(
+            quoted_root,
+            quoted_model,
+            quoted_kickoff,
+        )
+    # Unknown agent: treat the name as the executable and pass model + prompt.
+    return "cd {0} && exec {1} --model {2} {3}".format(
+        quoted_root,
+        shlex.quote(agent.strip()),
+        quoted_model,
+        quoted_kickoff,
     )
 
 

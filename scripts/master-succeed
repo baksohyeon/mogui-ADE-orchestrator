@@ -81,6 +81,7 @@ def _dispatch(args, runner):
             root=args.root,
             title=args.title,
             model=args.model,
+            agent=args.agent,
             orca_runner=runner,
             dry_run=args.dry_run,
         )
@@ -124,6 +125,11 @@ def _build_parser() -> argparse.ArgumentParser:
     kickoff.add_argument("--kickoff-file")
     spawn.add_argument("--root", required=True)
     spawn.add_argument("--model", default="claude-fable-5")
+    spawn.add_argument(
+        "--agent",
+        default="claude",
+        help="Agent CLI to launch (claude, grok, codex, or a custom executable name)",
+    )
     spawn.add_argument("--title", required=True)
     spawn.add_argument("--dry-run", action="store_true")
     return parser
@@ -157,6 +163,14 @@ def _extract_common_args(argv):
 def _fixture_runner(fixture_json: str):
     def run(command):
         if tuple(command) == ("orca", "terminal", "list", "--json"):
+            return 0, fixture_json, ""
+        # Scoped list used by spawn precheck/liveness on hosts where bare list fails.
+        if (
+            len(command) >= 5
+            and tuple(command[:3]) == ("orca", "terminal", "list")
+            and command[3] == "--worktree"
+            and command[-1] == "--json"
+        ):
             return 0, fixture_json, ""
         if len(command) >= 4 and tuple(command[:3]) == ("orca", "terminal", "close"):
             return 0, '{"ok":true}', ""

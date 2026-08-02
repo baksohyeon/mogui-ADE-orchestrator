@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import subprocess
 import sys
@@ -185,6 +186,9 @@ def _report(args: argparse.Namespace) -> int:
         print(f"REPORT_UNAVAILABLE: {exc}", file=sys.stderr)
         return 2
 
+    malformed_count = sum(not isinstance(entry, dict) for entry in entries)
+    entries = tuple(entry for entry in entries if isinstance(entry, dict))
+
     if args.today:
         today = datetime.now(timezone.utc).date()
         entries = tuple(
@@ -198,7 +202,7 @@ def _report(args: argparse.Namespace) -> int:
     override_counts: Counter[tuple[str, str]] = Counter()
     timestamps: list[float] = []
     for entry in entries:
-        timestamp = _number(entry.get("ts"))
+        timestamp = _timestamp(entry.get("ts"))
         if timestamp is not None:
             timestamps.append(timestamp)
 
@@ -210,15 +214,18 @@ def _report(args: argparse.Namespace) -> int:
         model = entry.get("model")
         if decision != "ALLOW" or not isinstance(model, str) or not model:
             continue
-        stats = model_stats.setdefault(model, [0, 0])
+        stats = model_stats.setdefault(model, [0, 0, 0])
         stats[0] += 1
-        stats[1] += _entry_cost_proxy(entry)
+        cost_proxy, computed = _entry_cost_proxy(entry)
+        stats[1] += cost_proxy
+        stats[2] += int(computed)
         tier_override = entry.get("tier_override")
         if isinstance(tier_override, str) and tier_override:
             override_counts[(model, tier_override)] += 1
 
     print("Dispatch gate report")
     print(f"Scope: {'today (UTC)' if args.today else 'all ledger entries'}")
+    print(f"Skipped malformed: {malformed_count}")
     if timestamps:
         print(
             "Time span: "
@@ -230,9 +237,15 @@ def _report(args: argparse.Namespace) -> int:
     print("Models:")
     if model_stats:
         for model in sorted(model_stats):
-            count, cost_proxy = model_stats[model]
+            count, cost_proxy, computed_count = model_stats[model]
+            computed_label = (
+                f" computed_legacy_entries={computed_count}"
+                if computed_count
+                else ""
+            )
             print(
                 f"  {model}: dispatches={count} est_cost_proxy={cost_proxy}"
+                f"{computed_label}"
             )
     else:
         print("  <none>")
@@ -259,7 +272,7 @@ def _report(args: argparse.Namespace) -> int:
 def _entry_date(entry: object):
     if not isinstance(entry, dict):
         return None
-    timestamp = _number(entry.get("ts"))
+    timestamp = _timestamp(entry.get("ts"))
     if timestamp is None:
         return None
     try:
@@ -268,9 +281,14 @@ def _entry_date(entry: object):
         return None
 
 
-def _entry_cost_proxy(entry: object) -> int:
+def _entry_cost_proxy(entry: object) -> tuple[int, bool]:
     if not isinstance(entry, dict):
-        return 0
+        return 0, False
+    if "cost_proxy" in entry:
+        cost_proxy = entry.get("cost_proxy")
+        if isinstance(cost_proxy, bool) or not isinstance(cost_proxy, int):
+            return 0, False
+        return max(0, cost_proxy), False
     est_chars = entry.get("est_chars")
     n_agents = entry.get("n_agents")
     if (
@@ -279,14 +297,28 @@ def _entry_cost_proxy(entry: object) -> int:
         or isinstance(n_agents, bool)
         or not isinstance(n_agents, int)
     ):
-        return 0
-    return max(0, est_chars) * max(0, n_agents)
+        return 0, True
+    return max(0, est_chars) * max(0, n_agents), True
 
 
 def _number(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    return float(value)
+    try:
+        return float(value)
+    except OverflowError:
+        return None
+
+
+def _timestamp(value: object) -> float | None:
+    timestamp = _number(value)
+    if timestamp is None or not math.isfinite(timestamp):
+        return None
+    try:
+        datetime.fromtimestamp(timestamp, timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return None
+    return timestamp
 
 
 def _format_timestamp(timestamp: float) -> str:

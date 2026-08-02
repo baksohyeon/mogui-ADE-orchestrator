@@ -24,13 +24,17 @@ here in the same change. Skip that and installations on different template
 states all report the same version, which is the whole thing this was meant to
 prevent.
 
-## Unreleased
+## 6
 
 The dispatch gate now enforces the installation-specific
 `model-tier-policy.json` fail closed, records justified tier overrides in its
 ledger, and provides a stable plain-text `report` rollup for model use, cost
 proxy, denials, overrides, and time span. Existing installations should copy
 and customize the policy file before adopting this gate version.
+
+Upgrade an existing installation by copying `master-ops/model-tier-policy.json`,
+re-running `bash scripts/onboarding-preflight.sh`, and raising the installed
+`Template version` line to 6.
 
 ## 5
 

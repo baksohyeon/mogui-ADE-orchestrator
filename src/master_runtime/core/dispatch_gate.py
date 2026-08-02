@@ -113,13 +113,13 @@ class DispatchGateConfig:
     ledger_path: str | Path = field(default_factory=_default_ledger_path)
     ticket_dir: str | Path = field(default_factory=_default_ticket_dir)
     known_roots_path: str | Path = field(default_factory=_default_known_roots_path)
-    tier_policy_path: str | Path = field(default_factory=_default_tier_policy_path)
     single_dispatch_char_limit: int = DEFAULT_SINGLE_DISPATCH_CHAR_LIMIT
     batch_dispatch_char_limit: int = DEFAULT_BATCH_DISPATCH_CHAR_LIMIT
     duplicate_window_seconds: int = DEFAULT_DUPLICATE_WINDOW_SECONDS
     high_cost_runtimes: frozenset[str] = DEFAULT_HIGH_COST_RUNTIMES
     ticket_ttl_seconds: int = DEFAULT_TICKET_TTL_SECONDS
     expired_ticket_gc_grace_seconds: int = DEFAULT_EXPIRED_TICKET_GC_GRACE_SECONDS
+    tier_policy_path: str | Path = field(default_factory=_default_tier_policy_path)
 
 
 @dataclass(frozen=True)
@@ -443,6 +443,7 @@ class DispatchGate:
             "est_chars": request.est_input_chars,
             "decision": "ALLOW" if decision.allow else "DENY",
             "reason": decision.reason.value,
+            "cost_proxy": decision.cost_proxy,
             "completion_channel": request.completion_channel,
             "model": request.model,
         }
@@ -633,7 +634,7 @@ def _validate_request(request: DispatchRequest) -> ReasonCode | None:
     if not isinstance(request.model, str) or not request.model.strip():
         return ReasonCode.NO_MODEL
     if request.model != request.model.strip():
-        return ReasonCode.TIER_POLICY_UNAVAILABLE
+        return ReasonCode.INVALID_REQUEST
     if request.tier_override is not None and (
         not isinstance(request.tier_override, str)
         or not request.tier_override.strip()

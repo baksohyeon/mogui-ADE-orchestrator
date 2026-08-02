@@ -24,6 +24,28 @@ def DispatchRequest(*args, **kwargs):
     return _DispatchRequest(*args, **kwargs)
 
 
+def test_dispatch_gate_config_preserves_old_positional_arity(tmp_path: Path) -> None:
+    config = DispatchGateConfig(
+        tmp_path / "ledger.jsonl",
+        tmp_path / "tickets",
+        tmp_path / "known-roots.json",
+        101,
+        202,
+        303,
+        frozenset({"premium"}),
+        404,
+        505,
+    )
+
+    assert config.single_dispatch_char_limit == 101
+    assert config.batch_dispatch_char_limit == 202
+    assert config.duplicate_window_seconds == 303
+    assert config.high_cost_runtimes == frozenset({"premium"})
+    assert config.ticket_ttl_seconds == 404
+    assert config.expired_ticket_gc_grace_seconds == 505
+    assert config.tier_policy_path == dispatch_gate._default_tier_policy_path()
+
+
 def test_check_without_completion_channel_records_denial_in_ledger(
     tmp_path: Path,
 ) -> None:
@@ -99,7 +121,9 @@ def test_check_records_model(tmp_path: Path) -> None:
     )
 
     assert decision.allow is True
-    assert _ledger_entries(tmp_path)[-1]["model"] == "gpt-5.6-luna"
+    entry = _ledger_entries(tmp_path)[-1]
+    assert entry["model"] == "gpt-5.6-luna"
+    assert entry["cost_proxy"] == 10_000
 
 
 def test_tier_policy_allows_worker_model(tmp_path: Path) -> None:
@@ -260,7 +284,7 @@ def test_noncanonical_denied_tier_never_fails_open(tmp_path: Path) -> None:
         assert not (case_dir / "dispatch-tickets").exists()
 
 
-def test_noncanonical_requested_model_never_bypasses_deny(tmp_path: Path) -> None:
+def test_noncanonical_requested_model_is_invalid_request(tmp_path: Path) -> None:
     contract = _contract(tmp_path, "noncanonical requested model")
     gate = _gate(
         tmp_path,
@@ -279,8 +303,8 @@ def test_noncanonical_requested_model_never_bypasses_deny(tmp_path: Path) -> Non
     )
 
     assert decision.allow is False
-    assert decision.reason == ReasonCode.TIER_POLICY_UNAVAILABLE
-    assert _ledger_entries(tmp_path)[-1]["reason"] == "TIER_POLICY_UNAVAILABLE"
+    assert decision.reason == ReasonCode.INVALID_REQUEST
+    assert _ledger_entries(tmp_path)[-1]["reason"] == "INVALID_REQUEST"
     assert not (tmp_path / "dispatch-tickets").exists()
 
 
@@ -400,6 +424,7 @@ def test_r1_denies_batch_cost_over_limit(tmp_path: Path) -> None:
     assert decision.allow is False
     assert decision.reason == ReasonCode.BUDGET_EXCEEDED
     assert decision.cost_proxy == 1_200_000
+    assert _ledger_entries(tmp_path)[-1]["cost_proxy"] == 1_200_000
 
 
 def test_unmeasured_contract_fails_closed_before_validation_and_budget(
@@ -1548,6 +1573,67 @@ def test_cli_report_rolls_up_models_denials_and_overrides(
     assert (
         'gpt-5.6-sol: reason="owner approved benchmark" count=1' in output
     )
+
+
+def test_cli_report_uses_stored_cost_and_labels_legacy_computation(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
+    ledger = tmp_path / "report-ledger.jsonl"
+    entries = (
+        {
+            "ts": 1_000,
+            "decision": "ALLOW",
+            "model": "stored-model",
+            "cost_proxy": 7,
+            "est_chars": 999,
+            "n_agents": 999,
+        },
+        {
+            "ts": 2_000,
+            "decision": "ALLOW",
+            "model": "legacy-model",
+            "est_chars": 20,
+            "n_agents": 3,
+        },
+    )
+    ledger.write_text(
+        "".join(json.dumps(entry) + "\n" for entry in entries),
+        encoding="utf-8",
+    )
+
+    assert script["main"](["--ledger", str(ledger), "report"]) == 0
+    output = capsys.readouterr().out
+
+    assert "stored-model: dispatches=1 est_cost_proxy=7" in output
+    assert "legacy-model: dispatches=1 est_cost_proxy=60" in output
+    assert "legacy-model: dispatches=1 est_cost_proxy=60 computed_legacy_entries=1" in output
+
+
+def test_cli_report_skips_non_object_and_invalid_timestamps(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
+    ledger = tmp_path / "damaged-ledger.jsonl"
+    ledger.write_text(
+        "[]\n"
+        '{"ts":1e309,"decision":"DENY","reason":"BAD_TS"}\n'
+        f'{{"ts":{10**400},"decision":"ALLOW","model":"damaged-model",'
+        '"cost_proxy":12}\n'
+        '{"ts":0,"decision":"ALLOW","model":"healthy-model","cost_proxy":3}\n',
+        encoding="utf-8",
+    )
+
+    assert script["main"](["--ledger", str(ledger), "report"]) == 0
+    output = capsys.readouterr().out
+
+    assert "Skipped malformed: 1" in output
+    assert "Time span: 1970-01-01T00:00:00Z to 1970-01-01T00:00:00Z" in output
+    assert "BAD_TS: 1" in output
+    assert "damaged-model: dispatches=1 est_cost_proxy=12" in output
+    assert "healthy-model: dispatches=1 est_cost_proxy=3" in output
 
 
 def test_cli_check_creates_default_ticket_directory(tmp_path: Path) -> None:

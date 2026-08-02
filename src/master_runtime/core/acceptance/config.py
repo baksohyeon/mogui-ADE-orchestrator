@@ -1,6 +1,6 @@
 """JSON config loading for acceptance runs.
 
-JSON rather than TOML: this repository targets Python 3.10+ and stays stdlib-only,
+JSON rather than TOML: this repository targets Python 3.11+ and stays stdlib-only,
 so `tomllib` is not available across the supported range.
 """
 

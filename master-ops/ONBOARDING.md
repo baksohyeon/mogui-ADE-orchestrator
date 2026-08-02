@@ -64,9 +64,27 @@ Before asking, say these plain definitions in the user's language:
 - “Workspace (root)” is simply the folder that groups the repositories this master will manage—nothing more special than that.
 - “Workspace name” is a display label; by default, it is that folder's name.
 - “Monitor namespace” is a short tag that keeps this workspace's session artifacts separate from other workspaces.
-- “Default model identifier” is the model the master session is expected to run as; it is measured at boot, not guessed.
+- “Default model identifier” is the model the master session is expected to run as; use the chosen agent CLI's table row below as the recommended candidate and measure the actual model at boot rather than guessing.
 
-Measure and offer numbered workspace-root candidates before asking: the parent directory of `{{RUNTIME_ROOT}}`, `{{RUNTIME_ROOT}}`'s grandparent when it groups repositories, and a user-named new folder. Make creating that new workspace folder and placing or cloning repositories into it a first-class option when no suitable folder exists; recommend the existing candidate that groups the intended repositories when available, otherwise recommend creating the new folder, and explain why. Then ask for the absolute workspace root, workspace name (default: confirmed root basename), monitor namespace, and default model identifier to measure at boot, with measured candidate values, a recommendation and reason, and a free-form option for each when available; explain why each is needed.
+Master model criteria:
+
+| Agent CLI | Master-session top-tier candidate |
+| --- | --- |
+| `claude` | `claude-fable-5` |
+| `codex` | `gpt-5.6-sol` |
+| `grok` | `grok-4.5` |
+| `cursor-agent` | measured at boot; no fixed identifier yet |
+
+The master session runs the top tier of its agent family. Worker and dispatch models use task-based tier selection instead: choose the lowest sufficient tier and state the exact model explicitly in every dispatch. For the `{{MODEL_ID}}` question, recommend the row for the chosen agent CLI; for `cursor-agent`, recommend measuring at boot and confirming the candidate with the owner.
+
+Selection criteria for the workspace-root candidates, in plain language:
+
+- If you are coordinating multiple product repositories, choose the folder that contains those repositories.
+- If you are maintaining a single repository, choose that repository's parent folder.
+- If this is an experiment or disposable work, choose a new temporary folder.
+- When an existing grouping folder is present, it wins over a new or broader candidate.
+
+Measure and offer numbered workspace-root candidates before asking: the parent directory of `{{RUNTIME_ROOT}}`, `{{RUNTIME_ROOT}}`'s grandparent when it groups repositories, and a user-named new folder. Make creating that new workspace folder and placing or cloning repositories into it a first-class option when no suitable folder exists; apply the criteria above, recommend the existing grouping candidate when present, and explain why. Then ask for the absolute workspace root, workspace name (default: confirmed root basename), monitor namespace, and default model identifier to measure at boot, with measured candidate values, a recommendation and reason, and a free-form option for each when available; explain why each is needed.
 
 Run:
 
@@ -89,7 +107,7 @@ Verify:
 
 **Why/caution:** Governance needs a visible ownership boundary that cannot be confused with product code.
 
-Ask whether to create a new repository or reuse an existing operations repository, and whether local Git initialization is allowed for a new one.
+Ask whether to create a new repository or reuse an existing operations repository, and whether local Git initialization is allowed for a new ops repository; this choice applies only to `{{OPS_REPO}}`, never to `{{WORKSPACE_ROOT}}`.
 
 Inspect the confirmed names; propose two or three candidates with pros and cons; recommend `<workspace>-ops`; evaluate governance clarity, separation from product scope, and shell-title ambiguity; use a structured choice when available.
 
@@ -99,33 +117,13 @@ Verify:
 - the selection was evaluated against the confirmed inventory
 - no product repository name was reused
 
-## Step 2.5. Register The Orca Workspace
-
-**Position and action:** Step 2.5 begins with the ops repository selected: open `{{WORKSPACE_ROOT}}` in Orca, start a terminal there, and measure its runtime-issued handle.
-
-**Why/caution:** A filesystem path is not a valid substitute for an Orca folder selector; guessed paths can fail with `selector_not_found`.
-
-Ask the user to provide that Orca terminal handle, then run:
-
-```console
-$ ORCA terminal show --terminal <terminal handle> --json
-```
-
-Resolve `ORCA` exactly as Step 0's preflight does. Capture the returned folder/worktree selector only if the metadata proves it belongs to `{{WORKSPACE_ROOT}}`; otherwise repeat with the correct Orca folder. Keep the selector for Step 8 without adding a template placeholder.
-
-Verify:
-
-- `terminal show` measured the terminal metadata
-- the selector points to the confirmed workspace folder context
-- the selector is available before founding spawn
-
 ## Step 3. Create The Ops Repository
 
-**Position and action:** Step 3 begins with an approved name and measured Orca context: create or deliberately reuse the ops repository.
+**Position and action:** Step 3 begins with an approved name: create or deliberately reuse the ops repository before registering it in Orca.
 
 **Why/caution:** Read and merge existing files; never overwrite operations records or initialize Git without approval.
 
-Ask for confirmation to create or reuse `{{OPS_REPO}}` and separate confirmation before local Git initialization.
+Ask for confirmation to create or reuse `{{OPS_REPO}}` and separate confirmation before local Git initialization of that ops repository.
 
 If new or empty, copy the Stage 1 skeleton from `{{RUNTIME_ROOT}}/master-ops/`, excluding `TEMPLATE-VERSION`, `CHANGELOG.md`, and `ONBOARDING.md`; if existing, merge deliberately after reading it. Do not push unless explicitly asked.
 
@@ -134,6 +132,28 @@ Verify:
 - the ops repository exists with `CLAUDE.md`, `AGENTS.md`, `docs/MASTER-OPERATIONS.md`, and the Stage 1 skeleton
 - only the allowed remaining placeholders are present
 - `TEMPLATE-VERSION`, `CHANGELOG.md`, and `ONBOARDING.md` are absent from the generated repository
+
+## Step 2.5. Register The Ops Repository And Seat The Master
+
+**Position and action:** Step 2.5 begins after Step 3: register the already-Git `{{OPS_REPO}}` with Orca, then seat the master terminal in that ops repository worktree. The workspace root is not registered in Orca; the ops repository worktree is the verified production placement (for mogui-ADE, root unregistered and master seat = ops repo worktree).
+
+**Why/caution:** The production placement is the ops repository worktree, not `{{WORKSPACE_ROOT}}`. Orca may have a folder-workspace route using a `folder:` selector, but that route is unverified from the CLI and must not be prescribed here.
+
+Ask the user to open `{{OPS_REPO}}` in Orca, start the master terminal in that ops repository worktree, and provide its runtime-issued terminal handle. Resolve `ORCA` exactly as Step 0's preflight does, then run:
+
+```console
+$ ORCA repo add --path "{{OPS_REPO}}" --json
+$ ORCA terminal show --terminal <terminal handle> --json
+```
+
+Capture the returned selector only when the terminal metadata proves it belongs to the `{{OPS_REPO}}` worktree; keep that ops-repository selector for Step 8 without adding a template placeholder. Do not register `{{WORKSPACE_ROOT}}` or substitute a filesystem path for the measured ops-repository worktree selector.
+
+Verify:
+
+- `orca repo add --path "{{OPS_REPO}}" --json` succeeds or confirms the ops repository is already registered
+- `terminal show` measured the terminal metadata
+- the selector points to the `{{OPS_REPO}}` worktree, not the workspace root
+- the workspace root remains unregistered and the ops-repository selector is available before founding spawn
 
 ## Step 4. Replace Template Placeholders
 
@@ -169,6 +189,8 @@ $ { [ -e "{{WORKSPACE_ROOT}}/.beads" ] || [ -L "{{WORKSPACE_ROOT}}/.beads" ]; } 
     || ln -s "$(cd "{{OPS_REPO}}" && pwd)/.beads" "{{WORKSPACE_ROOT}}/.beads"
 $ cd "{{WORKSPACE_ROOT}}" && bd where
 ```
+
+Immediately after `bd init`, perform the byte/semantic comparison before continuing. If `CLAUDE.md` and `AGENTS.md` differ only at the byte level (whitespace or block order) while their semantic content is the same, normalize the shared blocks, write the same resulting common block to both files, and say once: `CLAUDE.md and AGENTS.md differed only byte-wise; re-unified automatically.` Do not ask the user in that case. If any substantive line or block is present in only one file, stop and ask the user whether to accept host-specific divergence before proceeding.
 
 Ask before creating the link. If the prefix is wrong, `bd rename-prefix` rewrites database IDs and references but not Markdown. For another tracker, measure its resolution rules. Record active work in the tracker and seed only load-bearing memory pointers and rules.
 
@@ -223,7 +245,7 @@ Run this supervised path with the resolved `ORCA` executable:
 $ ORCA orchestration run-create --objective "Found and verify the Generation 1 master" --json
 $ ORCA orchestration task-create --spec "Run the byte-identical founding kickoff file and complete Step 9 boot smoke" --json
 $ "{{RUNTIME_ROOT}}/scripts/master-succeed" spawn \
-    --workspace-selector <measured folder selector> \
+    --workspace-selector <measured ops-repository worktree selector> \
     --kickoff-file <kickoff file> \
     --root "{{WORKSPACE_ROOT}}" \
     --model "{{MODEL_ID}}" \

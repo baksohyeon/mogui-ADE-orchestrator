@@ -126,6 +126,18 @@ else
   fi
 fi
 
+if command -v claude >/dev/null 2>&1; then
+  claude_plugins_file="${HOME}/.claude/plugins/installed_plugins.json"
+  if [[ -f "$claude_plugins_file" ]] \
+    && grep -Fq 'codex@openai-codex' "$claude_plugins_file"; then
+    pass "codex-plugin" "official Codex plugin is installed for Claude Code"
+  else
+    fail "codex-plugin" "official Codex plugin missing from $claude_plugins_file; in Claude Code run: /plugin marketplace add openai/codex-plugin-cc; /plugin install codex@openai-codex; /reload-plugins; verify /codex:setup"
+  fi
+else
+  printf 'INFO %-14s %s\n' "codex-plugin" "skipped because claude is not installed"
+fi
+
 if command -v bd >/dev/null 2>&1; then
   bd_output=""
   if bd_output=$(bd where 2>&1); then

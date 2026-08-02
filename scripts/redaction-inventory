@@ -57,20 +57,29 @@ def run(cmd):
 
 
 def load_rules(path):
-    """Pull just the regexes out of the pattern file."""
-    pats = []
+    """Pull the regexes out of the pattern file, and count what could not be used.
+
+    A line that is malformed or whose regex does not compile used to be dropped in
+    silence, so the reported rule count described what loaded rather than what the
+    file held: coverage narrowed while the file still looked populated. Return the
+    unusable count as well so the caller can say so out loud.
+    """
+    pats, unusable, considered = [], 0, 0
     with open(path, encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
+            considered += 1
             parts = line.split("|", 2)
-            if len(parts) == 3:
-                try:
-                    pats.append(re.compile(parts[2]))
-                except re.error:
-                    pass
-    return pats
+            if len(parts) != 3:
+                unusable += 1
+                continue
+            try:
+                pats.append(re.compile(parts[2]))
+            except re.error:
+                unusable += 1
+    return pats, unusable, considered
 
 
 def load_dictionary():  # use it if present, empty set if not
@@ -89,7 +98,7 @@ def covered(token, rules):
 
 
 def harvest():
-    """Collect the text to be scanned."""
+    """Collect the text to be scanned, with the number of tracked files read."""
     rc, files = run(["git", "ls-files"])
     if rc != 0:
         return None
@@ -105,8 +114,9 @@ def harvest():
         if b"\x00" in raw[:8192]:
             continue
         blobs.append(raw.decode("utf-8", errors="ignore"))
-    blobs.append(" ".join(files.splitlines()))
-    return "\n".join(blobs)
+    names = files.splitlines()
+    blobs.append(" ".join(names))
+    return "\n".join(blobs), len(names)
 
 
 def main():
@@ -122,15 +132,21 @@ def main():
         print("redaction-inventory: FAIL. REDACTION_EXTRA_PATTERNS is unset. "
               "A blind spot cannot be measured without rules.", file=sys.stderr)
         return 2
-    rules = load_rules(os.path.expanduser(path))
+    rules, unusable_rules, considered_rules = load_rules(os.path.expanduser(path))
     if not rules:
         print("redaction-inventory: FAIL. No rules could be read from the pattern file.", file=sys.stderr)
         return 2
 
     words = load_dictionary()
-    text = harvest()
-    if text is None:
+    harvested = harvest()
+    if harvested is None:
         print("redaction-inventory: FAIL. Not a git repository.", file=sys.stderr)
+        return 2
+    text, tracked_files = harvested
+    if not tracked_files:
+        # Nothing to read is not a clean result. Without this an empty checkout
+        # reports OK, and "checked nothing" reads the same as "found nothing".
+        print("redaction-inventory: FAIL. No tracked files to scan.", file=sys.stderr)
         return 2
 
     buckets = {
@@ -159,14 +175,23 @@ def main():
 
     total = sum(len(v) for v in uncovered.values())
     if a.json:
-        print(json.dumps({"rules": len(rules), "baseline": len(base),
+        print(json.dumps({"rules": len(rules),
+                          "rules_unusable": unusable_rules,
+                          "rules_considered": considered_rules,
+                          "tracked_files": tracked_files,
+                          "baseline": len(base),
                           "uncovered_total": total,
                           "uncovered": {k: [{"token": t, "count": n} for t, n in v]
                                         for k, v in uncovered.items()}},
                          ensure_ascii=False, indent=2))
     else:
         scope = "tracked"
-        print(f"redaction-inventory: {len(rules)} rules / scope {scope} / baseline {len(base)}")
+        unusable_note = (
+            f" / {unusable_rules} unusable of {considered_rules} rule lines"
+            if unusable_rules else ""
+        )
+        print(f"redaction-inventory: {len(rules)} rules / scope {scope}"
+              f" / {tracked_files} files / baseline {len(base)}{unusable_note}")
         if not total:
             print("redaction-inventory: OK. 0 uncovered candidates")
         else:

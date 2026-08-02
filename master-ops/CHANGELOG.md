@@ -20,20 +20,22 @@ This file is not in that repository. Step 3 keeps it out, so it stays in the
 orchestrator clone alongside the template it describes.
 
 When a change touches `master-ops/`, add an entry under `## Unreleased` in the
-same change. `TEMPLATE-VERSION` rises only when a release is cut, and the release
-is marked with the git tag `template/vN`. Merging a change is not releasing it.
+same change. `TEMPLATE-VERSION` moves only when a release is cut, and it holds
+that release's tag string. The repository's existing scheme continues, so the
+release after `v0.1.0` is `v0.2.0`. Merging a change is not releasing it, and
+between releases this file keeps whatever the last release left in it.
 
-Version numbers stay monotonic across that switch: the next release is 7, not a
-restart at a lower number, because an installation that already reports 6 would
-otherwise measure itself as newer than the template it came from and the skew
-check would go quiet.
+Skew is decided by comparing that string with the latest release tag for
+equality, never by comparing magnitudes. The integers 3 through 6 in the entries
+below are transitional numbers from before this file tracked releases; an
+installation still reporting one of them is caught the same way as any other
+mismatch, by not equalling the latest tag.
 
 One consequence to keep in mind while reading an installation's version line: an
 installation onboarded between releases carries unreleased entries while
-reporting the last released number, so that number describes the release it came
-from and not the exact body it received. Compare against the latest release tag,
-and when the difference matters, record the commit the installation was taken
-from alongside the number.
+reporting the last released tag, so that value names the release it came from and
+not the exact body it received. When the difference matters, record the commit the
+installation was taken from alongside the tag.
 
 ## Unreleased
 

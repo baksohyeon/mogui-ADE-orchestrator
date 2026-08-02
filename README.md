@@ -1,6 +1,6 @@
 # mogui-ADE-orchestrator
 
-> Existing installations: follow the [template v5 upgrade steps](master-ops/CHANGELOG.md#5) for mandatory Orca orchestration and the onboarding preflight.
+> Existing installations: compare the `Template version` line in your operations repository's `docs/MASTER-OPERATIONS.md` against the [latest release](https://github.com/baksohyeon/mogui-ADE-orchestrator/releases/latest). If they differ, read the [template changelog](master-ops/CHANGELOG.md) entries between the two and apply what applies — local edits win. Watch → Custom → Releases on this repository sends an email each time that line moves.
 >
 > *I have agents running in tmux sessions. Can I still drive each one manually when I want, and at the same time orchestrate all of those sessions from above? Is tmux-based agent orchestration a thing?*
 

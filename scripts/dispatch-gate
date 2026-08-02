@@ -200,8 +200,18 @@ def _report(args: argparse.Namespace) -> int:
     model_stats: dict[str, list[int]] = {}
     denial_counts: Counter[str] = Counter()
     override_counts: Counter[tuple[str, str]] = Counter()
+    policy_counts: Counter[tuple[str, str]] = Counter()
     timestamps: list[float] = []
     for entry in entries:
+        policy_path = entry.get("tier_policy_path")
+        policy_digest = entry.get("tier_policy_sha256")
+        if isinstance(policy_path, str) and policy_path:
+            policy_counts[
+                (
+                    policy_path,
+                    policy_digest if isinstance(policy_digest, str) else "",
+                )
+            ] += 1
         timestamp = _timestamp(entry.get("ts"))
         if timestamp is not None:
             timestamps.append(timestamp)
@@ -254,6 +264,18 @@ def _report(args: argparse.Namespace) -> int:
     if denial_counts:
         for reason in sorted(denial_counts):
             print(f"  {reason}: {denial_counts[reason]}")
+    else:
+        print("  <none>")
+
+    # More than one row here means the day was not judged against one policy.
+    print("Tier policies:")
+    if policy_counts:
+        for policy_path, policy_digest in sorted(policy_counts):
+            digest_label = policy_digest[:12] if policy_digest else "<unrecorded>"
+            print(
+                f"  {policy_path}: sha256={digest_label} "
+                f"decisions={policy_counts[(policy_path, policy_digest)]}"
+            )
     else:
         print("  <none>")
 

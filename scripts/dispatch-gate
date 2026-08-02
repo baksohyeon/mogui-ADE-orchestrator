@@ -37,6 +37,7 @@ class ProbeFailure(str, Enum):
     ORCA_MISSING = "orca_missing"
     PROBE_TIMEOUT = "probe_timeout"
     PROBE_UNPARSEABLE = "probe_unparseable"
+    TASK_OMITTED = "task_omitted"
     TASK_NOT_FOUND = "task_not_found"
 
 
@@ -124,7 +125,7 @@ def _check(args: argparse.Namespace) -> int:
 
 def _register(args: argparse.Namespace) -> int:
     if not args.orchestration_task:
-        return _deny_unverified_orchestration(args, ProbeFailure.TASK_NOT_FOUND)
+        return _deny_unverified_orchestration(args, ProbeFailure.TASK_OMITTED)
     probe_failure = _probe_orchestration_task(args.orchestration_task)
     if probe_failure is not None:
         return _deny_unverified_orchestration(args, probe_failure)

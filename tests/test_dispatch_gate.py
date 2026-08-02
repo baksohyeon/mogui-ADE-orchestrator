@@ -549,7 +549,7 @@ def test_cli_register_requires_orchestration_task(tmp_path: Path, capsys) -> Non
     assert "ORCHESTRATION_UNVERIFIED" in output.err
     ledger_entry = json.loads(ledger.read_text(encoding="utf-8"))
     assert ledger_entry["reason"] == "ORCHESTRATION_UNVERIFIED"
-    assert ledger_entry["probe_failure"] == "task_not_found"
+    assert ledger_entry["probe_failure"] == "task_omitted"
 
 
 def test_cli_register_denies_unverified_orchestration_task_with_ledger_entry(

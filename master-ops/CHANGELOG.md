@@ -65,8 +65,6 @@ that has its own incidents should
 append them in the same form rather than replacing these: the section is meant
 to accumulate, and a rule earned locally outranks one inherited from a template.
 
-## Unreleased
-
 The tier policy gains a version 2 shape that gates on tier multiplied by fan-out
 instead of on model identity. The incident this policy exists for was a top tier
 spread across ten workers, and identity was the wrong axis for it in both

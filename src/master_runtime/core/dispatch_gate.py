@@ -27,6 +27,10 @@ DEFAULT_LEDGER_PATH = Path(".dispatch-gate-ledger.jsonl")
 DEFAULT_TICKET_DIR = Path(".mogui") / "dispatch-tickets"
 DEFAULT_KNOWN_ROOTS_PATH = Path(".mogui") / "known-roots.json"
 DEFAULT_TIER_POLICY_RELATIVE_PATH = Path("master-ops") / "model-tier-policy.json"
+# One day. The fan-out that caused the incident can be spread over sequential
+# dispatches, so the cap counts agents inside a window rather than at once.
+DEFAULT_TIER_WINDOW_SECONDS = 24 * 60 * 60
+UNKNOWN_TIER = "unknown"
 DEFAULT_TICKET_TTL_SECONDS = 600
 DEFAULT_EXPIRED_TICKET_GC_GRACE_SECONDS = 24 * 60 * 60
 RUNTIME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
@@ -77,6 +81,8 @@ class ReasonCode(str, Enum):
     WORKTREE_AS_REPO_ROOT = "WORKTREE_AS_REPO_ROOT"
     TIER_POLICY = "TIER_POLICY"
     TIER_POLICY_UNAVAILABLE = "TIER_POLICY_UNAVAILABLE"
+    TIER_FANOUT_CAP = "TIER_FANOUT_CAP"
+    TIER_UNKNOWN_MODEL = "TIER_UNKNOWN_MODEL"
 
 
 @dataclass(frozen=True)
@@ -141,12 +147,35 @@ class ModelTierPolicy:
     denied tier miss the denied set, fall into the unknown branch, and pass as a
     warning wherever `unknown_model` is `warn`. `digest` identifies the file the
     decision was made against, because the path is caller-supplied.
+
+    Two shapes are supported. Version 1 gates on model identity: a name is
+    allowed, denied, or unknown. Version 2 gates on tier and fan-out, because the
+    incident this policy exists for was a top tier multiplied by ten workers, not
+    a particular identifier. Version 1 keeps its exact behaviour so no
+    installation changes verdicts by upgrading the runtime alone.
     """
 
-    worker_allowed: frozenset[str]
-    worker_denied_tiers: frozenset[str]
     unknown_model: str
     digest: str = ""
+    version: int = 1
+    # v1
+    worker_allowed: frozenset[str] = frozenset()
+    worker_denied_tiers: frozenset[str] = frozenset()
+    # v2
+    model_tiers: Mapping[str, str] = field(default_factory=dict)
+    fanout_caps: Mapping[str, int] = field(default_factory=dict)
+    window_seconds: int = DEFAULT_TIER_WINDOW_SECONDS
+
+    def tier_of(self, model_key: str) -> str:
+        """Return the tier for a casefolded model id, or the unknown tier."""
+
+        return self.model_tiers.get(model_key, UNKNOWN_TIER)
+
+    def cap_for(self, tier: str) -> int | None:
+        """Agents permitted per window for a tier. None means uncapped."""
+
+        cap = self.fanout_caps.get(tier)
+        return cap if isinstance(cap, int) else None
 
 
 class DispatchGate:
@@ -167,6 +196,7 @@ class DispatchGate:
         # policy loads must not inherit a digest from an earlier check. One gate
         # instance per process is the assumption here, same as the ticket lock.
         self._tier_policy_digest = ""
+        self._tier = ""
 
         # None is the fail-closed sentinel for an input whose size could not be
         # measured. Handle it before every other validation or budget check so
@@ -196,12 +226,40 @@ class DispatchGate:
             return decision
 
         self._tier_policy_digest = tier_policy.digest
-        tier_policy_warning = False
+        tier_warning: ReasonCode | None = None
         tier_override: str | None = None
         model = request.model.strip() if request.model is not None else ""
         # Casefolded: a denied tier spelled in another case is the same tier.
         model_key = model.casefold()
-        if model_key not in tier_policy.worker_allowed:
+
+        if tier_policy.version >= 2:
+            tier = tier_policy.tier_of(model_key)
+            self._tier = tier
+            cap = tier_policy.cap_for(tier)
+            if cap is not None:
+                used = self._tier_window_agents(tier, tier_policy)
+                if used + request.n_agents > cap:
+                    if request.tier_override is None:
+                        decision = GateDecision(
+                            False,
+                            ReasonCode.TIER_FANOUT_CAP,
+                            message=(
+                                f"tier={tier} agents={request.n_agents} "
+                                f"used={used} cap={cap} "
+                                f"window_seconds={tier_policy.window_seconds}"
+                            ),
+                        )
+                        self._append_decision(request, decision)
+                        return decision
+                    tier_override = request.tier_override.strip()
+            # An unlisted model is allowed under the unknown cap rather than
+            # blocked outright, so a newer or cheaper model is usable before
+            # anyone edits the policy. It never passes silently: the tier lands
+            # in the ledger and the warning surfaces it in the rollup.
+            if tier == UNKNOWN_TIER:
+                tier_warning = ReasonCode.TIER_UNKNOWN_MODEL
+
+        elif model_key not in tier_policy.worker_allowed:
             policy_denies = (
                 model_key in tier_policy.worker_denied_tiers
                 or tier_policy.unknown_model == "deny"
@@ -217,7 +275,7 @@ class DispatchGate:
                     return decision
                 tier_override = request.tier_override.strip()
             else:
-                tier_policy_warning = True
+                tier_warning = ReasonCode.TIER_POLICY
 
         try:
             contract_content = _contract_content(request.contract_path)
@@ -230,8 +288,8 @@ class DispatchGate:
             contract_content.decode("utf-8", errors="replace"),
             Path(self.config.known_roots_path),
         )
-        if tier_policy_warning:
-            lint_warnings = (*lint_warnings, ReasonCode.TIER_POLICY)
+        if tier_warning is not None:
+            lint_warnings = (*lint_warnings, tier_warning)
         cost_proxy = request.n_agents * est_input_chars
         if (
             _dispatch_ticket_path(
@@ -445,6 +503,49 @@ class DispatchGate:
 
         return tuple(self._read_entries())
 
+    def _tier_window_agents(self, tier: str, policy: ModelTierPolicy) -> int:
+        """Agents already dispatched in this tier inside the policy window.
+
+        Counts allowed dispatches, including ones an override let through: an
+        override bypasses the block for one request, it does not refund the cost
+        the window is measuring. Ten sequential single-agent dispatches therefore
+        reach the same cap as one fan-out of ten, which is the point, because the
+        incident's cost does not care whether the workers started together.
+
+        Entries written before the tier field existed are resolved through the
+        current policy, so history counts from the moment a policy names it. A
+        policy edit relabels past entries; that is the intended reading, since
+        the question being asked is what the policy in force now would have said.
+        """
+
+        threshold = self._clock() - policy.window_seconds
+        total = 0
+        for entry in self._read_entries():
+            if not isinstance(entry, Mapping) or entry.get("decision") != "ALLOW":
+                continue
+            timestamp = entry.get("ts")
+            if (
+                isinstance(timestamp, bool)
+                or not isinstance(timestamp, (int, float))
+                or timestamp < threshold
+            ):
+                continue
+            entry_tier = entry.get("tier")
+            if not isinstance(entry_tier, str) or not entry_tier:
+                model = entry.get("model")
+                entry_tier = (
+                    policy.tier_of(model.strip().casefold())
+                    if isinstance(model, str)
+                    else UNKNOWN_TIER
+                )
+            if entry_tier != tier:
+                continue
+            agents = entry.get("n_agents")
+            if isinstance(agents, bool) or not isinstance(agents, int) or agents < 1:
+                continue
+            total += agents
+        return total
+
     def _append_decision(
         self,
         request: DispatchRequest,
@@ -469,6 +570,8 @@ class DispatchGate:
         # Which policy decided. The path is caller-supplied through --tier-policy
         # or DISPATCH_TIER_POLICY, so an ALLOW that names neither path nor digest
         # cannot be told apart from one a substituted policy allowed.
+        if getattr(self, "_tier", ""):
+            entry["tier"] = self._tier
         entry["tier_policy_path"] = str(self.config.tier_policy_path)
         if getattr(self, "_tier_policy_digest", ""):
             entry["tier_policy_sha256"] = self._tier_policy_digest
@@ -675,12 +778,13 @@ def _validate_request(request: DispatchRequest) -> ReasonCode | None:
 def _load_tier_policy(path: Path) -> ModelTierPolicy:
     raw = path.read_bytes()
     payload = json.loads(raw.decode("utf-8"))
-    if (
-        not isinstance(payload, dict)
-        or isinstance(payload.get("version"), bool)
-        or payload.get("version") != 1
-    ):
-        raise ValueError("tier policy must be a version 1 object")
+    digest = hashlib.sha256(raw).hexdigest()
+    if not isinstance(payload, dict) or isinstance(payload.get("version"), bool):
+        raise ValueError("tier policy must be an object with a version")
+    if payload.get("version") == 2:
+        return _load_tier_policy_v2(payload, digest)
+    if payload.get("version") != 1:
+        raise ValueError("tier policy version must be 1 or 2")
 
     worker_allowed = _model_list(payload.get("worker_allowed"))
     worker_denied_tiers = _model_list(payload.get("worker_denied_tiers"))
@@ -693,7 +797,60 @@ def _load_tier_policy(path: Path) -> ModelTierPolicy:
         worker_allowed=worker_allowed,
         worker_denied_tiers=worker_denied_tiers,
         unknown_model=unknown_model,
-        digest=hashlib.sha256(raw).hexdigest(),
+        digest=digest,
+    )
+
+
+def _load_tier_policy_v2(payload: Mapping[str, object], digest: str) -> ModelTierPolicy:
+    """Parse a version 2 policy: tiers plus a per-window agent cap for each.
+
+    A model absent from every tier is `unknown`, which is a tier like any other
+    and therefore capped like any other. That is the difference from version 1,
+    where an unrecognised name was denied outright and a new model stayed blocked
+    until someone edited this file by hand.
+    """
+
+    tiers = payload.get("tiers")
+    if not isinstance(tiers, dict) or not tiers:
+        raise ValueError("tiers must be a non-empty object")
+    model_tiers: dict[str, str] = {}
+    for tier, models in tiers.items():
+        if not isinstance(tier, str) or not tier.strip() or tier != tier.strip():
+            raise ValueError("tier names must be non-empty and unpadded")
+        if tier == UNKNOWN_TIER:
+            raise ValueError(f"{UNKNOWN_TIER!r} is reserved for unlisted models")
+        for model_key in _model_list(models):
+            if model_key in model_tiers:
+                raise ValueError("a model may not appear in two tiers")
+            model_tiers[model_key] = tier
+
+    caps_payload = payload.get("fanout_caps")
+    if not isinstance(caps_payload, dict):
+        raise ValueError("fanout_caps must be an object")
+    fanout_caps: dict[str, int] = {}
+    for tier, cap in caps_payload.items():
+        if not isinstance(tier, str) or (tier != UNKNOWN_TIER and tier not in tiers):
+            raise ValueError("fanout_caps names a tier that does not exist")
+        if isinstance(cap, bool) or not isinstance(cap, int) or cap < 0:
+            raise ValueError("fanout_caps values must be non-negative integers")
+        fanout_caps[tier] = cap
+    if UNKNOWN_TIER not in fanout_caps:
+        raise ValueError(
+            f"fanout_caps must state a cap for {UNKNOWN_TIER!r}; "
+            "leaving it unstated is the ambiguity this version removes"
+        )
+
+    window_seconds = payload.get("window_seconds", DEFAULT_TIER_WINDOW_SECONDS)
+    if isinstance(window_seconds, bool) or not isinstance(window_seconds, int) or window_seconds <= 0:
+        raise ValueError("window_seconds must be a positive integer")
+
+    return ModelTierPolicy(
+        unknown_model="cap",
+        digest=digest,
+        version=2,
+        model_tiers=model_tiers,
+        fanout_caps=fanout_caps,
+        window_seconds=window_seconds,
     )
 
 

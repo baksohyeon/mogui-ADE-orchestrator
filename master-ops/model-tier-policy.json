@@ -1,18 +1,24 @@
 {
-  "version": 1,
-  "worker_allowed": [
-    "gpt-5.6-luna",
-    "gpt-5.3-codex",
-    "grok-4.5",
-    "claude-haiku-4-5",
-    "gemini-3.6-flash"
-  ],
-  "worker_denied_tiers": [
-    "gpt-5.6-sol",
-    "claude-opus-5",
-    "claude-fable-5",
-    "gpt-5.5-pro",
-    "grok-4-heavy"
-  ],
-  "unknown_model": "deny"
+  "version": 2,
+  "tiers": {
+    "top": [
+      "gpt-5.6-sol",
+      "claude-opus-5",
+      "claude-fable-5",
+      "gpt-5.5-pro",
+      "grok-4-heavy"
+    ],
+    "efficient": [
+      "gpt-5.6-luna",
+      "gpt-5.3-codex",
+      "grok-4.5",
+      "claude-haiku-4-5",
+      "gemini-3.6-flash"
+    ]
+  },
+  "fanout_caps": {
+    "top": 1,
+    "unknown": 1
+  },
+  "window_seconds": 86400
 }

@@ -1976,6 +1976,211 @@ def test_tier_policy_rejects_case_differing_duplicate_across_sets(
     assert decision.reason == ReasonCode.TIER_POLICY_UNAVAILABLE
 
 
+def test_v2_cap_counts_a_window_not_a_single_fanout(tmp_path: Path) -> None:
+    """Ten sequential single-agent dispatches cost what one fan-out of ten costs.
+
+    The incident behind this policy was a top tier multiplied by ten workers.
+    Capping concurrency alone would leave the same spend reachable one dispatch
+    at a time, so the cap counts agents inside a window.
+    """
+
+    policy = _tier_policy_v2(tmp_path)
+    gate = _gate(tmp_path, now=1_000, tier_policy_path=policy)
+
+    first = gate.check(
+        DispatchRequest(
+            runtime="codex",
+            model="claude-opus-5",
+            contract_path=_contract(tmp_path, "first top dispatch"),
+            est_input_chars=1_000,
+            n_agents=1,
+        )
+    )
+    second = gate.check(
+        DispatchRequest(
+            runtime="codex",
+            model="claude-opus-5",
+            contract_path=_contract(tmp_path, "second top dispatch"),
+            est_input_chars=1_000,
+            n_agents=1,
+        )
+    )
+
+    assert first.allow is True
+    assert second.allow is False
+    assert second.reason == ReasonCode.TIER_FANOUT_CAP
+    assert "used=1 cap=1" in second.message
+    assert _ledger_entries(tmp_path)[0]["tier"] == "top"
+
+
+def test_v2_override_passes_the_cap_and_still_consumes_it(tmp_path: Path) -> None:
+    """An override bypasses the block for one request; it does not refund cost."""
+
+    policy = _tier_policy_v2(tmp_path)
+    gate = _gate(tmp_path, now=1_000, tier_policy_path=policy)
+
+    for index in range(2):
+        decision = gate.check(
+            DispatchRequest(
+                runtime="codex",
+                model="claude-opus-5",
+                contract_path=_contract(tmp_path, f"override dispatch {index}"),
+                est_input_chars=1_000,
+                n_agents=1,
+                tier_override="owner approved benchmark",
+            )
+        )
+        assert decision.allow is True
+
+    blocked = gate.check(
+        DispatchRequest(
+            runtime="codex",
+            model="claude-opus-5",
+            contract_path=_contract(tmp_path, "third top dispatch"),
+            est_input_chars=1_000,
+            n_agents=1,
+        )
+    )
+    assert blocked.allow is False
+    assert "used=2" in blocked.message
+
+
+def test_v2_unknown_model_is_capped_not_denied(tmp_path: Path) -> None:
+    """A model the policy has never heard of is usable once, and never silently."""
+
+    policy = _tier_policy_v2(tmp_path)
+    gate = _gate(tmp_path, now=1_000, tier_policy_path=policy)
+
+    allowed = gate.check(
+        DispatchRequest(
+            runtime="codex",
+            model="gpt-6-released-yesterday",
+            contract_path=_contract(tmp_path, "unknown model once"),
+            est_input_chars=1_000,
+            n_agents=1,
+        )
+    )
+
+    assert allowed.allow is True
+    assert ReasonCode.TIER_UNKNOWN_MODEL in allowed.warnings
+    assert ReasonCode.TIER_POLICY not in allowed.warnings
+    entry = _ledger_entries(tmp_path)[-1]
+    assert entry["tier"] == "unknown"
+    assert entry["warnings"] == ["TIER_UNKNOWN_MODEL"]
+
+    denied = gate.check(
+        DispatchRequest(
+            runtime="codex",
+            model="gpt-6-released-yesterday",
+            contract_path=_contract(tmp_path, "unknown model twice"),
+            est_input_chars=1_000,
+            n_agents=1,
+        )
+    )
+    assert denied.allow is False
+    assert denied.reason == ReasonCode.TIER_FANOUT_CAP
+
+
+def test_v2_uncapped_tier_allows_a_large_fanout(tmp_path: Path) -> None:
+    """A tier with no cap is uncapped: the guard is tier times fan-out, not size."""
+
+    policy = _tier_policy_v2(tmp_path)
+    gate = _gate(tmp_path, now=1_000, tier_policy_path=policy)
+
+    decision = gate.check(
+        DispatchRequest(
+            runtime="codex",
+            model="claude-haiku-4-5",
+            contract_path=_contract(tmp_path, "efficient fanout"),
+            est_input_chars=1_000,
+            n_agents=10,
+        )
+    )
+
+    assert decision.allow is True
+    assert decision.reason == ReasonCode.OK
+
+
+def test_v2_window_expiry_releases_the_cap(tmp_path: Path) -> None:
+    policy = _tier_policy_v2(tmp_path, window_seconds=100)
+    clock = _MutableClock(1_000)
+    gate = _gate(tmp_path, clock=clock, tier_policy_path=policy)
+
+    assert gate.check(
+        DispatchRequest(
+            runtime="codex",
+            model="claude-opus-5",
+            contract_path=_contract(tmp_path, "before the window closes"),
+            est_input_chars=1_000,
+            n_agents=1,
+        )
+    ).allow is True
+
+    clock.value = 1_000 + 101
+    assert gate.check(
+        DispatchRequest(
+            runtime="codex",
+            model="claude-opus-5",
+            contract_path=_contract(tmp_path, "after the window closes"),
+            est_input_chars=1_000,
+            n_agents=1,
+        )
+    ).allow is True
+
+
+def test_v2_policy_validation_fails_closed(tmp_path: Path) -> None:
+    """Every malformed v2 shape denies rather than falling back to a default."""
+
+    bad_payloads = (
+        {"version": 2, "tiers": {}, "fanout_caps": {"unknown": 1}},
+        {"version": 2, "tiers": {"top": ["a"]}, "fanout_caps": {"top": 1}},
+        {
+            "version": 2,
+            "tiers": {"top": ["a"], "other": ["a"]},
+            "fanout_caps": {"unknown": 1},
+        },
+        {
+            "version": 2,
+            "tiers": {"unknown": ["a"]},
+            "fanout_caps": {"unknown": 1},
+        },
+        {
+            "version": 2,
+            "tiers": {"top": ["a"]},
+            "fanout_caps": {"top": -1, "unknown": 1},
+        },
+        {
+            "version": 2,
+            "tiers": {"top": ["a"]},
+            "fanout_caps": {"nosuchtier": 1, "unknown": 1},
+        },
+        {
+            "version": 2,
+            "tiers": {"top": ["a"]},
+            "fanout_caps": {"unknown": 1},
+            "window_seconds": 0,
+        },
+    )
+    for index, payload in enumerate(bad_payloads):
+        case_dir = tmp_path / f"bad{index}"
+        case_dir.mkdir()
+        policy = case_dir / "model-tier-policy.json"
+        policy.write_text(json.dumps(payload), encoding="utf-8")
+        gate = _gate(case_dir, now=1_000, tier_policy_path=policy)
+
+        decision = gate.check(
+            DispatchRequest(
+                runtime="codex",
+                model="claude-haiku-4-5",
+                contract_path=_contract(case_dir, f"bad policy {index}"),
+                est_input_chars=1_000,
+                n_agents=1,
+            )
+        )
+        assert decision.allow is False, payload
+        assert decision.reason == ReasonCode.TIER_POLICY_UNAVAILABLE, payload
+
+
 def _gate(
     tmp_path: Path,
     now: float | None = None,
@@ -2003,6 +2208,32 @@ def _tier_policy(tmp_path: Path, unknown_model: str = "deny") -> Path:
                 "worker_allowed": ["gpt-5.6-luna"],
                 "worker_denied_tiers": ["gpt-5.6-sol"],
                 "unknown_model": unknown_model,
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return policy
+
+
+def _tier_policy_v2(
+    tmp_path: Path,
+    caps: dict | None = None,
+    window_seconds: int = 86_400,
+    name: str = "model-tier-policy-v2.json",
+) -> Path:
+    policy = tmp_path / name
+    policy.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "tiers": {
+                    "top": ["gpt-5.6-sol", "claude-opus-5"],
+                    "efficient": ["gpt-5.6-luna", "claude-haiku-4-5"],
+                },
+                "fanout_caps": caps if caps is not None else {"top": 1, "unknown": 1},
+                "window_seconds": window_seconds,
             },
             sort_keys=True,
         )

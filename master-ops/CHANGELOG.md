@@ -65,6 +65,43 @@ that has its own incidents should
 append them in the same form rather than replacing these: the section is meant
 to accumulate, and a rule earned locally outranks one inherited from a template.
 
+The tier policy gains a version 2 shape that gates on tier multiplied by fan-out
+instead of on model identity. The incident this policy exists for was a top tier
+spread across ten workers, and identity was the wrong axis for it in both
+directions: a single top-tier dispatch passed, while `unknown_model: "deny"`
+blocked every model the file had not been hand-edited to name, including cheaper
+or stronger ones released later.
+
+A version 2 policy lists `tiers` and a `fanout_caps` entry per tier, plus a
+required cap for `unknown`. A model in no tier is `unknown` and capped there
+rather than denied, so a new model is usable once before anyone edits the file,
+and never silently: the tier lands in the ledger, the decision carries a
+`TIER_UNKNOWN_MODEL` warning distinct from a denial, and `report` prints an
+`unknown` row labelled as allowed without a known tier. Exceeding any cap still
+requires `--tier-override "<reason>"`, which is recorded as before.
+
+The cap counts accumulation inside `window_seconds`, not concurrency. Ten
+sequential single-agent dispatches therefore reach the same cap as one fan-out of
+ten, because the cost the window measures does not care whether the workers
+started together. An override passes one request without refunding what the
+window already counted.
+
+Version 1 policies load and behave exactly as before, so upgrading the runtime
+alone changes no verdicts. Migrate by rewriting the file to version 2 with the
+models this host actually offers, measured rather than copied from the template
+default.
+
+The gate also stops mixing its two output streams in a way that reads as one:
+the verdict remains JSON on stdout, and every human diagnostic on stderr is now
+prefixed with `dispatch-gate: `. Callers must not merge the streams, since
+`2>&1` into a JSON parser fails and an unprefixed reason code made that look like
+malformed output rather than a second stream.
+
+Upgrade an existing installation by rewriting `master-ops/model-tier-policy.json`
+in the version 2 shape and re-reading the dispatch section of
+`docs/MASTER-OPERATIONS.md`. The installed `Template version` line moves at the
+next release tag rather than here.
+
 ## 6
 
 The dispatch gate now enforces the installation-specific

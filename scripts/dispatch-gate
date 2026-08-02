@@ -136,7 +136,7 @@ def _check(args: argparse.Namespace) -> int:
     _print_decision(decision)
     if decision.allow:
         return 0
-    print(decision.reason.value, file=sys.stderr)
+    _diagnose(decision.reason.value)
     return 2
 
 
@@ -157,7 +157,7 @@ def _register(args: argparse.Namespace) -> int:
     _print_decision(decision)
     if decision.allow:
         return 0
-    print(_decision_error(decision), file=sys.stderr)
+    _diagnose(_decision_error(decision))
     return 2
 
 
@@ -171,10 +171,10 @@ def _watch(args: argparse.Namespace) -> int:
     }
     print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
     if decision.status == StallStatus.STALLED:
-        print(decision.reason, file=sys.stderr)
+        _diagnose(str(decision.reason))
         return 3
     if decision.status == StallStatus.MISSING:
-        print(decision.reason, file=sys.stderr)
+        _diagnose(str(decision.reason))
         return 2
     return 0
 
@@ -183,7 +183,7 @@ def _report(args: argparse.Namespace) -> int:
     try:
         entries = _gate(args).ledger_entries()
     except (OSError, json.JSONDecodeError) as exc:
-        print(f"REPORT_UNAVAILABLE: {exc}", file=sys.stderr)
+        _diagnose(f"REPORT_UNAVAILABLE: {exc}")
         return 2
 
     malformed_count = sum(not isinstance(entry, dict) for entry in entries)
@@ -201,6 +201,7 @@ def _report(args: argparse.Namespace) -> int:
     denial_counts: Counter[str] = Counter()
     override_counts: Counter[tuple[str, str]] = Counter()
     policy_counts: Counter[tuple[str, str]] = Counter()
+    tier_stats: dict[str, list[int]] = {}
     timestamps: list[float] = []
     for entry in entries:
         policy_path = entry.get("tier_policy_path")
@@ -224,6 +225,16 @@ def _report(args: argparse.Namespace) -> int:
         model = entry.get("model")
         if decision != "ALLOW" or not isinstance(model, str) or not model:
             continue
+        # Tier rollup, so an allowed unknown-tier dispatch is visible rather than
+        # merely recorded. A row here is the only place a reader sees that the
+        # policy let a model through without knowing its tier.
+        tier = entry.get("tier")
+        if isinstance(tier, str) and tier:
+            stats = tier_stats.setdefault(tier, [0, 0])
+            stats[0] += 1
+            agents = entry.get("n_agents")
+            if not isinstance(agents, bool) and isinstance(agents, int) and agents > 0:
+                stats[1] += agents
         stats = model_stats.setdefault(model, [0, 0, 0])
         stats[0] += 1
         cost_proxy, computed = _entry_cost_proxy(entry)
@@ -264,6 +275,15 @@ def _report(args: argparse.Namespace) -> int:
     if denial_counts:
         for reason in sorted(denial_counts):
             print(f"  {reason}: {denial_counts[reason]}")
+    else:
+        print("  <none>")
+
+    print("Tiers:")
+    if tier_stats:
+        for tier in sorted(tier_stats):
+            dispatches, agents = tier_stats[tier]
+            suffix = "  <- allowed without a known tier" if tier == "unknown" else ""
+            print(f"  {tier}: dispatches={dispatches} agents={agents}{suffix}")
     else:
         print("  <none>")
 
@@ -418,7 +438,7 @@ def _deny_unverified_orchestration(
         ledger.write(json.dumps(entry, sort_keys=True, separators=(",", ":")))
         ledger.write("\n")
     _print_decision(decision)
-    print(_decision_error(decision), file=sys.stderr)
+    _diagnose(_decision_error(decision))
     return 2
 
 
@@ -446,6 +466,19 @@ def _print_decision(decision: GateDecision) -> None:
     if decision.tier_override is not None:
         payload["tier_override"] = decision.tier_override
     print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+
+
+def _diagnose(message: str) -> None:
+    """Write a human diagnostic to stderr, prefixed so a merged stream is obvious.
+
+    The machine-readable answer is the JSON document on stdout and nothing else.
+    A caller that merges the streams with `2>&1` and parses the result as one
+    document gets a parse error, and an unprefixed reason code left that looking
+    like malformed JSON rather than like a second stream. Keep the streams apart:
+    `2>/dev/null` for machine use, or read stderr separately for the reason.
+    """
+
+    print(f"dispatch-gate: {message}", file=sys.stderr)
 
 
 def _decision_error(decision: GateDecision) -> str:

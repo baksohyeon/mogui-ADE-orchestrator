@@ -39,6 +39,38 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+The redaction gate starts moving onto gitleaks as its matching engine, and this
+release carries the preparation rather than the swap.
+
+`config/gitleaks.toml` holds the rules this repository needs beyond gitleaks'
+maintained default set, which covers provider secrets far better than a
+hand-written list. Organization-specific patterns stay out of it: this repository
+is public, so committing them would publish what they protect. They belong in a
+second config named by `GITLEAKS_CONFIG`, kept outside version control, which is
+the same contract `REDACTION_EXTRA_PATTERNS` has.
+
+`tests/test_gitleaks_parity.py` is the safety net for the swap. It runs both
+engines over one fixture per rule plus the excused classes and requires them to
+agree, because zero findings on both sides proves nothing by itself. Two
+translation errors surfaced while writing it and are fixed: synthetic home
+prefixes had become gitleaks `paths`, which skips files rather than content, and
+the placeholder list had become `stopwords`, which excused nothing here while
+`regexes` does. Current state: 14 of 14 positives flagged by both, 3 of 3
+negatives excused by both, no divergence.
+
+The preflight now requires `gitleaks` on PATH, waivable like any other check.
+
+One scope fact the swap depends on: `gitleaks dir .` walks the working tree,
+including untracked build output, and compiled bytecode alone produced 57 findings
+against 0 in tracked content. Build products are excluded in the config, and the
+wrapper will feed gitleaks the tracked file list rather than the directory.
+
+What gitleaks does not do, measured rather than assumed: it does not scan commit
+messages. A key placed only in a commit message returns "no leaks found" while the
+same key in file content is found. The wrapper keeps that scan, and keeps
+`redaction-inventory`, which measures the inverse question of which tokens no rule
+covers and has no gitleaks equivalent.
+
 `scripts/redaction-scan.sh` now scans commit messages, which it never did.
 
 The scan read tracked file contents, so a message was outside its scope while a

@@ -87,7 +87,7 @@ def _host(
     _write_stub(bin_dir / "orca", ORCA_STUB)
     _write_stub(bin_dir / "bd", BD_STUB)
     _write_stub(bin_dir / "gh", GH_STUB)
-    for name in ("claude", "git", *worker_runtimes):
+    for name in ("claude", "git", "gitleaks", *worker_runtimes):
         _write_stub(bin_dir / name, TRUE_STUB)
 
     env = dict(os.environ)
@@ -259,3 +259,13 @@ def test_no_worker_runtime_at_all_fails(tmp_path: Path) -> None:
     result = _run(env, tmp_path)
     assert "worker-runtime" in _labels(result.stdout, "FAIL"), result.stdout
     assert "cannot delegate" in result.stdout
+
+
+def test_missing_gitleaks_fails(tmp_path: Path) -> None:
+    """The redaction gate's matching engine is a host fact, not an assumption."""
+
+    env = _host(tmp_path, sanitized_path=True)
+    (tmp_path / "bin" / "gitleaks").unlink()
+    result = _run(env, tmp_path)
+    assert "gitleaks" in _labels(result.stdout, "FAIL"), result.stdout
+    assert "brew install gitleaks" in result.stdout

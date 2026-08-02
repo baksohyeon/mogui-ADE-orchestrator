@@ -378,6 +378,15 @@ for worker_runtime in "${worker_runtimes[@]}"; do
   fi
 done
 
+# gitleaks is the matching engine the publish gate is moving onto, and the
+# organization rules it needs live outside version control, so both the binary and
+# the config path are host facts onboarding has to measure.
+if command -v gitleaks >/dev/null 2>&1; then
+  pass "gitleaks" "$(gitleaks version 2>&1 | head -1)"
+else
+  fail "gitleaks" "gitleaks is not on PATH; install it (brew install gitleaks, or see https://gitleaks.io) because the redaction gate's matching engine is moving to it"
+fi
+
 for repo_tool in git gh; do
   if command -v "$repo_tool" >/dev/null 2>&1; then
     pass "$repo_tool" "present"

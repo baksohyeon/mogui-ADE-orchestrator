@@ -27,7 +27,7 @@ Use only these template placeholders: `{{WORKSPACE_NAME}}`, `{{WORKSPACE_ROOT}}`
 - `docs/runbooks/succession-boot-card.md` owns boot and recovery order.
 - `bd` owns execution state; follow the `bd prime` caution only after `bd where` proves the ops repository.
 - `contracts/` owns bounded worker briefs; it is not the execution-state tracker.
-- Agents: ground Orca claims in the [Orca docs snapshot agent index](https://grok-wiki.com/public/docs/stablyai-orca-2036d532bf1c/llms.txt) before improvising; the link hash may change with snapshot updates.
+- Agents: ground Orca claims in the [Orca documentation](https://www.onorca.dev/) before improvising; resolve the current snapshot agent index at onboarding rather than relying on a hash that may change.
 
 ## Step 0. Pass The Required Preflight
 
@@ -41,7 +41,7 @@ Run:
 
 ```console
 $ cd "{{RUNTIME_ROOT}}"
-$ bash scripts/onboarding-preflight.sh
+$ ORCA_AGENT_CLI="<user-named agent CLI>" bash scripts/onboarding-preflight.sh
 $ command -v "<user-named agent CLI>"
 $ command -v git
 ```
@@ -134,9 +134,9 @@ Verify:
 - only the allowed remaining placeholders are present
 - `TEMPLATE-VERSION`, `CHANGELOG.md`, and `ONBOARDING.md` are absent from the generated repository
 
-## Step 2.5. Register The Ops Repository And Seat The Master
+## Step 3.5. Register The Ops Repository And Seat The Master
 
-**Position and action:** Step 2.5 begins after Step 3: register the already-Git `{{OPS_REPO}}` with Orca, then seat the master terminal in that ops repository worktree. The workspace root is not registered in Orca; the ops repository worktree is the verified production placement (for mogui-ADE, root unregistered and master seat = ops repo worktree).
+**Position and action:** Step 3.5 begins after Step 3: register the already-Git `{{OPS_REPO}}` with Orca, then seat the master terminal in that ops repository worktree. The workspace root is not registered in Orca; the ops repository worktree is the verified production placement (for mogui-ADE, root unregistered and master seat = ops repo worktree).
 
 **Why/caution:** The production placement is the ops repository worktree, not `{{WORKSPACE_ROOT}}`. Orca may have a folder-workspace route using a `folder:` selector, but that route is unverified from the CLI and must not be prescribed here.
 
@@ -147,14 +147,14 @@ $ ORCA repo add --path "{{OPS_REPO}}" --json
 $ ORCA terminal show --terminal <terminal handle> --json
 ```
 
-Capture the returned selector only when the terminal metadata proves it belongs to the `{{OPS_REPO}}` worktree; keep that ops-repository selector for Step 8 without adding a template placeholder. Do not register `{{WORKSPACE_ROOT}}` or substitute a filesystem path for the measured ops-repository worktree selector.
+Capture the returned selector only when the terminal metadata proves it belongs to the `{{OPS_REPO}}` worktree. Before continuing, persist a durable placement result in the ops repository (or in the active tracker when one already exists) containing the selector, terminal handle, `{{OPS_REPO}}` path, and the `terminal show` worktree proof; do not rely on conversation state. Carry the same fields into the tracker during Step 5. Do not register `{{WORKSPACE_ROOT}}` or substitute a filesystem path for the measured ops-repository worktree selector.
 
 Verify:
 
 - `orca repo add --path "{{OPS_REPO}}" --json` succeeds or confirms the ops repository is already registered
 - `terminal show` measured the terminal metadata
 - the selector points to the `{{OPS_REPO}}` worktree, not the workspace root
-- the workspace root remains unregistered and the ops-repository selector is available before founding spawn
+- the workspace root remains unregistered and the durable placement result is available before founding spawn
 
 ## Step 4. Replace Template Placeholders
 
@@ -238,7 +238,7 @@ Verify the explanation preceded commands, nothing was installed or configured by
 
 **Why/caution:** Supervised dispatch is Orca orchestration only; raw terminal polling and vendor-direct CLIs are non-compliant, and failures remain closed.
 
-Ask for confirmation to spawn now or defer, and confirm the Step 2.5 Orca selector is still valid. Write a kickoff file containing Generation 1, this installer as founding origin, the boot sequence (rehydrate ops docs, declare Role State, measure model and placement), the initial queue, and the requirement to report the orchestration Task complete.
+Ask for confirmation to spawn now or defer, reload the durable placement result from Step 3.5 (and its tracker copy when available), re-run `terminal show`, and confirm that the selector, live handle, and `{{OPS_REPO}}` worktree proof still match. Write a kickoff file containing Generation 1, this installer as founding origin, the boot sequence (rehydrate ops docs, declare Role State, measure model and placement), the initial queue, and the requirement to report the orchestration Task complete.
 
 Run this supervised path with the resolved `ORCA` executable:
 

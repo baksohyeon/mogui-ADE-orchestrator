@@ -760,11 +760,30 @@ def _close_spawned_terminal(
     try:
         confirmed_sessions = find_sessions(runner, list_worktree=list_worktree)
     except SuccessionError:
-        return False
+        if not list_worktree:
+            return False
+        try:
+            # A scoped list can be unavailable on older hosts; the global list
+            # is still safe here because ownership is checked below.
+            confirmed_sessions = find_sessions(runner)
+        except SuccessionError:
+            return False
     confirmed = next(
         (session for session in confirmed_sessions if session.handle == handle),
         None,
     )
+    if confirmed is None and list_worktree:
+        try:
+            # A mismatch terminal is intentionally outside the requested
+            # worktree, so scoped confirmation cannot see it. Retry globally
+            # before giving up, while retaining handle/title/liveness checks.
+            confirmed_sessions = find_sessions(runner)
+        except SuccessionError:
+            return False
+        confirmed = next(
+            (session for session in confirmed_sessions if session.handle == handle),
+            None,
+        )
     if (
         confirmed is None
         or handle in snapshot_handles

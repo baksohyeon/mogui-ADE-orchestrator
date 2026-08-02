@@ -14,6 +14,15 @@ REPO_ROOT = SCRIPT_PATH.parent.parent
 SRC_ROOT = REPO_ROOT / "src"
 sys.path.insert(0, str(SRC_ROOT))
 
+
+DEFAULT_MODELS = {
+    "claude": "claude-fable-5",
+    "claude-code": "claude-fable-5",
+    "grok": "grok-4.5",
+    "grok-build": "grok-4.5",
+    "codex": "gpt-5.6-sol",
+}
+
 from master_runtime.core.succession import (  # noqa: E402
     SuccessionError,
     build_handoff,
@@ -75,12 +84,18 @@ def _dispatch(args, runner):
         kickoff_text = args.kickoff_text
         if args.kickoff_file:
             kickoff_text = Path(args.kickoff_file).read_text(encoding="utf-8")
+        model = args.model or DEFAULT_MODELS.get(args.agent.strip().lower())
+        if model is None:
+            raise SuccessionError(
+                "--model is required for agent " + str(args.agent),
+                2,
+            )
         report = spawn_successor(
             workspace_selector=args.workspace_selector,
             kickoff_text=kickoff_text,
             root=args.root,
             title=args.title,
-            model=args.model,
+            model=model,
             agent=args.agent,
             orca_runner=runner,
             dry_run=args.dry_run,
@@ -124,7 +139,7 @@ def _build_parser() -> argparse.ArgumentParser:
     kickoff.add_argument("--kickoff-text")
     kickoff.add_argument("--kickoff-file")
     spawn.add_argument("--root", required=True)
-    spawn.add_argument("--model", default="claude-fable-5")
+    spawn.add_argument("--model")
     spawn.add_argument(
         "--agent",
         default="claude",

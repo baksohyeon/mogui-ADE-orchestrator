@@ -13,6 +13,7 @@ from master_runtime.core.succession import (
     SessionInfo,
     SuccessionError,
     _reissued_terminal_candidates,
+    _spawn_startup_command,
     build_handoff,
     detect_duplicate_instances,
     detect_trigger,
@@ -483,16 +484,18 @@ def test_spawn_successor_mismatch_closes_terminal_and_fails_closed() -> None:
     calls = []
     create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
     close_command = ("orca", "terminal", "close", "--terminal", "term-new", "--json")
+    scoped_list_command = (
+        "orca",
+        "terminal",
+        "list",
+        "--worktree",
+        "folder:unit-a",
+        "--json",
+    )
     runner = _recording_runner(
         {
-            _LIST_COMMAND: [
-                (0, _orca_json_from_terminals(), ""),
-                (
-                    0,
-                    _orca_json_from_terminals(_list_terminal("term-new", "folder:wrong", "✳ successor")),
-                    "",
-                ),
-            ],
+            scoped_list_command: (0, _orca_json_from_terminals(), ""),
+            _LIST_COMMAND: (0, _orca_json_from_terminals(_list_terminal("term-new", "folder:wrong", "✳ successor")), ""),
             create_command: (0, _orca_create_json("term-new", "folder:wrong"), ""),
             close_command: (0, '{"ok":true}', ""),
         },
@@ -512,19 +515,39 @@ def test_spawn_successor_mismatch_closes_terminal_and_fails_closed() -> None:
     assert close_command in calls
 
 
+def test_spawn_startup_command_covers_agent_variants_and_shell_quoting() -> None:
+    root = "/repo/with space"
+    kickoff = "start; $(touch should-not-run)"
+
+    assert _spawn_startup_command(root, "grok-4.5", kickoff, "grok") == (
+        "cd '/repo/with space' && exec grok --model grok-4.5 --always-approve "
+        "--cwd '/repo/with space' 'start; $(touch should-not-run)'"
+    )
+    assert _spawn_startup_command(root, "gpt-5.6-sol", kickoff, "codex") == (
+        "cd '/repo/with space' && exec codex --model gpt-5.6-sol "
+        "'start; $(touch should-not-run)'"
+    )
+    assert _spawn_startup_command(root, "custom-model", kickoff, "custom agent; touch") == (
+        "cd '/repo/with space' && exec 'custom agent; touch' --model custom-model "
+        "'start; $(touch should-not-run)'"
+    )
+
+
 def test_spawn_successor_close_failure_is_reported() -> None:
     create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
     close_command = ("orca", "terminal", "close", "--terminal", "term-new", "--json")
+    scoped_list_command = (
+        "orca",
+        "terminal",
+        "list",
+        "--worktree",
+        "folder:unit-a",
+        "--json",
+    )
     runner = _runner(
         {
-            _LIST_COMMAND: [
-                (0, _orca_json_from_terminals(), ""),
-                (
-                    0,
-                    _orca_json_from_terminals(_list_terminal("term-new", "folder:wrong", "✳ successor")),
-                    "",
-                ),
-            ],
+            scoped_list_command: (0, _orca_json_from_terminals(), ""),
+            _LIST_COMMAND: (0, _orca_json_from_terminals(_list_terminal("term-new", "folder:wrong", "✳ successor")), ""),
             create_command: (0, _orca_create_json("term-new", "folder:wrong"), ""),
             close_command: (1, "", "close denied"),
         }
@@ -1377,6 +1400,60 @@ def test_cli_spawn_dry_run_outputs_json() -> None:
     assert payload["verification"]["fail_closed_action"] == "terminal close on mismatch"
 
 
+def test_cli_spawn_uses_agent_specific_default_model() -> None:
+    result = subprocess.run(
+        [
+            str(Path(__file__).resolve().parent.parent / "scripts" / "master-succeed"),
+            "spawn",
+            "--workspace-selector",
+            "folder:unit-a",
+            "--kickoff-text",
+            "start here",
+            "--root",
+            "/repo/example",
+            "--agent",
+            "codex",
+            "--title",
+            "successor",
+            "--dry-run",
+            "--json",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    assert "codex --model gpt-5.6-sol" in payload["startup_command"]
+
+
+def test_cli_spawn_requires_model_for_unknown_agent() -> None:
+    result = subprocess.run(
+        [
+            str(Path(__file__).resolve().parent.parent / "scripts" / "master-succeed"),
+            "spawn",
+            "--workspace-selector",
+            "folder:unit-a",
+            "--kickoff-text",
+            "start here",
+            "--root",
+            "/repo/example",
+            "--agent",
+            "custom-agent",
+            "--title",
+            "successor",
+            "--dry-run",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "--model is required for agent custom-agent" in result.stderr
+
+
 def test_cli_retire_accepts_explicit_target_handle() -> None:
     fixture = _orca_json_from_terminals(
         {
@@ -1423,8 +1500,12 @@ def _runner(responses):
     def run(command: Sequence[str]) -> Tuple[int, str, str]:
         key = tuple(command)
         if key not in responses and _is_scoped_terminal_list(command) and _LIST_COMMAND in responses:
-            # spawn scopes list to --worktree; reuse bare-list fixtures in unit tests
-            key = _LIST_COMMAND
+            # Reuse bare-list fixtures only after applying the requested
+            # worktree selector, so tests cannot hide a wrong selector.
+            response = responses[_LIST_COMMAND]
+            if isinstance(response, list):
+                response = response.pop(0)
+            return _filter_scoped_response(response, command[4])
         response = responses[key]
         if isinstance(response, list):
             return response.pop(0)
@@ -1440,6 +1521,32 @@ def _is_scoped_terminal_list(command: Sequence[str]) -> bool:
         and command[3] == "--worktree"
         and command[-1] == "--json"
     )
+
+
+def _filter_scoped_response(response, selector: str):
+    code, stdout, stderr = response
+    if code != 0:
+        return response
+    payload = json.loads(stdout)
+    result = payload.get("result")
+    terminals = result.get("terminals") if isinstance(result, dict) else None
+    if not isinstance(terminals, list):
+        return response
+    payload["result"]["terminals"] = [
+        terminal
+        for terminal in terminals
+        if _fixture_worktree_matches(terminal, selector)
+    ]
+    return code, json.dumps(payload), stderr
+
+
+def _fixture_worktree_matches(terminal: dict, selector: str) -> bool:
+    requested = selector.removeprefix("id:")
+    for key in ("worktreeId", "worktree_id", "worktreePath", "worktree_path"):
+        value = terminal.get(key)
+        if value and str(value).removeprefix("id:") == requested:
+            return True
+    return False
 
 
 def _recording_runner(responses, calls):

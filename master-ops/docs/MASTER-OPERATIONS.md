@@ -10,6 +10,8 @@ Change rule: do not change this document without explicit user approval or an ac
 
 ## 0. Document Map
 
+Orca is REQUIRED infrastructure. Supervised dispatch = orca orchestration only. (charter rule since template v5)
+
 This document is the workspace master-operations SSOT.
 
 - Template version: `{{TEMPLATE_VERSION}}` (source: `{{RUNTIME_ROOT}}/master-ops/CHANGELOG.md`)
@@ -106,7 +108,7 @@ Do not expand scope. If a request belongs outside the active role, ask whether i
 
 ## 3. Worker Routing And Review
 
-The master is agent-host neutral. Measure the configured model flag and the actual session model field at boot. Default master model identifier: `{{MODEL_ID}}`.
+The master is agent-host neutral. Neutrality covers artifact formats and agent swappability only; it is never an excuse to avoid required infrastructure. Use Orca's stable IDs (handles, worktrees, RPC) instead of raw OS utilities. (charter rule since template v5) Measure the configured model flag and the actual session model field at boot. Default master model identifier: `{{MODEL_ID}}`.
 
 A boot measurement is a snapshot of one moment, not a property of the session. Re-measure after resume, after continue, after compaction, at succession audit, and at session close. A probe that samples recent turns answers what the model is now; it cannot see a change that happened earlier and then settled. For that, audit the whole transcript with `{{RUNTIME_ROOT}}/scripts/model-drift-audit`, which exits 0 for no transition, 1 for a transition or an expectation mismatch, and 2 when it cannot decide. Do not read 2 as a pass.
 
@@ -125,6 +127,8 @@ Three-vote review is the default for non-trivial merges or direct-push changes. 
 - contract and scope
 
 Use the majority verdict, but a minority P1 `FIX_FIRST` finding must be addressed or explicitly rejected with evidence.
+
+PR review-bot threads are always worker-handled without per-round owner instruction: dispatch a fix worker on arrival, the master verifies, the worker replies and resolves, and the master judges rejections only. (charter rule since template v5)
 
 Do not run large fan-out from the master workflow by default. If it is unavoidable, report scale and estimated cost first.
 
@@ -148,6 +152,8 @@ L=~/.mogui/dispatch-ledger.jsonl
 ```
 
 `register` without a prior successful `check` is invalid. Register only after the artifact exists, and before the final evidence report. Promote dispatch acceptance and verification results into the issue tracker.
+
+The supervised dispatch command is vendor-neutral Orca orchestration: bind a Run, create the Task with `orca orchestration task-create`, attach the worker with `orca orchestration worker-start` (or `dispatch --inject`), then wait event-driven with `check --wait --types worker_done,escalation,question`. Raw terminal polling and vendor-direct CLIs bypass task and Dispatch provenance and `worker_done` authority and are non-compliant dispatch paths. Vendor plugins are allowed for non-dispatch uses such as second-opinion review. Record accidental work outside orchestration plainly as non-orchestrated; never relabel it orchestrated. (charter rule since template v5)
 
 If the workspace uses a warning hook for direct worker invocations, it should warn on missing gate evidence and log suppressions. This document specifies the behavior only; hook implementation and deny lists belong to the security or operations owner.
 

@@ -58,9 +58,14 @@ fi
 printf 'INFO resolved Orca CLI: %s\n' "$orca_command"
 
 orca_ready=false
-if [[ "${orca_command##*/}" != "orca" ]]; then
-  fail "orca" "$orca_command is not supported by the runtime; expose the CLI as 'orca' before onboarding"
-elif command -v "$orca_command" >/dev/null 2>&1; then
+orca_basename="${orca_command##*/}"
+if ! command -v "$orca_command" >/dev/null 2>&1; then
+  fail "orca" "$orca_command is not available; $(orca_install_hint)"
+elif [[ "$orca_basename" != "orca" \
+    && "$orca_basename" != "orca-dev" \
+    && "$orca_basename" != "orca-ide" ]]; then
+  fail "orca" "$orca_command is not a supported Orca CLI; expose the CLI as 'orca', 'orca-dev', or 'orca-ide' before onboarding"
+else
   status_output=""
   if status_output=$("$orca_command" status --json 2>&1); then
     if printf '%s\n' "$status_output" | grep -Eq '"ok"[[:space:]]*:[[:space:]]*true'; then
@@ -72,8 +77,6 @@ elif command -v "$orca_command" >/dev/null 2>&1; then
   else
     fail "orca" "$orca_command status --json failed; $(orca_install_hint)"
   fi
-else
-  fail "orca" "$orca_command is not available; $(orca_install_hint)"
 fi
 
 if [[ "$orca_ready" == true ]]; then
@@ -94,26 +97,50 @@ fi
 
 skills_output=""
 skills_status=0
-if command -v npx >/dev/null 2>&1; then
-  skills_output=$(npx --no-install skills list -g 2>&1 | strip_ansi) || skills_status=$?
-else
-  skills_status=127
+runtime_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+skills_command=()
+skills_display=""
+skills_candidate=$(command -v skills 2>/dev/null || true)
+if [[ -n "$skills_candidate" && "$skills_candidate" = /* && -x "$skills_candidate" ]]; then
+  skills_realpath=$(realpath "$skills_candidate" 2>/dev/null || printf '%s' "$skills_candidate")
+  case "$skills_realpath" in
+    "$runtime_root"/*)
+      ;;
+    *)
+      skills_command=("$skills_realpath")
+      skills_display="$skills_realpath"
+      ;;
+  esac
 fi
 
-if [[ $skills_status -eq 127 ]]; then
-  fail "skills" "npx is unavailable; install Node.js, then run: npx skills add stablyai/orca -g --skill orca-cli --skill orchestration"
-elif [[ $skills_status -eq 0 ]] \
-  && printf '%s\n' "$skills_output" | grep -Eq '(^|[[:space:]])orca-cli([[:space:]]|$)' \
-  && printf '%s\n' "$skills_output" | grep -Eq '(^|[[:space:]])orchestration([[:space:]]|$)'; then
-  pass "skills" "global orca-cli and orchestration skills are present"
+if [[ ${#skills_command[@]} -eq 0 ]] && command -v npx >/dev/null 2>&1; then
+  # --no-install may use only a locally available package; never auto-fetch.
+  skills_command=(npx --no-install skills)
+  skills_display="npx --no-install skills"
+fi
+
+if [[ ${#skills_command[@]} -eq 0 ]]; then
+  skills_status=127
 else
-  if [[ "$fix" == true ]]; then
-    printf 'FIX  skills         npx skills add stablyai/orca -g --skill orca-cli --skill orchestration\n'
+  skills_output=$("${skills_command[@]}" list -g 2>&1 | strip_ansi) || skills_status=$?
+  if [[ $skills_status -eq 0 ]] \
+    && printf '%s\n' "$skills_output" | grep -Eq '(^|[[:space:]])orca-cli([[:space:]]|$)' \
+    && printf '%s\n' "$skills_output" | grep -Eq '(^|[[:space:]])orchestration([[:space:]]|$)'; then
+    pass "skills" "global orca-cli and orchestration skills are present"
+  else
+    skills_status=1
+  fi
+fi
+
+if [[ $skills_status -eq 0 ]]; then
+  :
+elif [[ "$fix" == true && ${#skills_command[@]} -gt 0 ]]; then
+    printf 'FIX  skills         %s add stablyai/orca -g --skill orca-cli --skill orchestration\n' "$skills_display"
     fix_status=0
-    npx skills add stablyai/orca -g --skill orca-cli --skill orchestration || fix_status=$?
-    printf 'FIX  skills         npx skills update orchestration -g\n'
-    npx skills update orchestration -g || fix_status=$?
-    skills_output=$(npx --no-install skills list -g 2>&1 | strip_ansi) || fix_status=$?
+    "${skills_command[@]}" add stablyai/orca -g --skill orca-cli --skill orchestration || fix_status=$?
+    printf 'FIX  skills         %s update orchestration -g\n' "$skills_display"
+    "${skills_command[@]}" update orchestration -g || fix_status=$?
+    skills_output=$("${skills_command[@]}" list -g 2>&1 | strip_ansi) || fix_status=$?
     if [[ $fix_status -eq 0 ]] \
       && printf '%s\n' "$skills_output" | grep -Eq '(^|[[:space:]])orca-cli([[:space:]]|$)' \
       && printf '%s\n' "$skills_output" | grep -Eq '(^|[[:space:]])orchestration([[:space:]]|$)'; then
@@ -122,11 +149,14 @@ else
       fail "skills" "required skills still missing after --fix"
     fi
   else
-    fail "skills" "missing orca-cli or orchestration; run: npx skills add stablyai/orca -g --skill orca-cli --skill orchestration; refresh with: npx skills update orchestration -g"
+    if [[ ${#skills_command[@]} -eq 0 ]]; then
+      fail "skills" "skills executable unavailable; install a local skills executable or package, then run: skills add stablyai/orca -g --skill orca-cli --skill orchestration"
+    else
+      fail "skills" "missing orca-cli or orchestration; run: $skills_display add stablyai/orca -g --skill orca-cli --skill orchestration; refresh with: $skills_display update orchestration -g"
+    fi
   fi
-fi
 
-if command -v claude >/dev/null 2>&1; then
+if [[ "${ORCA_AGENT_CLI:-}" == "claude" || "${ORCA_AGENT_CLI:-}" == "claude-code" ]]; then
   claude_plugins_file="${HOME}/.claude/plugins/installed_plugins.json"
   if [[ -f "$claude_plugins_file" ]] \
     && grep -Fq 'codex@openai-codex' "$claude_plugins_file"; then
@@ -134,8 +164,10 @@ if command -v claude >/dev/null 2>&1; then
   else
     fail "codex-plugin" "official Codex plugin missing from $claude_plugins_file; in Claude Code run: /plugin marketplace add openai/codex-plugin-cc; /plugin install codex@openai-codex; /reload-plugins; verify /codex:setup"
   fi
+elif command -v claude >/dev/null 2>&1; then
+  printf 'INFO %-14s %s\n' "codex-plugin" "skipped because Claude Code is installed but ORCA_AGENT_CLI does not select it"
 else
-  printf 'INFO %-14s %s\n' "codex-plugin" "skipped because claude is not installed"
+  printf 'INFO %-14s %s\n' "codex-plugin" "skipped because Claude Code is not the selected agent"
 fi
 
 if command -v bd >/dev/null 2>&1; then

@@ -34,6 +34,13 @@ Python before onboarding proceeds. `ONBOARDING.md` is rewritten as a token-lean
 script-and-command flow while retaining its questions, safeguards, and
 verification gates; `--fix` may add or refresh only the required global skills.
 
+The v5 upgrade contract also adds governance rules to the template: Orca is
+required infrastructure, neutrality covers only artifact formats and agent
+swappability, PR review-bot threads are worker-handled by standing delegation,
+and supervised dispatch is vendor-neutral Orca orchestration only. Existing
+installations should add these rules to their operations SSOT when applying the
+v5 upgrade; accidental out-of-orchestration work must remain plainly recorded.
+
 Upgrade an existing installation in this order:
 
 1. Pull template v5 in the orchestrator clone.

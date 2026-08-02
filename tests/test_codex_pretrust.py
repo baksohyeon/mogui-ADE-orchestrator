@@ -243,11 +243,13 @@ def test_resolver_skips_disqualified_candidate_and_first_qualifier_wins(
     shim_bin = tmp_path / "bin"
     shim_bin.mkdir()
     probe_log = tmp_path / "probes.log"
-    failing = shim_bin / "python3"
-    failing.write_text(
-        f'#!/bin/sh\necho python3 >> "{probe_log}"\nexit 1\n', encoding="utf-8"
-    )
-    failing.chmod(0o755)
+    for disqualified in ("python3", "python3.14", "python3.13"):
+        failing = shim_bin / disqualified
+        failing.write_text(
+            f'#!/bin/sh\necho {disqualified} >> "{probe_log}"\nexit 1\n',
+            encoding="utf-8",
+        )
+        failing.chmod(0o755)
     qualifying = shim_bin / "python3.12"
     qualifying.write_text(
         f'#!/bin/sh\necho python3.12 >> "{probe_log}"\nexec "{sys.executable}" "$@"\n',
@@ -264,8 +266,9 @@ def test_resolver_skips_disqualified_candidate_and_first_qualifier_wins(
     assert "trusted (added)" in result.stdout
     assert "Summary: 1 added, 0 updated, 0 already trusted" in result.stdout
     probes = probe_log.read_text(encoding="utf-8").split()
-    assert probes[0] == "python3", probes
-    assert "python3.12" in probes, probes
+    # The qualifier is probed once and then runs again for the edit, so the
+    # first four entries pin the exact candidate order.
+    assert probes[:4] == ["python3", "python3.14", "python3.13", "python3.12"], probes
     parsed = tomllib.loads(config.read_bytes().decode("utf-8"))
     assert parsed["projects"]["/tmp/worktree"]["trust_level"] == "trusted"
 

@@ -1575,6 +1575,39 @@ def test_cli_report_rolls_up_models_denials_and_overrides(
     )
 
 
+def test_cli_report_shows_every_policy_a_day_was_judged_against(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    """Two rows here mean the day was not judged against one policy."""
+
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
+    ledger = tmp_path / "policy-report-ledger.jsonl"
+    rows = (
+        {"tier_policy_path": "/policies/installation.json", "tier_policy_sha256": "a" * 64},
+        {"tier_policy_path": "/policies/installation.json", "tier_policy_sha256": "a" * 64},
+        {"tier_policy_path": "/tmp/substituted.json", "tier_policy_sha256": "b" * 64},
+        {"tier_policy_path": "/policies/legacy-entry.json"},
+    )
+    with ledger.open("w", encoding="utf-8") as handle:
+        for index, row in enumerate(rows):
+            entry = {
+                "ts": 1_785_000_000 + index,
+                "decision": "ALLOW",
+                "reason": "OK",
+                "model": "gpt-5.6-luna",
+                "cost_proxy": 10,
+                **row,
+            }
+            handle.write(json.dumps(entry) + "\n")
+
+    assert script["main"](["--ledger", str(ledger), "report"]) == 0
+    output = capsys.readouterr().out
+    assert f"/policies/installation.json: sha256={'a' * 12} decisions=2" in output
+    assert f"/tmp/substituted.json: sha256={'b' * 12} decisions=1" in output
+    assert "/policies/legacy-entry.json: sha256=<unrecorded> decisions=1" in output
+
+
 def test_cli_report_uses_stored_cost_and_labels_legacy_computation(
     tmp_path: Path,
     capsys,
@@ -1833,6 +1866,114 @@ class _MutableClock:
 
     def __call__(self) -> float:
         return self.value
+
+
+def test_case_variant_of_denied_tier_is_denied_under_warn(tmp_path: Path) -> None:
+    """Exact-string membership let a case variant reach the unknown branch."""
+
+    contract = _contract(tmp_path, "case variant of a denied tier")
+    gate = _gate(
+        tmp_path,
+        now=1_000,
+        tier_policy_path=_tier_policy(tmp_path, unknown_model="warn"),
+    )
+
+    decision = gate.check(
+        DispatchRequest(
+            runtime="codex",
+            model="GPT-5.6-SOL",
+            contract_path=contract,
+            est_input_chars=10_000,
+            n_agents=1,
+        )
+    )
+
+    assert decision.allow is False
+    assert decision.reason == ReasonCode.TIER_POLICY
+    assert _ledger_entries(tmp_path)[-1]["model"] == "GPT-5.6-SOL"
+    assert not (tmp_path / "dispatch-tickets").exists()
+
+
+def test_case_variant_of_allowed_model_stays_allowed(tmp_path: Path) -> None:
+    contract = _contract(tmp_path, "case variant of an allowed model")
+    gate = _gate(tmp_path, now=1_000)
+
+    decision = gate.check(
+        DispatchRequest(
+            runtime="codex",
+            model="GPT-5.6-Luna",
+            contract_path=contract,
+            est_input_chars=10_000,
+            n_agents=1,
+        )
+    )
+
+    assert decision.allow is True
+    assert decision.reason == ReasonCode.OK
+
+
+def test_ledger_records_which_tier_policy_decided(tmp_path: Path) -> None:
+    """The policy path is caller-supplied, so the decision must name the file."""
+
+    policy = _tier_policy(tmp_path)
+    digest = hashlib.sha256(policy.read_bytes()).hexdigest()
+    gate = _gate(tmp_path, now=1_000, tier_policy_path=policy)
+
+    allowed = gate.check(
+        DispatchRequest(
+            runtime="codex",
+            model="gpt-5.6-luna",
+            contract_path=_contract(tmp_path, "policy identity on allow"),
+            est_input_chars=10_000,
+            n_agents=1,
+        )
+    )
+    denied = gate.check(
+        DispatchRequest(
+            runtime="codex",
+            model="gpt-5.6-sol",
+            contract_path=_contract(tmp_path, "policy identity on deny"),
+            est_input_chars=10_000,
+            n_agents=1,
+        )
+    )
+
+    assert allowed.allow is True
+    assert denied.allow is False
+    entries = _ledger_entries(tmp_path)[-2:]
+    assert [entry["tier_policy_path"] for entry in entries] == [str(policy)] * 2
+    assert [entry["tier_policy_sha256"] for entry in entries] == [digest] * 2
+
+
+def test_tier_policy_rejects_case_differing_duplicate_across_sets(
+    tmp_path: Path,
+) -> None:
+    policy = tmp_path / "model-tier-policy.json"
+    policy.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "worker_allowed": ["gpt-5.6-luna"],
+                "worker_denied_tiers": ["GPT-5.6-LUNA"],
+                "unknown_model": "deny",
+            }
+        ),
+        encoding="utf-8",
+    )
+    gate = _gate(tmp_path, now=1_000, tier_policy_path=policy)
+
+    decision = gate.check(
+        DispatchRequest(
+            runtime="codex",
+            model="gpt-5.6-luna",
+            contract_path=_contract(tmp_path, "overlapping policy sets"),
+            est_input_chars=10_000,
+            n_agents=1,
+        )
+    )
+
+    assert decision.allow is False
+    assert decision.reason == ReasonCode.TIER_POLICY_UNAVAILABLE
 
 
 def _gate(

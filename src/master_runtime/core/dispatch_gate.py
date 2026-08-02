@@ -135,11 +135,18 @@ class DispatchTicket:
 
 @dataclass(frozen=True)
 class ModelTierPolicy:
-    """Validated per-installation worker model policy."""
+    """Validated per-installation worker model policy.
+
+    Model sets are casefolded. Exact-string membership let a case variant of a
+    denied tier miss the denied set, fall into the unknown branch, and pass as a
+    warning wherever `unknown_model` is `warn`. `digest` identifies the file the
+    decision was made against, because the path is caller-supplied.
+    """
 
     worker_allowed: frozenset[str]
     worker_denied_tiers: frozenset[str]
     unknown_model: str
+    digest: str = ""
 
 
 class DispatchGate:
@@ -155,6 +162,11 @@ class DispatchGate:
 
     def check(self, request: DispatchRequest) -> GateDecision:
         """Return a gate decision and append it to the ledger."""
+
+        # Per-call, reset before anything can append: entries written before the
+        # policy loads must not inherit a digest from an earlier check. One gate
+        # instance per process is the assumption here, same as the ticket lock.
+        self._tier_policy_digest = ""
 
         # None is the fail-closed sentinel for an input whose size could not be
         # measured. Handle it before every other validation or budget check so
@@ -183,12 +195,15 @@ class DispatchGate:
             self._append_decision(request, decision)
             return decision
 
+        self._tier_policy_digest = tier_policy.digest
         tier_policy_warning = False
         tier_override: str | None = None
         model = request.model.strip() if request.model is not None else ""
-        if model not in tier_policy.worker_allowed:
+        # Casefolded: a denied tier spelled in another case is the same tier.
+        model_key = model.casefold()
+        if model_key not in tier_policy.worker_allowed:
             policy_denies = (
-                model in tier_policy.worker_denied_tiers
+                model_key in tier_policy.worker_denied_tiers
                 or tier_policy.unknown_model == "deny"
             )
             if policy_denies:
@@ -451,6 +466,12 @@ class DispatchGate:
             entry["warnings"] = [warning.value for warning in decision.warnings]
         if decision.tier_override is not None:
             entry["tier_override"] = decision.tier_override
+        # Which policy decided. The path is caller-supplied through --tier-policy
+        # or DISPATCH_TIER_POLICY, so an ALLOW that names neither path nor digest
+        # cannot be told apart from one a substituted policy allowed.
+        entry["tier_policy_path"] = str(self.config.tier_policy_path)
+        if getattr(self, "_tier_policy_digest", ""):
+            entry["tier_policy_sha256"] = self._tier_policy_digest
         self._append_entry(entry)
 
     def _append_entry(self, entry: Mapping[str, object]) -> None:
@@ -652,7 +673,8 @@ def _validate_request(request: DispatchRequest) -> ReasonCode | None:
 
 
 def _load_tier_policy(path: Path) -> ModelTierPolicy:
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    raw = path.read_bytes()
+    payload = json.loads(raw.decode("utf-8"))
     if (
         not isinstance(payload, dict)
         or isinstance(payload.get("version"), bool)
@@ -671,6 +693,7 @@ def _load_tier_policy(path: Path) -> ModelTierPolicy:
         worker_allowed=worker_allowed,
         worker_denied_tiers=worker_denied_tiers,
         unknown_model=unknown_model,
+        digest=hashlib.sha256(raw).hexdigest(),
     )
 
 
@@ -681,7 +704,7 @@ def _model_list(value: object) -> frozenset[str]:
         raise ValueError("model identifiers must be non-empty strings")
     if any(model != model.strip() for model in value):
         raise ValueError("model identifiers must not have surrounding whitespace")
-    return frozenset(value)
+    return frozenset(model.casefold() for model in value)
 
 
 def _dispatch_ticket_path(

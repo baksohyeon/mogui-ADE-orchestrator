@@ -164,7 +164,7 @@ L=~/.mogui/dispatch-ledger.jsonl
 "$G" --ledger "$L" register --job-id <job-id> --probe-cmd "<command proving the job-id appears in an artifact>" --orchestration-task <task-id>
 ```
 
-The gate enforces `model-tier-policy.json`; an exceptional denied-tier dispatch requires `--tier-override "<reason>"`, and every accepted override is recorded in the ledger.
+The gate enforces `model-tier-policy.json`; an exceptional denied-tier dispatch requires `--tier-override "<reason>"`, and every accepted override is recorded in the ledger. Model identifiers match casefolded, so a denied tier spelled in another case is the same tier. Each decision records the policy path and its `sha256`, because that path is caller-supplied; `dispatch-gate report` lists every policy a span was judged against, and more than one row means the span was not judged against one policy.
 
 Before attaching a Codex worker, run `scripts/codex-worker-pretrust <worktree-path>` so startup never blocks on the trust prompt.
 

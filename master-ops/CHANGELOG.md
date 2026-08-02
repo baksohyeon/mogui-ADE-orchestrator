@@ -32,6 +32,15 @@ ledger, and provides a stable plain-text `report` rollup for model use, cost
 proxy, denials, overrides, and time span. Existing installations should copy
 and customize the policy file before adopting this gate version.
 
+Model identifiers are matched casefolded, because exact-string membership let a
+case variant of a denied tier miss the denied set and pass as a warning wherever
+`unknown_model` is `warn`. Every check entry also records `tier_policy_path` and
+`tier_policy_sha256`, and `report` lists each policy a span was judged against:
+the policy path is caller-supplied through `--tier-policy` or
+`DISPATCH_TIER_POLICY`, so without that identity an allowed top-tier dispatch
+cannot be told apart from one a substituted policy allowed. More than one policy
+row in a day's rollup is the signal.
+
 Upgrade an existing installation by copying `master-ops/model-tier-policy.json`,
 re-running `bash scripts/onboarding-preflight.sh`, and raising the installed
 `Template version` line to 6.

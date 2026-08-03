@@ -48,6 +48,11 @@ Orchestration channel doctrine: acknowledgement, addressing, and reachability ru
 - §4 now specifies that a coordinator clears each delivery with the acknowledgement flag before waiting again, and cross-master traffic addresses a standing Run rather than a transient handle.
 - Succession boot card now binds a standing coordinator Run to the session at step 4, recording its durable address for peers before anyone needs it, with a note that a handle recorded in its place will be dead by the next restart.
 
+Selector kinds and worker placement documentation (2026-08-03):
+
+- `docs/public/orca-concepts.md` adds distinction between folder workspace and repository worktree selector kinds to the object model, with the consequence for what a session can do on its first command.
+- `master-ops/onboarding/04-seat.md` adds a worker placement subsection stating the rule inverse to the master's placement and the verification check.
+
 ONBOARDING.md installer UX pass from the 2026-08-03 mogui founding run
 (feedback tracked as maintainer backlog on that install):
 

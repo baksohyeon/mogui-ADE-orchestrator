@@ -1,5 +1,6 @@
 #!/bin/bash
 # UserPromptSubmit: warn once when unacked orchestration messages exist.
+# Keep this resolution order in sync with onboarding-preflight.sh and dispatch-gate.
 if [ -n "${ORCA_CLI_COMMAND:-}" ]; then
   orca_command="$ORCA_CLI_COMMAND"
 elif [ -n "${ORCA_DEV_REPO_ROOT:-}" ]; then

@@ -22,8 +22,9 @@ Blame has a narrow job that neither retro nor travelog can do: it recovers the
 evidence layer a raw session can blur during self-report, including what was not
 checked and where a causal claim outran observation. Its strict format is there for
 measurement quality, not for punishment. Use the filename format
-`BLAME-YYYY-MM-DD-<slug>.md`. The first blame submission creates `docs/blame/`
-if the generated operations repository does not already contain it.
+`BLAME-YYYY-MM-DD-<slug>.md`. Before the first blame submission, explicitly create
+`docs/blame/` in the generated operations repository if it does not already exist; no
+hook or script creates it automatically.
 
 **PROPOSED (owner decision pending)**
 

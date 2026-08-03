@@ -10,12 +10,15 @@ user-invocable: true
 
 # blame-agent
 
-Template adoption note: before persisting or pushing a blame report, run the repository's
-redaction scan over the report content and any quoted evidence. If a user request,
-transcript line, or evidence quote contains a credential, token, or key, record only
-metadata for the secret-bearing request and keep the value out of both chat output and the
-documented copy. Commit and push steps still follow the workspace's approval flow and
-branch rules; "standard branch" means the branch approved for that repository, not
+Template adoption note: before outputting, persisting, or pushing a blame report, run the
+workspace's approved fail-closed redaction gate over the exact report draft, path, or
+staged diff. A plain tracked-file scan is insufficient until the report is included in
+that scan, and a scan without workspace-specific rules is not a publish proof. If no such
+gate is available, stop and ask the coordinator before quoting evidence. If a user
+request, transcript line, or evidence quote contains a credential, token, or key, record
+only metadata for the secret-bearing request and keep the value out of both chat output
+and the documented copy. Commit and push steps still follow the workspace's approval flow
+and branch rules; "standard branch" means the branch approved for that repository, not
 necessarily the default branch.
 
 You are the incident reporter for your own execution. Output in the workspace owner's onboarded language preference. No excuses or softening.

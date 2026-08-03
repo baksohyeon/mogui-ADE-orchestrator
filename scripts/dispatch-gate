@@ -147,14 +147,24 @@ def _check(args: argparse.Namespace) -> int:
 
 
 def _register(args: argparse.Namespace) -> int:
-    if not args.orchestration_task:
-        return _deny_unverified_orchestration(args, ProbeFailure.TASK_OMITTED)
-    probe_failure = _probe_orchestration_task(args.orchestration_task)
-    if probe_failure is not None:
-        return _deny_unverified_orchestration(args, probe_failure)
+    gate = _gate(args)
+    completion_channel = gate.completion_channel_for_registration(
+        contract_sha=args.contract_sha,
+        runtime=args.runtime,
+    )
+    if completion_channel != "sentinel-log":
+        if not args.orchestration_task:
+            return _deny_unverified_orchestration(
+                args,
+                gate,
+                ProbeFailure.TASK_OMITTED,
+            )
+        probe_failure = _probe_orchestration_task(args.orchestration_task)
+        if probe_failure is not None:
+            return _deny_unverified_orchestration(args, gate, probe_failure)
 
     measured_model, model_probe_failed = _measure_worker_model(args.model_probe_cmd)
-    decision = _gate(args).register_job(
+    decision = gate.register_job(
         args.job_id,
         lambda job_id: _probe_contains_job_id(args.probe_cmd, job_id),
         contract_sha=args.contract_sha,
@@ -465,6 +475,7 @@ def _probe_orchestration_task(orchestration_task: str) -> ProbeFailure | None:
 
 def _deny_unverified_orchestration(
     args: argparse.Namespace,
+    gate: DispatchGate,
     probe_failure: ProbeFailure,
 ) -> int:
     decision = GateDecision(False, ReasonCode.ORCHESTRATION_UNVERIFIED)
@@ -477,7 +488,7 @@ def _deny_unverified_orchestration(
     }
     if args.orchestration_task:
         entry["orchestration_task"] = args.orchestration_task
-    ledger_path = Path(_gate(args).config.ledger_path)
+    ledger_path = Path(gate.config.ledger_path)
     ledger_path.parent.mkdir(parents=True, exist_ok=True)
     with ledger_path.open("a", encoding="utf-8") as ledger:
         ledger.write(json.dumps(entry, sort_keys=True, separators=(",", ":")))

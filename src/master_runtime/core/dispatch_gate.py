@@ -144,6 +144,14 @@ class DispatchTicket:
 
 
 @dataclass(frozen=True)
+class RegistrationCandidate:
+    """Pending dispatch selected for registration."""
+
+    pending: Mapping[str, object]
+    selected_ticket: DispatchTicket | None
+
+
+@dataclass(frozen=True)
 class ModelTierPolicy:
     """Validated per-installation worker model policy.
 
@@ -426,90 +434,15 @@ class DispatchGate:
             return GateDecision(False, ReasonCode.INVALID_REQUEST)
 
         with _ticket_lock(Path(self.config.ticket_dir)):
-            tickets = self._valid_dispatch_tickets(runtime_filter=runtime_filter)
-            if contract_sha is not None:
-                contract_sha_filter = _normalize_contract_sha_filter(contract_sha)
-                if contract_sha_filter is None:
-                    return GateDecision(False, ReasonCode.INVALID_REQUEST)
-                all_tickets = self._dispatch_tickets(
-                    runtime_filter=runtime_filter,
-                    include_expired=True,
-                )
-                matching_tickets = tuple(
-                    ticket
-                    for ticket in all_tickets
-                    if ticket.contract_sha.lower().startswith(contract_sha_filter)
-                )
-                if len(matching_tickets) > 1:
-                    return GateDecision(
-                        False,
-                        ReasonCode.AMBIGUOUS_TICKET,
-                        message=_candidate_sha_message(matching_tickets),
-                    )
-                selected_ticket = matching_tickets[0] if matching_tickets else None
-                pending_dispatches = self._pending_dispatches()
-                if selected_ticket is not None:
-                    matching_pending = tuple(
-                        entry
-                        for entry in pending_dispatches
-                        if entry.get("contract_sha") == selected_ticket.contract_sha
-                        and entry.get("runtime") == selected_ticket.runtime
-                    )
-                else:
-                    if all_tickets:
-                        return GateDecision(
-                            False,
-                            ReasonCode.NO_MATCHING_TICKET,
-                            message=_candidate_sha_message(all_tickets),
-                        )
-                    matching_pending = tuple(
-                        entry
-                        for entry in pending_dispatches
-                        if _contract_sha_matches(entry.get("contract_sha"), contract_sha_filter)
-                        and (
-                            runtime_filter is None
-                            or _string_or_none(entry.get("runtime")) == runtime_filter
-                        )
-                    )
-                    if len(matching_pending) > 1:
-                        return GateDecision(
-                            False,
-                            ReasonCode.AMBIGUOUS_TICKET,
-                            message=_candidate_sha_message_from_entries(matching_pending),
-                        )
-                    if not matching_pending:
-                        return GateDecision(
-                            False,
-                            ReasonCode.NO_MATCHING_TICKET,
-                            message=_candidate_sha_message(all_tickets),
-                        )
-            else:
-                if not tickets:
-                    return GateDecision(
-                        False,
-                        ReasonCode.NO_MATCHING_TICKET,
-                        message=_candidate_sha_message(tickets),
-                    )
-                if len(tickets) > 1:
-                    return GateDecision(
-                        False,
-                        ReasonCode.AMBIGUOUS_TICKET,
-                        message=_candidate_sha_message(tickets),
-                    )
-                selected_ticket = tickets[0]
-                matching_pending = tuple(
-                    entry
-                    for entry in self._pending_dispatches()
-                    if entry.get("contract_sha") == selected_ticket.contract_sha
-                    and entry.get("runtime") == selected_ticket.runtime
-                )
-                if not matching_pending:
-                    return GateDecision(
-                        False,
-                        ReasonCode.NO_MATCHING_TICKET,
-                        message=_candidate_sha_message(tickets),
-                    )
-            pending = matching_pending[0]
+            candidate, denial = self._registration_candidate(
+                contract_sha,
+                runtime_filter,
+            )
+            if denial is not None:
+                return denial
+            assert candidate is not None
+            pending = candidate.pending
+            selected_ticket = candidate.selected_ticket
 
             if contract_sha is not None and selected_ticket is not None:
                 try:
@@ -537,6 +470,9 @@ class DispatchGate:
                 "decision": "ALLOW",
                 "reason": ReasonCode.OK.value,
                 "job_id": job_id,
+                "completion_channel": _string_or_none(
+                    pending.get("completion_channel")
+                ),
             }
             if orchestration_task is not None:
                 entry["orchestration_task"] = orchestration_task
@@ -564,6 +500,120 @@ class DispatchGate:
                 tier_override=decision.tier_override,
             )
         return decision
+
+    def completion_channel_for_registration(
+        self,
+        contract_sha: str | None = None,
+        runtime: str | None = None,
+    ) -> str | None:
+        """Return the check channel for the pending dispatch register would use."""
+
+        runtime_filter = _normalize_runtime_filter(runtime)
+        if runtime is not None and runtime_filter is None:
+            return None
+
+        with _ticket_lock(Path(self.config.ticket_dir)):
+            candidate, denial = self._registration_candidate(
+                contract_sha,
+                runtime_filter,
+            )
+        if denial is not None or candidate is None:
+            return None
+        return _string_or_none(candidate.pending.get("completion_channel"))
+
+    def _registration_candidate(
+        self,
+        contract_sha: str | None,
+        runtime_filter: str | None,
+    ) -> tuple[RegistrationCandidate | None, GateDecision | None]:
+        tickets = self._valid_dispatch_tickets(runtime_filter=runtime_filter)
+        if contract_sha is not None:
+            contract_sha_filter = _normalize_contract_sha_filter(contract_sha)
+            if contract_sha_filter is None:
+                return None, GateDecision(False, ReasonCode.INVALID_REQUEST)
+            all_tickets = self._dispatch_tickets(
+                runtime_filter=runtime_filter,
+                include_expired=True,
+            )
+            matching_tickets = tuple(
+                ticket
+                for ticket in all_tickets
+                if ticket.contract_sha.lower().startswith(contract_sha_filter)
+            )
+            if len(matching_tickets) > 1:
+                return None, GateDecision(
+                    False,
+                    ReasonCode.AMBIGUOUS_TICKET,
+                    message=_candidate_sha_message(matching_tickets),
+                )
+            selected_ticket = matching_tickets[0] if matching_tickets else None
+            pending_dispatches = self._pending_dispatches()
+            if selected_ticket is not None:
+                matching_pending = tuple(
+                    entry
+                    for entry in pending_dispatches
+                    if entry.get("contract_sha") == selected_ticket.contract_sha
+                    and entry.get("runtime") == selected_ticket.runtime
+                )
+            else:
+                if all_tickets:
+                    return None, GateDecision(
+                        False,
+                        ReasonCode.NO_MATCHING_TICKET,
+                        message=_candidate_sha_message(all_tickets),
+                    )
+                matching_pending = tuple(
+                    entry
+                    for entry in pending_dispatches
+                    if _contract_sha_matches(
+                        entry.get("contract_sha"),
+                        contract_sha_filter,
+                    )
+                    and (
+                        runtime_filter is None
+                        or _string_or_none(entry.get("runtime")) == runtime_filter
+                    )
+                )
+                if len(matching_pending) > 1:
+                    return None, GateDecision(
+                        False,
+                        ReasonCode.AMBIGUOUS_TICKET,
+                        message=_candidate_sha_message_from_entries(matching_pending),
+                    )
+                if not matching_pending:
+                    return None, GateDecision(
+                        False,
+                        ReasonCode.NO_MATCHING_TICKET,
+                        message=_candidate_sha_message(all_tickets),
+                    )
+        else:
+            if not tickets:
+                return None, GateDecision(
+                    False,
+                    ReasonCode.NO_MATCHING_TICKET,
+                    message=_candidate_sha_message(tickets),
+                )
+            if len(tickets) > 1:
+                return None, GateDecision(
+                    False,
+                    ReasonCode.AMBIGUOUS_TICKET,
+                    message=_candidate_sha_message(tickets),
+                )
+            selected_ticket = tickets[0]
+            matching_pending = tuple(
+                entry
+                for entry in self._pending_dispatches()
+                if entry.get("contract_sha") == selected_ticket.contract_sha
+                and entry.get("runtime") == selected_ticket.runtime
+            )
+            if not matching_pending:
+                return None, GateDecision(
+                    False,
+                    ReasonCode.NO_MATCHING_TICKET,
+                    message=_candidate_sha_message(tickets),
+                )
+
+        return RegistrationCandidate(matching_pending[0], selected_ticket), None
 
     def ledger_entries(self) -> tuple[Mapping[str, object], ...]:
         """Return parsed ledger entries in append order."""

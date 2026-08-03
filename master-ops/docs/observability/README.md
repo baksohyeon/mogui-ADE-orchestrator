@@ -9,13 +9,39 @@ the master's behaviour, what it almost did, or what it decided not to do. Withou
 layer, the only observation channel a workspace owner has is a post-incident report — which
 arrives only after something already broke.
 
-This suite adds two voluntary, standing record genres. They capture different layers,
-neither replaces the other, and neither replaces the incident report.
+This suite adds three standing record genres. They capture different layers,
+neither replaces the others, and each answers a different observability question.
 
 | Genre | Directory | Captures | Cadence |
 |---|---|---|---|
+| Blame | `docs/blame/` | Structured incident observation record: what was observed, what was not observed, and where observation was promoted to cause too early | Only when an incident trigger is met |
 | Retro | `docs/retro/` | Judgment, misjudgment, near misses, temptations resisted | Track milestones, incidents, succession, on request |
 | Travelog | `docs/travelog/` | Where the master went, what it actually ran, what came back | Append per generation, as events happen |
+
+Blame has a narrow job that neither retro nor travelog can do: it recovers the
+evidence layer a raw session can blur during self-report, including what was not
+checked and where a causal claim outran observation. Its strict format is there for
+measurement quality, not for punishment. Use the filename format
+`BLAME-YYYY-MM-DD-<slug>.md`. Before the first blame submission, explicitly create
+`docs/blame/` in the generated operations repository if it does not already exist; no
+hook or script creates it automatically.
+
+**PROPOSED (owner decision pending)**
+
+Proposed incident triggers grounded in authoring-instance measurements from 2026-08-03:
+- A claim is stated stronger than its evidence supports and then propagated into a worker tool or contract.
+- A completed-tense progress report is made without a matching execution event after the
+  relevant transcript or log coverage has been measured; if coverage is incomplete, record
+  the action as unverified unless non-execution is independently confirmed.
+- A reading surface is treated as the thing itself (wrong mailbox, wrong field, piped exit code) and used as ground truth.
+
+Evidence pointer: the supporting measurements remain in the authoring instance's
+operations records; they are promoted here as template guidance, not as a claim that every
+future workspace has reproduced the same incidents.
+
+Rejected candidates (not adopted as triggers):
+- Product repository `main` reach outside dispatch path: rejected because the 2026-08-03 evidence set for this track did not confirm a direct main-path breach event.
+- "Wrote a guard and broke it the same day" as standalone trigger: rejected because it is too broad and mostly a duplicate symptom of the stronger evidence-quality triggers above.
 
 Retro is the one that earns its cost. It answers why a decision took the shape it
 did, which nothing else records. Travelog answers what happened, and a workspace

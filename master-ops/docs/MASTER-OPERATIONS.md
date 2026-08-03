@@ -17,7 +17,7 @@ The charter consists of ten sections covering the master's role, execution, and 
 | §1 | Document Map | Planning or orientation | [charter/01-document-map.md](charter/01-document-map.md) — maps current state and document ownership |
 | §2 | Role Constitution | Role switch or Role Lock question | [charter/02-role-constitution.md](charter/02-role-constitution.md) — defines the master's role, allowed roles, and role-state format |
 | §3 | Execution Principles | Proposal/Approval questions or scope drift | [charter/03-execution-principles.md](charter/03-execution-principles.md) — governs the default execution path and recovery procedures |
-| §4 | Worker Routing and Review | Dispatch planning or worker evaluation | [charter/04-worker-routing-review.md](charter/04-worker-routing-review.md) — governs worker dispatch, model selection, and review practices |
+| §4 | Worker Routing and Review | Dispatch planning or worker evaluation | [charter/04-worker-routing-review.md](charter/04-worker-routing-review.md) — governs worker dispatch, model selection, and review practices; contract drafting conventions live in [runbooks/contract-conventions.md](runbooks/contract-conventions.md) |
 | §5 | Dispatch Gate | Supervised dispatch planning | [charter/05-dispatch-gate.md](charter/05-dispatch-gate.md) — governs the supervised dispatch process and gate enforcement |
 | §6 | Succession | Session continuity or master change | [charter/06-succession.md](charter/06-succession.md) — governs master succession and recovery procedures |
 | §7 | Records | Document ownership or memory questions | [charter/07-records.md](charter/07-records.md) — governs document ownership and record separation |

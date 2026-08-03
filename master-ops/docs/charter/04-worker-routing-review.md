@@ -18,11 +18,11 @@ The installation-specific worker tier mapping lives in `model-tier-policy.json`,
 
 Worker contract clause library: `docs/runbooks/contract-conventions.md`.
 
-### Worker Launch Approval Posture
+## Worker Launch Approval Posture
 
 For operations-repository work, dispatch workers into an isolated `git worktree` and require first-action placement proof (`pwd`, `git branch --show-current`) in that worker checkout. If those measurements show the master's primary checkout instead, stop immediately: on 2026-08-03 this exact ambiguity caused four contaminations of the master's own tree in one day.
 
-Workers launched into isolated worktrees must start with the agent's non-interactive approval flag, or the measured Codex pre-trust posture below, so allowlist or trust prompts cannot block them mid-task. Pre-trust holds when the summary reports the worktree added, updated, or already trusted; the skip path (no TOML-capable interpreter, `Summary: skipped`) leaves the trust prompt in place and says so on stdout, so read the summary line before relying on it. At every dispatch, the master MEASURES the installed CLI's `--help` output and uses only flags present there; it never guesses flags from memory.
+Workers launched into isolated worktrees must start with the agent's non-interactive approval flag, or the measured pre-trust posture below, so allowlist or trust prompts cannot block them mid-task. Pre-trust holds when the summary reports the worktree added, updated, or already trusted; the skip path (`Summary: skipped`) leaves the trust prompt in place and says so on stdout, so read the summary line before relying on it. At every dispatch, the master MEASURES the installed CLI's `--help` output and uses only flags present there; it never guesses flags from memory.
 
 MEASURED examples from 2026-08-02:
 
@@ -30,6 +30,10 @@ MEASURED examples from 2026-08-02:
 - Claude Code: `--dangerously-skip-permissions`.
 - Cursor Agent: `--force` (also exposed as `--yolo`) to force-allow commands unless explicitly denied, plus `--trust` to trust the current workspace without prompting.
 - Codex: run `scripts/codex-worker-pretrust <worktree-path>` and retain the account-wide hooks trust posture; Codex uses this pre-trust path instead of a launch approval flag.
+
+MEASURED addition from 2026-08-03:
+
+- Cursor Agent pre-trust: run `scripts/cursor-worker-pretrust <worktree-path>` before attach and require exit status 0 with a summary that reports `added`, `updated`, or `already trusted` (not `skipped`); this uses Cursor Agent's measured `.workspace-trusted` storage instead of relying on `--trust` at worker launch. Follow-up measurement on `cursor-agent 2026.07.23-e383d2b` with a fresh workspace plus project-local `.cursor/hooks.json` showed no second startup gate: launch passed without extra prompts, hooks executed, and no `hooks.state`/`trusted_hash` persistence appeared in Cursor state.
 
 Three-vote review is the default for non-trivial merges or direct-push changes. Split review lenses:
 

@@ -68,6 +68,21 @@ Master-operations charter progressive split (2026-08-03 post-founding):
 - Cross-references throughout the repository that pointed at sections by number (in README.md, docs/public/defense-inventory.md, onboarding step files, and CHANGELOG.md) updated to link to the new charter files while keeping the section number visible in the link text.
 - No rule text changed; this is a structural reorganization only. The original §0–§9 numbering became §1–§10 after splitting to remove a monolithic load pattern that reappeared post-founding (every boot loaded all 325 lines even when one dispatch question needed one rule).
 
+Cursor worker pre-trust runbook guidance (2026-08-03 measurement):
+
+- `master-ops/docs/charter/04-worker-routing-review.md` now includes a Cursor
+  pre-trust companion beside the Codex guidance: run
+  `scripts/cursor-worker-pretrust <worktree-path>` before attach and require exit
+  status 0 with a summary reporting `added`, `updated`, or `already trusted`
+  (not `skipped`), so trust prompts do not block startup in isolated worktrees.
+- `master-ops/docs/charter/05-dispatch-gate.md` now repeats the same attach
+  requirement so pre-trust verification is explicit in both worker-routing and
+  dispatch-gate procedures.
+- Follow-up measurement on `cursor-agent 2026.07.23-e383d2b` is now recorded in
+  both sections: a fresh workspace with project-local `.cursor/hooks.json` showed
+  no second startup trust gate after pre-trust (no extra prompt), hooks executed,
+  and Cursor state persisted no `hooks.state` or `trusted_hash` key.
+
 Orchestration channel doctrine: acknowledgement, addressing, and reachability rules
 (2026-08-03 incident and measurement):
 

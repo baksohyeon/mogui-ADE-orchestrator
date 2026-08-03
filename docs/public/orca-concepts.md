@@ -34,7 +34,7 @@ Placement commands (`orca terminal create --worktree`, `master-succeed spawn --w
 | --- | --- |
 | `id:<repoId>::<path>` | Works end to end for repository worktrees. Copy the full `id` from `orca worktree list --json`; the repo id alone is not an address. |
 | `id:folder:<uuid>` | Works end to end for folder workspaces: precheck listing, terminal create, and spawn placement match all pass. |
-| `folder:<uuid>` (bare) | Fails the precheck listing with `selector_not_found`. Use the `id:` prefixed form. |
+| `folder:<uuid>` (bare) | Split behavior: `orca terminal create --worktree` accepts it, `orca terminal list --worktree` rejects it with `selector_not_found`. Measured identically on two independent hosts, so it is a subcommand asymmetry, not a host quirk. Prefer the `id:` form when one string must work everywhere. |
 | `path:/abs/dir` | Orca resolves it to `<repoId>::<path>`, so the spawn validator's comparison rejects it even when placement is correct. Prefer the `id:` forms. |
 
 Two rules fall out:

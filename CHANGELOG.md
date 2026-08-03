@@ -13,6 +13,18 @@ you build on it.
 
 ## [Unreleased]
 
+### Added
+
+- CI: `.github/workflows/gates.yml` runs the test suite (ubuntu and macos,
+  Python 3.12, checksum pinned gitleaks) and the committed ruleset redaction
+  scan on every pull request and push to main. What CI cannot cover is stated
+  in the workflow header: the organization rules live outside the repository,
+  so the full scan stays local. The inventory runs informationally.
+- An opt-in pre-push hook (`hooks/pre-push`, enable with
+  `git config core.hooksPath hooks`) scans each pushed ref range, covering
+  changed files and commit messages both, with a tracked tree fallback when no
+  range resolves.
+
 ### Fixed
 
 - Organization rules are proven against the engine that runs them. Python's
@@ -84,17 +96,6 @@ shipped in that tag but were recorded under Unreleased at the time; they are
 restored to their release here. The template's changes for the same tag are
 in `master-ops/CHANGELOG.md`.
 
-### Added
-
-- CI: `.github/workflows/gates.yml` runs the test suite (ubuntu and macos,
-  Python 3.12, checksum pinned gitleaks) and the committed ruleset redaction
-  scan on every pull request and push to main. What CI cannot cover is stated
-  in the workflow header: the organization rules live outside the repository,
-  so the full scan stays local. The inventory runs informationally.
-- An opt-in pre-push hook (`hooks/pre-push`, enable with
-  `git config core.hooksPath hooks`) scans each pushed ref range, covering
-  changed files and commit messages both, with a tracked tree fallback when no
-  range resolves.
 
 ### Added
 

@@ -15,7 +15,7 @@ status: active
 1. Current master: run a promotion audit for accepted knowledge, active tracks, open decisions, and unresolved acceptance evidence.
 2. Current master: spawn a clean successor with explicit workspace selector, kickoff file, root `{{WORKSPACE_ROOT}}`, model `{{MODEL_ID}}`, and machine-readable response when the host supports it.
 3. Current master: verify successor liveness by session artifact and process evidence, leave a one-line retirement note, and freeze.
-4. Successor: boot with a Role State declaration, measure the actual model field, capture the placement evidence three-set, close or retire the predecessor pane when the host supports it, and append a concise entry to `docs/lineage/MASTER-LINEAGE.md`.
+4. Successor: bind a non-legacy coordinator Run to this session and verify the binding before declaring Role State (the Run must be durable and bound to this terminal, not a handle that will die with restart or relocation), then measure the actual model field, capture the placement evidence three-set, close or retire the predecessor pane when the host supports it, and append a concise entry to `docs/lineage/MASTER-LINEAGE.md`.
 
 Placement evidence three-set:
 

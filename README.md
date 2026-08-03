@@ -71,6 +71,30 @@ Step 0 preflight refuses to proceed without Orca; running runtime scripts withou
 
 Agents: ground Orca claims in the [Orca docs snapshot agent index](https://grok-wiki.com/public/docs/stablyai-orca-2036d532bf1c/llms.txt) before improvising; the link hash may change with snapshot updates.
 
+
+### What one dispatch actually looks like
+
+This section walks a single supervised dispatch end to end for readers who understand what supervised dispatch means in principle but have never watched the state objects come into being. No re-argument for [why Orca is required](#why-orca-is-required); link that section instead. Assume an engineer who has never seen this system.
+
+1. **A contract file becomes the dispatch brief.** The work lives in a file, not in prose. The file is hashed; that hash is recorded with the gate decision and travels with the task, so any reader can re-verify the claim against the original file later. A conversation, by contrast, disappears when the terminal closes and cannot be audited after the fact by anything but a human who was listening.
+
+2. **The dispatch gate measures budget.** `scripts/dispatch-gate check` runs the caller's model and contract through a policy file (`master-ops/model-tier-policy.json`). The gate resolves the model to a tier, looks at how many agents have run in this tier's window, and compares the tally against the cap. It returns a decision with a reason code; deny stops the dispatch entirely, not as a warning. The decision goes into a JSONL ledger.
+
+3. **Task creation makes work into state.** `orca orchestration task-create --spec <text>` creates an orchestration task object. The task receives a stable id and enters Orca's state machine. It is a thing that can be queried, monitored, and reported on, not a line of text in a terminal.
+
+4. **A worktree and terminal isolate the worker.** `orca worktree create --name <name>` spawns a separate git checkout. `orca terminal create --worktree <selector>` opens a shell prompt inside that checkout. Two workers cannot collide because they cannot share a working tree.
+
+5. **Dispatch binds task to terminal and delivers the brief.** `orca orchestration dispatch --task <id> --to <handle> --inject` attaches the task to the terminal's session and delivers the preamble (which tells the worker how to report, where the Run mailbox is, and what the dispatchId is). The dispatch decision itself stays separate from the delivery mechanism; "dispatched" status in the record is not proof the preamble actually landed in the worker's shell.
+
+6. **Registration measures what is actually running.** After the worker starts, `scripts/dispatch-gate register` runs a caller-supplied probe command against the worker's session record. The probe reads the model that is actually running and compares it with the model declared at gate-check time. A mismatch in the risky direction (smaller model than promised) denies the task. An unverifiable probe warns and records anyway, so a runtime that cannot report its model does not get forced into a false-positive gate.
+
+7. **Completion comes through the mailbox, not the screen.** The coordinator calls `orca orchestration check --wait` and blocks. No polling loop, no watching the worker's terminal. When the worker sends `worker_done` through `orca orchestration send --type worker_done`, the message lands in the Run's mailbox. The check call unblocks and returns it.
+
+8. **The worker's report is a claim; acceptance comes from re-verification.** `worker_done` says the task is complete. But a dispatch record is not evidence of what the worker actually produced. Acceptance requires the coordinator to re-run the gates, read the diff, examine the artifacts, and check the redaction scan. Self-report is not proof.
+
+This design resolves a failure mode that cost time to debug: an inject returned a dispatched status while the worker terminal was still on its startup screen. The dispatch record showed dispatched and silent (no heartbeat). It was caught because the state object (the Dispatch) and the effect (the shell prompt landing) are separate things that can be compared. The recovery that worked: reset the task to ready, send the brief again with `orca terminal send`, and confirm the prompt actually appeared before trusting the record. The machinery is only as good as the reader's ability to compare the two.
+
+
 ### What is standing guard
 
 The system is only as strong as the guards a reader can find. Each line below names a real path; the expanded table is [`docs/public/defense-inventory.md`](docs/public/defense-inventory.md).

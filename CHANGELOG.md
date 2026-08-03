@@ -15,6 +15,13 @@ you build on it.
 
 ### Added
 
+- README section "What one dispatch actually looks like": walks a single
+  supervised dispatch end to end, naming the actual Orca command and this
+  repository's gate at each step. Closes the gap between knowing why Orca is
+  required and understanding what the machinery does on a single job. Includes
+  the failure mode that motivated the design: a dispatch record showed success
+  while the worker terminal was still on its startup screen, caught only
+  because dispatch state and shell effect are separate objects.
 - README section "What is standing guard" and `docs/public/defense-inventory.md`:
   the existing defense inventory (dispatch gate with tier × fan-out and a
   ledgered policy digest, transcript model probes, spawn placement and

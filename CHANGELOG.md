@@ -22,6 +22,9 @@ you build on it.
 
 ### Fixed
 
+- `dispatch-gate check` no longer denies repeated contract hashes as
+  `DUPLICATE_CONTRACT`; repeated ALLOW rows now carry an `attempt` ordinal so
+  the ledger identifies retries by `contract_sha` plus attempt.
 - Windows CI measurement leg: skip the diagnosed Unix script-execution surface
   (extensionless shebangs → WinError 193, bash/WSL paths, exec-bit discovery)
   via `tests/windows_exec_surface.py` so `tests (windows-latest)` reports green

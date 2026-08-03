@@ -6,6 +6,7 @@ import json
 import os
 import runpy
 import subprocess
+import threading
 from pathlib import Path
 
 import master_runtime.core.dispatch_gate as dispatch_gate
@@ -662,7 +663,9 @@ def test_r2_denies_multi_agent_high_cost_runtime(tmp_path: Path) -> None:
     assert decision.reason == ReasonCode.ROUTING_VIOLATION
 
 
-def test_r3_denies_recent_duplicate_contract(tmp_path: Path) -> None:
+def test_r3_allows_same_contract_twice_with_hash_attempt_lineage(
+    tmp_path: Path,
+) -> None:
     contract = _contract(tmp_path, "same contract")
     now = _MutableClock(1_000)
     gate = _gate(tmp_path, clock=now)
@@ -675,11 +678,16 @@ def test_r3_denies_recent_duplicate_contract(tmp_path: Path) -> None:
     )
 
     assert first.allow is True
-    assert second.allow is False
-    assert second.reason == ReasonCode.DUPLICATE_CONTRACT
+    assert second.allow is True
+    assert second.reason == ReasonCode.OK
+    entries = _ledger_entries(tmp_path)
+    assert [entry["attempt"] for entry in entries] == [1, 2]
+    assert {entry["contract_sha"] for entry in entries} == {_sha256(contract)}
 
 
-def test_r3_allows_duplicate_after_window(tmp_path: Path) -> None:
+def test_r3_check_does_not_change_subsequent_dispatch_outcome(
+    tmp_path: Path,
+) -> None:
     contract = _contract(tmp_path, "repeatable later")
     now = _MutableClock(1_000)
     gate = _gate(tmp_path, clock=now)
@@ -694,6 +702,7 @@ def test_r3_allows_duplicate_after_window(tmp_path: Path) -> None:
 
     assert first.allow is True
     assert second.allow is True
+    assert second.reason == ReasonCode.OK
 
 
 def test_r4_registers_verified_job_id(tmp_path: Path) -> None:
@@ -707,6 +716,7 @@ def test_r4_registers_verified_job_id(tmp_path: Path) -> None:
     assert decision.reason == ReasonCode.OK
     assert _ledger_entries(tmp_path)[-1]["job_id"] == "job-123"
     assert _ledger_entries(tmp_path)[-1]["completion_channel"] == "sentinel-log"
+    assert _ledger_entries(tmp_path)[-1]["attempt"] == 2
 
 
 def test_cli_register_with_verified_orchestration_task_records_task(
@@ -1570,7 +1580,7 @@ def test_register_runtime_filter_limits_ticket_candidates(tmp_path: Path) -> Non
     assert decision.contract_sha == _sha256(cursor_contract)
 
 
-def test_duplicate_check_refreshes_existing_dispatch_ticket(
+def test_repeated_check_writes_next_attempt_and_dispatch_ticket(
     tmp_path: Path,
 ) -> None:
     contract = _contract(tmp_path, "refresh duplicate ticket")
@@ -1585,10 +1595,61 @@ def test_duplicate_check_refreshes_existing_dispatch_ticket(
 
     ticket = tmp_path / "dispatch-tickets" / f"codex-{_sha256(contract)[:12]}.json"
     payload = json.loads(ticket.read_text(encoding="utf-8"))
-    assert decision.allow is False
-    assert decision.reason == ReasonCode.DUPLICATE_CONTRACT
+    assert decision.allow is True
+    assert decision.reason == ReasonCode.OK
+    assert _ledger_entries(tmp_path)[-1]["attempt"] == 2
     assert payload["issued_ts"] == 1_701
     assert payload["count"] == 1
+
+
+def test_concurrent_repeated_checks_receive_distinct_attempts(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    contract = _contract(tmp_path, "concurrent same contract")
+    gate = _gate(tmp_path, now=1_000)
+    first_in_append = threading.Event()
+    release_first = threading.Event()
+    append_calls = 0
+    real_append_entry = gate._append_entry
+
+    def delayed_first_append(entry):
+        nonlocal append_calls
+        append_calls += 1
+        if append_calls == 1:
+            first_in_append.set()
+            assert release_first.wait(timeout=2)
+        real_append_entry(entry)
+
+    monkeypatch.setattr(gate, "_append_entry", delayed_first_append)
+    decisions: list[GateDecision] = []
+
+    def check_contract() -> None:
+        decisions.append(
+            gate.check(
+                DispatchRequest(
+                    "codex",
+                    contract,
+                    est_input_chars=10_000,
+                    n_agents=1,
+                )
+            )
+        )
+
+    first_thread = threading.Thread(target=check_contract)
+    first_thread.start()
+    assert first_in_append.wait(timeout=2)
+    second_thread = threading.Thread(target=check_contract)
+    second_thread.start()
+    release_first.set()
+    first_thread.join(timeout=2)
+    second_thread.join(timeout=2)
+
+    assert not first_thread.is_alive()
+    assert not second_thread.is_alive()
+    assert len(decisions) == 2
+    assert all(decision.reason == ReasonCode.OK for decision in decisions)
+    assert sorted(entry["attempt"] for entry in _ledger_entries(tmp_path)) == [1, 2]
 
 
 def test_register_uses_ticket_flock(
@@ -2151,8 +2212,10 @@ def test_incident_a_fable_fanout_denied(tmp_path: Path) -> None:
     }
 
 
-def test_incident_b_duplicate_contract_denied(tmp_path: Path) -> None:
-    # Scenario B: the same contract must not be dispatched twice by a forwarder.
+def test_incident_b_repeated_contract_records_lineage_attempts(
+    tmp_path: Path,
+) -> None:
+    # Scenario B replacement: repeated contracts are lineage, not denial.
     contract = _contract(tmp_path, "duplicate contract")
     gate = _gate(tmp_path, now=1_000)
 
@@ -2164,8 +2227,9 @@ def test_incident_b_duplicate_contract_denied(tmp_path: Path) -> None:
     )
 
     assert first.allow is True
-    assert second.allow is False
-    assert second.reason == ReasonCode.DUPLICATE_CONTRACT
+    assert second.allow is True
+    assert second.reason == ReasonCode.OK
+    assert [entry["attempt"] for entry in _ledger_entries(tmp_path)] == [1, 2]
 
 
 def test_incident_c_missing_probe_job_id_denies_registration(tmp_path: Path) -> None:

@@ -24,7 +24,7 @@ The actual spawn entry point is `scripts/master-succeed spawn`. A dry run is the
 
 ```bash
 scripts/master-succeed spawn \
-  --workspace-selector polsia \
+  --workspace-selector "id:folder:<uuid>" \
   --kickoff-text "Founding master boot" \
   --root . \
   --model example-model \

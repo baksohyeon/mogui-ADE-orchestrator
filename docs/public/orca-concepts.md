@@ -19,7 +19,7 @@ Orca tracks three layers.
 
 The master coordinates every repository in the workspace, so its seat is the workspace-level workspace:
 
-- When the workspace root is a folder project containing the repositories, the master sits in that project's **folder workspace**. Its process cwd is the workspace root, which is what the harness, hooks, and tracker bind to.
+- When the workspace root is a folder project containing the repositories, the master sits in that project's **folder workspace**. Its process cwd is the workspace root, which is what the harness and hooks bind to; execution state lives in the tracker inside the ops repository, reachable from that root.
 - When the whole workspace is a single repository, the repository's primary worktree is the workspace level, and the master sits there.
 
 Seating a master inside one repository's worktree in a multi-repository workspace is a misplacement even when cwd, hooks, and session files all bind correctly: the pane hangs under that one repository in the sidebar, the owner's mental model breaks, and the master occupies a seat shaped for a worker. A measured incident of exactly this shape (2026-08-03) is why this page exists.

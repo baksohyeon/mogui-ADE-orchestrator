@@ -137,6 +137,8 @@ scripts/master-succeed retire \
 
 Add `--execute` only when the operator intends to close the predecessor terminal.
 
+Retiring a predecessor ends with three measured disappearances, never with a close command's return value: process, host pane, and tty. A frozen session also stays resumable forever from any terminal its agent CLI runs in, phones and remote machines included, so the boot card adds a revival check: scan running agent processes for lineage session ids (the session id is the portable key; resume flags differ per CLI), recover any unanswered owner instruction from a revived session, then take the revival through the same three disappearances. Four retired masters revived at once by a mobile resume is the measured incident behind the rule (2026-08-03).
+
 Early planned successions changed the procedure. One handoff described the predecessor as gone while the process was still alive, so runtime state is now checked separately from handoff text. Later successions added command-line and session-path matching before retirement, plus explicit cleanup and restart of monitors under the successor's ownership. A clean succession is therefore not only "the successor read the handoff"; it is a measured transfer of role, track, process ownership, and verification responsibility.
 
 ## Lineage

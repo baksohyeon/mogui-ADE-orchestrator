@@ -23,6 +23,15 @@ Placement evidence three-set:
 2. process current working directory is under `{{WORKSPACE_ROOT}}`
 3. session artifact or log path belongs to the expected workspace/session namespace
 
+## Retirement Completion And Revival Checks
+
+Retirement of a session is complete only when three disappearances are measured, not when a close command returns: the process (pid gone), the host pane (no live handle in the host's terminal list), and the tty (device and login chain gone). Close command return values have been wrong in both directions on real hosts; the measurement decides.
+
+A frozen session stays resumable forever, from any terminal the agent CLI runs in, including a phone or a remote machine. Measured live: four retired masters were revived at once by a mobile resume, attached to ttys outside the host runtime where pane doctrine cannot see them. Therefore:
+
+- At boot, and whenever the owner reports stray sessions, scan running agent processes for the session ids recorded in `docs/lineage/MASTER-LINEAGE.md`. Resume arguments differ per agent CLI, so the key is the session id itself in the process argv, not any one CLI's flag.
+- On a hit, in order: read the revived session's own record for activity since freezing (tool calls, repository writes); recover any unanswered owner instruction into the current master; terminate the agent process; hang up the hosting terminal chain; confirm the tty is gone. A shell with other children gets its children measured first.
+
 ## Accident Recovery
 
 Process death, host restart, stale UI handle, or accidental pane closure is not succession. First try same-session resume after proving no live duplicate process owns the session. If host runtime state is stale, recover the host, reacquire the handle, and verify connected state before continuing.

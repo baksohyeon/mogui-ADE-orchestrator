@@ -41,6 +41,16 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+Retirement gets a completion criterion and a revival check. Complete means
+three measured disappearances (process, pane, tty), never a close command's
+return value, which has been wrong in both directions on real hosts. Frozen
+sessions stay resumable forever from any terminal the agent CLI runs in,
+phones included; four retired masters revived at once by a mobile resume is
+the measured incident. The boot card now scans running agent processes for
+lineage session ids (the session id is the portable key, since resume flags
+differ per agent CLI), recovers unanswered owner instructions from revivals,
+and takes them through the same three disappearances.
+
 Step 1 stops leaving outside repositories implicit. When the user names a
 repository that lives outside the confirmed workspace root, the installer asks
 which home it gets: moved or cloned under the root (recommended when the master

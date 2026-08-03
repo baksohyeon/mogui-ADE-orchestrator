@@ -165,6 +165,53 @@ PY
   fi
 fi
 
+# The organization rules were validated by Python's re, and Python is not the
+# engine. gitleaks compiles RE2, which rejects constructs Python accepts
+# (lookarounds, most visibly), and it rejects them by panicking at config load.
+# Every scan under a panicking config finds nothing, which reads as clean.
+# Measured live: a lookbehind rule turned the whole scan into a green no-op
+# while the summary reported the rules as loaded. So the merged config is
+# proven against the actual engine before anything is scanned, and a failure
+# names the rule ids only, never the patterns they protect.
+if [[ "${CONFIG}" != "${BASE_CONFIG}" ]]; then
+  if ! printf 'redaction-scan engine self-test\n' \
+    | gitleaks stdin --config "${CONFIG}" --no-banner --exit-code 0 >/dev/null 2>&1; then
+    bad_ids=""
+    while IFS='|' read -r rule_id _rest; do
+      rule_id="${rule_id## }"; rule_id="${rule_id%% }"
+      [[ -z "${rule_id}" || "${rule_id}" == \#* ]] && continue
+      single="${WORK_DIR}/single-rule.toml"
+      python3 - "${REDACTION_EXTRA_PATTERNS}" "${rule_id}" "${single}" <<'PY'
+import sys
+source, wanted, target = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(source, encoding="utf-8") as handle:
+    for line in handle:
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split("|", 2)
+        if len(parts) != 3 or parts[0].strip() != wanted:
+            continue
+        with open(target, "w", encoding="utf-8") as out:
+            out.write('title = "single rule probe"\n\n')
+            out.write("[[rules]]\n")
+            out.write('id = "%s"\n' % parts[0].strip().replace('"', ""))
+            out.write('description = "probe"\n')
+            out.write("regex = '''%s'''\n" % parts[2].strip())
+        break
+PY
+      if [[ -s "${single}" ]] && ! printf 'x\n' \
+        | gitleaks stdin --config "${single}" --no-banner --exit-code 0 >/dev/null 2>&1; then
+        bad_ids="${bad_ids} ${rule_id}"
+      fi
+      rm -f "${single}"
+    done < "${REDACTION_EXTRA_PATTERNS}"
+    echo "redaction-scan: FAIL — the merged config crashes the engine; organization rule(s) not supported by RE2:${bad_ids:- (rule not isolated; test the file rule by rule)}" >&2
+    echo "redaction-scan: rewrite those regexes without lookarounds or other non-RE2 constructs, then re-run." >&2
+    exit 2
+  fi
+fi
+
 # A green scan must not imply coverage it does not have.
 if [[ "${EXTRA_RULE_COUNT}" -eq 0 ]]; then
   echo "redaction-scan: WARNING — organization-specific rules not loaded (REDACTION_EXTRA_PATTERNS unset or empty); this scan covers generic patterns only" >&2
@@ -193,13 +240,18 @@ scan_path() {
   local path="$1"
   [[ -f "${path}" ]] || return 0
   report_index=$((report_index + 1))
-  gitleaks dir "${path}" \
+  if ! gitleaks dir "${path}" \
     --config "${CONFIG}" \
     --no-banner \
     --exit-code 0 \
     --report-format json \
     --report-path "${REPORTS}/${report_index}.json" \
-    >/dev/null 2>&1 || true
+    >/dev/null 2>&1; then
+    # --exit-code 0 makes findings exit 0, so nonzero here is the engine
+    # failing, and a failed engine must not read as a clean file.
+    echo "redaction-scan: FAIL — gitleaks failed on ${path} (engine error, not a finding)" >&2
+    exit 2
+  fi
 }
 
 scan_commit_messages() {
@@ -211,14 +263,17 @@ scan_commit_messages() {
   while IFS= read -r sha; do
     [[ -z "${sha}" ]] && continue
     report_index=$((report_index + 1))
-    git log -1 --format=%B "${sha}" \
+    if ! git log -1 --format=%B "${sha}" \
       | gitleaks stdin \
           --config "${CONFIG}" \
           --no-banner \
           --exit-code 0 \
           --report-format json \
           --report-path "${REPORTS}/${report_index}.json" \
-          >/dev/null 2>&1 || true
+          >/dev/null 2>&1; then
+      echo "redaction-scan: FAIL — gitleaks failed on commit ${sha:0:12} message (engine error, not a finding)" >&2
+      exit 2
+    fi
     if [[ -s "${REPORTS}/${report_index}.json" ]]; then
       python3 - "${REPORTS}/${report_index}.json" "commit:${sha:0:12}" <<'PY'
 import json

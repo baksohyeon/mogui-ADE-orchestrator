@@ -66,7 +66,6 @@ class ReasonCode(str, Enum):
     OK = "OK"
     BUDGET_EXCEEDED = "BUDGET_EXCEEDED"
     ROUTING_VIOLATION = "ROUTING_VIOLATION"
-    DUPLICATE_CONTRACT = "DUPLICATE_CONTRACT"
     UNVERIFIED_JOB = "UNVERIFIED_JOB"
     INVALID_REQUEST = "INVALID_REQUEST"
     NO_COMPLETION_CHANNEL = "NO_COMPLETION_CHANNEL"
@@ -359,18 +358,6 @@ class DispatchGate:
             self._append_decision(request, decision)
             return decision
 
-        if self._has_recent_contract(contract_sha):
-            decision = GateDecision(
-                allow=False,
-                reason=ReasonCode.DUPLICATE_CONTRACT,
-                warnings=lint_warnings,
-                contract_sha=contract_sha,
-                cost_proxy=cost_proxy,
-            )
-            self._append_decision(request, decision)
-            self._refresh_dispatch_ticket(request, contract_sha)
-            return decision
-
         warnings = lint_warnings
         if runtime in self.config.high_cost_runtimes:
             warnings = (*warnings, ReasonCode.HIGH_COST_RUNTIME)
@@ -504,6 +491,7 @@ class DispatchGate:
                     *entry.get("warnings", []),
                     model_warning.value,
                 ]
+            entry["attempt"] = self._next_attempt(str(pending["contract_sha"]))
             self._append_entry(entry)
         if model_warning is not None:
             decision = GateDecision(
@@ -752,6 +740,11 @@ class DispatchGate:
         entry["tier_policy_path"] = str(self.config.tier_policy_path)
         if getattr(self, "_tier_policy_digest", ""):
             entry["tier_policy_sha256"] = self._tier_policy_digest
+        if decision.allow and decision.contract_sha is not None:
+            with _ticket_lock(Path(self.config.ticket_dir)):
+                entry["attempt"] = self._next_attempt(decision.contract_sha)
+                self._append_entry(entry)
+            return
         self._append_entry(entry)
 
     def _append_entry(self, entry: Mapping[str, object]) -> None:
@@ -772,20 +765,6 @@ class DispatchGate:
             return
 
         self._write_dispatch_ticket(request, decision.contract_sha, request.n_agents)
-
-    def _refresh_dispatch_ticket(
-        self,
-        request: DispatchRequest,
-        contract_sha: str,
-    ) -> None:
-        runtime = request.runtime.lower()
-        if _dispatch_ticket_path(Path(self.config.ticket_dir), runtime, contract_sha) is None:
-            return
-
-        with _ticket_lock(Path(self.config.ticket_dir)):
-            existing = self._read_dispatch_ticket(runtime, contract_sha)
-            count = existing.count if existing is not None else request.n_agents
-            self._write_dispatch_ticket_unlocked(request, contract_sha, count)
 
     def _write_dispatch_ticket(
         self,
@@ -823,16 +802,13 @@ class DispatchGate:
             ticket.write("\n")
         os.replace(tmp_path, ticket_path)
 
-    def _has_recent_contract(self, contract_sha: str) -> bool:
-        threshold = self._clock() - self.config.duplicate_window_seconds
-        for entry in self._read_entries():
-            if (
-                entry.get("contract_sha") == contract_sha
-                and entry.get("decision") == "ALLOW"
-                and _number_or_zero(entry.get("ts")) >= threshold
-            ):
-                return True
-        return False
+    def _next_attempt(self, contract_sha: str) -> int:
+        return 1 + sum(
+            1
+            for entry in self._read_entries()
+            if entry.get("contract_sha") == contract_sha
+            and entry.get("decision") == "ALLOW"
+        )
 
     def _pending_dispatches(self) -> tuple[Mapping[str, object], ...]:
         registered_counts: dict[str, int] = {}
@@ -1067,14 +1043,6 @@ def _contract_sha(contract_path: str | Path) -> str:
 
 def _contract_sha_from_content(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
-
-
-def _number_or_zero(value: object) -> float:
-    if isinstance(value, bool):
-        return float(value)
-    if isinstance(value, (int, float)):
-        return float(value)
-    return 0.0
 
 
 def _int_or_zero(value: object) -> int:

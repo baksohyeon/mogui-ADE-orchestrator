@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Owner-managed release milestone: only the owner updates MAJOR.MINOR by hand.
+OWNER_MANAGED_MAJOR_MINOR="0.5"
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/next-version [--help]
+
+Prints the release version that would be cut right now.
+BUILD is derived from: git rev-list --count origin/main
+EOF
+}
+
+if [[ "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+if [[ "$#" -ne 0 ]]; then
+  usage >&2
+  exit 2
+fi
+
+if ! git rev-parse --verify origin/main >/dev/null 2>&1; then
+  echo "next-version: origin/main is unavailable; run: git fetch origin main --tags" >&2
+  exit 2
+fi
+
+if [[ "$(git rev-parse --is-shallow-repository)" == "true" ]]; then
+  echo "next-version: shallow clone detected; run: git fetch --unshallow origin main --tags" >&2
+  exit 2
+fi
+
+build="$(git rev-list --count origin/main)"
+printf '%s.%s\n' "$OWNER_MANAGED_MAJOR_MINOR" "$build"

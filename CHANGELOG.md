@@ -22,6 +22,23 @@ you build on it.
 
 ### Added
 
+- `scripts/cursor-worker-pretrust`, measured on this host against known trusted
+  2026-08-03 worktrees under `.orca/worktrees/mogui-ADE-orchestrator/`: Cursor
+  Agent persists workspace trust in `~/.cursor/projects/<project-key>/.workspace-trusted`
+  as JSON with `workspacePath` and `trustedAt`. The script writes that marker
+  for the measured key form (absolute path with `/` mapped to `-` and `.` removed),
+  validates existing JSON before editing, stays idempotent, and rejects missing
+  worktree paths. Added docs rows and a runbook Cursor pre-trust section beside
+  the existing Codex guidance so worker startup can be pre-trusted before
+  orchestration attach. Additional measurement on `cursor-agent 2026.07.23-e383d2b`
+  found no second startup trust gate for project hooks: in a fresh workspace with
+  project-local `.cursor/hooks.json`, startup passed with no extra prompt after
+  pre-trust, hooks executed, and Cursor state showed no persisted `hooks.state` or
+  `trusted_hash` key. Hardening follow-up: reject trailing-slash symlink
+  `--projects-dir` values, refuse non-regular marker paths, probe for Python
+  3.6+ capability (and versioned `python3.10`–`python3.6` candidates), and write
+  markers through no-follow directory FDs with atomic replace so symlink
+  preflight is not only TOCTOU-sensitive shell checks.
 - Adopted `MAJOR.MINOR.BUILD` release numbering for orchestrator releases. The
   release build number is now derived from `git rev-list --count origin/main`
   at cut time, and the owner alone moves MAJOR or MINOR.

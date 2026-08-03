@@ -64,6 +64,33 @@ ONBOARDING.md installer UX pass from the 2026-08-03 mogui founding run
 - Step 7.6 drops the comprehension-quiz verify; explain the gate gap and continue.
 - README notes that callsign is chosen at install and lists example names.
 
+ONBOARDING progressive-load split (mgm-ed3), same 2026-08-03 feedback, second
+pass — the first pass added rules to the monolith, which made the overload
+worse; this pass cuts the load unit itself:
+
+- `ONBOARDING.md` becomes a router: session-mode question, agent load rules,
+  standing owner-language rules, placeholder list, and a step index. Everything
+  else moves to one file per step under `onboarding/` (`00-orientation.md` …
+  `10-card-and-retire.md`), loaded one file per turn, next file only after the
+  current step's Verify passes.
+- Session-mode triad at the top of the router: Founding (00→10), Reverify
+  (`onboarding/reverify.md`, read-only health checklist, spawn blocked), and
+  Template improve (not installation; route as an ordinary task). Mixing modes
+  in one session is what the 2026-08-03 run measured going wrong.
+- Every step file carries an "Owner script (3–6 sentences)" block; owner-facing
+  turns are capped at that plus one or two questions. Verify lists, the Orca
+  charter, and the Step 8 command sequence are agent-only sections; Step 8
+  commands are folded under "do not paste to the owner" and lose the `$`
+  owner-prompt prefix.
+- Progressive loading is host- and model-agnostic by rule: a stronger model does
+  not earn monolith reading, and a model that summarizes well does not earn
+  skipping a step file.
+- Step 3's skeleton copy and its verify now also exclude the `onboarding/`
+  directory alongside `TEMPLATE-VERSION`, `CHANGELOG.md`, and `ONBOARDING.md`.
+- Entry files (`CLAUDE.md`/`AGENTS.md`) now instruct: read the router only, ask
+  the mode question, open `00-orientation.md`, one step file per turn, never all
+  step files at once.
+
 ## v0.4.1
 
 No template changes in this release; the version string moves so an

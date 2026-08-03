@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from windows_exec_surface import skip_windows_exec_surface
 import json
 import shlex
 import subprocess
@@ -1671,6 +1672,7 @@ def test_spawn_successor_liveness_list_failure_does_not_close_preexisting_handle
     assert close_command not in calls
 
 
+@skip_windows_exec_surface
 def test_cli_check_duplicates_outputs_json() -> None:
     result = subprocess.run(
         [
@@ -1694,6 +1696,7 @@ def test_cli_check_duplicates_outputs_json() -> None:
     assert [item["handle"] for item in payload["duplicates"]] == ["term-u8-shadow"]
 
 
+@skip_windows_exec_surface
 def test_cli_spawn_dry_run_outputs_json() -> None:
     result = subprocess.run(
         [
@@ -1722,6 +1725,7 @@ def test_cli_spawn_dry_run_outputs_json() -> None:
     assert "expected_placement" not in payload["verification"]
 
 
+@skip_windows_exec_surface
 def test_cli_spawn_dry_run_outputs_expected_placement() -> None:
     result = subprocess.run(
         [
@@ -1751,6 +1755,7 @@ def test_cli_spawn_dry_run_outputs_expected_placement() -> None:
     assert payload["verification"]["expected_placement"] == "id:folder:unit-a"
 
 
+@skip_windows_exec_surface
 def test_cli_spawn_uses_agent_specific_default_model() -> None:
     result = subprocess.run(
         [
@@ -1779,6 +1784,7 @@ def test_cli_spawn_uses_agent_specific_default_model() -> None:
     assert "codex --model gpt-5.6-sol" in payload["startup_command"]
 
 
+@skip_windows_exec_surface
 def test_cli_spawn_requires_model_for_unknown_agent() -> None:
     result = subprocess.run(
         [
@@ -1805,6 +1811,7 @@ def test_cli_spawn_requires_model_for_unknown_agent() -> None:
     assert "--model is required for agent custom-agent" in result.stderr
 
 
+@skip_windows_exec_surface
 def test_cli_retire_accepts_explicit_target_handle() -> None:
     fixture = _orca_json_from_terminals(
         {

@@ -23,6 +23,8 @@ from pathlib import Path
 
 import pytest
 
+from windows_exec_surface import skip_windows_exec_surface
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCANNER = REPO_ROOT / "scripts" / "redaction-scan.sh"
 CONFIG = REPO_ROOT / "config" / "gitleaks.toml"
@@ -142,6 +144,7 @@ def _gitleaks_files(repo: Path, tmp_path: Path) -> set[str]:
 
 
 @requires_gitleaks
+@skip_windows_exec_surface
 def test_the_gate_flags_every_positive_fixture(tmp_path: Path) -> None:
     repo = _fixture_repo(tmp_path)
     missed = sorted(set(MUST_FLAG) - _scanner_files(repo))
@@ -156,6 +159,7 @@ def test_the_gate_excuses_placeholders_and_synthetic_paths(tmp_path: Path) -> No
 
 
 @requires_gitleaks
+@skip_windows_exec_surface
 def test_the_wrapper_and_a_direct_gitleaks_run_agree(tmp_path: Path) -> None:
     """The wrapper must not narrow what the engine finds, only scope it."""
 
@@ -184,6 +188,7 @@ def test_config_does_not_carry_organization_patterns(tmp_path: Path) -> None:
 
 
 @requires_gitleaks
+@skip_windows_exec_surface
 def test_organization_rules_reach_the_engine(tmp_path: Path) -> None:
     """A count of loaded rules must mean the rules were used.
 
@@ -231,6 +236,7 @@ def test_organization_rules_reach_the_engine(tmp_path: Path) -> None:
 
 
 @requires_gitleaks
+@skip_windows_exec_surface
 def test_retired_allowlist_entries_fail_closed(tmp_path: Path) -> None:
     """An exemption that stopped applying must be heard from the gate."""
 

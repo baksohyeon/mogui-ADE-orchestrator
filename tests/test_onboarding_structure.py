@@ -39,7 +39,11 @@ PLACEHOLDER = re.compile(r"\{\{[^}]+\}\}")
 
 
 def indexed_files() -> list[str]:
-    rows = [m.group(1) for m in map(INDEX_ROW.match, ROUTER.read_text().splitlines()) if m]
+    rows = [
+        m.group(1)
+        for m in map(INDEX_ROW.match, ROUTER.read_text(encoding="utf-8").splitlines())
+        if m
+    ]
     assert rows, "router step index parsed to zero rows; the table format changed"
     return rows
 
@@ -76,21 +80,21 @@ def test_onboarding_inventory():
 def test_next_pointers_follow_index_order():
     numbered = [n for n in indexed_files() if n[0].isdigit()]
     for current, expected_next in zip(numbered, numbered[1:]):
-        text = (STEP_DIR / current).read_text()
+        text = (STEP_DIR / current).read_text(encoding="utf-8")
         match = NEXT_POINTER.search(text)
         assert match, f"{current} has no next-file pointer"
         assert match.group(1) == expected_next, (
             f"{current} points to {match.group(1)}, but the router index orders {expected_next} next"
         )
     last = numbered[-1]
-    assert NEXT_POINTER.search((STEP_DIR / last).read_text()) is None, (
+    assert NEXT_POINTER.search((STEP_DIR / last).read_text(encoding="utf-8")) is None, (
         f"{last} is the last step but still carries a next-file pointer"
     )
 
 
 def test_numbered_steps_carry_required_sections():
     for name in indexed_files():
-        text = (STEP_DIR / name).read_text()
+        text = (STEP_DIR / name).read_text(encoding="utf-8")
         if name[0].isdigit():
             assert "Verify" in text, f"{name} has no Verify section"
             assert "Owner script" in text, f"{name} has no Owner script block"
@@ -102,7 +106,9 @@ def test_numbered_steps_carry_required_sections():
 
 def test_only_allowed_placeholders():
     for path in [ROUTER, *STEP_DIR.glob("*.md")]:
-        found = set(PLACEHOLDER.findall(path.read_text())) - {PLACEHOLDER_SHAPE_MENTION}
+        found = set(PLACEHOLDER.findall(path.read_text(encoding="utf-8"))) - {
+            PLACEHOLDER_SHAPE_MENTION
+        }
         unknown = found - ALLOWED_PLACEHOLDERS
         assert not unknown, f"{path.name} uses placeholders outside the allowlist: {sorted(unknown)}"
 

@@ -22,7 +22,10 @@ on:
 jobs:
   tests:
     # Windows is measurement-only for now; promote to blocking after three
-    # consecutive green runs on main.
+    # consecutive green runs on main. The leg measures the Windows-compatible
+    # subset; tests that need the Unix script execution surface (extensionless
+    # shebangs / bash+WSL) are skipped via tests/windows_exec_surface.py and
+    # remain the Windows work backlog.
     continue-on-error: ${{ matrix.measurement_only }}
     strategy:
       fail-fast: false

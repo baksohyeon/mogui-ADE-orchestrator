@@ -15,6 +15,11 @@ you build on it.
 
 ### Added
 
+- Documentation identifier audit: public and template docs now describe the
+  measured `model-identity-probe` no assertion path, drift exit, and undecidable
+  exit separately. A regression test pins documented dispatch-gate reason codes
+  to the source enum so plausible labels cannot re-enter unchecked.
+
 - README section "What is standing guard" and `docs/public/defense-inventory.md`:
   the existing defense inventory (dispatch gate with tier × fan-out and a
   ledgered policy digest, transcript model probes, spawn placement and

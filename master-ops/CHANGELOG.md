@@ -41,6 +41,11 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+## v0.4.1
+
+No template changes in this release; the version string moves so an
+installation's skew check compares equal against the latest tag.
+
 ## v0.4.0
 
 A prose pass over the onboarding guide removed em dashes and filler; no rule,

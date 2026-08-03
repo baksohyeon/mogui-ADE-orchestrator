@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -106,34 +105,6 @@ class LineageRecorderTests(unittest.TestCase):
             append_entry(self.path, entry)
 
         self.assertEqual(original, self.path.read_bytes())
-
-    def test_real_lineage_copy_dry_run_preserves_original_prefix(self) -> None:
-        source = Path("/Users/dev/workspace/example-product/example-ops/docs/lineage/MASTER-LINEAGE.md")
-        if not source.exists():
-            self.skipTest("real MASTER-LINEAGE.md source is unavailable")
-
-        dry_run_path = Path(self.tempdir.name) / "MASTER-LINEAGE-copy.md"
-        shutil.copyfile(source, dry_run_path)
-        original = dry_run_path.read_bytes()
-
-        append_entry(
-            dry_run_path,
-            valid_entry(generation=_next_generation(dry_run_path)),
-        )
-
-        self.assertEqual(original, dry_run_path.read_bytes()[: len(original)])
-        self.assertEqual(original, source.read_bytes())
-
-
-def _next_generation(path: Path) -> int:
-    generations: list[int] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.startswith("- **Generation**: "):
-            continue
-        value = line.rsplit(":", maxsplit=1)[1].strip()
-        if value.isdigit():
-            generations.append(int(value))
-    return max(generations, default=0) + 1
 
 
 if __name__ == "__main__":

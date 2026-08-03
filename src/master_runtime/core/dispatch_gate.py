@@ -397,6 +397,7 @@ class DispatchGate:
         declared_model: str | None = None,
         measured_model: str | None = None,
         model_probe_failed: bool = False,
+        expected_completion_channel: str | None = None,
     ) -> GateDecision:
         """Register a job only after independent probe verification succeeds."""
 
@@ -443,6 +444,23 @@ class DispatchGate:
             assert candidate is not None
             pending = candidate.pending
             selected_ticket = candidate.selected_ticket
+            completion_channel = _string_or_none(pending.get("completion_channel"))
+
+            if (
+                expected_completion_channel is not None
+                and completion_channel != expected_completion_channel
+            ):
+                actual_channel = (
+                    completion_channel if completion_channel is not None else "<none>"
+                )
+                return GateDecision(
+                    False,
+                    ReasonCode.INVALID_REQUEST,
+                    message=(
+                        f"expected_completion_channel={expected_completion_channel} "
+                        f"actual_completion_channel={actual_channel}"
+                    ),
+                )
 
             if contract_sha is not None and selected_ticket is not None:
                 try:
@@ -470,9 +488,7 @@ class DispatchGate:
                 "decision": "ALLOW",
                 "reason": ReasonCode.OK.value,
                 "job_id": job_id,
-                "completion_channel": _string_or_none(
-                    pending.get("completion_channel")
-                ),
+                "completion_channel": completion_channel,
             }
             if orchestration_task is not None:
                 entry["orchestration_task"] = orchestration_task

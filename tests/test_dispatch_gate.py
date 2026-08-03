@@ -888,6 +888,83 @@ def test_cli_register_allows_sentinel_log_without_orchestration_task(
     assert "orchestration_task" not in entry
 
 
+def test_cli_register_rechecks_expected_completion_channel_under_register_lock(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    contract = _contract(tmp_path, "stale sentinel channel decision")
+    ledger = tmp_path / "ledger.jsonl"
+    home = tmp_path / "home"
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("ORCA_CLI_COMMAND", str(tmp_path / "missing-orca"))
+
+    assert (
+        script["main"](
+            [
+                "--ledger",
+                str(ledger),
+                "check",
+                "--runtime",
+                "codex",
+                "--model",
+                "gpt-5.6-luna",
+                "--contract",
+                str(contract),
+                "--agents",
+                "1",
+                "--est-chars",
+                "1000",
+                "--completion-channel",
+                "orchestration",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    contract_sha = _sha256(contract)
+    ticket = home / ".mogui" / "dispatch-tickets" / f"codex-{contract_sha[:12]}.json"
+    assert ticket.exists()
+
+    def stale_channel(self, contract_sha=None, runtime=None):
+        return "sentinel-log"
+
+    monkeypatch.setattr(
+        script["DispatchGate"],
+        "completion_channel_for_registration",
+        stale_channel,
+    )
+
+    assert (
+        script["main"](
+            [
+                "--ledger",
+                str(ledger),
+                "register",
+                "--job-id",
+                "job-channel-race",
+                "--probe-cmd",
+                "printf job-channel-race",
+            ]
+        )
+        == 2
+    )
+    output = capsys.readouterr()
+    assert '"reason":"INVALID_REQUEST"' in output.out
+    assert "expected_completion_channel=sentinel-log" in output.err
+    assert "actual_completion_channel=orchestration" in output.err
+    entries = _ledger_entries(tmp_path)
+    assert len(entries) == 1
+    assert not any(
+        entry.get("job_id") == "job-channel-race"
+        and entry.get("decision") == "ALLOW"
+        for entry in entries
+    )
+    assert ticket.exists()
+
+
 def test_cli_register_sentinel_log_denies_failing_probe(
     tmp_path: Path,
     monkeypatch,
@@ -1250,6 +1327,88 @@ def test_register_consumes_matching_pending_dispatch_by_contract_sha(
     assert decision.allow is True
     assert decision.reason == ReasonCode.OK
     assert _ledger_entries(tmp_path)[-1]["contract_sha"] == first_sha
+
+
+def test_register_with_expected_completion_channel_matches(
+    tmp_path: Path,
+) -> None:
+    contract = _contract(tmp_path, "expected sentinel channel")
+    gate = _gate(tmp_path, now=1_000)
+    gate.check(DispatchRequest("codex", contract, est_input_chars=10_000, n_agents=1))
+
+    decision = gate.register_job(
+        "job-expected-channel",
+        lambda job_id: job_id == "job-expected-channel",
+        expected_completion_channel="sentinel-log",
+    )
+
+    assert decision.allow is True
+    assert decision.reason == ReasonCode.OK
+    entry = _ledger_entries(tmp_path)[-1]
+    assert entry["job_id"] == "job-expected-channel"
+    assert entry["completion_channel"] == "sentinel-log"
+
+
+def test_register_expected_completion_channel_mismatch_denies_before_write(
+    tmp_path: Path,
+) -> None:
+    contract = _contract(tmp_path, "expected channel mismatch")
+    gate = _gate(tmp_path, now=1_000)
+    gate.check(
+        _DispatchRequest(
+            runtime="codex",
+            contract_path=contract,
+            est_input_chars=10_000,
+            n_agents=1,
+            completion_channel="orchestration",
+            model="gpt-5.6-luna",
+        )
+    )
+    ticket = tmp_path / "dispatch-tickets" / f"codex-{_sha256(contract)[:12]}.json"
+    assert ticket.exists()
+
+    decision = gate.register_job(
+        "job-channel-mismatch",
+        lambda job_id: job_id == "job-channel-mismatch",
+        expected_completion_channel="sentinel-log",
+    )
+
+    assert decision.allow is False
+    assert decision.reason == ReasonCode.INVALID_REQUEST
+    assert "expected_completion_channel=sentinel-log" in decision.message
+    assert "actual_completion_channel=orchestration" in decision.message
+    entries = _ledger_entries(tmp_path)
+    assert len(entries) == 1
+    assert all(entry.get("job_id") != "job-channel-mismatch" for entry in entries)
+    assert ticket.exists()
+
+
+def test_register_without_expected_completion_channel_keeps_current_behavior(
+    tmp_path: Path,
+) -> None:
+    contract = _contract(tmp_path, "omitted expected channel")
+    gate = _gate(tmp_path, now=1_000)
+    gate.check(
+        _DispatchRequest(
+            runtime="codex",
+            contract_path=contract,
+            est_input_chars=10_000,
+            n_agents=1,
+            completion_channel="orchestration",
+            model="gpt-5.6-luna",
+        )
+    )
+
+    decision = gate.register_job(
+        "job-no-expected-channel",
+        lambda job_id: job_id == "job-no-expected-channel",
+    )
+
+    assert decision.allow is True
+    assert decision.reason == ReasonCode.OK
+    entry = _ledger_entries(tmp_path)[-1]
+    assert entry["job_id"] == "job-no-expected-channel"
+    assert entry["completion_channel"] == "orchestration"
 
 
 def test_register_denies_ambiguous_pending_dispatch_without_contract_sha(

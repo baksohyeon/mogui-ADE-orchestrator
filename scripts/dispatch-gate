@@ -173,6 +173,7 @@ def _register(args: argparse.Namespace) -> int:
         declared_model=args.declared_model,
         measured_model=measured_model,
         model_probe_failed=model_probe_failed,
+        expected_completion_channel=completion_channel,
     )
     _print_decision(decision)
     if decision.allow:

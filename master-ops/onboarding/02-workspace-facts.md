@@ -73,7 +73,7 @@ When the user names a repository that lives outside the confirmed workspace root
 
 Ask for workspace name (default: confirmed root basename), monitor namespace, and default model identifier to measure at boot, with measured candidates, a recommendation and reason, and a free-form option for each when available; explain why each is needed. Remind once that monitor namespace is not the Beads/issue prefix.
 
-## Land optional product_repo in the instance runtime config
+## Land optional product_repo and seed transcript_globs in the instance runtime config
 
 When the inventory has a single primary product repository the master is for (owner-confirmed, not guessed from folder layout alone), write its absolute path as `product_repo` in `{{RUNTIME_ROOT}}/config/instance-runtime.json`. If the workspace is multi-product or the owner declines a primary, leave `product_repo` null or omit it. Do not invent a product path.
 

@@ -14,14 +14,14 @@ Where we are: the master's ground rules are saved. What we decide next: who owns
 
 ### Land host answers in the instance runtime config
 
-For each host the owner names as running the master (and any worker runtime the preflight already measured on `PATH`), ensure `transcript_globs.<runtime>` in `{{RUNTIME_ROOT}}/config/instance-runtime.json` is either measured on this machine or explicitly supplied. Prefer measurement: locate that runtime's session JSONL tree when the host exposes one; do not paste another workspace's encoded path. Keep `master_host_runtime` aligned with the preflight agent CLI unless the owner explicitly changes the master host in this step.
+`transcript_globs` is keyed by **runtime name** (agent CLI name such as `claude` or `codex`), not by machine or host nickname. For each runtime name the master or a worker probe will use — at minimum the current `master_host_runtime`, plus any other runtime the owner names for master sessions or that the preflight measured on `PATH` and expects to probe — ensure `transcript_globs.<runtime>` in `{{RUNTIME_ROOT}}/config/instance-runtime.json` is either measured on this machine or explicitly supplied. Prefer measurement: locate that runtime's session JSONL tree when the host exposes one; do not paste another workspace's encoded path. Keep `master_host_runtime` equal to the preflight agent CLI, and update the matching glob key if the owner explicitly changes it. Verify that the configured keys are the runtime names the probe will look up (including `master_host_runtime` itself).
 
-Consumers such as `{{RUNTIME_ROOT}}/scripts/model-identity-probe` resolve transcript location with environment override → this config file → unconfigured (exit 2 with an honest message). They must never fall back to a baked default glob.
+When `--transcript` is omitted, consumers such as `{{RUNTIME_ROOT}}/scripts/model-identity-probe` resolve transcript location with environment override (`MOGUI_TRANSCRIPT_GLOB`) → this config file → unconfigured (exit 2 with an honest message). An explicit `--transcript` still wins over both. They must never fall back to a baked default glob.
 
 ### Verify (Step 7)
 
 - the hook spec is documented, no sensitive implementation was added, and its owner is explicit or unresolved
-- `config/instance-runtime.json` has `transcript_globs` entries for the named master hosts when measurement or an explicit owner value exists; missing globs are left unset rather than guessed
+- `config/instance-runtime.json` has a `transcript_globs` entry for `master_host_runtime` (and any other runtime names the owner expects to probe) when measurement or an explicit owner value exists; keys are runtime names, not host nicknames; missing globs are left unset rather than guessed
 
 ## Step 7.5. Offer the skill layer
 

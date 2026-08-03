@@ -89,7 +89,13 @@ class InstanceRuntimeConfig:
 
 
 def default_config_path(repo_root: Path | None = None) -> Path:
-    root = repo_root if repo_root is not None else Path.cwd()
+    # Prefer an explicit root. When omitted, locate the repository from this
+    # module path (src/master_runtime/core/...) rather than Path.cwd(), so a
+    # probe launched from another directory still finds config/instance-runtime.json.
+    if repo_root is not None:
+        root = repo_root
+    else:
+        root = Path(__file__).resolve().parents[3]
     return (root / DEFAULT_RELATIVE_CONFIG_PATH).resolve()
 
 
@@ -124,8 +130,8 @@ def load_instance_runtime_config(
     config_path = resolve_config_path(path, repo_root=repo_root, environ=env)
     payload = _read_payload(config_path)
 
-    file_master = _optional_str(payload.get("master_host_runtime"))
-    file_product = _optional_str(payload.get("product_repo"))
+    file_master = _config_optional_str(payload.get("master_host_runtime"), "master_host_runtime")
+    file_product = _config_optional_str(payload.get("product_repo"), "product_repo")
     file_globs = _parse_transcript_globs(payload.get("transcript_globs"))
 
     master = (
@@ -188,9 +194,26 @@ def _parse_transcript_globs(value: object) -> dict[str, str]:
 
 
 def _optional_str(value: object) -> str | None:
+    """Coerce env values: non-strings and blank strings are treated as unset."""
     if value is None:
         return None
     if not isinstance(value, str):
         return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _config_optional_str(value: object, field: str) -> str | None:
+    """Read an optional string field from the config file.
+
+    Wrong types are hard errors so a corrupted onboarding write is not
+    silently folded into "unconfigured".
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise InstanceRuntimeConfigError(
+            f"{field} must be a string or null in the instance runtime config"
+        )
     stripped = value.strip()
     return stripped or None

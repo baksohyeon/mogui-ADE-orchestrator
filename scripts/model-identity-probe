@@ -106,6 +106,12 @@ def _resolve_transcript_path(
     if transcript is not None and str(transcript).strip():
         return Path(transcript).expanduser()
 
+    # Env glob is runtime-agnostic and documented as first after --transcript.
+    # Apply it before requiring master_host_runtime so env-only setups work.
+    env_pattern = os.environ.get("MOGUI_TRANSCRIPT_GLOB")
+    if env_pattern is not None and env_pattern.strip():
+        return _newest_glob_match(env_pattern)
+
     config = load_instance_runtime_config(
         config_path,
         repo_root=REPO_ROOT,
@@ -119,19 +125,22 @@ def _resolve_transcript_path(
 
 def _newest_glob_match(pattern: str) -> Path:
     expanded = os.path.expanduser(pattern)
-    matches = []
+    newest: tuple[float, Path] | None = None
     for hit in glob.glob(expanded, recursive=True):
         path = Path(hit)
         try:
-            if path.is_file():
-                matches.append((path.stat().st_mtime, path))
+            if not path.is_file():
+                continue
+            candidate = (path.stat().st_mtime, path)
         except OSError:
             continue
-    if not matches:
+        if newest is None or candidate[0] > newest[0]:
+            newest = candidate
+    if newest is None:
         raise ValueError(
             "no transcript files matched configured glob {0!r}".format(pattern)
         )
-    return max(matches, key=lambda item: item[0])[1]
+    return newest[1]
 
 
 def recent_assistant_models(transcript_path: Path, limit: int = DEFAULT_LIMIT) -> tuple[str, ...]:

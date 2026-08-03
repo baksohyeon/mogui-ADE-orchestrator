@@ -13,6 +13,7 @@ import pytest
 from master_runtime.core.instance_runtime_config import (
     CONFIG_PATH_ENV,
     MASTER_HOST_RUNTIME_ENV,
+    MASTER_HOST_RUNTIME_ENV_ALT,
     PRODUCT_REPO_ENV,
     TRANSCRIPT_GLOB_ENV,
     InstanceRuntimeConfigError,
@@ -206,3 +207,50 @@ def test_probe_reports_unconfigured_without_transcript_or_config(tmp_path: Path)
     )
     assert result.returncode == 2
     assert "unconfigured" in result.stdout
+
+
+def test_probe_uses_transcript_glob_env_without_master_host(tmp_path: Path) -> None:
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(
+        (FIXTURES / "model_identity_probe_ok.jsonl").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env.pop("MODEL_IDENTITY_EXPECT", None)
+    env.pop(MASTER_HOST_RUNTIME_ENV, None)
+    env.pop(MASTER_HOST_RUNTIME_ENV_ALT, None)
+    env[TRANSCRIPT_GLOB_ENV] = str(transcript)
+    env[CONFIG_PATH_ENV] = str(tmp_path / "missing.json")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(PROBE),
+            "--expect",
+            "claude-fable-5",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=str(tmp_path),  # not the repo root
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "MODEL-PROBE OK claude-fable-5" in result.stdout
+
+
+def test_wrong_type_for_master_host_runtime_is_hard_error(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "instance-runtime.json",
+        {"master_host_runtime": ["claude"]},
+    )
+    with pytest.raises(InstanceRuntimeConfigError, match="must be a string"):
+        load_instance_runtime_config(config_path, environ={})
+
+
+def test_default_config_path_is_repo_relative_not_cwd(tmp_path: Path, monkeypatch) -> None:
+    from master_runtime.core import instance_runtime_config as mod
+
+    monkeypatch.chdir(tmp_path)
+    path = mod.default_config_path()
+    assert path == (ROOT / "config" / "instance-runtime.json").resolve()

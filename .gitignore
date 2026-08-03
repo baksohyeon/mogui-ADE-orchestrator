@@ -14,8 +14,8 @@ coverage/
 *.local.json
 
 # instance-owned runtime answers written by onboarding; template ships only the example
+# Supported format is JSON only (see config/instance-runtime.example.json).
 config/instance-runtime.json
-config/instance-runtime.toml
 
 # local-only redaction/sweep artifacts — these contain the very identifiers the
 # scanner protects, and a public repo must never accept them via `git add -A`

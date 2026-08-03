@@ -44,7 +44,7 @@ installation was taken from alongside the tag.
 Orchestration channel doctrine: acknowledgement, addressing, and reachability rules
 (2026-08-03 incident and measurement):
 
-- New §8 rule "Acknowledgement is part of reading. A handle is routing metadata; a Run address is an identity. A loopback test proves nothing about reachability from outside," with observation from a day-long blocking incident where two masters could not reach each other because a read-but-unacknowledged delivery held the queue head while both senders saw success and both receivers saw nothing to read.
+- New §8 rule "Acknowledgement is part of reading. A handle is routing metadata; a Run address is an identity. A loopback test proves nothing about reachability from outside," with observation from a blocking incident on 2026-08-03 where two masters could not reach each other for about an hour because a read-but-unacknowledged delivery held the queue head while both senders saw success and both receivers saw nothing to read. Measurement includes `orca orchestration check --terminal <handle>` returning the oldest unacknowledged delivery as proof of a stalled queue, `orca orchestration run-current --json` verifying the terminal's actual bound Run, and cross-session delivery testing to confirm reachability from outside.
 - §4 now specifies that a coordinator clears each delivery with the acknowledgement flag before waiting again, and cross-master traffic addresses a standing Run rather than a transient handle.
 - Succession boot card now binds a standing coordinator Run to the session at step 4, recording its durable address for peers before anyone needs it, with a note that a handle recorded in its place will be dead by the next restart.
 

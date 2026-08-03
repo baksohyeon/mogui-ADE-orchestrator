@@ -13,6 +13,8 @@ you build on it.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-03
+
 ### Added
 
 - The scan warns when organization rules contain no native script pattern:

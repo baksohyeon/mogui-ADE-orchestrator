@@ -41,6 +41,8 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+## v0.4.0
+
 A prose pass over the onboarding guide removed em dashes and filler; no rule,
 step, or verification changed meaning.
 

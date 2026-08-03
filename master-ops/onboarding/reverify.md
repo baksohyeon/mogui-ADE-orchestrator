@@ -18,7 +18,7 @@ Where we are: this workspace was already set up, so nothing will be installed or
 3. **Role state**: `docs/runbooks/role-state.md` names one active role with Role Lock state, and its Generation matches the last entry in `docs/lineage/MASTER-LINEAGE.md`.
 4. **Lineage**: the last lineage entry's session evidence (session id, measured model) is present, and the measured model matches the configured one or the mismatch is explained.
 5. **Operating card**: the owner still has the operating card from installation; if it is lost, reprint it from `10-card-and-retire.md` with current values — that is the one write this mode allows.
-6. **Placeholders**: `rg '\{\{[^}]+\}\}' "{{OPS_REPO}}"` finds nothing, or every hit matches an owner-recorded deferral (same rule as Step 5 Verify); anything else is an installation error — fail reverify and have the owner bring it to the living master as a rescue task.
+6. **Placeholders**: `rg '\{\{[^}]+\}\}' "{{OPS_REPO}}"` finds nothing, or every hit matches an owner-recorded deferral (same rule as the placeholders step (`05-placeholders.md`)); anything else is an installation error — fail reverify and have the owner bring it to the living master as a rescue task.
 
 ## Report
 

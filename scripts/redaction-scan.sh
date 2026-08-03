@@ -237,7 +237,7 @@ list_scan_files() {
 
 # A range neither end of which resolves is not an empty range. git prints a
 # fatal to stderr and this script used to keep going with zero files and zero
-# messages, which read as clean. Measured with an all-zeros left side: OK,
+# messages, which read as clean. Measured with an unresolvable left side: OK,
 # exit 0. A range that cannot be enumerated is exit 2.
 if [[ -n "${RANGE}" ]] && ! git rev-list --max-count=0 "${RANGE}" >/dev/null 2>&1; then
   echo "redaction-scan: FAIL — range does not resolve in this repository: ${RANGE}" >&2
@@ -245,7 +245,7 @@ if [[ -n "${RANGE}" ]] && ! git rev-list --max-count=0 "${RANGE}" >/dev/null 2>&
 fi
 if [[ -n "${COMMIT_RANGE}" && "${COMMIT_RANGE}" != "${RANGE}" ]] \
   && ! git rev-list --max-count=0 "${COMMIT_RANGE}" >/dev/null 2>&1; then
-  echo "redaction-scan: FAIL — commit-message range does not resolve: ${COMMIT_RANGE}" >&2
+  echo "redaction-scan: FAIL — message range does not resolve: ${COMMIT_RANGE}" >&2
   exit 2
 fi
 

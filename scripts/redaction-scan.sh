@@ -142,7 +142,12 @@ with open(target, "w", encoding="utf-8") as out:
         out.write('description = "%s"\n' % description.replace('"', ""))
         out.write("regex = '''%s'''\n\n" % regex)
 
-native = sum(1 for _, _, regex in rules if any(ord(ch) > 127 for ch in regex))
+_native_escape = re.compile(r"\\u[0-9a-fA-F]{4}|\\U[0-9a-fA-F]{8}|\\x\{[0-9a-fA-F]+\}|\\N\{")
+native = sum(
+    1
+    for _, _, regex in rules
+    if any(ord(ch) > 127 for ch in regex) or _native_escape.search(regex)
+)
 
 # Counts only. This file's contents are what the scan protects, so nothing from it
 # is printed here or anywhere else.

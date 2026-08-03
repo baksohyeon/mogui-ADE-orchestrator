@@ -70,3 +70,15 @@ def test_no_org_rules_means_no_native_warning(tmp_path: Path) -> None:
         check=False,
     )
     assert WARNING not in result.stderr
+
+
+def test_escaped_native_range_silences_warning(tmp_path: Path) -> None:
+    repo = _repo_with_commits(tmp_path, ["plain change"])
+    extra = tmp_path / "extra.txt"
+    extra.write_text(
+        "person_x|Personal identifier|(?i)romanizedname\n"
+        "person_x_native|Personal identifier native|[\\uac00-\\ud7af]{2,4}\n",
+        encoding="utf-8",
+    )
+    result = _scan_with_extra(repo, extra)
+    assert WARNING not in result.stderr

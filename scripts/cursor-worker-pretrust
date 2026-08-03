@@ -47,13 +47,13 @@ trust_file="$projects_dir/$project_key/.workspace-trusted"
 
 python_bin=""
 for python_candidate in python3 python; do
-  if "$python_candidate" -c 'import json' >/dev/null 2>&1; then
+  if "$python_candidate" -c 'import sys; assert sys.version_info[0] >= 3; import json' >/dev/null 2>&1; then
     python_bin="$python_candidate"
     break
   fi
 done
 if [[ -z "$python_bin" ]]; then
-  skip_message='SKIP no Python interpreter with json support found (tried python3, python); trust marker edits are verified by parsing JSON, so nothing was changed and dispatched Cursor workers will see a trust prompt'
+  skip_message='SKIP no Python 3 interpreter with json support found (tried python3, python); trust marker edits are verified by parsing JSON, so nothing was changed and dispatched Cursor workers will see a trust prompt'
   printf '%s\n' "$skip_message"
   printf '%s\n' "$skip_message" >&2
   printf 'Summary: skipped — 0 added, 0 updated, 0 already trusted\n'

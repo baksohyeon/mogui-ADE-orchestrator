@@ -149,7 +149,7 @@ def test_no_python_interpreter_skips_without_writing(tmp_path: Path) -> None:
     result = run_pretrust(str(workspace), projects_dir, env=env)
 
     assert result.returncode == 0
-    assert "SKIP no Python interpreter with json support found" in result.stdout
-    assert "SKIP no Python interpreter with json support found" in result.stderr
+    assert "SKIP no Python 3 interpreter with json support found" in result.stdout
+    assert "SKIP no Python 3 interpreter with json support found" in result.stderr
     assert "Summary: skipped — 0 added, 0 updated, 0 already trusted" in result.stdout
     assert not trusted_file(projects_dir, str(workspace)).exists()

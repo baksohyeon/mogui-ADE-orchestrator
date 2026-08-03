@@ -131,8 +131,11 @@ MEASURED examples from 2026-08-02:
 - Grok: `--always-approve`.
 - Claude Code: `--dangerously-skip-permissions`.
 - Cursor Agent: `--force` (also exposed as `--yolo`) to force-allow commands unless explicitly denied, plus `--trust` to trust the current workspace without prompting.
-- Cursor Agent pre-trust: run `scripts/cursor-worker-pretrust <worktree-path>` before attach and confirm the summary is not `skipped`; this uses Cursor Agent's measured `.workspace-trusted` storage instead of relying on `--trust` at worker launch.
 - Codex: run `scripts/codex-worker-pretrust <worktree-path>` and retain the account-wide hooks trust posture; Codex uses this pre-trust path instead of a launch approval flag.
+
+MEASURED addition from 2026-08-03:
+
+- Cursor Agent pre-trust: run `scripts/cursor-worker-pretrust <worktree-path>` before attach and confirm the summary is not `skipped`; this uses Cursor Agent's measured `.workspace-trusted` storage instead of relying on `--trust` at worker launch.
 
 Three-vote review is the default for non-trivial merges or direct-push changes. Split review lenses:
 

@@ -1,0 +1,68 @@
+# The same three gates that run locally before a push, run where the author's
+# word is not the evidence. The 0.1.0 changelog said it plainly: "a passing
+# count in a pull request is the author's word." This closes that.
+#
+# What CI cannot cover, stated rather than implied: the organization rules file
+# (REDACTION_EXTRA_PATTERNS) is deliberately not in the repository, so the scan
+# here runs the committed ruleset only. The full scan with organization rules
+# still runs locally before a push.
+#
+# gitleaks is installed in both jobs, not only the redaction one: the test
+# suite exercises redaction-scan.sh for real (measured on the first run of this
+# workflow — four commit message scan tests failed on a runner without it).
+# The install block is duplicated across jobs because Actions YAML has no
+# anchors across jobs and a composite action is more machinery than two copies.
+name: gates
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install gitleaks (pinned, checksum verified)
+        shell: bash
+        run: |
+          case "$(uname -s)-$(uname -m)" in
+            Linux-x86_64) f=gitleaks_8.30.1_linux_x64.tar.gz;    sum=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb ;;
+            Darwin-arm64) f=gitleaks_8.30.1_darwin_arm64.tar.gz; sum=b40ab0ae55c505963e365f271a8d3846efbc170aa17f2607f13df610a9aeb6a5 ;;
+            *) echo "unmapped runner: $(uname -s)-$(uname -m)"; exit 1 ;;
+          esac
+          curl -sSfL -o gitleaks.tgz "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/$f"
+          echo "$sum  gitleaks.tgz" | shasum -a 256 -c -
+          tar -xzf gitleaks.tgz gitleaks
+          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
+      - run: python3 -m pip install pytest
+      - run: PYTHONPATH=src python3 -m pytest tests -q
+
+  redaction:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install gitleaks (pinned, checksum verified)
+        shell: bash
+        run: |
+          case "$(uname -s)-$(uname -m)" in
+            Linux-x86_64) f=gitleaks_8.30.1_linux_x64.tar.gz;    sum=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb ;;
+            Darwin-arm64) f=gitleaks_8.30.1_darwin_arm64.tar.gz; sum=b40ab0ae55c505963e365f271a8d3846efbc170aa17f2607f13df610a9aeb6a5 ;;
+            *) echo "unmapped runner: $(uname -s)-$(uname -m)"; exit 1 ;;
+          esac
+          curl -sSfL -o gitleaks.tgz "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/$f"
+          echo "$sum  gitleaks.tgz" | shasum -a 256 -c -
+          tar -xzf gitleaks.tgz gitleaks
+          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
+      - name: Scan tracked content (committed rules)
+        run: ./scripts/redaction-scan.sh
+      - name: Inventory (informational — exit 1 is the normal triage state)
+        run: ./scripts/redaction-inventory || true

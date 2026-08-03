@@ -165,6 +165,59 @@ PY
   fi
 fi
 
+# The organization rules were validated by Python's re, and Python is not the
+# engine. gitleaks compiles RE2, which rejects constructs Python accepts
+# (lookarounds, most visibly), and it rejects them by panicking at config load.
+# Every scan under a panicking config finds nothing, which reads as clean.
+# Measured live: a lookbehind rule turned the whole scan into a green no-op
+# while the summary reported the rules as loaded. So the merged config is
+# proven against the actual engine before anything is scanned, and a failure
+# names the rule ids only, never the patterns they protect.
+if [[ "${CONFIG}" != "${BASE_CONFIG}" ]]; then
+  if ! printf 'redaction-scan engine self-test\n' \
+    | gitleaks stdin --config "${CONFIG}" --no-banner --exit-code 0 >/dev/null 2>&1; then
+    # One Python pass isolates the offending rules: it reuses the same parse
+    # the translator applied and probes each rule alone through gitleaks, so
+    # the rules file format lives in one shape and an id indented with a tab cannot
+    # slip the net. Ids only, never patterns.
+    bad_ids=$(python3 - "${REDACTION_EXTRA_PATTERNS}" "${WORK_DIR}" <<'PY'
+import subprocess
+import sys
+
+source, work_dir = sys.argv[1], sys.argv[2]
+bad = []
+with open(source, encoding="utf-8") as handle:
+    for line in handle:
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split("|", 2)
+        if len(parts) != 3:
+            continue
+        rule_id, _description, regex = (part.strip() for part in parts)
+        single = f"{work_dir}/single-rule.toml"
+        with open(single, "w", encoding="utf-8") as out:
+            out.write('title = "single rule probe"\n\n')
+            out.write("[[rules]]\n")
+            out.write('id = "%s"\n' % rule_id.replace('"', ""))
+            out.write('description = "probe"\n')
+            out.write("regex = '''%s'''\n" % regex)
+        probe = subprocess.run(
+            ["gitleaks", "stdin", "--config", single, "--no-banner", "--exit-code", "0"],
+            input="x\n", capture_output=True, text=True,
+        )
+        if probe.returncode != 0:
+            bad.append(rule_id)
+print(" ".join(bad))
+PY
+)
+    bad_ids="${bad_ids:+ ${bad_ids}}"
+    echo "redaction-scan: FAIL — the merged config crashes the engine; organization rule(s) not supported by RE2:${bad_ids:- (rule not isolated; test the file rule by rule)}" >&2
+    echo "redaction-scan: rewrite those regexes without lookarounds or other non-RE2 constructs, then re-run." >&2
+    exit 2
+  fi
+fi
+
 # A green scan must not imply coverage it does not have.
 if [[ "${EXTRA_RULE_COUNT}" -eq 0 ]]; then
   echo "redaction-scan: WARNING — organization-specific rules not loaded (REDACTION_EXTRA_PATTERNS unset or empty); this scan covers generic patterns only" >&2
@@ -182,6 +235,20 @@ list_scan_files() {
   esac
 }
 
+# A range neither end of which resolves is not an empty range. git prints a
+# fatal to stderr and this script used to keep going with zero files and zero
+# messages, which read as clean. Measured with an unresolvable left side: OK,
+# exit 0. A range that cannot be enumerated is exit 2.
+if [[ -n "${RANGE}" ]] && ! git rev-list --max-count=0 "${RANGE}" >/dev/null 2>&1; then
+  echo "redaction-scan: FAIL — range does not resolve in this repository: ${RANGE}" >&2
+  exit 2
+fi
+if [[ -n "${COMMIT_RANGE}" && "${COMMIT_RANGE}" != "${RANGE}" ]] \
+  && ! git rev-list --max-count=0 "${COMMIT_RANGE}" >/dev/null 2>&1; then
+  echo "redaction-scan: FAIL — message range does not resolve: ${COMMIT_RANGE}" >&2
+  exit 2
+fi
+
 REPORTS="${WORK_DIR}/reports"
 mkdir -p "${REPORTS}"
 report_index=0
@@ -193,13 +260,18 @@ scan_path() {
   local path="$1"
   [[ -f "${path}" ]] || return 0
   report_index=$((report_index + 1))
-  gitleaks dir "${path}" \
+  if ! gitleaks dir "${path}" \
     --config "${CONFIG}" \
     --no-banner \
     --exit-code 0 \
     --report-format json \
     --report-path "${REPORTS}/${report_index}.json" \
-    >/dev/null 2>&1 || true
+    >/dev/null 2>&1; then
+    # --exit-code 0 makes findings exit 0, so nonzero here is the engine
+    # failing, and a failed engine must not read as a clean file.
+    echo "redaction-scan: FAIL — gitleaks failed on ${path} (engine error, not a finding)" >&2
+    exit 2
+  fi
 }
 
 scan_commit_messages() {
@@ -211,14 +283,17 @@ scan_commit_messages() {
   while IFS= read -r sha; do
     [[ -z "${sha}" ]] && continue
     report_index=$((report_index + 1))
-    git log -1 --format=%B "${sha}" \
+    if ! git log -1 --format=%B "${sha}" \
       | gitleaks stdin \
           --config "${CONFIG}" \
           --no-banner \
           --exit-code 0 \
           --report-format json \
           --report-path "${REPORTS}/${report_index}.json" \
-          >/dev/null 2>&1 || true
+          >/dev/null 2>&1; then
+      echo "redaction-scan: FAIL — gitleaks failed on commit ${sha:0:12} message (engine error, not a finding)" >&2
+      exit 2
+    fi
     if [[ -s "${REPORTS}/${report_index}.json" ]]; then
       python3 - "${REPORTS}/${report_index}.json" "commit:${sha:0:12}" <<'PY'
 import json

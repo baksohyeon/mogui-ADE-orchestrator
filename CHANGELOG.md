@@ -13,6 +13,17 @@ you build on it.
 
 ## [Unreleased]
 
+### Fixed
+
+- Organization rules are proven against the engine that runs them. Python's
+  `re` validated the rules, gitleaks compiles RE2, and a rule Python accepted
+  crashed the engine at config load while every invocation swallowed the
+  crash: scans with organization rules configured reported `OK` having
+  scanned nothing. The merged config now runs a canary through gitleaks
+  before anything is scanned (failure exits 2 naming rule ids, never
+  patterns), and a nonzero gitleaks exit during a scan is an engine error
+  and exits 2 rather than reading as a clean file.
+
 ## [0.3.0] - 2026-08-03
 
 ### Changed

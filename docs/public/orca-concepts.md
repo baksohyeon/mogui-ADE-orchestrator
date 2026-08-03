@@ -44,7 +44,7 @@ Two rules fall out:
 
 ## Labels That Look Wrong But Are Not
 
-**"Unavailable worktree"** in Agent Session History means the session ran in a workspace that is not a Git worktree. Folder workspaces have no Git checkout, so every master session seated in one carries this chip. It is the expected label for a healthy master, not an error.
+**"Unavailable worktree"** in Agent Session History means the session ran in a workspace that is not a Git worktree. Folder workspaces have no Git checkout, so every master session seated in one carries this chip.
 
 **Empty `worktreePath`** in `orca terminal list --json` output is the same fact from the CLI side: folder workspaces report a `worktreeId` of `folder:<uuid>` and an empty path. Judge placement by `worktreeId`, not by the path field or by the repository name shown in a pane's status line, which only reflects the shell's cwd.
 

@@ -41,6 +41,57 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+ONBOARDING.md installer UX pass from the 2026-08-03 mogui founding run
+(feedback tracked as maintainer backlog on that install):
+
+- Standing owner-facing language rules: no jargon quizzes; plain glosses for
+  probe/placement/selector; shell examples the owner sees use a `$ ` prefix.
+- Pacing and context diet: ship one step chunk at a time; start path is
+  Orientation → Step 0 only; re-read the step from disk if the transcript drifts.
+- Step 1 splits into purpose (with examples) → root → full-child inventory by
+  default → name/monitor/model. Outside repositories lead with "move or clone
+  under the root"; external lane is secondary opt-in. Monitor namespace is
+  explicitly not the issue-tracker prefix.
+- Step 1A no longer measures or ranks workspace-root folder candidates (that
+  felt intrusive). The installer explains terms, gives pick criteria, asks the
+  owner to choose the folder and paste an absolute path (prefer Orca **Copy
+  path**), then validates only what was pasted.
+- Step 3.5 explains the full open-measure-close temporary-terminal flow before
+  any UI action; owner speech says "temporary terminal," not "probe."
+- Step 5 byte-only CLAUDE.md/AGENTS.md drift is announce-and-proceed with an
+  ELI5 line; only substantive divergence asks the owner.
+- Step 6 asks for a master callsign; "master" stays the doc role label.
+- Step 7.6 drops the comprehension-quiz verify; explain the gate gap and continue.
+- README notes that callsign is chosen at install and lists example names.
+
+ONBOARDING progressive-load split (mgm-ed3), same 2026-08-03 feedback, second
+pass — the first pass added rules to the monolith, which made the overload
+worse; this pass cuts the load unit itself:
+
+- `ONBOARDING.md` becomes a router: session-mode question, agent load rules,
+  standing owner-language rules, placeholder list, and a step index. Everything
+  else moves to one file per step under `onboarding/` (`00-orientation.md` …
+  `10-card-and-retire.md`), loaded one file per turn, next file only after the
+  current step's Verify passes.
+- Session-mode triad at the top of the router: Founding (00→10), Reverify
+  (`onboarding/reverify.md`, read-only health checklist, spawn blocked), and
+  Template improve (not installation; route as an ordinary task). Mixing modes
+  in one session is what the 2026-08-03 run measured going wrong.
+- Every numbered founding step file carries an "Owner script (3–6 sentences)" block;
+  `reverify.md` keeps an Owner script and adds `Checklist` and `Report` sections;
+  owner-facing turns are capped at that plus one or two questions. Verify lists, the Orca
+  charter, and the Step 8 command sequence are agent-only sections; Step 8
+  commands are folded under "do not paste to the owner" and lose the `$`
+  owner-prompt prefix.
+- Progressive loading is host- and model-agnostic by rule: a stronger model does
+  not earn monolith reading, and a model that summarizes well does not earn
+  skipping a step file.
+- Step 3's skeleton copy and its verify now also exclude the `onboarding/`
+  directory alongside `TEMPLATE-VERSION`, `CHANGELOG.md`, and `ONBOARDING.md`.
+- Entry files (`CLAUDE.md`/`AGENTS.md`) now instruct: read the router only, ask
+  the mode question, open `00-orientation.md`, one step file per turn, never all
+  step files at once.
+
 ## v0.4.1
 
 No template changes in this release; the version string moves so an

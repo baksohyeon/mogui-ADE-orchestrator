@@ -7,7 +7,7 @@
 # git feeds pre-push one line per ref on stdin (<local ref> <local sha>
 # <remote ref> <remote sha>), and the scan runs over each pushed range with
 # --range, which covers both the files those commits change and the commit
-# messages themselves. A tip-of-tree scan would miss a secret that lives in an
+# messages themselves. A tip of tree scan would miss a secret that lives in an
 # intermediate commit and is gone from the final tree — the one real leak this
 # repository has had was exactly that shape.
 #
@@ -31,7 +31,7 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
   if [ "$remote_sha" = "$zero" ]; then
     # New ref: the remote has no tip to diff against. Anchor on the default
     # branch when one is known; a repository where even that fails falls
-    # through to the whole-tree scan below.
+    # through to the whole tree scan below.
     base=$(git merge-base "$local_sha" origin/main 2>/dev/null) || base=""
   else
     base=$remote_sha
@@ -43,7 +43,7 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
 done
 
 # No ranges resolved (empty stdin, ref deletions only, or no usable base):
-# fall back to the tracked-tree scan rather than passing silently.
+# fall back to the tracked tree scan rather than passing silently.
 if [ "$scanned_any" = false ]; then
   "$repo_root/scripts/redaction-scan.sh" || status=$?
 fi

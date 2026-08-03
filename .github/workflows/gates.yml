@@ -9,9 +9,9 @@
 #
 # gitleaks is installed in both jobs, not only the redaction one: the test
 # suite exercises redaction-scan.sh for real (measured on the first run of this
-# workflow — four commit-message scan tests failed on a runner without it).
+# workflow — four commit message scan tests failed on a runner without it).
 # The install block is duplicated across jobs because Actions YAML has no
-# cross-job anchors and a composite action is more machinery than two copies.
+# anchors across jobs and a composite action is more machinery than two copies.
 name: gates
 
 on:
@@ -31,7 +31,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install gitleaks (pinned, checksum-verified)
+      - name: Install gitleaks (pinned, checksum verified)
         shell: bash
         run: |
           case "$(uname -s)-$(uname -m)" in
@@ -50,7 +50,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install gitleaks (pinned, checksum-verified)
+      - name: Install gitleaks (pinned, checksum verified)
         shell: bash
         run: |
           case "$(uname -s)-$(uname -m)" in

@@ -16,13 +16,13 @@ you build on it.
 ### Added
 
 - CI: `.github/workflows/gates.yml` runs the test suite (ubuntu and macos,
-  Python 3.12, checksum-pinned gitleaks) and the committed-ruleset redaction
+  Python 3.12, checksum pinned gitleaks) and the committed ruleset redaction
   scan on every pull request and push to main. What CI cannot cover is stated
   in the workflow header: the organization rules live outside the repository,
   so the full scan stays local. The inventory runs informationally.
 - An opt-in pre-push hook (`hooks/pre-push`, enable with
   `git config core.hooksPath hooks`) scans each pushed ref range, covering
-  changed files and commit messages both, with a tracked-tree fallback when no
+  changed files and commit messages both, with a tracked tree fallback when no
   range resolves.
 
 ### Added

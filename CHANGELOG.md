@@ -15,6 +15,13 @@ you build on it.
 
 ### Added
 
+- `docs/public/orca-concepts.md`: Orca's object model (projects, folder
+  workspaces, repository worktrees), where the master sits and why, selector
+  forms with their measured behavior, and expected UI labels that look
+  alarming. Linked from the README document table, the document index, and the
+  lifecycle page's founding spawn section. Written after a misplacement where
+  a master was spawned into a repository worktree instead of the workspace
+  folder workspace (2026-08-03).
 - CI: `.github/workflows/gates.yml` runs the test suite (ubuntu and macos,
   Python 3.12, checksum pinned gitleaks) and the committed ruleset redaction
   scan on every pull request and push to main. What CI cannot cover is stated

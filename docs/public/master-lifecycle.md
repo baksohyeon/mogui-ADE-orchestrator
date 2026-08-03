@@ -18,6 +18,8 @@ Use the repository onboarding guide as the source of truth:
 
 - [master-ops/ONBOARDING.md](../../master-ops/ONBOARDING.md)
 
+Placement targets the workspace-level seat: the folder workspace of the workspace root (selector form `id:folder:<uuid>`) in a multi-repository workspace, or the primary worktree when the workspace is one repository. Repository worktrees inside a multi-repository workspace are worker seats. [orca-concepts.md](./orca-concepts.md) explains the object model and which selector forms are verified.
+
 The actual spawn entry point is `scripts/master-succeed spawn`. A dry run is the safe way to inspect the host command before creating a terminal:
 
 ```bash

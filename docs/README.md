@@ -17,9 +17,10 @@ Read in this order:
 1. [`overview.md`](./public/overview.md), what problem this solves, when it is worth it, related work
 2. [`getting-started.md`](./public/getting-started.md), shortest path into the repository
 3. [`concepts.md`](./public/concepts.md), the vocabulary: runtime units, evidence labels, the four capability areas
-4. [`master-lifecycle.md`](./public/master-lifecycle.md), boot, role state, compaction, succession
-5. [`delegation-and-review.md`](./public/delegation-and-review.md), worker contracts, the dispatch gate, acceptance
-6. [`reference.md`](./public/reference.md), script entry points, generated from local `--help` output
+4. [`orca-concepts.md`](./public/orca-concepts.md), Orca's object model: projects, folder workspaces, worktrees, verified selector forms, where the master sits
+5. [`master-lifecycle.md`](./public/master-lifecycle.md), boot, role state, compaction, succession
+6. [`delegation-and-review.md`](./public/delegation-and-review.md), worker contracts, the dispatch gate, acceptance
+7. [`reference.md`](./public/reference.md), script entry points, generated from local `--help` output
 
 These pages describe the control model. Host-specific hook wiring, workspace path policy, and sensitive-lane implementation sit outside this public surface.
 

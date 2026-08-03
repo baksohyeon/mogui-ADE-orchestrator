@@ -230,6 +230,7 @@ One integration note if you adopt GSD. Its context monitor warns the agent at 35
 | Reading about the system for the first time | [`docs/public/overview.md`](./docs/public/overview.md) |
 | Installing it on your own workspace | [`master-ops/ONBOARDING.md`](./master-ops/ONBOARDING.md) |
 | Looking for a specific document | [`docs/README.md`](./docs/README.md) (the document index) |
+| Confused by Orca projects, workspaces, or an "Unavailable worktree" label | [`docs/public/orca-concepts.md`](./docs/public/orca-concepts.md) |
 | Reading the code | [Architecture](#architecture) below, then `src/master_runtime/core/` |
 
 Documentation in this repository is English. `master-ops/` is a template that gets copied and substituted during onboarding, not documentation about this repository. See the index for why the two are separate.

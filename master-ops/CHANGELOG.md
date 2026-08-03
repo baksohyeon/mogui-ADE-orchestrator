@@ -41,6 +41,25 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+The master's seat moves to the workspace level. Step 3.5 previously prescribed
+the ops repository worktree and forbade the folder route as unverified; the
+folder route is now verified from the CLI (`id:folder:<uuid>` passes precheck
+listing, terminal create, and spawn placement match, measured 2026-08-03), and
+a master seated in one repository's worktree shipped as a real misplacement the
+same day. Step 3.5 now seats the master in the workspace root's folder
+workspace (or the primary worktree when the workspace is a single repository),
+records the selector in `id:` prefixed form, and Step 8 spawns against that
+durable record.
+
+Onboarding gains an Orca Context Charter, installer scope only: ground every
+Orca claim in the docs snapshot (agent index first, smallest page next),
+answer newcomer questions about projects, workspaces, and worktrees in place,
+and explain expected UI labels that look alarming (the "Unavailable worktree"
+chip on folder workspace sessions) before the user has to ask. The operating
+card printed in Step 10 now points at the runtime repository's Orca concepts
+guide, and Step 10 answers lingering Orca questions under the charter before
+the installer retires.
+
 ## v0.3.0
 
 The charter's review-bot rule gains its missing half. The v5 rule said who

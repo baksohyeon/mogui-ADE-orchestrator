@@ -14,7 +14,7 @@ Answer these five before proposing any tool, and put the answers in the pull req
 
 The first three are usually disqualifying on their own: a component that fails them is a subscription presenting itself as a dependency. A component that passes them and answers nothing for the fifth is a preference. Preferences are allowed, and they get labelled as preferences, and nothing gates on them.
 
-This is a maintainer question rather than an operator one. An installation does not choose the stack; it receives one, and `master-ops/ONBOARDING.md` carries the same five questions for the narrower decision an installer does make, which is what to install of what is offered.
+This is a maintainer question rather than an operator one. An installation does not choose the stack; it receives one, and the onboarding flow (`master-ops/onboarding/08-settings-and-skills.md`, routed from `master-ops/ONBOARDING.md`) carries the same five questions for the narrower decision an installer does make, which is what to install of what is offered.
 
 ## Running it
 

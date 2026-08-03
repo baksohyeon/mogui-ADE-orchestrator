@@ -12,7 +12,7 @@ Nothing to configure and nothing to read first. Clone it, start an agent inside 
 
 It runs the fleet on [Orca](https://www.onorca.dev/download). A session has to outlive its window and be addressable by handle before anything can orchestrate it. Built and run on macOS; Orca also ships Linux and Windows. Python 3, stdlib-only core, MIT. No API key.
 
-The orchestrating session is called the master, for lack of a better word. It has no name yet. Suggestions welcome.
+The orchestrating session is called the master in the docs — that is a temporary role label, not a permanent name. At install you pick a **callsign** for the living session (examples people have used or floated: 자비스 / Jarvis, Friday, Alfred, HAL-but-nice, or anything short you will say out loud). Suggestions still welcome.
 
 
 ## Why these tools
@@ -27,7 +27,7 @@ Five questions decided the stack, and they are the bar for anything proposed lat
 
 Failing the first three usually means a subscription presenting itself as a dependency. Passing them while answering nothing for the fifth means a preference, which is allowed and labelled as one, and nothing gates on it.
 
-The maintainer-facing version of this bar is in `CONTRIBUTING.md`; the installer-facing one is in `master-ops/ONBOARDING.md`.
+The maintainer-facing version of this bar is in `CONTRIBUTING.md`; the installer-facing one is in `master-ops/onboarding/08-settings-and-skills.md`, routed from `master-ops/ONBOARDING.md`.
 
 ## Quickstart
 

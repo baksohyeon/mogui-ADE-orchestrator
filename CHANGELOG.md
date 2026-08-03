@@ -23,7 +23,11 @@ you build on it.
   validates existing JSON before editing, stays idempotent, and rejects missing
   worktree paths. Added docs rows and a runbook Cursor pre-trust section beside
   the existing Codex guidance so worker startup can be pre-trusted before
-  orchestration attach.
+  orchestration attach. Additional measurement on `cursor-agent 2026.07.23-e383d2b`
+  found no second startup trust gate for project hooks: in a fresh workspace with
+  project-local `.cursor/hooks.json`, startup passed with no extra prompt after
+  pre-trust, hooks executed, and Cursor state showed no persisted `hooks.state` or
+  `trusted_hash` key.
 - Documentation identifier audit: public and template docs now describe the
   measured `model-identity-probe` no assertion path, drift exit, and undecidable
   exit separately. A regression test pins documented dispatch-gate reason codes

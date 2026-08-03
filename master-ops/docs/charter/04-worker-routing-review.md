@@ -29,7 +29,7 @@ MEASURED examples from 2026-08-02:
 
 MEASURED addition from 2026-08-03:
 
-- Cursor Agent pre-trust: run `scripts/cursor-worker-pretrust <worktree-path>` before attach and require exit status 0 with a summary that reports `added`, `updated`, or `already trusted` (not `skipped`); this uses Cursor Agent's measured `.workspace-trusted` storage instead of relying on `--trust` at worker launch.
+- Cursor Agent pre-trust: run `scripts/cursor-worker-pretrust <worktree-path>` before attach and require exit status 0 with a summary that reports `added`, `updated`, or `already trusted` (not `skipped`); this uses Cursor Agent's measured `.workspace-trusted` storage instead of relying on `--trust` at worker launch. Follow-up measurement on `cursor-agent 2026.07.23-e383d2b` with a fresh workspace plus project-local `.cursor/hooks.json` showed no second startup gate: launch passed without extra prompts, hooks executed, and no `hooks.state`/`trusted_hash` persistence appeared in Cursor state.
 
 Three-vote review is the default for non-trivial merges or direct-push changes. Split review lenses:
 

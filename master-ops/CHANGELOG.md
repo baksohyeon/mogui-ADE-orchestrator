@@ -58,6 +58,10 @@ Cursor worker pre-trust runbook guidance (2026-08-03 measurement):
 - `master-ops/docs/charter/05-dispatch-gate.md` now repeats the same attach
   requirement so pre-trust verification is explicit in both worker-routing and
   dispatch-gate procedures.
+- Follow-up measurement on `cursor-agent 2026.07.23-e383d2b` is now recorded in
+  both sections: a fresh workspace with project-local `.cursor/hooks.json` showed
+  no second startup trust gate after pre-trust (no extra prompt), hooks executed,
+  and Cursor state persisted no `hooks.state` or `trusted_hash` key.
 
 Orchestration channel doctrine: acknowledgement, addressing, and reachability rules
 (2026-08-03 incident and measurement):

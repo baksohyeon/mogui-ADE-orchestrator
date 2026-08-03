@@ -31,6 +31,8 @@ Before attaching a Codex worker, run `scripts/codex-worker-pretrust <worktree-pa
 
 Before attaching a Cursor worker, run `scripts/cursor-worker-pretrust <worktree-path>` and require exit status 0 with a summary that reports `added`, `updated`, or `already trusted` (not `skipped`), so startup does not block on the trust prompt.
 
+Measured on `cursor-agent 2026.07.23-e383d2b`: a fresh workspace with project-local `.cursor/hooks.json` started without any second trust prompt after pre-trust, hooks executed, and Cursor state showed no persisted `hooks.state` or `trusted_hash` key.
+
 `register` without a prior successful `check` is invalid. Register only after the artifact exists, and before the final evidence report. Promote dispatch acceptance and verification results into the issue tracker.
 
 The supervised dispatch command is vendor-neutral Orca orchestration: bind a Run, create the Task with `orca orchestration task-create`, attach the worker with `orca orchestration worker-start` (or `dispatch --inject`), then wait event-driven with `check --wait --types worker_done,escalation,question`. A coordinator clears each delivery with the acknowledgement flag before waiting again, and cross-master traffic addresses a standing Run rather than a transient handle. Raw terminal polling and vendor-direct CLIs bypass task and Dispatch provenance and `worker_done` authority and are non-compliant dispatch paths. Vendor plugins are allowed for non-dispatch uses such as second-opinion review. Record accidental work outside orchestration plainly as non-orchestrated; never relabel it orchestrated. (charter rule since template v5)

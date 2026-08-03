@@ -54,6 +54,25 @@ def test_no_orphan_step_files():
     assert on_disk == set(indexed_files()), "step files on disk and the router index disagree"
 
 
+def test_onboarding_inventory():
+    """Pin the expected onboarding step files to catch silent drifts."""
+    expected = {
+        "00-orientation.md",
+        "01-preflight.md",
+        "02-workspace-facts.md",
+        "03-ops-repo.md",
+        "04-seat.md",
+        "05-placeholders.md",
+        "06-tracker.md",
+        "07-user-rules.md",
+        "08-settings-and-skills.md",
+        "09-spawn.md",
+        "10-card-and-retire.md",
+        "reverify.md",
+    }
+    assert set(indexed_files()) == expected, f"onboarding inventory drifted; expected {expected}"
+
+
 def test_next_pointers_follow_index_order():
     numbered = [n for n in indexed_files() if n[0].isdigit()]
     for current, expected_next in zip(numbered, numbered[1:]):

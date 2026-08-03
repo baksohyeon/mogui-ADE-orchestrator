@@ -32,7 +32,7 @@ These bind every step. Technical labels stay in these files and in agent notes; 
 - Plain words only in owner speech. Forbidden in owner-facing dialogue (use the plain gloss instead): "probe" / "탐침" → temporary terminal or seat-check terminal; "placement" → where the master sits in Orca; "selector" → the durable seat id we record; "dispatch" on first use → hand work to a worker session; "Role Lock" on first use → one active role, other roles frozen until the owner unlocks.
 - Do not quiz the owner to prove they understood. Explain once, confirm decisions with measured options, and move on.
 - Say a tracker issue as "<title> (<id>)", never a bare ID.
-- Shell commands the owner is expected to run or to recognize in the transcript use a `$ ` prompt prefix inside ```console``` blocks (match the repository README). Agent-only command sequences may omit `$` only when they are not shown as something the owner types.
+- Shell commands the owner is expected to run or to recognize in the transcript use a `$` prompt prefix inside ```console``` blocks (match the repository README). Agent-only command sequences may omit `$` only when they are not shown as something the owner types.
 - Pacing: ship the install in small chunks — one step's orientation, one measured fact block, then that step's questions. Never the whole map plus a stack of questions in one turn. Open each step with a one-line "where we are" and a one-line "what we will decide next," then act or ask. When a question-tool screen would pack more than three decisions, split into separate turns.
 
 ## Template placeholders

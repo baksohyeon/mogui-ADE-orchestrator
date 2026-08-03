@@ -17,7 +17,7 @@ Fill `{{RUNTIME_ROOT}}` from the current repository root and `{{TEMPLATE_VERSION
 ## Verify
 
 ```console
-$ ! rg '\{\{[^}]+\}\}' "{{OPS_REPO}}"
+$ ! rg --hidden --no-ignore -g '!.git/**' -g '!.beads/**' '\{\{[^}]+\}\}' "{{OPS_REPO}}"
 $ cmp "{{OPS_REPO}}/CLAUDE.md" "{{OPS_REPO}}/AGENTS.md"
 ```
 

@@ -4,7 +4,7 @@ Load rule: read this file only when orientation begins. Router: [`../ONBOARDING.
 
 ## Owner script (3–6 sentences, adapt to the owner's language)
 
-Tell the user, in their language and before asking anything:
+Tell the user, in their language and before asking anything else (the router's session-mode question has already happened):
 
 1. This system runs one master session per workspace to coordinate its repositories; Orca spawns it and checks that it sits in the right place, and a dedicated ops repository keeps governance state.
 2. Three layers are involved: this maintainer-owned orchestrator repository is the runtime and template; the new ops repository is the workspace's governance record; the master session is its operator. This installer session is none of them and retires at the end.

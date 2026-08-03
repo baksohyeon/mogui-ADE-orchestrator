@@ -4,7 +4,7 @@ Load rule: read this file only when Step 0 begins. Router: [`../ONBOARDING.md`](
 
 **Position and action:** Step 0 starts after orientation, with no workspace state changed: run `bash scripts/onboarding-preflight.sh` from `{{RUNTIME_ROOT}}` and fix every FAIL before continuing.
 
-**Why/caution:** Orca, an orchestration Run bound to this terminal, the Orca skills, Beads, Python, the named agent CLI, at least one worker runtime to dispatch to, Git, and the organization rules file are all required; do not offer a non-Orca fallback. Never suggest skipping the preflight itself: that discards every other check with it.
+**Why/caution:** Orca, an orchestration Run bound to this terminal, the Orca skills, Beads, Python, the named agent CLI, at least one worker runtime to dispatch to, Git, the GitHub CLI (`gh`), and the organization rules file are all required; do not offer a non-Orca fallback. Never suggest skipping the preflight itself: that discards every other check with it.
 
 ## Owner script (3–6 sentences, adapt to the owner's language)
 

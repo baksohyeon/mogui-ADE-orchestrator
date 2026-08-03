@@ -13,12 +13,12 @@ Where we are: this workspace was already set up, so nothing will be installed or
 ## Checklist (all read-only)
 
 0. **Bootstrap the facts first**: this mode never loads the steps that establish the workspace facts, so ask the owner for the workspace root and ops repository path (or the operating card, which carries both), then read the durable placement result from that ops repository. Do not scan the disk for candidate workspaces, and do not substitute this orchestrator clone's paths. Every `{{...}}` value below means the measured value from that ops repository, not a literal.
-1. **Seat**: the durable placement selector recorded in the ops repository still resolves on the host (`ORCA terminal list --worktree <selector> --json`), and exactly one live master terminal sits in it.
+1. **Seat**: the durable placement selector recorded in the ops repository still resolves on the host (`orca terminal list --worktree <selector> --json`), and exactly one live master terminal sits in it.
 2. **Tracker**: from `{{WORKSPACE_ROOT}}`, `bd where` (or the equivalent) resolves to the ops repository, and no tracker database shadows it from above.
 3. **Role state**: `docs/runbooks/role-state.md` names one active role with Role Lock state, and its Generation matches the last entry in `docs/lineage/MASTER-LINEAGE.md`.
 4. **Lineage**: the last lineage entry's session evidence (session id, measured model) is present, and the measured model matches the configured one or the mismatch is explained.
 5. **Operating card**: the owner still has the operating card from installation; if it is lost, reprint it from `10-card-and-retire.md` with current values — that is the one write this mode allows.
-6. **Placeholders**: `rg '\{\{[^}]+\}\}' "{{OPS_REPO}}"` finds nothing, or every hit is an intentionally deferred value the owner can name.
+6. **Placeholders**: `rg '\{\{[^}]+\}\}' "{{OPS_REPO}}"` finds nothing — any remaining {{...}} token is an installation error; fail reverify and have the owner bring it to the living master as a rescue task.
 
 ## Report
 

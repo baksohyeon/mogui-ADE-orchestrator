@@ -30,8 +30,8 @@ To start work, tell the master:
   "Approved, execute"               it executes only what you approved
 
 To delegate, tell the master:
-  "Dispatch <task> to a worker"     it runs the gate, dispatches, and verifies
-                                     the result before accepting it
+  "Dispatch <task> to a worker"     it checks preconditions, sends the work to a
+                                     worker, and reviews the result before accepting
 
 Before publishing anything, the master runs:
   the test suite, the redaction scan, the redaction inventory

@@ -486,6 +486,71 @@ def test_spawn_successor_creates_and_verifies_worktree() -> None:
     assert "expected_placement" not in report.verification
 
 
+def test_spawn_successor_bare_folder_selector_uses_id_for_list_only() -> None:
+    calls = []
+    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    bare_list_command = _scoped_list_command("folder:unit-a")
+    id_list_command = _scoped_list_command("id:folder:unit-a")
+    runner = _recording_runner(
+        {
+            bare_list_command: (1, "", "selector_not_found"),
+            id_list_command: [
+                (0, _orca_json_from_terminals(), ""),
+                (0, _orca_json_from_terminals(_list_terminal("term-new", "folder:unit-a", "successor")), ""),
+            ],
+            _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(), ""),
+            create_command: (0, _orca_create_json("term-new", "folder:unit-a"), ""),
+        },
+        calls,
+    )
+
+    report = spawn_successor(
+        workspace_selector="folder:unit-a",
+        kickoff_text="start here",
+        root="/repo/example",
+        title="successor",
+        orca_runner=runner,
+    )
+
+    assert report.status == "CREATED"
+    assert report.handle == "term-new"
+    assert report.worktree_id == "folder:unit-a"
+    assert id_list_command in calls
+    assert bare_list_command not in calls
+    assert create_command in calls
+
+
+def test_spawn_successor_id_folder_selector_keeps_working() -> None:
+    calls = []
+    create_command = _spawn_create_command("id:folder:unit-a", "start here", "/repo/example", "successor")
+    id_list_command = _scoped_list_command("id:folder:unit-a")
+    runner = _recording_runner(
+        {
+            id_list_command: [
+                (0, _orca_json_from_terminals(), ""),
+                (0, _orca_json_from_terminals(_list_terminal("term-new", "folder:unit-a", "successor")), ""),
+            ],
+            _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(), ""),
+            create_command: (0, _orca_create_json("term-new", "folder:unit-a"), ""),
+        },
+        calls,
+    )
+
+    report = spawn_successor(
+        workspace_selector="id:folder:unit-a",
+        kickoff_text="start here",
+        root="/repo/example",
+        title="successor",
+        orca_runner=runner,
+    )
+
+    assert report.status == "CREATED"
+    assert report.handle == "term-new"
+    assert report.worktree_id == "folder:unit-a"
+    assert id_list_command in calls
+    assert create_command in calls
+
+
 def test_worktrees_match_accepts_path_selector_resolved_repo_path() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
@@ -1750,6 +1815,17 @@ def _is_scoped_terminal_list(command: Sequence[str]) -> bool:
         and tuple(command[:3]) == ("orca", "terminal", "list")
         and command[3] == "--worktree"
         and command[-1] == "--json"
+    )
+
+
+def _scoped_list_command(selector: str) -> Tuple[str, ...]:
+    return (
+        "orca",
+        "terminal",
+        "list",
+        "--worktree",
+        selector,
+        "--json",
     )
 
 

@@ -289,7 +289,7 @@ def find_sessions(
             "terminal",
             "list",
             "--worktree",
-            list_worktree,
+            _terminal_list_worktree_selector(list_worktree),
             "--json",
         )
     else:
@@ -925,6 +925,12 @@ def _normalize_worktree_selector(value: str) -> str:
     if text.startswith("id:"):
         return text[3:]
     return text
+
+
+def _terminal_list_worktree_selector(value: str) -> str:
+    if value.startswith("folder:"):
+        return "id:" + value
+    return value
 
 
 def _worktrees_match(actual: str, requested: str) -> bool:

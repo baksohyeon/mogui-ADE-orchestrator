@@ -41,6 +41,22 @@ Not on macOS? Orca has Linux and Windows builds on its [download page](https://w
 
 Then open Orca once and turn on **Settings → Orca CLI → Shell command**. The runtime calls `orca` to spawn and retire master sessions. `orca status` should answer.
 
+Now add the cloned repository to Orca (Add a project → Browse folder → the clone) and open a terminal inside it. In that terminal, start whichever agent you already use:
+
+```console
+$ claude    # or: codex, grok, cursor-agent, your daily driver
+```
+
+And speak:
+
+```text
+Arise, my master.
+```
+
+Any words work; pick something with ceremony, you are founding a lineage. The agent walks you through setup and ends by spawning your Generation 1 master. [Getting Started](docs/public/getting-started.md) has the detail.
+
+![Claude Code in Orca, opened on the cloned repository. The prompt reads "wake up, master." and the agent has started reading master-ops/ONBOARDING.md.](docs/assets/wake-up-master.png)
+
 ### Why Orca is required
 
 Without Orca there is no session lifetime, no stable handles, and no supervised dispatch. The harness degrades to screen-polling and an unsupervised agent. In a real incident, a user skipped Orca setup, trusted the harness alone, and watched their agent run wild on errors.
@@ -55,15 +71,6 @@ Step 0 preflight refuses to proceed without Orca; running runtime scripts withou
 
 Agents: ground Orca claims in the [Orca docs snapshot agent index](https://grok-wiki.com/public/docs/stablyai-orca-2036d532bf1c/llms.txt) before improvising; the link hash may change with snapshot updates.
 
-Open that directory in Orca, start any coding agent inside it, and say:
-
-```text
-Wake the master.
-```
-
-Any words work. It walks you through setup and ends by spawning your Generation 1 master. [Getting Started](docs/public/getting-started.md) has the detail.
-
-![Claude Code in Orca, opened on the cloned repository. The prompt reads "wake up, master." and the agent has started reading master-ops/ONBOARDING.md.](docs/assets/wake-up-master.png)
 
 <details><summary>Prefer to poke at it before installing anything</summary>
 

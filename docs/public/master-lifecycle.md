@@ -59,6 +59,8 @@ scripts/model-identity-probe \
 
 If the host cannot expose a measured model field, report that as unavailable. Do not infer the actual model from a launch flag.
 
+The same rule covers agents these tools cannot read. The transcript walkers parse the session record schema they were built against (Claude Code's JSONL under its projects directory); Codex, for one, stores sessions under its own directory in a different shape. An agent whose transcript the tool cannot parse comes back as exit 2, undecidable, the same refusal the tools give any unreadable input; the master then reports the agent as unsupported instead of guessing, which is the operating rule the Step 9 wording (measured, unavailable, or unsupported) already sets for humans. Across agents the portable session key is the session id in process argv, which is what the revival check in the succession card relies on, not any one CLI's transcript format.
+
 That probe samples recent turns, so it answers what the model is now. It does not answer whether the model changed earlier in the session, and a tail sample reads clean whenever the tail is homogeneous. For that question, walk the whole transcript:
 
 ```bash

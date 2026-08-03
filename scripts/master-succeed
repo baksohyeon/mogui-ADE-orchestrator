@@ -147,7 +147,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Agent CLI to launch (claude, grok, codex, or a custom executable name)",
     )
     spawn.add_argument("--title", required=True)
-    spawn.add_argument("--expected-placement")
+    spawn.add_argument(
+        "--expected-placement",
+        help=(
+            "Independently expected worktree id; spawn fails closed (exit 26) "
+            "when the created terminal lands elsewhere. Use id:<repoId>::<path> "
+            "or folder:<uuid>; a path: value only matches repository worktrees"
+        ),
+    )
     spawn.add_argument("--dry-run", action="store_true")
     return parser
 

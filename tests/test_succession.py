@@ -569,6 +569,14 @@ def test_worktrees_match_accepts_path_selector_resolved_repo_path() -> None:
         )
 
 
+def test_worktrees_match_path_resolution_failure_falls_back_to_literal() -> None:
+    from master_runtime.core.succession import _worktrees_match
+
+    embedded_null = "/tmp/spawn\0dir"
+    assert _worktrees_match("repo::" + embedded_null, "path:" + embedded_null)
+    assert not _worktrees_match("repo::" + embedded_null, "path:/tmp/spawn\0other")
+
+
 def test_worktrees_match_path_resolution_failure_fails_closed() -> None:
     assert not _worktrees_match("repoid::/repo/example", "path:\0")
     assert not _worktrees_match("repoid::", "path:")

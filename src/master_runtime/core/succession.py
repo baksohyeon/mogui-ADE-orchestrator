@@ -974,7 +974,7 @@ def _path_worktree_matches(actual: str, requested: str) -> bool:
     try:
         return os.path.realpath(actual_path) == os.path.realpath(requested_path)
     except (OSError, RuntimeError, ValueError):
-        return False
+        return actual_path.rstrip("/") == requested_path.rstrip("/")
 
 
 def _with_selector_hint(message: str) -> str:

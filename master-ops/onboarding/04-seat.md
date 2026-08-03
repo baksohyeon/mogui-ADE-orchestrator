@@ -38,3 +38,9 @@ Capture the returned selector only when the terminal metadata proves the workspa
 - the selector points at the workspace-level seat, never an individual repository worktree inside a multi-repository workspace
 - the durable placement result exists in `id:` prefixed selector form before founding spawn
 - the temporary seat-check terminal is closed, so the founding spawn will be the only terminal in that seat
+
+## If fail
+
+- `terminal list` rejects the captured selector: the record is probably in the bare `folder:<uuid>` form — re-capture and persist the `id:` prefixed form, which every consumer accepts (the subcommand asymmetry above is measured behavior, not an error to work around).
+- The placement comparison rejects the selector: it is probably a `path:` form or a filesystem path — never substitute a path for the measured selector; re-run `terminal show` and capture `worktreeId`.
+- The terminal metadata shows a repository worktree instead of the workspace-level seat: the owner opened the temporary terminal in the wrong place; explain, ask them to open it in the folder workspace, and measure again.

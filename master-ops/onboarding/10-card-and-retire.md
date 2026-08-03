@@ -50,7 +50,7 @@ New to Orca? Concepts, and labels that look alarming but are normal:
   {{RUNTIME_ROOT}}/docs/public/orca-concepts.md
 ```
 
-Fill the declined slot (the `<declined components, or the word none>` line) from the recorded choices. If nothing was declined, write the word none rather than leaving it blank, because a blank line reads as unknown. The angle-bracket slots in the card are filled by hand at print time; do not introduce a new `{{...}}` placeholder for them, since the placeholders step verifies that only the eight allowed placeholders remain anywhere in the generated repository.
+Fill the declined slot (the `<declined components, or the word none>` line) from the recorded choices. If nothing was declined, write the word none rather than leaving it blank, because a blank line reads as unknown. The angle-bracket slots in the card are filled by hand at print time; do not introduce a new `{{...}}` placeholder for them, since the placeholders step verifies that no `{{...}}` placeholder remains in the generated repository.
 
 If the user lingers with Orca questions instead of closing, answer them here under the Orca Context Charter (grounded in the docs snapshot and the concepts guide) before retiring; a user who leaves onboarding still confused about workspaces will misplace the next master by hand.
 

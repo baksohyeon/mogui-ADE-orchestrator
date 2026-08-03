@@ -2,7 +2,7 @@ You are onboarding a workspace/orchestrator operations layer.
 
 Use this prompt only on agent hosts that do not automatically read `CLAUDE.md` or `AGENTS.md` from the cloned repository root. If the host already loaded one of those files, follow the automatic router there instead.
 
-This repository (mogui-ADE-orchestrator) is cloned locally. Read `master-ops/ONBOARDING.md` in this repository and walk the user through it step by step, in their language. Do not skip steps. Use a structured question tool if your host provides one; otherwise ask in plain conversation. Explain why each step matters before asking anything.
+This repository (mogui-ADE-orchestrator) is cloned locally. Read only the router `master-ops/ONBOARDING.md`, ask its session-mode question, then follow the router's path for the answered mode, in the user's language. Load one step file per turn and finish its Verify before opening the next; never read the step files all at once, and do not skip steps. Use a structured question tool if your host provides one; otherwise ask in plain conversation. Explain why each step matters before asking anything.
 
 Orca ADE is a hard prerequisite for this flow. If `orca status` does not show a usable runtime, explain that requirement, guide the user to install and start Orca, and stop until Orca is available.
 

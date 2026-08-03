@@ -27,7 +27,7 @@ Five questions decided the stack, and they are the bar for anything proposed lat
 
 Failing the first three usually means a subscription presenting itself as a dependency. Passing them while answering nothing for the fifth means a preference, which is allowed and labelled as one, and nothing gates on it.
 
-The maintainer-facing version of this bar is in `CONTRIBUTING.md`; the installer-facing one is in `master-ops/ONBOARDING.md`.
+The maintainer-facing version of this bar is in `CONTRIBUTING.md`; the installer-facing one is in `master-ops/onboarding/08-settings-and-skills.md`, routed from `master-ops/ONBOARDING.md`.
 
 ## Quickstart
 

@@ -8,19 +8,19 @@ This Stage 2 flow turns the Stage 1 skeleton into a working workspace/orchestrat
 
 Before anything else — before orientation, before any measurement — ask the owner which of these this session is, with a one-line gloss each. A session that mixes modes loses its role; exactly this was measured on the 2026-08-03 install run.
 
-1. **Founding** — a new workspace: build the ops repository and spawn a Generation 1 master. Path: step files `00` → `10`.
+1. **Founding** — a genuinely new workspace: build the ops repository and spawn a Generation 1 master. Path: step files `00` → `10`.
 2. **Reverify** — a workspace that already has an ops repository and a master: check health only. Path: `onboarding/reverify.md` alone. **Spawning is blocked in this mode**; a second master is an incident, not a convenience.
 3. **Template improve** — work on this orchestrator repository's own documents or code. That is not installation at all: stop this flow and route the work as an ordinary task (master or worker lane).
 
-If evidence contradicts the chosen mode (for example the owner says Founding but a live master already exists), stop and re-ask with the evidence — do not improvise a hybrid.
+If evidence contradicts the chosen mode, stop and re-ask with the evidence — do not improvise a hybrid. The Founding guard triggers on an existing ops repository or lineage file, not only on a live master: a workspace whose master died, or a half-finished install, is **not** Founding — that is recovery or succession, owned by the ops repository's `docs/runbooks/succession-boot-card.md`, and re-running Founding against it corrupts lineage and governance records.
 
 ## How to run this flow (agent rules)
 
 1. Read one step file per turn: the file for the step you are on, nothing else. Never read all step files at once.
 2. Do not open the next step file until the current step's Verify list passes.
 3. Owner-facing turns are short: a 3–6 sentence explanation plus at most one or two questions. Never dump command blocks or charter text at the owner; agent-only commands stay in agent notes. Each step file carries an "Owner script" block as the template for that step's opening turn.
-4. On failure or a branch, re-read only the current step's "If fail" section from disk. If quality or encoding drift appears in the transcript, re-read the step file from disk rather than improvising from a stale summary.
-5. Ask through the host's structured question tool when available; otherwise ask in normal conversation. Either way: numbered options from measured candidates when they exist, one marked recommendation with a reason, and a free-form option. Explain why before every question. Never ask the user to simply provide a value when measurable candidates exist — with one standing exception: the workspace root is chosen and pasted by the owner, never scanned or shortlisted (see `02-workspace-facts.md`).
+4. On failure or a branch, re-read the current step's "If fail" section from disk where the step has one; a step without an "If fail" section has no scripted recovery, so stop and ask rather than improvise. If quality or encoding drift appears in the transcript, re-read the step file from disk rather than working from a stale summary.
+5. Ask through the host's structured question tool when available; otherwise ask in normal conversation. Either way: numbered options from measured candidates when they exist, one marked recommendation with a reason, and a free-form option. Explain why before every question. Never ask the user to simply provide a value when measurable candidates exist — with one standing exception: the workspace root is chosen and pasted by the owner, never scanned or shortlisted (see `onboarding/02-workspace-facts.md`).
 6. Progressive loading is mandatory for every host and every model. A stronger model does not earn monolith reading, and a model that summarizes well does not earn skipping a step file; both failure modes were observed on 2026-08-03 (one model drowned, one improvised).
 
 The step files are terse to save agent tokens; user-facing dialogue must NOT be terse. Speak to the user warmly, as a helpful collaborator, in full sentences, with reasons and cautions.

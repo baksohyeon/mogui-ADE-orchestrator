@@ -22,3 +22,8 @@ $ cmp "{{OPS_REPO}}/CLAUDE.md" "{{OPS_REPO}}/AGENTS.md"
 ```
 
 Also verify no source workspace's private names were copied accidentally.
+
+## If fail
+
+- `rg` still finds `{{...}}` tokens: fill each from the confirmed facts, or record the owner's explicit deferral for that value; never delete a placeholder to silence the check.
+- `cmp` shows `CLAUDE.md` and `AGENTS.md` differ: if the divergence is byte-only formatting, re-unify to one common block in both files; if a substantive line exists in only one file, stop and ask whether host-specific divergence is intended.

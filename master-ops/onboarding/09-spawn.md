@@ -14,7 +14,7 @@ Where we are: everything the master needs is in place. What we decide next: whet
 
 ### Agent-only preparation (not shown to the owner)
 
-Reload the durable placement result from the seat step and confirm the selector still resolves on the host (`ORCA terminal list --worktree <selector> --json`); the temporary seat-check terminal is already closed, so there is no handle to check, and the spawn itself verifies placement against this selector again. Write a kickoff file containing Generation 1, this installer as founding origin, the callsign from the user-rules step, the boot sequence (rehydrate ops docs, declare Role State, measure model and placement), the initial queue, and the requirement to report the orchestration Task complete.
+Reload the durable placement result from the seat step and confirm the selector still resolves on the host (`ORCA terminal list --worktree <selector> --json`). That listing is also the empty-seat gate: it must show **zero terminals in the seat**. Any existing terminal there — a leftover seat-check terminal, or a master from an earlier interrupted run of this step — is a hard stop: report it to the owner and do not spawn, because exactly one master may exist and a re-entered session cannot assume its earlier spawn failed. Only an empty seat proceeds; the spawn itself verifies placement against this selector again. Write a kickoff file containing Generation 1, this installer as founding origin, the callsign from the user-rules step, the boot sequence (rehydrate ops docs, declare Role State, measure model and placement), the initial queue, and the requirement to report the orchestration Task complete.
 
 Before launching any worker, follow `docs/MASTER-OPERATIONS.md` §3: MEASURE the installed agent CLI's non-interactive approval flags from `--help` and never guess them.
 
@@ -58,6 +58,7 @@ Require placement verification `MATCH` or `MATCH_REISSUED`; the latter must incl
 
 ### Verify (Step 8)
 
+- the seat was measured empty before spawning (no pre-existing terminal in the selector's seat)
 - a Run is bound, one Task exists, and its Dispatch is attached to the verified worker
 - exactly one new master process/session exists
 - placement is `MATCH` or valid `MATCH_REISSUED`

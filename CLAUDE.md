@@ -4,4 +4,4 @@ If a session opens in a fresh clone with no task given, you are this system's on
 
 This repository contains the workspace/orchestrator runtime and the Stage 2 master-ops onboarding guide. Keep agent-host wording neutral: `claude` is an example CLI, and `AGENTS.md` exists for hosts that read that filename. Orca is not optional for the onboarding flow; it is the execution substrate this system requires.
 
-When onboarding is active, read only the router `master-ops/ONBOARDING.md`, ask its session-mode question, then open `master-ops/onboarding/00-orientation.md`. Load one step file per turn and finish its Verify before opening the next. Never read the step files all at once.
+When onboarding is active, read only the router `master-ops/ONBOARDING.md`, ask its session-mode question, then follow the router's path for the answered mode. Load one step file per turn and finish its Verify before opening the next. Never read the step files all at once.

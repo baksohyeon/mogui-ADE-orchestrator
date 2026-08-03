@@ -1,6 +1,6 @@
 # Reverify — Health Check For An Already-Founded Workspace
 
-Load rule: read this file only when the router's mode question answered **Reverify**. Router: [`../ONBOARDING.md`](../ONBOARDING.md). This mode uses no other step file.
+Load rule: read this file only when the router's mode question answered **Reverify**. Router: [`../ONBOARDING.md`](../ONBOARDING.md). This mode uses no other step file, with one exception: `10-card-and-retire.md` may be opened read-only to reprint a lost operating card (check 5).
 
 **Position and action:** the workspace already has an ops repository and a master. Check health, report, and stop. Running the full founding steps against a founded workspace is time waste at best and a duplicate master at worst.
 
@@ -12,6 +12,7 @@ Where we are: this workspace was already set up, so nothing will be installed or
 
 ## Checklist (all read-only)
 
+0. **Bootstrap the facts first**: this mode never loads the steps that establish the workspace facts, so ask the owner for the workspace root and ops repository path (or the operating card, which carries both), then read the durable placement result from that ops repository. Do not scan the disk for candidate workspaces, and do not substitute this orchestrator clone's paths. Every `{{...}}` value below means the measured value from that ops repository, not a literal.
 1. **Seat**: the durable placement selector recorded in the ops repository still resolves on the host (`ORCA terminal list --worktree <selector> --json`), and exactly one live master terminal sits in it.
 2. **Tracker**: from `{{WORKSPACE_ROOT}}`, `bd where` (or the equivalent) resolves to the ops repository, and no tracker database shadows it from above.
 3. **Role state**: `docs/runbooks/role-state.md` names one active role with Role Lock state, and its Generation matches the last entry in `docs/lineage/MASTER-LINEAGE.md`.

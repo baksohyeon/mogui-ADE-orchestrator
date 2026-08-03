@@ -13,6 +13,8 @@ you build on it.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-03
+
 ### Added
 
 - The scan warns when organization rules contain no native script pattern:
@@ -190,7 +192,8 @@ tests pass, 1 skipped.
 There is no CI at this tag. Tests and the redaction scanners run locally before
 a push, so a passing count in a pull request is the author's word.
 
-[Unreleased]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/baksohyeon/mogui-ADE-orchestrator/releases/tag/v0.1.0

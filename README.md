@@ -244,7 +244,7 @@ Documentation in this repository is English. `master-ops/` is a template that ge
 
 ## Status
 
-Working and exercised, as of 2026-08-03: 435 unit tests pass, 1 skipped. Every
+Working and exercised, as of 2026-08-03: 434 unit tests pass, 1 skipped. Every
 unit listed below exists in `src/master_runtime/core/`. The succession,
 dispatch-gate, acceptance, and compaction paths have run against real
 workspaces, and onboarding has been run start to finish by someone other than

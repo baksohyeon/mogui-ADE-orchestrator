@@ -15,6 +15,18 @@ you build on it.
 
 ### Added
 
+- `docs/public/defense-inventory.md` "Breaks when" column and "Substrate and
+  stability" section: each guard now names a concrete failure condition grounded
+  in the tree or in a measurement run on 2026-08-03. Substrate paragraph
+  distinguishes guards standing on contracted surfaces (this repository's
+  scripts, `git`, documented Orca subcommands) from those on vendor-internal
+  formats (host session storage). When vendor surfaces are unreadable, guards
+  degrade to recorded warnings (e.g. `MODEL_PROBE_FAILED`) rather than false
+  passes. Observed example: 2026-08-03 grok worker's `register` call returned
+  `MODEL_PROBE_FAILED` when session file did not exist yet.
+
+### Added
+
 - README section "What is standing guard" and `docs/public/defense-inventory.md`:
   the existing defense inventory (dispatch gate with tier × fan-out and a
   ledgered policy digest, transcript model probes, spawn placement and

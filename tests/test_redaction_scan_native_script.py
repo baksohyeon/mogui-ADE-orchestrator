@@ -89,6 +89,8 @@ def test_python_u_escape_rule_dies_at_the_engine_canary(tmp_path: Path) -> None:
     )
     result = _scan_with_extra(repo, extra)
     assert result.returncode == 2
+    assert "not supported by RE2" in result.stderr
+    assert "person_x_native" in result.stderr
 
 
 def test_property_class_rule_is_dropped_as_unusable(tmp_path: Path) -> None:

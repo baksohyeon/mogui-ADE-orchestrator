@@ -41,6 +41,13 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+Orchestration channel doctrine: acknowledgement, addressing, and reachability rules
+(2026-08-03 incident and measurement):
+
+- New §8 rule "Acknowledgement is part of reading. A handle is routing metadata; a Run address is an identity. A loopback test proves nothing about reachability from outside," with observation from a day-long blocking incident where two masters could not reach each other because a read-but-unacknowledged delivery held the queue head while both senders saw success and both receivers saw nothing to read.
+- §4 now specifies that a coordinator clears each delivery with the acknowledgement flag before waiting again, and cross-master traffic addresses a standing Run rather than a transient handle.
+- Succession boot card now binds a standing coordinator Run to the session at step 4, recording its durable address for peers before anyone needs it, with a note that a handle recorded in its place will be dead by the next restart.
+
 ONBOARDING.md installer UX pass from the 2026-08-03 mogui founding run
 (feedback tracked as maintainer backlog on that install):
 

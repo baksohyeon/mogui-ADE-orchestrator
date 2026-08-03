@@ -13,6 +13,66 @@ you build on it.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-03
+
+### Changed
+
+- `scripts/codex-worker-pretrust` finds a TOML-capable interpreter instead of
+  demanding Python 3.11. A resolver probes `python3`, newer versioned names, then
+  `python` (the only name Windows Git Bash and Windows venvs expose), taking the
+  first whose `tomllib` imports; the probe is the capability, not a version
+  number. When nothing qualifies, the script skips instead of erroring: exit code
+  changes from 2 to 0, nothing is written, the summary line reads
+  `Summary: skipped — ...` so a machine can tell the skip from a clean run, and
+  the reason prints to both stdout and stderr. Callers that branched on exit 2
+  for the case of a missing interpreter should read the summary instead. (#40)
+- `scripts/onboarding-preflight.sh` enforces no interpreter version floor:
+  `python3` presence still fails when missing, the version is reported and never
+  compared, and a tool that needs a more capable interpreter locates one itself
+  at runtime. The `pytest` check warns instead of failing, because tests are the
+  agent's job; `gitleaks` and `ctx` warn instead of blocking, since publishing
+  needs the former and the records practice the latter while running a master
+  needs neither; the Codex plugin check advises instead of blocking, because a
+  routing policy that sends heavy work to Codex is one workspace's choice. Every
+  demoted check stays in the essential components summary, so the downgrade is
+  from blocking to loud, not from blocking to silent. (#35, #37, #39)
+- The redaction gate runs on gitleaks. `scripts/redaction-scan.sh` keeps only
+  what gitleaks does not do: scoping to tracked content, scanning commit
+  messages (measured: gitleaks does not read them), translating the
+  organization rules file, and stating what was covered. The operator interface
+  is unchanged; exemptions move to `.gitleaksignore` fingerprints or a config
+  allowlist, and a file still holding entries in the retired
+  `scripts/redaction-allowlist.txt` format exits 2 rather than being ignored.
+  A parity test planted before the swap caught three translation errors. (#29,
+  #30, #32)
+- `dispatch-gate register` measures the worker's actual model instead of
+  trusting the declaration, because the incident the tier policy exists for was
+  a worker inheriting a tier nobody asked for. (#27)
+
+### Added
+
+- `tests/test_reference_command_table.py` pins `docs/public/reference.md` to the
+  actual `scripts/` surface: it reads each executable's own `--help`, compares
+  the (script, command) pairs against the table's rows, and fails in both
+  directions. The table had sat behind an `AUTO-GENERATED` marker whose
+  generator never existed, and four commands had drifted out of it. (#36)
+- First tests for `scripts/redaction-inventory`, closing two silent passes. (#28)
+
+### Fixed
+
+- Public documentation caught up with the code: the getting-started page names
+  what a user actually installs and scopes the list to the master-session path
+  (#35); the concept pages stopped describing the removed adapter dispatch and
+  isolation paths as live mechanisms (#38, #41); the scan documentation matches
+  what the scan does (#34).
+
+## [0.2.0] - 2026-08-02
+
+Tagged alongside the master-ops template's v0.2.0 release. These runtime entries
+shipped in that tag but were recorded under Unreleased at the time; they are
+restored to their release here. The template's changes for the same tag are
+in `master-ops/CHANGELOG.md`.
+
 ### Added
 
 - Spawn liveness verification against reissued terminal handles. Orca reissues a
@@ -76,5 +136,7 @@ tests pass, 1 skipped.
 There is no CI at this tag. Tests and the redaction scanners run locally before
 a push, so a passing count in a pull request is the author's word.
 
-[Unreleased]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/baksohyeon/mogui-ADE-orchestrator/releases/tag/v0.1.0

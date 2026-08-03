@@ -18,7 +18,7 @@ Measure: feed the instrument a case it must object to, and watch it object. Unti
 
 **A declaration is not a measurement.**
 Observed: the dispatch gate enforces the model identifier a caller declares at `check`, and `register` takes no model at all. The incident that motivated the tier policy was a worker default-inheriting a top-tier model, which a compliant declaration does not prevent.
-Measure: `{{RUNTIME_ROOT}}/scripts/model-identity-probe` for what a session runs now, `{{RUNTIME_ROOT}}/scripts/model-drift-audit` for transitions across a whole transcript. Exit 2 means undecided; do not read it as a pass.
+Measure: `{{RUNTIME_ROOT}}/scripts/model-identity-probe` for what a session runs now, `{{RUNTIME_ROOT}}/scripts/model-drift-audit` for transitions across a whole transcript. For `model-identity-probe`, exit 2 means drift or undecided, and exit 0 without an expected model is only an informational no-assertion result. For `model-drift-audit`, exit 2 means undecided. Do not read any of those states as a pass.
 
 **Put the guard where the incident was.**
 Observed: ten workers were fanned out at once and every one of them silently inherited the runtime's default top tier. That cost incident is why the tier policy exists. The policy encodes model identifiers, so it stops neither half of what happened: a single top-tier dispatch passes it, and `unknown_model: "deny"` blocks any model the file has not been hand-edited to name, including cheaper or stronger ones released later.

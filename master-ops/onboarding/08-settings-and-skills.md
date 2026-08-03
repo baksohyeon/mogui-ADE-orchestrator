@@ -12,9 +12,16 @@ Load rule: read this file only when Step 7 begins. Router: [`../ONBOARDING.md`](
 
 Where we are: the master's ground rules are saved. What we decide next: who owns the host settings and security-sensitive configuration, and which safety hooks to turn on. Ask which hosts run the master, who owns hooks/security-sensitive configuration, and whether dispatch warning, role-state injection, and compaction probe hooks should be enabled. Present the hook wiring spec from `docs/MASTER-OPERATIONS.md` in agent notes, not as a wall of text at the owner; delegate auth, permission, secrets, credentials, and production-data work to a dedicated security/operations session.
 
+### Land host answers in the instance runtime config
+
+For each host the owner names as running the master (and any worker runtime the preflight already measured on `PATH`), ensure `transcript_globs.<runtime>` in `{{RUNTIME_ROOT}}/config/instance-runtime.json` is either measured on this machine or explicitly supplied. Prefer measurement: locate that runtime's session JSONL tree when the host exposes one; do not paste another workspace's encoded path. Keep `master_host_runtime` aligned with the preflight agent CLI unless the owner explicitly changes the master host in this step.
+
+Consumers such as `{{RUNTIME_ROOT}}/scripts/model-identity-probe` resolve transcript location with environment override → this config file → unconfigured (exit 2 with an honest message). They must never fall back to a baked default glob.
+
 ### Verify (Step 7)
 
 - the hook spec is documented, no sensitive implementation was added, and its owner is explicit or unresolved
+- `config/instance-runtime.json` has `transcript_globs` entries for the named master hosts when measurement or an explicit owner value exists; missing globs are left unset rather than guessed
 
 ## Step 7.5. Offer the skill layer
 

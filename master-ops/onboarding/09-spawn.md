@@ -18,6 +18,8 @@ Reload the durable placement result from the seat step and confirm the selector 
 
 Before launching any worker, follow `docs/MASTER-OPERATIONS.md` §3: MEASURE the installed agent CLI's non-interactive approval flags from `--help` and never guess them.
 
+Confirm `{{RUNTIME_ROOT}}/config/instance-runtime.json` still carries the onboarding answers (`master_host_runtime`, and `transcript_globs` when measured). Use that file (or `MOGUI_MASTER_HOST_RUNTIME` / `MOGUI_TRANSCRIPT_GLOB` env overrides) for launch and model-probe guidance; do not reintroduce a hardcoded host runtime or transcript path. When a value is missing, treat it as unconfigured and measure or ask rather than guessing.
+
 Before attaching a Codex worker, run `{{RUNTIME_ROOT}}/scripts/codex-worker-pretrust <worktree-path>` as the pre-trust step.
 
 ### Agent-only command sequence (do not paste to the owner)

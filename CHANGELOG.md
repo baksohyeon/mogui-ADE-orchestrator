@@ -20,6 +20,20 @@ you build on it.
 
 ## [Unreleased]
 
+### Added
+
+- Instance runtime config for onboarding answers: ships
+  `config/instance-runtime.example.json` (template never commits a filled copy)
+  with `master_host_runtime`, per-runtime `transcript_globs`, and optional
+  `product_repo`. Loader
+  `src/master_runtime/core/instance_runtime_config.py` resolves each value as
+  environment override → config file → honest unconfigured. Consumer:
+  `scripts/model-identity-probe` can omit `--transcript` and resolve via
+  config/`MOGUI_TRANSCRIPT_GLOB` instead of a baked path. Onboarding steps
+  01, 02, 08, and 09 wire existing runtime questions into
+  `config/instance-runtime.json` (gitignored). Owner decision 2026-08-04:
+  onboarding already asked these facts; they needed a durable landing place.
+
 ### Fixed
 
 - Windows CI measurement leg: skip the diagnosed Unix script-execution surface

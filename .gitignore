@@ -13,6 +13,10 @@ coverage/
 # local-only workspace manifests (real coordinates never enter this repo)
 *.local.json
 
+# instance-owned runtime answers written by onboarding; template ships only the example
+config/instance-runtime.json
+config/instance-runtime.toml
+
 # local-only redaction/sweep artifacts — these contain the very identifiers the
 # scanner protects, and a public repo must never accept them via `git add -A`
 *redact-result*

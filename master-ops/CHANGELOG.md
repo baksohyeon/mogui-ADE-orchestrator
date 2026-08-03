@@ -78,7 +78,7 @@ worse; this pass cuts the load unit itself:
   Template improve (not installation; route as an ordinary task). Mixing modes
   in one session is what the 2026-08-03 run measured going wrong.
 - Every numbered founding step file carries an "Owner script (3–6 sentences)" block;
-  `reverify.md` is a mode file with `Checklist` and `Report` sections instead;
+  `reverify.md` keeps an Owner script and adds `Checklist` and `Report` sections;
   owner-facing turns are capped at that plus one or two questions. Verify lists, the Orca
   charter, and the Step 8 command sequence are agent-only sections; Step 8
   commands are folded under "do not paste to the owner" and lose the `$`

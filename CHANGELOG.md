@@ -13,6 +13,14 @@ you build on it.
 
 ## [Unreleased]
 
+### Removed
+
+- The permanently skipped lineage test. It dry ran the append against a real
+  operations ledger at a path the publication sweep replaced with a fictional
+  one, so it could never run on any machine, and the property it checked
+  (append preserves existing bytes) is already covered twice on the same code
+  path by the synthetic fixtures. The suite now reports zero skips.
+
 ## [0.4.0] - 2026-08-03
 
 ### Added

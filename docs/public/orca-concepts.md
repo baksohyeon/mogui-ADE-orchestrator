@@ -10,8 +10,10 @@ Orca tracks three layers.
 
 **Workspace.** A seat inside a project where terminals and agents live. There are two kinds, and the project's shape decides which you get:
 
-- A *worktree* belongs to a Git repository project: one checked-out branch, created from the Create worktree dialog. This is where workers sit.
-- A *folder workspace* belongs to a folder project: the folder itself is the seat, with no Git checkout of its own, created from the Create Folder Workspace dialog.
+- A *repository worktree* belongs to a Git repository project: one checked-out branch, created from the Create worktree dialog. A terminal opened there starts inside the checkout and git works immediately. This is where workers sit when they need to run git commands.
+- A *folder workspace* belongs to a folder project: the folder itself is the seat, with no Git checkout of its own, created from the Create Folder Workspace dialog. A terminal opened there starts outside any checkout. An empty `worktreePath` is the expected shape for this kind; judge placement by `worktreeId`, which reads as `folder:<uuid>`.
+
+The kind determines what a session can do on its first command, not merely where it appears in the sidebar.
 
 **Terminal.** A live session inside a workspace. Agents, including masters, are terminals.
 

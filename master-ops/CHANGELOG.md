@@ -41,6 +41,26 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+Instance-validated asset promotion (2026-08-04 staging to template):
+
+- New `master-ops/docs/runbooks/contract-conventions.md` carries the authoring
+  instance's eight graded worker-contract clauses, reading-surface doctrine, and
+  prose backlog, adapted with template placeholders and authoring-instance
+  evidence labels.
+- Worker routing now points to the contract conventions runbook and requires
+  isolated `git worktree` placement proof for operations-repository workers.
+- New `master-ops/skills/blame-agent/SKILL.md` and the Blame observability genre
+  register the structured incident observation tool, including its Korean output
+  contract and proposed trigger list pending owner decision.
+- New `master-ops/scripts/hooks/orch-inbox-warn.sh` and
+  `master-ops/docs/runbooks/orch-inbox-warn.md` carry the orchestration inbox
+  warning hook, including correct-Run precondition, binding-first doctrine, and
+  idle-session limit.
+- Existing installations do not auto-update from this template. To adopt this
+  entry, copy the new files into the generated operations repository, wire the
+  hook in host settings by hand, and merge local charter or observability edits
+  deliberately.
+
 Master-operations charter progressive split (2026-08-03 post-founding):
 
 - `master-ops/docs/MASTER-OPERATIONS.md` is now an index table (26 lines) with a section brief for each of the ten charter topics; full section bodies moved to `master-ops/docs/charter/` one file per section (01-document-map.md … 10-closed-principles-pointer.md). Load one section at a time; sections not needed for the current task stay closed.

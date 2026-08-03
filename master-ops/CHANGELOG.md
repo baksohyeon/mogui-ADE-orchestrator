@@ -41,20 +41,29 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+Master-operations charter progressive split (2026-08-03 post-founding):
+
+- `master-ops/docs/MASTER-OPERATIONS.md` is now an index table (26 lines) with a section brief for each of the ten charter topics; full section bodies moved to `master-ops/docs/charter/` one file per section (01-document-map.md … 10-closed-principles-pointer.md). Load one section at a time; sections not needed for the current task stay closed.
+- Every section file opens with a one-line statement of what it governs and a link back to the index.
+- Cross-references throughout the repository that pointed at sections by number (in README.md, docs/public/defense-inventory.md, onboarding step files, and CHANGELOG.md) updated to link to the new charter files while keeping the section number visible in the link text.
+- No rule text changed; this is a structural reorganization only. The original §0–§9 numbering became §1–§10 after splitting to remove a monolithic load pattern that reappeared post-founding (every boot loaded all 325 lines even when one dispatch question needed one rule).
+
 Cursor worker pre-trust runbook guidance (2026-08-03 measurement):
 
-- `docs/MASTER-OPERATIONS.md` §3 now includes a Cursor pre-trust companion beside
-  the Codex guidance: run `scripts/cursor-worker-pretrust <worktree-path>` before
-  attach and confirm the summary is not `skipped`, so trust prompts do not block
-  startup in isolated worktrees. §4 Dispatch Gate now repeats the same attach
-  requirement with explicit pass criteria: exit status 0 and a summary reporting
-  `added`, `updated`, or `already trusted` (not `skipped`).
+- `master-ops/docs/charter/04-worker-routing-review.md` now includes a Cursor
+  pre-trust companion beside the Codex guidance: run
+  `scripts/cursor-worker-pretrust <worktree-path>` before attach and require exit
+  status 0 with a summary reporting `added`, `updated`, or `already trusted`
+  (not `skipped`), so trust prompts do not block startup in isolated worktrees.
+- `master-ops/docs/charter/05-dispatch-gate.md` now repeats the same attach
+  requirement so pre-trust verification is explicit in both worker-routing and
+  dispatch-gate procedures.
 
 Orchestration channel doctrine: acknowledgement, addressing, and reachability rules
 (2026-08-03 incident and measurement):
 
-- New §8 rule "Acknowledgement is part of reading. A handle is routing metadata; a Run address is an identity. A loopback test proves nothing about reachability from outside," with observation from a blocking incident on 2026-08-03 where two masters could not reach each other for about an hour because a read-but-unacknowledged delivery held the queue head while both senders saw success and both receivers saw nothing to read. Measurement includes `orca orchestration check --terminal <handle>` returning the oldest unacknowledged delivery as proof of a stalled queue, `orca orchestration run-current --json` verifying the terminal's actual bound Run, and cross-session delivery testing to confirm reachability from outside.
-- §4 now specifies that a coordinator clears each delivery with the acknowledgement flag before waiting again, and cross-master traffic addresses a standing Run rather than a transient handle.
+- New §9 rule "Acknowledgement is part of reading. A handle is routing metadata; a Run address is an identity. A loopback test proves nothing about reachability from outside," with observation from a blocking incident on 2026-08-03 where two masters could not reach each other for about an hour because a read-but-unacknowledged delivery held the queue head while both senders saw success and both receivers saw nothing to read. Measurement includes `orca orchestration check --terminal <handle>` returning the oldest unacknowledged delivery as proof of a stalled queue, `orca orchestration run-current --json` verifying the terminal's actual bound Run, and cross-session delivery testing to confirm reachability from outside.
+- §5 now specifies that a coordinator clears each delivery with the acknowledgement flag before waiting again, and cross-master traffic addresses a standing Run rather than a transient handle.
 - Succession boot card now binds a standing coordinator Run to the session at step 4, recording its durable address for peers before anyone needs it, with a note that a handle recorded in its place will be dead by the next restart.
 
 Selector kinds and worker placement documentation (2026-08-03):
@@ -119,9 +128,9 @@ instance-validated, promotion per staging→production loop):
 - UserPromptSubmit hook now couples the role-state injection with the
   `Proposal -> Approval -> Execution` rule in every turn, establishing a
   mechanical guard against host defaults that override the charter. See
-  MASTER-OPERATIONS §7 hook spec and §8 incident-derived rules for motivation
+  MASTER-OPERATIONS §8 hook spec and §9 incident-derived rules for motivation
   and measurement.
-- New §8 rule "Host-injected autonomy defaults override the charter unless
+- New §9 rule "Host-injected autonomy defaults override the charter unless
   mechanically countered," with observation from 2026-08-03 founding run,
   measurement via hook wiring and transcript audit.
 

@@ -218,3 +218,34 @@ def test_no_python_interpreter_skips_without_writing(tmp_path: Path) -> None:
     assert "SKIP no Python 3 interpreter with json support found" in result.stderr
     assert "Summary: skipped — 0 added, 0 updated, 0 already trusted" in result.stdout
     assert not trusted_file(projects_dir, str(workspace)).exists()
+
+
+def test_python_candidate_that_is_not_python3_is_rejected(tmp_path: Path) -> None:
+    projects_dir = tmp_path / "projects"
+    workspace = tmp_path / "worktree"
+    workspace.mkdir()
+    shim_bin = tmp_path / "bin"
+    shim_bin.mkdir()
+    (shim_bin / "bash").symlink_to("/bin/bash")
+    python_shim = shim_bin / "python"
+    python_shim.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" = \"-c\" ]; then\n"
+        "  case \"$2\" in\n"
+        "    *\"assert sys.version_info[0] >= 3\"*) exit 1 ;;\n"
+        "  esac\n"
+        "fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    python_shim.chmod(0o755)
+
+    env = os.environ.copy()
+    env["PATH"] = str(shim_bin)
+
+    result = run_pretrust(str(workspace), projects_dir, env=env)
+
+    assert result.returncode == 0
+    assert "SKIP no Python 3 interpreter with json support found" in result.stdout
+    assert "Summary: skipped — 0 added, 0 updated, 0 already trusted" in result.stdout
+    assert not trusted_file(projects_dir, str(workspace)).exists()

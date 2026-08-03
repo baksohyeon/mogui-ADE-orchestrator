@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from windows_exec_surface import skip_windows_exec_surface
 import hashlib
 import json
 import os
@@ -833,6 +834,7 @@ def test_cli_register_requires_orchestration_task(
     assert ledger_entry["probe_failure"] == "task_omitted"
 
 
+@skip_windows_exec_surface
 def test_cli_register_allows_sentinel_log_without_orchestration_task(
     tmp_path: Path,
     monkeypatch,
@@ -888,6 +890,7 @@ def test_cli_register_allows_sentinel_log_without_orchestration_task(
     assert "orchestration_task" not in entry
 
 
+@skip_windows_exec_surface
 def test_cli_register_rechecks_expected_completion_channel_under_register_lock(
     tmp_path: Path,
     monkeypatch,
@@ -965,6 +968,7 @@ def test_cli_register_rechecks_expected_completion_channel_under_register_lock(
     assert ticket.exists()
 
 
+@skip_windows_exec_surface
 def test_cli_register_sentinel_log_denies_failing_probe(
     tmp_path: Path,
     monkeypatch,
@@ -1023,6 +1027,7 @@ def test_cli_register_sentinel_log_denies_failing_probe(
     )
 
 
+@skip_windows_exec_surface
 def test_cli_register_without_matching_ticket_keeps_no_matching_ticket_denial(
     tmp_path: Path,
     monkeypatch,
@@ -1699,6 +1704,7 @@ def test_contract_lint_warns_for_path_outside_known_roots(
     assert ReasonCode.PATH_OUTSIDE_KNOWN_ROOTS in decision.warnings
 
 
+@skip_windows_exec_surface
 def test_contract_lint_accepts_paths_inside_known_roots(
     tmp_path: Path,
 ) -> None:
@@ -1780,6 +1786,7 @@ def test_r4_denies_unverified_job_id(tmp_path: Path) -> None:
     assert all("job_id" not in entry for entry in _ledger_entries(tmp_path))
 
 
+@skip_windows_exec_surface
 def test_cli_check_register_and_watch_commands(tmp_path: Path) -> None:
     contract = _contract(tmp_path, "cli contract")
     ledger = tmp_path / "cli-ledger.jsonl"
@@ -2009,6 +2016,7 @@ def test_cli_report_skips_non_object_and_invalid_timestamps(
     assert "healthy-model: dispatches=1 est_cost_proxy=3" in output
 
 
+@skip_windows_exec_surface
 def test_cli_check_creates_default_ticket_directory(tmp_path: Path) -> None:
     contract = _dispatch_contract(tmp_path, runtime="codex")
     ledger = tmp_path / "cli-ledger.jsonl"
@@ -2054,6 +2062,7 @@ def test_cli_check_creates_default_ticket_directory(tmp_path: Path) -> None:
     assert isinstance(payload["issued_ts"], (int, float))
 
 
+@skip_windows_exec_surface
 def test_cli_register_ambiguous_prints_candidate_shas(tmp_path: Path) -> None:
     first_contract = _contract(tmp_path, "first cli candidate")
     second_contract = _contract(tmp_path, "second cli candidate")
@@ -2634,6 +2643,7 @@ def test_register_under_a_v1_policy_warns_but_cannot_rank(tmp_path: Path) -> Non
     assert ReasonCode.MODEL_MISMATCH in decision.warnings
 
 
+@skip_windows_exec_surface
 def test_cli_model_probe_separates_no_command_from_a_failed_one(
     tmp_path: Path,
 ) -> None:

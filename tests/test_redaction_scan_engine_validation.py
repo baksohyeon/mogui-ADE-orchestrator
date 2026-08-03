@@ -22,6 +22,9 @@ import pytest
 
 from test_redaction_scan_commit_messages import _repo_with_commits
 
+from windows_exec_surface import skip_windows_exec_surface
+pytestmark = skip_windows_exec_surface
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 

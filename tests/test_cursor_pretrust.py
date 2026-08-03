@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from windows_exec_surface import skip_windows_exec_surface
 import json
 import os
 from pathlib import Path
@@ -44,6 +45,7 @@ def test_trusted_file_matches_measured_literal_key_shape() -> None:
     )
 
 
+@skip_windows_exec_surface
 def test_fresh_add_writes_dot_stripped_project_key(tmp_path: Path) -> None:
     tmp_path = resolved_tmp(tmp_path)
     projects_dir = tmp_path / "projects"
@@ -61,6 +63,7 @@ def test_fresh_add_writes_dot_stripped_project_key(tmp_path: Path) -> None:
     assert isinstance(marker["trustedAt"], str) and marker["trustedAt"]
 
 
+@skip_windows_exec_surface
 def test_second_run_is_idempotent(tmp_path: Path) -> None:
     tmp_path = resolved_tmp(tmp_path)
     projects_dir = tmp_path / "projects"
@@ -79,6 +82,7 @@ def test_second_run_is_idempotent(tmp_path: Path) -> None:
     assert "Summary: 0 added, 0 updated, 1 already trusted" in second.stdout
 
 
+@skip_windows_exec_surface
 def test_existing_marker_missing_trusted_at_is_updated(tmp_path: Path) -> None:
     tmp_path = resolved_tmp(tmp_path)
     projects_dir = tmp_path / "projects"
@@ -101,6 +105,7 @@ def test_existing_marker_missing_trusted_at_is_updated(tmp_path: Path) -> None:
     assert isinstance(marker["trustedAt"], str) and marker["trustedAt"]
 
 
+@skip_windows_exec_surface
 def test_missing_worktree_path_is_rejected(tmp_path: Path) -> None:
     tmp_path = resolved_tmp(tmp_path)
     missing = tmp_path / "missing-worktree"
@@ -113,6 +118,7 @@ def test_missing_worktree_path_is_rejected(tmp_path: Path) -> None:
     assert not trusted_file(projects_dir, str(missing)).exists()
 
 
+@skip_windows_exec_surface
 def test_relative_worktree_path_is_rejected(tmp_path: Path) -> None:
     tmp_path = resolved_tmp(tmp_path)
     result = run_pretrust("relative/worktree", tmp_path / "projects")
@@ -121,6 +127,7 @@ def test_relative_worktree_path_is_rejected(tmp_path: Path) -> None:
     assert "worktree path must be absolute" in result.stderr
 
 
+@skip_windows_exec_surface
 def test_malformed_marker_aborts_without_writing(tmp_path: Path) -> None:
     tmp_path = resolved_tmp(tmp_path)
     projects_dir = tmp_path / "projects"
@@ -138,6 +145,7 @@ def test_malformed_marker_aborts_without_writing(tmp_path: Path) -> None:
     assert trust_path.read_text(encoding="utf-8") == original
 
 
+@skip_windows_exec_surface
 def test_workspace_path_mismatch_aborts_without_writing(tmp_path: Path) -> None:
     tmp_path = resolved_tmp(tmp_path)
     projects_dir = tmp_path / "projects"
@@ -158,6 +166,7 @@ def test_workspace_path_mismatch_aborts_without_writing(tmp_path: Path) -> None:
     assert json.loads(trust_path.read_text(encoding="utf-8")) == original
 
 
+@skip_windows_exec_surface
 def test_symlinked_project_path_is_rejected(tmp_path: Path) -> None:
     tmp_path = resolved_tmp(tmp_path)
     projects_dir = tmp_path / "projects"
@@ -176,6 +185,7 @@ def test_symlinked_project_path_is_rejected(tmp_path: Path) -> None:
     assert not (target / ".workspace-trusted").exists()
 
 
+@skip_windows_exec_surface
 def test_symlinked_projects_dir_ancestor_is_rejected(tmp_path: Path) -> None:
     tmp_path = resolved_tmp(tmp_path)
     workspace = tmp_path / "worktree"
@@ -193,6 +203,7 @@ def test_symlinked_projects_dir_ancestor_is_rejected(tmp_path: Path) -> None:
     assert not (real_root / "projects").exists()
 
 
+@skip_windows_exec_surface
 def test_symlinked_projects_dir_with_trailing_slash_is_rejected(tmp_path: Path) -> None:
     tmp_path = resolved_tmp(tmp_path)
     workspace = tmp_path / "worktree"
@@ -210,6 +221,7 @@ def test_symlinked_projects_dir_with_trailing_slash_is_rejected(tmp_path: Path) 
     assert not any(real_root.rglob(".workspace-trusted"))
 
 
+@skip_windows_exec_surface
 def test_non_regular_marker_is_rejected(tmp_path: Path) -> None:
     tmp_path = resolved_tmp(tmp_path)
     projects_dir = tmp_path / "projects"
@@ -226,6 +238,7 @@ def test_non_regular_marker_is_rejected(tmp_path: Path) -> None:
     assert trust_path.is_dir()
 
 
+@skip_windows_exec_surface
 def test_versioned_python_candidate_is_accepted(tmp_path: Path) -> None:
     import sys
 
@@ -265,6 +278,7 @@ def test_versioned_python_candidate_is_accepted(tmp_path: Path) -> None:
     assert probes[:4] == ["python3", "python3.14", "python3.13", "python3.12"]
 
 
+@skip_windows_exec_surface
 def test_only_python310_candidate_is_accepted(tmp_path: Path) -> None:
     import sys
 
@@ -310,6 +324,7 @@ def test_only_python310_candidate_is_accepted(tmp_path: Path) -> None:
     assert "python3.10" in probes
 
 
+@skip_windows_exec_surface
 def test_no_python_interpreter_skips_without_writing(tmp_path: Path) -> None:
     tmp_path = resolved_tmp(tmp_path)
     projects_dir = tmp_path / "projects"
@@ -330,6 +345,7 @@ def test_no_python_interpreter_skips_without_writing(tmp_path: Path) -> None:
     assert not trusted_file(projects_dir, str(workspace)).exists()
 
 
+@skip_windows_exec_surface
 def test_python_candidate_below_minimum_is_rejected(tmp_path: Path) -> None:
     tmp_path = resolved_tmp(tmp_path)
     projects_dir = tmp_path / "projects"

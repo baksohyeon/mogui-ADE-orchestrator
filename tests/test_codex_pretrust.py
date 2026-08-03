@@ -4,6 +4,9 @@ import subprocess
 import tomllib
 
 
+from windows_exec_surface import skip_windows_exec_surface
+pytestmark = skip_windows_exec_surface
+
 SCRIPT = Path(__file__).parents[1] / "scripts" / "codex-worker-pretrust"
 
 

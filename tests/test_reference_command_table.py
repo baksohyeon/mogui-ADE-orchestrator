@@ -16,6 +16,9 @@ import re
 import subprocess
 from pathlib import Path
 
+from windows_exec_surface import skip_windows_exec_surface
+pytestmark = skip_windows_exec_surface
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 REFERENCE = REPO_ROOT / "docs" / "public" / "reference.md"

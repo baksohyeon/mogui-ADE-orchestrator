@@ -13,6 +13,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from windows_exec_surface import skip_windows_exec_surface
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PREFLIGHT = REPO_ROOT / "scripts" / "onboarding-preflight.sh"
 
@@ -133,6 +135,7 @@ def _labels(output: str, verdict: str) -> set[str]:
     return set(re.findall(rf"^{verdict} +(\S+)", output, re.MULTILINE))
 
 
+@skip_windows_exec_surface
 def test_provisioned_host_reports_no_failure_it_can_act_on(tmp_path: Path) -> None:
     """A correctly provisioned host must be able to pass.
 
@@ -152,6 +155,7 @@ def test_provisioned_host_reports_no_failure_it_can_act_on(tmp_path: Path) -> No
     } <= _labels(result.stdout, "PASS"), result.stdout
 
 
+@skip_windows_exec_surface
 def test_skills_pass_without_the_installer_cli(tmp_path: Path) -> None:
     """The artifact is the subject; the installer listing is only a fallback."""
 
@@ -161,6 +165,7 @@ def test_skills_pass_without_the_installer_cli(tmp_path: Path) -> None:
     assert "skills" not in _labels(result.stdout, "FAIL"), result.stdout
 
 
+@skip_windows_exec_surface
 def test_legacy_read_only_coordinator_is_named(tmp_path: Path) -> None:
     env = _host(tmp_path)
     env["STUB_RUN_CURRENT"] = RUN_LEGACY_READ_ONLY
@@ -170,6 +175,7 @@ def test_legacy_read_only_coordinator_is_named(tmp_path: Path) -> None:
     assert "run-create" in result.stdout
 
 
+@skip_windows_exec_surface
 def test_unbound_run_fails_even_though_rpc_answers(tmp_path: Path) -> None:
     env = _host(tmp_path)
     env["STUB_RUN_CURRENT"] = RUN_NULL
@@ -178,6 +184,7 @@ def test_unbound_run_fails_even_though_rpc_answers(tmp_path: Path) -> None:
     assert "no Run is bound" in result.stdout
 
 
+@skip_windows_exec_surface
 def test_bound_legacy_run_fails(tmp_path: Path) -> None:
     env = _host(tmp_path)
     env["STUB_RUN_CURRENT"] = RUN_BOUND_LEGACY
@@ -186,6 +193,7 @@ def test_bound_legacy_run_fails(tmp_path: Path) -> None:
     assert "inspect-only" in result.stdout
 
 
+@skip_windows_exec_surface
 def test_missing_agent_cli_selection_fails(tmp_path: Path) -> None:
     env = _host(tmp_path)
     env["ORCA_AGENT_CLI"] = ""
@@ -193,6 +201,7 @@ def test_missing_agent_cli_selection_fails(tmp_path: Path) -> None:
     assert "agent-cli" in _labels(result.stdout, "FAIL"), result.stdout
 
 
+@skip_windows_exec_surface
 def test_missing_rules_file_blocks_instead_of_warning(tmp_path: Path) -> None:
     env = _host(tmp_path, rules=None)
     result = _run(env, tmp_path)
@@ -201,6 +210,7 @@ def test_missing_rules_file_blocks_instead_of_warning(tmp_path: Path) -> None:
     assert result.returncode == 1
 
 
+@skip_windows_exec_surface
 def test_malformed_rule_fails_and_nothing_from_the_file_is_printed(
     tmp_path: Path,
 ) -> None:
@@ -218,6 +228,7 @@ def test_malformed_rule_fails_and_nothing_from_the_file_is_printed(
         assert leaked not in output, output
 
 
+@skip_windows_exec_surface
 def test_waived_failure_is_labeled_and_stops_blocking(tmp_path: Path) -> None:
     """The escape exists so the whole preflight is not skipped, and it is loud."""
 
@@ -232,6 +243,7 @@ def test_waived_failure_is_labeled_and_stops_blocking(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout
 
 
+@skip_windows_exec_surface
 def test_waiver_that_matched_nothing_keeps_the_check_enforced(tmp_path: Path) -> None:
     """A typo'd waiver must not read as a waiver."""
 
@@ -244,6 +256,7 @@ def test_waiver_that_matched_nothing_keeps_the_check_enforced(tmp_path: Path) ->
     assert result.returncode == 1
 
 
+@skip_windows_exec_surface
 def test_one_missing_worker_runtime_warns_when_another_is_present(
     tmp_path: Path,
 ) -> None:
@@ -253,6 +266,7 @@ def test_one_missing_worker_runtime_warns_when_another_is_present(
     assert "worker-runtime" not in _labels(result.stdout, "FAIL"), result.stdout
 
 
+@skip_windows_exec_surface
 def test_no_worker_runtime_at_all_fails(tmp_path: Path) -> None:
     env = _host(tmp_path, worker_runtimes=(), sanitized_path=True)
     result = _run(env, tmp_path)
@@ -260,6 +274,7 @@ def test_no_worker_runtime_at_all_fails(tmp_path: Path) -> None:
     assert "cannot delegate" in result.stdout
 
 
+@skip_windows_exec_surface
 def test_missing_gitleaks_warns_without_blocking(tmp_path: Path) -> None:
     """Publishing needs gitleaks; running a master does not, so its absence warns.
 
@@ -276,6 +291,7 @@ def test_missing_gitleaks_warns_without_blocking(tmp_path: Path) -> None:
     assert "ESSENTIAL COMPONENTS MISSING" in result.stdout
 
 
+@skip_windows_exec_surface
 def test_missing_ctx_warns_without_blocking(tmp_path: Path) -> None:
     """Agent history is what the records practice queries; a master runs without it."""
 
@@ -287,6 +303,7 @@ def test_missing_ctx_warns_without_blocking(tmp_path: Path) -> None:
     assert "ctx.rs" in result.stdout
 
 
+@skip_windows_exec_surface
 def test_missing_behaviour_packs_warn_with_their_cost(tmp_path: Path) -> None:
     """Behaviour-shaping layers warn: a master runs without them, differently."""
 
@@ -305,6 +322,7 @@ def test_missing_behaviour_packs_warn_with_their_cost(tmp_path: Path) -> None:
     assert "pairs with the methodology layer" in result.stdout
 
 
+@skip_windows_exec_surface
 def test_present_behaviour_packs_pass(tmp_path: Path) -> None:
     env = _host(tmp_path)
     home = tmp_path / "home"
@@ -318,6 +336,7 @@ def test_present_behaviour_packs_pass(tmp_path: Path) -> None:
     assert "skill-stack" not in _labels(result.stdout, "WARN"), result.stdout
 
 
+@skip_windows_exec_surface
 def test_behaviour_packs_resolve_from_a_neutral_skill_root(tmp_path: Path) -> None:
     """These packs are not one agent's plugins, so detection must not assume that."""
 
@@ -333,6 +352,7 @@ def test_behaviour_packs_resolve_from_a_neutral_skill_root(tmp_path: Path) -> No
     assert "skill-stack" not in _labels(result.stdout, "WARN"), result.stdout
 
 
+@skip_windows_exec_surface
 def test_install_hint_follows_the_selected_agent(tmp_path: Path) -> None:
     env = _host(tmp_path)
     (tmp_path / "home" / ".claude" / "plugins" / "installed_plugins.json").write_text(
@@ -346,6 +366,7 @@ def test_install_hint_follows_the_selected_agent(tmp_path: Path) -> None:
     assert "skill pack for codex" in result.stdout, result.stdout
 
 
+@skip_windows_exec_surface
 def test_essential_gaps_are_repeated_loudly_with_their_consequence(
     tmp_path: Path,
 ) -> None:

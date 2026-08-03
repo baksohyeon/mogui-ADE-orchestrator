@@ -22,6 +22,9 @@ from pathlib import Path
 
 from test_redaction_scan_commit_messages import _repo_with_commits
 
+from windows_exec_surface import skip_windows_exec_surface
+pytestmark = skip_windows_exec_surface
+
 WARNING = "organization rules contain no native script pattern"
 
 

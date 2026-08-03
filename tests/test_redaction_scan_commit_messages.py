@@ -12,6 +12,9 @@ import os
 import subprocess
 from pathlib import Path
 
+from windows_exec_surface import skip_windows_exec_surface
+pytestmark = skip_windows_exec_surface
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCAN = REPO_ROOT / "scripts" / "redaction-scan.sh"
 CONFIG = REPO_ROOT / "config" / "gitleaks.toml"

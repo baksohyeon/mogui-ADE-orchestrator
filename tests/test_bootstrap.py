@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from windows_exec_surface import skip_windows_exec_surface
 import json
 import subprocess
 from pathlib import Path
@@ -113,6 +114,7 @@ def test_strict_lease_rejects_dual_instance(tmp_path: Path) -> None:
         )
 
 
+@skip_windows_exec_surface
 def test_cli_json_outputs_role_state(tmp_path: Path) -> None:
     charter = _file(tmp_path, "charter.md", "# Charter\n")
     handoff = _file(tmp_path, "handoff.md", "## Role State\n\n" + ROLE_STATE_BLOCK + "\n")

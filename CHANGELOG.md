@@ -20,6 +20,16 @@ you build on it.
 
 ## [Unreleased]
 
+### Fixed
+
+- Windows CI measurement leg: skip the diagnosed Unix script-execution surface
+  (extensionless shebangs → WinError 193, bash/WSL paths, exec-bit discovery)
+  via `tests/windows_exec_surface.py` so `tests (windows-latest)` reports green
+  on the Windows-compatible subset. The skipped class is the Windows backlog;
+  the job stays measurement-only (`continue-on-error` unchanged). Onboarding
+  structure tests now read UTF-8 explicitly so Windows default encodings do not
+  false-fail doc inventory checks.
+
 ### Added
 
 - `scripts/cursor-worker-pretrust`, measured on this host against known trusted

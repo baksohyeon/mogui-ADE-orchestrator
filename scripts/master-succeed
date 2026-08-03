@@ -97,6 +97,7 @@ def _dispatch(args, runner):
             title=args.title,
             model=model,
             agent=args.agent,
+            expected_placement=args.expected_placement,
             orca_runner=runner,
             dry_run=args.dry_run,
         )
@@ -146,6 +147,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Agent CLI to launch (claude, grok, codex, or a custom executable name)",
     )
     spawn.add_argument("--title", required=True)
+    spawn.add_argument("--expected-placement")
     spawn.add_argument("--dry-run", action="store_true")
     return parser
 

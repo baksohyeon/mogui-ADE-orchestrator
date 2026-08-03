@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shlex
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 from typing import Sequence, Tuple
@@ -10,10 +11,12 @@ from typing import Sequence, Tuple
 from master_runtime.core.bootstrap import RoleState
 from master_runtime.core.recovery import RecoveryReport, RecoveryStep
 from master_runtime.core.succession import (
+    SPAWN_PLACEMENT_MISMATCH,
     SessionInfo,
     SuccessionError,
     _reissued_terminal_candidates,
     _spawn_startup_command,
+    _worktrees_match,
     build_handoff,
     detect_duplicate_instances,
     detect_trigger,
@@ -480,6 +483,90 @@ def test_spawn_successor_creates_and_verifies_worktree() -> None:
     assert report.worktree_id == "folder:unit-a"
     assert report.verified is True
     assert create_command in calls
+    assert "expected_placement" not in report.verification
+
+
+def test_worktrees_match_accepts_path_selector_resolved_repo_path() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        checkout = root / "checkout"
+        checkout.mkdir()
+        alias = root / "checkout_alias"
+        alias.symlink_to(checkout, target_is_directory=True)
+
+        assert _worktrees_match(
+            "repoid::{0}/".format(checkout),
+            "path:{0}/".format(alias),
+        )
+        assert _worktrees_match(
+            "id:repoid::{0}".format(checkout),
+            "path:{0}".format(alias),
+        )
+
+
+def test_worktrees_match_path_resolution_failure_fails_closed() -> None:
+    assert not _worktrees_match("repoid::/repo/example", "path:\0")
+    assert not _worktrees_match("repoid::", "path:")
+
+
+def test_spawn_successor_expected_placement_passes() -> None:
+    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    runner = _runner(
+        {
+            _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(), ""),
+            _LIST_COMMAND: [
+                (0, _orca_json_from_terminals(), ""),
+                (0, _orca_json_from_terminals(_list_terminal("term-new", "folder:unit-a", "successor")), ""),
+            ],
+            create_command: (0, _orca_create_json("term-new", "folder:unit-a"), ""),
+        }
+    )
+
+    report = spawn_successor(
+        workspace_selector="folder:unit-a",
+        expected_placement="id:folder:unit-a",
+        kickoff_text="start here",
+        root="/repo/example",
+        title="successor",
+        orca_runner=runner,
+    )
+
+    assert report.status == "CREATED"
+    assert report.worktree_id == "folder:unit-a"
+    assert report.verification["expected_placement"] == "id:folder:unit-a"
+
+
+def test_spawn_successor_expected_placement_mismatch_closes_terminal() -> None:
+    calls = []
+    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    close_command = ("orca", "terminal", "close", "--terminal", "term-new", "--json")
+    runner = _recording_runner(
+        {
+            _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(), ""),
+            _LIST_COMMAND: [
+                (0, _orca_json_from_terminals(), ""),
+                (0, _orca_json_from_terminals(_list_terminal("term-new", "folder:unit-a", "successor")), ""),
+            ],
+            create_command: (0, _orca_create_json("term-new", "folder:unit-a"), ""),
+            close_command: (0, '{"ok":true}', ""),
+        },
+        calls,
+    )
+
+    with unittest.TestCase().assertRaisesRegex(SuccessionError, "placement mismatch") as raised:
+        spawn_successor(
+            workspace_selector="folder:unit-a",
+            expected_placement="folder:other",
+            kickoff_text="start here",
+            root="/repo/example",
+            title="successor",
+            orca_runner=runner,
+        )
+
+    assert raised.exception.exit_code == SPAWN_PLACEMENT_MISMATCH
+    assert "expected folder:other, got folder:unit-a" in str(raised.exception)
+    assert "Accepted selector forms" in str(raised.exception)
+    assert close_command in calls
 
 
 def test_spawn_successor_mismatch_closes_terminal_and_fails_closed() -> None:
@@ -515,6 +602,7 @@ def test_spawn_successor_mismatch_closes_terminal_and_fails_closed() -> None:
         )
 
     assert raised.exception.exit_code == 22
+    assert "Accepted selector forms" in str(raised.exception)
     assert close_command in calls
 
 
@@ -747,6 +835,7 @@ def test_spawn_successor_dry_run_only_builds_plan() -> None:
     assert report.handle is None
     assert report.verified is False
     assert report.command == _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    assert "expected_placement" not in report.verification
     assert calls == []
 
 
@@ -1466,6 +1555,36 @@ def test_cli_spawn_dry_run_outputs_json() -> None:
     payload = json.loads(result.stdout)
     assert payload["status"] == "DRY_RUN"
     assert payload["verification"]["fail_closed_action"] == "terminal close on mismatch"
+    assert "expected_placement" not in payload["verification"]
+
+
+def test_cli_spawn_dry_run_outputs_expected_placement() -> None:
+    result = subprocess.run(
+        [
+            str(Path(__file__).resolve().parent.parent / "scripts" / "master-succeed"),
+            "spawn",
+            "--workspace-selector",
+            "folder:unit-a",
+            "--expected-placement",
+            "id:folder:unit-a",
+            "--kickoff-text",
+            "start here",
+            "--root",
+            "/repo/example",
+            "--title",
+            "successor",
+            "--dry-run",
+            "--json",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "DRY_RUN"
+    assert payload["verification"]["expected_placement"] == "id:folder:unit-a"
 
 
 def test_cli_spawn_uses_agent_specific_default_model() -> None:

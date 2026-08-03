@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -119,8 +120,13 @@ SPAWN_WORKTREE_MISMATCH = 22
 SPAWN_CLOSE_ERROR = 23
 SPAWN_HANDLE_STALE = 24
 SPAWN_LIST_ERROR = 25
+SPAWN_PLACEMENT_MISMATCH = 26
 
 _SPAWN_HANDLE_HINT = re.compile(r'"(?:handle|terminal|terminalHandle)"\s*:\s*"([^"]+)"')
+_SPAWN_SELECTOR_HINT = (
+    "Accepted selector forms are full id:<repoId>::<path>, id:folder:<uuid> "
+    "for folder workspaces; path: is matched by resolved directory."
+)
 
 
 def _title_matches(pane_title: str, session_title: str) -> bool:
@@ -424,6 +430,7 @@ def spawn_successor(
     title: str,
     model: str = "claude-fable-5",
     agent: str = "claude",
+    expected_placement: Optional[str] = None,
     orca_runner: Optional[OrcaRunner] = None,
     dry_run: bool = False,
 ) -> SpawnReport:
@@ -435,6 +442,11 @@ def spawn_successor(
     pane_title = _require_substr(title, "title")
     model_name = _require_substr(model, "model")
     agent_name = _require_substr(agent, "agent")
+    expected = (
+        _require_substr(expected_placement, "expected_placement")
+        if expected_placement is not None
+        else None
+    )
     startup_command = _spawn_startup_command(cwd, model_name, kickoff, agent_name)
     create_command = (
         "orca",
@@ -455,6 +467,8 @@ def spawn_successor(
         "liveness_check": "reported handle must be live+new+connected in requested worktree, else adopt unique titled candidate or fail closed without closing",
         "agent": agent_name,
     }
+    if expected is not None:
+        verification["expected_placement"] = expected
     if dry_run:
         return SpawnReport(
             "DRY_RUN",
@@ -525,41 +539,37 @@ def spawn_successor(
         )
         raise
     if not _worktrees_match(worktree_id, selector):
-        mismatch = SuccessionError(
-            "spawn worktree mismatch: requested {0}, got {1}".format(selector, worktree_id),
-            SPAWN_WORKTREE_MISMATCH,
-        )
-        if handle in snapshot_handles:
-            raise SuccessionError(
-                "{0}; reported handle {1} is pre-existing; terminal not closed".format(
-                    str(mismatch),
-                    handle,
-                ),
-                mismatch.exit_code,
-            ) from mismatch
-        if _close_spawned_terminal(
+        _raise_spawn_mismatch(
             runner,
             handle,
-            str(mismatch),
+            "spawn worktree mismatch: requested {0}, got {1}".format(selector, worktree_id),
+            "spawn worktree mismatch; closed terminal {0}: requested {1}, got {2}".format(
+                handle,
+                selector,
+                worktree_id,
+            ),
+            SPAWN_WORKTREE_MISMATCH,
             snapshot_handles,
             pane_title,
             list_worktree=selector,
             global_snapshot_handles=global_snapshot_handles,
-        ):
-            raise SuccessionError(
-                "spawn worktree mismatch; closed terminal {0}: requested {1}, got {2}".format(
-                    handle,
-                    selector,
-                    worktree_id,
-                ),
-                SPAWN_WORKTREE_MISMATCH,
-            )
-        raise SuccessionError(
-            "{0}; terminal not closed; ownership unconfirmed, reconcile via orca terminal list".format(
-                str(mismatch),
+        )
+    if expected is not None and not _worktrees_match(worktree_id, expected):
+        _raise_spawn_mismatch(
+            runner,
+            handle,
+            "spawn placement mismatch: expected {0}, got {1}".format(expected, worktree_id),
+            "spawn placement mismatch; closed terminal {0}: expected {1}, got {2}".format(
+                handle,
+                expected,
+                worktree_id,
             ),
-            mismatch.exit_code,
-        ) from mismatch
+            SPAWN_PLACEMENT_MISMATCH,
+            snapshot_handles,
+            pane_title,
+            list_worktree=selector,
+            global_snapshot_handles=global_snapshot_handles,
+        )
 
     try:
         live_sessions = find_sessions(runner, list_worktree=selector)
@@ -604,6 +614,7 @@ def spawn_successor(
                 "liveness_check": "reported handle is live+new+connected in requested worktree",
                 "title_matched": _title_matches(pane_title, matched_live_session.title),
                 "result": "MATCH",
+                **({"expected_placement": expected} if expected is not None else {}),
             },
         )
 
@@ -646,6 +657,7 @@ def spawn_successor(
             "liveness_check": "reissued handle is live+new+connected in requested worktree",
             "title_matched": True,
             "result": "MATCH_REISSUED",
+            **({"expected_placement": expected} if expected is not None else {}),
         },
         handle_reissued=True,
     )
@@ -775,6 +787,60 @@ def _raise_spawn_error_after_cleanup(
     ) from error
 
 
+def _raise_spawn_mismatch(
+    runner: OrcaRunner,
+    handle: str,
+    mismatch_message: str,
+    closed_message: str,
+    exit_code: int,
+    snapshot_handles: frozenset,
+    pane_title: str,
+    list_worktree: Optional[str] = None,
+    global_snapshot_handles: Optional[frozenset] = None,
+) -> None:
+    error = SuccessionError(mismatch_message, exit_code)
+    if handle in snapshot_handles:
+        raise SuccessionError(
+            _with_selector_hint(
+                "{0}; reported handle {1} is pre-existing; terminal not closed".format(
+                    str(error),
+                    handle,
+                )
+            ),
+            error.exit_code,
+        ) from error
+    try:
+        closed = _close_spawned_terminal(
+            runner,
+            handle,
+            str(error),
+            snapshot_handles,
+            pane_title,
+            list_worktree=list_worktree,
+            global_snapshot_handles=global_snapshot_handles,
+        )
+    except SuccessionError as exc:
+        if exc.exit_code == SPAWN_CLOSE_ERROR:
+            raise SuccessionError(
+                _with_selector_hint(str(exc)),
+                exc.exit_code,
+            ) from exc
+        raise
+    if closed:
+        raise SuccessionError(
+            _with_selector_hint(closed_message),
+            error.exit_code,
+        ) from error
+    raise SuccessionError(
+        _with_selector_hint(
+            "{0}; terminal not closed; ownership unconfirmed, reconcile via orca terminal list".format(
+                str(error),
+            )
+        ),
+        error.exit_code,
+    ) from error
+
+
 def _close_spawned_terminal(
     runner: OrcaRunner,
     handle: str,
@@ -866,7 +932,28 @@ def _worktrees_match(actual: str, requested: str) -> bool:
         return False
     if actual == requested:
         return True
-    return _normalize_worktree_selector(actual) == _normalize_worktree_selector(requested)
+    actual_text = _normalize_worktree_selector(actual)
+    requested_text = _normalize_worktree_selector(requested)
+    if actual_text == requested_text:
+        return True
+    return _path_worktree_matches(actual_text, requested_text)
+
+
+def _path_worktree_matches(actual: str, requested: str) -> bool:
+    if not requested.startswith("path:") or "::" not in actual:
+        return False
+    _repo_id, actual_path = actual.split("::", 1)
+    requested_path = requested[5:]
+    if not actual_path or not requested_path:
+        return False
+    try:
+        return os.path.realpath(actual_path) == os.path.realpath(requested_path)
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
+def _with_selector_hint(message: str) -> str:
+    return message.rstrip(". ") + ". " + _SPAWN_SELECTOR_HINT
 
 
 def _spawn_startup_command(

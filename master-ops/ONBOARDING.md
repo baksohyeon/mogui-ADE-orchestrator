@@ -2,7 +2,7 @@
 
 > The master exists to maximize Orca infrastructure productivity. Orca is REQUIRED infrastructure. Supervised dispatch = orca orchestration only.
 
-Use this Stage 2 guide to turn the Stage 1 skeleton into a working workspace/orchestrator operations repository. Ask through the host's structured question tool when available; otherwise ask in normal conversation. The prose fallback must match the structured path in quality: for every question, show measured candidate values as numbered options when available, mark one recommendation and explain why, and include a free-form option; never ask the user to simply provide a value when measurable candidates exist. Explain why before every question. This file is terse to save agent tokens; user-facing dialogue must NOT be terse — speak to the user warmly, in full sentences, with reasons and cautions.
+Use this Stage 2 guide to turn the Stage 1 skeleton into a working workspace/orchestrator operations repository. Ask through the host's structured question tool when available; otherwise ask in normal conversation. The prose fallback must match the structured path in quality: for every question, show measured candidate values as numbered options when available, mark one recommendation and explain why, and include a free-form option; never ask the user to simply provide a value when measurable candidates exist. Explain why before every question. This file is terse to save agent tokens; user-facing dialogue must NOT be terse. Speak to the user warmly, in full sentences, with reasons and cautions.
 
 ## Orientation, Before Step 0
 
@@ -79,7 +79,7 @@ Verify:
 
 Before asking, say these plain definitions in the user's language:
 
-- “Workspace (root)” is simply the folder that groups the repositories this master will manage—nothing more special than that.
+- “Workspace (root)” is the folder that groups the repositories this master will manage, nothing more.
 - “Workspace name” is a display label; by default, it is that folder's name.
 - “Monitor namespace” is a short tag that keeps this workspace's session artifacts separate from other workspaces.
 - “Default model identifier” is the model the master session is expected to run as; use the chosen agent CLI's table row below as the recommended candidate and measure the actual model at boot rather than guessing.
@@ -116,7 +116,7 @@ Read current files first, detect immediate child repositories, read the measured
 When the user names a repository that lives outside the confirmed workspace root, ask which of two homes it gets, and explain why the question matters: the master holds the repository inventory (`{{REPO_LIST}}`) and measures code across it (for example through a review graph indexed at the workspace root), so a repository outside the root is invisible to that measurement and fragments the sidebar in Orca. The two homes:
 
 - Move or clone it under the workspace root (recommend this when the master will route real work into it); then it joins `{{REPO_LIST}}` as an ordinary member.
-- Record it as an external lane: it stays where it is, enters the operations document by absolute path with its access rules (who may write, which gates run before pushing), and the master treats every claim about it as needing its own measurement, because none of the workspace-level tooling sees it. Repositories that legitimately stay outside exist — a public lane maintained for open source or another owner's checkout — so this is a real choice, not a formality.
+- Record it as an external lane: it stays where it is, enters the operations document by absolute path with its access rules (who may write, which gates run before pushing), and the master treats every claim about it as needing its own measurement, because none of the workspace-level tooling sees it. Some repositories legitimately stay outside (a public lane maintained for open source, another owner's checkout), so ask the question as a real choice.
 
 Do not move anything yourself; moving repositories is the user's action.
 
@@ -308,7 +308,7 @@ Record the confirmed decline together with what is being accepted, in the user's
 
 Where the agent running onboarding has no interactive query interface, the re-ask cannot happen at all. In that case the dispatch contract carries the confirmed declines up front, and the record says they were confirmed in advance rather than asked.
 
-Verify the explanation preceded commands, nothing was installed or configured by the agent, every essential decline was re-asked once with its consequence restated, and the user's choice—including no installation—is recorded with what it accepts.
+Verify the explanation preceded commands, nothing was installed or configured by the agent, every essential decline was re-asked once with its consequence restated, and the user's choice, including no installation, is recorded with what it accepts.
 
 ## Step 7.6. State What The Publish Gates Do Not Cover
 
@@ -386,7 +386,7 @@ Verify:
 
 **Position and action:** Step 9 runs inside the new master session: declare its role, measure identity and placement, record lineage, and report completion.
 
-**Why/caution:** Model identity is measured, unavailable, or unsupported—never guessed—and the installer does not perform this boot on the master's behalf.
+**Why/caution:** Model identity is measured, unavailable, or unsupported, never guessed, and the installer does not perform this boot on the master's behalf.
 
 Ask for the initial role or approval to start in Maintenance, plus permission for local read-only model and placement probes. Update `docs/runbooks/role-state.md` for Generation 1, declare Role State in conversation, measure configured and actual model when exposed, capture placement evidence, append Generation 1 to `docs/lineage/MASTER-LINEAGE.md`, then send `worker_done` exactly once for the active Dispatch.
 

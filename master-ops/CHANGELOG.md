@@ -41,6 +41,9 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+A prose pass over the onboarding guide removed em dashes and filler; no rule,
+step, or verification changed meaning.
+
 Retirement gets a completion criterion and a revival check. Complete means
 three measured disappearances (process, pane, tty), never a close command's
 return value, which has been wrong in both directions on real hosts. Frozen

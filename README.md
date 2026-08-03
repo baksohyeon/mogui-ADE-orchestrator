@@ -1,6 +1,6 @@
 # mogui-ADE-orchestrator
 
-> Existing installations: compare the `Template version` line in your operations repository's `docs/MASTER-OPERATIONS.md` against the [latest release](https://github.com/baksohyeon/mogui-ADE-orchestrator/releases/latest). If they differ, read the [template changelog](master-ops/CHANGELOG.md) entries between the two and apply what applies — local edits win. Watch → Custom → Releases on this repository sends an email each time that line moves.
+> Existing installations: compare the `Template version` line in your operations repository's `docs/MASTER-OPERATIONS.md` against the [latest release](https://github.com/baksohyeon/mogui-ADE-orchestrator/releases/latest). If they differ, read the [template changelog](master-ops/CHANGELOG.md) entries between the two and apply what applies; local edits win. Watch → Custom → Releases on this repository sends an email each time that line moves.
 >
 > *I have agents running in tmux sessions. Can I still drive each one manually when I want, and at the same time orchestrate all of those sessions from above? Is tmux-based agent orchestration a thing?*
 
@@ -175,7 +175,7 @@ Local only.
 | Approval | a runtime callback | a gate a human holds |
 | Orchestrator dies | the graph dies with it | the successor takes the role and proves it |
 
-The order of events matters for reading this table. This system was designed and built first; Dorito learned deepagents existed when its announcement landed two weeks into the work. The comparison was then run deliberately — their code and documentation were analyzed and this system was checked against their published spec — and the two turned out to decompose the same problem the same way. Convergence of two teams staring at the same failure modes, not lineage in either direction. The repository history is consistent with that reading: `git log -S deepagents --reverse` shows when the comparison entered, well after the architecture did.
+The order of events matters for reading this table. This system was designed and built first; Dorito learned deepagents existed when its announcement landed two weeks into the work. Dorito then ran the comparison on purpose, reading their code and documentation and checking this system against their published spec, and the two turned out to decompose the same problem the same way: two teams staring at the same failure modes converged, with no lineage in either direction. The repository history is consistent with that reading: `git log -S deepagents --reverse` shows when the comparison entered, well after the architecture did.
 
 ## What this runs on
 
@@ -237,7 +237,7 @@ Documentation in this repository is English. `master-ops/` is a template that ge
 
 ## Status
 
-Working and exercised, as of 2026-08-03: 416 unit tests pass, 1 skipped. Every
+Working and exercised, as of 2026-08-03: 433 unit tests pass, 1 skipped. Every
 unit listed below exists in `src/master_runtime/core/`. The succession,
 dispatch-gate, acceptance, and compaction paths have run against real
 workspaces, and onboarding has been run start to finish by someone other than
@@ -306,7 +306,7 @@ Two principles shape the layout:
 
 To use the system, the [Quickstart](#quickstart) above is the whole path. This section is for changing the harness itself.
 
-Prerequisites: macOS and the `python3` it already has. The runtime is stdlib-only; there is nothing to install, and no version floor is enforced: the core imports and runs on the 3.9.6 a bare Mac ends up with. A tool that needs a more capable interpreter locates one itself at runtime, and the [Reference](docs/public/reference.md) table states each tool's behavior in its own row. The suite's collection imports `tomllib` (3.11+), so tests reach an older interpreter through `uv` — and tests are the agent's job either way.
+Prerequisites: macOS and the `python3` it already has. The runtime is stdlib-only; there is nothing to install, and no version floor is enforced: the core imports and runs on the 3.9.6 a bare Mac ends up with. A tool that needs a more capable interpreter locates one itself at runtime, and the [Reference](docs/public/reference.md) table states each tool's behavior in its own row. The suite's collection imports `tomllib` (3.11+), so tests reach an older interpreter through `uv`, and tests are the agent's job either way.
 
 All CLI entry points live in `scripts/` and are self-contained (they insert `src/` on `sys.path` themselves):
 

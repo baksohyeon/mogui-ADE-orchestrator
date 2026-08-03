@@ -641,6 +641,25 @@ def spawn_successor(
             ),
             SPAWN_HANDLE_STALE,
         )
+    if expected is not None and not _worktrees_match(reissued.worktree_id, expected):
+        _raise_spawn_mismatch(
+            runner,
+            reissued.handle,
+            "spawn placement mismatch: expected {0}, got {1}".format(
+                expected,
+                reissued.worktree_id,
+            ),
+            "spawn placement mismatch; closed terminal {0}: expected {1}, got {2}".format(
+                reissued.handle,
+                expected,
+                reissued.worktree_id,
+            ),
+            SPAWN_PLACEMENT_MISMATCH,
+            snapshot_handles,
+            pane_title,
+            list_worktree=selector,
+            global_snapshot_handles=global_snapshot_handles,
+        )
 
     return SpawnReport(
         "CREATED",

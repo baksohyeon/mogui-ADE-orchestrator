@@ -946,6 +946,97 @@ def test_spawn_successor_reissued_handle_resolves_via_list() -> None:
     assert report.verification["title_matched"] is True
 
 
+def test_spawn_successor_reissued_expected_placement_passes() -> None:
+    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    runner = _runner(
+        {
+            _GLOBAL_SNAPSHOT_FIXTURE: (
+                0,
+                _orca_json_from_terminals(_list_terminal("term-user", "folder:other", "shell")),
+                "",
+            ),
+            _LIST_COMMAND: [
+                (0, _orca_json_from_terminals(_list_terminal("term-user", "folder:other", "shell")), ""),
+                (
+                    0,
+                    _orca_json_from_terminals(
+                        _list_terminal("term-user", "folder:other", "shell"),
+                        _list_terminal("term-reissued", "folder:unit-a", "⠂ successor"),
+                    ),
+                    "",
+                ),
+            ],
+            create_command: (0, _orca_create_json("term-old", "folder:unit-a"), ""),
+        }
+    )
+
+    report = spawn_successor(
+        workspace_selector="folder:unit-a",
+        expected_placement="id:folder:unit-a",
+        kickoff_text="start here",
+        root="/repo/example",
+        title="successor",
+        orca_runner=runner,
+    )
+
+    assert report.status == "CREATED"
+    assert report.handle == "term-reissued"
+    assert report.handle_reissued is True
+    assert report.verification["result"] == "MATCH_REISSUED"
+    assert report.verification["expected_placement"] == "id:folder:unit-a"
+
+
+def test_spawn_successor_reissued_expected_placement_mismatch_closes_terminal() -> None:
+    calls = []
+    with tempfile.TemporaryDirectory() as tmpdir:
+        checkout = Path(tmpdir) / "checkout"
+        checkout.mkdir()
+        selector = "path:{0}".format(checkout)
+        expected = "repoa::{0}".format(checkout)
+        create_command = _spawn_create_command(selector, "start here", "/repo/example", "successor")
+        scoped_list_command = _scoped_list_command(selector)
+        close_command = ("orca", "terminal", "close", "--terminal", "term-reissued", "--json")
+        runner = _recording_runner(
+            {
+                scoped_list_command: [
+                    (0, _orca_json_from_terminals(), ""),
+                    (
+                        0,
+                        _orca_json_from_terminals(
+                            _list_terminal("term-reissued", "repob::{0}".format(checkout), "⠂ successor")
+                        ),
+                        "",
+                    ),
+                    (
+                        0,
+                        _orca_json_from_terminals(
+                            _list_terminal("term-reissued", "repob::{0}".format(checkout), "⠂ successor")
+                        ),
+                        "",
+                    ),
+                ],
+                _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(), ""),
+                create_command: (0, _orca_create_json("term-old", "repoa::{0}".format(checkout)), ""),
+                close_command: (0, '{"ok":true}', ""),
+            },
+            calls,
+        )
+
+        with unittest.TestCase().assertRaisesRegex(SuccessionError, "placement mismatch") as raised:
+            spawn_successor(
+                workspace_selector=selector,
+                expected_placement=expected,
+                kickoff_text="start here",
+                root="/repo/example",
+                title="successor",
+                orca_runner=runner,
+            )
+
+    assert raised.exception.exit_code == SPAWN_PLACEMENT_MISMATCH
+    assert "expected {0}, got repob::{1}".format(expected, checkout) in str(raised.exception)
+    assert close_command in calls
+
+
 def test_spawn_successor_live_handle_is_not_reissued() -> None:
     create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
     runner = _runner(

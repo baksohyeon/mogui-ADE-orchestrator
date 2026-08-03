@@ -82,3 +82,25 @@ def test_escaped_native_range_silences_warning(tmp_path: Path) -> None:
     )
     result = _scan_with_extra(repo, extra)
     assert WARNING not in result.stderr
+
+
+def test_escaped_ascii_codepoints_still_warn(tmp_path: Path) -> None:
+    repo = _repo_with_commits(tmp_path, ["plain change"])
+    extra = tmp_path / "extra.txt"
+    extra.write_text(
+        "person_x|Personal identifier|(?i)\\u0041\\u0042name\n",
+        encoding="utf-8",
+    )
+    result = _scan_with_extra(repo, extra)
+    assert WARNING in result.stderr
+
+
+def test_unicode_property_class_silences_warning(tmp_path: Path) -> None:
+    repo = _repo_with_commits(tmp_path, ["plain change"])
+    extra = tmp_path / "extra.txt"
+    extra.write_text(
+        "person_x_native|Personal identifier native|\\p{Hangul}{2,4}\n",
+        encoding="utf-8",
+    )
+    result = _scan_with_extra(repo, extra)
+    assert WARNING not in result.stderr

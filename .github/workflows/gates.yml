@@ -65,9 +65,9 @@ jobs:
             tar -xzf gitleaks.pkg gitleaks
             sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
           fi
-      - run: python3 -m pip install pytest
+      - run: python -m pip install pytest
       - shell: bash
-        run: PYTHONPATH=src python3 -m pytest tests -q
+        run: PYTHONPATH=src python -m pytest tests -q
 
   redaction:
     runs-on: ubuntu-latest

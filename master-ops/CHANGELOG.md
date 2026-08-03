@@ -92,6 +92,18 @@ worse; this pass cuts the load unit itself:
   the mode question, open `00-orientation.md`, one step file per turn, never all
   step files at once.
 
+Charter countermeasure for host-injected autonomy defaults (2026-08-03,
+instance-validated, promotion per staging→production loop):
+
+- UserPromptSubmit hook now couples the role-state injection with the
+  `Proposal -> Approval -> Execution` rule in every turn, establishing a
+  mechanical guard against host defaults that override the charter. See
+  MASTER-OPERATIONS §7 hook spec and §8 incident-derived rules for motivation
+  and measurement.
+- New §8 rule "Host-injected autonomy defaults override the charter unless
+  mechanically countered," with observation from 2026-08-03 founding run,
+  measurement via hook wiring and transcript audit.
+
 ## v0.4.1
 
 No template changes in this release; the version string moves so an

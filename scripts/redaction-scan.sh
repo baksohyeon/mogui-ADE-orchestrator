@@ -142,7 +142,7 @@ with open(target, "w", encoding="utf-8") as out:
         out.write('description = "%s"\n' % description.replace('"', ""))
         out.write("regex = '''%s'''\n\n" % regex)
 
-_escape_hex = re.compile(r"\\u([0-9a-fA-F]{4})|\\U([0-9a-fA-F]{8})|\\x\{([0-9a-fA-F]+)\}")
+_escape_hex = re.compile(r"\\u([0-9a-fA-F]{4})|\\U([0-9a-fA-F]{8})|\\x([0-9a-fA-F]{2})")
 _native_property = re.compile(
     r"\\p\{(?:Han|Hangul|Hiragana|Katakana|Cyrillic|Arabic|Hebrew|Thai|Devanagari|Greek|Hangeul)\}"
 )

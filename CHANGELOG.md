@@ -15,6 +15,11 @@ you build on it.
 
 ### Added
 
+- Documentation identifier audit: public and template docs now describe the
+  measured `model-identity-probe` no assertion path, drift exit, and undecidable
+  exit separately. A regression test pins documented dispatch-gate reason codes
+  to the source enum so plausible labels cannot re-enter unchecked.
+
 - First-run setup guide rewrite in `docs/public/getting-started.md` for a
   reader who has never opened Orca: measured prerequisites, install and shell
   command registration, folder workspace versus checkout, wake-up and

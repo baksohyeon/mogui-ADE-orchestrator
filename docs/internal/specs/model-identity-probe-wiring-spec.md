@@ -18,18 +18,22 @@ scripts/model-identity-probe --transcript <session.jsonl> --expect claude-fable-
 Arguments:
 
 - `--transcript`: required path to the current session JSONL transcript.
-- `--expect`: expected model id. Default: `claude-fable-5`.
+- `--expect`: expected model id. Default: none; without `--expect` or
+  `MODEL_IDENTITY_EXPECT`, the probe reports what it measured and asserts
+  nothing.
 - `--limit`: number of recent assistant turns to inspect. Default: `10`.
 
 Exit behavior:
 
-- `0`: all observed recent assistant model fields match `--expect`.
+- `0`: all observed recent assistant model fields match `--expect`, or no
+  expected model was supplied and nothing was asserted.
 - `2`: no assistant model fields are observed, the transcript is unreadable,
   JSONL is malformed, the limit is invalid, or any observed model differs.
 
 Output:
 
 - Success: `MODEL-PROBE OK <model> n/n`
+- Informational result with no assertion: `MODEL-PROBE INFO <observed model distribution> — no expected model supplied (--expect or MODEL_IDENTITY_EXPECT); nothing asserted`
 - Drift: `MODEL-PROBE DRIFT: <observed model distribution> — propose a clean-spawn succession and review delegation state for sensitive areas`
 
 ## UserPromptSubmit Wiring

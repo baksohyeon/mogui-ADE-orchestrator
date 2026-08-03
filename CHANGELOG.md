@@ -15,6 +15,14 @@ you build on it.
 
 ### Added
 
+- First-run setup guide rewrite in `docs/public/getting-started.md` for a
+  reader who has never opened Orca: measured prerequisites, install and shell
+  command registration, folder workspace versus checkout, wake-up and
+  onboarding decision preview, boot proof, and a first supervised worker.
+  README Quickstart and document table point at that path honestly instead of
+  stopping at a wake-up phrase. Unverified first-launch UI labels and
+  non-macOS installers are marked rather than invented.
+
 - README section "What is standing guard" and `docs/public/defense-inventory.md`:
   the existing defense inventory (dispatch gate with tier × fan-out and a
   ledgered policy digest, transcript model probes, spawn placement and

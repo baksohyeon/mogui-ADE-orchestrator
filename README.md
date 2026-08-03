@@ -8,7 +8,7 @@ Yes. That is what this is. Any mix of agents, as many as you want. (Claude as th
 
 Anyone running more than two agents at once hits this. Dorito hit it, got tired of it, and wrote this.
 
-Nothing to configure and nothing to read first. Clone it, start an agent inside the clone, tell it to wake up. The agent takes it from there and explains as it goes.
+Clone it, open it in Orca, start an agent inside the clone, and tell it to wake up. The agent runs the install interview and explains as it goes. The honest first-run path (prerequisites, Orca vocabulary, onboarding decisions, first supervised worker) is [Getting Started](docs/public/getting-started.md), not this paragraph alone.
 
 It runs the fleet on [Orca](https://www.onorca.dev/download). A session has to outlive its window and be addressable by handle before anything can orchestrate it. Built and run on macOS; Orca also ships Linux and Windows. Python 3, stdlib-only core, MIT. No API key.
 
@@ -31,6 +31,8 @@ The maintainer-facing version of this bar is in `CONTRIBUTING.md`; the installer
 
 ## Quickstart
 
+First run is longer than a clone and a wake-up phrase. You install Orca, register its shell command, put this repository in front of an agent, answer an onboarding interview, watch Generation 1 boot, then give the master one small task and watch it hand that task to a worker. The human-facing path with measured checks, vocabulary earned in order, and failure shapes is **[Getting Started](docs/public/getting-started.md)**. Follow that page; the block below is only the opening commands.
+
 ```console
 $ brew install --cask stablyai/orca/orca
 $ git clone https://github.com/baksohyeon/mogui-ADE-orchestrator
@@ -39,21 +41,7 @@ $ cd mogui-ADE-orchestrator
 
 Not on macOS? Orca has Linux and Windows builds on its [download page](https://www.onorca.dev/download). `--cask` is macOS-only, so Homebrew is not the route there.
 
-Then open Orca once and turn on **Settings → Orca CLI → Shell command**. The runtime calls `orca` to spawn and retire master sessions. `orca status` should answer.
-
-Now add the cloned repository to Orca (Add a project → Browse folder → the clone) and open a terminal inside it. In that terminal, start whichever agent you already use:
-
-```console
-$ claude    # or: codex, grok, cursor-agent, your daily driver
-```
-
-And speak:
-
-```text
-Arise, my master.
-```
-
-Any words work; pick something with ceremony, you are founding a lineage. The agent walks you through setup and ends by spawning your Generation 1 master. [Getting Started](docs/public/getting-started.md) has the detail.
+Open Orca and turn on **Settings → Orca CLI → Shell command**, then confirm `orca status` shows a ready runtime. Add the folder to Orca, open a terminal in this clone, start your agent CLI, and wake it with any short phrase that is not a concrete task (for example `Wake the master.`). The agent becomes the onboarding guide. Setup is not finished at spawn: stay with [Getting Started](docs/public/getting-started.md) through proof of boot and the first supervised worker.
 
 ![Claude Code in Orca, opened on the cloned repository. The prompt reads "wake up, master." and the agent has started reading master-ops/ONBOARDING.md.](docs/assets/wake-up-master.png)
 
@@ -247,7 +235,8 @@ One integration note if you adopt GSD. Its context monitor warns the agent at 35
 | You are | Start here |
 | --- | --- |
 | Reading about the system for the first time | [`docs/public/overview.md`](./docs/public/overview.md) |
-| Installing it on your own workspace | [`master-ops/ONBOARDING.md`](./master-ops/ONBOARDING.md) |
+| Installing it on your own machine (human path) | [`docs/public/getting-started.md`](./docs/public/getting-started.md) |
+| Agent-executed onboarding steps (after the wake-up) | [`master-ops/ONBOARDING.md`](./master-ops/ONBOARDING.md) |
 | Looking for a specific document | [`docs/README.md`](./docs/README.md) (the document index) |
 | Confused by Orca projects, workspaces, or an "Unavailable worktree" label | [`docs/public/orca-concepts.md`](./docs/public/orca-concepts.md) |
 | Reading the code | [Architecture](#architecture) below, then `src/master_runtime/core/` |
@@ -323,7 +312,7 @@ Two principles shape the layout:
 
 ## Working on the harness
 
-To use the system, the [Quickstart](#quickstart) above is the whole path. This section is for changing the harness itself.
+To use the system, follow [Getting Started](docs/public/getting-started.md); the [Quickstart](#quickstart) only opens that path. This section is for changing the harness itself.
 
 Prerequisites: macOS and the `python3` it already has. The runtime is stdlib-only; there is nothing to install, and no version floor is enforced: the core imports and runs on the 3.9.6 a bare Mac ends up with. A tool that needs a more capable interpreter locates one itself at runtime, and the [Reference](docs/public/reference.md) table states each tool's behavior in its own row. The suite's collection imports `tomllib` (3.11+), so tests reach an older interpreter through `uv`, and tests are the agent's job either way.
 

@@ -54,6 +54,7 @@ decide and should block a release cut until resolved.
 Use the command below only after explicit owner approval:
 
 ```console
+[ -n "${version:-}" ] || exit 1
 git tag "v${version}"
 ```
 

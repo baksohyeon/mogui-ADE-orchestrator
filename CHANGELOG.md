@@ -23,6 +23,22 @@ you build on it.
   stopping at a wake-up phrase. Unverified first-launch UI labels and
   non-macOS installers are marked rather than invented.
 
+- README section "What one dispatch actually looks like": walks a single
+  supervised dispatch end to end, naming the actual Orca command and this
+  repository's gate at each step. Closes the gap between knowing why Orca is
+  required and understanding what the machinery does on a single job. Includes
+  the failure mode that motivated the design: a dispatch record showed success
+  while the worker terminal was still on its startup screen, caught only
+  because dispatch state and shell effect are separate objects.
+- `docs/public/defense-inventory.md` "Breaks when" column and "Substrate and
+  stability" section: each guard now names a concrete failure condition grounded
+  in the tree or in a measurement run on 2026-08-03. Substrate paragraph
+  distinguishes guards standing on contracted surfaces (this repository's
+  scripts, `git`, documented Orca subcommands) from those on vendor-internal
+  formats (host session storage). When vendor surfaces are unreadable, guards
+  degrade to recorded warnings (e.g. `MODEL_PROBE_FAILED`) rather than false
+  passes. Observed example: 2026-08-03 grok worker's `register` call returned
+  `MODEL_PROBE_FAILED` when session file did not exist yet.
 - README section "What is standing guard" and `docs/public/defense-inventory.md`:
   the existing defense inventory (dispatch gate with tier × fan-out and a
   ledgered policy digest, transcript model probes, spawn placement and

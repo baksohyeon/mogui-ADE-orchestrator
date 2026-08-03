@@ -19,6 +19,10 @@ Load rule: read this file only when Step 3.5 begins. Router: [`../ONBOARDING.md`
 
 Only after the owner has heard that sequence, ask them to perform steps 2–4.
 
+## Worker Placement
+
+The master's seat is workspace-level because the master coordinates every repository and must not hang under one of them. A worker that runs git needs a repository worktree, because that is where a checkout exists. Placing a worker at a folder seat is allowed only when its first command changes directory into a checkout; otherwise the worker starts outside every repository and fails on its first git call. After delivery, read the terminal and confirm the agent is at its prompt in the intended directory, because a created terminal is not a working one.
+
 ## Run
 
 Resolve `ORCA` exactly as Step 0's preflight does, then run:

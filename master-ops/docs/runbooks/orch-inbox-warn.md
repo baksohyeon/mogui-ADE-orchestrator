@@ -9,7 +9,7 @@ Add this block to workspace `.claude/settings.json` under `hooks`:
       "hooks": [
         {
           "type": "command",
-          "command": "bash {{OPS_REPO_ROOT}}/scripts/hooks/orch-inbox-warn.sh",
+          "command": "bash {{OPS_REPO}}/scripts/hooks/orch-inbox-warn.sh",
           "statusMessage": "Checking orchestration inbox"
         }
       ]
@@ -21,6 +21,8 @@ Add this block to workspace `.claude/settings.json` under `hooks`:
 ## Behavior
 
 On each turn start, the hook runs `orca orchestration check --peek --json`.
+It resolves the Orca CLI the same way onboarding preflight does: `ORCA_CLI_COMMAND` when
+set, then `orca-dev` when `ORCA_DEV_REPO_ROOT` is set, then `orca`.
 If unacknowledged messages exist, it injects one line with `unacked=<count>` and up to
 three subject lines, each truncated to 48 characters.
 If the queue is empty, `orca` is missing, output is invalid, or command execution fails,

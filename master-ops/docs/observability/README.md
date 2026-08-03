@@ -22,14 +22,21 @@ Blame has a narrow job that neither retro nor travelog can do: it recovers the
 evidence layer a raw session can blur during self-report, including what was not
 checked and where a causal claim outran observation. Its strict format is there for
 measurement quality, not for punishment. Use the filename format
-`BLAME-YYYY-MM-DD-<slug>.md`.
+`BLAME-YYYY-MM-DD-<slug>.md`. The first blame submission creates `docs/blame/`
+if the generated operations repository does not already contain it.
 
 **PROPOSED (owner decision pending)**
 
-Proposed incident triggers grounded in 2026-08-03 measurements:
+Proposed incident triggers grounded in authoring-instance measurements from 2026-08-03:
 - A claim is stated stronger than its evidence supports and then propagated into a worker tool or contract.
-- A completed-tense progress report is made without a matching execution event (the action did not run).
+- A completed-tense progress report is made without a matching execution event after the
+  relevant transcript or log coverage has been measured; if coverage is incomplete, record
+  the action as unverified unless non-execution is independently confirmed.
 - A reading surface is treated as the thing itself (wrong mailbox, wrong field, piped exit code) and used as ground truth.
+
+Evidence pointer: the supporting measurements remain in the authoring instance's
+operations records; they are promoted here as template guidance, not as a claim that every
+future workspace has reproduced the same incidents.
 
 Rejected candidates (not adopted as triggers):
 - Product repository `main` reach outside dispatch path: rejected because the 2026-08-03 evidence set for this track did not confirm a direct main-path breach event.

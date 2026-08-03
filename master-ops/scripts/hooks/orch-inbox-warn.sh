@@ -1,7 +1,14 @@
 #!/bin/bash
 # UserPromptSubmit: warn once when unacked orchestration messages exist.
-command -v orca >/dev/null 2>&1 || exit 0
-out=$(orca orchestration check --peek --json 2>/dev/null) || exit 0
+if [ -n "${ORCA_CLI_COMMAND:-}" ]; then
+  orca_command="$ORCA_CLI_COMMAND"
+elif [ -n "${ORCA_DEV_REPO_ROOT:-}" ]; then
+  orca_command="orca-dev"
+else
+  orca_command="orca"
+fi
+command -v "$orca_command" >/dev/null 2>&1 || exit 0
+out=$("$orca_command" orchestration check --peek --json 2>/dev/null) || exit 0
 line=$(printf '%s' "$out" | python3 -c 'import json,sys
 try:
   r=(json.load(sys.stdin).get("result") or {})

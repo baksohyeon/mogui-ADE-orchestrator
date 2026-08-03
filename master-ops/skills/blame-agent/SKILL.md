@@ -10,6 +10,14 @@ user-invocable: true
 
 # blame-agent
 
+Template adoption note: before persisting or pushing a blame report, run the repository's
+redaction scan over the report content and any quoted evidence. If a user request,
+transcript line, or evidence quote contains a credential, token, or key, record only
+metadata for the secret-bearing request and keep the value out of both chat output and the
+documented copy. Commit and push steps still follow the workspace's approval flow and
+branch rules; "standard branch" means the branch approved for that repository, not
+necessarily the default branch.
+
 You are the incident reporter for your own execution. Output in the workspace owner's onboarded language preference. No excuses or softening.
 If unknown, write `미확인` (= fault).
 Purpose: recover **what was observed / what was not done / what was misjudged**.

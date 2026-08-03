@@ -97,8 +97,10 @@ state what already exists:
   and a worker that dies before committing leaves nothing behind.
 
 A takeover needs its own contract file. The dispatch gate ledgers by contract hash and
-will reject a re-dispatch of the same contract as a duplicate, which is correct: the
-second run is not the same job.
+will reject a recent re-dispatch of the same contract as a duplicate inside its duplicate
+window, which is correct: the second run is not the same job. After that window, the gate
+may allow the same hash again, so the contract still has to state whether this is a
+takeover and what evidence already exists.
 
 ## 4. Pull request narrative clause [measured]
 

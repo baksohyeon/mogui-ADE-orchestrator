@@ -24,7 +24,6 @@ you build on it.
   worktree paths. Added docs rows and a runbook Cursor pre-trust section beside
   the existing Codex guidance so worker startup can be pre-trusted before
   orchestration attach.
-
 - Documentation identifier audit: public and template docs now describe the
   measured `model-identity-probe` no assertion path, drift exit, and undecidable
   exit separately. A regression test pins documented dispatch-gate reason codes

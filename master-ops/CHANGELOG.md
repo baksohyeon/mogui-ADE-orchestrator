@@ -41,6 +41,13 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+Cursor worker pre-trust runbook guidance (2026-08-03 measurement):
+
+- `docs/MASTER-OPERATIONS.md` §3 now includes a Cursor pre-trust companion beside
+  the Codex guidance: run `scripts/cursor-worker-pretrust <worktree-path>` before
+  attach and confirm the summary is not `skipped`, so trust prompts do not block
+  startup in isolated worktrees.
+
 Orchestration channel doctrine: acknowledgement, addressing, and reachability rules
 (2026-08-03 incident and measurement):
 

@@ -1,0 +1,166 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  printf 'Usage: %s <worktree-path> [--projects-dir <dir>]\n' "${0##*/}" >&2
+}
+
+if [[ $# -ne 1 && $# -ne 3 ]]; then
+  usage
+  exit 2
+fi
+
+worktree_path=$1
+if [[ "$worktree_path" != /* ]]; then
+  printf 'ERROR worktree path must be absolute: %s\n' "$worktree_path" >&2
+  usage
+  exit 2
+fi
+if [[ ! -d "$worktree_path" ]]; then
+  printf 'ERROR worktree path does not exist: %s\n' "$worktree_path" >&2
+  exit 2
+fi
+
+if [[ $# -eq 3 ]]; then
+  if [[ "$2" != "--projects-dir" || -z "$3" ]]; then
+    usage
+    exit 2
+  fi
+  projects_dir=$3
+elif [[ -n "${CURSOR_PROJECTS_DIR:-}" ]]; then
+  projects_dir=$CURSOR_PROJECTS_DIR
+else
+  projects_dir="$HOME/.cursor/projects"
+fi
+
+# Cursor Agent stores trust per project key under ~/.cursor/projects, where the
+# measured key form is the absolute workspace path with slash-to-dash conversion
+# and periods removed.
+trimmed_path=${worktree_path#/}
+project_key=${trimmed_path//\//-}
+project_key=${project_key//./}
+if [[ -z "$project_key" ]]; then
+  printf 'ERROR could not derive a project key from path: %s\n' "$worktree_path" >&2
+  exit 2
+fi
+trust_file="$projects_dir/$project_key/.workspace-trusted"
+
+python_bin=""
+for python_candidate in python3 python; do
+  if "$python_candidate" -c 'import json' >/dev/null 2>&1; then
+    python_bin="$python_candidate"
+    break
+  fi
+done
+if [[ -z "$python_bin" ]]; then
+  skip_message='SKIP no Python interpreter with json support found (tried python3, python); trust marker edits are verified by parsing JSON, so nothing was changed and dispatched Cursor workers will see a trust prompt'
+  printf '%s\n' "$skip_message"
+  printf '%s\n' "$skip_message" >&2
+  printf 'Summary: skipped — 0 added, 0 updated, 0 already trusted\n'
+  exit 0
+fi
+
+status=$(
+  "$python_bin" - "$trust_file" "$worktree_path" <<'PY'
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+trust_path = Path(sys.argv[1])
+workspace_path = sys.argv[2]
+
+
+def abort(message: str) -> None:
+    print(f"ERROR {trust_path}: {message}", file=sys.stderr)
+    raise SystemExit(2)
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace(
+        "+00:00", "Z"
+    )
+
+
+def parse_document(raw: bytes) -> dict:
+    try:
+        decoded = raw.decode("utf-8")
+    except UnicodeDecodeError as error:
+        abort(f"cannot decode trust marker as UTF-8: {error}")
+    try:
+        document = json.loads(decoded)
+    except json.JSONDecodeError as error:
+        abort(f"cannot parse trust marker JSON: {error}")
+    if not isinstance(document, dict):
+        abort("trust marker is not a JSON object")
+    return document
+
+
+if not trust_path.exists():
+    trust_path.parent.mkdir(parents=True, exist_ok=True)
+    trust_path.write_text(
+        json.dumps(
+            {
+                "trustedAt": now_iso(),
+                "workspacePath": workspace_path,
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    print("added")
+    raise SystemExit(0)
+
+document = parse_document(trust_path.read_bytes())
+trusted_at = document.get("trustedAt")
+workspace_in_file = document.get("workspacePath")
+if workspace_in_file not in (None, workspace_path):
+    abort(
+        "workspacePath mismatch in existing trust marker; refusing to overwrite "
+        f"{workspace_in_file!r} with {workspace_path!r}"
+    )
+if workspace_in_file == workspace_path and isinstance(trusted_at, str) and trusted_at:
+    print("already")
+    raise SystemExit(0)
+
+updated = dict(document)
+if workspace_in_file is None:
+    updated["workspacePath"] = workspace_path
+if not isinstance(trusted_at, str) or not trusted_at:
+    updated["trustedAt"] = now_iso()
+
+encoded = json.dumps(updated, indent=2) + "\n"
+if trust_path.read_text(encoding="utf-8") == encoded:
+    print("already")
+else:
+    trust_path.write_text(encoded, encoding="utf-8")
+    print("updated")
+PY
+)
+
+added=0
+updated=0
+already_trusted=0
+case "$status" in
+  already)
+    printf '%s: already trusted\n' "$trust_file"
+    already_trusted=1
+    ;;
+  updated)
+    printf '%s: trusted (updated)\n' "$trust_file"
+    updated=1
+    ;;
+  added)
+    printf '%s: trusted (added)\n' "$trust_file"
+    added=1
+    ;;
+  *)
+    printf 'ERROR unexpected pre-trust status for %s: %s\n' "$trust_file" "$status" >&2
+    exit 2
+    ;;
+esac
+
+printf 'Summary: %d added, %d updated, %d already trusted\n' \
+  "$added" "$updated" "$already_trusted"

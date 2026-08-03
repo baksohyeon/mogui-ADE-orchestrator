@@ -15,6 +15,16 @@ you build on it.
 
 ### Added
 
+- `scripts/cursor-worker-pretrust`, measured on this host against known trusted
+  2026-08-03 worktrees under `.orca/worktrees/mogui-ADE-orchestrator/`: Cursor
+  Agent persists workspace trust in `~/.cursor/projects/<project-key>/.workspace-trusted`
+  as JSON with `workspacePath` and `trustedAt`. The script writes that marker
+  for the measured key form (absolute path with `/` mapped to `-` and `.` removed),
+  validates existing JSON before editing, stays idempotent, and rejects missing
+  worktree paths. Added docs rows and a runbook Cursor pre-trust section beside
+  the existing Codex guidance so worker startup can be pre-trusted before
+  orchestration attach.
+
 - First-run setup guide rewrite in `docs/public/getting-started.md` for a
   reader who has never opened Orca: measured prerequisites, install and shell
   command registration, folder workspace versus checkout, wake-up and

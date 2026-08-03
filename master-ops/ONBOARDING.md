@@ -116,7 +116,7 @@ Read current files first, detect immediate child repositories, read the measured
 When the user names a repository that lives outside the confirmed workspace root, ask which of two homes it gets, and explain why the question matters: the master holds the repository inventory (`{{REPO_LIST}}`) and measures code across it (for example through a review graph indexed at the workspace root), so a repository outside the root is invisible to that measurement and fragments the sidebar in Orca. The two homes:
 
 - Move or clone it under the workspace root (recommend this when the master will route real work into it); then it joins `{{REPO_LIST}}` as an ordinary member.
-- Record it as an external lane: it stays where it is, enters the operations document by absolute path with its access rules (who may write, which gates run before pushing), and the master treats every claim about it as needing its own measurement, because none of the workspace-level tooling sees it. Repositories that legitimately stay outside exist — a public open-source lane or another owner's checkout — so this is a real choice, not a formality.
+- Record it as an external lane: it stays where it is, enters the operations document by absolute path with its access rules (who may write, which gates run before pushing), and the master treats every claim about it as needing its own measurement, because none of the workspace-level tooling sees it. Repositories that legitimately stay outside exist — a public lane maintained for open source or another owner's checkout — so this is a real choice, not a formality.
 
 Do not move anything yourself; moving repositories is the user's action.
 

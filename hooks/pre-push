@@ -33,8 +33,14 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
     # branch when one is known; a repository where even that fails falls
     # through to the whole tree scan below.
     base=$(git merge-base "$local_sha" origin/main 2>/dev/null) || base=""
-  else
+  elif git cat-file -e "$remote_sha^{commit}" 2>/dev/null; then
     base=$remote_sha
+  else
+    # A forced update can advertise a remote tip whose object this clone never
+    # fetched. Handing the scan a range it cannot walk used to read as a clean
+    # empty scan; the scan now exits 2 on that, and the hook does not hand it
+    # one in the first place.
+    base=$(git merge-base "$local_sha" origin/main 2>/dev/null) || base=""
   fi
   if [ -n "$base" ] && [ "$base" != "$local_sha" ]; then
     "$repo_root/scripts/redaction-scan.sh" --range "$base..$local_sha" || status=$?

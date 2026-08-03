@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Opt-in pre-push hook: run the redaction scan before anything leaves the
+# machine. Enable once per clone with:
+#
+#   git config core.hooksPath hooks
+#
+# Discipline already says the gates run before a push; this turns the habit
+# into wiring for the one gate whose failure is expensive in public. The test
+# suite stays out of the hook deliberately — tests are the agent's job, and a
+# multi-second hook gets bypassed with --no-verify until it might as well not
+# exist. The scan honors the same environment as a manual run, so a checkout
+# with organization rules configured scans with them.
+set -euo pipefail
+
+repo_root=$(git rev-parse --show-toplevel)
+exec "$repo_root/scripts/redaction-scan.sh"

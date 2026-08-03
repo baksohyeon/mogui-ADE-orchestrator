@@ -46,7 +46,20 @@ usage or tool error into 1. Read each script's codes rather than assuming.
 
 **The redaction scanners read tracked files.** An unstaged new file is
 invisible to them, and the run comes back green without having looked at it.
-Stage first, then scan. These run locally before publishing, not in CI.
+Stage first, then scan.
+
+CI (`.github/workflows/gates.yml`) runs the test suite and the scan with the
+committed ruleset on every pull request. The organization rules file is
+deliberately not in the repository, so the full scan with those rules still
+runs only locally. To make the local scan automatic, enable the committed
+pre-push hook once per clone:
+
+```console
+$ git config core.hooksPath hooks
+```
+
+The hook runs the scan and nothing else — the test suite stays out of it, so
+the hook stays fast enough that nobody reaches for `--no-verify`.
 
 `redaction-inventory` also skips binary files, judged by a NUL byte in the
 first 8 KB. That is a heuristic and it is silent: the output still says the

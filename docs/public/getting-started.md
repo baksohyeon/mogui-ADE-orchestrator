@@ -12,32 +12,39 @@ You get one long-lived coordinating session per workspace, called the master whi
 
 ## Prerequisites, measured
 
-Each item below is something you can check from a terminal before you start. Missing a required item is not a soft warning; onboarding will refuse to found a master until the gap is closed or explicitly waived.
+Classifications below follow `scripts/onboarding-preflight.sh` as read on this branch: a FAIL prints `FAIL`, counts toward exit 1 with `BLOCKED`, and refuses founding until fixed or waived; a WARN prints `WARN`, does not exit 1 by itself, and is repeated when the label is essential. The table lists installable tools and files you can check before opening the installer session. It does not replace the preflight: the script also measures session state (a non-legacy orchestration Run bound to the current terminal, a writable dispatch-ledger path, and `ORCA_AGENT_CLI` once onboarding names it) that only exists in the right seat.
 
-| Need | How you check | If it is missing |
+| Need | How you check | Preflight when absent |
 | --- | --- | --- |
-| Orca app and a reachable runtime | Install (next section), open the app, then `orca status`. Expect `appRunning: true` and `runtimeState: ready` (or the JSON form via `orca status --json` with `"ok": true`). | No session can outlive a tab; founding spawn has nowhere to put the master. |
-| `orca` on `PATH` | `command -v orca` then `orca status`. | App may be open while every script that spawns or retires a master fails. Register the shell command in Orca settings (below). |
-| A coding-agent CLI you already use | `command -v claude`, or the same for `codex`, `grok`, `cursor-agent`, or your daily driver. | Onboarding cannot start an installer session or a master. One CLI is enough. |
-| `git` | `git --version` | Clone and worktrees fail. |
-| `python3` on `PATH` | `python3 --version` | Core library is stdlib-only and the preflight only checks presence, not a version floor. Tools that need a newer interpreter locate one themselves or skip loudly; see [Reference](reference.md). |
+| Orca app and a reachable runtime | Install (next section), open the app, then `orca status`. Expect `appRunning: true` and `runtimeState: ready` (or `orca status --json` with `"ok": true`). | FAIL on `orca` when the CLI is missing, unsupported, or status is not ok. Without a ready runtime, founding has nowhere to put the master. |
+| `orca` on `PATH` | `command -v orca` then `orca status`. Supported basenames: `orca`, `orca-dev`, `orca-ide`. | Same `orca` FAIL as above. App may be open while spawn and retire scripts still cannot call the host. Register the shell command in Orca settings (below). |
+| Master agent CLI | `command -v` for the CLI you will run as master (`claude`, or another host you actually use). | FAIL on `agent-cli` when `ORCA_AGENT_CLI` is unset or not on `PATH`. Onboarding sets the variable; install the binary before then. |
+| At least one worker runtime | `command -v codex` and/or `command -v cursor-agent`. | FAIL on `worker-runtime` when neither is on `PATH`. One present is enough; a missing second runtime is WARN only. |
+| `git` | `git --version` | FAIL: `git is required; this repository is managed through pull requests`. |
+| `gh` (GitHub CLI) | `gh --version` | FAIL: `gh is required; this repository is managed through pull requests`. Login is separate: when `gh` is present but not authenticated, preflight WARNs on `gh-auth` (and on missing `workflow` scope) rather than blocking. |
+| `python3` on `PATH` | `python3 --version` | FAIL: entry points are `python3` scripts. No version floor; tools that need a newer interpreter locate one themselves or skip loudly ([Reference](reference.md)). |
+| `bd` (Beads) | `command -v bd` | FAIL: `binary missing; install Beads before onboarding`. Later, `bd where` must resolve inside an ops repository; a marker without a working `bd where` is also FAIL. |
+| Orca skills `orca-cli` and `orchestration` | Confirm both skill directories resolve under your agent skills roots, or that a skills package manager lists them globally. | FAIL on `skills` when neither the on-disk artifacts nor a successful global list shows both names. |
+| Organization redaction rules file | Default path `~/.config/redaction-extra.txt`, or the path in `REDACTION_EXTRA_PATTERNS`. File must yield at least one compilable rule (three pipe-separated fields: id, description, regex). | FAIL on `redaction-extra`: two of the three publish gates refuse without a usable rules file. |
 
-Recommended, not required for the first conversation. Preflight warns when they are absent:
+WARN (does not exit 1 alone; still called out when labelled essential):
 
-| Tool | Why | Check |
+| Tool | Preflight behavior | Check |
 | --- | --- | --- |
-| [`gitleaks`](https://gitleaks.io) | Redaction gate matching engine; exits 2 without it when you publish. | `gitleaks version` (on macOS, `brew install gitleaks`) |
-| [`ctx`](https://ctx.rs) | Cross-provider agent history search for the records practice. | `ctx status` |
+| [`gitleaks`](https://gitleaks.io) | WARN if missing; redaction scan exits 2 without it when publishing. | `gitleaks version` (on macOS, `brew install gitleaks`) |
+| [`ctx`](https://ctx.rs) | WARN if missing or if `ctx status` fails; records practice needs the index. | `ctx status` |
+| Methodology / restraint skill packs (`superpowers`, `ponytail`) | WARN on `skill-stack` per missing pack; master runs without them but with different behaviour. | Skill directory under a known skills root, or the agent plugin manifest |
+| `gh` authentication | WARN on `gh-auth` when `gh` is present but not logged in, or logged in without `workflow` scope. | `gh auth status`; `gh auth login` or `gh auth refresh -h github.com -s workflow` as the message directs |
 
-From the clone of this repository, one command measures the whole list the installer cares about:
+From the clone of this repository, one command measures the full set including session state:
 
 ```console
 $ bash scripts/onboarding-preflight.sh
 ```
 
-A missing required check exits 1 with `BLOCKED`. A missing recommended check warns and is repeated in the closing summary. `PREFLIGHT_WAIVE` can downgrade a named check to a warning; the summary prints that decision out loud rather than pretending the tool is present. Onboarding runs this as Step 0, so you do not have to keep the table in your head.
+Any FAIL exits 1 with `BLOCKED`. WARNs do not exit 1 by themselves and, when essential, are repeated in the closing summary. `PREFLIGHT_WAIVE` can downgrade a named check from FAIL to a printed waiver; the summary says that out loud rather than pretending the tool is present. Onboarding runs this as Step 0, so you do not have to keep the table in your head.
 
-Verified on the authoring host: `orca status` and `orca status --json`, `bash scripts/onboarding-preflight.sh`, `git --version`, `python3 --version`, and the agent CLIs that resolve on `PATH`. Platform notes below that this host cannot open (Linux package names, Windows installer UI) are marked as such.
+Verified on the authoring host against the preflight script and live checks: `orca status` / `orca status --json`, `bash scripts/onboarding-preflight.sh`, `git --version`, `gh --version`, `python3 --version`, and the agent CLIs that resolve on `PATH`. Platform notes below that this host cannot open (Linux package names, Windows installer UI) are marked as such.
 
 ## Installing and opening Orca
 

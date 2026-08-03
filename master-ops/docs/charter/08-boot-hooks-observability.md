@@ -11,7 +11,7 @@ Recommended hook spec:
 - SessionStart: load master operations context, role state, and issue-tracker memory
 - SessionStart on compact: run `scripts/compaction-probe.sh`
 - PreCompact: reload or export issue-tracker memory
-- UserPromptSubmit: inject the current role-state line from `docs/runbooks/role-state.md` together with the `Proposal -> Approval -> Execution` rule — this pairing exists to counter host-injected autonomy defaults (see §8)
+- UserPromptSubmit: inject the current role-state line from `docs/runbooks/role-state.md` and the `Proposal -> Approval -> Execution` rule. This pairing mechanically counters the host's autonomy defaults, which can override the charter unless the execution rule is present in every turn's context. See §9 for the incident that motivated this coupling.
 - PreToolUse: warn when supervised dispatch is bypassed
 - PostToolUse: collect non-sensitive audit markers when locally approved
 - SessionStart: warn when the issue tracker is not reachable from `{{WORKSPACE_ROOT}}`, or when an environment variable points its database outside the workspace
@@ -23,7 +23,7 @@ continues either way. Measure the environment variable in the same shell the
 agent's tool calls use; a login shell can define a different value, and reading
 the wrong one turns the check into a pass.
 
-Context-quality monitor namespace: `mg`
+Context-quality monitor namespace: `{{MONITOR_NS}}`
 
 Lineage is append-only observability metadata. Do not use Lineage as the bootstrap source, priority source, or model-evaluation source.
 

@@ -12,7 +12,7 @@ A coordinated repository's agent instruction file does not declare the master's 
 
 Treat this as a standing pull rather than an occasional slip. The master must understand its repositories, understanding them means reading those files, and those files are written in the second person.
 
-Configure the host to keep repository-level instruction files out of the master's automatic context, for example through whatever ignore or exclude list the host provides for auto-loaded instruction files. Record the mechanism your host uses in section 7. That configuration weakens the pull; this rule is what holds when the configuration is absent or wrong.
+Configure the host to keep repository-level instruction files out of the master's automatic context, for example through whatever ignore or exclude list the host provides for auto-loaded instruction files. Record the mechanism your host uses in section 8. That configuration weakens the pull; this rule is what holds when the configuration is absent or wrong.
 
 Update the role-state file only at two moments:
 

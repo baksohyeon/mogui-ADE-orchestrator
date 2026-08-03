@@ -4,7 +4,7 @@ Maps current state and document ownership. See the index: [`../MASTER-OPERATIONS
 
 Orca is REQUIRED infrastructure. Supervised dispatch = orca orchestration only. (charter rule since template v5)
 
-This document is the workspace master-operations SSOT.
+The workspace master-operations SSOT is the charter index [`../MASTER-OPERATIONS.md`](../MASTER-OPERATIONS.md); this file is its Document Map section.
 
 - Template version: `{{TEMPLATE_VERSION}}` (source: `{{RUNTIME_ROOT}}/master-ops/CHANGELOG.md`)
 - Operations repository: `{{OPS_REPO}}`

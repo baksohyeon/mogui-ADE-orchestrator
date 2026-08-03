@@ -24,7 +24,7 @@ Guards in this table stand on two kinds of substrates. **Contracted surfaces** i
 
 - **Operators** read the README section first; open a row here when you need the script name, the exit code, or the incident that paid for the rule.
 - **Agents** treat paths as the authority. Do not invent a guard that is not in this table; if you find a real guard missing a row, add it with a path and a measurement, or drop the claim.
-- **Sources for this table:** `master-ops/docs/MASTER-OPERATIONS.md §3, §5, §9; `master-ops/docs/runbooks/succession-boot-card.md`; `scripts/` entry points; `master-ops/onboarding/09-spawn.md` and `master-ops/ONBOARDING.md`; public notes in `docs/public/orca-concepts.md` and `CHANGELOG.md` / `master-ops/CHANGELOG.md` for dated incidents.
+- **Sources for this table:** `master-ops/docs/MASTER-OPERATIONS.md` §4, §5, §9; `master-ops/docs/runbooks/succession-boot-card.md`; `scripts/` entry points; `master-ops/onboarding/09-spawn.md` and `master-ops/ONBOARDING.md`; public notes in `docs/public/orca-concepts.md` and `CHANGELOG.md` / `master-ops/CHANGELOG.md` for dated incidents.
 
 ## Not in this inventory
 

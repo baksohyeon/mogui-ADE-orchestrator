@@ -13,6 +13,15 @@ you build on it.
 
 ## [Unreleased]
 
+### Added
+
+- README section "What is standing guard" and `docs/public/defense-inventory.md`:
+  the existing defense inventory (dispatch gate with tier × fan-out and a
+  ledgered policy digest, transcript model probes, spawn placement and
+  empty-seat checks, redaction scope honesty, frozen-session revival checks,
+  progressive onboarding) surfaced with paths and measurements. No new guards;
+  every claim points at a file that already lived in the tree.
+
 ## [0.4.1] - 2026-08-03
 
 ### Fixed

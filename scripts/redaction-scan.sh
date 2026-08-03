@@ -142,12 +142,20 @@ with open(target, "w", encoding="utf-8") as out:
         out.write('description = "%s"\n' % description.replace('"', ""))
         out.write("regex = '''%s'''\n\n" % regex)
 
+# Only literal characters can express native script in a rule that actually
+# scans: this loader's re.compile gate rejects RE2's brace and property forms
+# (backslash x brace, backslash p brace), and the engine canary rejects
+# Python's backslash u form, so no escape spelling survives both gates.
+native = sum(
+    1 for _, _, regex in rules if any(ord(ch) > 127 for ch in regex)
+)
+
 # Counts only. This file's contents are what the scan protects, so nothing from it
 # is printed here or anywhere else.
-print(f"{len(rules)} {unusable} {considered}")
+print(f"{len(rules)} {unusable} {considered} {native}")
 PY
   then
-    read -r EXTRA_RULE_COUNT EXTRA_UNUSABLE EXTRA_CONSIDERED < "${WORK_DIR}/counts"
+    read -r EXTRA_RULE_COUNT EXTRA_UNUSABLE EXTRA_CONSIDERED EXTRA_NATIVE < "${WORK_DIR}/counts"
   else
     echo "redaction-scan: FAIL — could not read the organization rules file" >&2
     exit 2
@@ -162,6 +170,12 @@ PY
   fi
   if [[ "${EXTRA_UNUSABLE}" -gt 0 ]]; then
     echo "redaction-scan: WARNING — ${EXTRA_UNUSABLE} of ${EXTRA_CONSIDERED} organization rule lines are unusable and were skipped" >&2
+  fi
+  if [[ "${EXTRA_RULE_COUNT}" -gt 0 && "${EXTRA_NATIVE:-0}" -eq 0 ]]; then
+    # A romanization only rule set misses the same identifier in its native
+    # spelling; measured live when a Korean name passed a scan whose rules
+    # only knew its romanization.
+    echo "redaction-scan: WARNING — organization rules contain no native script pattern; romanization only identifier rules miss native spellings" >&2
   fi
 fi
 

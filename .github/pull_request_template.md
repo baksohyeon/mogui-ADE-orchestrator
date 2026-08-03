@@ -1,6 +1,26 @@
-## Summary
+## Problem
 
-What changed, and what made it necessary.
+State what happened before the change with counts, dates, paths, and the command used to observe it.
+Rejected: "Docs were confusing."
+Accepted: "On 2026-08-03, loading `master-ops/ONBOARDING.md` (59 lines) twice made a worker ignore its own 'load one step file per turn' rule in terminal replay."
+
+## Why this approach
+
+Name at least one alternative not taken and why, or name the constraint that forced this choice.
+Rejected: "This felt cleaner."
+Example: "Split one box into four fixed headings so missing reasoning appears as an empty section during review."
+
+## What this changes
+
+- List concrete file-level changes and what is intentionally out of scope.
+- Use bullets only in this section; do not write a paragraph.
+- Rejected: "Updated the template a bit and left other things alone."
+
+## Expected effect
+
+State what a reviewer can observe now and where to check it, using a path or command.
+If the effect is not observable yet, state what event would make it observable.
+Rejected: "This should improve PR quality eventually."
 
 ## Testing
 

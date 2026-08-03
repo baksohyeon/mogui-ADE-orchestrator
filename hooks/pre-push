@@ -1,16 +1,51 @@
 #!/usr/bin/env bash
-# Opt-in pre-push hook: run the redaction scan before anything leaves the
-# machine. Enable once per clone with:
+# Opt-in pre-push hook: scan what is actually being pushed, before it leaves
+# the machine. Enable once per clone with:
 #
 #   git config core.hooksPath hooks
 #
-# Discipline already says the gates run before a push; this turns the habit
-# into wiring for the one gate whose failure is expensive in public. The test
-# suite stays out of the hook deliberately — tests are the agent's job, and a
-# multi-second hook gets bypassed with --no-verify until it might as well not
-# exist. The scan honors the same environment as a manual run, so a checkout
-# with organization rules configured scans with them.
+# git feeds pre-push one line per ref on stdin (<local ref> <local sha>
+# <remote ref> <remote sha>), and the scan runs over each pushed range with
+# --range, which covers both the files those commits change and the commit
+# messages themselves. A tip-of-tree scan would miss a secret that lives in an
+# intermediate commit and is gone from the final tree — the one real leak this
+# repository has had was exactly that shape.
+#
+# The scan honors the caller's environment: a checkout with organization rules
+# configured (REDACTION_EXTRA_PATTERNS, REDACTION_REQUIRE_EXTRA) scans with
+# them. The hook does not demand them, deliberately — this file is committed to
+# a public repository, and a contributor cannot have rules that are private to
+# the organization. The test suite also stays out: tests are the agent's job,
+# and a slow hook gets bypassed with --no-verify until it might as well not
+# exist.
 set -euo pipefail
 
 repo_root=$(git rev-parse --show-toplevel)
-exec "$repo_root/scripts/redaction-scan.sh"
+zero=0000000000000000000000000000000000000000
+status=0
+scanned_any=false
+
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+  # Deleting a remote ref pushes nothing scannable.
+  [ "$local_sha" = "$zero" ] && continue
+  if [ "$remote_sha" = "$zero" ]; then
+    # New ref: the remote has no tip to diff against. Anchor on the default
+    # branch when one is known; a repository where even that fails falls
+    # through to the whole-tree scan below.
+    base=$(git merge-base "$local_sha" origin/main 2>/dev/null) || base=""
+  else
+    base=$remote_sha
+  fi
+  if [ -n "$base" ] && [ "$base" != "$local_sha" ]; then
+    "$repo_root/scripts/redaction-scan.sh" --range "$base..$local_sha" || status=$?
+    scanned_any=true
+  fi
+done
+
+# No ranges resolved (empty stdin, ref deletions only, or no usable base):
+# fall back to the tracked-tree scan rather than passing silently.
+if [ "$scanned_any" = false ]; then
+  "$repo_root/scripts/redaction-scan.sh" || status=$?
+fi
+
+exit "$status"

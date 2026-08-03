@@ -705,6 +705,7 @@ def test_r4_registers_verified_job_id(tmp_path: Path) -> None:
     assert decision.allow is True
     assert decision.reason == ReasonCode.OK
     assert _ledger_entries(tmp_path)[-1]["job_id"] == "job-123"
+    assert _ledger_entries(tmp_path)[-1]["completion_channel"] == "sentinel-log"
 
 
 def test_cli_register_with_verified_orchestration_task_records_task(
@@ -776,9 +777,39 @@ def test_cli_register_with_verified_orchestration_task_records_task(
     assert _ledger_entries(tmp_path)[-1]["orchestration_task"] == "task-orch-123"
 
 
-def test_cli_register_requires_orchestration_task(tmp_path: Path, capsys) -> None:
+def test_cli_register_requires_orchestration_task(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    contract = _contract(tmp_path, "orchestration task required")
     script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
     ledger = tmp_path / "ledger.jsonl"
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+    assert (
+        script["main"](
+            [
+                "--ledger",
+                str(ledger),
+                "check",
+                "--runtime",
+                "codex",
+                "--model",
+                "gpt-5.6-luna",
+                "--contract",
+                str(contract),
+                "--agents",
+                "1",
+                "--est-chars",
+                "1000",
+                "--completion-channel",
+                "orchestration",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
 
     assert (
         script["main"](
@@ -797,9 +828,236 @@ def test_cli_register_requires_orchestration_task(tmp_path: Path, capsys) -> Non
     output = capsys.readouterr()
     assert '"reason":"ORCHESTRATION_UNVERIFIED"' in output.out
     assert "ORCHESTRATION_UNVERIFIED" in output.err
-    ledger_entry = json.loads(ledger.read_text(encoding="utf-8"))
+    ledger_entry = _ledger_entries(tmp_path)[-1]
     assert ledger_entry["reason"] == "ORCHESTRATION_UNVERIFIED"
     assert ledger_entry["probe_failure"] == "task_omitted"
+
+
+def test_cli_register_allows_sentinel_log_without_orchestration_task(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    contract = _contract(tmp_path, "sentinel log registration")
+    ledger = tmp_path / "ledger.jsonl"
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("ORCA_CLI_COMMAND", str(tmp_path / "missing-orca"))
+
+    assert (
+        script["main"](
+            [
+                "--ledger",
+                str(ledger),
+                "check",
+                "--runtime",
+                "codex",
+                "--model",
+                "gpt-5.6-luna",
+                "--contract",
+                str(contract),
+                "--agents",
+                "1",
+                "--est-chars",
+                "1000",
+                "--completion-channel",
+                "sentinel-log",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    assert (
+        script["main"](
+            [
+                "--ledger",
+                str(ledger),
+                "register",
+                "--job-id",
+                "job-sentinel",
+                "--probe-cmd",
+                "printf job-sentinel",
+            ]
+        )
+        == 0
+    )
+    entry = _ledger_entries(tmp_path)[-1]
+    assert entry["job_id"] == "job-sentinel"
+    assert entry["completion_channel"] == "sentinel-log"
+    assert "orchestration_task" not in entry
+
+
+def test_cli_register_rechecks_expected_completion_channel_under_register_lock(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    contract = _contract(tmp_path, "stale sentinel channel decision")
+    ledger = tmp_path / "ledger.jsonl"
+    home = tmp_path / "home"
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("ORCA_CLI_COMMAND", str(tmp_path / "missing-orca"))
+
+    assert (
+        script["main"](
+            [
+                "--ledger",
+                str(ledger),
+                "check",
+                "--runtime",
+                "codex",
+                "--model",
+                "gpt-5.6-luna",
+                "--contract",
+                str(contract),
+                "--agents",
+                "1",
+                "--est-chars",
+                "1000",
+                "--completion-channel",
+                "orchestration",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    contract_sha = _sha256(contract)
+    ticket = home / ".mogui" / "dispatch-tickets" / f"codex-{contract_sha[:12]}.json"
+    assert ticket.exists()
+
+    def stale_channel(self, contract_sha=None, runtime=None):
+        return "sentinel-log"
+
+    monkeypatch.setattr(
+        script["DispatchGate"],
+        "completion_channel_for_registration",
+        stale_channel,
+    )
+
+    assert (
+        script["main"](
+            [
+                "--ledger",
+                str(ledger),
+                "register",
+                "--job-id",
+                "job-channel-race",
+                "--probe-cmd",
+                "printf job-channel-race",
+            ]
+        )
+        == 2
+    )
+    output = capsys.readouterr()
+    assert '"reason":"INVALID_REQUEST"' in output.out
+    assert "expected_completion_channel=sentinel-log" in output.err
+    assert "actual_completion_channel=orchestration" in output.err
+    entries = _ledger_entries(tmp_path)
+    assert len(entries) == 1
+    assert not any(
+        entry.get("job_id") == "job-channel-race"
+        and entry.get("decision") == "ALLOW"
+        for entry in entries
+    )
+    assert ticket.exists()
+
+
+def test_cli_register_sentinel_log_denies_failing_probe(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    contract = _contract(tmp_path, "sentinel log failing probe")
+    ledger = tmp_path / "ledger.jsonl"
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("ORCA_CLI_COMMAND", str(tmp_path / "missing-orca"))
+
+    assert (
+        script["main"](
+            [
+                "--ledger",
+                str(ledger),
+                "check",
+                "--runtime",
+                "codex",
+                "--model",
+                "gpt-5.6-luna",
+                "--contract",
+                str(contract),
+                "--agents",
+                "1",
+                "--est-chars",
+                "1000",
+                "--completion-channel",
+                "sentinel-log",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    assert (
+        script["main"](
+            [
+                "--ledger",
+                str(ledger),
+                "register",
+                "--job-id",
+                "job-sentinel-missing",
+                "--probe-cmd",
+                "printf different-job",
+            ]
+        )
+        == 2
+    )
+    output = capsys.readouterr()
+    assert '"reason":"UNVERIFIED_JOB"' in output.out
+    assert "UNVERIFIED_JOB" in output.err
+    assert all(
+        entry.get("job_id") != "job-sentinel-missing"
+        for entry in _ledger_entries(tmp_path)
+    )
+
+
+def test_cli_register_without_matching_ticket_keeps_no_matching_ticket_denial(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    ledger = tmp_path / "ledger.jsonl"
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    orca = tmp_path / "orca"
+    orca.write_text(
+        '#!/bin/sh\nprintf \'%s\\n\' \'{"ok":true,"result":{"dispatch":{"id":"d1"}}}\'\n',
+        encoding="utf-8",
+    )
+    orca.chmod(0o755)
+    monkeypatch.setenv("ORCA_CLI_COMMAND", str(orca))
+
+    assert (
+        script["main"](
+            [
+                "--ledger",
+                str(ledger),
+                "register",
+                "--job-id",
+                "job-missing-ticket",
+                "--probe-cmd",
+                "printf job-missing-ticket",
+                "--orchestration-task",
+                "task-missing-ticket",
+            ]
+        )
+        == 2
+    )
+    output = capsys.readouterr()
+    assert '"reason":"NO_MATCHING_TICKET"' in output.out
+    assert "NO_MATCHING_TICKET: candidate_contract_shas=<none>" in output.err
 
 
 def test_cli_register_denies_unverified_orchestration_task_with_ledger_entry(
@@ -1069,6 +1327,88 @@ def test_register_consumes_matching_pending_dispatch_by_contract_sha(
     assert decision.allow is True
     assert decision.reason == ReasonCode.OK
     assert _ledger_entries(tmp_path)[-1]["contract_sha"] == first_sha
+
+
+def test_register_with_expected_completion_channel_matches(
+    tmp_path: Path,
+) -> None:
+    contract = _contract(tmp_path, "expected sentinel channel")
+    gate = _gate(tmp_path, now=1_000)
+    gate.check(DispatchRequest("codex", contract, est_input_chars=10_000, n_agents=1))
+
+    decision = gate.register_job(
+        "job-expected-channel",
+        lambda job_id: job_id == "job-expected-channel",
+        expected_completion_channel="sentinel-log",
+    )
+
+    assert decision.allow is True
+    assert decision.reason == ReasonCode.OK
+    entry = _ledger_entries(tmp_path)[-1]
+    assert entry["job_id"] == "job-expected-channel"
+    assert entry["completion_channel"] == "sentinel-log"
+
+
+def test_register_expected_completion_channel_mismatch_denies_before_write(
+    tmp_path: Path,
+) -> None:
+    contract = _contract(tmp_path, "expected channel mismatch")
+    gate = _gate(tmp_path, now=1_000)
+    gate.check(
+        _DispatchRequest(
+            runtime="codex",
+            contract_path=contract,
+            est_input_chars=10_000,
+            n_agents=1,
+            completion_channel="orchestration",
+            model="gpt-5.6-luna",
+        )
+    )
+    ticket = tmp_path / "dispatch-tickets" / f"codex-{_sha256(contract)[:12]}.json"
+    assert ticket.exists()
+
+    decision = gate.register_job(
+        "job-channel-mismatch",
+        lambda job_id: job_id == "job-channel-mismatch",
+        expected_completion_channel="sentinel-log",
+    )
+
+    assert decision.allow is False
+    assert decision.reason == ReasonCode.INVALID_REQUEST
+    assert "expected_completion_channel=sentinel-log" in decision.message
+    assert "actual_completion_channel=orchestration" in decision.message
+    entries = _ledger_entries(tmp_path)
+    assert len(entries) == 1
+    assert all(entry.get("job_id") != "job-channel-mismatch" for entry in entries)
+    assert ticket.exists()
+
+
+def test_register_without_expected_completion_channel_keeps_current_behavior(
+    tmp_path: Path,
+) -> None:
+    contract = _contract(tmp_path, "omitted expected channel")
+    gate = _gate(tmp_path, now=1_000)
+    gate.check(
+        _DispatchRequest(
+            runtime="codex",
+            contract_path=contract,
+            est_input_chars=10_000,
+            n_agents=1,
+            completion_channel="orchestration",
+            model="gpt-5.6-luna",
+        )
+    )
+
+    decision = gate.register_job(
+        "job-no-expected-channel",
+        lambda job_id: job_id == "job-no-expected-channel",
+    )
+
+    assert decision.allow is True
+    assert decision.reason == ReasonCode.OK
+    entry = _ledger_entries(tmp_path)[-1]
+    assert entry["job_id"] == "job-no-expected-channel"
+    assert entry["completion_channel"] == "orchestration"
 
 
 def test_register_denies_ambiguous_pending_dispatch_without_contract_sha(

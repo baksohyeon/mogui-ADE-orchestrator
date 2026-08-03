@@ -13,6 +13,12 @@ you build on it.
 
 ## [Unreleased]
 
+### Fixed
+
+- `dispatch-gate register` accepts a verified `sentinel-log` dispatch without
+  requiring an Orca orchestration record, and records the completion channel in
+  the ledger. `orchestration` dispatches still require Orca verification.
+
 ### Removed
 
 - The permanently skipped lineage test. It dry ran the append against a real

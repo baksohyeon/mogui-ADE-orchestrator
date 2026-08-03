@@ -15,6 +15,12 @@ you build on it.
 
 ### Added
 
+- The scan warns when organization rules contain no native script pattern:
+  a rule set that spells an identifier only in its romanized form misses the
+  same identifier in its native spelling (measured live with a Korean name).
+  The warning fires only when organization rules are loaded, and never prints
+  rule content.
+
 - `master-succeed spawn --expected-placement <worktreeId>`: after the existing
   requested versus actual check, the spawn verifies the actual worktree against
   an independently supplied expected placement and fails closed with a new exit

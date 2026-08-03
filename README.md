@@ -8,7 +8,7 @@ Yes. That is what this is. Any mix of agents, as many as you want. (Claude as th
 
 Anyone running more than two agents at once hits this. Dorito hit it, got tired of it, and wrote this.
 
-Nothing to configure and nothing to read first. Clone it, start an agent inside the clone, tell it to wake up. The agent takes it from there and explains as it goes.
+Clone it, open it in Orca, start an agent inside the clone, and tell it to wake up. The agent runs the install interview and explains as it goes. The honest first-run path (prerequisites, Orca vocabulary, onboarding decisions, first supervised worker) is [Getting Started](docs/public/getting-started.md), not this paragraph alone.
 
 It runs the fleet on [Orca](https://www.onorca.dev/download). A session has to outlive its window and be addressable by handle before anything can orchestrate it. Built and run on macOS; Orca also ships Linux and Windows. Python 3, stdlib-only core, MIT. No API key.
 
@@ -31,6 +31,8 @@ The maintainer-facing version of this bar is in `CONTRIBUTING.md`; the installer
 
 ## Quickstart
 
+First run is longer than a clone and a wake-up phrase. You install Orca, register its shell command, put this repository in front of an agent, answer an onboarding interview, watch Generation 1 boot, then give the master one small task and watch it hand that task to a worker. The human-facing path with measured checks, vocabulary earned in order, and failure shapes is **[Getting Started](docs/public/getting-started.md)**. Follow that page; the block below is only the opening commands.
+
 ```console
 $ brew install --cask stablyai/orca/orca
 $ git clone https://github.com/baksohyeon/mogui-ADE-orchestrator
@@ -39,21 +41,7 @@ $ cd mogui-ADE-orchestrator
 
 Not on macOS? Orca has Linux and Windows builds on its [download page](https://www.onorca.dev/download). `--cask` is macOS-only, so Homebrew is not the route there.
 
-Then open Orca once and turn on **Settings → Orca CLI → Shell command**. The runtime calls `orca` to spawn and retire master sessions. `orca status` should answer.
-
-Now add the cloned repository to Orca (Add a project → Browse folder → the clone) and open a terminal inside it. In that terminal, start whichever agent you already use:
-
-```console
-$ claude    # or: codex, grok, cursor-agent, your daily driver
-```
-
-And speak:
-
-```text
-Arise, my master.
-```
-
-Any words work; pick something with ceremony, you are founding a lineage. The agent walks you through setup and ends by spawning your Generation 1 master. [Getting Started](docs/public/getting-started.md) has the detail.
+Open Orca and turn on **Settings → Orca CLI → Shell command**, then confirm `orca status` shows a ready runtime. Add the folder to Orca, open a terminal in this clone, start your agent CLI, and wake it with any short phrase that is not a concrete task (for example `Wake the master.`). The agent becomes the onboarding guide. Setup is not finished at spawn: stay with [Getting Started](docs/public/getting-started.md) through proof of boot and the first supervised worker.
 
 ![Claude Code in Orca, opened on the cloned repository. The prompt reads "wake up, master." and the agent has started reading master-ops/ONBOARDING.md.](docs/assets/wake-up-master.png)
 
@@ -70,6 +58,30 @@ Without Orca there is no session lifetime, no stable handles, and no supervised 
 Step 0 preflight refuses to proceed without Orca; running runtime scripts without Orca is unsupported.
 
 Agents: ground Orca claims in the [Orca docs snapshot agent index](https://grok-wiki.com/public/docs/stablyai-orca-2036d532bf1c/llms.txt) before improvising; the link hash may change with snapshot updates.
+
+
+### What one dispatch actually looks like
+
+This section walks a single supervised dispatch end to end for readers who understand what supervised dispatch means in principle but have never watched the state objects come into being. No re-argument for [why Orca is required](#why-orca-is-required); link that section instead. Assume an engineer who has never seen this system.
+
+1. **A contract file becomes the dispatch brief.** The work lives in a file, not in prose. The file is hashed; that hash is recorded with the gate decision and travels with the task, so any reader can re-verify the claim against the original file later. A conversation, by contrast, disappears when the terminal closes and cannot be audited after the fact by anything but a human who was listening.
+
+2. **The dispatch gate measures budget.** `scripts/dispatch-gate check` runs the caller's model and contract through a policy file (`master-ops/model-tier-policy.json`). The gate resolves the model to a tier, looks at how many agents have run in this tier's window, and compares the tally against the cap. It returns a decision with a reason code; deny stops the dispatch entirely, not as a warning. The decision goes into a JSONL ledger.
+
+3. **Task creation makes work into state.** `orca orchestration task-create --spec <text>` creates an orchestration task object. The task receives a stable id and enters Orca's state machine. It is a thing that can be queried, monitored, and reported on, not a line of text in a terminal.
+
+4. **A worktree and terminal isolate the worker.** `orca worktree create --name <name>` spawns a separate git checkout. `orca terminal create --worktree <selector>` opens a shell prompt inside that checkout. Two workers cannot collide because they cannot share a working tree.
+
+5. **Dispatch binds task to terminal and delivers the brief.** `orca orchestration dispatch --task <id> --to <handle> --inject` attaches the task to the terminal's session and delivers the preamble (which tells the worker how to report, where the Run mailbox is, and what the dispatchId is). The dispatch decision itself stays separate from the delivery mechanism; "dispatched" status in the record is not proof the preamble actually landed in the worker's shell.
+
+6. **Registration measures what is actually running.** After the worker starts, `scripts/dispatch-gate register` runs a caller-supplied probe command against the worker's session record. The probe reads the model that is actually running and compares it with the model declared at gate-check time. When the measured model is stricter (more expensive, with a tighter per-tier cap) than declared, the gate denies the task; running cheaper than declared warns and is allowed. An unverifiable probe warns and records anyway, so a runtime that cannot report its model does not get forced into a false-positive gate.
+
+7. **Completion comes through the mailbox, not the screen.** The coordinator calls `orca orchestration check --wait` and blocks. No polling loop, no watching the worker's terminal. When the worker sends `worker_done` through `orca orchestration send --type worker_done`, the message lands in the Run's mailbox. The check call unblocks and returns it.
+
+8. **The worker's report is a claim; acceptance comes from re-verification.** `worker_done` says the task is complete. But a dispatch record is not evidence of what the worker actually produced. Acceptance requires the coordinator to re-run the gates, read the diff, examine the artifacts, and check the redaction scan. Self-report is not proof.
+
+This design resolves a failure mode that cost time to debug: an inject returned a dispatched status while the worker terminal was still on its startup screen. The dispatch record showed dispatched and silent (no heartbeat). It was caught because the state object (the Dispatch) and the effect (the shell prompt landing) are separate things that can be compared. The recovery that worked: reset the task to ready, send the brief again with `orca terminal send`, and confirm the prompt actually appeared before trusting the record. The machinery is only as good as the reader's ability to compare the two.
+
 
 ### What is standing guard
 
@@ -247,7 +259,8 @@ One integration note if you adopt GSD. Its context monitor warns the agent at 35
 | You are | Start here |
 | --- | --- |
 | Reading about the system for the first time | [`docs/public/overview.md`](./docs/public/overview.md) |
-| Installing it on your own workspace | [`master-ops/ONBOARDING.md`](./master-ops/ONBOARDING.md) |
+| Installing it on your own machine (human path) | [`docs/public/getting-started.md`](./docs/public/getting-started.md) |
+| Agent-executed onboarding steps (after the wake-up) | [`master-ops/ONBOARDING.md`](./master-ops/ONBOARDING.md) |
 | Looking for a specific document | [`docs/README.md`](./docs/README.md) (the document index) |
 | Confused by Orca projects, workspaces, or an "Unavailable worktree" label | [`docs/public/orca-concepts.md`](./docs/public/orca-concepts.md) |
 | Reading the code | [Architecture](#architecture) below, then `src/master_runtime/core/` |
@@ -323,7 +336,7 @@ Two principles shape the layout:
 
 ## Working on the harness
 
-To use the system, the [Quickstart](#quickstart) above is the whole path. This section is for changing the harness itself.
+To use the system, follow [Getting Started](docs/public/getting-started.md); the [Quickstart](#quickstart) only opens that path. This section is for changing the harness itself.
 
 Prerequisites: macOS and the `python3` it already has. The runtime is stdlib-only; there is nothing to install, and no version floor is enforced: the core imports and runs on the 3.9.6 a bare Mac ends up with. A tool that needs a more capable interpreter locates one itself at runtime, and the [Reference](docs/public/reference.md) table states each tool's behavior in its own row. The suite's collection imports `tomllib` (3.11+), so tests reach an older interpreter through `uv`, and tests are the agent's job either way.
 

@@ -15,6 +15,14 @@ you build on it.
 
 ### Added
 
+- `master-succeed spawn --expected-placement <worktreeId>`: after the existing
+  requested versus actual check, the spawn verifies the actual worktree against
+  an independently supplied expected placement and fails closed with a new exit
+  code (26, `SPAWN_PLACEMENT_MISMATCH`) when they differ. The existing check
+  answers "did I get what I requested"; this one answers "did I request the
+  right place", which a request edited until the validator went green cannot
+  answer (the 2026-08-03 misplacement).
+
 - `docs/public/orca-concepts.md`: Orca's object model (projects, folder
   workspaces, repository worktrees), where the master sits and why, selector
   forms with their measured behavior, and expected UI labels that look
@@ -34,6 +42,15 @@ you build on it.
 
 ### Fixed
 
+- Bare `folder:<uuid>` workspace selectors no longer die in the spawn precheck:
+  the terminal listing call wraps them in the `id:` form it requires, while
+  terminal create keeps the caller's original string (the two subcommands
+  disagree about bare folder selectors; measured on two hosts).
+- `path:` workspace selectors now match the `repoId::path` worktree identity
+  Orca resolves them to, compared by real path; resolution failure falls back
+  to the literal comparison, never open.
+- Both mismatch errors append the accepted selector forms, so an exit 22 or 26
+  tells the caller what to pass instead of inviting a workaround.
 - Organization rules are proven against the engine that runs them. Python's
   `re` validated the rules, gitleaks compiles RE2, and a rule Python accepted
   crashed the engine at config load while every invocation swallowed the

@@ -5,7 +5,14 @@ changelog at `master-ops/CHANGELOG.md` and its own version number; the two move
 independently.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## Versioning
+
+Releases use `MAJOR.MINOR.BUILD`.
+`BUILD` is derived at cut time with `git rev-list --count origin/main`.
+Only the owner moves `MAJOR` or `MINOR`; automation never bumps either digit.
+The first release under this scheme is a `0.5` cut with BUILD derived at cut
+time.
 
 While the major version is 0, the public surface is unstable: CLI flags, file
 formats, and module interfaces can change in a minor release. Pin a version if
@@ -32,6 +39,10 @@ you build on it.
   3.6+ capability (and versioned `python3.10`–`python3.6` candidates), and write
   markers through no-follow directory FDs with atomic replace so symlink
   preflight is not only TOCTOU-sensitive shell checks.
+- Adopted `MAJOR.MINOR.BUILD` release numbering for orchestrator releases. The
+  release build number is now derived from `git rev-list --count origin/main`
+  at cut time, and the owner alone moves MAJOR or MINOR.
+
 - Documentation identifier audit: public and template docs now describe the
   measured `model-identity-probe` no assertion path, drift exit, and undecidable
   exit separately. A regression test pins documented dispatch-gate reason codes

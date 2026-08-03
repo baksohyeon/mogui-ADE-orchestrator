@@ -21,10 +21,20 @@ on:
 
 jobs:
   tests:
+    # Windows is measurement-only for now; promote to blocking after three
+    # consecutive green runs on main.
+    continue-on-error: ${{ matrix.measurement_only }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            measurement_only: false
+          - os: macos-latest
+            measurement_only: false
+          - os: windows-latest
+            measurement_only: true
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7.0.1
@@ -34,17 +44,30 @@ jobs:
       - name: Install gitleaks (pinned, checksum verified)
         shell: bash
         run: |
-          case "$(uname -s)-$(uname -m)" in
-            Linux-x86_64) f=gitleaks_8.30.1_linux_x64.tar.gz;    sum=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb ;;
-            Darwin-arm64) f=gitleaks_8.30.1_darwin_arm64.tar.gz; sum=b40ab0ae55c505963e365f271a8d3846efbc170aa17f2607f13df610a9aeb6a5 ;;
-            *) echo "unmapped runner: $(uname -s)-$(uname -m)"; exit 1 ;;
+          case "$RUNNER_OS" in
+            Linux) f=gitleaks_8.30.1_linux_x64.tar.gz; sum=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb ;;
+            macOS) f=gitleaks_8.30.1_darwin_arm64.tar.gz; sum=b40ab0ae55c505963e365f271a8d3846efbc170aa17f2607f13df610a9aeb6a5 ;;
+            Windows) f=gitleaks_8.30.1_windows_x64.zip; sum=d29144deff3a68aa93ced33dddf84b7fdc26070add4aa0f4513094c8332afc4e ;;
+            *) echo "unmapped runner: $RUNNER_OS"; exit 1 ;;
           esac
-          curl -sSfL -o gitleaks.tgz "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/$f"
-          echo "$sum  gitleaks.tgz" | shasum -a 256 -c -
-          tar -xzf gitleaks.tgz gitleaks
-          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
-      - run: python3 -m pip install pytest
-      - run: PYTHONPATH=src python3 -m pytest tests -q
+          curl -sSfL -o gitleaks.pkg "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/$f"
+          if command -v shasum >/dev/null 2>&1; then
+            echo "$sum  gitleaks.pkg" | shasum -a 256 -c -
+          else
+            echo "$sum  gitleaks.pkg" | sha256sum -c -
+          fi
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            unzip -q gitleaks.pkg gitleaks.exe
+            mkdir -p "$RUNNER_TEMP/bin"
+            cp gitleaks.exe "$RUNNER_TEMP/bin/gitleaks.exe"
+            echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          else
+            tar -xzf gitleaks.pkg gitleaks
+            sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
+          fi
+      - run: python -m pip install pytest
+      - shell: bash
+        run: PYTHONPATH=src python -m pytest tests -q
 
   redaction:
     runs-on: ubuntu-latest

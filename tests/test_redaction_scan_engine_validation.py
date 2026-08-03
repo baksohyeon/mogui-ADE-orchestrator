@@ -94,3 +94,28 @@ def test_engine_failure_during_scan_is_exit_2_not_silence(tmp_path: Path) -> Non
     assert result.returncode == 2, result.stdout + result.stderr
     assert "engine error, not a finding" in result.stderr
     assert "OK — 0 findings" not in result.stdout
+
+
+def test_unresolvable_range_is_exit_2_not_a_clean_scan(tmp_path: Path) -> None:
+    repo = _repo_with_commits(tmp_path, ["one commit"])
+    env = {**os.environ}
+    env.pop("REDACTION_EXTRA_PATTERNS", None)
+    env.pop("REDACTION_REQUIRE_EXTRA", None)
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(repo / "scripts" / "redaction-scan.sh"),
+            "--range",
+            "0000000000000000000000000000000000000000..HEAD",
+        ],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "range does not resolve" in result.stderr
+    assert "OK" not in result.stdout

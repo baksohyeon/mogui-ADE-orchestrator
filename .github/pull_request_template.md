@@ -2,7 +2,7 @@
 
 State what happened before the change with counts, dates, paths, and the command used to observe it.
 Rejected: "Docs were confusing."
-Accepted: "On 2026-08-03, loading `master-ops/ONBOARDING.md` (524 lines) twice made a worker ignore its own 'load one step file per turn' rule in terminal replay."
+Accepted: "On 2026-08-03, loading `master-ops/ONBOARDING.md` (59 lines) twice made a worker ignore its own 'load one step file per turn' rule in terminal replay."
 
 ## Why this approach
 

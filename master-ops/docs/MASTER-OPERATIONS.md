@@ -225,7 +225,7 @@ Recommended hook spec:
 - SessionStart: load master operations context, role state, and issue-tracker memory
 - SessionStart on compact: run `scripts/compaction-probe.sh`
 - PreCompact: reload or export issue-tracker memory
-- UserPromptSubmit: inject the current role-state line from `docs/runbooks/role-state.md`
+- UserPromptSubmit: inject the current role-state line from `docs/runbooks/role-state.md` and the `Proposal -> Approval -> Execution` rule. This pairing mechanically counters the host's autonomy defaults, which can override the charter unless the execution rule is present in every turn's context. See §8 for the incident that motivated this coupling.
 - PreToolUse: warn when supervised dispatch is bypassed
 - PostToolUse: collect non-sensitive audit markers when locally approved
 - SessionStart: warn when the issue tracker is not reachable from `{{WORKSPACE_ROOT}}`, or when an environment variable points its database outside the workspace
@@ -309,6 +309,10 @@ Measure: after the base merges, `git rebase --onto origin/main <old-base-sha>`, 
 **Reverting a file discards work that was never committed.**
 Observed: `git checkout --` was used to undo a deliberate mutation during testing, and it also removed uncommitted work in the same file, which had to be reconstructed.
 Measure: before reverting a path, run `git status --porcelain <path>` and read it. Every line there is work the revert will discard, so an empty result is the only state in which revert is safe. The same procedure was safe an hour earlier because that result was empty then; the safety belonged to the state, not to the procedure.
+
+**Host-injected autonomy defaults override the charter unless mechanically countered.**
+Observed: on 2026-08-03 a master on a hook-rich host repeatedly implemented product changes inline and executed without proposals, despite §1 and §2. Each time the owner interrupted with an explicit instruction to propose first. The host's instruction surface provided a default behaviour — act autonomously, do not ask, keep going — that outweighed the charter in context. Host defaults are agent-neutral and apply to any high-compliance model; the charter is paper without the mechanical coupling.
+Measure: wire the UserPromptSubmit hook to inject both the role-state line and the `Proposal -> Approval -> Execution` rule into every user turn; feed each hook a case it must object to and watch it object before trusting any quiet run. Until the UserPromptSubmit pairing is wired, audit sessions by counting explicit owner corrections of unproposed execution in the transcript — the pass is that count staying zero.
 
 ## 9. Closed Principles Pointer
 

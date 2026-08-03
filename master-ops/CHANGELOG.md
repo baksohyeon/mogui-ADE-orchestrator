@@ -41,6 +41,16 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+Step 1 stops leaving outside repositories implicit. When the user names a
+repository that lives outside the confirmed workspace root, the installer asks
+which home it gets: moved or cloned under the root (recommended when the master
+will route real work into it, since the inventory and workspace-level code
+measurement only see what lives under the root) or recorded as an external
+lane, staying put with its absolute path and access rules in the operations
+document. The installer never moves repositories itself, and the step's
+verification now requires every named outside repository to end up in one of
+the two homes.
+
 The master's seat moves to the workspace level. Step 3.5 previously prescribed
 the ops repository worktree and forbade the folder route as unverified; the
 folder route is now verified from the CLI (`id:folder:<uuid>` passes precheck

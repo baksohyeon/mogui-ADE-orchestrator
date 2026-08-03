@@ -135,7 +135,7 @@ MEASURED examples from 2026-08-02:
 
 MEASURED addition from 2026-08-03:
 
-- Cursor Agent pre-trust: run `scripts/cursor-worker-pretrust <worktree-path>` before attach and confirm the summary is not `skipped`; this uses Cursor Agent's measured `.workspace-trusted` storage instead of relying on `--trust` at worker launch.
+- Cursor Agent pre-trust: run `scripts/cursor-worker-pretrust <worktree-path>` before attach and require exit status 0 with a summary that reports `added`, `updated`, or `already trusted` (not `skipped`); this uses Cursor Agent's measured `.workspace-trusted` storage instead of relying on `--trust` at worker launch.
 
 Three-vote review is the default for non-trivial merges or direct-push changes. Split review lenses:
 
@@ -178,7 +178,7 @@ The verdict is graded. No declared model, or a probe that returns nothing, warns
 
 Before attaching a Codex worker, run `scripts/codex-worker-pretrust <worktree-path>` and confirm the summary is not `skipped`, so startup does not block on the trust prompt.
 
-Before attaching a Cursor worker, run `scripts/cursor-worker-pretrust <worktree-path>` and confirm the summary is not `skipped`, so startup does not block on the trust prompt.
+Before attaching a Cursor worker, run `scripts/cursor-worker-pretrust <worktree-path>` and require exit status 0 with a summary that reports `added`, `updated`, or `already trusted` (not `skipped`), so startup does not block on the trust prompt.
 
 `register` without a prior successful `check` is invalid. Register only after the artifact exists, and before the final evidence report. Promote dispatch acceptance and verification results into the issue tracker.
 

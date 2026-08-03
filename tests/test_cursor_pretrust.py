@@ -29,6 +29,16 @@ def trusted_file(projects_dir: Path, worktree_path: str) -> Path:
     return projects_dir / key / ".workspace-trusted"
 
 
+def test_trusted_file_matches_measured_literal_key_shape() -> None:
+    projects_dir = Path("/tmp/projects-root")
+    assert trusted_file(
+        projects_dir,
+        "/tmp/.orca/worktrees/repo/feature.with.dot",
+    ) == Path(
+        "/tmp/projects-root/tmp-orca-worktrees-repo-featurewithdot/.workspace-trusted"
+    )
+
+
 def test_fresh_add_writes_dot_stripped_project_key(tmp_path: Path) -> None:
     projects_dir = tmp_path / "projects"
     workspace = tmp_path / ".orca" / "worktrees" / "repo" / "feature.with.dot"
@@ -134,6 +144,61 @@ def test_workspace_path_mismatch_aborts_without_writing(tmp_path: Path) -> None:
     assert result.returncode == 2
     assert "workspacePath mismatch in existing trust marker" in result.stderr
     assert json.loads(trust_path.read_text(encoding="utf-8")) == original
+
+
+def test_symlinked_project_path_is_rejected(tmp_path: Path) -> None:
+    projects_dir = tmp_path / "projects"
+    workspace = tmp_path / ".orca" / "worktrees" / "repo" / "branch"
+    workspace.mkdir(parents=True)
+    key = str(workspace).removeprefix("/").replace("/", "-").replace(".", "")
+    target = tmp_path / "outside"
+    target.mkdir()
+    projects_dir.mkdir()
+    (projects_dir / key).symlink_to(target, target_is_directory=True)
+
+    result = run_pretrust(str(workspace), projects_dir)
+
+    assert result.returncode == 2
+    assert "trust marker path must not use symlinks" in result.stderr
+    assert not (target / ".workspace-trusted").exists()
+
+
+def test_versioned_python_candidate_is_accepted(tmp_path: Path) -> None:
+    import sys
+
+    projects_dir = tmp_path / "projects"
+    workspace = tmp_path / "worktree"
+    workspace.mkdir()
+    shim_bin = tmp_path / "bin"
+    shim_bin.mkdir()
+    probe_log = tmp_path / "probes.log"
+    (shim_bin / "bash").symlink_to("/bin/bash")
+
+    for disqualified in ("python3", "python3.14", "python3.13"):
+        failing = shim_bin / disqualified
+        failing.write_text(
+            f'#!/bin/sh\necho {disqualified} >> "{probe_log}"\nexit 1\n',
+            encoding="utf-8",
+        )
+        failing.chmod(0o755)
+
+    qualifying = shim_bin / "python3.12"
+    qualifying.write_text(
+        f'#!/bin/sh\necho python3.12 >> "{probe_log}"\nexec "{sys.executable}" "$@"\n',
+        encoding="utf-8",
+    )
+    qualifying.chmod(0o755)
+
+    env = os.environ.copy()
+    env["PATH"] = str(shim_bin)
+
+    result = run_pretrust(str(workspace), projects_dir, env=env)
+
+    assert result.returncode == 0, result.stderr
+    assert "trusted (added)" in result.stdout
+    assert "Summary: 1 added, 0 updated, 0 already trusted" in result.stdout
+    probes = probe_log.read_text(encoding="utf-8").split()
+    assert probes[:4] == ["python3", "python3.14", "python3.13", "python3.12"]
 
 
 def test_no_python_interpreter_skips_without_writing(tmp_path: Path) -> None:

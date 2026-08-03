@@ -163,6 +163,22 @@ def test_symlinked_project_path_is_rejected(tmp_path: Path) -> None:
     assert not (target / ".workspace-trusted").exists()
 
 
+def test_symlinked_projects_dir_ancestor_is_rejected(tmp_path: Path) -> None:
+    workspace = tmp_path / "worktree"
+    workspace.mkdir()
+    real_root = tmp_path / "real-root"
+    real_root.mkdir()
+    linked_root = tmp_path / "linked-root"
+    linked_root.symlink_to(real_root, target_is_directory=True)
+    projects_dir = linked_root / "projects"
+
+    result = run_pretrust(str(workspace), projects_dir)
+
+    assert result.returncode == 2
+    assert "trust marker path must not use symlinks" in result.stderr
+    assert not (real_root / "projects").exists()
+
+
 def test_versioned_python_candidate_is_accepted(tmp_path: Path) -> None:
     import sys
 

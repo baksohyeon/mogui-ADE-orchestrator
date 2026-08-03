@@ -29,6 +29,18 @@ Use only these template placeholders: `{{WORKSPACE_NAME}}`, `{{WORKSPACE_ROOT}}`
 - `contracts/` owns bounded worker briefs; it is not the execution-state tracker.
 - Agents: ground Orca claims in the [Orca documentation](https://www.onorca.dev/) before improvising; resolve the current snapshot agent index at onboarding rather than relying on a hash that may change.
 
+## Orca Context Charter, Installer Scope
+
+This charter binds the installer session only; it is not copied into the master's operating documents. Use the Orca docs snapshot as source-grounded context for every Orca claim made during onboarding:
+
+- Agent index, read first: the snapshot's `llms.txt` page map (current link in the runtime repository README under "Why Orca is required").
+- Fetch the smallest relevant page from that index first, and load the full Markdown only when a task genuinely needs the whole documentation at once.
+- Treat the snapshot as read-only and generated. Prefer source-grounded claims, cite the page or source file used, and check the live Orca repository when freshness or code changes matter.
+- Keep provider assumptions out of plans; use whatever fetch, file, and shell tools this session provides.
+- After reading, state in one line what was relied on, then proceed.
+
+Two standing duties come with the charter. First, whenever the user signals they are new to Orca or asks what a project, workspace, worktree, or terminal is, answer in place from these sources and [docs/public/orca-concepts.md](../docs/public/orca-concepts.md) rather than deferring them to a link. Second, expected UI labels that look alarming (for example the "Unavailable worktree" chip on folder workspace sessions) get explained as normal before the user has to ask.
+
 ## Step 0. Pass The Required Preflight
 
 **Position and action:** Step 0 starts after orientation, with no workspace state changed: run `bash scripts/onboarding-preflight.sh` from `{{RUNTIME_ROOT}}` and fix every FAIL before continuing.
@@ -141,25 +153,26 @@ Verify:
 
 ## Step 3.5. Register The Ops Repository And Seat The Master
 
-**Position and action:** Step 3.5 begins after Step 3: register the already-Git `{{OPS_REPO}}` with Orca, then seat the master terminal in that ops repository worktree. The workspace root is not registered in Orca; the ops repository worktree is the verified production placement (for mogui-ADE, root unregistered and master seat = ops repo worktree).
+**Position and action:** Step 3.5 begins after Step 3: register `{{WORKSPACE_ROOT}}` and the already-Git `{{OPS_REPO}}` with Orca, then seat the master terminal at the workspace level: the folder workspace of `{{WORKSPACE_ROOT}}` when the root is a folder containing repositories, or the repository's primary worktree when the workspace is a single repository.
 
-**Why/caution:** The production placement is the ops repository worktree, not `{{WORKSPACE_ROOT}}`. Orca may have a folder-workspace route using a `folder:` selector, but that route is unverified from the CLI and must not be prescribed here.
+**Why/caution:** The master coordinates every repository, so its seat is the workspace-level workspace, never one repository's worktree inside a multi-repository workspace. A master seated in a repository worktree binds correctly (cwd, hooks, session files) yet hangs under that one repository in the owner's sidebar and occupies a seat shaped for a worker; exactly this shipped as a measured misplacement on 2026-08-03. The folder route is verified from the CLI with the `id:folder:<uuid>` selector form: precheck listing, terminal create, and spawn placement match all pass (measured 2026-08-03). Bare `folder:<uuid>` is accepted by `terminal create` but rejected by `terminal list` (a measured subcommand asymmetry), and `path:` selectors are rejected by the placement comparison, so the durable record must use the `id:` prefixed form, which every consumer accepts. [docs/public/orca-concepts.md](../docs/public/orca-concepts.md) holds the object model.
 
-Ask the user to open `{{OPS_REPO}}` in Orca, start the master terminal in that ops repository worktree, and provide its runtime-issued terminal handle. Resolve `ORCA` exactly as Step 0's preflight does, then run:
+Ask the user to add `{{WORKSPACE_ROOT}}` as an Orca project (the Add a project dialog's Browse folder accepts a folder with many repositories), create or open its folder workspace, open a plain terminal there as a placement probe, and provide its runtime-issued terminal handle. The probe is not the master: its only job is to prove the seat, Step 8's spawn creates the actual master terminal, and exactly one master may exist. Resolve `ORCA` exactly as Step 0's preflight does, then run:
 
 ```console
 ORCA repo add --path "{{OPS_REPO}}" --json
 ORCA terminal show --terminal <terminal handle> --json
 ```
 
-Capture the returned selector only when the terminal metadata proves it belongs to the `{{OPS_REPO}}` worktree. Before continuing, persist a durable placement result in an ops-repository file containing the selector, terminal handle, `{{OPS_REPO}}` path, and the `terminal show` worktree proof; do not rely on conversation state. Step 5 initializes the issue tracker independently and does not require a second placement copy; it may record a pointer to this result. Do not register `{{WORKSPACE_ROOT}}` or substitute a filesystem path for the measured ops-repository worktree selector.
+Capture the returned selector only when the terminal metadata proves the workspace-level seat: a folder workspace reports `worktreeId` as `folder:<uuid>` with an empty `worktreePath`, and that emptiness is the expected shape, so judge by `worktreeId`. Before continuing, persist a durable placement result in an ops-repository file containing the selector in `id:` prefixed form, `{{WORKSPACE_ROOT}}`, and the `terminal show` proof; do not rely on conversation state, and do not treat the probe's terminal handle as durable, because handles are scoped to the app runtime and die with restarts. The durable identity is the selector. After persisting, ask the user to close the probe terminal (or close it yourself if it is yours): leaving it open means Step 8 creates a second terminal in the same seat. Step 5 initializes the issue tracker independently and does not require a second placement copy; it may record a pointer to this result. Do not substitute a filesystem path for the measured selector, and do not infer the seat from a shell's cwd.
 
 Verify:
 
-- `orca repo add --path "{{OPS_REPO}}" --json` succeeds or confirms the ops repository is already registered
+- `orca repo add --path "{{OPS_REPO}}" --json` succeeds or confirms the ops repository is already registered (worker worktrees are created from this registration)
 - `terminal show` measured the terminal metadata
-- the selector points to the `{{OPS_REPO}}` worktree, not the workspace root
-- the workspace root remains unregistered and the durable placement result is available before founding spawn
+- the selector points at the workspace-level seat, never an individual repository worktree inside a multi-repository workspace
+- the durable placement result exists in `id:` prefixed selector form before founding spawn
+- the placement probe terminal is closed, so the founding spawn will be the only terminal in that seat
 
 ## Step 4. Replace Template Placeholders
 
@@ -313,7 +326,7 @@ Verify the user can state one surface the gates do not cover, and that the organ
 
 **Why/caution:** Supervised dispatch is Orca orchestration only; raw terminal polling and vendor-direct CLIs are non-compliant, and failures remain closed.
 
-Ask for confirmation to spawn now or defer, reload the durable placement result from Step 3.5, re-run `terminal show`, and confirm that the selector, live handle, and `{{OPS_REPO}}` worktree proof still match. Write a kickoff file containing Generation 1, this installer as founding origin, the boot sequence (rehydrate ops docs, declare Role State, measure model and placement), the initial queue, and the requirement to report the orchestration Task complete.
+Ask for confirmation to spawn now or defer, reload the durable placement result from Step 3.5 and confirm the selector still resolves on the host (`ORCA terminal list --worktree <selector> --json`); the probe terminal is already closed, so there is no handle to check, and the spawn itself verifies placement against this selector again. Write a kickoff file containing Generation 1, this installer as founding origin, the boot sequence (rehydrate ops docs, declare Role State, measure model and placement), the initial queue, and the requirement to report the orchestration Task complete.
 
 Before launching any worker, follow `docs/MASTER-OPERATIONS.md` §3: MEASURE the installed agent CLI's non-interactive approval flags from `--help` and never guess them.
 
@@ -334,7 +347,7 @@ L=~/.mogui/dispatch-ledger.jsonl
 ORCA orchestration run-create --objective "Found and verify the Generation 1 master" --json
 ORCA orchestration task-create --spec "Run the byte-identical founding kickoff file and complete Step 9 boot smoke" --json
 "{{RUNTIME_ROOT}}/scripts/master-succeed" spawn \
-    --workspace-selector <measured ops-repository worktree selector> \
+    --workspace-selector <durable placement selector from Step 3.5, id: prefixed> \
     --kickoff-file <kickoff file> \
     --root "{{WORKSPACE_ROOT}}" \
     --model "{{MODEL_ID}}" \
@@ -414,11 +427,16 @@ When a session gets long:
 If the master behaves unlike the documents, check what was declined at
 onboarding before assuming a defect. Declined at install:
   <declined components, or the word none>
+
+New to Orca? Concepts, and labels that look alarming but are normal:
+  {{RUNTIME_ROOT}}/docs/public/orca-concepts.md
 ```
 
-Fill the last line from the recorded choices. If nothing was declined, write the word none rather than leaving it blank, because a blank line reads as unknown. The angle-bracket slots in the card are filled by hand at print time; do not introduce a new `{{...}}` placeholder for them, since Step 4 verifies that only the eight allowed placeholders remain anywhere in this document.
+Fill the declined slot (the `<declined components, or the word none>` line) from the recorded choices. If nothing was declined, write the word none rather than leaving it blank, because a blank line reads as unknown. The angle-bracket slots in the card are filled by hand at print time; do not introduce a new `{{...}}` placeholder for them, since Step 4 verifies that only the eight allowed placeholders remain anywhere in this document.
 
 Finally, ask the user to close this installer terminal now that the master is running. Say why in one sentence: two agents holding one repository is how uncommitted work gets lost, and the installer has no further role. Do not close it yourself, and do not close the master's terminal.
+
+If the user lingers with Orca questions instead of closing, answer them here under the Orca Context Charter (grounded in the docs snapshot and the concepts guide) before retiring; a user who leaves onboarding still confused about workspaces will misplace the next master by hand.
 
 Verify:
 

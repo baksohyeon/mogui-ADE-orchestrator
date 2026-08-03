@@ -19,3 +19,4 @@ coverage/
 *redaction-report*
 redaction-extra*.txt
 *.sweep.md
+.orca/

@@ -41,6 +41,34 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+The master's seat moves to the workspace level. Step 3.5 previously prescribed
+the ops repository worktree and forbade the folder route as unverified; the
+folder route is now verified from the CLI (`id:folder:<uuid>` passes precheck
+listing, terminal create, and spawn placement match, measured 2026-08-03), and
+a master seated in one repository's worktree shipped as a real misplacement the
+same day. Step 3.5 now seats the master in the workspace root's folder
+workspace (or the primary worktree when the workspace is a single repository),
+proves the seat with a placement probe terminal (`terminal show` must report
+`worktreeId` as `folder:<uuid>`; an empty `worktreePath` is the expected shape,
+judge by `worktreeId`), persists the selector in `id:` prefixed form (bare
+`folder:` is accepted by `terminal create` but rejected by `terminal list`, a
+measured subcommand asymmetry, so only the `id:` form works everywhere), treats
+the probe handle as transient rather than durable, and closes the probe so
+Step 8's spawn is the only terminal in the seat. Step 8 resolves the durable
+selector on the host again instead of checking a dead handle.
+
+Onboarding gains an Orca Context Charter, installer scope only: ground every
+Orca claim in the docs snapshot (agent index first, smallest page next), treat
+the snapshot as read-only and generated, cite the page or source file used and
+check the live Orca repository when freshness matters, keep provider
+assumptions out of plans, state in one line what was relied on before
+proceeding, answer newcomer questions about projects, workspaces, and worktrees
+in place, and explain expected UI labels that look alarming (the "Unavailable
+worktree" chip on folder workspace sessions) before the user has to ask. The
+operating card printed in Step 10 now points at the runtime repository's Orca
+concepts guide, and Step 10 answers lingering Orca questions under the charter
+before the installer retires.
+
 ## v0.3.0
 
 The charter's review-bot rule gains its missing half. The v5 rule said who

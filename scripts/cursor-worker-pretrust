@@ -46,9 +46,14 @@ fi
 trust_file="$projects_dir/$project_key/.workspace-trusted"
 project_dir="$projects_dir/$project_key"
 
+# Normalize trailing separators before each -L test so a projects-dir value
+# ending in "/" still rejects a symlinked leaf instead of skipping it.
 check_no_symlink_ancestors() {
   local candidate=$1
   while :; do
+    while [[ "$candidate" == */ && "$candidate" != "/" ]]; do
+      candidate=${candidate%/}
+    done
     if [[ -L "$candidate" ]]; then
       printf 'ERROR trust marker path must not use symlinks: %s\n' "$candidate" >&2
       exit 2
@@ -56,7 +61,6 @@ check_no_symlink_ancestors() {
     if [[ "$candidate" == "/" || "$candidate" == "." ]]; then
       break
     fi
-    candidate=${candidate%/}
     if [[ "$candidate" != */* ]]; then
       candidate="."
     else
@@ -72,15 +76,23 @@ check_no_symlink_ancestors "$projects_dir"
 check_no_symlink_ancestors "$project_dir"
 check_no_symlink_ancestors "$trust_file"
 
+# Probe for a runtime that can run the embedded worker: JSON stdlib plus the
+# 3.6+ features it uses (f-strings, datetime.isoformat(timespec=...)).
+# Include versioned python3.10..python3.6 so hosts without a bare python3 shim
+# still find a usable interpreter.
 python_bin=""
-for python_candidate in python3 python3.14 python3.13 python3.12 python3.11 python; do
-  if "$python_candidate" -c 'import sys; assert sys.version_info[0] >= 3; import json' >/dev/null 2>&1; then
+for python_candidate in \
+  python3 \
+  python3.14 python3.13 python3.12 python3.11 python3.10 python3.9 python3.8 python3.7 python3.6 \
+  python
+do
+  if "$python_candidate" -c 'import sys, json; from datetime import datetime, timezone; raise SystemExit(0 if sys.version_info >= (3, 6) and datetime.now(timezone.utc).isoformat(timespec="milliseconds") else 1)' >/dev/null 2>&1; then
     python_bin="$python_candidate"
     break
   fi
 done
 if [[ -z "$python_bin" ]]; then
-  skip_message='SKIP no Python 3 interpreter with json support found (tried python3, python3.14-3.11, python); trust marker edits are verified by parsing JSON, so nothing was changed and dispatched Cursor workers will see a trust prompt'
+  skip_message='SKIP no Python 3.6+ interpreter with json support found (tried python3, python3.14-3.6, python); trust marker edits are verified by parsing JSON, so nothing was changed and dispatched Cursor workers will see a trust prompt'
   printf '%s\n' "$skip_message"
   printf '%s\n' "$skip_message" >&2
   printf 'Summary: skipped — 0 added, 0 updated, 0 already trusted\n'
@@ -88,82 +100,239 @@ if [[ -z "$python_bin" ]]; then
 fi
 
 status=$(
-  "$python_bin" - "$trust_file" "$worktree_path" <<'PY'
+  "$python_bin" - "$projects_dir" "$project_key" "$worktree_path" <<'PY'
 import json
+import os
+import stat
 import sys
 from datetime import datetime, timezone
-from pathlib import Path
 
 
-trust_path = Path(sys.argv[1])
-workspace_path = sys.argv[2]
+projects_dir = sys.argv[1]
+project_key = sys.argv[2]
+workspace_path = sys.argv[3]
+marker_name = ".workspace-trusted"
 
-
-def abort(message: str) -> None:
-    print(f"ERROR {trust_path}: {message}", file=sys.stderr)
+O_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
+O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+if O_NOFOLLOW == 0:
+    print(
+        "ERROR host lacks O_NOFOLLOW; refusing to write trust markers without "
+        "no-follow open semantics",
+        file=sys.stderr,
+    )
     raise SystemExit(2)
 
 
-def now_iso() -> str:
+def abort(message):
+    target = os.path.join(projects_dir, project_key, marker_name)
+    print("ERROR %s: %s" % (target, message), file=sys.stderr)
+    raise SystemExit(2)
+
+
+def now_iso():
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace(
         "+00:00", "Z"
     )
 
 
-def parse_document(raw: bytes) -> dict:
+def open_dir_nofollow(path, dir_fd=None):
+    flags = os.O_RDONLY | O_DIRECTORY | O_NOFOLLOW
+    if dir_fd is None:
+        return os.open(path, flags)
+    return os.open(path, flags, dir_fd=dir_fd)
+
+
+def ensure_existing_path_no_symlinks(path):
+    """Reject any existing symlink component on path (leaf optional)."""
+    if not path:
+        abort("empty path")
+    if path == "/":
+        return
+    # Walk absolute path components with lstat so a trailing slash cannot hide a
+    # symlink leaf the way shell -L with a trailing separator can.
+    parts = []
+    head = path
+    while head not in ("", "/"):
+        head, tail = os.path.split(head.rstrip("/"))
+        if tail:
+            parts.append(tail)
+        if head == "":
+            break
+    parts.reverse()
+    current = "/"
+    for part in parts:
+        current = os.path.join(current, part) if current != "/" else "/" + part
+        try:
+            st = os.lstat(current)
+        except FileNotFoundError:
+            return
+        if stat.S_ISLNK(st.st_mode):
+            abort("trust marker path must not use symlinks: %s" % current)
+
+
+def parse_document(raw):
     try:
         decoded = raw.decode("utf-8")
     except UnicodeDecodeError as error:
-        abort(f"cannot decode trust marker as UTF-8: {error}")
+        abort("cannot decode trust marker as UTF-8: %s" % error)
     try:
         document = json.loads(decoded)
     except json.JSONDecodeError as error:
-        abort(f"cannot parse trust marker JSON: {error}")
+        abort("cannot parse trust marker JSON: %s" % error)
     if not isinstance(document, dict):
         abort("trust marker is not a JSON object")
     return document
 
 
-if not trust_path.exists():
-    trust_path.parent.mkdir(parents=True, exist_ok=True)
-    trust_path.write_text(
-        json.dumps(
-            {
+def read_regular_file_nofollow(dir_fd, name):
+    fd = os.open(name, os.O_RDONLY | O_NOFOLLOW, dir_fd=dir_fd)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            abort("trust marker is not a regular file")
+        chunks = []
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return b"".join(chunks)
+    finally:
+        os.close(fd)
+
+
+def write_regular_file_atomic(dir_fd, name, data):
+    """Create or replace name in dir_fd without following a symlink leaf."""
+    # If the destination exists as a symlink or non-regular node, refuse.
+    try:
+        st = os.lstat(name, dir_fd=dir_fd)
+    except FileNotFoundError:
+        st = None
+    if st is not None:
+        if stat.S_ISLNK(st.st_mode):
+            abort("trust marker path must not use symlinks: %s" % name)
+        if not stat.S_ISREG(st.st_mode):
+            abort("trust marker is not a regular file")
+
+    tmp_name = ".%s.tmp.%s" % (name, os.getpid())
+    # Best-effort cleanup of a leftover temp from a prior crash.
+    try:
+        os.unlink(tmp_name, dir_fd=dir_fd)
+    except FileNotFoundError:
+        pass
+
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | O_NOFOLLOW
+    fd = os.open(tmp_name, flags, 0o644, dir_fd=dir_fd)
+    try:
+        view = memoryview(data)
+        while view:
+            written = os.write(fd, view)
+            view = view[written:]
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+    try:
+        os.replace(tmp_name, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+    except Exception:
+        try:
+            os.unlink(tmp_name, dir_fd=dir_fd)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def open_or_create_project_dir(projects_fd, key):
+    try:
+        return open_dir_nofollow(key, dir_fd=projects_fd)
+    except FileNotFoundError:
+        try:
+            os.mkdir(key, 0o755, dir_fd=projects_fd)
+        except FileExistsError:
+            # Lost a race with another creator; open and verify.
+            pass
+        return open_dir_nofollow(key, dir_fd=projects_fd)
+    except NotADirectoryError:
+        abort("project directory path is not a directory: %s" % key)
+
+
+# Preflight: refuse symlink components already present on the resolved paths.
+ensure_existing_path_no_symlinks(projects_dir)
+ensure_existing_path_no_symlinks(os.path.join(projects_dir, project_key))
+ensure_existing_path_no_symlinks(os.path.join(projects_dir, project_key, marker_name))
+
+# projects_dir may not exist yet; create it without following a symlink leaf.
+if not os.path.exists(projects_dir):
+    parent = os.path.dirname(projects_dir.rstrip("/")) or "/"
+    leaf = os.path.basename(projects_dir.rstrip("/"))
+    ensure_existing_path_no_symlinks(parent)
+    parent_fd = open_dir_nofollow(parent)
+    try:
+        try:
+            os.mkdir(leaf, 0o755, dir_fd=parent_fd)
+        except FileExistsError:
+            pass
+        projects_fd = open_dir_nofollow(leaf, dir_fd=parent_fd)
+    finally:
+        os.close(parent_fd)
+else:
+    if os.path.islink(projects_dir) or not os.path.isdir(projects_dir):
+        abort("trust marker path must not use symlinks: %s" % projects_dir)
+    projects_fd = open_dir_nofollow(projects_dir)
+
+try:
+    project_fd = open_or_create_project_dir(projects_fd, project_key)
+    try:
+        try:
+            raw = read_regular_file_nofollow(project_fd, marker_name)
+            exists = True
+        except FileNotFoundError:
+            raw = None
+            exists = False
+
+        if not exists:
+            payload = {
                 "trustedAt": now_iso(),
                 "workspacePath": workspace_path,
-            },
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    print("added")
-    raise SystemExit(0)
+            }
+            encoded = (json.dumps(payload, indent=2) + "\n").encode("utf-8")
+            write_regular_file_atomic(project_fd, marker_name, encoded)
+            print("added")
+            raise SystemExit(0)
 
-document = parse_document(trust_path.read_bytes())
-trusted_at = document.get("trustedAt")
-workspace_in_file = document.get("workspacePath")
-if workspace_in_file not in (None, workspace_path):
-    abort(
-        "workspacePath mismatch in existing trust marker; refusing to overwrite "
-        f"{workspace_in_file!r} with {workspace_path!r}"
-    )
-if workspace_in_file == workspace_path and isinstance(trusted_at, str) and trusted_at:
-    print("already")
-    raise SystemExit(0)
+        document = parse_document(raw)
+        trusted_at = document.get("trustedAt")
+        workspace_in_file = document.get("workspacePath")
+        if workspace_in_file not in (None, workspace_path):
+            abort(
+                "workspacePath mismatch in existing trust marker; refusing to overwrite "
+                "%r with %r" % (workspace_in_file, workspace_path)
+            )
+        if (
+            workspace_in_file == workspace_path
+            and isinstance(trusted_at, str)
+            and trusted_at
+        ):
+            print("already")
+            raise SystemExit(0)
 
-updated = dict(document)
-if workspace_in_file is None:
-    updated["workspacePath"] = workspace_path
-if not isinstance(trusted_at, str) or not trusted_at:
-    updated["trustedAt"] = now_iso()
+        updated = dict(document)
+        if workspace_in_file is None:
+            updated["workspacePath"] = workspace_path
+        if not isinstance(trusted_at, str) or not trusted_at:
+            updated["trustedAt"] = now_iso()
 
-encoded = json.dumps(updated, indent=2) + "\n"
-if trust_path.read_text(encoding="utf-8") == encoded:
-    print("already")
-else:
-    trust_path.write_text(encoded, encoding="utf-8")
-    print("updated")
+        encoded = (json.dumps(updated, indent=2) + "\n").encode("utf-8")
+        if raw.decode("utf-8") == encoded.decode("utf-8"):
+            print("already")
+        else:
+            write_regular_file_atomic(project_fd, marker_name, encoded)
+            print("updated")
+    finally:
+        os.close(project_fd)
+finally:
+    os.close(projects_fd)
 PY
 )
 

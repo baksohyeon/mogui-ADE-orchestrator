@@ -27,7 +27,11 @@ you build on it.
   found no second startup trust gate for project hooks: in a fresh workspace with
   project-local `.cursor/hooks.json`, startup passed with no extra prompt after
   pre-trust, hooks executed, and Cursor state showed no persisted `hooks.state` or
-  `trusted_hash` key.
+  `trusted_hash` key. Hardening follow-up: reject trailing-slash symlink
+  `--projects-dir` values, refuse non-regular marker paths, probe for Python
+  3.6+ capability (and versioned `python3.10`–`python3.6` candidates), and write
+  markers through no-follow directory FDs with atomic replace so symlink
+  preflight is not only TOCTOU-sensitive shell checks.
 - Documentation identifier audit: public and template docs now describe the
   measured `model-identity-probe` no assertion path, drift exit, and undecidable
   exit separately. A regression test pins documented dispatch-gate reason codes

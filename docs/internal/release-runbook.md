@@ -8,12 +8,15 @@ MAJOR and MINOR are owner-managed milestones; automation must never bump them.
 If the repository is shallow, unshallow first:
 
 ```console
-git fetch --unshallow origin main --tags
+if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+  git fetch --unshallow origin main --tags || exit $?
+fi
 ```
 
 Sync origin main and derive the version:
 
 ```console
+set -e
 git fetch origin main --tags
 version="$(./scripts/next-version)"
 printf '%s\n' "$version"

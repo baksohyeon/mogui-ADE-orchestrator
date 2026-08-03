@@ -9,7 +9,7 @@ usage() {
 Usage: scripts/next-version [--help]
 
 Prints the release version that would be cut right now.
-BUILD is derived from: git rev-list --count origin/main
+BUILD is derived from: git rev-list --count refs/remotes/origin/main
 EOF
 }
 

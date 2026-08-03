@@ -142,23 +142,13 @@ with open(target, "w", encoding="utf-8") as out:
         out.write('description = "%s"\n' % description.replace('"', ""))
         out.write("regex = '''%s'''\n\n" % regex)
 
-_escape_hex = re.compile(r"\\u([0-9a-fA-F]{4})|\\U([0-9a-fA-F]{8})|\\x([0-9a-fA-F]{2})")
-_native_property = re.compile(
-    r"\\p\{(?:Han|Hangul|Hiragana|Katakana|Cyrillic|Arabic|Hebrew|Thai|Devanagari|Greek|Hangeul)\}"
+# Only literal characters can express native script in a rule that actually
+# scans: this loader's re.compile gate rejects RE2's brace and property forms
+# (backslash x brace, backslash p brace), and the engine canary rejects
+# Python's backslash u form, so no escape spelling survives both gates.
+native = sum(
+    1 for _, _, regex in rules if any(ord(ch) > 127 for ch in regex)
 )
-
-
-def _regex_has_native(regex):
-    if any(ord(ch) > 127 for ch in regex):
-        return True
-    for match in _escape_hex.finditer(regex):
-        digits = next(group for group in match.groups() if group)
-        if int(digits, 16) > 127:
-            return True
-    return bool(_native_property.search(regex))
-
-
-native = sum(1 for _, _, regex in rules if _regex_has_native(regex))
 
 # Counts only. This file's contents are what the scan protects, so nothing from it
 # is printed here or anywhere else.

@@ -13,9 +13,12 @@ rather than silence.
 from __future__ import annotations
 
 import os
+import shutil
 import stat
 import subprocess
 from pathlib import Path
+
+import pytest
 
 from test_redaction_scan_commit_messages import _repo_with_commits
 
@@ -35,6 +38,13 @@ def _scan_with_extra(repo: Path, extra: Path, *args: str) -> subprocess.Complete
     )
 
 
+requires_gitleaks = pytest.mark.skipif(
+    shutil.which("gitleaks") is None,
+    reason="gitleaks is the engine under test",
+)
+
+
+@requires_gitleaks
 def test_lookbehind_rule_fails_closed_and_names_the_rule(tmp_path: Path) -> None:
     repo = _repo_with_commits(tmp_path, ["one commit"])
     extra = tmp_path / "extra.txt"

@@ -176,36 +176,42 @@ fi
 if [[ "${CONFIG}" != "${BASE_CONFIG}" ]]; then
   if ! printf 'redaction-scan engine self-test\n' \
     | gitleaks stdin --config "${CONFIG}" --no-banner --exit-code 0 >/dev/null 2>&1; then
-    bad_ids=""
-    while IFS='|' read -r rule_id _rest; do
-      rule_id="${rule_id## }"; rule_id="${rule_id%% }"
-      [[ -z "${rule_id}" || "${rule_id}" == \#* ]] && continue
-      single="${WORK_DIR}/single-rule.toml"
-      python3 - "${REDACTION_EXTRA_PATTERNS}" "${rule_id}" "${single}" <<'PY'
+    # One Python pass isolates the offending rules: it reuses the same parse
+    # the translator applied and probes each rule alone through gitleaks, so
+    # the rules file format lives in one shape and an id indented with a tab cannot
+    # slip the net. Ids only, never patterns.
+    bad_ids=$(python3 - "${REDACTION_EXTRA_PATTERNS}" "${WORK_DIR}" <<'PY'
+import subprocess
 import sys
-source, wanted, target = sys.argv[1], sys.argv[2], sys.argv[3]
+
+source, work_dir = sys.argv[1], sys.argv[2]
+bad = []
 with open(source, encoding="utf-8") as handle:
     for line in handle:
         line = line.strip()
         if not line or line.startswith("#"):
             continue
         parts = line.split("|", 2)
-        if len(parts) != 3 or parts[0].strip() != wanted:
+        if len(parts) != 3:
             continue
-        with open(target, "w", encoding="utf-8") as out:
+        rule_id, _description, regex = (part.strip() for part in parts)
+        single = f"{work_dir}/single-rule.toml"
+        with open(single, "w", encoding="utf-8") as out:
             out.write('title = "single rule probe"\n\n')
             out.write("[[rules]]\n")
-            out.write('id = "%s"\n' % parts[0].strip().replace('"', ""))
+            out.write('id = "%s"\n' % rule_id.replace('"', ""))
             out.write('description = "probe"\n')
-            out.write("regex = '''%s'''\n" % parts[2].strip())
-        break
+            out.write("regex = '''%s'''\n" % regex)
+        probe = subprocess.run(
+            ["gitleaks", "stdin", "--config", single, "--no-banner", "--exit-code", "0"],
+            input="x\n", capture_output=True, text=True,
+        )
+        if probe.returncode != 0:
+            bad.append(rule_id)
+print(" ".join(bad))
 PY
-      if [[ -s "${single}" ]] && ! printf 'x\n' \
-        | gitleaks stdin --config "${single}" --no-banner --exit-code 0 >/dev/null 2>&1; then
-        bad_ids="${bad_ids} ${rule_id}"
-      fi
-      rm -f "${single}"
-    done < "${REDACTION_EXTRA_PATTERNS}"
+)
+    bad_ids="${bad_ids:+ ${bad_ids}}"
     echo "redaction-scan: FAIL — the merged config crashes the engine; organization rule(s) not supported by RE2:${bad_ids:- (rule not isolated; test the file rule by rule)}" >&2
     echo "redaction-scan: rewrite those regexes without lookarounds or other non-RE2 constructs, then re-run." >&2
     exit 2

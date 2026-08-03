@@ -5,17 +5,21 @@ MAJOR and MINOR are owner-managed milestones; automation must never bump them.
 
 ## 1) Sync and derive the build number
 
-```console
-git fetch origin main --tags
-build="$(git rev-list --count origin/main)"
-version="0.5.${build}"
-printf '%s\n' "$version"
-```
-
 If the repository is shallow, unshallow first:
 
 ```console
-git fetch --unshallow origin main --tags
+if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+  git fetch --unshallow origin main --tags || exit $?
+fi
+```
+
+Sync origin main and derive the version:
+
+```console
+set -e
+git fetch origin main --tags
+version="$(./scripts/next-version)"
+printf '%s\n' "$version"
 ```
 
 ## 2) Stage new files before redaction checks
@@ -29,9 +33,12 @@ The scanners read tracked content, so an unstaged new file is invisible.
 ## 3) Run release gates
 
 ```console
+set -e
 PYTHONPATH=src uv run pytest tests -q
 ./scripts/redaction-scan.sh
-if ! ./scripts/redaction-inventory; then rc=$?; [ "$rc" -eq 1 ] || exit "$rc"; fi
+rc=0
+./scripts/redaction-inventory || rc=$?
+if [ "$rc" -ne 0 ]; then [ "$rc" -eq 1 ] || exit "$rc"; fi
 ```
 
 `redaction-inventory` exit 1 is the normal triage state. Exit 2 means cannot
@@ -39,7 +46,7 @@ decide and should block a release cut until resolved.
 
 ## 4) Finalize release metadata
 
-- Ensure `CHANGELOG.md` has the release notes for `v0.5.<build>`.
+- Ensure `CHANGELOG.md` has the release notes for `v${version}`.
 - Verify links and release date text.
 
 ## 5) Tagging is owner-approved and manual
@@ -47,7 +54,8 @@ decide and should block a release cut until resolved.
 Use the command below only after explicit owner approval:
 
 ```console
-git tag "v0.5.${build}"
+[ -n "${version:-}" ] || exit 1
+git tag "v${version}"
 ```
 
 Never automate tag creation or tag push. Do not push tags unless the owner asks

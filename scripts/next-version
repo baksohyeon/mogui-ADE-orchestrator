@@ -9,7 +9,7 @@ usage() {
 Usage: scripts/next-version [--help]
 
 Prints the release version that would be cut right now.
-BUILD is derived from: git rev-list --count origin/main
+BUILD is derived from: git rev-list --count refs/remotes/origin/main
 EOF
 }
 
@@ -23,7 +23,7 @@ if [[ "$#" -ne 0 ]]; then
   exit 2
 fi
 
-if ! git rev-parse --verify origin/main >/dev/null 2>&1; then
+if ! git rev-parse --verify refs/remotes/origin/main >/dev/null 2>&1; then
   echo "next-version: origin/main is unavailable; run: git fetch origin main --tags" >&2
   exit 2
 fi
@@ -33,5 +33,5 @@ if [[ "$(git rev-parse --is-shallow-repository)" == "true" ]]; then
   exit 2
 fi
 
-build="$(git rev-list --count origin/main)"
+build="$(git rev-list --count refs/remotes/origin/main)"
 printf '%s.%s\n' "$OWNER_MANAGED_MAJOR_MINOR" "$build"

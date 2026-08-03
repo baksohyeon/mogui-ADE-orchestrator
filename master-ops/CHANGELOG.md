@@ -41,6 +41,29 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+ONBOARDING.md installer UX pass from the 2026-08-03 mogui founding run
+(feedback tracked as maintainer backlog on that install):
+
+- Standing owner-facing language rules: no jargon quizzes; plain glosses for
+  probe/placement/selector; shell examples the owner sees use a `$ ` prefix.
+- Pacing and context diet: ship one step chunk at a time; start path is
+  Orientation → Step 0 only; re-read the step from disk if the transcript drifts.
+- Step 1 splits into purpose (with examples) → root → full-child inventory by
+  default → name/monitor/model. Outside repositories lead with "move or clone
+  under the root"; external lane is secondary opt-in. Monitor namespace is
+  explicitly not the issue-tracker prefix.
+- Step 1A no longer measures or ranks workspace-root folder candidates (that
+  felt intrusive). The installer explains terms, gives pick criteria, asks the
+  owner to choose the folder and paste an absolute path (prefer Orca **Copy
+  path**), then validates only what was pasted.
+- Step 3.5 explains the full open-measure-close temporary-terminal flow before
+  any UI action; owner speech says "temporary terminal," not "probe."
+- Step 5 byte-only CLAUDE.md/AGENTS.md drift is announce-and-proceed with an
+  ELI5 line; only substantive divergence asks the owner.
+- Step 6 asks for a master callsign; "master" stays the doc role label.
+- Step 7.6 drops the comprehension-quiz verify; explain the gate gap and continue.
+- README notes that callsign is chosen at install and lists example names.
+
 ## v0.4.1
 
 No template changes in this release; the version string moves so an

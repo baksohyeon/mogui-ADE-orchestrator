@@ -57,42 +57,61 @@ class WorkspaceDescriptor:
     master_seat: str
     repositories: tuple[RepositoryDescriptor, ...]
     source_path: Path | None
+    workspace_root: str | None = None
 
     def repository_for_path(self, path: str | Path) -> RepositoryDescriptor | None:
         """Match a path to a repository by declared relative path or exact name.
 
         Matching rules (unique hit required; ambiguous hits raise):
-        - exact match of the declared relative ``path``
+        - exact match of the declared relative ``path`` (including ``.``)
         - exact match of the declared ``name`` when the candidate has no
           path separator (``widget`` matches name ``widget``)
-        - absolute candidate whose path ends with ``/<declared path>`` when
-          the declared path has more than one segment (``.../services/app``
-          matches ``services/app``; single-segment declared paths never
-          suffix-match absolute candidates, because ``/a/app`` and ``/b/app``
-          would otherwise collide)
+        - absolute candidate: only when ``workspace_root`` is set on this
+          descriptor, the candidate is under that root, and the relative
+          remainder equals the declared path (so ``/other/widget`` cannot
+          steal the identity of ``widget`` under a different parent)
 
         Relative multi-segment candidates that are not exact equals never match
         by basename alone (``other/app`` does not match ``services/app``).
+        Absolute candidates without a bound ``workspace_root`` never match.
         """
-        candidate_str = Path(path).as_posix().rstrip("/")
-        if not candidate_str or candidate_str == ".":
+        raw = Path(path)
+        if not str(path).strip():
             return None
-        candidate_is_absolute = candidate_str.startswith("/")
+
+        # Prefer resolving absolute inputs against the bound workspace root.
+        relative_from_root: str | None = None
+        if raw.is_absolute():
+            if not self.workspace_root:
+                return None
+            root = Path(self.workspace_root).expanduser().resolve(strict=False)
+            try:
+                relative_from_root = (
+                    raw.expanduser().resolve(strict=False).relative_to(root).as_posix()
+                )
+            except ValueError:
+                return None
+            if relative_from_root in {"", "."}:
+                relative_from_root = "."
+            candidate_str = relative_from_root
+        else:
+            candidate_str = raw.as_posix().rstrip("/")
+            if candidate_str == "":
+                return None
+            if candidate_str == ".":
+                candidate_str = "."
 
         matches: list[RepositoryDescriptor] = []
         for repo in self.repositories:
-            declared = repo.path.rstrip("/")
+            declared = repo.path.rstrip("/") if repo.path != "." else "."
             if candidate_str == declared:
                 matches.append(repo)
                 continue
             if (
-                candidate_is_absolute
-                and "/" in declared
-                and candidate_str.endswith("/" + declared)
+                candidate_str != "."
+                and "/" not in candidate_str
+                and candidate_str == repo.name
             ):
-                matches.append(repo)
-                continue
-            if "/" not in candidate_str and candidate_str == repo.name:
                 matches.append(repo)
 
         if not matches:
@@ -177,6 +196,7 @@ def load_workspace_descriptor(
             master_seat="",
             repositories=(),
             source_path=None,
+            workspace_root=None,
         )
     payload = _read_payload(config_path)
     return _parse_descriptor(payload, source_path=config_path)
@@ -251,6 +271,14 @@ def _parse_descriptor(payload: Mapping[str, Any], *, source_path: Path) -> Works
     if not isinstance(master_seat, str):
         raise WorkspaceDescriptorError("master_seat must be a string")
 
+    workspace_root_raw = payload.get("workspace_root")
+    if workspace_root_raw is None or workspace_root_raw == "":
+        workspace_root: str | None = None
+    elif not isinstance(workspace_root_raw, str):
+        raise WorkspaceDescriptorError("workspace_root must be a string or null")
+    else:
+        workspace_root = workspace_root_raw.strip() or None
+
     raw_repos = payload.get("repositories")
     if raw_repos is None:
         repositories: tuple[RepositoryDescriptor, ...] = ()
@@ -267,7 +295,9 @@ def _parse_descriptor(payload: Mapping[str, Any], *, source_path: Path) -> Works
         master_seat=master_seat.strip(),
         repositories=repositories,
         source_path=source_path,
+        workspace_root=workspace_root,
     )
+
 
 
 def _reject_duplicate_identity(repositories: Sequence[RepositoryDescriptor]) -> None:

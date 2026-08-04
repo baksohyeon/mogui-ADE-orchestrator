@@ -35,6 +35,7 @@ def test_example_file_is_valid_json_with_documented_floor_fields() -> None:
     docs = payload["_docs"]
     for key in (
         "workspace_root_is_plain_folder",
+        "workspace_root",
         "master_seat",
         "repositories",
         "name",
@@ -45,6 +46,7 @@ def test_example_file_is_valid_json_with_documented_floor_fields() -> None:
         "prohibited",
     ):
         assert key in docs and docs[key].strip()
+    assert "workspace_root" in payload
     for repo in payload["repositories"]:
         for field in ("name", "path", "remote", "role", "capabilities", "prohibited"):
             assert field in repo
@@ -158,11 +160,16 @@ def test_product_direct_main_commit_is_prohibited(tmp_path: Path) -> None:
     )
 
 
-def test_multi_segment_path_suffix_match(tmp_path: Path) -> None:
+def test_absolute_path_requires_bound_workspace_root(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    (workspace / "services" / "app").mkdir(parents=True)
+    elsewhere = tmp_path / "elsewhere" / "services" / "app"
+    elsewhere.mkdir(parents=True)
     config = _write(
         tmp_path / "workspace-descriptor.json",
         {
             "workspace_root_is_plain_folder": True,
+            "workspace_root": str(workspace),
             "master_seat": "folder-workspace-of-workspace-root",
             "repositories": [
                 {
@@ -177,14 +184,70 @@ def test_multi_segment_path_suffix_match(tmp_path: Path) -> None:
         },
     )
     assert action_is_prohibited(
-        "/workspace/root/services/app",
+        str(workspace / "services" / "app"),
         "direct-main-commit",
         config_path=config,
         environ={},
     )
-    # Different parent with same basename must not match.
+    # Same relative suffix under a different absolute root must not match.
     assert not action_is_prohibited(
-        "/workspace/root/other/app",
+        str(elsewhere),
+        "direct-main-commit",
+        config_path=config,
+        environ={},
+        default_when_unknown_repo=False,
+    )
+
+
+def test_dot_path_matches_workspace_root_repo(tmp_path: Path) -> None:
+    workspace = tmp_path / "single"
+    workspace.mkdir()
+    config = _write(
+        tmp_path / "workspace-descriptor.json",
+        {
+            "workspace_root_is_plain_folder": True,
+            "workspace_root": str(workspace),
+            "master_seat": "primary-worktree",
+            "repositories": [
+                {
+                    "name": "single",
+                    "path": ".",
+                    "remote": "",
+                    "role": "product",
+                    "capabilities": ["pr"],
+                    "prohibited": ["direct-main-commit"],
+                }
+            ],
+        },
+    )
+    assert action_is_prohibited(
+        ".", "direct-main-commit", config_path=config, environ={}
+    )
+    assert action_is_prohibited(
+        str(workspace), "direct-main-commit", config_path=config, environ={}
+    )
+
+
+def test_absolute_without_workspace_root_is_unknown(tmp_path: Path) -> None:
+    config = _write(
+        tmp_path / "workspace-descriptor.json",
+        {
+            "workspace_root_is_plain_folder": True,
+            "master_seat": "x",
+            "repositories": [
+                {
+                    "name": "app",
+                    "path": "app",
+                    "remote": "",
+                    "role": "product",
+                    "capabilities": [],
+                    "prohibited": ["direct-main-commit"],
+                }
+            ],
+        },
+    )
+    assert not action_is_prohibited(
+        "/any/app",
         "direct-main-commit",
         config_path=config,
         environ={},

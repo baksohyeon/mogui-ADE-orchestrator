@@ -2,13 +2,13 @@
 
 Load rule: read this file only when Step 1 begins. Router: [`../ONBOARDING.md`](../ONBOARDING.md). Next file after Verify passes: `03-ops-repo.md`.
 
-**Position and action:** Step 1 begins after prerequisites pass: collect and measure the workspace facts before routing any work. Pace this step in three short turns when needed: (A) purpose and workspace root, (B) repository inventory, (C) name, monitor namespace, and model.
+**Position and action:** Step 1 begins after prerequisites pass: collect and measure the workspace facts before routing any work. Pace this step in gentle turns when needed: (A) purpose and workspace root, (B) repository inventory, (C) name, monitor namespace, and model.
 
 **Why/caution:** The master operates above repositories and needs a confirmed absolute root, a purpose, and an inventory.
 
-## Owner script (3–6 sentences, adapt to the owner's language)
+## Owner script (kind ELI5, adapt to the owner's language)
 
-Where we are: the machine checks passed. What we decide next: what this master is for and which folder it will manage. Before asking, give these plain definitions in the user's language:
+Where we are: the machine checks passed, so the Herald can now ask where the Master should live and what work it should guard. What we decide next: what this Master is for and which folder it will manage. Before asking, give these plain definitions in the user's language, slowly enough that a new Orca user can point at the right thing:
 
 - "Workspace (root)" is the folder that groups the repositories this master will manage, nothing more.
 - "Workspace name" is a display label; by default, it is that folder's name.
@@ -79,6 +79,31 @@ When the inventory has a single primary product repository the master is for (ow
 
 Also seed `transcript_globs` for the confirmed master host runtime when a transcript location can be **measured** on this host (for example Claude Code projects under `~/.claude/projects/`). Measurement beats asking; when nothing measurable exists for a runtime, leave that runtime's glob unset rather than pasting another installation's path.
 
+## Land the workspace descriptor (inventory the master and guards will read)
+
+The confirmed repository list needs one durable file the master, onboarding later steps, and guards can read without re-asking. That file is the **workspace descriptor**: a short inventory of which repositories belong here and what may be done to each. Plain explanation for the owner: it is the Herald's inventory of the realm — which houses sit in this workspace and which doors stay locked (for example, no direct commits to a product repository's main branch). It is not a git submodule map; the workspace root stays a plain folder of sibling checkouts on purpose.
+
+After `{{REPO_LIST}}` is confirmed:
+
+1. Copy the example once if the filled file is missing, then write the instance file (do not commit the filled copy; the template ships only the example):
+
+```console
+$ cd "{{RUNTIME_ROOT}}"
+$ test -f config/workspace-descriptor.json || cp config/workspace-descriptor.example.json config/workspace-descriptor.json
+```
+
+2. For each confirmed member repository under the workspace root, measure and write:
+   - `name` (folder basename unless the owner chooses another short id)
+   - `path` (workspace-root-relative; use `.` only when the workspace itself is that single repository)
+   - `remote` from `git -C "{{WORKSPACE_ROOT}}/<path>" remote get-url origin 2>/dev/null || echo ""` (paths are under the workspace root, not under `{{RUNTIME_ROOT}}`; empty string when no origin remote)
+   - `role`: `ops` for `{{OPS_REPO}}` once known, otherwise `product` for ordinary members (ask when a child is clearly governance-only)
+   - `capabilities`: default `["pr", "dispatch-target"]` unless the owner removes one
+   - `prohibited`: default `["direct-main-commit", "force-push"]` for `product`; default `["force-push"]` for `ops` (the owner may add or remove after seeing the list)
+3. Set workspace-level fields: `workspace_root_is_plain_folder: true` (always; do not offer submodules), `workspace_root` to the confirmed absolute `{{WORKSPACE_ROOT}}` (so absolute path checks can bind under this root), and `master_seat` to the seat form you will use in the seat step (folder workspace of the workspace root is the usual multi-repo answer; primary worktree when the workspace is one repository).
+4. Read the draft back for owner confirmation before treating it as final. Never invent repositories that were not measured. The filled instance file may hold this machine's absolute `workspace_root`; never commit that filled file — the template ships only the example.
+
+Resolution order for consumers (same shape as instance runtime config): environment override (`WORKSPACE_DESCRIPTOR` or `MOGUI_WORKSPACE_DESCRIPTOR`) → this file → honest unconfigured. The first consumer is worker routing / `scripts/workspace-descriptor-check`, which refuses product-repo `direct-main-commit` and `force-push` from the descriptor instead of a hardcoded path list.
+
 ## Verify
 
 - the master's purpose was asked with examples and recorded or explicitly deferred
@@ -88,6 +113,7 @@ Also seed `transcript_globs` for the confirmed master host runtime when a transc
 - `{{REPO_LIST}}` defaults to every measured immediate child repository, with only explicit opt-outs removed
 - every repository the user named that lives outside the root was offered move/clone first; if still outside, it is recorded as an external lane with access rules; none is left implicit
 - `config/instance-runtime.json` still has `master_host_runtime` from the preflight step; `product_repo` is set only when the owner confirmed a primary product path; any `transcript_globs` entry came from measurement or an explicit owner value, never a copied foreign path
+- `config/workspace-descriptor.json` exists (instance-owned, not committed) with `workspace_root_is_plain_folder: true`, `workspace_root` equal to the confirmed absolute root, a `master_seat` value, and one repository entry per confirmed `{{REPO_LIST}}` member under the root; product entries default-prohibit `direct-main-commit` and `force-push` unless the owner changed them; remotes were measured under `{{WORKSPACE_ROOT}}`; the template example was not replaced in git
 
 ## If fail
 

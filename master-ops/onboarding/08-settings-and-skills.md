@@ -2,15 +2,47 @@
 
 Load rule: read this file only when Step 7 begins. Router: [`../ONBOARDING.md`](../ONBOARDING.md). Next file after Verify passes: `09-spawn.md`.
 
-## Step 7. Explain the settings layer
+## Step 7. Explain the settings layer (default-on harness wiring)
 
-**Position and action:** Step 7 begins with durable user rules seeded: identify the host and the owner of settings and sensitive configuration.
+**Position and action:** Step 7 begins with durable user rules seeded: identify the host and the owner of settings and sensitive configuration, then wire the shipped harness **on by default**.
 
-**Why/caution:** The template specifies hook behavior but does not ship hidden deny lists, credentials, secret paths, or environment-specific security implementation.
+**Why/caution:** The template specifies hook behavior but does not ship hidden deny lists, credentials, secret paths, or environment-specific security implementation. A harness whose pieces are individually opt-in protects nothing — install everything on, and disable later by asking.
 
-### Owner script (3–6 sentences, adapt to the owner's language)
+### Owner script (kind ELI5, adapt to the owner's language)
 
-Where we are: the master's ground rules are saved. What we decide next: who owns the host settings and security-sensitive configuration, and which safety hooks to turn on. Ask which hosts run the master, who owns hooks/security-sensitive configuration, and whether dispatch warning, role-state injection, and compaction probe hooks should be enabled. Present the hook wiring spec from `docs/MASTER-OPERATIONS.md` in agent notes, not as a wall of text at the owner; delegate auth, permission, secrets, credentials, and production-data work to a dedicated security/operations session.
+Where we are: the Master's ground rules are saved, and the Herald now prepares the host-side safeguards before the Master rises. What happens next: we turn on the safety hooks and skills this template ships, all together, so the Master wakes with the same guards every install. Explain in simple terms that hooks are small host-side actions: some prepare the Master's context when it starts or resumes, some refresh it during a session, and some warn before risky actions. One warm sentence for the owner: **everything is on by default, and any piece can be turned off later by just asking the Master — who will explain what that piece does before disabling it.** Confirm who owns host settings and security-sensitive configuration (often the owner themselves). Do **not** ask per-hook or per-skill enable questions. Present the hook wiring spec from `docs/MASTER-OPERATIONS.md` in agent notes, not as a wall of text at the owner; delegate auth, permission, secrets, credentials, and production-data work to a dedicated security/operations session.
+
+### Default-on wiring (agent actions)
+
+Wire every shipped hook and skill this template documents, without offering an opt-out menu:
+
+- SessionStart: master operations context, role state, tracker memory
+- SessionStart on compact: `scripts/compaction-probe.sh`
+- PreCompact: reload or export tracker memory
+- UserPromptSubmit: role-state line + `Proposal -> Approval -> Execution` (see charter §8 / §9)
+- PreToolUse: supervised-dispatch bypass warning
+- PostToolUse: non-sensitive audit markers when locally approved
+- SessionStart: tracker reachability from `{{WORKSPACE_ROOT}}`
+- Shipped skills under `master-ops/skills/` (for example blame-agent) and the recommended methodology / restraint / tracker skill layers named in the stack table below
+
+Record in the ops notes that harness wiring is default-on as of this install. Do not edit host `settings.json` yourself when the host requires the owner to approve plugin installs — print the install commands and treat "printed and ready" as wired for onboarding purposes when the host blocks unattended writes.
+
+### Agent notes — disable guidance (for the master later)
+
+When the owner asks to turn something off, explain the piece in one sentence, state what behaviour changes, then apply the disable only after they confirm:
+
+| piece | what it does | how to disable later |
+| --- | --- | --- |
+| Role-state injection (UserPromptSubmit) | Restates the active role and Proposal→Approval→Execution every turn | Remove or comment the UserPromptSubmit hook entry in the host settings that points at the role-state inject script; re-enable by restoring it |
+| Compaction probe (SessionStart on compact) | Checks that the master still knows required facts after compaction | Remove the compact SessionStart hook that runs `scripts/compaction-probe.sh` |
+| Dispatch / supervised-dispatch warning (PreToolUse) | Warns when a worker path bypasses the dispatch gate | Remove the PreToolUse warn hook for bare worker invocation |
+| Tracker reachability warning (SessionStart) | Warns when the issue tracker is not reachable from the workspace root | Remove the SessionStart tracker-check hook |
+| Inbox / orch-inbox warn | Surfaces unread orchestration mailbox items | Remove the UserPromptSubmit hook for `orch-inbox-warn.sh` when present |
+| Blame-agent skill | Structured incident observation skill | Uninstall or unload the skill from the host skill path; documents stay in `master-ops/skills/blame-agent/` |
+| Methodology / restraint skill layers | How the master plans, verifies, and limits scope | Uninstall the host skill pack; charter remains readable as advice without them |
+| Worker runtime plugin | In-session delegation to another CLI | `/plugin` uninstall (or host equivalent) for that worker plugin |
+
+Never re-introduce per-item opt-out questions into this onboarding step. Disable is a post-install conversation with the master.
 
 ### Land host answers in the instance runtime config
 
@@ -20,18 +52,20 @@ When `--transcript` is omitted, consumers such as `{{RUNTIME_ROOT}}/scripts/mode
 
 ### Verify (Step 7)
 
+- shipped hooks and skills are treated as default-on; no per-item enable questions were asked
+- the owner heard the single sentence that everything is on and any piece can be disabled later by asking the master
 - the hook spec is documented, no sensitive implementation was added, and its owner is explicit or unresolved
 - `config/instance-runtime.json` has a `transcript_globs` entry for `master_host_runtime` (and any other runtime names the owner expects to probe) when measurement or an explicit owner value exists; keys are runtime names, not host nicknames; missing globs are left unset rather than guessed
 
-## Step 7.5. Offer the skill layer
+## Step 7.5. Skill layer (default-on shipped stack; print install commands)
 
-**Position and action:** Step 7.5 begins before the master is born: explain the optional stack in README, then ask which parts the user wants.
+**Position and action:** Step 7.5 begins before the master is born: explain the stack this install wires by default, print host install commands for pieces the template cannot embed, and stop.
 
-**Why/caution:** Skills load into the founding session; some installers, especially GSD, modify lifecycle hooks and require deliberate user choice.
+**Why/caution:** Skills load into the founding session. Default-on means the recommended stack is on unless the owner later asks the master to disable a piece. Do not run a per-component shopping quiz during install.
 
-Explain each component in one sentence before showing any command. Print approved install commands and stop; do not run them or edit `settings.json`, hooks, or plugin configuration.
+Explain each component in one sentence. Print approved install commands and stop; do not run them or edit `settings.json`, hooks, or plugin configuration unless the owner already approved unattended host edits earlier in this session.
 
-These five questions decided what is in the stack, and they are worth repeating when a component is proposed later:
+**Agent notes — five questions for any *new* component proposed after install** (not an install-time opt-in menu):
 
 1. does it require an API key
 2. does it force telemetry, or collect more than the job needs
@@ -41,7 +75,7 @@ These five questions decided what is in the stack, and they are worth repeating 
 
 A component that fails the first three is usually a subscription pretending to be a dependency. A component that passes them but answers nothing for the fifth is a preference, and should be labelled as one.
 
-The stack this template was built against, with what each one is for and what it is deliberately not used for. Name the role before the install command, because a tool adopted without its boundary becomes the next thing to unwind:
+The stack this template was built against (default-on for this install), with what each one is for and what it is deliberately not used for:
 
 | component | role here | not used for |
 |---|---|---|
@@ -52,14 +86,14 @@ The stack this template was built against, with what each one is for and what it
 | methodology skills | how the master plans and verifies | without them the charter reads as advice rather than procedure |
 | restraint skills | how much the master builds | pairs with the methodology layer rather than competing |
 | review graph | impact radius and review context, locally parsed | optional; its value is token cost, not correctness |
-| spec-driven framework | phase discipline from research through verification | installs lifecycle hooks, so it needs a deliberate yes |
+| spec-driven framework | phase discipline from research through verification | installs lifecycle hooks; still default-on here — disable later via the master if unwanted |
 | worker runtime plugin | lets the master delegate implementation from inside its own session | one wiring of the adapter layer, not a harness requirement |
 
 Each host carries its own agent model and worker runtime plugin ecosystem. A worker runtime such as Codex is a first-class executor rather than a fallback. Expect the preference to split hard between the two camps; the contracts hold either way, which is the point of an agent-neutral template.
 
 One asymmetry to plan around rather than discover: an agent without an interactive query interface cannot run the steps of this document that ask the user a question. Onboarding is a conversation. Run it from an agent that can ask, or supply every answer in the dispatch contract up front and record that the questions were answered in advance rather than asked.
 
-Install commands for the Claude Code case, printed and not run:
+Install commands for the Claude Code case, printed and not run (default-on intent: the owner is expected to run these unless they already have the worker plugin):
 
 ```console
 $ /plugin marketplace add openai/codex-plugin-cc
@@ -68,24 +102,20 @@ $ /reload-plugins
 $ /codex:setup
 ```
 
-Say which of them are optional in name only. The template carries documents and scripts; it cannot carry the host layer that makes a master behave the way the documents describe, so a component listed here as recommended is often load-bearing. State the consequence of declining each one in a sentence, in the same breath as the offer, rather than leaving the user to discover it later:
+Name the load-bearing consequence of each layer in one sentence while presenting the table, not as a decline quiz:
 
 - a methodology skill layer changes how the master plans and verifies; without it the master still runs, and reads the charter as advice rather than procedure
-- a restraint skill layer keeps the master from over-building; without it, expect larger diffs and more speculative structure. It pairs with the methodology layer rather than competing with it: one decides how to approach work, the other decides how much to build
+- a restraint skill layer keeps the master from over-building; without it, expect larger diffs and more speculative structure
 - a tracker skill layer is what makes execution state survive a session; without it, state lives only in the transcript
 - a worker runtime is what makes delegation possible at all; without at least one, the master does every task itself
 
-When the user declines a component the preflight treats as essential, ask once more. Not as a nag: restate the specific behaviour that changes, then ask whether to proceed without it. One re-ask, then take the answer as final.
-
-The reason to ask twice is that the first no is usually answering a different question. A component list reads as preferences, so the first pass is "do I want this", while the question that matters is "am I accepting this behaviour". Restating the consequence is what turns one into the other.
-
-Record the confirmed decline together with what is being accepted, in the user's own terms where possible. A declined component is a fact about the installation, and later behaviour that looks like a master defect is often a declined component instead.
-
-Where the agent running onboarding has no interactive query interface, the re-ask cannot happen at all. In that case the dispatch contract carries the confirmed declines up front, and the record says they were confirmed in advance rather than asked.
+If the owner spontaneously declines a default-on piece during this step, restate the specific behaviour that changes, confirm once, then record the decline with what is being accepted. Do not open with declines. Disable paths for later are in the Step 7 agent notes table.
 
 ### Verify (Step 7.5)
 
-- the explanation preceded commands, nothing was installed or configured by the agent, every essential decline was re-asked once with its consequence restated, and the user's choice, including no installation, is recorded with what it accepts
+- the explanation preceded commands; the agent did not run a per-item opt-in menu; default-on intent is recorded
+- nothing was installed or configured by the agent unless the owner already approved unattended host edits
+- any spontaneous decline was re-confirmed once with its consequence restated and recorded
 
 ## Step 7.6. State what the publish gates do not cover
 
@@ -93,9 +123,9 @@ Where the agent running onboarding has no interactive query interface, the re-as
 
 **Why/caution:** A gate that is trusted beyond its scope is worse than no gate, because it converts an unchecked surface into a believed-clean one.
 
-### Owner script (3–6 sentences, adapt to the owner's language)
+### Owner script (kind ELI5, adapt to the owner's language)
 
-The gates read repository content. Name the surfaces they do not read, so nobody assumes coverage that does not exist: pull request titles, bodies, and review comments; release notes and issue text; anything typed into a forge web interface. None of those are in the repository, so no scanner in this template sees them — and they are where internal names most easily arrive, because they are written in prose rather than code. The habit that works is to grep your own outgoing text for organization identifiers before posting it, exactly as the scan does for files. Explain the gap once, in plain language, then continue.
+The gates read repository content. This is one of the places where the Herald must be especially plain: name the surfaces they do not read, so nobody assumes coverage that does not exist. Those surfaces are pull request titles, bodies, and review comments; release notes and issue text; anything typed into a forge web interface. None of those are in the repository, so no scanner in this template sees them — and they are where internal names most easily arrive, because they are written in prose rather than code. The habit that works is to grep your own outgoing text for organization identifiers before posting it, exactly as the scan does for files. Explain the gap once, in plain language, then continue.
 
 Tell the user that organization-specific patterns live in a file outside version control, that the gates fail closed without it, and that its format is one rule per line as `id|description|regex`. That file is what makes the gates able to catch a workspace name; the shipped rules only catch generic provider secrets.
 

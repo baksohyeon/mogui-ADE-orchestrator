@@ -14,7 +14,21 @@ Recommended worker lanes:
 - Local code work: a worker lane bound to the relevant repository checkout
 - Sensitive areas such as auth, permissions, secrets, credentials, production data, and incident material: a dedicated security or operations session
 
-The installation-specific worker tier mapping lives in `model-tier-policy.json`, which groups installed model identifiers into tiers; use the lowest sufficient tier for each worker lane. Measure what this host actually offers before filling it in: a template default lists models a machine may not have, and a model the file has never heard of is not blocked, it is capped as `unknown`.
+## Workspace descriptor prohibitions (product main and force-push)
+
+Which repositories belong to this workspace, and which actions are hard-blocked on each, live in the instance workspace descriptor written at onboarding (`{{RUNTIME_ROOT}}/config/workspace-descriptor.json`; template ships only `config/workspace-descriptor.example.json`). Do not keep a parallel hardcoded product-path list in this charter.
+
+Before a direct commit to a repository default branch, a force-push, or any other action named under a repository's `prohibited` list, measure the descriptor:
+
+```bash
+"{{RUNTIME_ROOT}}/scripts/workspace-descriptor-check" \
+  --path <repository-path> \
+  --action direct-main-commit
+```
+
+Exit `1` means prohibited; exit `0` means the descriptor does not list that action for the matched repo; exit `2` means unconfigured or invalid (fail closed: do not invent permission). The same check accepts `--action force-push`. Resolution order matches instance runtime config: environment override (`WORKSPACE_DESCRIPTOR` or `MOGUI_WORKSPACE_DESCRIPTOR`) → instance file → honest unconfigured. Product repositories default to prohibiting `direct-main-commit` and `force-push`; ops repositories default to prohibiting `force-push`. Owner-confirmed edits to the instance file win over these defaults.
+
+The installation-specific worker tier mapping lives in the instance file `{{RUNTIME_ROOT}}/config/model-tier-policy.json` when onboarding wrote one (after agent-inventory consent), else the template `model-tier-policy.json`. It groups installed model identifiers into tiers; use the lowest sufficient tier for each worker lane. Measure what this host actually offers before filling it in: never guess a model id, and a model the file has never heard of is not blocked, it is capped as `unknown`. Gate resolution: `DISPATCH_TIER_POLICY` → instance `config/model-tier-policy.json` → template `master-ops/model-tier-policy.json`.
 
 Worker contract clause library: `docs/runbooks/contract-conventions.md`.
 

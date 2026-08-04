@@ -22,6 +22,34 @@ you build on it.
 
 ### Added
 
+- Onboarding agent-inventory consent and default-on harness wiring (owner
+  decisions 2026-08-04): step 01 asks consent to probe installed agent CLIs
+  (purpose: match task weight to model strength; cap top-tier fan-out), then
+  writes instance `config/model-tier-policy.json` from measured (or
+  owner-named) runtimes, versions, and model ids — never guessed ids.
+  Ships `config/model-tier-policy.example.json` only. Dispatch gate default
+  path is now env `DISPATCH_TIER_POLICY` → instance file → template
+  `master-ops/model-tier-policy.json`. Step 08 wires shipped hooks/skills
+  default-on with one owner sentence that any piece can be disabled later by
+  asking the master; agent notes carry disable guidance. No per-item wiring
+  opt-out questions.
+
+- Workspace descriptor inventory (owner decision 2026-08-04; closes ledger item
+  mgm-tek.9 repository descriptor): ships
+  `config/workspace-descriptor.example.json` only (filled instance file is
+  gitignored). Per repository: `name`, workspace-root-relative `path`,
+  `remote`, `role` (`product`|`ops`), `capabilities`, `prohibited`. Workspace
+  fields: `workspace_root_is_plain_folder: true` (no submodules; plain folder
+  of siblings is intentional) and `master_seat`. Loader
+  `src/master_runtime/core/workspace_descriptor.py` resolves environment
+  override → instance file → honest unconfigured. Consumer:
+  `scripts/workspace-descriptor-check` and worker-routing guidance read
+  `prohibited` (for example `direct-main-commit`, `force-push`) instead of a
+  hardcoded product-path list. Onboarding step 02 writes the instance file
+  from the measured repository inventory. Docs:
+  `docs/public/orca-concepts.md` records that Orca "not a valid worktree
+  folder" on the plain root is expected.
+
 - Instance runtime config for onboarding answers: ships
   `config/instance-runtime.example.json` (template never commits a filled copy)
   with `master_host_runtime`, per-runtime `transcript_globs`, and optional

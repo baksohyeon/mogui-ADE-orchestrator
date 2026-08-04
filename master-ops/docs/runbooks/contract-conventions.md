@@ -77,6 +77,8 @@ to batch rather than loop:
 Two things are never traded for speed, and the contract must say so: **one reply per
 thread**, and the task's own verification steps. Everything else is throughput.
 
+What those replies should sound like lives in [Review voice](review-voice.md).
+
 Iterating eighteen threads one at a time costs roughly an order of magnitude more turns
 than batching them, and the extra turns buy nothing.
 
@@ -283,10 +285,38 @@ address a report was sent to before concluding it was never sent.
 This applies to the master more than to any worker, because the master is the one reading
 surfaces all day and has nobody downstream to catch a misread.
 
+## 9. Document reference clause [measured]
+
+A reference from one document to another is written as a real markdown link:
+`[readable title](relative/path/to/target.md)`. A path wrapped in backticks is not a
+reference; it is a string that happens to look like one.
+
+The reason is navigation. An agent reading a document follows links. A backticked path
+has to be recognised as a path, resolved against the reading agent's guess about which
+directory the document lives in, and then opened on a hunch. Each of those steps is a
+place to fail silently, and the failure looks like the reference was never there. Wiki
+brackets have the same defect with a nicer face: they name a target without saying where
+it is.
+
+Backticks stay where they belong: code identifiers, flags, commands, literal values,
+and file names being discussed as names rather than as destinations. The test is whether
+a reader is meant to *go* there. If yes, it is a link.
+
+Basis: owner instruction 2026-08-05, after measured runbooks were found carrying document
+references in backticks, including a file written that same day whose whole subject was
+making guidance reachable. The convention already existed in places and went unfollowed
+elsewhere — an unstated form is not a convention. Those references were converted, each
+checked against the file it claimed to point at. When a target lives in another
+repository and no relative path resolves to it, say so in the sentence rather than
+emitting a link that goes nowhere; that case stays described as a name, not linked.
+
+Verify the links, do not assume them: resolve each target relative to the file that
+contains it and confirm the file exists before committing.
+
 ## Grade distribution (2026-08-04)
 
 - machine-enforced: 1
-- measured: 5
+- measured: 6
 - prose: 2
 
 Distribution is non-uniform, so these grades are based on enforceability and

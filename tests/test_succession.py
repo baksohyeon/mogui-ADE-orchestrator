@@ -730,6 +730,21 @@ def test_spawn_startup_command_covers_agent_variants_and_shell_quoting() -> None
         "cd '/repo/with space' && exec codex --model gpt-5.6-sol "
         "'start; $(touch should-not-run)'"
     )
+    # Flags below are measured from each CLI's own --help, never guessed.
+    # cursor-agent is the executable; plain `cursor` is the updater, so both
+    # spellings must resolve to cursor-agent or a successor lands in the wrong
+    # binary. --force allows commands unless denied, --trust skips the
+    # workspace prompt; without them the session comes up prompt-blocked, which
+    # is how Generation 1 stalled on a bare claude.
+    for spelling in ("cursor", "cursor-agent"):
+        assert _spawn_startup_command(root, "gpt-5", kickoff, spelling) == (
+            "cd '/repo/with space' && exec cursor-agent --model gpt-5 --force --trust "
+            "'start; $(touch should-not-run)'"
+        )
+    assert _spawn_startup_command(root, "agy-model", kickoff, "agy") == (
+        "cd '/repo/with space' && exec agy --model agy-model "
+        "--dangerously-skip-permissions 'start; $(touch should-not-run)'"
+    )
     assert _spawn_startup_command(root, "custom-model", kickoff, "custom agent; touch") == (
         "cd '/repo/with space' && exec 'custom agent; touch' --model custom-model "
         "'start; $(touch should-not-run)'"

@@ -1006,12 +1006,30 @@ def _spawn_startup_command(
             quoted_kickoff,
         )
     if agent_key in ("codex",):
+        # Codex has no launch approval flag by design; it uses the account-wide
+        # pre-trust path (scripts/codex-worker-pretrust) instead.
         return "cd {0} && exec codex --model {1} {2}".format(
             quoted_root,
             quoted_model,
             quoted_kickoff,
         )
+    if agent_key in ("cursor", "cursor-agent"):
+        # The executable is cursor-agent; plain `cursor` is the updater.
+        return "cd {0} && exec cursor-agent --model {1} --force --trust {2}".format(
+            quoted_root,
+            quoted_model,
+            quoted_kickoff,
+        )
+    if agent_key in ("agy",):
+        return "cd {0} && exec agy --model {1} --dangerously-skip-permissions {2}".format(
+            quoted_root,
+            quoted_model,
+            quoted_kickoff,
+        )
     # Unknown agent: treat the name as the executable and pass model + prompt.
+    # No approval flag is attached, so such a session can come up prompt-blocked
+    # and stall on its first tool call. Add a branch above once the host's flag
+    # has been measured from its own --help; do not guess one.
     return "cd {0} && exec {1} --model {2} {3}".format(
         quoted_root,
         shlex.quote(agent.strip()),

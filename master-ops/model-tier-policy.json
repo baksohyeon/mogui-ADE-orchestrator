@@ -13,12 +13,17 @@
       "gpt-5.3-codex",
       "grok-4.5",
       "claude-haiku-4-5",
-      "gemini-3.6-flash"
+      "claude-haiku-4-5-20251001",
+      "gemini-3.6-flash",
+      "claude-sonnet-5",
+      "gpt-5.5",
+      "grok-4.5-fast"
     ]
   },
   "fanout_caps": {
-    "top": 1,
-    "unknown": 1
+    "top": 4,
+    "unknown": 8
   },
-  "window_seconds": 86400
+  "window_seconds": 86400,
+  "_notes": "2026-08-04 owner directive: daily 1-per-day top cap retired (rule outlived its basis; quota pressure shifted lanes to grok). unknown no longer inherits the strictest cap — an absent model id must not be punished as if it were top tier (dz measurement: claude-sonnet-5 fell to unknown and was denied like top). Add new model ids to a tier list as they appear. Template aligned with the instance policy on the same day; gate treats a missing fanout_caps entry as uncapped for every tier including unknown."
 }

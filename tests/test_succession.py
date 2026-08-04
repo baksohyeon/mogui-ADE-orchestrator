@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Sequence, Tuple
+from unittest.mock import patch
 
 from master_runtime.core.bootstrap import RoleState
 from master_runtime.core.recovery import RecoveryReport, RecoveryStep
@@ -15,6 +16,8 @@ from master_runtime.core.succession import (
     SPAWN_PLACEMENT_MISMATCH,
     SessionInfo,
     SuccessionError,
+    _default_process_probe,
+    _default_tty_probe,
     _reissued_terminal_candidates,
     _spawn_startup_command,
     _worktrees_match,
@@ -796,6 +799,26 @@ def test_retire_blank_target_tty_is_skipped_not_measured() -> None:
         assert report.disappearances["tty"].startswith("skipped:"), blank_tty
         assert report.status != "CLOSED", blank_tty
         assert probe_calls == [], blank_tty
+
+
+def test_default_process_probe_timeout_is_fail_closed() -> None:
+    """TimeoutExpired → still present is pure control flow, not host /dev behaviour."""
+
+    def raise_timeout(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired(cmd=("ps",), timeout=5)
+
+    with patch("master_runtime.core.succession.subprocess.run", side_effect=raise_timeout):
+        assert _default_process_probe(4242) is True
+
+
+def test_default_tty_probe_timeout_is_fail_closed() -> None:
+    """TimeoutExpired → still present is pure control flow, not host /dev behaviour."""
+
+    def raise_timeout(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired(cmd=("ps",), timeout=5)
+
+    with patch("master_runtime.core.succession.subprocess.run", side_effect=raise_timeout):
+        assert _default_tty_probe("/dev/ttys147") is True
 
 
 def test_retire_target_tty_supplied_and_still_present_is_refused() -> None:

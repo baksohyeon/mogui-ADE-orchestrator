@@ -156,14 +156,14 @@ CLOSE_WAIT means these six things (an unstated convention is not a convention):
 
 Send the FIN into the predecessor's live prompt when it is idle; a mailbox the idle agent never reads is not delivery. Send-success is not consumption — verify by reading the pane. Choose a FIN marker the predecessor must produce that does not appear verbatim in the successor's own FIN text, or count occurrences and require at least two; quoting the marker inside the instruction string can put it on screen before the predecessor has answered.
 
-TIME_WAIT is not ceremony. A handle can rotate without a restart, and a session can hold two processes at once (one replaying the other's transcript). Closing the instant a FIN lands can close a pane whose incarnation is being recreated — the same hazard TIME_WAIT exists for in TCP. Wait for measured quiet on both the host's last-output timestamp and a pane read, then close.
+TIME_WAIT is not ceremony. A handle can rotate without a restart, and a session can hold two processes at once (one replaying the other's transcript). Closing the instant a FIN lands can close a pane whose incarnation is being recreated — the same hazard that TIME_WAIT exists to prevent in TCP. Wait for measured quiet on both the host's last-output timestamp and a pane read, then close.
 
-Carry the predecessor's pid and tty yourself. Host terminal lists often report `process_id: null` for the folder-workspace panes a master seat occupies, so the tool cannot invent those checks from the record. Pass what you measured:
+Carry the predecessor's pid and tty yourself. Host terminal lists often report `process_id: null` for the folder-workspace panes a master seat occupies, so the tool cannot invent those checks from the record. Pass what you measured on the live sessions (handles, pid, and tty are not assumed to come from any particular host environment variable):
 
 ```bash
 scripts/master-succeed retire \
-  --self-handle "$ORCA_TERMINAL_HANDLE" \
-  --target-handle predecessor-handle \
+  --self-handle <successor-handle you measured> \
+  --target-handle <predecessor-handle you measured> \
   --target-pid <measured-pid> \
   --target-tty <measured-tty> \
   --json \

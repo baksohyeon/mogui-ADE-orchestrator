@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Sequence, Tuple
+from unittest.mock import patch
 
 from master_runtime.core.bootstrap import RoleState
 from master_runtime.core.recovery import RecoveryReport, RecoveryStep
@@ -15,6 +16,8 @@ from master_runtime.core.succession import (
     SPAWN_PLACEMENT_MISMATCH,
     SessionInfo,
     SuccessionError,
+    _default_process_probe,
+    _default_tty_probe,
     _reissued_terminal_candidates,
     _spawn_startup_command,
     _worktrees_match,
@@ -281,8 +284,13 @@ def test_retire_predecessor_execute_closes_and_rechecks() -> None:
         execute=True,
     )
 
-    assert report.status == "CLOSED"
+    # No pid/tty supplied and terminal record has none → partial, not full CLOSED.
+    assert report.status == "CLOSED_PARTIAL"
     assert report.target_handle == "term-u8"
+    assert report.closed is True
+    assert report.disappearances["pane"] == "measured"
+    assert report.disappearances["process"].startswith("skipped:")
+    assert report.disappearances["tty"].startswith("skipped:")
     assert ("orca", "terminal", "close", "--terminal", "term-u8", "--json") in calls
 
 
@@ -394,10 +402,13 @@ def test_retire_predecessor_explicit_handle_closes_title_drift_folder_context() 
         process_probe=lambda pid: False,
     )
 
-    assert report.status == "CLOSED"
+    # Process measured from terminal record; tty still skipped → CLOSED_PARTIAL.
+    assert report.status == "CLOSED_PARTIAL"
     assert report.target_handle == "term-u8"
     assert report.closed is True
-    assert "process gone: pid=4242" in report.reason
+    assert report.disappearances["pane"] == "measured"
+    assert report.disappearances["process"] == "measured"
+    assert report.disappearances["tty"].startswith("skipped:")
     assert "term-u8: handle=term-u8 -> handle" in report.match_attempts
     assert ("orca", "terminal", "close", "--terminal", "term-u8", "--json") in calls
 
@@ -453,7 +464,460 @@ def test_retire_predecessor_refuses_when_pid_survives_close() -> None:
 
     assert report.status == "REFUSED"
     assert report.closed is False
+    assert report.disappearances["pane"] == "measured"
+    assert report.disappearances["process"] == "still_present"
     assert "target process still present after close: pid=4242" in report.reason
+
+
+def test_retire_target_pid_supplied_and_gone_with_tty_is_closed() -> None:
+    runner = _runner(
+        {
+            _LIST_COMMAND: [
+                (
+                    0,
+                    _orca_json_from_terminals(
+                        {
+                            "handle": "term-self",
+                            "worktreePath": "/repo/mogui-ADE-orchestrator/u9-succession",
+                            "connected": True,
+                            "title": "u9 successor",
+                        },
+                        {
+                            "handle": "term-u8",
+                            "processId": None,
+                            "worktreePath": "",
+                            "connected": True,
+                            "title": "folder workspace predecessor",
+                        },
+                    ),
+                    "",
+                ),
+                (
+                    0,
+                    _orca_json_from_terminals(
+                        {
+                            "handle": "term-self",
+                            "worktreePath": "/repo/mogui-ADE-orchestrator/u9-succession",
+                            "connected": True,
+                            "title": "u9 successor",
+                        },
+                    ),
+                    "",
+                ),
+            ],
+            ("orca", "terminal", "close", "--terminal", "term-u8", "--json"): (0, '{"ok":true}', ""),
+        }
+    )
+    probed = []
+
+    report = retire_predecessor(
+        predecessor_selector="",
+        self_handle="term-self",
+        target_handle="term-u8",
+        orca_runner=runner,
+        execute=True,
+        target_pid=88616,
+        target_tty="/dev/ttys147",
+        process_probe=lambda pid: probed.append(pid) or False,
+        tty_probe=lambda tty: probed.append(tty) or False,
+    )
+
+    assert report.status == "CLOSED"
+    assert report.closed is True
+    assert report.disappearances == {
+        "pane": "measured",
+        "process": "measured",
+        "tty": "measured",
+    }
+    assert probed == [88616, "/dev/ttys147"]
+    assert "three disappearances measured" in report.reason
+
+
+def test_retire_target_pid_supplied_and_still_present_is_refused() -> None:
+    runner = _runner(
+        {
+            _LIST_COMMAND: [
+                (
+                    0,
+                    _orca_json_from_terminals(
+                        {
+                            "handle": "term-self",
+                            "connected": True,
+                            "title": "successor",
+                        },
+                        {
+                            "handle": "term-u8",
+                            "processId": None,
+                            "connected": True,
+                            "title": "predecessor",
+                        },
+                    ),
+                    "",
+                ),
+                (
+                    0,
+                    _orca_json_from_terminals(
+                        {"handle": "term-self", "connected": True, "title": "successor"},
+                    ),
+                    "",
+                ),
+            ],
+            ("orca", "terminal", "close", "--terminal", "term-u8", "--json"): (0, '{"ok":true}', ""),
+        }
+    )
+
+    report = retire_predecessor(
+        predecessor_selector="",
+        self_handle="term-self",
+        target_handle="term-u8",
+        orca_runner=runner,
+        execute=True,
+        target_pid=88616,
+        process_probe=lambda pid: True,
+        tty_probe=lambda tty: False,
+    )
+
+    assert report.status == "REFUSED"
+    assert report.closed is False
+    assert report.disappearances["process"] == "still_present"
+    assert "pid=88616" in report.reason
+    # A skip on tty must not be readable as a process pass.
+    assert report.disappearances["tty"].startswith("skipped:")
+    assert report.status != "CLOSED"
+    assert report.status != "CLOSED_PARTIAL"
+
+
+def test_retire_pid_omitted_with_null_terminal_pid_is_skipped_not_pass() -> None:
+    """Gen-2 teardown shape: process_id null, no --target-pid → never full CLOSED."""
+    runner = _runner(
+        {
+            _LIST_COMMAND: [
+                (
+                    0,
+                    _orca_json_from_terminals(
+                        {
+                            "handle": "term-self",
+                            "connected": True,
+                            "title": "successor",
+                        },
+                        {
+                            "handle": "term-u8",
+                            "processId": None,
+                            "connected": True,
+                            "title": "folder workspace master",
+                        },
+                    ),
+                    "",
+                ),
+                (
+                    0,
+                    _orca_json_from_terminals(
+                        {"handle": "term-self", "connected": True, "title": "successor"},
+                    ),
+                    "",
+                ),
+            ],
+            ("orca", "terminal", "close", "--terminal", "term-u8", "--json"): (0, '{"ok":true}', ""),
+        }
+    )
+    process_probe_calls = []
+
+    report = retire_predecessor(
+        predecessor_selector="",
+        self_handle="term-self",
+        target_handle="term-u8",
+        orca_runner=runner,
+        execute=True,
+        process_probe=lambda pid: process_probe_calls.append(pid) or False,
+    )
+
+    assert report.status == "CLOSED_PARTIAL"
+    assert report.closed is True
+    assert report.disappearances["pane"] == "measured"
+    assert report.disappearances["process"] == (
+        "skipped:no target-pid and no pid reported by terminal list"
+    )
+    assert report.disappearances["tty"] == "skipped:no target-tty supplied"
+    assert process_probe_calls == []
+    assert report.status != "CLOSED"
+
+
+def test_retire_null_process_id_with_external_target_pid_pins_gen2_shape() -> None:
+    """Terminal record process_id null AND --target-pid supplied (Gen-2 real shape)."""
+    runner = _runner(
+        {
+            _LIST_COMMAND: [
+                (
+                    0,
+                    _orca_json_from_terminals(
+                        {
+                            "handle": "term-self",
+                            "connected": True,
+                            "title": "gen3 successor",
+                        },
+                        {
+                            "handle": "term-u8",
+                            "processId": None,
+                            "connected": True,
+                            "title": "gen2 predecessor",
+                        },
+                    ),
+                    "",
+                ),
+                (
+                    0,
+                    _orca_json_from_terminals(
+                        {"handle": "term-self", "connected": True, "title": "gen3 successor"},
+                    ),
+                    "",
+                ),
+            ],
+            ("orca", "terminal", "close", "--terminal", "term-u8", "--json"): (0, '{"ok":true}', ""),
+        }
+    )
+    probed_pids = []
+
+    report = retire_predecessor(
+        predecessor_selector="",
+        self_handle="term-self",
+        target_handle="term-u8",
+        orca_runner=runner,
+        execute=True,
+        target_pid=88616,
+        target_tty="ttys147",
+        process_probe=lambda pid: probed_pids.append(pid) or False,
+        tty_probe=lambda tty: False,
+    )
+
+    assert probed_pids == [88616]
+    assert report.status == "CLOSED"
+    assert report.disappearances == {
+        "pane": "measured",
+        "process": "measured",
+        "tty": "measured",
+    }
+
+
+def test_retire_target_tty_supplied_and_gone() -> None:
+    runner = _runner(
+        {
+            _LIST_COMMAND: [
+                (
+                    0,
+                    _orca_json_from_terminals(
+                        {"handle": "term-self", "connected": True, "title": "successor"},
+                        {
+                            "handle": "term-u8",
+                            "processId": 99,
+                            "connected": True,
+                            "title": "predecessor",
+                        },
+                    ),
+                    "",
+                ),
+                (
+                    0,
+                    _orca_json_from_terminals(
+                        {"handle": "term-self", "connected": True, "title": "successor"},
+                    ),
+                    "",
+                ),
+            ],
+            ("orca", "terminal", "close", "--terminal", "term-u8", "--json"): (0, '{"ok":true}', ""),
+        }
+    )
+
+    report = retire_predecessor(
+        predecessor_selector="",
+        self_handle="term-self",
+        target_handle="term-u8",
+        orca_runner=runner,
+        execute=True,
+        target_tty="/dev/ttys147",
+        process_probe=lambda pid: False,
+        tty_probe=lambda tty: False,
+    )
+
+    assert report.status == "CLOSED"
+    assert report.disappearances["tty"] == "measured"
+
+
+def test_retire_blank_target_tty_is_skipped_not_measured() -> None:
+    """Whitespace-only or /dev/-only target_tty must not count as measured."""
+    base_lists = {
+        _LIST_COMMAND: [
+            (
+                0,
+                _orca_json_from_terminals(
+                    {"handle": "term-self", "connected": True, "title": "successor"},
+                    {
+                        "handle": "term-u8",
+                        "processId": 99,
+                        "connected": True,
+                        "title": "predecessor",
+                    },
+                ),
+                "",
+            ),
+            (
+                0,
+                _orca_json_from_terminals(
+                    {"handle": "term-self", "connected": True, "title": "successor"},
+                ),
+                "",
+            ),
+        ],
+        ("orca", "terminal", "close", "--terminal", "term-u8", "--json"): (0, '{"ok":true}', ""),
+    }
+
+    for blank_tty in ("   ", "/dev/", " /dev/ "):
+        runner = _runner(
+            {
+                _LIST_COMMAND: list(base_lists[_LIST_COMMAND]),
+                ("orca", "terminal", "close", "--terminal", "term-u8", "--json"): (
+                    0,
+                    '{"ok":true}',
+                    "",
+                ),
+            }
+        )
+        probe_calls = []
+        report = retire_predecessor(
+            predecessor_selector="",
+            self_handle="term-self",
+            target_handle="term-u8",
+            orca_runner=runner,
+            execute=True,
+            target_tty=blank_tty,
+            process_probe=lambda pid: False,
+            tty_probe=lambda tty: probe_calls.append(tty) or False,
+        )
+
+        assert report.status == "CLOSED_PARTIAL", blank_tty
+        assert report.disappearances["pane"] == "measured", blank_tty
+        assert report.disappearances["process"] == "measured", blank_tty
+        assert report.disappearances["tty"].startswith("skipped:"), blank_tty
+        assert report.status != "CLOSED", blank_tty
+        assert probe_calls == [], blank_tty
+
+
+def test_default_process_probe_timeout_is_fail_closed() -> None:
+    """TimeoutExpired → still present is pure control flow, not host /dev behaviour."""
+
+    def raise_timeout(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired(cmd=("ps",), timeout=5)
+
+    with patch("master_runtime.core.succession.subprocess.run", side_effect=raise_timeout):
+        assert _default_process_probe(4242) is True
+
+
+def test_default_tty_probe_timeout_is_fail_closed() -> None:
+    """TimeoutExpired → still present is pure control flow, not host /dev behaviour."""
+
+    def raise_timeout(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired(cmd=("ps",), timeout=5)
+
+    with patch("master_runtime.core.succession.subprocess.run", side_effect=raise_timeout):
+        assert _default_tty_probe("/dev/ttys147") is True
+
+
+def test_retire_target_tty_supplied_and_still_present_is_refused() -> None:
+    runner = _runner(
+        {
+            _LIST_COMMAND: [
+                (
+                    0,
+                    _orca_json_from_terminals(
+                        {"handle": "term-self", "connected": True, "title": "successor"},
+                        {
+                            "handle": "term-u8",
+                            "processId": 99,
+                            "connected": True,
+                            "title": "predecessor",
+                        },
+                    ),
+                    "",
+                ),
+                (
+                    0,
+                    _orca_json_from_terminals(
+                        {"handle": "term-self", "connected": True, "title": "successor"},
+                    ),
+                    "",
+                ),
+            ],
+            ("orca", "terminal", "close", "--terminal", "term-u8", "--json"): (0, '{"ok":true}', ""),
+        }
+    )
+
+    report = retire_predecessor(
+        predecessor_selector="",
+        self_handle="term-self",
+        target_handle="term-u8",
+        orca_runner=runner,
+        execute=True,
+        target_tty="/dev/ttys147",
+        process_probe=lambda pid: False,
+        tty_probe=lambda tty: True,
+    )
+
+    assert report.status == "REFUSED"
+    assert report.closed is False
+    assert report.disappearances["tty"] == "still_present"
+    assert "target tty still present after close: /dev/ttys147" in report.reason
+
+
+def test_retire_pane_surviving_close_is_refused() -> None:
+    runner = _runner(
+        {
+            _LIST_COMMAND: [
+                (
+                    0,
+                    _orca_json_from_terminals(
+                        {"handle": "term-self", "connected": True, "title": "successor"},
+                        {
+                            "handle": "term-u8",
+                            "processId": 99,
+                            "connected": True,
+                            "title": "predecessor",
+                        },
+                    ),
+                    "",
+                ),
+                (
+                    0,
+                    _orca_json_from_terminals(
+                        {"handle": "term-self", "connected": True, "title": "successor"},
+                        {
+                            "handle": "term-u8",
+                            "processId": 99,
+                            "connected": True,
+                            "title": "predecessor",
+                        },
+                    ),
+                    "",
+                ),
+            ],
+            ("orca", "terminal", "close", "--terminal", "term-u8", "--json"): (0, '{"ok":true}', ""),
+        }
+    )
+
+    report = retire_predecessor(
+        predecessor_selector="",
+        self_handle="term-self",
+        target_handle="term-u8",
+        orca_runner=runner,
+        execute=True,
+        target_pid=99,
+        target_tty="ttys1",
+        process_probe=lambda pid: False,
+        tty_probe=lambda tty: False,
+    )
+
+    assert report.status == "REFUSED"
+    assert report.closed is False
+    assert report.disappearances["pane"] == "still_present"
+    assert "target still present after close" in report.reason
 
 
 def test_spawn_successor_creates_and_verifies_worktree() -> None:

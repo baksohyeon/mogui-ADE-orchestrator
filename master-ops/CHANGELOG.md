@@ -47,14 +47,16 @@ no step created the workspace-root session card):
 - Skeleton: `master-ops/workspace-card/CLAUDE.md` (canonical session card with
   `{{...}}` placeholders) and `README.md` (canonical vs root deploy; link base
   is the workspace root, a deliberate exception to the working-directory
-  clause). Not the ops-repo agent instruction pair and not step 10's owner
-  operating card.
-- Step 05 fills the card with the rest of the ops repository, asserts no
-  placeholders remain, then deploys
-  `cp "{{OPS_REPO}}/workspace-card/CLAUDE.md" "{{WORKSPACE_ROOT}}/CLAUDE.md"`.
-  Placement is before `09-spawn.md` so the master has a card at boot.
-- Reverify check 7: root card matches ops canonical; report drift only, never
-  silent redeploy.
+  clause). README carries no template placeholders (step 03 copies it into the
+  ops repo; step 05 forbids leftover `{{...}}`). Not the ops-repo agent
+  instruction pair and not step 10's owner operating card.
+- Card points dispatch at charter §5 (`docs/charter/05-dispatch-gate.md`), not
+  at a skeleton-absent wrapper path; review-bot routing cites charter §4.
+- Step 05: fill every ops-repo token (no deferral), deploy the filled card to
+  the workspace root as a Run action, then Verify (no-placeholder, ops pair,
+  root-vs-canonical card). Placement is before `09-spawn.md`.
+- Reverify check 6 matches (no deferral pass); check 7 reports root-vs-canonical
+  drift only, never silent redeploy.
 - Name disambiguation in steps 03, 05, 06, and reverify so nobody `cmp`s the
   wrong `CLAUDE.md` pair.
 

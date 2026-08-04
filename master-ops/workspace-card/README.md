@@ -10,11 +10,13 @@ Owner decision, 2026-08-05: the card lives here (in the ops repository after ins
 
 Edit the file here (or in the ops repository's `workspace-card/CLAUDE.md` after install), then redeploy to the workspace root. Never edit the root copy alone: it is the copy, and the next deployment overwrites it.
 
-From the workspace root, after placeholders are filled:
+From the workspace root, after the card's installation values are filled (onboarding step 05 does this):
 
-```console
-$ cp "{{OPS_REPO}}/workspace-card/CLAUDE.md" "{{WORKSPACE_ROOT}}/CLAUDE.md"
+```bash
+cp <ops-repo>/workspace-card/CLAUDE.md <workspace-root>/CLAUDE.md
 ```
+
+Angle-bracket slots are filled by hand at redeploy time; this README carries no double-brace template placeholders, because step 03 copies it into the ops repository and step 05 asserts that no such placeholder remains there.
 
 Onboarding step 05 deploys the filled card. Reverify check 7 compares the two and **reports drift only** — it does not silently redeploy. There is no harness self-check script for this pair in the template; the reverify entry is the check.
 
@@ -22,7 +24,7 @@ Onboarding step 05 deploys the filled card. Reverify check 7 compares the two an
 
 **Decision (deliberate exception to the working-directory clause):** every path inside the card resolves from the **workspace root**, because that is where the card is read — not from `workspace-card/`, where it is stored. A link written relative to this storage directory would break the moment the file is deployed. This is the single place in the repository where a document's links are relative to somewhere other than its own directory, and it contradicts the working-directory clause in [contract conventions](../docs/runbooks/contract-conventions.md) on its face. That contradiction is intentional. Do not "fix" the card's links to resolve from this directory; that would break the deployed copy the master actually reads.
 
-When editing, verify each link by resolving it from the workspace root (with `{{OPS_REPO}}` and other placeholders filled), not from this directory.
+When editing, verify each link by resolving it from the workspace root (with the card's installation values already filled), not from this directory.
 
 ## What is not here
 

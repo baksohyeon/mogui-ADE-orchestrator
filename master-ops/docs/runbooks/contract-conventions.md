@@ -285,7 +285,7 @@ address a report was sent to before concluding it was never sent.
 This applies to the master more than to any worker, because the master is the one reading
 surfaces all day and has nobody downstream to catch a misread.
 
-## 10. Document reference clause [measured]
+## 9. Document reference clause [measured]
 
 A reference from one document to another is written as a real markdown link:
 `[readable title](relative/path/to/target.md)`. A path wrapped in backticks is not a

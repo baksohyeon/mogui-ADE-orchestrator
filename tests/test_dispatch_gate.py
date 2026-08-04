@@ -290,7 +290,11 @@ def test_instance_tier_policy_example_is_loadable_version_2() -> None:
     )
     policy = dispatch_gate._load_tier_policy(example)
     assert policy.version >= 2
-    assert policy.cap_for("unknown") == 1
+    # Example ships the looser intended unknown cap (template-aligned), not the
+    # retired one-agent ceiling. Missing key would be uncapped; when present it
+    # must stay looser than top so fresh installs inherit the revised contract.
+    assert policy.cap_for("unknown") == 8
+    assert policy.cap_for("top") == 4
 
 
 def test_unparseable_tier_policy_fails_closed(tmp_path: Path) -> None:

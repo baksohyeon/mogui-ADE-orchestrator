@@ -141,6 +141,15 @@ Installer retirement by newborn master (2026-08-04 onboarding 09/10):
   mismatches, ambiguity, or still-present targets are reported plainly and do
   not trigger guessed terminal closure.
 
+Instruction-stacking countermeasure and promotion sweep 2B canon (2026-08-04 owner decisions):
+
+- `master-ops/docs/charter/02-role-constitution.md` now states that the constitution outranks conflicting host, global, or session-injected autonomy defaults, including "do not ask" or "keep working" style instructions, and that conflicts must be named plainly.
+- `master-ops/docs/charter/03-execution-principles.md` now carries the answer-first rule, the observable instruction-stacking drift signature, the stop-answer-resume response, and the no per-turn answer-sheet injection policy.
+- `master-ops/docs/charter/05-dispatch-gate.md` now specifies camelCase `deliveryId` acknowledgement chaining for event-driven `check --wait`, including the stale-batch failure mode when a backlog is not acknowledged.
+- `master-ops/docs/charter/08-boot-hooks-observability.md` and `master-ops/docs/orca-docs-grounding.md` now carry the Orca foundational-knowledge charter: Orca Documentation 22 pages, Developer Reference Wiki 6 pages, `stablyai/orca` snapshots, index-first reading, live binary flags, and Orca primitives before hand-rolled sleep/poll loops.
+- `master-ops/docs/runbooks/contract-conventions.md` now includes merge-time `reviews[].submittedAt` re-measurement, public-forge redaction, context-injection policy, and chat-to-docs clauses; `master-ops/docs/charter/07-records.md` mirrors the accepted chat-to-docs rule.
+- Existing installations do not auto-update. To adopt this entry, copy the changed charter files, grounding file, contract-conventions runbook, and the new canon tests into the generated operations repository or merge their equivalent local clauses deliberately; then update the local template version record to `v0.4.4`.
+
 Instance runtime config landing (2026-08-04 owner onboarding-parameterization decision):
 
 - Onboarding steps now write confirmed runtime answers into

@@ -4,7 +4,7 @@ Governs boot configuration, hook wiring, and observability practices. See the in
 
 Hook wiring is a specification here. Apply concrete hook configuration through a human or dedicated security/operations session.
 
-Orca command and orchestration references are grounded through `docs/orca-docs-grounding.md`; start there and never guess Orca flags.
+Orca command and orchestration references are grounded through `docs/orca-docs-grounding.md`; start there and never guess Orca flags. That file is the foundational-knowledge charter and names the two canonical source-grounded references: the Orca Documentation set (operational, 22 pages) and the Orca Developer Reference Wiki (internals, 6 pages) on grok-wiki, snapshots of `stablyai/orca`. Agent lifecycle concerns use Orca primitives first; host-harness wrappers exist only to deliver notifications. Hand-rolled sleep/poll loops around state Orca can block on are a measured anti-pattern.
 
 Recommended hook spec:
 

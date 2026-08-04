@@ -13,6 +13,7 @@ The workspace master-operations SSOT is the charter index [`../MASTER-OPERATIONS
 - Append-only evidence: `docs/decisions/closed-decisions-and-facts.md`, `docs/lineage/MASTER-LINEAGE.md`
 - Field cards: `docs/runbooks/succession-boot-card.md`
 - Role state SSOT: `docs/runbooks/role-state.md`
+- Review voice (public-surface prose): `docs/runbooks/review-voice.md`
 - Observability suite: `docs/observability/README.md` — attribution legend, integrity rules, and the blame / retro / travelog genres
 - Execution state SSOT: the issue tracker selected during onboarding, reachable from `{{WORKSPACE_ROOT}}`
 - Long-term planning and design SSOT: Git documents

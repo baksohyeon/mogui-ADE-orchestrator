@@ -77,6 +77,8 @@ to batch rather than loop:
 Two things are never traded for speed, and the contract must say so: **one reply per
 thread**, and the task's own verification steps. Everything else is throughput.
 
+What those replies should sound like lives in `docs/runbooks/review-voice.md`.
+
 Iterating eighteen threads one at a time costs roughly an order of magnitude more turns
 than batching them, and the extra turns buy nothing.
 

@@ -19,23 +19,23 @@ Where we are: the ops repository skeleton exists, and the earlier steps recorded
 3. Deploy the filled session card to the workspace root (overwrite the root copy; the ops repository file remains the canonical). This is a Run action that happens after fill and before Verify — Verify's session-card `cmp` expects the root file to already exist:
 
 ```console
-$ cp "{{OPS_REPO}}/workspace-card/CLAUDE.md" "{{WORKSPACE_ROOT}}/CLAUDE.md"
-# no stdout on success
+$ cp "{{OPS_REPO}}/workspace-card/CLAUDE.md" "{{WORKSPACE_ROOT}}/CLAUDE.md" && echo deployed
+deployed
 ```
 
 The root file is outside every git repository. Links inside the card resolve from the workspace root, not from `workspace-card/` — see [workspace-card README](../workspace-card/README.md).
 
 ## Verify
 
-Run after the fill and deploy above. Silence (exit 0) means pass for each line:
+Run after the fill and deploy above. Each line must exit 0; the trailing `&& echo …` prints only on success and does not mask a failed check:
 
 ```console
-$ ! rg --hidden -g '!.git/**' -g '!.beads/**' '\{\{[^}]+\}\}' "{{OPS_REPO}}"; echo exit:$?
-exit:0
-$ cmp "{{OPS_REPO}}/CLAUDE.md" "{{OPS_REPO}}/AGENTS.md"; echo exit:$?
-exit:0
-$ cmp "{{WORKSPACE_ROOT}}/CLAUDE.md" "{{OPS_REPO}}/workspace-card/CLAUDE.md"; echo exit:$?
-exit:0
+$ ! rg --hidden -g '!.git/**' -g '!.beads/**' '\{\{[^}]+\}\}' "{{OPS_REPO}}" && echo clean
+clean
+$ cmp "{{OPS_REPO}}/CLAUDE.md" "{{OPS_REPO}}/AGENTS.md" && echo match
+match
+$ cmp "{{WORKSPACE_ROOT}}/CLAUDE.md" "{{OPS_REPO}}/workspace-card/CLAUDE.md" && echo match
+match
 ```
 
 - The first check: **no** `{{...}}` remains anywhere under `{{OPS_REPO}}` (including `workspace-card/`). No deferral list.

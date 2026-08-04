@@ -13,7 +13,7 @@ Edit the file here (or in the ops repository's `workspace-card/CLAUDE.md` after 
 From the workspace root, after the card's installation values are filled (onboarding step 05 does this):
 
 ```bash
-cp <ops-repo>/workspace-card/CLAUDE.md <workspace-root>/CLAUDE.md
+cp "<ops-repo>/workspace-card/CLAUDE.md" "<workspace-root>/CLAUDE.md"
 ```
 
 Angle-bracket slots are filled by hand at redeploy time; this README carries no double-brace template placeholders, because step 03 copies it into the ops repository and step 05 asserts that no such placeholder remains there.

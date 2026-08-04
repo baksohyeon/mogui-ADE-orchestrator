@@ -1,0 +1,93 @@
+#!/bin/bash
+# Read-only coverage report: hook by (runtime_hint, session_kind) matrix with last-fired timestamp and count.
+# Lists all hooks in scripts/hooks/ that have zero fire-log entries.
+
+logfile="${MOGUI_HOOK_FIRE_LOG:-$HOME/.mogui/hook-fire-log.jsonl}"
+repo_base="$(cd "$(dirname "$0")/.." && pwd)"
+
+# Build matrix: hook -> (runtime_hint, session_kind) -> (ts, count)
+# Parse and aggregate JSON lines.
+REPO_BASE="$repo_base" MOGUI_HOOK_FIRE_LOG="$logfile" python3 << 'PYTHON_END'
+import json
+import os
+from collections import defaultdict
+from datetime import datetime
+
+logfile = os.environ.get("MOGUI_HOOK_FIRE_LOG") or os.path.expanduser("~/.mogui/hook-fire-log.jsonl")
+
+matrix = defaultdict(lambda: defaultdict(lambda: {"count": 0, "last_ts": 0}))
+
+if not os.path.exists(logfile):
+    print(f"No fire-log found at {logfile} (no hook invocations yet)\n")
+else:
+    try:
+        f = open(logfile, encoding="utf-8")
+    except OSError as e:
+        print(f"Could not read fire-log at {logfile}: {e}\n")
+    else:
+        with f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(entry, dict):
+                    continue
+
+                hook = entry.get("hook", "unknown")
+                runtime = entry.get("runtime_hint", "unknown")
+                session = entry.get("session_kind", "unknown")
+                ts = entry.get("ts", 0)
+                if not isinstance(ts, (int, float)):
+                    continue
+
+                key = f"{runtime}|{session}"
+                matrix[hook][key]["count"] += 1
+                matrix[hook][key]["last_ts"] = max(matrix[hook][key]["last_ts"], ts)
+
+# Print matrix header
+print("=== Hook Fire Coverage Matrix ===\n")
+print(f"{'Hook':<25} {'Runtime|Session':<20} {'Count':>6} {'Last Fired (UTC)':>26}")
+print("-" * 80)
+
+# Sort and print matrix entries
+if matrix:
+    for hook in sorted(matrix.keys()):
+        first = True
+        for key in sorted(matrix[hook].keys()):
+            count = matrix[hook][key]["count"]
+            ts = matrix[hook][key]["last_ts"]
+            last_fired = datetime.utcfromtimestamp(ts).isoformat() if ts > 0 else "never"
+
+            hook_display = hook if first else ""
+            print(f"{hook_display:<25} {key:<20} {count:>6} {last_fired:>26}")
+            first = False
+else:
+    print("(no hook invocations recorded)")
+
+# List hooks with zero entries
+print("\n=== Never-Fired Hooks (Measurement Targets) ===\n")
+
+repo_base = os.environ.get("REPO_BASE", "")
+hooks_dir = os.path.join(repo_base, "scripts/hooks")
+
+if os.path.isdir(hooks_dir):
+    try:
+        all_hooks = sorted([f[:-3] for f in os.listdir(hooks_dir) if f.endswith(".sh")])
+        never_fired = [h for h in all_hooks if h not in matrix]
+
+        if never_fired:
+            for hook in never_fired:
+                print(f"  - {hook}")
+        else:
+            print("  (all wired hooks have at least one fire-log entry)")
+    except Exception as e:
+        print(f"Could not list hooks directory: {e}", file=__import__('sys').stderr)
+else:
+    print(f"  (hooks directory not found at {hooks_dir})")
+
+print()
+PYTHON_END

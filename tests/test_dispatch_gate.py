@@ -2608,7 +2608,6 @@ def test_v2_policy_validation_fails_closed(tmp_path: Path) -> None:
 
     bad_payloads = (
         {"version": 2, "tiers": {}, "fanout_caps": {"unknown": 1}},
-        {"version": 2, "tiers": {"top": ["a"]}, "fanout_caps": {"top": 1}},
         {
             "version": 2,
             "tiers": {"top": ["a"], "other": ["a"]},
@@ -2654,6 +2653,164 @@ def test_v2_policy_validation_fails_closed(tmp_path: Path) -> None:
         )
         assert decision.allow is False, payload
         assert decision.reason == ReasonCode.TIER_POLICY_UNAVAILABLE, payload
+
+
+def test_v2_missing_unknown_cap_is_uncapped_like_any_tier(tmp_path: Path) -> None:
+    """Absence of fanout_caps.unknown is uncapped, same as any other missing key.
+
+    Measured asymmetry before the fix: cap_for returned None for a missing
+    efficient entry (uncapped), but the loader rejected a policy that omitted
+    unknown, so instance revisions could not drop the key and had to invent a
+    placeholder value.
+    """
+
+    policy = tmp_path / "model-tier-policy.json"
+    policy.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "tiers": {
+                    "top": ["claude-opus-5"],
+                    "efficient": ["claude-haiku-4-5"],
+                },
+                "fanout_caps": {"top": 1},
+                "window_seconds": 86_400,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    gate = _gate(tmp_path, now=1_000, tier_policy_path=policy)
+
+    for index in range(3):
+        decision = gate.check(
+            DispatchRequest(
+                runtime="codex",
+                model="gpt-6-released-yesterday",
+                contract_path=_contract(tmp_path, f"unlisted fanout {index}"),
+                est_input_chars=1_000,
+                n_agents=1,
+            )
+        )
+        assert decision.allow is True, decision
+        assert ReasonCode.TIER_UNKNOWN_MODEL in decision.warnings
+        assert _ledger_entries(tmp_path)[-1]["tier"] == "unknown"
+
+
+def test_v2_tier_resolution_listed_top_efficient_unlisted_and_sonnet5(
+    tmp_path: Path,
+) -> None:
+    """Tier resolution: listed top, listed efficient, unlisted, no-cap tier.
+
+    Pins claude-sonnet-5 by name — the measured regression where an unlisted
+    mid-tier id resolved to unknown with the same cap as top and was refused
+    with TIER_FANOUT_CAP exactly like claude-opus-5.
+    """
+
+    policy = tmp_path / "model-tier-policy.json"
+    policy.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "tiers": {
+                    "top": ["claude-opus-5"],
+                    "efficient": ["claude-haiku-4-5", "claude-sonnet-5"],
+                },
+                "fanout_caps": {"top": 1},
+                "window_seconds": 86_400,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    gate = _gate(tmp_path, now=1_000, tier_policy_path=policy)
+
+    top = gate.check(
+        DispatchRequest(
+            runtime="codex",
+            model="claude-opus-5",
+            contract_path=_contract(tmp_path, "listed top id"),
+            est_input_chars=1_000,
+            n_agents=1,
+        )
+    )
+    assert top.allow is True
+    assert _ledger_entries(tmp_path)[-1]["tier"] == "top"
+
+    top_capped = gate.check(
+        DispatchRequest(
+            runtime="codex",
+            model="claude-opus-5",
+            contract_path=_contract(tmp_path, "listed top id again"),
+            est_input_chars=1_000,
+            n_agents=1,
+        )
+    )
+    assert top_capped.allow is False
+    assert top_capped.reason == ReasonCode.TIER_FANOUT_CAP
+
+    efficient = gate.check(
+        DispatchRequest(
+            runtime="codex",
+            model="claude-haiku-4-5",
+            contract_path=_contract(tmp_path, "listed efficient id"),
+            est_input_chars=1_000,
+            n_agents=10,
+        )
+    )
+    assert efficient.allow is True
+    assert _ledger_entries(tmp_path)[-1]["tier"] == "efficient"
+
+    # Measured regression pin: claude-sonnet-5 must resolve as listed efficient,
+    # not unknown, and must not inherit the top fan-out cap.
+    sonnet = gate.check(
+        DispatchRequest(
+            runtime="codex",
+            model="claude-sonnet-5",
+            contract_path=_contract(tmp_path, "claude-sonnet-5 regression pin"),
+            est_input_chars=1_000,
+            n_agents=5,
+        )
+    )
+    assert sonnet.allow is True
+    assert sonnet.reason == ReasonCode.OK
+    assert ReasonCode.TIER_UNKNOWN_MODEL not in sonnet.warnings
+    sonnet_entry = _ledger_entries(tmp_path)[-1]
+    assert sonnet_entry["tier"] == "efficient"
+    assert sonnet_entry["model"] == "claude-sonnet-5"
+
+    unlisted = gate.check(
+        DispatchRequest(
+            runtime="codex",
+            model="brand-new-model-id",
+            contract_path=_contract(tmp_path, "unlisted model id"),
+            est_input_chars=1_000,
+            n_agents=5,
+        )
+    )
+    assert unlisted.allow is True
+    assert ReasonCode.TIER_UNKNOWN_MODEL in unlisted.warnings
+    assert _ledger_entries(tmp_path)[-1]["tier"] == "unknown"
+
+
+def test_template_policy_resolves_claude_sonnet_5_as_efficient() -> None:
+    """Shipped template lists claude-sonnet-5 under efficient (measured fix)."""
+
+    from master_runtime.core.dispatch_gate import _load_tier_policy
+
+    repo_root = Path(__file__).resolve().parents[1]
+    template = repo_root / "master-ops" / "model-tier-policy.json"
+    policy = _load_tier_policy(template)
+
+    assert policy.version == 2
+    assert policy.tier_of("claude-sonnet-5") == "efficient"
+    assert policy.tier_of("claude-opus-5") == "top"
+    assert policy.tier_of("claude-haiku-4-5") == "efficient"
+    assert policy.tier_of("grok-4.5-fast") == "efficient"
+    assert policy.tier_of("never-listed-anywhere") == "unknown"
+    assert policy.cap_for("top") == 4
+    assert policy.cap_for("unknown") == 8
+    assert policy.cap_for("efficient") is None
 
 
 def _registered(

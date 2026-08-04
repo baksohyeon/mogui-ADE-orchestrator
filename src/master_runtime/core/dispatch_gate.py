@@ -299,10 +299,12 @@ class DispatchGate:
                         self._append_decision(request, decision)
                         return decision
                     tier_override = request.tier_override.strip()
-            # An unlisted model is allowed under the unknown cap rather than
+            # An unlisted model resolves to the unknown tier rather than being
             # blocked outright, so a newer or cheaper model is usable before
-            # anyone edits the policy. It never passes silently: the tier lands
-            # in the ledger and the warning surfaces it in the rollup.
+            # anyone edits the policy. It uses fanout_caps.unknown when set,
+            # else the same uncapped rule as any tier with no cap entry. It
+            # never passes silently: the tier lands in the ledger and the
+            # warning surfaces it in the rollup.
             if tier == UNKNOWN_TIER:
                 tier_warning = ReasonCode.TIER_UNKNOWN_MODEL
 
@@ -979,12 +981,16 @@ def _load_tier_policy(path: Path) -> ModelTierPolicy:
 
 
 def _load_tier_policy_v2(payload: Mapping[str, object], digest: str) -> ModelTierPolicy:
-    """Parse a version 2 policy: tiers plus a per-window agent cap for each.
+    """Parse a version 2 policy: tiers plus optional per-window agent caps.
 
-    A model absent from every tier is `unknown`, which is a tier like any other
-    and therefore capped like any other. That is the difference from version 1,
-    where an unrecognised name was denied outright and a new model stayed blocked
-    until someone edited this file by hand.
+    A model absent from every tier is `unknown`, which is a tier like any other.
+    A missing `fanout_caps` entry for any tier — including `unknown` — means
+    uncapped, the same rule `cap_for` already applied to named tiers such as
+    `efficient`. Requiring `unknown` while allowing other tiers to omit a key
+    was the asymmetry that forced instance policies to invent a placeholder
+    cap; absence is unambiguous for every tier. That is the difference from
+    version 1, where an unrecognised name was denied outright and a new model
+    stayed blocked until someone edited this file by hand.
     """
 
     tiers = payload.get("tiers")
@@ -1011,11 +1017,6 @@ def _load_tier_policy_v2(payload: Mapping[str, object], digest: str) -> ModelTie
         if isinstance(cap, bool) or not isinstance(cap, int) or cap < 0:
             raise ValueError("fanout_caps values must be non-negative integers")
         fanout_caps[tier] = cap
-    if UNKNOWN_TIER not in fanout_caps:
-        raise ValueError(
-            f"fanout_caps must state a cap for {UNKNOWN_TIER!r}; "
-            "leaving it unstated is the ambiguity this version removes"
-        )
 
     window_seconds = payload.get("window_seconds", DEFAULT_TIER_WINDOW_SECONDS)
     if isinstance(window_seconds, bool) or not isinstance(window_seconds, int) or window_seconds <= 0:

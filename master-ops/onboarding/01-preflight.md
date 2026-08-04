@@ -6,9 +6,9 @@ Load rule: read this file only when Step 0 begins. Router: [`../ONBOARDING.md`](
 
 **Why/caution:** Orca, an orchestration Run bound to this terminal, the Orca skills, Beads, Python, the named agent CLI, at least one worker runtime to dispatch to, Git, the GitHub CLI (`gh`), and the organization rules file are all required; do not offer a non-Orca fallback. Never suggest skipping the preflight itself: that discards every other check with it.
 
-## Owner script (3–6 sentences, adapt to the owner's language)
+## Owner script (kind ELI5, adapt to the owner's language)
 
-Where we are: orientation is done; nothing on the machine has been changed yet. What we decide next: whether this machine has everything the system needs, using read-only checks. Ask whether the user is ready for local read-only checks, and which agent CLI they expect to use (for example `claude`). Explain that if a check fails, we fix it together before moving on — nothing is skipped silently.
+Where we are: the Herald has explained the map, and nothing on the machine has been changed yet. What we decide next: whether this machine has the tools needed to raise the Master safely. Explain gently that these are read-only checks: we are looking at doors and keys, not moving furniture. Ask whether the owner is ready for local read-only checks, and which program they expect to use to run the Master (for example `claude`). If a check fails, say plainly that we fix it together before moving on; nothing is skipped silently, because a missing tool would make the later summoning look mysterious.
 
 **Measured-fallback for the agent CLI:** if this installer session can measure its own runtime (process name, parent argv, or a host-exported selection such as `ORCA_AGENT_CLI`), that measurement is the recommended candidate and beats an empty ask. Still confirm with the owner when measurement and their expectation could diverge. Never invent a runtime name when nothing was measured.
 

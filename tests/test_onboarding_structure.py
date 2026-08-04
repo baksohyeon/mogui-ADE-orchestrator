@@ -36,6 +36,7 @@ PLACEHOLDER_SHAPE_MENTION = "{{...}}"
 INDEX_ROW = re.compile(r"^\|\s*(?:\d{2}|—)\s*\|\s*`onboarding/([a-z0-9-]+\.md)`\s*\|")
 NEXT_POINTER = re.compile(r"Next file after Verify passes: `([a-z0-9-]+\.md)`")
 PLACEHOLDER = re.compile(r"\{\{[^}]+\}\}")
+HEADING = re.compile(r"^#{1,6}\s+", re.MULTILINE)
 
 
 def indexed_files() -> list[str]:
@@ -111,6 +112,71 @@ def test_only_allowed_placeholders():
         }
         unknown = found - ALLOWED_PLACEHOLDERS
         assert not unknown, f"{path.name} uses placeholders outside the allowlist: {sorted(unknown)}"
+
+
+def test_founder_spawn_hands_installer_retirement_switch_to_master():
+    text = (STEP_DIR / "09-spawn.md").read_text(encoding="utf-8")
+    kickoff = _section_between(
+        text,
+        "### Agent-only preparation (not shown to the owner)",
+        "Before launching any worker",
+    )
+    assert kickoff.index("warm resume note") < kickoff.index("installer retirement switch")
+    assert "ORCA terminal close --terminal <installer handle> --json" in kickoff
+    assert "re-list live terminals" in kickoff
+    assert "match the installer and not the newborn master's own handle" in kickoff
+    assert "do not invent it" in kickoff
+
+
+def test_final_onboarding_retirement_is_master_closed_not_owner_closed():
+    text = (STEP_DIR / "10-card-and-retire.md").read_text(encoding="utf-8")
+    assert "the Master closes this installer terminal" in text
+    assert "newborn master was given the warm resume note and installer kill switch" in text
+    assert "newborn master closed the installer terminal after identity recheck" in text
+    assert "process / Orca terminal / tty disappearance verification" in text
+    assert re.search(r"(?i)\bplease\s+close\s+this\s+installer\s+terminal\b", text) is None
+
+
+def test_owner_language_is_kind_modern_not_archaic():
+    router_text = ROUTER.read_text(encoding="utf-8")
+    assert "genuinely kind, unhurried ELI5" in router_text
+    assert "plain, warm, modern, and kind" in router_text
+    combined = "\n".join(_owner_language_sections())
+    forbidden = re.compile(
+        r"\b(?:hark|thy|thee|thou|shalt|risen)\b|Shakespeare|고어|나이다|옵니다",
+        re.IGNORECASE,
+    )
+    assert forbidden.search(combined) is None
+    all_onboarding_text = "\n".join(
+        [router_text, *[path.read_text(encoding="utf-8") for path in STEP_DIR.glob("*.md")]]
+    )
+    sentence_cap = re.compile(
+        r"\b(?:\d+\s*[-–]\s*\d+|four\s+or\s+five)\s+sentences?\b",
+        re.IGNORECASE,
+    )
+    assert sentence_cap.search(all_onboarding_text) is None
+
+
+def _owner_language_sections() -> list[str]:
+    sections = [_section_until_next_heading(ROUTER.read_text(encoding="utf-8"), "## Standing rules — owner-facing language")]
+    for path in STEP_DIR.glob("*.md"):
+        text = path.read_text(encoding="utf-8")
+        for marker in re.finditer(r"^#{2,3}\s+Owner script\b.*$", text, re.MULTILINE):
+            sections.append(_section_until_next_heading(text[marker.start() :], marker.group(0)))
+    return sections
+
+
+def _section_until_next_heading(text: str, current_heading: str) -> str:
+    body_start = text.find(current_heading) + len(current_heading)
+    body = text[body_start:]
+    next_heading = HEADING.search(body)
+    return body[: next_heading.start()] if next_heading else body
+
+
+def _section_between(text: str, start: str, end: str) -> str:
+    start_index = text.index(start) + len(start)
+    end_index = text.index(end, start_index)
+    return text[start_index:end_index]
 
 
 def test_entry_files_stay_byte_identical():

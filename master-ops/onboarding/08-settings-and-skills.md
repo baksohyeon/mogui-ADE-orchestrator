@@ -8,9 +8,9 @@ Load rule: read this file only when Step 7 begins. Router: [`../ONBOARDING.md`](
 
 **Why/caution:** The template specifies hook behavior but does not ship hidden deny lists, credentials, secret paths, or environment-specific security implementation. A harness whose pieces are individually opt-in protects nothing — install everything on, and disable later by asking.
 
-### Owner script (3–6 sentences, adapt to the owner's language)
+### Owner script (kind ELI5, adapt to the owner's language)
 
-Where we are: the master's ground rules are saved. What happens next: we turn on the safety hooks and skills this template ships, all together, so the master wakes with the same guards every install. One warm sentence for the owner: **everything is on by default, and any piece can be turned off later by just asking the master — who will explain what that piece does before disabling it.** Confirm who owns host settings and security-sensitive configuration (often the owner themselves). Do **not** ask per-hook or per-skill enable questions. Present the hook wiring spec from `docs/MASTER-OPERATIONS.md` in agent notes, not as a wall of text at the owner; delegate auth, permission, secrets, credentials, and production-data work to a dedicated security/operations session.
+Where we are: the Master's ground rules are saved, and the Herald now prepares the host-side safeguards before the Master rises. What happens next: we turn on the safety hooks and skills this template ships, all together, so the Master wakes with the same guards every install. Explain in simple terms that hooks are small host-side actions: some prepare the Master's context when it starts or resumes, some refresh it during a session, and some warn before risky actions. One warm sentence for the owner: **everything is on by default, and any piece can be turned off later by just asking the Master — who will explain what that piece does before disabling it.** Confirm who owns host settings and security-sensitive configuration (often the owner themselves). Do **not** ask per-hook or per-skill enable questions. Present the hook wiring spec from `docs/MASTER-OPERATIONS.md` in agent notes, not as a wall of text at the owner; delegate auth, permission, secrets, credentials, and production-data work to a dedicated security/operations session.
 
 ### Default-on wiring (agent actions)
 
@@ -123,9 +123,9 @@ If the owner spontaneously declines a default-on piece during this step, restate
 
 **Why/caution:** A gate that is trusted beyond its scope is worse than no gate, because it converts an unchecked surface into a believed-clean one.
 
-### Owner script (3–6 sentences, adapt to the owner's language)
+### Owner script (kind ELI5, adapt to the owner's language)
 
-The gates read repository content. Name the surfaces they do not read, so nobody assumes coverage that does not exist: pull request titles, bodies, and review comments; release notes and issue text; anything typed into a forge web interface. None of those are in the repository, so no scanner in this template sees them — and they are where internal names most easily arrive, because they are written in prose rather than code. The habit that works is to grep your own outgoing text for organization identifiers before posting it, exactly as the scan does for files. Explain the gap once, in plain language, then continue.
+The gates read repository content. This is one of the places where the Herald must be especially plain: name the surfaces they do not read, so nobody assumes coverage that does not exist. Those surfaces are pull request titles, bodies, and review comments; release notes and issue text; anything typed into a forge web interface. None of those are in the repository, so no scanner in this template sees them — and they are where internal names most easily arrive, because they are written in prose rather than code. The habit that works is to grep your own outgoing text for organization identifiers before posting it, exactly as the scan does for files. Explain the gap once, in plain language, then continue.
 
 Tell the user that organization-specific patterns live in a file outside version control, that the gates fail closed without it, and that its format is one rule per line as `id|description|regex`. That file is what makes the gates able to catch a workspace name; the shipped rules only catch generic provider secrets.
 

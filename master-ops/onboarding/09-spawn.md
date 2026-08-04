@@ -8,13 +8,15 @@ Load rule: read this file only when Step 8 begins. Router: [`../ONBOARDING.md`](
 
 **Why/caution:** Supervised dispatch is Orca orchestration only; raw terminal polling and vendor-direct CLIs are non-compliant, and failures remain closed.
 
-### Owner script (3–6 sentences, adapt to the owner's language)
+### Owner script (kind ELI5, adapt to the owner's language)
 
-Where we are: everything the master needs is in place. What we decide next: whether to create the master now or defer. Explain in plain words: we will open one new terminal in the workspace seat we recorded earlier, hand it a kickoff note, and wait until it reports its first boot went clean; you do not need to type anything during this. Ask for confirmation to spawn now or defer.
+Where we are: everything the Master needs is in place; the Herald has prepared the book, the seat, and the rules. What we decide next: whether to raise the Master now or defer. Explain in plain words: we will open one new Orca terminal in the workspace seat we recorded earlier, hand it a kickoff note, and wait until it reports its first boot went clean; the owner does not need to type anything during this. Keep the summoning frame grounded: raising the Master means creating one new verified terminal, not magic. Ask for confirmation to spawn now or defer.
 
 ### Agent-only preparation (not shown to the owner)
 
-Reload the durable placement result from the seat step and confirm the selector still resolves on the host (`ORCA terminal list --worktree <selector> --json`). That listing is also the empty-seat gate: it must show **zero terminals in the seat**. Any existing terminal there — a leftover seat-check terminal, or a master from an earlier interrupted run of this step — is a hard stop: report it to the owner and do not spawn, because exactly one master may exist and a re-entered session cannot assume its earlier spawn failed. Only an empty seat proceeds; the spawn itself verifies placement against this selector again. Write a kickoff file containing Generation 1, this installer as founding origin, the callsign from the user-rules step, the boot sequence (rehydrate ops docs, declare Role State, measure model and placement), the initial queue, and the requirement to report the orchestration Task complete.
+Reload the durable placement result from the seat step and confirm the selector still resolves on the host (`ORCA terminal list --worktree <selector> --json`). That listing is also the empty-seat gate: it must show **zero terminals in the seat**. Any existing terminal there — a leftover seat-check terminal, or a master from an earlier interrupted run of this step — is a hard stop: report it to the owner and do not spawn, because exactly one master may exist and a re-entered session cannot assume its earlier spawn failed. Only an empty seat proceeds; the spawn itself verifies placement against this selector again. Write a kickoff file in the Herald voice but with exact technical facts: Generation 1, this installer as faithful Herald and founding origin, the callsign from the user-rules step, the boot sequence (rehydrate ops docs, declare Role State, measure model and placement), the initial queue, and the requirement to report the orchestration Task complete. The kickoff should frame the Master as raised only beside the plain statement that a new Orca terminal has been created and verified.
+
+The kickoff file also includes a warm resume note before the installer retirement switch. The note states that the installation is complete once Step 10 verification passes, the operating card has been printed, the master terminal must remain running, and any later installer resume should treat itself as retired. If the master is proven absent later, do not rerun Founding; route recovery through `docs/runbooks/succession-boot-card.md`. After the note, give the newborn master the installer retirement switch: this installer's terminal handle, pty id when Orca exposes it, session id when Orca exposes it, and the exact close command form `ORCA terminal close --terminal <installer handle> --json`. Before Step 10 executes the switch, the newborn master must re-list live terminals and require the handle plus any available pty/session identity to match the installer and not the newborn master's own handle; on missing, mismatched, or ambiguous identity, report the failure and do not close anything. If the installer handle, pty id, or session id cannot be measured, write `unavailable` for that field in the kickoff and do not invent it.
 
 Before launching any worker, follow `docs/MASTER-OPERATIONS.md` §3: MEASURE the installed agent CLI's non-interactive approval flags from `--help` and never guess them.
 
@@ -65,6 +67,7 @@ Require placement verification `MATCH` or `MATCH_REISSUED`; the latter must incl
 - exactly one new master process/session exists
 - placement is `MATCH` or valid `MATCH_REISSUED`
 - kickoff content received by the master matches the kickoff file byte-for-byte
+- the kickoff gives the master the installer kill switch and warm resume note
 - the coordinator processes and acknowledges deliveries, answers questions through orchestration, and waits until that Task's `worker_done`
 
 ### If fail
@@ -77,7 +80,7 @@ Require placement verification `MATCH` or `MATCH_REISSUED`; the latter must incl
 
 **Why/caution:** Model identity is measured, unavailable, or unsupported, never guessed.
 
-The master asks for the initial role or approval to start in Maintenance, plus permission for local read-only model and seat checks. It updates `docs/runbooks/role-state.md` for Generation 1, declares Role State in conversation (including the callsign), measures configured and actual model when exposed, captures placement evidence, appends Generation 1 to `docs/lineage/MASTER-LINEAGE.md`, then sends `worker_done` exactly once for the active Dispatch.
+The master asks for the initial role or approval to start in Maintenance, plus permission for local read-only model and seat checks. It updates `docs/runbooks/role-state.md` for Generation 1, declares Role State in conversation (including the callsign), measures configured and actual model when exposed, captures placement evidence, appends Generation 1 to `docs/lineage/MASTER-LINEAGE.md`, keeps the installer kill switch and warm resume note for Step 10, then sends `worker_done` exactly once for the active Dispatch.
 
 ### Verify (Step 9)
 

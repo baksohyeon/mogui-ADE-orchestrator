@@ -2,13 +2,13 @@
 
 Load rule: read this file only when Step 1 begins. Router: [`../ONBOARDING.md`](../ONBOARDING.md). Next file after Verify passes: `03-ops-repo.md`.
 
-**Position and action:** Step 1 begins after prerequisites pass: collect and measure the workspace facts before routing any work. Pace this step in three short turns when needed: (A) purpose and workspace root, (B) repository inventory, (C) name, monitor namespace, and model.
+**Position and action:** Step 1 begins after prerequisites pass: collect and measure the workspace facts before routing any work. Pace this step in gentle turns when needed: (A) purpose and workspace root, (B) repository inventory, (C) name, monitor namespace, and model.
 
 **Why/caution:** The master operates above repositories and needs a confirmed absolute root, a purpose, and an inventory.
 
-## Owner script (3–6 sentences, adapt to the owner's language)
+## Owner script (kind ELI5, adapt to the owner's language)
 
-Where we are: the machine checks passed. What we decide next: what this master is for and which folder it will manage. Before asking, give these plain definitions in the user's language:
+Where we are: the machine checks passed, so the Herald can now ask where the Master should live and what work it should guard. What we decide next: what this Master is for and which folder it will manage. Before asking, give these plain definitions in the user's language, slowly enough that a new Orca user can point at the right thing:
 
 - "Workspace (root)" is the folder that groups the repositories this master will manage, nothing more.
 - "Workspace name" is a display label; by default, it is that folder's name.

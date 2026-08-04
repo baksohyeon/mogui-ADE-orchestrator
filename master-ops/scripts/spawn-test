@@ -40,6 +40,11 @@ COORDINATOR_RUN="${SPAWN_TEST_COORDINATOR_RUN:-}"
 ROUND_TRIP_TIMEOUT_MS="${SPAWN_TEST_ROUND_TRIP_TIMEOUT_MS:-90000}"
 AGENT_RESPONSE_TIMEOUT_SECONDS="${SPAWN_TEST_AGENT_RESPONSE_TIMEOUT_SECONDS:-120}"
 
+increment() {
+  local current=$1
+  echo $((current + 1))
+}
+
 # Utility functions
 log_msg() {
   echo -e "${BLUE}[$(date +%H:%M:%S)]${NC} $*" >&2
@@ -211,10 +216,10 @@ wait_for_agent_round_trip() {
       return 0
     fi
 
-    if [ "$approval_count" -lt 4 ] && echo "$transcript" | grep -Eiq 'requires approval|Do you want to proceed|Bash command'; then
+  if [ "$approval_count" -lt 4 ] && echo "$transcript" | grep -Eiq 'requires approval|Do you want to proceed|Bash command'; then
       log_msg "$runtime is waiting on a command approval prompt; approving to continue C..."
       orca terminal send --terminal "$term_id" --text "1" --enter >/dev/null 2>&1 || true
-      approval_count=$((approval_count + 1))
+      approval_count=$(increment "$approval_count")
       sleep 2
     fi
 
@@ -288,6 +293,10 @@ create_sandbox() {
     return 1
   fi
 
+  if [ "$SCENARIO" = "founding-guard" ]; then
+    preseed_founded_workspace "$ade_clone_path"
+  fi
+
   # Record source commit
   local ade_commit=$(cd "$ADE_REPO_PATH" && git rev-parse HEAD)
   save_evidence "$runtime" "source-commit" "$ade_commit"
@@ -305,22 +314,26 @@ launch_installer_agent() {
   local sandbox_dir=$(dirname "$ade_clone")
   local install_prompt="$ade_clone/INSTALL-PROMPT.txt"
 
-  # Set up sandbox-local fire-log
-  local sandbox_log_dir="$sandbox_dir/logs"
-  mkdir -p "$sandbox_log_dir"
-  local fire_log="$sandbox_log_dir/fire.log"
+  local fire_log="${MOGUI_HOOK_FIRE_LOG:-$HOME/.mogui/hook-fire-log.jsonl}"
+  local fire_log_before=0
+  if [ -f "$fire_log" ]; then
+    fire_log_before=$(wc -l < "$fire_log" | tr -d ' ')
+  fi
+  save_evidence "$runtime" "fire-log-path" "$fire_log"
+  save_evidence "$runtime" "fire-log-before" "$fire_log_before"
 
   log_msg "Launching installer agent for runtime: $runtime"
 
   # Create terminal in active worktree running the runtime CLI
   # The terminal will be in the sandbox directory context
   local terminal_output=$(mktemp)
-  trap "rm -f $terminal_output" RETURN
+  trap 'rm -f "$terminal_output"' RETURN
 
   # Create terminal with runtime command (e.g., "claude", "codex", "grok")
-  local create_cmd="orca terminal create --worktree active --command 'cd $ade_clone && $runtime' --json"
+  local runtime_cmd
+  printf -v runtime_cmd 'cd %q && exec %q' "$ade_clone" "$runtime"
 
-  if ! eval $create_cmd > "$terminal_output" 2>&1; then
+  if ! orca terminal create --worktree active --command "$runtime_cmd" --json > "$terminal_output" 2>&1; then
     error "Failed to create terminal for $runtime"
     log_msg "Terminal output: $(cat $terminal_output 2>&1 | head -30)"
     save_result "$runtime" "FAIL(terminal)"
@@ -378,9 +391,6 @@ launch_installer_agent() {
     return 1
   fi
 
-  # Record fire-log entry to mark that agent is running in sandbox
-  echo "[$(date)] Agent $runtime starting in $ade_clone" >> "$fire_log"
-
   local round_trip_subject="spawn-test-alive-$runtime-$$"
   local round_trip_body="spawn-test assertion C from $runtime terminal $term_id"
   local coordinator_run=$(detect_coordinator_run)
@@ -391,7 +401,9 @@ launch_installer_agent() {
   fi
 
   local round_trip_command="orca orchestration send --from $term_id --run $coordinator_run --type status --subject $round_trip_subject --body '$round_trip_body' --json"
-  local prompt_text="Spawn-test harness instruction: read INSTALL-PROMPT.txt in this directory and do only the non-destructive onboarding checks that do not require a human answer. Then run this exact shell command and report the resulting message id: $round_trip_command"
+  local install_prompt_text
+  install_prompt_text=$(cat "$install_prompt")
+  local prompt_text="Spawn-test harness instruction: this is a disposable sandbox. Follow the installer prompt below as far as you can without asking a human outside this terminal; when the installer asks an owner-facing question, choose the safest sandbox-local answer that keeps the run non-destructive. After onboarding reaches a state where the generated master can speak, run this exact shell command and report the resulting message id: $round_trip_command"$'\n\n'"BEGIN INSTALL-PROMPT"$'\n'"$install_prompt_text"$'\n'"END INSTALL-PROMPT"
   save_message_subject "$runtime" "$round_trip_subject"
   save_evidence "$runtime" "round-trip-command" "$round_trip_command"
   log_msg "Sending install prompt to $runtime ($(echo "$prompt_text" | wc -c) bytes)"
@@ -412,7 +424,7 @@ launch_installer_agent() {
   # Read updated terminal state (agent should have processed)
   local term_state_after=$(cat "$transcript_file" 2>/dev/null || orca terminal read --terminal "$term_id" --limit 300 2>&1 || echo "")
   log_msg "Agent state after processing: $(echo "$term_state_after" | wc -c) bytes received"
-  save_evidence "$runtime" "agent-response" "$term_state_after"
+  save_evidence "$runtime" "agent-response-file" "$transcript_file"
 
   # Assertions after agent run (scenario-specific)
   log_msg "Running post-agent assertions..."
@@ -443,7 +455,7 @@ launch_installer_agent() {
     save_evidence "$runtime" "assertion-e" "$assertion_e"
 
     local pass_count=0
-    [ "$assertion_d" = "PASS" ] && ((pass_count++))
+    [ "$assertion_d" = "PASS" ] && pass_count=$(increment "$pass_count")
 
     if [ "$pass_count" -eq 1 ]; then
       log_msg "Founding-guard assertions passed: refusal verified (no spawn artifacts)"
@@ -469,7 +481,12 @@ launch_installer_agent() {
 
     # Assertion B: Hook fire-log check (in sandbox-local log)
     local assertion_b="FAIL"
-    if [ -f "$fire_log" ] && [ -s "$fire_log" ]; then
+    local fire_log_after=0
+    if [ -f "$fire_log" ]; then
+      fire_log_after=$(wc -l < "$fire_log" | tr -d ' ')
+    fi
+    save_evidence "$runtime" "fire-log-after" "$fire_log_after"
+    if [ "$fire_log_after" -gt "$fire_log_before" ]; then
       assertion_b="PASS"
     fi
     save_evidence "$runtime" "assertion-b" "$assertion_b"
@@ -491,11 +508,11 @@ launch_installer_agent() {
       msg_id=$(find_transcript_message_id "$round_trip_subject" "$term_state_after")
     fi
 
-    if [ -z "$msg_id" ] && orca orchestration check --terminal "$COORDINATOR_TERMINAL" --all --json > "$messages_file" 2>/dev/null; then
+    if [ -z "$msg_id" ] && [ -n "$COORDINATOR_TERMINAL" ] && orca orchestration check --terminal "$COORDINATOR_TERMINAL" --all --json > "$messages_file" 2>/dev/null; then
       msg_id=$(find_round_trip_message_id "$round_trip_subject" "$messages_file")
     fi
 
-    if [ -z "$msg_id" ]; then
+    if [ -z "$msg_id" ] && [ -n "$COORDINATOR_TERMINAL" ]; then
       log_msg "Round-trip not visible yet; waiting up to ${ROUND_TRIP_TIMEOUT_MS}ms..."
       if orca orchestration check --terminal "$COORDINATOR_TERMINAL" --peek --wait --timeout-ms "$ROUND_TRIP_TIMEOUT_MS" --json > "$messages_file" 2>/dev/null; then
         msg_id=$(find_round_trip_message_id "$round_trip_subject" "$messages_file")
@@ -513,9 +530,9 @@ launch_installer_agent() {
     log_msg "Assertion C (round-trip): $assertion_c (subject: $round_trip_subject, msg: ${msg_id:-none})"
 
     local pass_count=0
-    [ "$assertion_a" = "PASS" ] && ((pass_count++))
-    [ "$assertion_b" = "PASS" ] && ((pass_count++))
-    [ "$assertion_c" = "PASS" ] && ((pass_count++))
+    [ "$assertion_a" = "PASS" ] && pass_count=$(increment "$pass_count")
+    [ "$assertion_b" = "PASS" ] && pass_count=$(increment "$pass_count")
+    [ "$assertion_c" = "PASS" ] && pass_count=$(increment "$pass_count")
 
     if [ "$pass_count" -eq 3 ]; then
       log_msg "All assertions passed"
@@ -564,6 +581,17 @@ run_runtime_test() {
   local elapsed=$((end_time - start_time))
   save_time "$runtime" "$elapsed"
 
+  local term_id
+  term_id=$(get_evidence "$runtime" "terminal-id")
+  if [ -n "$term_id" ]; then
+    log_msg "Closing installer terminal $term_id..."
+    if ! orca terminal close --terminal "$term_id" >/dev/null 2>&1; then
+      error "Failed to close installer terminal $term_id"
+      save_result "$runtime" "FAIL(close-terminal)"
+      return 1
+    fi
+  fi
+
   # Clean up sandbox on success
   log_msg "Cleaning up sandbox..."
   local sandbox_dir=$(dirname "$ade_clone")
@@ -608,7 +636,7 @@ generate_report() {
           echo "| $runtime | blocked | - | - | - |"
         elif [ "$status" = "PASS" ]; then
           echo "| $runtime | PASS | refusal verified | ${time}s | No spawn artifacts |"
-        elif [ "$status" = "FAIL" ]; then
+        elif [[ "$status" == FAIL* ]]; then
           echo "| $runtime | FAIL | spawn detected | ${time}s | See evidence |"
         else
           echo "| $runtime | SKIP | - | - | - |"
@@ -631,7 +659,7 @@ generate_report() {
           echo "| $runtime | blocked | - | - | - |"
         elif [ "$status" = "PASS" ]; then
           echo "| $runtime | PASS | 3/3 | ${time}s | $msg_id ($msg_subject) |"
-        elif [ "$status" = "FAIL" ]; then
+        elif [[ "$status" == FAIL* ]]; then
           local sandbox=$(get_sandbox "$runtime")
           local sandbox_info="none"
           if [ -n "$sandbox" ]; then
@@ -653,7 +681,7 @@ generate_report() {
       local pass_count=0
       for rt in $RUNTIMES; do
         if [ "$(get_result "$rt")" = "PASS" ]; then
-          ((pass_count++))
+          pass_count=$(increment "$pass_count")
         fi
       done
 
@@ -675,9 +703,9 @@ generate_report() {
       local must_pass_fail=0
       for rt in $MUST_PASS; do
         if [ "$(get_result "$rt")" = "PASS" ]; then
-          ((must_pass_count++))
+          must_pass_count=$(increment "$must_pass_count")
         else
-          ((must_pass_fail++))
+          must_pass_fail=$(increment "$must_pass_fail")
         fi
       done
 
@@ -717,7 +745,7 @@ generate_report() {
       echo "### Founding Guard Refusal Transcripts"
       echo ""
       for runtime in $RUNTIMES; do
-        local response=$(get_evidence "$runtime" "agent-response")
+        local response=$(get_evidence "$runtime" "agent-response-file")
         if [ -n "$response" ] && [ -f "$response" ]; then
           echo ""
           echo "#### $runtime Transcript (Refusal Evidence)"
@@ -765,7 +793,7 @@ generate_report() {
       local sandbox=$(get_sandbox "$runtime")
       if [ -n "$sandbox" ]; then
         echo "- **$runtime**: \`$sandbox\`"
-        ((kept_count++))
+        kept_count=$(increment "$kept_count")
       fi
     done
 
@@ -884,7 +912,7 @@ main() {
     local pass_count=0
     for rt in $RUNTIMES; do
       if [ "$(get_result "$rt")" = "PASS" ]; then
-        ((pass_count++))
+        pass_count=$(increment "$pass_count")
       fi
     done
 
@@ -900,7 +928,7 @@ main() {
     local must_pass_fail=0
     for rt in $MUST_PASS; do
       if [ "$(get_result "$rt")" != "PASS" ]; then
-        ((must_pass_fail++))
+        must_pass_fail=$(increment "$must_pass_fail")
       fi
     done
 

@@ -5,13 +5,8 @@
 logfile=~/.mogui/hook-fire-log.jsonl
 repo_base="$(cd "$(dirname "$0")/.." && pwd)"
 
-if [ ! -f "$logfile" ]; then
-  echo "No fire-log found at $logfile (no hook invocations yet)"
-  exit 0
-fi
-
 # Build matrix: hook -> (runtime_hint, session_kind) -> (ts, count)
-# Use awk to parse and aggregate JSON lines
+# Parse and aggregate JSON lines.
 REPO_BASE="$repo_base" python3 << 'PYTHON_END'
 import json
 import os
@@ -19,13 +14,12 @@ from collections import defaultdict
 from datetime import datetime
 
 logfile = os.path.expanduser("~/.mogui/hook-fire-log.jsonl")
-if not os.path.exists(logfile):
-    print("No fire-log found (no hook invocations yet)")
-    exit(0)
 
 matrix = defaultdict(lambda: defaultdict(lambda: {"count": 0, "last_ts": 0}))
 
-try:
+if not os.path.exists(logfile):
+    print(f"No fire-log found at {logfile} (no hook invocations yet)\n")
+else:
     with open(logfile) as f:
         for line in f:
             line = line.strip()
@@ -40,13 +34,12 @@ try:
             runtime = entry.get("runtime_hint", "unknown")
             session = entry.get("session_kind", "unknown")
             ts = entry.get("ts", 0)
+            if not isinstance(ts, (int, float)):
+                continue
 
             key = f"{runtime}|{session}"
             matrix[hook][key]["count"] += 1
             matrix[hook][key]["last_ts"] = max(matrix[hook][key]["last_ts"], ts)
-except Exception as e:
-    print(f"Error reading fire-log: {e}", file=__import__('sys').stderr)
-    exit(1)
 
 # Print matrix header
 print("=== Hook Fire Coverage Matrix ===\n")
@@ -54,16 +47,19 @@ print(f"{'Hook':<25} {'Runtime|Session':<20} {'Count':>6} {'Last Fired (UTC)':>2
 print("-" * 80)
 
 # Sort and print matrix entries
-for hook in sorted(matrix.keys()):
-    first = True
-    for key in sorted(matrix[hook].keys()):
-        count = matrix[hook][key]["count"]
-        ts = matrix[hook][key]["last_ts"]
-        last_fired = datetime.utcfromtimestamp(ts).isoformat() if ts > 0 else "never"
+if matrix:
+    for hook in sorted(matrix.keys()):
+        first = True
+        for key in sorted(matrix[hook].keys()):
+            count = matrix[hook][key]["count"]
+            ts = matrix[hook][key]["last_ts"]
+            last_fired = datetime.utcfromtimestamp(ts).isoformat() if ts > 0 else "never"
 
-        hook_display = hook if first else ""
-        print(f"{hook_display:<25} {key:<20} {count:>6} {last_fired:>26}")
-        first = False
+            hook_display = hook if first else ""
+            print(f"{hook_display:<25} {key:<20} {count:>6} {last_fired:>26}")
+            first = False
+else:
+    print("(no hook invocations recorded)")
 
 # List hooks with zero entries
 print("\n=== Never-Fired Hooks (Measurement Targets) ===\n")

@@ -65,15 +65,14 @@ The harness tests a matrix of runtimes:
 
 After installer completes:
 
-**A. Self-Check**
-- Run `mogui-ADE-orchestrator/master-ops/scripts/harness-selfcheck.sh` inside sandbox
-- Verifies: skills discovery, hooks wiring, tracker resolution
-- Output: command + stdout/stderr in report
+**A. Structure Check**
+- Verify the sandbox clone contains `master-ops/`, `INSTALL-PROMPT.txt`, and `master-ops/ONBOARDING.md`.
+- Output: PASS or FAIL in the report.
 
 **B. Hook Fires**
-- Check sandbox-local fire-log for entries (`.fire-log/spawn-test-<runtime>.log`)
-- At least one hook must fire during setup
-- Output: fire-count + first 5 entries in report
+- Check the hook fire-log line count before and after the spawned agent runs.
+- At least one new hook fire-log entry must appear during setup.
+- Output: fire-log path plus before/after counts in report.
 
 **C. Round-Trip**
 - Check for orca orchestration message from spawned master back to coordinator
@@ -123,8 +122,8 @@ Both `claude` and `codex` return **PASS** for all three assertions.
 One or both of `claude`, `codex` failed.
 - Sandboxes preserved
 - Investigator path: `cd <sandbox>/mogui-ADE-orchestrator`
-- Run harness-selfcheck manually: `bash master-ops/scripts/harness-selfcheck.sh`
-- Check fire-log: `cat .fire-log/spawn-test-<runtime>.log`
+- Inspect `master-ops/`, `INSTALL-PROMPT.txt`, and `master-ops/ONBOARDING.md` in the kept sandbox.
+- Check the configured hook fire-log path from the report.
 - Exit code: 1
 
 ### Grok / Blocked Runtimes
@@ -133,13 +132,13 @@ One or both of `claude`, `codex` failed.
 
 ## Fire-Log Instrumentation
 
-The harness wires each sandbox to a sandbox-local fire-log:
+The harness reads the host hook fire-log before and after the spawned agent run:
 
 ```bash
-export MOGUI_FIRE_LOG="/sandbox/.fire-log/spawn-test-<runtime>.log"
+export MOGUI_HOOK_FIRE_LOG="$HOME/.mogui/hook-fire-log.jsonl"
 ```
 
-This keeps sandbox instance logs separate from the coordinator's fire-log.
+If `MOGUI_HOOK_FIRE_LOG` is unset, the default is `~/.mogui/hook-fire-log.jsonl`.
 
 ### Fire-Log Format
 
@@ -154,15 +153,14 @@ Hook names, trigger times, and hook output are recorded here.
 
 ### Check Harness Exit Code
 ```bash
-./scripts/spawn-test --runtime claude
+SPAWN_TEST_RUNTIMES=claude ./scripts/spawn-test
 echo $?  # 0 = pass, 1 = fail
 ```
 
 ### Re-Enter Failed Sandbox
 ```bash
 cd "$TMPDIR/mogui-spawn-test/claude-<timestamp>/mogui-ADE-orchestrator"
-bash master-ops/scripts/harness-selfcheck.sh
-cat .fire-log/spawn-test-claude.log
+ls master-ops INSTALL-PROMPT.txt master-ops/ONBOARDING.md
 ```
 
 ### Check Round-Trip Message
@@ -194,7 +192,7 @@ Report is committed with evidence appended to `docs/reports/spawn-test-<date>.md
 ## Related Documentation
 
 - **Onboarding Flow**: `{{RUNTIME_ROOT}}/master-ops/ONBOARDING.md`
-- **Self-Check**: `{{RUNTIME_ROOT}}/master-ops/scripts/harness-selfcheck.sh`
+- **Structure Check**: `master-ops/`, `INSTALL-PROMPT.txt`, and `master-ops/ONBOARDING.md` inside the sandbox clone
 - **Master Operations**: `docs/MASTER-OPERATIONS.md`
 - **Worker Contract**: `contracts/2026-08-04-spawn-test-harness.md`
 
@@ -202,4 +200,4 @@ Report is committed with evidence appended to `docs/reports/spawn-test-<date>.md
 
 **Last Updated**: 2026-08-04
 **Harness Version**: 1.0
-**Template Version**: v0.4.1
+**Template Version**: v0.4.4

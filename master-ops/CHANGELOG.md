@@ -41,6 +41,8 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+## v0.4.4
+
 Promotion sweep 2A verified tools (2026-08-04 staging to template):
 
 - New `master-ops/scripts/orca-wait`, `master-ops/scripts/hooks/bash-poll-warn.sh`,
@@ -50,8 +52,8 @@ Promotion sweep 2A verified tools (2026-08-04 staging to template):
 - New `master-ops/scripts/conversation-redaction-scan`,
   `master-ops/scripts/pr-body-check`, and
   `master-ops/docs/runbooks/conversation-redaction.md` cover PR bodies,
-  comments, review text, and issue bodies for conversation-surface home-path
-  leaks without printing the matched value.
+  PR comments, review-thread comments, and issue bodies for
+  conversation-surface home-path leaks without printing the matched value.
 - Hook fire-log observability is promoted through fail-open fire-log calls in
   shipped hooks, the new `master-ops/scripts/hook-coverage-report`, and
   `master-ops/docs/runbooks/hook-fire-observability.md`.

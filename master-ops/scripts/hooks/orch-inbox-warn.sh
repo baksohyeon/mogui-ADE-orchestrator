@@ -2,13 +2,28 @@
 # UserPromptSubmit: warn once when unacked orchestration messages exist.
 
 log_fire() {
-  mkdir -p ~/.mogui
+  mkdir -p ~/.mogui 2>/dev/null || return 0
   local session_kind="unknown"
   if [ -n "$ORCA_TASK_ID" ] || [ -n "$ORCA_DISPATCH_ID" ] || [[ "$PWD" == *".orca/worktrees"* ]]; then
     session_kind="worker"
+  elif [ -f "$PWD/docs/MASTER-OPERATIONS.md" ]; then
+    session_kind="master"
   fi
-  printf '{"ts":%d,"hook":"orch-inbox-warn","event":"UserPromptSubmit","cwd":"%s","runtime_hint":"%s","session_kind":"%s"}\n' \
-    "$(date +%s)" "$PWD" "${MOGUI_RUNTIME_HINT:-unknown}" "$session_kind" >> ~/.mogui/hook-fire-log.jsonl 2>/dev/null || true
+  python3 - "orch-inbox-warn" "UserPromptSubmit" "$PWD" "${MOGUI_RUNTIME_HINT:-unknown}" "$session_kind" <<'PY' >> ~/.mogui/hook-fire-log.jsonl 2>/dev/null || true
+import json
+import sys
+import time
+
+_, hook, event, cwd, runtime_hint, session_kind = sys.argv
+print(json.dumps({
+    "ts": int(time.time()),
+    "hook": hook,
+    "event": event,
+    "cwd": cwd,
+    "runtime_hint": runtime_hint,
+    "session_kind": session_kind,
+}, separators=(",", ":")))
+PY
 }
 
 log_fire

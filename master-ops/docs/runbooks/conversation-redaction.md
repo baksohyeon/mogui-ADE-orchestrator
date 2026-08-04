@@ -70,9 +70,10 @@ When findings are detected, follow this exact procedure (owner-approved per PR#6
    gh pr edit <PR#> --body "$(cat new-body.txt)"
    ```
 
-2. **Delete bot comments quoting a leak**: If a bot comment (CodeRabbit, linter, etc.) quoted the leaked value in context, delete the comment, not just edit it (because edit leaves the history). The bot will re-comment on the next push if needed.
+2. **Delete bot comments quoting a leak**: If a bot comment (CodeRabbit, linter, etc.) quoted the leaked value in context, delete the comment, not just edit it (because edit leaves the history). Use the endpoint for the surface that carried the leak; issue comments and pull-request review comments use different APIs.
    ```bash
    gh api repos/owner/repo/issues/comments/<comment-id> -X DELETE
+   gh api repos/owner/repo/pulls/comments/<review-comment-id> -X DELETE
    ```
 
 3. **Run redaction scan to verify**: After remediation, re-run the scanner to confirm the sweep is complete.
@@ -92,10 +93,14 @@ To validate the scanner works, seed a synthetic marker in a test fixture and ver
 
 1. Create a test PR body file with a known marker:
    ```bash
-   cat > /tmp/test-pr-body.txt <<EOF
-   ## Problem
-   User path is <macos-home-dir>/development.
-   EOF
+   HOME_MARKER="/"Users/testcase"
+   {
+     printf '## Problem\n'
+     printf 'User path is %s/development.\n' "$HOME_MARKER"
+     printf '\n## Why this approach\nfilled\n'
+     printf '\n## What this changes\nfilled\n'
+     printf '\n## Expected effect\nfilled\n'
+   } > /tmp/test-pr-body.txt
    ```
 
 2. Run pr-body-check against it:

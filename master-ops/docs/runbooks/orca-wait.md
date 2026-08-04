@@ -27,6 +27,9 @@ The correct orca wait flow:
 # Wait once and return after first batch
 ./scripts/orca-wait --once
 
+# Keep waiting and print every non-heartbeat batch
+./scripts/orca-wait
+
 # Custom timeout (milliseconds)
 ./scripts/orca-wait --once --timeout-ms 10000
 
@@ -36,7 +39,6 @@ The correct orca wait flow:
 
 Output:
 ```
-heartbeat|msg_abc123|term_xyz|alive
 worker_done|msg_def456|term_xyz|complete
 ```
 

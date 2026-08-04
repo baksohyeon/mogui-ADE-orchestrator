@@ -10,6 +10,7 @@ TIMEOUT_MS=3300000
 ONCE=0
 TYPES=""
 HELP=0
+LAST_WAIT_OUTPUT=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -71,8 +72,16 @@ while [[ $DRAINED -eq 0 ]] && [[ $DRAIN_ITER -lt $MAX_DRAIN ]]; do
   [[ -n "$PREV_DELIVERY" ]] && DRAIN_CMD+=("--ack" "$PREV_DELIVERY")
   [[ -n "$TYPES" ]] && DRAIN_CMD+=("--types" "$TYPES")
 
-  # Capture JSON output, filter keepalives
-  OUTPUT=$("${DRAIN_CMD[@]}" 2>&1 | jq -s "map(select(._keepalive|not))" 2>/dev/null)
+  # Capture JSON output, filter keepalives. Keep stderr out of jq input.
+  DRAIN_ERR=$(mktemp)
+  OUTPUT=$("${DRAIN_CMD[@]}" 2>"$DRAIN_ERR" | jq -s "map(select(._keepalive|not))" 2>/dev/null)
+  DRAIN_EXIT=$?
+  if [[ $DRAIN_EXIT -ne 0 ]]; then
+    cat "$DRAIN_ERR" >&2
+    rm -f "$DRAIN_ERR"
+    exit $DRAIN_EXIT
+  fi
+  rm -f "$DRAIN_ERR"
 
   if [[ -z "$OUTPUT" ]] || [[ "$OUTPUT" == "[]" ]] || [[ "$OUTPUT" == "null" ]]; then
     DRAINED=1
@@ -92,36 +101,32 @@ if [[ $DRAINED -eq 0 ]]; then
   echo "[orca-wait] WARNING: backlog drain hit max iterations ($MAX_DRAIN), proceeding with partial drain" >&2
 fi
 
-# Wait phase: block until a message arrives (or timeout)
-WAIT_CMD=("orca" "orchestration" "check" "${CHECK_FLAGS[@]}")
-[[ -n "$PREV_DELIVERY" ]] && WAIT_CMD+=("--ack" "$PREV_DELIVERY")
+while true; do
+  # Wait phase: block until a message arrives (or timeout)
+  WAIT_CMD=("orca" "orchestration" "check" "${CHECK_FLAGS[@]}")
+  [[ -n "$PREV_DELIVERY" ]] && WAIT_CMD+=("--ack" "$PREV_DELIVERY")
 
-# Run the wait and capture output
-WAIT_OUTPUT=$("${WAIT_CMD[@]}" 2>&1)
-WAIT_EXIT=$?
+  WAIT_ERR=$(mktemp)
+  WAIT_OUTPUT=$("${WAIT_CMD[@]}" 2>"$WAIT_ERR")
+  WAIT_EXIT=$?
 
-# If wait failed, exit with the error
-if [[ $WAIT_EXIT -ne 0 ]]; then
-  # Filter out keepalives from stderr
-  printf '%s\n' "$WAIT_OUTPUT" | grep -v '"_keepalive"' >&2
-  exit $WAIT_EXIT
-fi
+  if [[ $WAIT_EXIT -ne 0 ]]; then
+    grep -v '"_keepalive"' "$WAIT_ERR" >&2
+    rm -f "$WAIT_ERR"
+    exit $WAIT_EXIT
+  fi
+  rm -f "$WAIT_ERR"
 
-# Parse and print results
-printf '%s\n' "$WAIT_OUTPUT" | jq -s "
-  map(select(._keepalive|not)) |
-  .[] |
-  if .type and .id and .from and .subject then
-    \"\\(.type)|\(.id)|\(.from)|\(.subject)\"
-  else
-    empty
-  end
-" 2>/dev/null
+  printf '%s\n' "$WAIT_OUTPUT" | jq -r -s "
+    map(select(._keepalive|not)) |
+    .[] |
+    if .type and .id and .from and .subject then
+      \"\\(.type)|\(.id)|\(.from)|\(.subject)\"
+    else
+      empty
+    end
+  " 2>/dev/null
 
-# Exit with --once flag
-[[ $ONCE -eq 1 ]] && exit 0
-
-# Continue waiting if --once is not set
-# (In typical use with the harness, --once exits here; without it,
-#  the wait loops for the full timeout and returns all messages in that batch)
-exit 0
+  PREV_DELIVERY=$(printf '%s\n' "$WAIT_OUTPUT" | jq -r -s "map(select(._keepalive|not)) | .[-1].deliveryId // empty" 2>/dev/null)
+  [[ $ONCE -eq 1 ]] && exit 0
+done

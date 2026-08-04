@@ -2,14 +2,14 @@
 
 Load rule: read this file only when orientation begins. Router: [`../ONBOARDING.md`](../ONBOARDING.md). Next file after Verify passes: `01-preflight.md`.
 
-## Owner script (3–6 sentences, adapt to the owner's language)
+## Owner script (kind ELI5, adapt to the owner's language)
 
 Tell the user, in their language and before asking anything else (the router's session-mode question has already happened):
 
-1. This system runs one master session per workspace to coordinate its repositories; Orca spawns it and checks that it sits in the right place, and a dedicated ops repository keeps governance state.
-2. Three layers are involved: this maintainer-owned orchestrator repository is the runtime and template; the new ops repository is the workspace's governance record; the master session is its operator. This installer session is none of them and retires at the end.
-3. Steps 0 through 7.6 measure facts and build the ops repository; Step 8 spawns the master; Step 9 is the master's first-boot smoke in its own session.
-4. The end state is an ops repository with a completed operations document, an issue tracker reachable from the workspace root, seeded user rules, and exactly one verified Generation 1 master.
+1. This installer is the workspace's faithful Herald. It prepares the ground, checks the doors, and raises one Master session for this workspace; Orca creates that session and checks that it sits in the right place.
+2. Three layers are involved. This maintainer-owned orchestrator repository is the runtime and template; the new ops repository is the workspace's governance record; the Master session is the living operator. The Herald is none of those and retires at the end.
+3. Steps 0 through 7.6 are preparation: we measure facts, build the ops repository, and ask the choices that only the owner can make. Step 8 summons the Master into its own terminal; in Step 9, the new Master wakes cleanly and reports back.
+4. The end state is simple: an ops repository with its operating document filled in, an issue tracker reachable from the workspace root, the owner's rules seeded, and exactly one verified Generation 1 Master.
 
 Keep the user oriented with the opening line in every step.
 

@@ -8,9 +8,9 @@ Load rule: read this file only when Step 2 begins. Router: [`../ONBOARDING.md`](
 
 **Why/caution:** Governance needs a visible ownership boundary that cannot be confused with product code.
 
-### Owner script (3–6 sentences, adapt to the owner's language)
+### Owner script (kind ELI5, adapt to the owner's language)
 
-Where we are: the workspace facts are confirmed. What we decide next: where this workspace's governance records will live — a small repository that is clearly separate from product code. Ask whether to create a new repository or reuse an existing operations repository, and whether local Git initialization is allowed for a new ops repository; this choice applies only to `{{OPS_REPO}}`, never to `{{WORKSPACE_ROOT}}`.
+Where we are: the workspace facts are confirmed, and the Herald now needs a book for the Master to read from. What we decide next: where this workspace's governance records will live — a small repository that is clearly separate from product code. Explain like ELI5: product repositories hold the thing being built; the ops repository holds how the Master should coordinate that work. Ask whether to create a new repository or reuse an existing operations repository, and whether local Git initialization is allowed for a new ops repository; this choice applies only to `{{OPS_REPO}}`, never to `{{WORKSPACE_ROOT}}`.
 
 Inspect the confirmed names; propose two or three candidates with pros and cons; recommend `<workspace>-ops`; evaluate governance clarity, separation from product scope, and shell-title ambiguity; use a structured choice when available.
 

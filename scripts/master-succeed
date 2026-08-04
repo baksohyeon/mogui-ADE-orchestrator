@@ -15,6 +15,9 @@ SRC_ROOT = REPO_ROOT / "src"
 sys.path.insert(0, str(SRC_ROOT))
 
 
+# cursor/agy intentionally omitted: their model ids were not measured from
+# each CLI's --help or docs. Omitted --model therefore exits with
+# "--model is required for agent X" until a measured id is recorded here.
 DEFAULT_MODELS = {
     "claude": "claude-fable-5",
     "claude-code": "claude-fable-5",

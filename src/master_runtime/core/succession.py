@@ -476,14 +476,19 @@ def _measure_disappearances(
     else:
         process = DISAPPEARANCE_MEASURED
 
-    if target_tty:
-        tty = (
-            DISAPPEARANCE_STILL_PRESENT
-            if tty_probe(target_tty)
-            else DISAPPEARANCE_MEASURED
-        )
-    else:
+    # Whitespace-only or "/dev/"-only values normalize to an empty bare name.
+    # Treat those as skipped, never as measured — an unusable target is not a
+    # disappearance the probe observed.
+    if target_tty is None or not str(target_tty).strip():
         tty = "skipped:no target-tty supplied"
+    else:
+        bare_tty = _tty_bare_name(str(target_tty))
+        if not bare_tty:
+            tty = "skipped:target-tty has no device name after normalization"
+        elif tty_probe(str(target_tty).strip()):
+            tty = DISAPPEARANCE_STILL_PRESENT
+        else:
+            tty = DISAPPEARANCE_MEASURED
 
     return {"pane": pane, "process": process, "tty": tty}, process_pid
 
@@ -1281,13 +1286,22 @@ def _default_orca_runner(command: Sequence[str]) -> Tuple[int, str, str]:
     return completed.returncode, completed.stdout, completed.stderr
 
 
+_PROBE_TIMEOUT_SEC = 5
+
+
 def _default_process_probe(pid: int) -> bool:
-    completed = subprocess.run(
-        ("ps", "-p", str(pid), "-o", "pid="),
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        completed = subprocess.run(
+            ("ps", "-p", str(pid), "-o", "pid="),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=_PROBE_TIMEOUT_SEC,
+        )
+    except subprocess.TimeoutExpired:
+        # Unmeasurable within budget: report presence so the outcome refuses
+        # instead of claiming a disappearance the probe never observed.
+        return True
     return completed.returncode == 0 and bool(completed.stdout.strip())
 
 
@@ -1303,18 +1317,25 @@ def _default_tty_probe(tty: str) -> bool:
 
     Device nodes under /dev often persist after hangup on some hosts, so the
     decisive measurement is whether any process still lists the tty. Inject a
-    ``tty_probe`` in tests rather than asserting this default.
+    ``tty_probe`` in tests rather than asserting this default. A stalled ``ps``
+    is treated as still present (fail-closed).
     """
 
     bare = _tty_bare_name(tty)
     if not bare:
         return False
-    completed = subprocess.run(
-        ("ps", "-t", bare, "-o", "pid="),
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        completed = subprocess.run(
+            ("ps", "-t", bare, "-o", "pid="),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=_PROBE_TIMEOUT_SEC,
+        )
+    except subprocess.TimeoutExpired:
+        # Unmeasurable within budget: report presence so the outcome refuses
+        # instead of claiming a disappearance the probe never observed.
+        return True
     return completed.returncode == 0 and bool(completed.stdout.strip())
 
 

@@ -170,7 +170,7 @@ scripts/master-succeed retire \
   --execute
 ```
 
-Each disappearance is reported separately under `disappearances` (`pane`, `process`, `tty`), each valued `measured`, `still_present`, or `skipped:<why>`. `CLOSED` means all three are `measured` and none is `still_present`. When process or tty was skipped, status is `CLOSED_PARTIAL` so a skip cannot read as a full pass. A survivor is a refusal. Without `--execute` the command dry-runs.
+Each disappearance is reported separately under `disappearances`. `pane` is `measured` or `still_present` only. `process` and `tty` may also be `skipped:<why>` when the caller did not supply a usable target. Full `CLOSED` requires all three `measured` and none `still_present`. When process or tty was skipped, status is `CLOSED_PARTIAL` so a skip cannot read as a full pass. A survivor is a refusal. Without `--execute` the command dry-runs.
 
 Sweep the predecessor's scratchpad before CLOSED. It dies with the session and is often the only place uncommitted work had to live. Copy the tree somewhere durable that is not a git repository, then diff each file against the trunk branch and record the verdict — including when salvage value is zero.
 
@@ -178,7 +178,7 @@ Sweep the predecessor's scratchpad before CLOSED. It dies with the session and i
 
 ## Retirement Completion And Revival
 
-Retirement ends with three measured disappearances, never with a close command's return value: process (pid gone), host pane (no live handle in the host's terminal list), and tty (device and login chain gone). Close command return values have been wrong in both directions on real hosts; the measurement decides.
+Full `CLOSED` requires three measured disappearances, never a close command's return value alone: process (pid gone), host pane (no live handle in the host's terminal list), and tty (device and login chain gone). When process or tty could not be measured and was skipped, the tool reports `CLOSED_PARTIAL` instead — pane-only absence is not a full close. Close command return values have been wrong in both directions on real hosts; the measurement decides.
 
 A frozen session also stays resumable forever from any terminal its agent CLI runs in, phones and remote machines included, so the boot card adds a revival check: scan running agent processes for lineage session ids (the session id is the portable key; resume flags differ per CLI), recover any unanswered owner instruction from a revived session, then take the revival through the same three disappearances. Four retired masters revived at once by a mobile resume is the measured incident behind the rule (2026-08-03).
 

@@ -739,6 +739,65 @@ def test_retire_target_tty_supplied_and_gone() -> None:
     assert report.disappearances["tty"] == "measured"
 
 
+def test_retire_blank_target_tty_is_skipped_not_measured() -> None:
+    """Whitespace-only or /dev/-only target_tty must not count as measured."""
+    base_lists = {
+        _LIST_COMMAND: [
+            (
+                0,
+                _orca_json_from_terminals(
+                    {"handle": "term-self", "connected": True, "title": "successor"},
+                    {
+                        "handle": "term-u8",
+                        "processId": 99,
+                        "connected": True,
+                        "title": "predecessor",
+                    },
+                ),
+                "",
+            ),
+            (
+                0,
+                _orca_json_from_terminals(
+                    {"handle": "term-self", "connected": True, "title": "successor"},
+                ),
+                "",
+            ),
+        ],
+        ("orca", "terminal", "close", "--terminal", "term-u8", "--json"): (0, '{"ok":true}', ""),
+    }
+
+    for blank_tty in ("   ", "/dev/", " /dev/ "):
+        runner = _runner(
+            {
+                _LIST_COMMAND: list(base_lists[_LIST_COMMAND]),
+                ("orca", "terminal", "close", "--terminal", "term-u8", "--json"): (
+                    0,
+                    '{"ok":true}',
+                    "",
+                ),
+            }
+        )
+        probe_calls = []
+        report = retire_predecessor(
+            predecessor_selector="",
+            self_handle="term-self",
+            target_handle="term-u8",
+            orca_runner=runner,
+            execute=True,
+            target_tty=blank_tty,
+            process_probe=lambda pid: False,
+            tty_probe=lambda tty: probe_calls.append(tty) or False,
+        )
+
+        assert report.status == "CLOSED_PARTIAL", blank_tty
+        assert report.disappearances["pane"] == "measured", blank_tty
+        assert report.disappearances["process"] == "measured", blank_tty
+        assert report.disappearances["tty"].startswith("skipped:"), blank_tty
+        assert report.status != "CLOSED", blank_tty
+        assert probe_calls == [], blank_tty
+
+
 def test_retire_target_tty_supplied_and_still_present_is_refused() -> None:
     runner = _runner(
         {

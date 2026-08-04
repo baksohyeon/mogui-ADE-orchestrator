@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+"""Command line entry point for worker lease reaping."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+
+SCRIPT_PATH = Path(__file__).resolve()
+REPO_ROOT = SCRIPT_PATH.parent.parent
+SRC_ROOT = REPO_ROOT / "src"
+sys.path.insert(0, str(SRC_ROOT))
+
+
+from master_runtime.core.worker_reap import ReapError, WorkerReaper  # noqa: E402
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+
+    reap_ledger_path = None
+    if args.ledger:
+        reap_ledger_path = Path(args.ledger)
+
+    reaper = WorkerReaper(reap_ledger_path=reap_ledger_path)
+
+    try:
+        record = reaper.reap(
+            task_id=args.task_id,
+            dispatch_id=args.dispatch_id,
+            execute=not args.dry_run,
+        )
+    except ReapError as exc:
+        print(str(exc), file=sys.stderr)
+        return exc.exit_code
+
+    result = {
+        "record": record.to_dict(),
+        "dry_run": args.dry_run,
+    }
+
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
+    else:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+
+    return 0
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="worker-reap",
+        description="Close settled worker terminals and clean up worktrees",
+    )
+    parser.add_argument(
+        "--task-id",
+        help="Task ID to reap (or use --dispatch-id)",
+    )
+    parser.add_argument(
+        "--dispatch-id",
+        help="Dispatch ID to reap (or use --task-id)",
+    )
+    parser.add_argument(
+        "--ledger",
+        help="Path to reap ledger for recording actions",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would happen without actually closing/removing",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output as compact JSON",
+    )
+    return parser
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -696,8 +696,8 @@ generate_report() {
       done
     else
       # Happy-path scenario
-      echo "| Runtime | Status | Assertions | Wall Time | Message ID | Fire Log |"
-      echo "|---------|--------|-----------|-----------|------------|----------|"
+      echo "| Runtime | Status | Assertions | Wall Time | Message ID | Sandbox | Fire Log |"
+      echo "|---------|--------|-----------|-----------|------------|---------|----------|"
 
       # Per-runtime matrix
       for runtime in $RUNTIMES; do
@@ -714,16 +714,16 @@ generate_report() {
         fi
 
         if [ "$status" = "blocked" ]; then
-          echo "| $runtime | blocked | - | - | - | - |"
+          echo "| $runtime | blocked | - | - | - | - | - |"
         elif [ "$status" = "PASS" ]; then
-          echo "| $runtime | PASS | 3/3 | ${time}s | $msg_id ($msg_subject) | $fire_log_note |"
+          echo "| $runtime | PASS | 3/3 | ${time}s | $msg_id ($msg_subject) | - | $fire_log_note |"
         elif [[ "$status" == FAIL* ]]; then
           local sandbox=$(get_sandbox "$runtime")
           local sandbox_info="-"
           [ -n "$sandbox" ] && sandbox_info="\`${sandbox##*/}\`"
-          echo "| $runtime | FAIL | - | ${time}s | $sandbox_info | $fire_log_note |"
+          echo "| $runtime | FAIL | - | ${time}s | - | $sandbox_info | $fire_log_note |"
         else
-          echo "| $runtime | SKIP | - | - | - | - |"
+          echo "| $runtime | SKIP | - | - | - | - | - |"
         fi
       done
     fi

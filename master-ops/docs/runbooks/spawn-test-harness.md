@@ -6,7 +6,7 @@ This document describes the sandbox spawn-test harness: an end-to-end verificati
 
 The onboarding installer has never been tested end-to-end with machine verification. This harness automates the full flow for each runtime and produces evidence:
 
-- a. **Machine Assertion A**: Sandbox clone contains the expected onboarding files
+- a. **Machine Assertion A**: Spawned agent generated an operations repository with `docs/MASTER-OPERATIONS.md`
 - b. **Machine Assertion B**: At least one hook fire-log entry is written from the sandbox during onboarding
 - c. **Machine Assertion C**: Round-trip - spawned master sends orca orchestration message back to coordinator
 
@@ -97,18 +97,18 @@ Generated at: `docs/reports/spawn-test-<YYYY-MM-DD>.md`
 2. **Pass Summary**: Must-pass runtimes status
 3. **Floor Status**: "FLOOR MET" vs "FLOOR NOT MET"
 4. **Round-Trip Messages**: Message IDs from successful runs
-5. **Kept Sandboxes**: Paths to failed-run sandboxes for investigation
+5. **Kept Sandboxes**: Failed-run sandbox identifiers for investigation
 6. **Details**: Full output per runtime
 
 ### Example Summary
 
 ```markdown
-| Runtime | Status | Assertions | Wall Time | Message ID | Fire Log |
-|---------|--------|-----------|-----------|------------|----------|
-| claude  | PASS | 3/3     | 127s      | msg_abc (spawn-test-alive-claude-123) | spawn-test-claude.jsonl 0->2 |
-| codex   | PASS | 3/3     | 95s       | msg_def (spawn-test-alive-codex-123) | spawn-test-codex.jsonl 0->1 |
-| agy     | blocked | - | - | - | - |
-| cursor  | blocked | - | - | - | - |
+| Runtime | Status | Assertions | Wall Time | Message ID | Sandbox | Fire Log |
+|---------|--------|-----------|-----------|------------|---------|----------|
+| claude  | PASS | 3/3     | 127s      | msg_abc (spawn-test-alive-claude-123) | - | spawn-test-claude.jsonl 0->2 |
+| codex   | PASS | 3/3     | 95s       | msg_def (spawn-test-alive-codex-123) | - | spawn-test-codex.jsonl 0->1 |
+| agy     | blocked | - | - | - | - | - |
+| cursor  | blocked | - | - | - | - | - |
 ```
 
 ## Interpreting Results
@@ -123,7 +123,7 @@ Both `claude` and `codex` return **PASS** for all three assertions.
 One or both of `claude`, `codex` failed.
 - Sandboxes preserved
 - Investigator path: `cd <sandbox>/mogui-ADE-orchestrator`
-- Inspect `master-ops/`, `INSTALL-PROMPT.txt`, and `master-ops/ONBOARDING.md` in the kept sandbox.
+- Inspect the generated operations repository candidate for `docs/MASTER-OPERATIONS.md`.
 - Check the sandbox-local hook fire-log path and before/after counts from the report.
 - Exit code: 1
 
@@ -162,7 +162,7 @@ echo $?  # 0 = pass, 1 = fail
 ### Re-Enter Failed Sandbox
 ```bash
 cd "$TMPDIR/mogui-spawn-test/claude-<timestamp>/mogui-ADE-orchestrator"
-ls master-ops INSTALL-PROMPT.txt master-ops/ONBOARDING.md
+find .. -path '*/mogui-master-ops/docs/MASTER-OPERATIONS.md' -print
 ```
 
 ### Check Round-Trip Message
@@ -194,8 +194,8 @@ Report is committed with evidence appended to `docs/reports/spawn-test-<date>.md
 ## Related Documentation
 
 - **Onboarding Flow**: `{{RUNTIME_ROOT}}/master-ops/ONBOARDING.md`
-- **Structure Check**: `master-ops/`, `INSTALL-PROMPT.txt`, and `master-ops/ONBOARDING.md` inside the sandbox clone
-- **Master Operations**: `docs/MASTER-OPERATIONS.md`
+- **Structure Check**: generated operations repository with `docs/MASTER-OPERATIONS.md`
+- **Master Operations**: `<sandbox>/mogui-master-ops/docs/MASTER-OPERATIONS.md` or `<sandbox>/mogui-ADE-orchestrator/mogui-master-ops/docs/MASTER-OPERATIONS.md`
 - **Worker Contract**: `contracts/2026-08-04-spawn-test-harness.md`
 
 ---

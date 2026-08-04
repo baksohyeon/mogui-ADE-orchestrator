@@ -1,0 +1,35 @@
+{
+  "_docs": {
+    "workspace_root_is_plain_folder": "Always true for this runtime: the workspace root is a plain folder that groups member repositories as siblings. It is not a git parent and must never use submodules. Orca may label that folder 'not a valid worktree folder'; that is expected for a folder project, not an error.",
+    "workspace_root": "Absolute path of the confirmed workspace root. Required for absolute path lookups: the checker resolves an absolute candidate under this root and matches the remainder to a declared relative path. Omit or null only when absolute lookups will not be used.",
+    "master_seat": "Where the master session sits: usually the folder workspace of the workspace root (selector form id:folder:<uuid>), or the primary worktree when the whole workspace is one repository.",
+    "repositories": "Inventory of member repositories the master coordinates. Paths are relative to the workspace root. role is product or ops. capabilities names what worker lanes may do (for example pr, dispatch-target). prohibited names hard stops (for example direct-main-commit, force-push).",
+    "name": "Short stable id for the repository entry (usually the folder basename).",
+    "path": "Workspace-root-relative path to the checkout (for example product-app or workspace-ops). Use . when the workspace is a single repository whose root is the product checkout.",
+    "remote": "Canonical remote URL when known; use empty string when none is measured yet.",
+    "role": "product for code the master coordinates through workers; ops for the workspace governance repository.",
+    "capabilities": "Allowed worker-lane actions for this repository (open set; common values: pr, dispatch-target).",
+    "prohibited": "Hard-blocked actions for this repository (open set; common values: direct-main-commit, force-push)."
+  },
+  "workspace_root_is_plain_folder": true,
+  "workspace_root": "/absolute/path/to/workspace-root",
+  "master_seat": "folder-workspace-of-workspace-root",
+  "repositories": [
+    {
+      "name": "example-product",
+      "path": "example-product",
+      "remote": "https://github.com/example/example-product.git",
+      "role": "product",
+      "capabilities": ["pr", "dispatch-target"],
+      "prohibited": ["direct-main-commit", "force-push"]
+    },
+    {
+      "name": "example-ops",
+      "path": "example-ops",
+      "remote": "https://github.com/example/example-ops.git",
+      "role": "ops",
+      "capabilities": ["pr", "dispatch-target"],
+      "prohibited": ["force-push"]
+    }
+  ]
+}

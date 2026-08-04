@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import os
 import sys
@@ -11,6 +12,16 @@ from collections import Counter
 from pathlib import Path
 from typing import Iterable, Mapping
 
+
+SCRIPT_PATH = Path(__file__).resolve()
+REPO_ROOT = SCRIPT_PATH.parent.parent
+SRC_ROOT = REPO_ROOT / "src"
+sys.path.insert(0, str(SRC_ROOT))
+
+from master_runtime.core.instance_runtime_config import (  # noqa: E402
+    InstanceRuntimeConfigError,
+    load_instance_runtime_config,
+)
 
 # No model name is hardcoded: the expected model differs per workspace and per
 # host, so a baked-in default would silently assert someone else's policy.
@@ -23,7 +34,28 @@ DRIFT_ACTION = "propose a clean-spawn succession and review delegation state for
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="model-identity-probe")
-    parser.add_argument("--transcript", required=True)
+    parser.add_argument(
+        "--transcript",
+        help=(
+            "path to a session transcript JSONL file. When omitted, resolve "
+            "from instance runtime config / MOGUI_TRANSCRIPT_GLOB for --runtime "
+            "(default: configured master_host_runtime) and pick the newest match"
+        ),
+    )
+    parser.add_argument(
+        "--runtime",
+        help=(
+            "runtime name whose transcript_glob to use when --transcript is "
+            "omitted (default: master_host_runtime from env or instance config)"
+        ),
+    )
+    parser.add_argument(
+        "--config",
+        help=(
+            "path to instance runtime config JSON "
+            "(default: INSTANCE_RUNTIME_CONFIG or config/instance-runtime.json)"
+        ),
+    )
     parser.add_argument("--expect", default=os.environ.get("MODEL_IDENTITY_EXPECT") or DEFAULT_EXPECTED_MODEL)
     parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT)
     args = parser.parse_args(argv)
@@ -37,7 +69,16 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
-        models = recent_assistant_models(Path(args.transcript), limit=args.limit)
+        transcript_path = _resolve_transcript_path(args.transcript, args.runtime, args.config)
+    except InstanceRuntimeConfigError as exc:
+        print("MODEL-PROBE DRIFT: unconfigured - {0} — {1}".format(exc, DRIFT_ACTION))
+        return 2
+    except (OSError, ValueError) as exc:
+        print("MODEL-PROBE DRIFT: transcript_error={0} — {1}".format(exc, DRIFT_ACTION))
+        return 2
+
+    try:
+        models = recent_assistant_models(transcript_path, limit=args.limit)
     except (OSError, ValueError) as exc:
         print("MODEL-PROBE DRIFT: transcript_error={0} — {1}".format(exc, DRIFT_ACTION))
         return 2
@@ -55,6 +96,51 @@ def main(argv: list[str] | None = None) -> int:
 
     print("MODEL-PROBE DRIFT: {0} — {1}".format(_model_distribution(models), DRIFT_ACTION))
     return 2
+
+
+def _resolve_transcript_path(
+    transcript: str | None,
+    runtime: str | None,
+    config_path: str | None,
+) -> Path:
+    if transcript is not None and str(transcript).strip():
+        return Path(transcript).expanduser()
+
+    # Env glob is runtime-agnostic and documented as first after --transcript.
+    # Apply it before requiring master_host_runtime so env-only setups work.
+    env_pattern = os.environ.get("MOGUI_TRANSCRIPT_GLOB")
+    if env_pattern is not None and env_pattern.strip():
+        return _newest_glob_match(env_pattern)
+
+    config = load_instance_runtime_config(
+        config_path,
+        repo_root=REPO_ROOT,
+    )
+    runtime_name = (runtime or "").strip() or None
+    if runtime_name is None:
+        runtime_name = config.require_master_host_runtime()
+    pattern = config.require_transcript_glob(runtime_name)
+    return _newest_glob_match(pattern)
+
+
+def _newest_glob_match(pattern: str) -> Path:
+    expanded = os.path.expanduser(pattern)
+    newest: tuple[float, Path] | None = None
+    for hit in glob.glob(expanded, recursive=True):
+        path = Path(hit)
+        try:
+            if not path.is_file():
+                continue
+            candidate = (path.stat().st_mtime, path)
+        except OSError:
+            continue
+        if newest is None or candidate[0] > newest[0]:
+            newest = candidate
+    if newest is None:
+        raise ValueError(
+            "no transcript files matched configured glob {0!r}".format(pattern)
+        )
+    return newest[1]
 
 
 def recent_assistant_models(transcript_path: Path, limit: int = DEFAULT_LIMIT) -> tuple[str, ...]:

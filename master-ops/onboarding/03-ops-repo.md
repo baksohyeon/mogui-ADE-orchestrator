@@ -28,10 +28,10 @@ Inspect the confirmed names; propose two or three candidates with pros and cons;
 
 Ask for confirmation to create or reuse `{{OPS_REPO}}` and separate confirmation before local Git initialization of that ops repository.
 
-If new or empty, copy the Stage 1 skeleton from `{{RUNTIME_ROOT}}/master-ops/`, excluding `TEMPLATE-VERSION`, `CHANGELOG.md`, `ONBOARDING.md`, and the `onboarding/` directory; if existing, merge deliberately after reading it. Do not push unless explicitly asked.
+If new or empty, copy the Stage 1 skeleton from `{{RUNTIME_ROOT}}/master-ops/`, excluding `TEMPLATE-VERSION`, `CHANGELOG.md`, `ONBOARDING.md`, and the `onboarding/` directory; if existing, merge deliberately after reading it. Do not push unless explicitly asked. The skeleton includes `workspace-card/` (canonical workspace-root session card); that directory copies with the rest of the skeleton and is not excluded.
 
 ### Verify (Step 3)
 
-- the ops repository exists with `CLAUDE.md`, `AGENTS.md`, `docs/MASTER-OPERATIONS.md`, and the Stage 1 skeleton
+- the ops repository exists with its own agent instruction files `CLAUDE.md` and `AGENTS.md` (the ops-repo pair, kept byte-identical later — **not** the workspace session card), plus `docs/MASTER-OPERATIONS.md`, `workspace-card/CLAUDE.md` (canonical session card for later root deploy), and the rest of the Stage 1 skeleton
 - only the allowed remaining placeholders are present
 - `TEMPLATE-VERSION`, `CHANGELOG.md`, `ONBOARDING.md`, and the `onboarding/` directory are absent from the generated repository

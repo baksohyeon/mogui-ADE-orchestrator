@@ -41,6 +41,25 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+Workspace session card onboarding (2026-08-05 owner decision; measured gap:
+no step created the workspace-root session card):
+
+- Skeleton: `master-ops/workspace-card/CLAUDE.md` (canonical session card with
+  `{{...}}` placeholders) and `README.md` (canonical vs root deploy; link base
+  is the workspace root, a deliberate exception to the working-directory
+  clause). README carries no template placeholders (step 03 copies it into the
+  ops repo; step 05 forbids leftover `{{...}}`). Not the ops-repo agent
+  instruction pair and not step 10's owner operating card.
+- Card points dispatch at charter §5 (`docs/charter/05-dispatch-gate.md`), not
+  at a skeleton-absent wrapper path; review-bot routing cites charter §4.
+- Step 05: fill every ops-repo token (no deferral), deploy the filled card to
+  the workspace root as a Run action, then Verify (no-placeholder, ops pair,
+  root-vs-canonical card). Placement is before `09-spawn.md`.
+- Reverify check 6 matches (no deferral pass); check 7 reports root-vs-canonical
+  drift only, never silent redeploy.
+- Name disambiguation in steps 03, 05, 06, and reverify so nobody `cmp`s the
+  wrong `CLAUDE.md` pair.
+
 ## v0.4.4
 
 Promotion sweep 2A verified tools (2026-08-04 staging to template):

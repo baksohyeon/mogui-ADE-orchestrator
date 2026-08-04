@@ -87,5 +87,5 @@ The master asks for the initial role or approval to start in Maintenance, plus p
 - Role State has one active role and Role Lock is enabled
 - model measurement is reported as measured, unavailable, or unsupported
 - placement evidence includes the host pane/worktree selector, process cwd under `{{WORKSPACE_ROOT}}`, and session artifact/log namespace
-- no placeholders remain unless the user intentionally deferred them
+- no placeholders remain (step 05 forbids deferral; a leftover token is an install error, same rule as reverify check 6)
 - the founding Task and Dispatch complete through `worker_done`

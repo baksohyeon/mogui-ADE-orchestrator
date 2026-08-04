@@ -51,7 +51,7 @@ The installer start path is `00-orientation.md` → `01-preflight.md` only. Defe
 | 02 | `onboarding/02-workspace-facts.md` | Step 1 | purpose, root, inventory, name / monitor namespace / model |
 | 03 | `onboarding/03-ops-repo.md` | Steps 2–3 | ops repository chosen and created |
 | 04 | `onboarding/04-seat.md` | Step 3.5 | ops repo registered; durable workspace seat recorded |
-| 05 | `onboarding/05-placeholders.md` | Step 4 | placeholders replaced; entry files identical |
+| 05 | `onboarding/05-placeholders.md` | Step 4 | placeholders replaced; ops entry files identical; workspace session card deployed to root |
 | 06 | `onboarding/06-tracker.md` | Step 5 | issue tracker resolves from the workspace root |
 | 07 | `onboarding/07-user-rules.md` | Step 6 | owner rules and master callsign seeded |
 | 08 | `onboarding/08-settings-and-skills.md` | Steps 7–7.6 | hook owners, skill stack, publish-gate scope |

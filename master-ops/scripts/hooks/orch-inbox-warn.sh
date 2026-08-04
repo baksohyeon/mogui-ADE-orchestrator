@@ -1,5 +1,18 @@
 #!/bin/bash
 # UserPromptSubmit: warn once when unacked orchestration messages exist.
+
+log_fire() {
+  mkdir -p ~/.mogui
+  local session_kind="unknown"
+  if [ -n "$ORCA_TASK_ID" ] || [ -n "$ORCA_DISPATCH_ID" ] || [[ "$PWD" == *".orca/worktrees"* ]]; then
+    session_kind="worker"
+  fi
+  printf '{"ts":%d,"hook":"orch-inbox-warn","event":"UserPromptSubmit","cwd":"%s","runtime_hint":"%s","session_kind":"%s"}\n' \
+    "$(date +%s)" "$PWD" "${MOGUI_RUNTIME_HINT:-unknown}" "$session_kind" >> ~/.mogui/hook-fire-log.jsonl 2>/dev/null || true
+}
+
+log_fire
+
 # Keep this resolution order in sync with onboarding-preflight.sh and dispatch-gate.
 if [ -n "${ORCA_CLI_COMMAND:-}" ]; then
   orca_command="$ORCA_CLI_COMMAND"

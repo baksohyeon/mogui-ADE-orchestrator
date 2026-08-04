@@ -1,0 +1,127 @@
+#!/bin/bash
+# orca-wait - event-driven wait wrapper draining ack-chain backlog
+# Encapsulates the correct orca orchestration check protocol: drain unread,
+# then block on deliveryId ack-chaining until a matching message arrives.
+
+set -o pipefail
+
+# Defaults
+TIMEOUT_MS=3300000
+ONCE=0
+TYPES=""
+HELP=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --once)     ONCE=1; shift ;;
+    --timeout-ms) TIMEOUT_MS="$2"; shift 2 ;;
+    --types)    TYPES="$2"; shift 2 ;;
+    --help|-h)  HELP=1; shift ;;
+    *)
+      echo "[orca-wait] unrecognized flag: $1" >&2
+      exit 1
+      ;;
+  esac
+done
+
+if [[ $HELP -eq 1 ]]; then
+  cat >&2 <<'EOF'
+orca-wait - event-driven wait with ack-chain backlog drain
+
+Usage: orca-wait [--once] [--timeout-ms N] [--types TYPE,TYPE,...]
+
+Drains the unread backlog via ack-chaining, then blocks on orchestration check.
+Prints one line per non-heartbeat message: type|id|from|subject
+
+Options:
+  --once          Exit after the first non-empty batch
+  --timeout-ms N  Timeout per wait (default 3300000ms)
+  --types X,Y,Z   Filter by message types (passed to orca check --types)
+  --help          Show this message
+
+Environment:
+  ORCA_TASK_ID    Task ID for bound run lookup
+  ORCA_DISPATCH_ID Dispatch ID (optional, for context)
+EOF
+  exit 0
+fi
+
+# Ensure orca command exists
+if ! command -v orca &>/dev/null; then
+  echo "[orca-wait] ERROR: orca command not found (install orca-cli)" >&2
+  exit 127
+fi
+
+# Build the orca check flags
+CHECK_FLAGS=("--unread" "--wait" "--timeout-ms" "$TIMEOUT_MS" "--json")
+[[ -n "$TYPES" ]] && CHECK_FLAGS+=("--types" "$TYPES")
+
+# Drain phase: loop until we get an empty batch (no unacked messages remain)
+# Each iteration ack's the previous batch before checking the next
+PREV_DELIVERY=""
+DRAINED=0
+DRAIN_ITER=0
+MAX_DRAIN=100  # bounded loop to prevent infinite drain
+
+while [[ $DRAINED -eq 0 ]] && [[ $DRAIN_ITER -lt $MAX_DRAIN ]]; do
+  ((DRAIN_ITER++))
+
+  # Build current drain check: --wait 0 timeout so it returns immediately
+  DRAIN_CMD=("orca" "orchestration" "check" "--unread" "--wait" "--timeout-ms" "100" "--json")
+  [[ -n "$PREV_DELIVERY" ]] && DRAIN_CMD+=("--ack" "$PREV_DELIVERY")
+  [[ -n "$TYPES" ]] && DRAIN_CMD+=("--types" "$TYPES")
+
+  # Capture JSON output, filter keepalives
+  OUTPUT=$("${DRAIN_CMD[@]}" 2>&1 | jq -s "map(select(._keepalive|not))" 2>/dev/null)
+
+  if [[ -z "$OUTPUT" ]] || [[ "$OUTPUT" == "[]" ]] || [[ "$OUTPUT" == "null" ]]; then
+    DRAINED=1
+    break
+  fi
+
+  # Extract deliveryId from the last message for the next ack
+  PREV_DELIVERY=$(printf '%s' "$OUTPUT" | jq -r ".[-1].deliveryId // empty" 2>/dev/null)
+
+  if [[ -z "$PREV_DELIVERY" ]]; then
+    DRAINED=1
+    break
+  fi
+done
+
+if [[ $DRAINED -eq 0 ]]; then
+  echo "[orca-wait] WARNING: backlog drain hit max iterations ($MAX_DRAIN), proceeding with partial drain" >&2
+fi
+
+# Wait phase: block until a message arrives (or timeout)
+WAIT_CMD=("orca" "orchestration" "check" "${CHECK_FLAGS[@]}")
+[[ -n "$PREV_DELIVERY" ]] && WAIT_CMD+=("--ack" "$PREV_DELIVERY")
+
+# Run the wait and capture output
+WAIT_OUTPUT=$("${WAIT_CMD[@]}" 2>&1)
+WAIT_EXIT=$?
+
+# If wait failed, exit with the error
+if [[ $WAIT_EXIT -ne 0 ]]; then
+  # Filter out keepalives from stderr
+  printf '%s\n' "$WAIT_OUTPUT" | grep -v '"_keepalive"' >&2
+  exit $WAIT_EXIT
+fi
+
+# Parse and print results
+printf '%s\n' "$WAIT_OUTPUT" | jq -s "
+  map(select(._keepalive|not)) |
+  .[] |
+  if .type and .id and .from and .subject then
+    \"\\(.type)|\(.id)|\(.from)|\(.subject)\"
+  else
+    empty
+  end
+" 2>/dev/null
+
+# Exit with --once flag
+[[ $ONCE -eq 1 ]] && exit 0
+
+# Continue waiting if --once is not set
+# (In typical use with the harness, --once exits here; without it,
+#  the wait loops for the full timeout and returns all messages in that batch)
+exit 0

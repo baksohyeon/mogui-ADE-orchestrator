@@ -1,0 +1,147 @@
+#!/usr/bin/env bash
+# conversation-redaction-scan - detect redaction violations in PR bodies and comments
+# Scans GitHub PR bodies, PR comments, review-thread comments, and issue bodies for
+# absolute machine paths and identity-bearing strings.
+#
+# Usage:
+#   scripts/conversation-redaction-scan [--repo owner/name] [--limit N]
+#
+# Exit: 0 clean, 1 findings exist, 2 API error or usage error
+
+set -euo pipefail
+
+REPO="${MOGUI_PRODUCT_REPO:-baksohyeon/mogui-ADE-orchestrator}"
+LIMIT=30
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --repo)
+      REPO="${2:-}"
+      [ -n "$REPO" ] || { echo "error: --repo requires a value" >&2; exit 2; }
+      shift 2
+      ;;
+    --limit)
+      LIMIT="${2:-}"
+      if ! printf '%s' "$LIMIT" | grep -qE '^[0-9]+$'; then
+        echo "error: --limit requires a numeric value" >&2
+        exit 2
+      fi
+      shift 2
+      ;;
+    *)
+      echo "error: unknown argument: $1" >&2
+      exit 2
+      ;;
+  esac
+done
+
+# Redaction patterns (from product repo gitleaks config)
+declare -a PATTERNS=(
+  "home_path:/"'Users/'"[A-Za-z0-9._-]+"
+  "home_path:/home/[A-Za-z0-9._-]+"
+)
+
+# Check if gh is available
+if ! command -v gh >/dev/null 2>&1; then
+  echo "conversation-redaction-scan: FAIL - gh CLI is not on PATH" >&2
+  exit 2
+fi
+
+scan_text() {
+  local surface="$1"
+  local number="$2"
+  local author="$3"
+  local locator="$4"
+  local text="$5"
+
+  local violations=""
+  local line_num=1
+  while IFS= read -r line; do
+    for pattern_def in "${PATTERNS[@]}"; do
+      pattern_name="${pattern_def%%:*}"
+      pattern_re="${pattern_def#*:}"
+      if printf '%s' "$line" | grep -qE "$pattern_re"; then
+        # Record violation without printing the actual matched value
+        violations="${violations}${violations:+\n}${surface}|${number}|${author}|${locator}|${pattern_name}"
+      fi
+    done
+    ((line_num++))
+  done <<< "$text"
+
+  printf '%s' "$violations"
+}
+
+echo "Scanning ${REPO} (limit: ${LIMIT} PRs)..."
+
+FINDINGS=""
+COUNT=0
+
+# Fetch PRs and scan bodies + comments (including merged PRs)
+PR_JSON=$(gh pr list --repo "$REPO" --state all --limit "$LIMIT" --json "number,author,body" --jq '.[]' 2>/dev/null) || {
+  echo "conversation-redaction-scan: FAIL - could not fetch PRs from $REPO" >&2
+  exit 2
+}
+
+while IFS= read -r pr_line; do
+  [[ -z "$pr_line" ]] && continue
+
+  # Extract from JSON line
+  PR_NUMBER=$(printf '%s' "$pr_line" | jq -r '.number // empty')
+  AUTHOR=$(printf '%s' "$pr_line" | jq -r '.author.login // "unknown"')
+  BODY=$(printf '%s' "$pr_line" | jq -r '.body // ""')
+
+  [[ -z "$PR_NUMBER" ]] && continue
+  ((COUNT++))
+
+  # Scan PR body
+  if [[ -n "$BODY" ]]; then
+    result=$(scan_text "pr_body" "$PR_NUMBER" "$AUTHOR" "PR#${PR_NUMBER}" "$BODY")
+    [[ -n "$result" ]] && FINDINGS="${FINDINGS}${FINDINGS:+$'\n'}${result}"
+  fi
+
+  # Scan PR comments
+  COMMENTS=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json comments --jq '.comments[].body' 2>/dev/null || echo "") || true
+  if [[ -n "$COMMENTS" ]]; then
+    result=$(scan_text "pr_comment" "$PR_NUMBER" "$AUTHOR" "PR#${PR_NUMBER}/comments" "$COMMENTS")
+    [[ -n "$result" ]] && FINDINGS="${FINDINGS}${FINDINGS:+$'\n'}${result}"
+  fi
+
+  # Scan review comments
+  REVIEWS=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json reviews --jq '.reviews[].body' 2>/dev/null || echo "") || true
+  if [[ -n "$REVIEWS" ]]; then
+    result=$(scan_text "review_comment" "$PR_NUMBER" "$AUTHOR" "PR#${PR_NUMBER}/reviews" "$REVIEWS")
+    [[ -n "$result" ]] && FINDINGS="${FINDINGS}${FINDINGS:+$'\n'}${result}"
+  fi
+done <<< "$PR_JSON"
+
+# Fetch and scan issue bodies
+ISSUE_JSON=$(gh issue list --repo "$REPO" --state all --limit "$LIMIT" --json "number,author,body" --jq '.[]' 2>/dev/null) || {
+  echo "conversation-redaction-scan: WARNING - could not fetch issues from $REPO" >&2
+}
+
+while IFS= read -r issue_line; do
+  [[ -z "$issue_line" ]] && continue
+
+  ISSUE_NUMBER=$(printf '%s' "$issue_line" | jq -r '.number // empty')
+  ISSUE_AUTHOR=$(printf '%s' "$issue_line" | jq -r '.author.login // "unknown"')
+  ISSUE_BODY=$(printf '%s' "$issue_line" | jq -r '.body // ""')
+
+  [[ -z "$ISSUE_NUMBER" ]] && continue
+  ((COUNT++))
+
+  # Scan issue body
+  if [[ -n "$ISSUE_BODY" ]]; then
+    result=$(scan_text "issue_body" "$ISSUE_NUMBER" "$ISSUE_AUTHOR" "Issue#${ISSUE_NUMBER}" "$ISSUE_BODY")
+    [[ -n "$result" ]] && FINDINGS="${FINDINGS}${FINDINGS:+$'\n'}${result}"
+  fi
+done <<< "$ISSUE_JSON"
+
+# Output summary
+if [[ -n "$FINDINGS" ]]; then
+  echo "conversation-redaction-scan: FAIL - ${REPO} scanned ${COUNT} PRs (limit: ${LIMIT}), violations found:"
+  printf '%s\n' "$FINDINGS"
+  exit 1
+else
+  echo "conversation-redaction-scan: OK - ${REPO} scanned ${COUNT} PRs (limit: ${LIMIT}), 0 findings"
+  exit 0
+fi

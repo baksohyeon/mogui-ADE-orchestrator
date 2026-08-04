@@ -12,9 +12,16 @@ Recommended hook spec:
 - SessionStart on compact: run `scripts/compaction-probe.sh`
 - PreCompact: reload or export issue-tracker memory
 - UserPromptSubmit: inject the current role-state line from `docs/runbooks/role-state.md` and the `Proposal -> Approval -> Execution` rule. This pairing mechanically counters the host's autonomy defaults, which can override the charter unless the execution rule is present in every turn's context. See §9 for the incident that motivated this coupling.
+- UserPromptSubmit: warn when unacknowledged orchestration inbox messages exist, using `scripts/hooks/orch-inbox-warn.sh`.
+- PreToolUse(Bash): warn when a hand-rolled poll loop appears; event waits use `scripts/orca-wait`. See `docs/runbooks/orca-wait.md`.
 - PreToolUse: warn when supervised dispatch is bypassed
 - PostToolUse: collect non-sensitive audit markers when locally approved
 - SessionStart: warn when the issue tracker is not reachable from `{{WORKSPACE_ROOT}}`, or when an environment variable points its database outside the workspace
+
+Every shipped hook should append one fail-open fire-log record to
+`~/.mogui/hook-fire-log.jsonl` before doing its ordinary work, then continue
+even if logging fails. Read `docs/runbooks/hook-fire-observability.md` and
+`scripts/hook-coverage-report` when measuring whether hooks actually fire.
 
 The last one covers a failure that is otherwise silent. The master runs at the
 workspace root, and a tracker that resolves its database from the current
@@ -36,6 +43,11 @@ Measure: run the probe and read its output, not just its exit code. A probe whos
 **Publish gates read repository content and nothing else.**
 Observed: pull request bodies, review comments, release notes, and issue text are not in the repository, so no scanner in this template reads them. An audit of one day's outgoing text found none, which is the point: it took a separate grep to know.
 Measure: before posting outgoing text, grep it for organization identifiers the way the scan greps files. A green publish gate says nothing about prose written into a forge.
+
+For conversation surfaces, use `scripts/pr-body-check` before posting or
+updating a pull request body, and use `scripts/conversation-redaction-scan` for
+periodic sweeps of PR bodies, PR comments, review comments, and issue bodies.
+The scanner reports the surface and pattern class but not the matched value.
 
 ### Tool Boundaries
 

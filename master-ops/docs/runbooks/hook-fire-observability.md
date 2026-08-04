@@ -1,0 +1,127 @@
+# Hook Fire Observability Runbook
+
+## Purpose
+
+The fire-log (`~/.mogui/hook-fire-log.jsonl`) records when ops hooks run, where they ran, and what runtime invoked them. It answers: **Which hooks actually fire in live operation?** across runtimes (Claude, Codex, Cursor, Grok, Antigravity/Gemini) and session kinds (master, dispatched worker).
+
+## Design Decision
+
+Observational fire-log first; active canaries later and only for hooks that never appear in the log. Principle borrowed from the AHE research program: with rare events you cannot distinguish "prevented" from "never happened"; the antidote is a guard-firing log.
+
+## What the Log Answers
+
+- Does a hook fire at all?
+- How often?
+- In what runtimes and session kinds?
+- When was the last invocation?
+
+## What the Log Cannot Answer
+
+- A wired-but-broken hook (e.g., script exits early, condition never true) and a not-wired hook **both show zero fire-log entries**. Distinguishing them requires an active canary (deliberately deferred).
+- Whether a hook's decision logic ran correctly (the log records only that the hook was invoked, not its outcome).
+
+## Fire-Log Schema
+
+One JSON line per hook invocation. Example:
+
+```json
+{"ts": 1722728400, "hook": "role-state-inject", "event": "UserPromptSubmit", "cwd": "{{WORKSPACE_ROOT}}", "runtime_hint": "claude", "session_kind": "master"}
+```
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `ts` | epoch seconds | When the hook fired (seconds since 1970-01-01) |
+| `hook` | string | Name of the hook script (without `.sh`) |
+| `event` | string | Hook event type (e.g., `SessionStart`, `UserPromptSubmit`, `PreToolUse`) |
+| `cwd` | string | Working directory when hook fired |
+| `runtime_hint` | string | Runtime identifier: `claude`, `codex`, `cursor`, `grok`, `antigravity`, or `unknown` |
+| `session_kind` | string | `master` (ops repo root) or `worker` (in `.orca/worktrees`), or `unknown` |
+
+## Log Location
+
+```
+~/.mogui/hook-fire-log.jsonl
+```
+
+Append-only; one line per invocation. Fails open (never blocks or breaks the hook if append fails).
+
+## Reading the Log
+
+### Manual inspection
+
+```bash
+tail -20 ~/.mogui/hook-fire-log.jsonl
+jq '.hook' ~/.mogui/hook-fire-log.jsonl | sort | uniq -c
+```
+
+### Coverage report
+
+```bash
+scripts/hook-coverage-report
+```
+
+Prints a matrix of hook by (runtime_hint, session_kind) with last-fired timestamp and count. Lists hooks with zero entries (measurement targets).
+
+## Escalation Rule
+
+A hook with **zero entries after days of normal operation** is a measurement target (a signal to investigate), not proof of breakage:
+
+1. **High severity**: A hook marked SessionStart or UserPromptSubmit with zero entries after 3+ days of daily use -> escalate for canary investigation (verify wiring, check conditions, measure firing).
+2. **Low severity**: A rarely-triggered hook (e.g., PreToolUse on edits to a path that hasn't been edited) with zero entries -> not actionable; wait for triggering event.
+
+## Operational Workflow
+
+### During session startup
+
+The master session outputs active protections:
+
+```
+[protections] active: role-state inject (every turn) | product-path hard block (overrides logged: N) | bash trim-warn | dispatch gate+ledger (ops-policy decisions: M) | PreCompact memory reinject
+```
+
+This line confirms the harness state. If a protection is missing or logged counts diverge from expected operation, investigate the fire-log.
+
+### When debugging a suspected hook failure
+
+1. Check the fire-log for recent entries: `tail -50 ~/.mogui/hook-fire-log.jsonl | grep "<hook-name>"`
+2. Run the coverage report: `scripts/hook-coverage-report`
+3. If zero entries: check the wiring in `~/.claude/settings.json` (global) or `.claude/settings.json` (project-level). Hooks bind only at session start; settings changes mid-session are inert.
+4. If recent entries but suspected misbehavior: the hook fired but may have a logic bug; review the script and run manual self-tests.
+
+### Adding a new hook
+
+1. Add the script to `scripts/hooks/<name>.sh`
+2. Wire it in the appropriate settings file (global or project)
+3. Add a `log_fire()` call at the top of the script body:
+   ```bash
+   log_fire() {
+     mkdir -p ~/.mogui
+     local session_kind="unknown"
+     if [ -n "$ORCA_TASK_ID" ] || [ -n "$ORCA_DISPATCH_ID" ] || [[ "$PWD" == *".orca/worktrees"* ]]; then
+       session_kind="worker"
+     fi
+     printf '{"ts":%d,"hook":"<name>","event":"<event>","cwd":"%s","runtime_hint":"%s","session_kind":"%s"}\n' \
+       "$(date +%s)" "$PWD" "${MOGUI_RUNTIME_HINT:-unknown}" "$session_kind" >> ~/.mogui/hook-fire-log.jsonl 2>/dev/null || true
+   }
+   ```
+4. Call `log_fire` at the start of the script body (fail-open: never block if logging fails).
+5. Self-test: invoke the hook the way the harness would, then verify the fire-log line appears.
+
+## Constraints
+
+- Appending to the fire-log must be fail-open (never block or fail the hook; `|| true` on every path).
+- One line per invocation.
+- No message bodies or secrets in the line.
+- Hook's existing behavior must be byte-identical otherwise.
+
+## Implementation Notes
+
+- `session_kind` is derived cheaply (presence of a dispatch/task env var or `.orca/worktrees` in cwd = worker; otherwise unknown).
+- `runtime_hint` is set via the `MOGUI_RUNTIME_HINT` environment variable (or defaults to `unknown`).
+- Timestamp is Unix epoch seconds (`date +%s`).
+
+## Further Reading
+
+- Contract: `contracts/2026-08-04-hook-fire-observability.md`
+- Hook specifications: `docs/specs/2026-08-03-master-hook-skill-harness-design.md`
+- Master operations: `docs/MASTER-OPERATIONS.md`

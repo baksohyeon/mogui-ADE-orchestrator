@@ -1,0 +1,207 @@
+#!/usr/bin/env bash
+# Check whether PR narrative sections are present and actually filled.
+# Also scan for redaction violations (absolute home paths, identity-bearing strings).
+# Exit: 0 all sections filled and clean, 1 missing/empty/unmodified guidance or redaction violations, 2 usage/runtime error.
+set -u
+
+SECTION_HEADINGS=(
+  "Problem"
+  "Why this approach"
+  "What this changes"
+  "Expected effect"
+)
+
+usage() {
+  echo "usage: scripts/pr-body-check <pr-number> [--repo owner/repo] [--body-file path] [--template-file path]" >&2
+  exit 2
+}
+
+repo_from_remote() {
+  local remote_url
+  remote_url="$(git remote get-url origin 2>/dev/null)" || return 1
+  python3 - "$remote_url" <<'PY'
+import re
+import sys
+
+remote = sys.argv[1].strip()
+patterns = [
+    r"^git@github\.com:([^/]+/[^/]+?)(?:\.git)?$",
+    r"^https://github\.com/([^/]+/[^/]+?)(?:\.git)?$",
+    r"^ssh://git@github\.com/([^/]+/[^/]+?)(?:\.git)?$",
+]
+for pattern in patterns:
+    match = re.match(pattern, remote)
+    if match:
+        print(match.group(1))
+        sys.exit(0)
+sys.exit(1)
+PY
+}
+
+if [ $# -lt 1 ]; then
+  usage
+fi
+
+PR_NUMBER="$1"
+shift
+
+REPO_OVERRIDE=""
+BODY_FILE=""
+TEMPLATE_FILE=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --repo)
+      [ $# -ge 2 ] || usage
+      REPO_OVERRIDE="$2"
+      shift 2
+      ;;
+    --body-file)
+      [ $# -ge 2 ] || usage
+      BODY_FILE="$2"
+      shift 2
+      ;;
+    --template-file)
+      [ $# -ge 2 ] || usage
+      TEMPLATE_FILE="$2"
+      shift 2
+      ;;
+    *)
+      usage
+      ;;
+  esac
+done
+
+if ! printf '%s' "$PR_NUMBER" | rg '^[0-9]+$' >/dev/null; then
+  echo "error: pull request number must be numeric: $PR_NUMBER" >&2
+  exit 2
+fi
+
+if [ -n "$REPO_OVERRIDE" ]; then
+  REPO="$REPO_OVERRIDE"
+else
+  REPO="$(repo_from_remote)" || {
+    echo "error: could not derive owner/repo from git remote origin; pass --repo owner/repo" >&2
+    exit 2
+  }
+fi
+
+if [ -n "$BODY_FILE" ]; then
+  [ -f "$BODY_FILE" ] || {
+    echo "error: body file not found: $BODY_FILE" >&2
+    exit 2
+  }
+  PR_BODY="$(<"$BODY_FILE")"
+else
+  PR_BODY="$(gh pr view "$PR_NUMBER" --repo "$REPO" --json body --jq .body 2>/dev/null)" || {
+    echo "error: failed to fetch PR #$PR_NUMBER body from $REPO" >&2
+    exit 2
+  }
+fi
+
+if [ -n "$TEMPLATE_FILE" ]; then
+  [ -f "$TEMPLATE_FILE" ] || {
+    echo "error: template file not found: $TEMPLATE_FILE" >&2
+    exit 2
+  }
+  TEMPLATE_BODY="$(<"$TEMPLATE_FILE")"
+else
+  TEMPLATE_BODY="$(gh api "repos/$REPO/contents/.github/pull_request_template.md" --jq '.content' 2>/dev/null | python3 -c 'import base64,sys;print(base64.b64decode(sys.stdin.read()).decode("utf-8"))')" || {
+    echo "error: failed to fetch .github/pull_request_template.md from $REPO" >&2
+    exit 2
+  }
+fi
+
+SECTIONS_CSV="$(IFS=,; echo "${SECTION_HEADINGS[*]}")"
+
+python3 - "$SECTIONS_CSV" "$PR_BODY" "$TEMPLATE_BODY" <<'PY'
+import re
+import sys
+
+
+def split_sections(markdown):
+    heading_re = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
+    matches = list(heading_re.finditer(markdown))
+    sections = {}
+    for index, match in enumerate(matches):
+        heading = match.group(1).strip()
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(markdown)
+        sections[heading] = markdown[start:end].strip()
+    return sections
+
+
+def normalize(text):
+    text = text.replace("\r\n", "\n")
+    lines = [line.rstrip() for line in text.split("\n")]
+    # Remove empty boundary lines after trimming right edge.
+    while lines and lines[0] == "":
+        lines.pop(0)
+    while lines and lines[-1] == "":
+        lines.pop()
+    # Collapse repeated blank lines for stable comparisons.
+    collapsed = []
+    last_blank = False
+    for line in lines:
+        blank = (line.strip() == "")
+        if blank and last_blank:
+            continue
+        collapsed.append(line.strip())
+        last_blank = blank
+    return "\n".join(collapsed).strip()
+
+
+def scan_redaction(text):
+    """Check for redaction violations: absolute home paths, identity-bearing strings."""
+    # Patterns from product repo gitleaks config
+    redaction_patterns = [
+        ("home_path", "/" r"Users/[A-Za-z0-9._-]+"),
+        ("home_path_linux", r"/home/[A-Za-z0-9._-]+"),
+    ]
+
+    violations = []
+    lines = text.split("\n")
+    for line_num, line in enumerate(lines, 1):
+        for pattern_name, pattern_re in redaction_patterns:
+            if re.search(pattern_re, line):
+                # Don't print the matched value itself; just the class and location
+                violations.append(f"  Line {line_num}: [{pattern_name}] absolute path detected")
+    return violations
+
+
+target_sections = [item.strip() for item in sys.argv[1].split(",") if item.strip()]
+pr_body = sys.argv[2]
+template_body = sys.argv[3]
+
+pr_sections = split_sections(pr_body)
+template_sections = split_sections(template_body)
+
+has_failure = False
+for heading in target_sections:
+    if heading not in pr_sections:
+        verdict = "missing heading"
+        has_failure = True
+    else:
+        current = normalize(pr_sections[heading])
+        if current == "":
+            verdict = "present but empty"
+            has_failure = True
+        else:
+            template = normalize(template_sections.get(heading, ""))
+            if template and (current == template or template in current):
+                verdict = "present but unmodified template guidance"
+                has_failure = True
+            else:
+                verdict = "filled"
+    print(f"{heading}: {verdict}")
+
+# Redaction scan on PR body
+redaction_violations = scan_redaction(pr_body)
+if redaction_violations:
+    has_failure = True
+    print("\nRedaction violations detected:")
+    for violation in redaction_violations:
+        print(violation)
+
+sys.exit(1 if has_failure else 0)
+PY

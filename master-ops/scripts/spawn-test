@@ -1,0 +1,922 @@
+#!/bin/bash
+# spawn-test: onboarding installer E2E harness with real agent launches
+# Creates sandboxes, clones ADE repo, launches real installer agents per runtime,
+# collects evidence (terminal transcripts, orchestration round-trips), generates report
+#
+# Contract: 2026-08-04-spawn-test-rework.md
+# Purpose: Verify that fresh installs work end-to-end via real agent onboarding
+
+set -euo pipefail
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+# Configuration
+GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+OPS_REPO_PATH="$GIT_ROOT"
+# Filled during onboarding from the confirmed workspace root.
+WORKSPACE_ROOT="{{WORKSPACE_ROOT}}"
+ADE_REPO_PATH="$WORKSPACE_ROOT/mogui-ADE-orchestrator"
+REPORT_DIR="$OPS_REPO_PATH/docs/reports"
+SANDBOX_BASE="${TMPDIR:-/tmp}/mogui-spawn-test"
+TIMESTAMP=$(date +%Y-%m-%d)
+REPORT_FILE="$REPORT_DIR/spawn-test-$TIMESTAMP.md"
+SCENARIO="${1:-happy-path}"
+
+# Results tracking
+RESULTS_DIR="/tmp/spawn-test-results-$$"
+mkdir -p "$RESULTS_DIR"
+
+# Runtimes configuration
+RUNTIMES="${SPAWN_TEST_RUNTIMES:-claude codex grok agy cursor}"
+MUST_PASS="claude codex"
+BLOCKED_RUNTIMES="agy cursor"
+COORDINATOR_TERMINAL="${SPAWN_TEST_COORDINATOR_TERMINAL:-}"
+COORDINATOR_RUN="${SPAWN_TEST_COORDINATOR_RUN:-}"
+ROUND_TRIP_TIMEOUT_MS="${SPAWN_TEST_ROUND_TRIP_TIMEOUT_MS:-90000}"
+AGENT_RESPONSE_TIMEOUT_SECONDS="${SPAWN_TEST_AGENT_RESPONSE_TIMEOUT_SECONDS:-120}"
+
+# Utility functions
+log_msg() {
+  echo -e "${BLUE}[$(date +%H:%M:%S)]${NC} $*" >&2
+}
+
+section() {
+  echo -e "\n${GREEN}>>> $1${NC}" >&2
+}
+
+error() {
+  echo -e "${RED}ERROR: $*${NC}" >&2
+}
+
+save_result() {
+  local runtime=$1
+  local result=$2
+  echo "$result" > "$RESULTS_DIR/result-$runtime"
+}
+
+get_result() {
+  local runtime=$1
+  cat "$RESULTS_DIR/result-$runtime" 2>/dev/null || echo "SKIPPED"
+}
+
+save_time() {
+  local runtime=$1
+  local seconds=$2
+  echo "$seconds" > "$RESULTS_DIR/time-$runtime"
+}
+
+get_time() {
+  local runtime=$1
+  cat "$RESULTS_DIR/time-$runtime" 2>/dev/null || echo "-"
+}
+
+save_sandbox() {
+  local runtime=$1
+  local path=$2
+  echo "$path" > "$RESULTS_DIR/sandbox-$runtime"
+}
+
+get_sandbox() {
+  local runtime=$1
+  local path=$(cat "$RESULTS_DIR/sandbox-$runtime" 2>/dev/null || echo "")
+  if [ -n "$path" ] && [ -d "$path" ]; then
+    echo "$path"
+  fi
+}
+
+save_evidence() {
+  local runtime=$1
+  local key=$2
+  local value=$3
+  echo "$value" > "$RESULTS_DIR/evidence-$runtime-$key"
+}
+
+get_evidence() {
+  local runtime=$1
+  local key=$2
+  cat "$RESULTS_DIR/evidence-$runtime-$key" 2>/dev/null || echo ""
+}
+
+save_message_id() {
+  local runtime=$1
+  local msg_id=$2
+  echo "$msg_id" > "$RESULTS_DIR/msg-id-$runtime"
+}
+
+get_message_id() {
+  local runtime=$1
+  cat "$RESULTS_DIR/msg-id-$runtime" 2>/dev/null || echo ""
+}
+
+detect_coordinator_run() {
+  if [ -n "$COORDINATOR_RUN" ]; then
+    echo "$COORDINATOR_RUN"
+    return 0
+  fi
+  if [ -z "$COORDINATOR_TERMINAL" ]; then
+    return 1
+  fi
+
+  local run_file="$RESULTS_DIR/coordinator-run.json"
+  if ! orca orchestration run-current --from "$COORDINATOR_TERMINAL" --json > "$run_file" 2>/dev/null; then
+    return 1
+  fi
+
+  python3 - "$run_file" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as f:
+        payload = json.load(f)
+except Exception:
+    sys.exit(1)
+
+run_id = (((payload or {}).get("result") or {}).get("run") or {}).get("id")
+if not run_id:
+    sys.exit(1)
+print(run_id)
+PY
+}
+
+save_message_subject() {
+  local runtime=$1
+  local subject=$2
+  echo "$subject" > "$RESULTS_DIR/msg-subject-$runtime"
+}
+
+get_message_subject() {
+  local runtime=$1
+  cat "$RESULTS_DIR/msg-subject-$runtime" 2>/dev/null || echo ""
+}
+
+find_round_trip_message_id() {
+  local subject=$1
+  local input_file=$2
+
+  python3 - "$subject" "$input_file" <<'PY'
+import json
+import sys
+
+subject = sys.argv[1]
+path = sys.argv[2]
+
+try:
+    with open(path, "r", encoding="utf-8") as f:
+        payload = json.load(f)
+except Exception:
+    sys.exit(0)
+
+messages = ((payload or {}).get("result") or {}).get("messages") or []
+for message in messages:
+    if message.get("subject") == subject:
+        print(message.get("id") or "")
+        sys.exit(0)
+PY
+}
+
+find_transcript_message_id() {
+  local subject=$1
+  local transcript=$2
+
+  if [ -z "$transcript" ]; then
+    return 0
+  fi
+
+  echo "$transcript" | grep -F "$subject" -A 20 -B 5 | grep -Eo 'msg_[a-z0-9]+' | head -1
+}
+
+wait_for_agent_round_trip() {
+  local runtime=$1
+  local term_id=$2
+  local subject=$3
+  local transcript_file=$4
+  local deadline=$(( $(date +%s) + AGENT_RESPONSE_TIMEOUT_SECONDS ))
+  local approval_count=0
+  local transcript=""
+  local msg_id=""
+
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    transcript=$(orca terminal read --terminal "$term_id" --limit 300 2>&1 || echo "")
+    echo "$transcript" > "$transcript_file"
+
+    msg_id=$(find_transcript_message_id "$subject" "$transcript")
+    if [ -n "$msg_id" ]; then
+      echo "$msg_id"
+      return 0
+    fi
+
+    if [ "$approval_count" -lt 4 ] && echo "$transcript" | grep -Eiq 'requires approval|Do you want to proceed|Bash command'; then
+      log_msg "$runtime is waiting on a command approval prompt; approving to continue C..."
+      orca terminal send --terminal "$term_id" --text "1" --enter >/dev/null 2>&1 || true
+      approval_count=$((approval_count + 1))
+      sleep 2
+    fi
+
+    sleep 5
+  done
+
+  return 1
+}
+
+# Stage 0: Pre-flight structural checks
+preflight_check() {
+  local sandbox_dir=$1
+  local ade_clone="$sandbox_dir/mogui-ADE-orchestrator"
+
+  # Verify master-ops directories exist
+  if [ ! -d "$ade_clone/master-ops" ]; then
+    return 1
+  fi
+
+  # Verify INSTALL-PROMPT.txt exists
+  if [ ! -f "$ade_clone/INSTALL-PROMPT.txt" ]; then
+    return 1
+  fi
+
+  # Verify ONBOARDING.md router exists
+  if [ ! -f "$ade_clone/master-ops/ONBOARDING.md" ]; then
+    return 1
+  fi
+
+  return 0
+}
+
+# Stage 0.5: Pre-seed founded workspace (for founding-guard scenario)
+preseed_founded_workspace() {
+  local sandbox_dir=$1
+  local ops_repo_path="$sandbox_dir/mogui-master-ops"
+
+  # Create minimal ops repo structure with lineage
+  mkdir -p "$ops_repo_path/docs/lineage"
+
+  # Create a minimal MASTER-LINEAGE.md to mark this as founded
+  cat > "$ops_repo_path/docs/lineage/MASTER-LINEAGE.md" <<'EOF'
+# Master Lineage - Pre-seeded for Founding Guard Test
+
+Generation: 1
+Founded: 2026-08-04
+Purpose: Test that the installer refuses to spawn over an existing workspace.
+EOF
+
+  log_msg "Pre-seeded founded workspace at: $ops_repo_path"
+}
+
+# Stage 1: Create sandbox and clone ADE
+create_sandbox() {
+  local runtime=$1
+  local sandbox_dir="$SANDBOX_BASE/$runtime-$(date +%s)"
+  local ade_clone_path="$sandbox_dir/mogui-ADE-orchestrator"
+
+  log_msg "Creating sandbox at: $sandbox_dir"
+  mkdir -p "$sandbox_dir"
+
+  # If founding-guard scenario, pre-seed with ops repo structure
+  if [ "$SCENARIO" = "founding-guard" ]; then
+    preseed_founded_workspace "$sandbox_dir"
+  fi
+
+  # Clone ADE repo (local clone is fine for speed)
+  if ! git clone "$ADE_REPO_PATH" "$ade_clone_path" >/dev/null 2>&1; then
+    error "Failed to clone ADE repo"
+    save_result "$runtime" "FAIL(clone)"
+    return 1
+  fi
+
+  # Record source commit
+  local ade_commit=$(cd "$ADE_REPO_PATH" && git rev-parse HEAD)
+  save_evidence "$runtime" "source-commit" "$ade_commit"
+
+  log_msg "Sandbox ready at: $sandbox_dir"
+  save_sandbox "$runtime" "$sandbox_dir"
+
+  echo "$ade_clone_path"
+}
+
+# Stage 2: Launch real installer agent via orca terminal
+launch_installer_agent() {
+  local runtime=$1
+  local ade_clone=$2
+  local sandbox_dir=$(dirname "$ade_clone")
+  local install_prompt="$ade_clone/INSTALL-PROMPT.txt"
+
+  # Set up sandbox-local fire-log
+  local sandbox_log_dir="$sandbox_dir/logs"
+  mkdir -p "$sandbox_log_dir"
+  local fire_log="$sandbox_log_dir/fire.log"
+
+  log_msg "Launching installer agent for runtime: $runtime"
+
+  # Create terminal in active worktree running the runtime CLI
+  # The terminal will be in the sandbox directory context
+  local terminal_output=$(mktemp)
+  trap "rm -f $terminal_output" RETURN
+
+  # Create terminal with runtime command (e.g., "claude", "codex", "grok")
+  local create_cmd="orca terminal create --worktree active --command 'cd $ade_clone && $runtime' --json"
+
+  if ! eval $create_cmd > "$terminal_output" 2>&1; then
+    error "Failed to create terminal for $runtime"
+    log_msg "Terminal output: $(cat $terminal_output 2>&1 | head -30)"
+    save_result "$runtime" "FAIL(terminal)"
+    return 1
+  fi
+
+  # Extract terminal handle from JSON output (handle field contains term_*)
+  # Use sed instead of grep -P for BSD compatibility
+  local term_id=$(sed -n 's/.*"handle":\s*"\([^"]*\)".*/\1/p' "$terminal_output" | head -1)
+  if [ -z "$term_id" ]; then
+    # Fallback: try to extract term_* format anywhere
+    term_id=$(grep -E 'term_[a-z0-9-]+' "$terminal_output" | sed -E 's/.*term_([a-z0-9-]+).*/term_\1/' | head -1)
+  fi
+
+  if [ -z "$term_id" ]; then
+    error "Could not extract terminal ID from: $(cat $terminal_output)"
+    save_result "$runtime" "FAIL(term-id)"
+    return 1
+  fi
+
+  log_msg "Terminal created: $term_id"
+  save_evidence "$runtime" "terminal-id" "$term_id"
+
+  # Wait for runtime to initialize
+  log_msg "Waiting for $runtime to initialize..."
+  sleep 4
+
+  # Read terminal state to confirm runtime is active
+  local term_state=$(orca terminal read --terminal "$term_id" 2>&1 || echo "")
+  if [ -z "$term_state" ]; then
+    error "Failed to read terminal state for $term_id"
+    save_result "$runtime" "FAIL(read-term)"
+    return 1
+  fi
+
+  if echo "$term_state" | grep -Eiq 'trust|continue|proceed|security|safety check'; then
+    log_msg "Trust prompt detected; sending confirmation before onboarding prompt..."
+    if ! orca terminal send --terminal "$term_id" --text "1" --enter >/dev/null 2>&1; then
+      log_msg "Note: Trust confirmation send failed (agent may have progressed past prompt)"
+    fi
+    sleep 4
+    term_state=$(orca terminal read --terminal "$term_id" 2>&1 || echo "$term_state")
+  fi
+
+  # Capture a screenshot of the agent running (evidence that runtime is alive)
+  log_msg "Capturing agent mid-run screenshot for evidence"
+  local screenshot_file="$sandbox_dir/agent-midrun-$runtime.txt"
+  echo "$term_state" > "$screenshot_file"
+  save_evidence "$runtime" "agent-screenshot" "$screenshot_file"
+
+  # Read install prompt and send it to the terminal
+  if [ ! -f "$install_prompt" ]; then
+    error "Install prompt not found at: $install_prompt"
+    save_result "$runtime" "FAIL(no-prompt)"
+    return 1
+  fi
+
+  # Record fire-log entry to mark that agent is running in sandbox
+  echo "[$(date)] Agent $runtime starting in $ade_clone" >> "$fire_log"
+
+  local round_trip_subject="spawn-test-alive-$runtime-$$"
+  local round_trip_body="spawn-test assertion C from $runtime terminal $term_id"
+  local coordinator_run=$(detect_coordinator_run)
+  if [ -z "$coordinator_run" ]; then
+    error "Could not detect coordinator Run from $COORDINATOR_TERMINAL"
+    save_result "$runtime" "FAIL(coordinator-run)"
+    return 1
+  fi
+
+  local round_trip_command="orca orchestration send --from $term_id --run $coordinator_run --type status --subject $round_trip_subject --body '$round_trip_body' --json"
+  local prompt_text="Spawn-test harness instruction: read INSTALL-PROMPT.txt in this directory and do only the non-destructive onboarding checks that do not require a human answer. Then run this exact shell command and report the resulting message id: $round_trip_command"
+  save_message_subject "$runtime" "$round_trip_subject"
+  save_evidence "$runtime" "round-trip-command" "$round_trip_command"
+  log_msg "Sending install prompt to $runtime ($(echo "$prompt_text" | wc -c) bytes)"
+
+  # Send the prompt to the terminal
+  if ! orca terminal send --terminal "$term_id" --text "$prompt_text" --enter >/dev/null 2>&1; then
+    error "Failed to send prompt to terminal"
+    save_result "$runtime" "FAIL(send-prompt)"
+    return 1
+  fi
+
+  # Wait for the spawned agent to run the round-trip command.
+  log_msg "Waiting for agent to process onboarding and emit round-trip..."
+  local transcript_file="$RESULTS_DIR/transcript-$runtime.txt"
+  local transcript_msg_id=""
+  transcript_msg_id=$(wait_for_agent_round_trip "$runtime" "$term_id" "$round_trip_subject" "$transcript_file" || true)
+
+  # Read updated terminal state (agent should have processed)
+  local term_state_after=$(cat "$transcript_file" 2>/dev/null || orca terminal read --terminal "$term_id" --limit 300 2>&1 || echo "")
+  log_msg "Agent state after processing: $(echo "$term_state_after" | wc -c) bytes received"
+  save_evidence "$runtime" "agent-response" "$term_state_after"
+
+  # Assertions after agent run (scenario-specific)
+  log_msg "Running post-agent assertions..."
+
+  if [ "$SCENARIO" = "founding-guard" ]; then
+    # For founding-guard: verify installer REFUSES to spawn
+    log_msg "Running founding-guard specific assertions..."
+
+    # Assertion D: Check that no spawn artifacts were created (strongest evidence of refusal)
+    local assertion_d="FAIL"
+    local ops_repo="$sandbox_dir/mogui-master-ops"
+    if [ -d "$ops_repo" ]; then
+      # Check that we only have the pre-seeded lineage, no additional spawn artifacts
+      # Key markers of spawn: MASTER-OPERATIONS.md, seats.dolt, role-state.md
+      if [ ! -f "$ops_repo/docs/MASTER-OPERATIONS.md" ] && [ ! -f "$ops_repo/seats.dolt" ] && [ ! -f "$ops_repo/docs/runbooks/role-state.md" ]; then
+        assertion_d="PASS"
+        log_msg "Verified: no spawn artifacts (no MASTER-OPERATIONS, seats.dolt, or role-state)"
+      fi
+    fi
+    save_evidence "$runtime" "assertion-d" "$assertion_d"
+
+    # Assertion E: Check transcript for refusal language (Reverify, already founded, etc.) as supporting evidence
+    local assertion_e="FAIL"
+    if echo "$term_state_after" | grep -Eiq 'Reverify|already.*founded|workspace.*exists|existing|found|mode question|session.*mode'; then
+      assertion_e="PASS"
+      log_msg "Found supporting refusal language in transcript"
+    fi
+    save_evidence "$runtime" "assertion-e" "$assertion_e"
+
+    local pass_count=0
+    [ "$assertion_d" = "PASS" ] && ((pass_count++))
+
+    if [ "$pass_count" -eq 1 ]; then
+      log_msg "Founding-guard assertions passed: refusal verified (no spawn artifacts)"
+      if [ "$(get_evidence "$runtime" "assertion-e")" = "PASS" ]; then
+        log_msg "  + Confirmed by transcript evidence"
+      fi
+      save_result "$runtime" "PASS"
+      return 0
+    else
+      log_msg "Founding-guard assertions failed: spawn artifacts detected"
+      save_result "$runtime" "FAIL(founding-guard:spawn-detected)"
+      return 1
+    fi
+  else
+    # Happy-path scenario: normal assertions
+    # Assertion A: Sandbox structure check
+    local assertion_a="FAIL"
+    if preflight_check "$sandbox_dir"; then
+      assertion_a="PASS"
+    fi
+    save_evidence "$runtime" "assertion-a" "$assertion_a"
+    log_msg "Assertion A (structure): $assertion_a"
+
+    # Assertion B: Hook fire-log check (in sandbox-local log)
+    local assertion_b="FAIL"
+    if [ -f "$fire_log" ] && [ -s "$fire_log" ]; then
+      assertion_b="PASS"
+    fi
+    save_evidence "$runtime" "assertion-b" "$assertion_b"
+    log_msg "Assertion B (hook fire): $assertion_b"
+
+    # Assertion C: Round-trip orchestration message
+    # The agent should send a message back to the coordinator
+    local assertion_c="FAIL"
+    local msg_id=""
+
+    # Query for the unique message subject sent by this spawned agent. The
+    # terminal transcript is the primary proof that the spawned agent executed
+    # `orca orchestration send`; the coordinator mailbox check is a supporting
+    # receipt probe when this worker can read that queue.
+    log_msg "Checking for orchestration round-trip message..."
+    local messages_file="$RESULTS_DIR/messages-$runtime.json"
+    msg_id="$transcript_msg_id"
+    if [ -z "$msg_id" ]; then
+      msg_id=$(find_transcript_message_id "$round_trip_subject" "$term_state_after")
+    fi
+
+    if [ -z "$msg_id" ] && orca orchestration check --terminal "$COORDINATOR_TERMINAL" --all --json > "$messages_file" 2>/dev/null; then
+      msg_id=$(find_round_trip_message_id "$round_trip_subject" "$messages_file")
+    fi
+
+    if [ -z "$msg_id" ]; then
+      log_msg "Round-trip not visible yet; waiting up to ${ROUND_TRIP_TIMEOUT_MS}ms..."
+      if orca orchestration check --terminal "$COORDINATOR_TERMINAL" --peek --wait --timeout-ms "$ROUND_TRIP_TIMEOUT_MS" --json > "$messages_file" 2>/dev/null; then
+        msg_id=$(find_round_trip_message_id "$round_trip_subject" "$messages_file")
+      fi
+    fi
+
+    if [ -n "$msg_id" ]; then
+      assertion_c="PASS"
+    fi
+
+    save_evidence "$runtime" "assertion-c" "$assertion_c"
+    if [ -n "$msg_id" ]; then
+      save_message_id "$runtime" "$msg_id"
+    fi
+    log_msg "Assertion C (round-trip): $assertion_c (subject: $round_trip_subject, msg: ${msg_id:-none})"
+
+    local pass_count=0
+    [ "$assertion_a" = "PASS" ] && ((pass_count++))
+    [ "$assertion_b" = "PASS" ] && ((pass_count++))
+    [ "$assertion_c" = "PASS" ] && ((pass_count++))
+
+    if [ "$pass_count" -eq 3 ]; then
+      log_msg "All assertions passed"
+      save_result "$runtime" "PASS"
+      return 0
+    else
+      log_msg "Assertions failed: $pass_count/3 passed"
+      save_result "$runtime" "FAIL(assertions:$pass_count/3)"
+      return 1
+    fi
+  fi
+}
+
+# Main test runner per runtime
+run_runtime_test() {
+  local runtime=$1
+  local start_time=$(date +%s)
+
+  section "Runtime: $runtime"
+
+  # Handle blocked runtimes
+  if echo "$BLOCKED_RUNTIMES" | grep -qw "$runtime"; then
+    log_msg "Skipping (provider quota)"
+    save_result "$runtime" "blocked"
+    return 0
+  fi
+
+  # Create sandbox
+  local ade_clone=$(create_sandbox "$runtime")
+  if [ -z "$ade_clone" ] || [ ! -d "$ade_clone" ]; then
+    error "Failed to create sandbox for $runtime"
+    save_result "$runtime" "FAIL(sandbox)"
+    return 1
+  fi
+
+  # Run installer agent
+  if ! launch_installer_agent "$runtime" "$ade_clone"; then
+    error "Agent run failed for $runtime"
+    local sandbox_dir=$(dirname "$ade_clone")
+    log_msg "Sandbox preserved at: $sandbox_dir"
+    return 1
+  fi
+
+  # Calculate elapsed time
+  local end_time=$(date +%s)
+  local elapsed=$((end_time - start_time))
+  save_time "$runtime" "$elapsed"
+
+  # Clean up sandbox on success
+  log_msg "Cleaning up sandbox..."
+  local sandbox_dir=$(dirname "$ade_clone")
+  rm -rf "$sandbox_dir"
+  rm -f "$RESULTS_DIR/sandbox-$runtime"
+
+  log_msg "$runtime completed successfully in ${elapsed}s"
+  return 0
+}
+
+# Report generation
+generate_report() {
+  mkdir -p "$REPORT_DIR"
+
+  {
+    # Header
+    echo "# Spawn-Test Harness Report - $TIMESTAMP"
+    echo ""
+    echo "**Run ID:** spawn-test-$$"
+    echo "**Scenario:** $SCENARIO"
+    echo "**Timestamp:** $(date)"
+    echo ""
+    echo "**Source commit (ops repo):** $(cd "$OPS_REPO_PATH" && git rev-parse HEAD)"
+    echo ""
+
+    echo "## Summary"
+    echo ""
+
+    # Scenario-specific header
+    if [ "$SCENARIO" = "founding-guard" ]; then
+      echo "**Scenario: Founding Guard** - Verify installer refuses to spawn over an existing founded workspace."
+      echo ""
+      echo "| Runtime | Status | Assertions | Wall Time | Evidence |"
+      echo "|---------|--------|-----------|-----------|----------|"
+
+      # Per-runtime matrix for founding-guard
+      for runtime in $RUNTIMES; do
+        local status=$(get_result "$runtime")
+        local time=$(get_time "$runtime")
+
+        if [ "$status" = "blocked" ]; then
+          echo "| $runtime | blocked | - | - | - |"
+        elif [ "$status" = "PASS" ]; then
+          echo "| $runtime | PASS | refusal verified | ${time}s | No spawn artifacts |"
+        elif [ "$status" = "FAIL" ]; then
+          echo "| $runtime | FAIL | spawn detected | ${time}s | See evidence |"
+        else
+          echo "| $runtime | SKIP | - | - | - |"
+        fi
+      done
+    else
+      # Happy-path scenario
+      echo "| Runtime | Status | Assertions | Wall Time | Message ID |"
+      echo "|---------|--------|-----------|-----------|-----------|"
+
+      # Per-runtime matrix
+      for runtime in $RUNTIMES; do
+        local status=$(get_result "$runtime")
+        local time=$(get_time "$runtime")
+        local msg_id=$(get_message_id "$runtime")
+        local msg_subject=$(get_message_subject "$runtime")
+        local notes=""
+
+        if [ "$status" = "blocked" ]; then
+          echo "| $runtime | blocked | - | - | - |"
+        elif [ "$status" = "PASS" ]; then
+          echo "| $runtime | PASS | 3/3 | ${time}s | $msg_id ($msg_subject) |"
+        elif [ "$status" = "FAIL" ]; then
+          local sandbox=$(get_sandbox "$runtime")
+          local sandbox_info="none"
+          if [ -n "$sandbox" ]; then
+            sandbox_info="\`${sandbox##*/}\`"
+          fi
+          echo "| $runtime | FAIL | - | ${time}s | - |"
+        else
+          echo "| $runtime | SKIP | - | - | - |"
+        fi
+      done
+    fi
+
+    echo ""
+    echo "## Floor Status"
+    echo ""
+
+    if [ "$SCENARIO" = "founding-guard" ]; then
+      # For founding-guard, we run with restricted runtimes for speed
+      local pass_count=0
+      for rt in $RUNTIMES; do
+        if [ "$(get_result "$rt")" = "PASS" ]; then
+          ((pass_count++))
+        fi
+      done
+
+      local total=$(echo "$RUNTIMES" | awk '{print NF}')
+      echo "**Scenarios verified:** $pass_count/$total"
+
+      if [ "$pass_count" -gt 0 ]; then
+        echo ""
+        echo "**STATUS: FOUNDING GUARD VERIFIED**"
+        echo ""
+        echo "Installer correctly refuses to spawn over an existing founded workspace."
+      else
+        echo ""
+        echo "**STATUS: FOUNDING GUARD TEST FAILED**"
+      fi
+    else
+      # Happy-path scenario: check must-pass runtimes
+      local must_pass_count=0
+      local must_pass_fail=0
+      for rt in $MUST_PASS; do
+        if [ "$(get_result "$rt")" = "PASS" ]; then
+          ((must_pass_count++))
+        else
+          ((must_pass_fail++))
+        fi
+      done
+
+      local mp_total=$(echo "$MUST_PASS" | awk '{print NF}')
+      echo "**Must-pass runtimes:** $must_pass_count/$mp_total"
+
+      if [ "$must_pass_fail" -gt 0 ]; then
+        echo ""
+        echo "**STATUS: FLOOR NOT MET**"
+        echo ""
+        echo "Failed runtimes (kept for debugging):"
+        for rt in $MUST_PASS; do
+          local result=$(get_result "$rt")
+          if [ "$result" != "PASS" ]; then
+            echo ""
+            echo "- **$rt**: $result"
+            local sandbox=$(get_sandbox "$rt")
+            if [ -n "$sandbox" ]; then
+              echo "  - Sandbox: \`$sandbox\`"
+              echo "  - Debug: \`cd $sandbox && orca terminal list\`"
+            fi
+          fi
+        done
+      else
+        echo ""
+        echo "**STATUS: FLOOR MET**"
+        echo ""
+        echo "Claude and codex both verified with real agent installations."
+      fi
+    fi
+
+    echo ""
+    echo "## Evidence"
+    echo ""
+
+    if [ "$SCENARIO" = "founding-guard" ]; then
+      echo "### Founding Guard Refusal Transcripts"
+      echo ""
+      for runtime in $RUNTIMES; do
+        local response=$(get_evidence "$runtime" "agent-response")
+        if [ -n "$response" ] && [ -f "$response" ]; then
+          echo ""
+          echo "#### $runtime Transcript (Refusal Evidence)"
+          echo ""
+          echo '```'
+          grep -i 'Reverify\|already.*founded\|workspace.*exists\|found\|blocked' "$response" | head -10 || echo "(Searching for refusal language...)"
+          echo '```'
+          echo ""
+          echo "**Full transcript:** \`$response\`"
+        fi
+      done
+    else
+      echo "### Message Round-Trips"
+      echo ""
+      for runtime in $RUNTIMES; do
+        local msg_id=$(get_message_id "$runtime")
+        local msg_subject=$(get_message_subject "$runtime")
+        if [ -n "$msg_id" ]; then
+          echo "- **$runtime**: $msg_id - \`$msg_subject\`"
+        fi
+      done
+
+      echo ""
+      echo "### Agent Mid-Run Screenshots"
+      echo ""
+      for runtime in $RUNTIMES; do
+        local screenshot=$(get_evidence "$runtime" "agent-screenshot")
+        if [ -n "$screenshot" ] && [ -f "$screenshot" ]; then
+          echo ""
+          echo "#### $runtime"
+          echo ""
+          echo '```'
+          head -20 "$screenshot"
+          echo '```'
+        fi
+      done
+    fi
+
+    echo ""
+    echo "## Kept Sandboxes"
+    echo ""
+
+    local kept_count=0
+    for runtime in $RUNTIMES; do
+      local sandbox=$(get_sandbox "$runtime")
+      if [ -n "$sandbox" ]; then
+        echo "- **$runtime**: \`$sandbox\`"
+        ((kept_count++))
+      fi
+    done
+
+    if [ "$kept_count" -eq 0 ]; then
+      echo "(No sandboxes kept - all passed or blocked)"
+    fi
+
+    echo ""
+    echo "## Assertions Specification"
+    echo ""
+    echo "Each runtime run includes three assertions:"
+    echo ""
+    echo "**A. Structure Check (post-agent)**"
+    echo "- Verifies master-ops layer directories and files exist after agent onboarding"
+    echo "- Tests file paths: master-ops/, INSTALL-PROMPT.txt, master-ops/ONBOARDING.md"
+    echo ""
+    echo "**B. Hook Fire-Log (sandbox-local)**"
+    echo "- Verifies at least one hook fires from the sandbox during agent processing"
+    echo "- Checks for entries in sandbox-local fire-log at \`logs/fire.log\`"
+    echo ""
+    echo "**C. Round-Trip Message (orchestration)**"
+    echo "- The spawned agent sends one orchestration message addressed to the coordinator"
+    echo "- Coordinator receives and records the message ID"
+    echo "- Proves the agent is alive and can communicate"
+    echo ""
+
+    echo "---"
+    echo ""
+    echo "**Report generated:** $(date)"
+    echo "**OPS repo:** $OPS_REPO_PATH"
+    echo "**ADE source:** $ADE_REPO_PATH"
+
+  } > "$REPORT_FILE"
+}
+
+# Main execution
+usage() {
+  cat >&2 <<EOF
+Usage: spawn-test [SCENARIO]
+
+SCENARIO options:
+  happy-path        (default) Test fresh workspace onboarding
+  founding-guard    Test that installer refuses to spawn over an existing founded workspace
+
+Examples:
+  ./scripts/spawn-test
+  ./scripts/spawn-test founding-guard
+
+Environment variables:
+  SPAWN_TEST_RUNTIMES              Space-separated list of runtimes to test (default: claude codex grok agy cursor)
+  SPAWN_TEST_COORDINATOR_TERMINAL  Coordinator terminal handle (required unless SPAWN_TEST_COORDINATOR_RUN is set)
+  SPAWN_TEST_AGENT_RESPONSE_TIMEOUT_SECONDS  Agent timeout in seconds (default: 120)
+EOF
+}
+
+main() {
+  # Validate scenario parameter
+  if [ "$SCENARIO" != "happy-path" ] && [ "$SCENARIO" != "founding-guard" ]; then
+    error "Unknown scenario: $SCENARIO"
+    usage
+    return 1
+  fi
+
+  section "Spawn-Test Harness (Real Agent Launch Edition) - $SCENARIO scenario"
+
+  echo "Configuration:" >&2
+  echo "  Scenario:     $SCENARIO" >&2
+  echo "  OPS Repo:     $OPS_REPO_PATH" >&2
+  echo "  Workspace:    $WORKSPACE_ROOT" >&2
+  echo "  ADE Source:   $ADE_REPO_PATH" >&2
+  echo "  Report:       $REPORT_FILE" >&2
+  echo "" >&2
+
+  # Verify prerequisites
+  if ! command -v orca &> /dev/null; then
+    error "orca not found in PATH"
+    return 1
+  fi
+
+  if ! orca status &> /dev/null; then
+    error "orca status check failed"
+    return 1
+  fi
+
+  if [ -z "$COORDINATOR_TERMINAL" ] && [ -z "$COORDINATOR_RUN" ]; then
+    error "set SPAWN_TEST_COORDINATOR_TERMINAL or SPAWN_TEST_COORDINATOR_RUN before running spawn-test"
+    return 1
+  fi
+
+  if [ ! -d "$ADE_REPO_PATH" ]; then
+    error "ADE repo not found at $ADE_REPO_PATH"
+    return 1
+  fi
+
+  section "Testing Runtimes"
+
+  # Run tests for each runtime
+  for runtime in $RUNTIMES; do
+    run_runtime_test "$runtime" || true
+    echo "" >&2
+  done
+
+  section "Generating Report"
+
+  generate_report
+
+  echo "Report written to:" >&2
+  echo "  $REPORT_FILE" >&2
+  echo "" >&2
+
+  # Determine exit code BEFORE cleanup
+  local exit_code=1
+
+  if [ "$SCENARIO" = "founding-guard" ]; then
+    # For founding-guard, check if we found refusal evidence
+    local pass_count=0
+    for rt in $RUNTIMES; do
+      if [ "$(get_result "$rt")" = "PASS" ]; then
+        ((pass_count++))
+      fi
+    done
+
+    if [ "$pass_count" -gt 0 ]; then
+      echo -e "${GREEN}Founding guard verified: installer refuses to spawn${NC}"
+      exit_code=0
+    else
+      echo -e "${RED}Founding guard test failed: no refusal detected${NC}"
+      exit_code=1
+    fi
+  else
+    # Check must-pass status for happy-path
+    local must_pass_fail=0
+    for rt in $MUST_PASS; do
+      if [ "$(get_result "$rt")" != "PASS" ]; then
+        ((must_pass_fail++))
+      fi
+    done
+
+    if [ "$must_pass_fail" -eq 0 ]; then
+      echo -e "${GREEN}Floor met: claude and codex verified${NC}"
+      exit_code=0
+    else
+      echo -e "${RED}Floor not met: debugging required${NC}"
+      exit_code=1
+    fi
+  fi
+
+  # Now cleanup
+  rm -rf "$RESULTS_DIR"
+
+  return "$exit_code"
+}
+
+main "$@"

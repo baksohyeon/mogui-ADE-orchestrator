@@ -18,17 +18,17 @@ Recommended hook spec:
 - PostToolUse: collect non-sensitive audit markers when locally approved
 - SessionStart: warn when the issue tracker is not reachable from `{{WORKSPACE_ROOT}}`, or when an environment variable points its database outside the workspace
 
+The tracker SessionStart warning covers a failure that is otherwise silent. The
+master runs at the workspace root, and a tracker that resolves its database
+from the current directory finds nothing there, or finds a product repository's
+database. Boot continues either way. Measure the environment variable in the
+same shell the agent's tool calls use; a login shell can define a different
+value, and reading the wrong one turns the check into a pass.
+
 Every shipped hook should append one fail-open fire-log record to
 `~/.mogui/hook-fire-log.jsonl` before doing its ordinary work, then continue
 even if logging fails. Read `docs/runbooks/hook-fire-observability.md` and
 `scripts/hook-coverage-report` when measuring whether hooks actually fire.
-
-The last one covers a failure that is otherwise silent. The master runs at the
-workspace root, and a tracker that resolves its database from the current
-directory finds nothing there, or finds a product repository's database. Boot
-continues either way. Measure the environment variable in the same shell the
-agent's tool calls use; a login shell can define a different value, and reading
-the wrong one turns the check into a pass.
 
 Context-quality monitor namespace: `{{MONITOR_NS}}`
 

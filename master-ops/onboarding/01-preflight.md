@@ -10,6 +10,8 @@ Load rule: read this file only when Step 0 begins. Router: [`../ONBOARDING.md`](
 
 Where we are: orientation is done; nothing on the machine has been changed yet. What we decide next: whether this machine has everything the system needs, using read-only checks. Ask whether the user is ready for local read-only checks, and which agent CLI they expect to use (for example `claude`). Explain that if a check fails, we fix it together before moving on — nothing is skipped silently.
 
+**Measured-fallback for the agent CLI:** if this installer session can measure its own runtime (process name, parent argv, or a host-exported selection such as `ORCA_AGENT_CLI`), that measurement is the recommended candidate and beats an empty ask. Still confirm with the owner when measurement and their expectation could diverge. Never invent a runtime name when nothing was measured.
+
 ## Run
 
 Show the owner-facing form with `$` when you narrate the check; the agent may run the same lines without asking the owner to type them:
@@ -23,10 +25,23 @@ $ command -v git
 
 Use `bash scripts/onboarding-preflight.sh --fix` only with approval; it may add or refresh the global Orca skills, while application installs remain manual.
 
+## Land the agent CLI answer in the instance runtime config
+
+After the agent CLI is confirmed, write it into the instance-owned runtime config so later scripts do not hardcode one installation's host. Copy the example once if the filled file is missing, then set `master_host_runtime` to the confirmed CLI name. Do not commit the filled file; the template ships only the example.
+
+```console
+$ cd "{{RUNTIME_ROOT}}"
+$ test -f config/instance-runtime.json || cp config/instance-runtime.example.json config/instance-runtime.json
+# set master_host_runtime to the confirmed agent CLI (JSON); leave other keys for later steps
+```
+
+Schema (one sentence each): `master_host_runtime` is the agent CLI the master runs on; `transcript_globs` maps each runtime name to a glob for that runtime's session transcripts used by the model probe; `product_repo` is the optional absolute path of the primary product repository. Resolution order for consumers: environment override → this file → honest unconfigured (never a baked guess).
+
 ## Verify
 
 - the preflight exits zero, Orca status was measured, a non-legacy orchestration Run is bound to this terminal, required skills resolve, `bd` is present and resolves to the ops repo when one exists, and Python is present
 - the named agent CLI is set and resolves on `PATH`; an unset selection is a FAIL, because it silently downgrades the agent-specific checks to INFO
+- `{{RUNTIME_ROOT}}/config/instance-runtime.json` exists (instance-owned, not committed) with `master_host_runtime` equal to the confirmed agent CLI; the template example was not replaced in git
 - at least one of the worker runtimes this master dispatches to resolves on `PATH`; the others are reported as warnings, since routing every lane through one executor is a normal setup
 - `gitleaks` was measured: present passes, absent warns without blocking, because publishing needs it (the redaction gate exits 2 without its engine) while running a master does not. Treat the warning as a real install item on any host that will publish
 - `ctx` was measured: present with a reachable index passes, absent or unreachable warns without blocking, because the records practice cannot query cross-provider history without it while a master still runs. Ignore the warning only on a host that does no history work

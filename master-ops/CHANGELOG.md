@@ -41,6 +41,22 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+Instance runtime config landing (2026-08-04 owner onboarding-parameterization decision):
+
+- Onboarding steps now write confirmed runtime answers into
+  `{{RUNTIME_ROOT}}/config/instance-runtime.json` (instance-owned; template
+  ships only `config/instance-runtime.example.json`).
+- Step 01 lands `master_host_runtime` from the agent-CLI answer, preferring
+  measured installer runtime over an empty ask.
+- Step 02 may land optional `product_repo` and measured `transcript_globs`.
+- Step 08 completes `transcript_globs` for named master hosts; Step 09 requires
+  launch and model-probe guidance to read the config (or env overrides) rather
+  than hardcoding a host runtime or transcript path.
+- Existing installations do not auto-update. To adopt: copy the example into
+  the runtime clone as `config/instance-runtime.json`, fill the keys from the
+  live master host and measured transcript locations, and stop using any local
+  wrapper default such as a stale `DEFAULT_MASTER_HOST_RUNTIME`.
+
 Instance-validated asset promotion (2026-08-04 staging to template):
 
 - New `master-ops/docs/runbooks/contract-conventions.md` carries the authoring

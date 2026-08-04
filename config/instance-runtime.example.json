@@ -1,0 +1,14 @@
+{
+  "_docs": {
+    "master_host_runtime": "Agent CLI name the master session runs on (for example claude, codex, or grok).",
+    "transcript_globs": "Map of runtime name to a filesystem glob that locates that runtime's session JSONL transcripts for model-identity probes.",
+    "product_repo": "Optional absolute path of the primary product repository this master serves; omit or null when the workspace has no single primary product."
+  },
+  "master_host_runtime": "claude",
+  "transcript_globs": {
+    "claude": "~/.claude/projects/-Users-example-workspace/*.jsonl",
+    "codex": "~/.codex/sessions/**/*.jsonl",
+    "grok": "~/.grok/sessions/**/*.jsonl"
+  },
+  "product_repo": "/absolute/path/to/primary-product-repo"
+}

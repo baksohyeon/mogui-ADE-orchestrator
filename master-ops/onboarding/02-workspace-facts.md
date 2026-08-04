@@ -73,6 +73,12 @@ When the user names a repository that lives outside the confirmed workspace root
 
 Ask for workspace name (default: confirmed root basename), monitor namespace, and default model identifier to measure at boot, with measured candidates, a recommendation and reason, and a free-form option for each when available; explain why each is needed. Remind once that monitor namespace is not the Beads/issue prefix.
 
+## Land optional product_repo and seed transcript_globs in the instance runtime config
+
+When the inventory has a single primary product repository the master is for (owner-confirmed, not guessed from folder layout alone), write its absolute path as `product_repo` in `{{RUNTIME_ROOT}}/config/instance-runtime.json`. If the workspace is multi-product or the owner declines a primary, leave `product_repo` null or omit it. Do not invent a product path.
+
+Also seed `transcript_globs` for the confirmed master host runtime when a transcript location can be **measured** on this host (for example Claude Code projects under `~/.claude/projects/`). Measurement beats asking; when nothing measurable exists for a runtime, leave that runtime's glob unset rather than pasting another installation's path.
+
 ## Verify
 
 - the master's purpose was asked with examples and recorded or explicitly deferred
@@ -81,6 +87,7 @@ Ask for workspace name (default: confirmed root basename), monitor namespace, an
 - `{{WORKSPACE_NAME}}` is explicit or is the confirmed root basename approved by the user
 - `{{REPO_LIST}}` defaults to every measured immediate child repository, with only explicit opt-outs removed
 - every repository the user named that lives outside the root was offered move/clone first; if still outside, it is recorded as an external lane with access rules; none is left implicit
+- `config/instance-runtime.json` still has `master_host_runtime` from the preflight step; `product_repo` is set only when the owner confirmed a primary product path; any `transcript_globs` entry came from measurement or an explicit owner value, never a copied foreign path
 
 ## If fail
 

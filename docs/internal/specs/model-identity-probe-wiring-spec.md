@@ -17,18 +17,30 @@ scripts/model-identity-probe --transcript <session.jsonl> --expect claude-fable-
 
 Arguments:
 
-- `--transcript`: required path to the current session JSONL transcript.
+- `--transcript`: path to the current session JSONL transcript. Optional when
+  a transcript can be resolved from instance runtime config (see below).
+- `--runtime`: runtime name whose `transcript_globs` entry to use when
+  `--transcript` is omitted. Defaults to configured `master_host_runtime`.
+- `--config`: path to the instance runtime config JSON. Defaults to
+  `INSTANCE_RUNTIME_CONFIG` or `<repo>/config/instance-runtime.json`.
 - `--expect`: expected model id. Default: none; without `--expect` or
   `MODEL_IDENTITY_EXPECT`, the probe reports what it measured and asserts
   nothing.
 - `--limit`: number of recent assistant turns to inspect. Default: `10`.
+
+Transcript resolution when `--transcript` is omitted (never a baked default):
+
+1. Environment `MOGUI_TRANSCRIPT_GLOB` (newest match of the glob).
+2. Instance config `transcript_globs.<runtime>` from the config path above.
+3. Honest unconfigured: exit 2 with `MODEL-PROBE DRIFT: unconfigured - ...`.
 
 Exit behavior:
 
 - `0`: all observed recent assistant model fields match `--expect`, or no
   expected model was supplied and nothing was asserted.
 - `2`: no assistant model fields are observed, the transcript is unreadable,
-  JSONL is malformed, the limit is invalid, or any observed model differs.
+  JSONL is malformed, the limit is invalid, any observed model differs, or
+  the transcript location is unconfigured.
 
 Output:
 

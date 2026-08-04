@@ -2,7 +2,7 @@
 # Read-only coverage report: hook by (runtime_hint, session_kind) matrix with last-fired timestamp and count.
 # Lists all hooks in scripts/hooks/ that have zero fire-log entries.
 
-logfile=~/.mogui/hook-fire-log.jsonl
+logfile="${MOGUI_HOOK_FIRE_LOG:-$HOME/.mogui/hook-fire-log.jsonl}"
 repo_base="$(cd "$(dirname "$0")/.." && pwd)"
 
 # Build matrix: hook -> (runtime_hint, session_kind) -> (ts, count)
@@ -13,7 +13,7 @@ import os
 from collections import defaultdict
 from datetime import datetime
 
-logfile = os.path.expanduser("~/.mogui/hook-fire-log.jsonl")
+logfile = os.environ.get("MOGUI_HOOK_FIRE_LOG") or os.path.expanduser("~/.mogui/hook-fire-log.jsonl")
 
 matrix = defaultdict(lambda: defaultdict(lambda: {"count": 0, "last_ts": 0}))
 
@@ -27,7 +27,9 @@ else:
                 continue
             try:
                 entry = json.loads(line)
-            except json.JSONDecodeError:
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(entry, dict):
                 continue
 
             hook = entry.get("hook", "unknown")

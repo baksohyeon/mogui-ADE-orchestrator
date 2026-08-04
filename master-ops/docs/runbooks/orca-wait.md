@@ -21,9 +21,6 @@ The correct orca wait flow:
 ## orca-wait usage
 
 ```bash
-# Wait for next message (blocks ~55 minutes before timeout)
-./scripts/orca-wait
-
 # Wait once and return after first batch
 ./scripts/orca-wait --once
 

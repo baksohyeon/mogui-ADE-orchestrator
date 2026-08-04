@@ -96,7 +96,10 @@ if [ -n "$BODY_FILE" ]; then
   }
   PR_BODY_PATH="$BODY_FILE"
 else
-  TMP_PR_BODY="$(mktemp)"
+  TMP_PR_BODY="$(mktemp)" || {
+    echo "error: failed to create temporary PR body file" >&2
+    exit 2
+  }
   gh pr view "$PR_NUMBER" --repo "$REPO" --json body --jq .body > "$TMP_PR_BODY" 2>/dev/null || {
     echo "error: failed to fetch PR #$PR_NUMBER body from $REPO" >&2
     exit 2
@@ -111,7 +114,10 @@ if [ -n "$TEMPLATE_FILE" ]; then
   }
   TEMPLATE_BODY_PATH="$TEMPLATE_FILE"
 else
-  TMP_TEMPLATE_BODY="$(mktemp)"
+  TMP_TEMPLATE_BODY="$(mktemp)" || {
+    echo "error: failed to create temporary template body file" >&2
+    exit 2
+  }
   TEMPLATE_CONTENT="$(gh api "repos/$REPO/contents/.github/pull_request_template.md" --jq '.content' 2>/dev/null)" || {
     echo "error: failed to fetch .github/pull_request_template.md from $REPO" >&2
     exit 2

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # conversation-redaction-scan - detect redaction violations in PR bodies and comments
-# Scans GitHub PR bodies, PR comments, review-thread comments, and issue bodies for
-# absolute machine paths and identity-bearing strings.
+# Scans GitHub PR bodies, PR comments, review bodies, review-thread comments,
+# and issue bodies for absolute machine paths and identity-bearing strings.
 #
 # Usage:
 #   scripts/conversation-redaction-scan [--repo owner/name] [--limit N]
@@ -89,6 +89,17 @@ append_findings() {
   return 0
 }
 
+graphql_page() {
+  local query="$1"
+  local id="$2"
+  local cursor="${3:-}"
+  if [[ -n "$cursor" ]]; then
+    gh api graphql -f id="$id" -f cursor="$cursor" -f query="$query"
+  else
+    gh api graphql -f id="$id" -f query="$query"
+  fi
+}
+
 # Fetch PRs and scan bodies + comments (including merged PRs)
 PR_JSON=$(gh pr list --repo "$REPO" --state all --limit "$LIMIT" --json "number,author,body" --jq '.[]' 2>/dev/null) || {
   echo "conversation-redaction-scan: FAIL - could not fetch PRs from $REPO" >&2
@@ -129,37 +140,97 @@ while IFS= read -r pr_line; do
     echo "conversation-redaction-scan: FAIL - could not fetch PR node id for PR#${PR_NUMBER}" >&2
     exit 2
   }
-  THREAD_COMMENTS=$(gh api graphql -f id="$PR_NODE_ID" -f query='
-    query($id:ID!) {
+
+  REVIEWS_QUERY='
+    query($id:ID!, $cursor:String) {
       node(id:$id) {
         ... on PullRequest {
-          reviewThreads(first:100) {
-            nodes {
-              comments(first:100) {
-                nodes {
-                  author { login }
-                  body
-                  path
-                  line
-                }
-              }
-            }
+          reviews(first:100, after:$cursor) {
+            pageInfo { hasNextPage endCursor }
+            nodes { author { login } authorAssociation body }
           }
         }
       }
-    }' --jq '.data.node.reviewThreads.nodes[].comments.nodes[]' 2>/dev/null) || {
-    echo "conversation-redaction-scan: FAIL - could not fetch review-thread comments for PR#${PR_NUMBER}" >&2
-    exit 2
-  }
-  while IFS= read -r thread_comment_line; do
-    [[ -z "$thread_comment_line" ]] && continue
-    THREAD_AUTHOR=$(printf '%s' "$thread_comment_line" | jq -r '.author.login // "unknown"')
-    THREAD_BODY=$(printf '%s' "$thread_comment_line" | jq -r '.body // ""')
-    THREAD_PATH=$(printf '%s' "$thread_comment_line" | jq -r '.path // "unknown"')
-    THREAD_LINE=$(printf '%s' "$thread_comment_line" | jq -r '.line // "unknown"')
-    result=$(scan_text "review_thread_comment" "$PR_NUMBER" "$THREAD_AUTHOR" "PR#${PR_NUMBER}/${THREAD_PATH}:${THREAD_LINE}" "$THREAD_BODY")
-    append_findings "$result"
-  done <<< "$THREAD_COMMENTS"
+    }'
+  review_cursor=""
+  while :; do
+    REVIEWS_PAGE=$(graphql_page "$REVIEWS_QUERY" "$PR_NODE_ID" "$review_cursor" 2>/dev/null) || {
+      echo "conversation-redaction-scan: FAIL - could not fetch review bodies for PR#${PR_NUMBER}" >&2
+      exit 2
+    }
+    while IFS= read -r review_line; do
+      [[ -z "$review_line" ]] && continue
+      REVIEW_AUTHOR=$(printf '%s' "$review_line" | jq -r '.author.login // "unknown"')
+      REVIEW_ASSOCIATION=$(printf '%s' "$review_line" | jq -r '.authorAssociation // "NONE"')
+      if [[ "$REVIEW_ASSOCIATION" == "NONE" ]]; then
+        continue
+      fi
+      REVIEW_BODY=$(printf '%s' "$review_line" | jq -r '.body // ""')
+      result=$(scan_text "review_body" "$PR_NUMBER" "$REVIEW_AUTHOR" "PR#${PR_NUMBER}/reviews" "$REVIEW_BODY")
+      append_findings "$result"
+    done <<< "$(printf '%s' "$REVIEWS_PAGE" | jq -c '.data.node.reviews.nodes[]')"
+    if [[ "$(printf '%s' "$REVIEWS_PAGE" | jq -r '.data.node.reviews.pageInfo.hasNextPage')" != "true" ]]; then
+      break
+    fi
+    review_cursor=$(printf '%s' "$REVIEWS_PAGE" | jq -r '.data.node.reviews.pageInfo.endCursor // empty')
+  done
+
+  THREADS_QUERY='
+    query($id:ID!, $cursor:String) {
+      node(id:$id) {
+        ... on PullRequest {
+          reviewThreads(first:100, after:$cursor) {
+            pageInfo { hasNextPage endCursor }
+            nodes { id }
+          }
+        }
+      }
+    }'
+  THREAD_COMMENTS_QUERY='
+    query($id:ID!, $cursor:String) {
+      node(id:$id) {
+        ... on PullRequestReviewThread {
+          comments(first:100, after:$cursor) {
+            pageInfo { hasNextPage endCursor }
+            nodes { author { login } body path line }
+          }
+        }
+      }
+    }'
+  thread_cursor=""
+  while :; do
+    THREADS_PAGE=$(graphql_page "$THREADS_QUERY" "$PR_NODE_ID" "$thread_cursor" 2>/dev/null) || {
+      echo "conversation-redaction-scan: FAIL - could not fetch review threads for PR#${PR_NUMBER}" >&2
+      exit 2
+    }
+    while IFS= read -r thread_id; do
+      [[ -z "$thread_id" ]] && continue
+      comment_cursor=""
+      while :; do
+        THREAD_COMMENTS_PAGE=$(graphql_page "$THREAD_COMMENTS_QUERY" "$thread_id" "$comment_cursor" 2>/dev/null) || {
+          echo "conversation-redaction-scan: FAIL - could not fetch review-thread comments for PR#${PR_NUMBER}" >&2
+          exit 2
+        }
+        while IFS= read -r thread_comment_line; do
+          [[ -z "$thread_comment_line" ]] && continue
+          THREAD_AUTHOR=$(printf '%s' "$thread_comment_line" | jq -r '.author.login // "unknown"')
+          THREAD_BODY=$(printf '%s' "$thread_comment_line" | jq -r '.body // ""')
+          THREAD_PATH=$(printf '%s' "$thread_comment_line" | jq -r '.path // "unknown"')
+          THREAD_LINE=$(printf '%s' "$thread_comment_line" | jq -r '.line // "unknown"')
+          result=$(scan_text "review_thread_comment" "$PR_NUMBER" "$THREAD_AUTHOR" "PR#${PR_NUMBER}/${THREAD_PATH}:${THREAD_LINE}" "$THREAD_BODY")
+          append_findings "$result"
+        done <<< "$(printf '%s' "$THREAD_COMMENTS_PAGE" | jq -c '.data.node.comments.nodes[]')"
+        if [[ "$(printf '%s' "$THREAD_COMMENTS_PAGE" | jq -r '.data.node.comments.pageInfo.hasNextPage')" != "true" ]]; then
+          break
+        fi
+        comment_cursor=$(printf '%s' "$THREAD_COMMENTS_PAGE" | jq -r '.data.node.comments.pageInfo.endCursor // empty')
+      done
+    done <<< "$(printf '%s' "$THREADS_PAGE" | jq -r '.data.node.reviewThreads.nodes[].id')"
+    if [[ "$(printf '%s' "$THREADS_PAGE" | jq -r '.data.node.reviewThreads.pageInfo.hasNextPage')" != "true" ]]; then
+      break
+    fi
+    thread_cursor=$(printf '%s' "$THREADS_PAGE" | jq -r '.data.node.reviewThreads.pageInfo.endCursor // empty')
+  done
 done <<< "$PR_JSON"
 
 # Fetch and scan issue bodies

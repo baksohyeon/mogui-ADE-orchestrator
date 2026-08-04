@@ -6,8 +6,8 @@ This document describes the sandbox spawn-test harness: an end-to-end verificati
 
 The onboarding installer has never been tested end-to-end with machine verification. This harness automates the full flow for each runtime and produces evidence:
 
-- a. **Machine Assertion A**: Self-check passes in sandbox master-ops
-- b. **Machine Assertion B**: At least one hook fires during onboarding
+- a. **Machine Assertion A**: Sandbox clone contains the expected onboarding files
+- b. **Machine Assertion B**: At least one hook fire-log entry is written from the sandbox during onboarding
 - c. **Machine Assertion C**: Round-trip - spawned master sends orca orchestration message back to coordinator
 
 See AHE E11 (second-workspace transplant) - this is the standing instrument.
@@ -50,7 +50,7 @@ The harness tests a matrix of runtimes:
 1. Create temp directory under `$TMPDIR` or `/tmp`
 2. Clone mogui-ADE-orchestrator into sandbox (local copy)
 3. Record source commit: CLONE_SOURCE_COMMIT file
-4. Setup sandbox-local fire-log: .fire-log/spawn-test-<runtime>.log
+4. Setup sandbox-local fire-log: `.fire-log/spawn-test-<runtime>.jsonl`
 ```
 
 ### Installer Run
@@ -71,7 +71,7 @@ After installer completes:
 
 **B. Hook Fires**
 - Check the hook fire-log line count before and after the spawned agent runs.
-- At least one new hook fire-log entry must appear during setup.
+- At least one new hook fire-log entry with `cwd` under the sandbox must appear during setup.
 - Output: fire-log path plus before/after counts in report.
 
 **C. Round-Trip**
@@ -123,7 +123,7 @@ One or both of `claude`, `codex` failed.
 - Sandboxes preserved
 - Investigator path: `cd <sandbox>/mogui-ADE-orchestrator`
 - Inspect `master-ops/`, `INSTALL-PROMPT.txt`, and `master-ops/ONBOARDING.md` in the kept sandbox.
-- Check the configured hook fire-log path from the report.
+- Check the sandbox-local hook fire-log path and before/after counts from the report.
 - Exit code: 1
 
 ### Grok / Blocked Runtimes
@@ -132,19 +132,20 @@ One or both of `claude`, `codex` failed.
 
 ## Fire-Log Instrumentation
 
-The harness reads the host hook fire-log before and after the spawned agent run:
+The harness creates a sandbox-local hook fire-log and passes it to the spawned
+runtime:
 
 ```bash
-export MOGUI_HOOK_FIRE_LOG="$HOME/.mogui/hook-fire-log.jsonl"
+export MOGUI_HOOK_FIRE_LOG="$TMPDIR/mogui-spawn-test/<runtime>-<timestamp>/.fire-log/spawn-test-<runtime>.jsonl"
 ```
 
-If `MOGUI_HOOK_FIRE_LOG` is unset, the default is `~/.mogui/hook-fire-log.jsonl`.
+The shipped hooks honor `MOGUI_HOOK_FIRE_LOG`; outside spawn-test, the default
+remains `~/.mogui/hook-fire-log.jsonl`.
 
 ### Fire-Log Format
 
-```
-[HH:MM:SS] <event>: <details>
-[HH:MM:SS] <event>: <details>
+```json
+{"ts":1722728400,"hook":"bash-poll-warn","event":"PreToolUse(Bash)","cwd":"/tmp/mogui-spawn-test/claude-123/mogui-ADE-orchestrator","runtime_hint":"claude","session_kind":"unknown"}
 ```
 
 Hook names, trigger times, and hook output are recorded here.
@@ -168,8 +169,8 @@ ls master-ops INSTALL-PROMPT.txt master-ops/ONBOARDING.md
 # In coordinator terminal:
 orca orchestration check | grep spawn-test-claude
 
-# In sandbox terminal (if async):
-cat .fire-log/spawn-test-claude.log | tail -20
+# In kept sandbox (if async):
+cat ../.fire-log/spawn-test-claude.jsonl | tail -20
 ```
 
 ## Constraints and Prohibitions

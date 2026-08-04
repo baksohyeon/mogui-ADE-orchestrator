@@ -2,14 +2,15 @@
 # UserPromptSubmit: warn once when unacked orchestration messages exist.
 
 log_fire() {
-  mkdir -p ~/.mogui 2>/dev/null || return 0
+  local fire_log="${MOGUI_HOOK_FIRE_LOG:-$HOME/.mogui/hook-fire-log.jsonl}"
+  mkdir -p "$(dirname "$fire_log")" 2>/dev/null || return 0
   local session_kind="unknown"
   if [ -n "$ORCA_TASK_ID" ] || [ -n "$ORCA_DISPATCH_ID" ] || [[ "$PWD" == *".orca/worktrees"* ]]; then
     session_kind="worker"
   elif [ -f "$PWD/docs/MASTER-OPERATIONS.md" ]; then
     session_kind="master"
   fi
-  python3 - "orch-inbox-warn" "UserPromptSubmit" "$PWD" "${MOGUI_RUNTIME_HINT:-unknown}" "$session_kind" <<'PY' >> ~/.mogui/hook-fire-log.jsonl 2>/dev/null || true
+  python3 - "orch-inbox-warn" "UserPromptSubmit" "$PWD" "${MOGUI_RUNTIME_HINT:-unknown}" "$session_kind" <<'PY' >> "$fire_log" 2>/dev/null || true
 import json
 import sys
 import time

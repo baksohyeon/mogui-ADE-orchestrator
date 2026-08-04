@@ -10,7 +10,6 @@ TIMEOUT_MS=3300000
 ONCE=0
 TYPES=""
 HELP=0
-LAST_WAIT_OUTPUT=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

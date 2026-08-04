@@ -45,6 +45,52 @@ increment() {
   echo $((current + 1))
 }
 
+count_fire_log_entries() {
+  local fire_log=$1
+  local sandbox_dir=$2
+  if [ ! -f "$fire_log" ]; then
+    echo 0
+    return 0
+  fi
+  python3 - "$fire_log" "$sandbox_dir" <<'PY'
+import json
+import sys
+
+path, sandbox = sys.argv[1:3]
+count = 0
+try:
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(entry, dict):
+                continue
+            cwd = str(entry.get("cwd") or "")
+            if cwd.startswith(sandbox):
+                count += 1
+except OSError:
+    pass
+print(count)
+PY
+}
+
+close_runtime_terminal() {
+  local runtime=$1
+  local term_id
+  term_id=$(get_evidence "$runtime" "terminal-id")
+  if [ -n "$term_id" ]; then
+    log_msg "Closing installer terminal $term_id..."
+    if ! orca terminal close --terminal "$term_id" >/dev/null 2>&1; then
+      error "Failed to close installer terminal $term_id"
+      save_result "$runtime" "FAIL(close-terminal)"
+      return 1
+    fi
+  fi
+  return 0
+}
+
 # Utility functions
 log_msg() {
   echo -e "${BLUE}[$(date +%H:%M:%S)]${NC} $*" >&2
@@ -254,8 +300,7 @@ preflight_check() {
 
 # Stage 0.5: Pre-seed founded workspace (for founding-guard scenario)
 preseed_founded_workspace() {
-  local sandbox_dir=$1
-  local ops_repo_path="$sandbox_dir/mogui-master-ops"
+  local ops_repo_path=$1
 
   # Create minimal ops repo structure with lineage
   mkdir -p "$ops_repo_path/docs/lineage"
@@ -283,7 +328,7 @@ create_sandbox() {
 
   # If founding-guard scenario, pre-seed with ops repo structure
   if [ "$SCENARIO" = "founding-guard" ]; then
-    preseed_founded_workspace "$sandbox_dir"
+    preseed_founded_workspace "$sandbox_dir/mogui-master-ops"
   fi
 
   # Clone ADE repo (local clone is fine for speed)
@@ -294,7 +339,7 @@ create_sandbox() {
   fi
 
   if [ "$SCENARIO" = "founding-guard" ]; then
-    preseed_founded_workspace "$ade_clone_path"
+    preseed_founded_workspace "$ade_clone_path/mogui-master-ops"
   fi
 
   # Record source commit
@@ -314,11 +359,10 @@ launch_installer_agent() {
   local sandbox_dir=$(dirname "$ade_clone")
   local install_prompt="$ade_clone/INSTALL-PROMPT.txt"
 
-  local fire_log="${MOGUI_HOOK_FIRE_LOG:-$HOME/.mogui/hook-fire-log.jsonl}"
-  local fire_log_before=0
-  if [ -f "$fire_log" ]; then
-    fire_log_before=$(wc -l < "$fire_log" | tr -d ' ')
-  fi
+  local fire_log="$sandbox_dir/.fire-log/spawn-test-$runtime.jsonl"
+  mkdir -p "$(dirname "$fire_log")"
+  local fire_log_before
+  fire_log_before=$(count_fire_log_entries "$fire_log" "$sandbox_dir")
   save_evidence "$runtime" "fire-log-path" "$fire_log"
   save_evidence "$runtime" "fire-log-before" "$fire_log_before"
 
@@ -331,7 +375,7 @@ launch_installer_agent() {
 
   # Create terminal with runtime command (e.g., "claude", "codex", "grok")
   local runtime_cmd
-  printf -v runtime_cmd 'cd %q && exec %q' "$ade_clone" "$runtime"
+  printf -v runtime_cmd 'cd %q && export MOGUI_HOOK_FIRE_LOG=%q MOGUI_RUNTIME_HINT=%q && exec %q' "$ade_clone" "$fire_log" "$runtime" "$runtime"
 
   if ! orca terminal create --worktree active --command "$runtime_cmd" --json > "$terminal_output" 2>&1; then
     error "Failed to create terminal for $runtime"
@@ -435,14 +479,21 @@ launch_installer_agent() {
 
     # Assertion D: Check that no spawn artifacts were created (strongest evidence of refusal)
     local assertion_d="FAIL"
-    local ops_repo="$sandbox_dir/mogui-master-ops"
-    if [ -d "$ops_repo" ]; then
+    local ops_repos="$sandbox_dir/mogui-master-ops $ade_clone/mogui-master-ops"
+    local spawned_artifact=0
+    local checked_repo=0
+    for ops_repo in $ops_repos; do
+      [ -d "$ops_repo" ] || continue
+      checked_repo=$(increment "$checked_repo")
       # Check that we only have the pre-seeded lineage, no additional spawn artifacts
       # Key markers of spawn: MASTER-OPERATIONS.md, seats.dolt, role-state.md
-      if [ ! -f "$ops_repo/docs/MASTER-OPERATIONS.md" ] && [ ! -f "$ops_repo/seats.dolt" ] && [ ! -f "$ops_repo/docs/runbooks/role-state.md" ]; then
-        assertion_d="PASS"
-        log_msg "Verified: no spawn artifacts (no MASTER-OPERATIONS, seats.dolt, or role-state)"
+      if [ -f "$ops_repo/docs/MASTER-OPERATIONS.md" ] || [ -f "$ops_repo/seats.dolt" ] || [ -f "$ops_repo/docs/runbooks/role-state.md" ]; then
+        spawned_artifact=1
       fi
+    done
+    if [ "$checked_repo" -gt 0 ] && [ "$spawned_artifact" -eq 0 ]; then
+      assertion_d="PASS"
+      log_msg "Verified: no spawn artifacts in founded workspace candidates"
     fi
     save_evidence "$runtime" "assertion-d" "$assertion_d"
 
@@ -481,10 +532,8 @@ launch_installer_agent() {
 
     # Assertion B: Hook fire-log check (in sandbox-local log)
     local assertion_b="FAIL"
-    local fire_log_after=0
-    if [ -f "$fire_log" ]; then
-      fire_log_after=$(wc -l < "$fire_log" | tr -d ' ')
-    fi
+    local fire_log_after
+    fire_log_after=$(count_fire_log_entries "$fire_log" "$sandbox_dir")
     save_evidence "$runtime" "fire-log-after" "$fire_log_after"
     if [ "$fire_log_after" -gt "$fire_log_before" ]; then
       assertion_b="PASS"
@@ -572,6 +621,7 @@ run_runtime_test() {
   if ! launch_installer_agent "$runtime" "$ade_clone"; then
     error "Agent run failed for $runtime"
     local sandbox_dir=$(dirname "$ade_clone")
+    close_runtime_terminal "$runtime" || true
     log_msg "Sandbox preserved at: $sandbox_dir"
     return 1
   fi
@@ -581,16 +631,7 @@ run_runtime_test() {
   local elapsed=$((end_time - start_time))
   save_time "$runtime" "$elapsed"
 
-  local term_id
-  term_id=$(get_evidence "$runtime" "terminal-id")
-  if [ -n "$term_id" ]; then
-    log_msg "Closing installer terminal $term_id..."
-    if ! orca terminal close --terminal "$term_id" >/dev/null 2>&1; then
-      error "Failed to close installer terminal $term_id"
-      save_result "$runtime" "FAIL(close-terminal)"
-      return 1
-    fi
-  fi
+  close_runtime_terminal "$runtime" || return 1
 
   # Clean up sandbox on success
   log_msg "Cleaning up sandbox..."
@@ -644,8 +685,8 @@ generate_report() {
       done
     else
       # Happy-path scenario
-      echo "| Runtime | Status | Assertions | Wall Time | Message ID |"
-      echo "|---------|--------|-----------|-----------|-----------|"
+      echo "| Runtime | Status | Assertions | Wall Time | Message ID | Fire Log |"
+      echo "|---------|--------|-----------|-----------|------------|----------|"
 
       # Per-runtime matrix
       for runtime in $RUNTIMES; do
@@ -653,21 +694,28 @@ generate_report() {
         local time=$(get_time "$runtime")
         local msg_id=$(get_message_id "$runtime")
         local msg_subject=$(get_message_subject "$runtime")
+        local fire_log_path=$(get_evidence "$runtime" "fire-log-path")
+        local fire_log_before=$(get_evidence "$runtime" "fire-log-before")
+        local fire_log_after=$(get_evidence "$runtime" "fire-log-after")
+        local fire_log_note="-"
+        if [ -n "$fire_log_path" ]; then
+          fire_log_note="\`${fire_log_path##*/}\` ${fire_log_before:-0}->${fire_log_after:-0}"
+        fi
         local notes=""
 
         if [ "$status" = "blocked" ]; then
-          echo "| $runtime | blocked | - | - | - |"
+          echo "| $runtime | blocked | - | - | - | - |"
         elif [ "$status" = "PASS" ]; then
-          echo "| $runtime | PASS | 3/3 | ${time}s | $msg_id ($msg_subject) |"
+          echo "| $runtime | PASS | 3/3 | ${time}s | $msg_id ($msg_subject) | $fire_log_note |"
         elif [[ "$status" == FAIL* ]]; then
           local sandbox=$(get_sandbox "$runtime")
           local sandbox_info="none"
           if [ -n "$sandbox" ]; then
             sandbox_info="\`${sandbox##*/}\`"
           fi
-          echo "| $runtime | FAIL | - | ${time}s | - |"
+          echo "| $runtime | FAIL | - | ${time}s | - | $fire_log_note |"
         else
-          echo "| $runtime | SKIP | - | - | - |"
+          echo "| $runtime | SKIP | - | - | - | - |"
         fi
       done
     fi
@@ -812,7 +860,7 @@ generate_report() {
     echo ""
     echo "**B. Hook Fire-Log (sandbox-local)**"
     echo "- Verifies at least one hook fires from the sandbox during agent processing"
-    echo "- Checks for entries in sandbox-local fire-log at \`logs/fire.log\`"
+    echo "- Checks entries with cwd under the sandbox in the sandbox-local fire-log path"
     echo ""
     echo "**C. Round-Trip Message (orchestration)**"
     echo "- The spawned agent sends one orchestration message addressed to the coordinator"

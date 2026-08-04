@@ -4,7 +4,7 @@
 
 **Authoring guard** - `scripts/pr-body-check` now includes redaction scans after narrative-section checks. Detects absolute home paths (macOS and Linux home-directory forms) in PR bodies and exits 1 if violations are found.
 
-**Detection scan** - `scripts/conversation-redaction-scan` scans GitHub PR bodies, PR comments, review-thread comments, and issue bodies for the same patterns. Outputs findings as `surface|number|author|locator|pattern_class` (never printing the matched value itself) and exits 1 when violations exist.
+**Detection scan** - `scripts/conversation-redaction-scan` scans GitHub PR bodies, PR comments, repository-participant review summary bodies, review-thread comments, and issue bodies for the same patterns. Outputs findings as `surface|number|author|locator|pattern_class` (never printing the matched value itself) and exits 1 when violations exist.
 
 ## Why this matters (incident 2026-08-04, second occurrence)
 
@@ -39,6 +39,7 @@ Exit: 0 all checks pass, 1 section or redaction failure, 2 usage error.
 Minimal v1 implementation. Fetches and scans:
 - PR bodies
 - PR comments
+- Repository-participant review summary bodies (`authorAssociation` other than `NONE`; third-party bot review summaries are not owner-editable after submission)
 - Review-thread comments
 - Issue bodies (extensible)
 
@@ -93,7 +94,7 @@ To validate the scanner works, seed a synthetic marker in a test fixture and ver
 
 1. Create a test PR body file with a known marker:
    ```bash
-   HOME_MARKER="/"Users/testcase"
+   HOME_MARKER="/"Users/testcase
    {
      printf '## Problem\n'
      printf 'User path is %s/development.\n' "$HOME_MARKER"
@@ -112,8 +113,8 @@ To validate the scanner works, seed a synthetic marker in a test fixture and ver
    ```
    Problem: filled
    Why this approach: filled
-   What this changes: missing heading
-   Expected effect: missing heading
+   What this changes: filled
+   Expected effect: filled
 
    Redaction violations detected:
      Line 2: [home_path] absolute path detected

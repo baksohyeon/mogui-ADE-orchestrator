@@ -40,7 +40,7 @@ One JSON line per hook invocation. Example:
 ## Log Location
 
 ```
-~/.mogui/hook-fire-log.jsonl
+${MOGUI_HOOK_FIRE_LOG:-~/.mogui/hook-fire-log.jsonl}
 ```
 
 Append-only; one line per invocation. Fails open (never blocks or breaks the hook if append fails).
@@ -95,14 +95,15 @@ This line confirms the harness state. If a protection is missing or logged count
 3. Add a `log_fire()` call at the top of the script body:
    ```bash
    log_fire() {
-     mkdir -p ~/.mogui 2>/dev/null || return 0
+     local fire_log="${MOGUI_HOOK_FIRE_LOG:-$HOME/.mogui/hook-fire-log.jsonl}"
+     mkdir -p "$(dirname "$fire_log")" 2>/dev/null || return 0
      local session_kind="unknown"
      if [ -n "$ORCA_TASK_ID" ] || [ -n "$ORCA_DISPATCH_ID" ] || [[ "$PWD" == *".orca/worktrees"* ]]; then
        session_kind="worker"
      elif [ -f "$PWD/docs/MASTER-OPERATIONS.md" ]; then
        session_kind="master"
      fi
-     python3 - "<name>" "<event>" "$PWD" "${MOGUI_RUNTIME_HINT:-unknown}" "$session_kind" <<'PY' >> ~/.mogui/hook-fire-log.jsonl 2>/dev/null || true
+     python3 - "<name>" "<event>" "$PWD" "${MOGUI_RUNTIME_HINT:-unknown}" "$session_kind" <<'PY' >> "$fire_log" 2>/dev/null || true
    import json
    import sys
    import time
@@ -127,6 +128,8 @@ This line confirms the harness state. If a protection is missing or logged count
 - Appending to the fire-log must be fail-open (never block or fail the hook; `|| true` on every path).
 - One line per invocation.
 - No message bodies or secrets in the line.
+- `session_kind=master` is emitted when the hook runs from a directory that
+  contains `docs/MASTER-OPERATIONS.md`; worker markers still take precedence.
 - Hook's existing behavior must be byte-identical otherwise.
 
 ## Implementation Notes

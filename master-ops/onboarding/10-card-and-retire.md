@@ -56,12 +56,12 @@ If the user lingers with Orca questions before retirement, answer them here unde
 
 ## Installer retirement
 
-After the card is printed and the checks above pass, send the newborn master the warm resume note and kill switch from Step 8. The note must say that this installer has completed Step 10, the operating card was printed, the master terminal is the living session, and a resumed installer should do no further work. If the master is proven absent later, do not rerun Founding; route recovery through `docs/runbooks/succession-boot-card.md`. The master then closes the installer terminal with `ORCA terminal close --terminal <installer handle> --json`; if the close command fails or the handle is unavailable, report the failure plainly to the owner and leave the installer idle rather than guessing another terminal.
+After the card is printed and the checks above pass, send the newborn master the warm resume note and kill switch from Step 8. The note must say that this installer has completed Step 10, the operating card was printed, the master terminal is the living session, and a resumed installer should do no further work. If the master is proven absent later, do not rerun Founding; route recovery through `docs/runbooks/succession-boot-card.md`. Before closing, the master re-lists live terminals and requires the installer handle plus any available pty/session identity to match the installer and not the master's own handle. The master then closes the installer terminal with `ORCA terminal close --terminal <installer handle> --json` and independently verifies that the installer process, Orca terminal, and tty have disappeared; if the command fails, the handle is unavailable, identity is ambiguous or mismatched, or any target remains, report the failure plainly to the owner and leave the installer idle rather than guessing another terminal.
 
 ## Verify
 
 - the card was printed in full, with placeholders replaced and the declined line filled or explicitly none
 - the user was told where to keep it and that it works when pasted into any agent
 - the newborn master was given the warm resume note and installer kill switch
-- the newborn master closed the installer terminal, or the close failure was reported without guessing another terminal
+- the newborn master closed the installer terminal after identity recheck and process / Orca terminal / tty disappearance verification, or the close failure was reported without guessing another terminal
 - the master's terminal was left running

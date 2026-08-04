@@ -116,17 +116,24 @@ def test_only_allowed_placeholders():
 
 def test_founder_spawn_hands_installer_retirement_switch_to_master():
     text = (STEP_DIR / "09-spawn.md").read_text(encoding="utf-8")
-    assert "installer retirement switch" in text
-    assert "warm resume note" in text
-    assert "ORCA terminal close --terminal <installer handle> --json" in text
-    assert "do not invent it" in text
+    kickoff = _section_between(
+        text,
+        "### Agent-only preparation (not shown to the owner)",
+        "Before launching any worker",
+    )
+    assert kickoff.index("warm resume note") < kickoff.index("installer retirement switch")
+    assert "ORCA terminal close --terminal <installer handle> --json" in kickoff
+    assert "re-list live terminals" in kickoff
+    assert "match the installer and not the newborn master's own handle" in kickoff
+    assert "do not invent it" in kickoff
 
 
 def test_final_onboarding_retirement_is_master_closed_not_owner_closed():
     text = (STEP_DIR / "10-card-and-retire.md").read_text(encoding="utf-8")
     assert "the Master closes this installer terminal" in text
     assert "newborn master was given the warm resume note and installer kill switch" in text
-    assert "newborn master closed the installer terminal" in text
+    assert "newborn master closed the installer terminal after identity recheck" in text
+    assert "process / Orca terminal / tty disappearance verification" in text
     assert re.search(r"(?i)\bplease\s+close\s+this\s+installer\s+terminal\b", text) is None
 
 
@@ -165,6 +172,12 @@ def _section_until_next_heading(text: str, current_heading: str) -> str:
     body = text[body_start:]
     next_heading = HEADING.search(body)
     return body[: next_heading.start()] if next_heading else body
+
+
+def _section_between(text: str, start: str, end: str) -> str:
+    start_index = text.index(start) + len(start)
+    end_index = text.index(end, start_index)
+    return text[start_index:end_index]
 
 
 def test_entry_files_stay_byte_identical():

@@ -60,15 +60,19 @@ Installer retirement by newborn master (2026-08-04 onboarding 09/10):
   installer retirement switch: installer terminal handle, pty id when exposed,
   session id when exposed, exact `orca terminal close` command form, and a warm
   resume note that says a later installer resume should treat itself as retired
-  unless the master is proven absent. If the installer handle, pty id, or
-  session id cannot be measured, the kickoff records `unavailable` for that
-  field and does not invent it; an absent-Master case routes to
-  `docs/runbooks/succession-boot-card.md` and must not rerun Founding.
+  unless the master is proven absent. The note appears before the kill switch.
+  If the installer handle, pty id, or session id cannot be measured, the kickoff
+  records `unavailable` for that field and does not invent it; an absent-Master
+  case routes to `docs/runbooks/succession-boot-card.md` and must not rerun
+  Founding.
 - Step 10 no longer asks the owner to close the installer terminal. After the
   operating card is printed and verification passes, the newborn master closes
-  the installer with that kill switch; unavailable handles, pty ids, session
-  ids, or close failures are reported plainly and do not trigger guessed
-  terminal closure.
+  the installer with that kill switch only after re-listing live terminals and
+  confirming the installer handle plus any available pty/session identity match
+  the installer and not the newborn master. It then verifies installer process,
+  Orca terminal, and tty disappearance; unavailable identifiers, close failures,
+  mismatches, ambiguity, or still-present targets are reported plainly and do
+  not trigger guessed terminal closure.
 
 Instance runtime config landing (2026-08-04 owner onboarding-parameterization decision):
 

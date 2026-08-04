@@ -8,7 +8,7 @@ Load rule: read this file only when the router's mode question answered **Reveri
 
 ## Owner script (kind ELI5, adapt to the owner's language)
 
-Where we are: this workspace was already set up, so nothing will be installed or changed. What happens next: a handful of read-only checks — where the master sits, whether the tracker answers, and whether the governance records are current — and then a short pass/fail report. You do not need to type anything unless a check needs your decision.
+Where we are: this workspace was already set up, so nothing will be installed or changed at runtime. If the operating card is lost, reprinting it is the one allowed write. What happens next: a handful of checks — where the master sits, whether the tracker answers, and whether the governance records are current — and then a short pass/fail report. Provide the workspace root and ops repository path, or the operating card, before the checks when those facts are not already available.
 
 ## Checklist (all read-only)
 

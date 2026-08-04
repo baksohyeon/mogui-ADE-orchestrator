@@ -8,7 +8,7 @@ Load rule: read this file only when Step 4 begins. Router: [`../ONBOARDING.md`](
 
 ## Owner script (kind ELI5, adapt to the owner's language)
 
-Where we are: the ops repository skeleton exists; the Herald has the draft, but a few blanks still need the owner's confirmed names and choices. What we decide next: the remaining values that only the owner can confirm, plus any coordination exclusions. Ask for each unresolved value patiently, in small separate turns when that is clearer.
+Where we are: the ops repository skeleton exists, and the earlier steps recorded the owner's confirmed names and choices. What we do next: fill the remaining placeholders from those facts and local measurements, then verify the generated files. Pause to ask only if a required value was never decided.
 
 ## Run
 

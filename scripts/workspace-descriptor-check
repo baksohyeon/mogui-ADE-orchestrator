@@ -25,7 +25,6 @@ sys.path.insert(0, str(SRC_ROOT))
 
 from master_runtime.core.workspace_descriptor import (  # noqa: E402
     WorkspaceDescriptorError,
-    action_is_prohibited,
     load_workspace_descriptor,
 )
 
@@ -73,10 +72,10 @@ def main(argv: list[str] | None = None) -> int:
             raise WorkspaceDescriptorError(
                 "workspace descriptor is unconfigured"
             )
-        prohibited = action_is_prohibited(
+        # Use the already-loaded descriptor (do not re-read the file).
+        prohibited = descriptor.is_prohibited(
             args.path,
             args.action,
-            config_path=args.config,
             default_when_unknown_repo=not args.allow_unknown_repo,
         )
     except WorkspaceDescriptorError as exc:

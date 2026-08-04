@@ -59,19 +59,50 @@ class WorkspaceDescriptor:
     source_path: Path | None
 
     def repository_for_path(self, path: str | Path) -> RepositoryDescriptor | None:
-        """Match a path to a repository entry by relative path or basename."""
-        candidate = Path(path)
-        candidate_str = candidate.as_posix().rstrip("/")
-        candidate_name = candidate.name
+        """Match a path to a repository by declared relative path or exact name.
+
+        Matching rules (unique hit required; ambiguous hits raise):
+        - exact match of the declared relative ``path``
+        - exact match of the declared ``name`` when the candidate has no
+          path separator (``widget`` matches name ``widget``)
+        - absolute candidate whose path ends with ``/<declared path>`` when
+          the declared path has more than one segment (``.../services/app``
+          matches ``services/app``; single-segment declared paths never
+          suffix-match absolute candidates, because ``/a/app`` and ``/b/app``
+          would otherwise collide)
+
+        Relative multi-segment candidates that are not exact equals never match
+        by basename alone (``other/app`` does not match ``services/app``).
+        """
+        candidate_str = Path(path).as_posix().rstrip("/")
+        if not candidate_str or candidate_str == ".":
+            return None
+        candidate_is_absolute = candidate_str.startswith("/")
+
+        matches: list[RepositoryDescriptor] = []
         for repo in self.repositories:
-            if candidate_str == repo.path or candidate_str.endswith("/" + repo.path):
-                return repo
-            if candidate_name == repo.name or candidate_name == Path(repo.path).name:
-                return repo
-            # Absolute path ending with the declared relative path.
-            if candidate_str.endswith("/" + repo.path.rstrip("/")):
-                return repo
-        return None
+            declared = repo.path.rstrip("/")
+            if candidate_str == declared:
+                matches.append(repo)
+                continue
+            if (
+                candidate_is_absolute
+                and "/" in declared
+                and candidate_str.endswith("/" + declared)
+            ):
+                matches.append(repo)
+                continue
+            if "/" not in candidate_str and candidate_str == repo.name:
+                matches.append(repo)
+
+        if not matches:
+            return None
+        if len(matches) > 1:
+            names = ", ".join(sorted({m.name for m in matches}))
+            raise WorkspaceDescriptorError(
+                f"path {candidate_str!r} matches multiple repository entries: {names}"
+            )
+        return matches[0]
 
     def is_prohibited(
         self,
@@ -183,6 +214,10 @@ def action_is_prohibited(
 def _read_payload(path: Path) -> dict[str, Any]:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
+    except UnicodeDecodeError as exc:
+        raise WorkspaceDescriptorError(
+            f"workspace descriptor is not valid UTF-8: {path}: {exc}"
+        ) from exc
     except json.JSONDecodeError as exc:
         raise WorkspaceDescriptorError(
             f"workspace descriptor is not valid JSON: {path}: {exc}"
@@ -222,7 +257,10 @@ def _parse_descriptor(payload: Mapping[str, Any], *, source_path: Path) -> Works
     else:
         if not isinstance(raw_repos, list):
             raise WorkspaceDescriptorError("repositories must be a JSON array")
-        repositories = tuple(_parse_repository(entry, index) for index, entry in enumerate(raw_repos))
+        repositories = tuple(
+            _parse_repository(entry, index) for index, entry in enumerate(raw_repos)
+        )
+        _reject_duplicate_identity(repositories)
 
     return WorkspaceDescriptor(
         workspace_root_is_plain_folder=True,
@@ -230,6 +268,25 @@ def _parse_descriptor(payload: Mapping[str, Any], *, source_path: Path) -> Works
         repositories=repositories,
         source_path=source_path,
     )
+
+
+def _reject_duplicate_identity(repositories: Sequence[RepositoryDescriptor]) -> None:
+    seen_paths: dict[str, str] = {}
+    seen_names: dict[str, str] = {}
+    for repo in repositories:
+        path_key = repo.path.rstrip("/")
+        if path_key in seen_paths:
+            raise WorkspaceDescriptorError(
+                f"duplicate repository path {path_key!r} "
+                f"(entries {seen_paths[path_key]!r} and {repo.name!r})"
+            )
+        seen_paths[path_key] = repo.name
+        if repo.name in seen_names:
+            raise WorkspaceDescriptorError(
+                f"duplicate repository name {repo.name!r} "
+                f"(paths {seen_names[repo.name]!r} and {path_key!r})"
+            )
+        seen_names[repo.name] = path_key
 
 
 def _parse_repository(entry: object, index: int) -> RepositoryDescriptor:
@@ -251,8 +308,23 @@ def _parse_repository(entry: object, index: int) -> RepositoryDescriptor:
         raise WorkspaceDescriptorError(
             f"repositories[{index}].role must be one of {sorted(ALLOWED_ROLES)}, got {role!r}"
         )
-    capabilities = _string_list(entry.get("capabilities"), f"repositories[{index}].capabilities")
-    prohibited = _string_list(entry.get("prohibited"), f"repositories[{index}].prohibited")
+    # capabilities may be omitted (defaults to empty). prohibited must be present
+    # as an array — missing/null is invalid so product defaults cannot vanish by
+    # accident; an explicit [] is the owner-confirmed "no prohibitions" choice.
+    if "capabilities" not in entry:
+        capabilities: tuple[str, ...] = ()
+    else:
+        capabilities = _string_list(
+            entry.get("capabilities"), f"repositories[{index}].capabilities"
+        )
+    if "prohibited" not in entry or entry.get("prohibited") is None:
+        raise WorkspaceDescriptorError(
+            f"repositories[{index}].prohibited must be present "
+            "(use an empty array only when the owner confirmed no prohibitions)"
+        )
+    prohibited = _string_list(
+        entry.get("prohibited"), f"repositories[{index}].prohibited"
+    )
     return RepositoryDescriptor(
         name=name,
         path=path,

@@ -130,8 +130,10 @@ def test_product_direct_main_commit_is_prohibited(tmp_path: Path) -> None:
     assert action_is_prohibited(
         "widget", "direct-main-commit", config_path=config, environ={}
     )
+    # Bare name and declared relative path both resolve; single-segment absolute
+    # paths do not suffix-match (would be ambiguous across parents).
     assert action_is_prohibited(
-        "/tmp/workspace/widget", "force-push", config_path=config, environ={}
+        "widget", "force-push", config_path=config, environ={}
     )
     assert not action_is_prohibited(
         "widget-ops", "direct-main-commit", config_path=config, environ={}
@@ -139,6 +141,113 @@ def test_product_direct_main_commit_is_prohibited(tmp_path: Path) -> None:
     assert action_is_prohibited(
         "widget-ops", "force-push", config_path=config, environ={}
     )
+    # Same basename under another relative parent is unknown → fail closed.
+    assert action_is_prohibited(
+        "other/widget",
+        "direct-main-commit",
+        config_path=config,
+        environ={},
+        default_when_unknown_repo=True,
+    )
+    assert not action_is_prohibited(
+        "other/widget",
+        "direct-main-commit",
+        config_path=config,
+        environ={},
+        default_when_unknown_repo=False,
+    )
+
+
+def test_multi_segment_path_suffix_match(tmp_path: Path) -> None:
+    config = _write(
+        tmp_path / "workspace-descriptor.json",
+        {
+            "workspace_root_is_plain_folder": True,
+            "master_seat": "folder-workspace-of-workspace-root",
+            "repositories": [
+                {
+                    "name": "app",
+                    "path": "services/app",
+                    "remote": "",
+                    "role": "product",
+                    "capabilities": ["pr"],
+                    "prohibited": ["direct-main-commit", "force-push"],
+                }
+            ],
+        },
+    )
+    assert action_is_prohibited(
+        "/workspace/root/services/app",
+        "direct-main-commit",
+        config_path=config,
+        environ={},
+    )
+    # Different parent with same basename must not match.
+    assert not action_is_prohibited(
+        "/workspace/root/other/app",
+        "direct-main-commit",
+        config_path=config,
+        environ={},
+        default_when_unknown_repo=False,
+    )
+
+
+def test_missing_prohibited_field_is_invalid(tmp_path: Path) -> None:
+    config = _write(
+        tmp_path / "no-prohibited.json",
+        {
+            "workspace_root_is_plain_folder": True,
+            "master_seat": "x",
+            "repositories": [
+                {
+                    "name": "app",
+                    "path": "app",
+                    "remote": "",
+                    "role": "product",
+                    "capabilities": ["pr"],
+                }
+            ],
+        },
+    )
+    with pytest.raises(WorkspaceDescriptorError, match="prohibited"):
+        load_workspace_descriptor(config, environ={})
+
+
+def test_duplicate_path_is_invalid(tmp_path: Path) -> None:
+    config = _write(
+        tmp_path / "dup.json",
+        {
+            "workspace_root_is_plain_folder": True,
+            "master_seat": "x",
+            "repositories": [
+                {
+                    "name": "a",
+                    "path": "shared",
+                    "remote": "",
+                    "role": "product",
+                    "capabilities": [],
+                    "prohibited": ["direct-main-commit"],
+                },
+                {
+                    "name": "b",
+                    "path": "shared",
+                    "remote": "",
+                    "role": "product",
+                    "capabilities": [],
+                    "prohibited": [],
+                },
+            ],
+        },
+    )
+    with pytest.raises(WorkspaceDescriptorError, match="duplicate repository path"):
+        load_workspace_descriptor(config, environ={})
+
+
+def test_invalid_utf8_is_undecidable(tmp_path: Path) -> None:
+    path = tmp_path / "bad-utf8.json"
+    path.write_bytes(b'{"workspace_root_is_plain_folder": true, "\xff": 1}')
+    with pytest.raises(WorkspaceDescriptorError, match="UTF-8"):
+        load_workspace_descriptor(path, environ={})
 
 
 def test_rejects_non_plain_folder_flag(tmp_path: Path) -> None:

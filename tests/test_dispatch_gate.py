@@ -231,55 +231,54 @@ def test_missing_tier_policy_fails_closed(tmp_path: Path) -> None:
     assert _ledger_entries(tmp_path)[-1]["reason"] == "TIER_POLICY_UNAVAILABLE"
 
 
-def test_default_tier_policy_env_overrides_paths(monkeypatch, tmp_path: Path) -> None:
+def test_default_tier_policy_env_overrides_paths(tmp_path: Path) -> None:
     override = tmp_path / "override-policy.json"
     override.write_text("{}", encoding="utf-8")
-    monkeypatch.setenv("DISPATCH_TIER_POLICY", str(override))
-    assert dispatch_gate._default_tier_policy_path() == override
-
-
-def test_default_tier_policy_uses_template_when_instance_absent(
-    monkeypatch,
-) -> None:
-    """Without DISPATCH_TIER_POLICY and without instance file → template path."""
-    monkeypatch.delenv("DISPATCH_TIER_POLICY", raising=False)
-    repo_root = Path(dispatch_gate.__file__).resolve().parents[3]
-    instance = repo_root / dispatch_gate.INSTANCE_TIER_POLICY_RELATIVE_PATH
-    template = repo_root / dispatch_gate.DEFAULT_TIER_POLICY_RELATIVE_PATH
-    # Instance file is gitignored and must not be present in a clean checkout.
-    assert not instance.is_file(), (
-        f"unexpected instance tier policy at {instance}; remove it for tests"
+    assert (
+        dispatch_gate._default_tier_policy_path(
+            repo_root=tmp_path,
+            environ={"DISPATCH_TIER_POLICY": str(override)},
+        )
+        == override
     )
-    assert dispatch_gate._default_tier_policy_path() == template
 
 
-def test_default_tier_policy_prefers_instance_when_present(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_default_tier_policy_uses_template_when_instance_absent(tmp_path: Path) -> None:
+    """Without DISPATCH_TIER_POLICY and without instance file → template path."""
+    # Isolate under tmp_path so an onboarded checkout cannot poison the assertion.
+    (tmp_path / "master-ops").mkdir()
+    template = tmp_path / dispatch_gate.DEFAULT_TIER_POLICY_RELATIVE_PATH
+    template.write_text("{}", encoding="utf-8")
+    (tmp_path / "config").mkdir()
+    assert (
+        dispatch_gate._default_tier_policy_path(repo_root=tmp_path, environ={})
+        == template
+    )
+
+
+def test_default_tier_policy_prefers_instance_when_present(tmp_path: Path) -> None:
     """When config/model-tier-policy.json exists, it is preferred over template."""
-    monkeypatch.delenv("DISPATCH_TIER_POLICY", raising=False)
-    repo_root = Path(dispatch_gate.__file__).resolve().parents[3]
-    instance = repo_root / dispatch_gate.INSTANCE_TIER_POLICY_RELATIVE_PATH
-    instance.parent.mkdir(parents=True, exist_ok=True)
-    created = False
-    try:
-        if not instance.is_file():
-            instance.write_text(
-                json.dumps(
-                    {
-                        "version": 2,
-                        "tiers": {"top": [], "efficient": []},
-                        "fanout_caps": {"top": 1, "unknown": 1},
-                        "window_seconds": 86400,
-                    }
-                ),
-                encoding="utf-8",
-            )
-            created = True
-        assert dispatch_gate._default_tier_policy_path() == instance
-    finally:
-        if created and instance.is_file():
-            instance.unlink()
+    (tmp_path / "master-ops").mkdir()
+    (tmp_path / dispatch_gate.DEFAULT_TIER_POLICY_RELATIVE_PATH).write_text(
+        "{}", encoding="utf-8"
+    )
+    (tmp_path / "config").mkdir()
+    instance = tmp_path / dispatch_gate.INSTANCE_TIER_POLICY_RELATIVE_PATH
+    instance.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "tiers": {"top": [], "efficient": []},
+                "fanout_caps": {"top": 1, "unknown": 1},
+                "window_seconds": 86400,
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert (
+        dispatch_gate._default_tier_policy_path(repo_root=tmp_path, environ={})
+        == instance
+    )
 
 
 def test_instance_tier_policy_example_is_loadable_version_2() -> None:

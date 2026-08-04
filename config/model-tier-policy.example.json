@@ -6,10 +6,10 @@
     "tiers": "Map of tier name to model id list. Put only measured (or owner-named) model ids here. Unlisted models fall into the reserved unknown tier and use fanout_caps.unknown.",
     "fanout_caps": "Per-tier cap on agents dispatched inside window_seconds. unknown must always be present so unlisted models stay conservatively capped.",
     "window_seconds": "Rolling window for the fan-out cap (seconds). Default 86400 (one day).",
-    "consent": "Record whether the owner allowed the inventory probe: yes, no, or manual-only. Does not affect gate parsing."
+    "consent": "Record whether the owner allowed the inventory probe: yes, no, or manual-only. Template default is no until onboarding writes the owner answer. Does not affect gate parsing."
   },
   "version": 2,
-  "consent": "yes",
+  "consent": "no",
   "agents": [
     {
       "runtime": "claude",

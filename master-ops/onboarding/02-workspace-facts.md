@@ -95,7 +95,7 @@ $ test -f config/workspace-descriptor.json || cp config/workspace-descriptor.exa
 2. For each confirmed member repository under the workspace root, measure and write:
    - `name` (folder basename unless the owner chooses another short id)
    - `path` (workspace-root-relative)
-   - `remote` from `git -C <path> remote get-url origin` when present; empty string when none
+   - `remote` from `git -C <path> remote get-url origin 2>/dev/null || echo ""` (empty string when no origin remote)
    - `role`: `ops` for `{{OPS_REPO}}` once known, otherwise `product` for ordinary members (ask when a child is clearly governance-only)
    - `capabilities`: default `["pr", "dispatch-target"]` unless the owner removes one
    - `prohibited`: default `["direct-main-commit", "force-push"]` for `product`; default `["force-push"]` for `ops` (the owner may add or remove after seeing the list)

@@ -37,4 +37,4 @@ Processing a completion report ends at verification, merge decision, **and reap 
 - Reaping closes the worker terminal and removes clean, merged worktrees
 - Ambiguous worktrees (dirty, unmerged, inaccessible) are left with a reason logged
 - Reap is never automatic; only explicit operator or master instruction reaps
-- See [`../../runbooks/worker-reap.md`](../../runbooks/worker-reap.md) for usage and guards
+- See [`../../../docs/runbooks/worker-reap.md`](../../../docs/runbooks/worker-reap.md) for usage and guards

@@ -131,17 +131,22 @@ Output:
 }
 ```
 
-The reap record is appended to the ledger:
+The reap record is appended to the ledger (fields alphabetical per `sort_keys=True`, includes both `ts` and `timestamp`):
 ```jsonl
-{"event":"reap","ts":1722787200.0,"task_id":"task_abc123","dispatch_id":"dispatch_xyz","terminal_id":"term_123","worktree_path":"/path/to/worktree","actions_taken":"terminal_closed:term_123;worktree_left:/path/to/worktree"}
+{"actions_taken":"terminal_closed:term_123;worktree_left:/path/to/worktree","dispatch_id":"dispatch_xyz","event":"reap","task_id":"task_abc123","terminal_id":"term_123","timestamp":1722787200.0,"ts":1722787200.0,"worktree_path":"/path/to/worktree"}
 ```
 
 ### Detect Unreaped Settled Leases
 
-Use `dispatch-gate report` or a dedicated observability command to detect debris:
+Use the `ReapObservability` class to detect debris:
 
-```bash
-scripts/dispatch-gate report --ledger master-ops/ledger/dispatch-ledger.jsonl --unreaped-settled
+```python
+from master_runtime.core.work_ledger import ReapObservability
+
+obs = ReapObservability("master-ops/ledger/dispatch-ledger.jsonl")
+unreaped = obs.unreaped_settled_leases()
+for dispatch_id, state in unreaped.items():
+    print(f"{dispatch_id}: {state.status} (settled, not yet reaped)")
 ```
 
 Lists all settled dispatches with no reap record.
@@ -172,7 +177,7 @@ from master_runtime.core.work_ledger import ReapObservability
 obs = ReapObservability("master-ops/ledger/dispatch-ledger.jsonl")
 unreaped = obs.unreaped_settled_leases()
 for dispatch_id, state in unreaped.items():
-    print(f"{dispatch_id}: {state.status} (unreap since {state.reaped_at})")
+    print(f"{dispatch_id}: {state.status} (settled, not yet reaped)")
 ```
 
 This is the same pattern as detecting never-fired hooks: absence made visible.

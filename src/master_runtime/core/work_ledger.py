@@ -320,6 +320,9 @@ class ReapObservability:
                 except (json.JSONDecodeError, ValueError):
                     continue
 
+                if not isinstance(event, dict):
+                    continue
+
                 event_type = event.get("event")
                 dispatch_id = event.get("dispatch_id")
                 if not dispatch_id:
@@ -345,7 +348,7 @@ class ReapObservability:
                         dispatch_states[dispatch_id] = replace(
                             current,
                             is_reaped=True,
-                            reaped_at=float(event.get("ts", 0.0)),
+                            reaped_at=_float_or_zero(event.get("ts")),
                         )
 
         return {

@@ -138,6 +138,40 @@ class WorkerReaperTests(unittest.TestCase):
 
             self.assertIn("worktree_left:", record.actions_taken)
 
+    def test_reap_removes_clean_merged_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = tmp
+            removed_paths = []
+
+            def fake_runner(cmd):
+                if "dispatch-show" in cmd:
+                    dispatch = {
+                        "dispatch_id": "d1",
+                        "task_id": "t1",
+                        "terminal_id": "term1",
+                        "status": "COMPLETED",
+                        "worktree_path": tmp_path,
+                    }
+                    return 0, json.dumps(dispatch), ""
+                if "git" in cmd and "status" in cmd:
+                    return 0, "", ""
+                if "git" in cmd and "branch" in cmd and "--show-current" in cmd:
+                    return 0, "main\n", ""
+                if "git" in cmd and "branch" in cmd and "--merged" in cmd:
+                    return 0, "* main\n  feature-x\n", ""
+                if "git" in cmd and "worktree" in cmd and "remove" in cmd:
+                    removed_paths.append(cmd[-1])
+                    return 0, "", ""
+                if "terminal" in cmd and "close" in cmd:
+                    return 0, "", ""
+                return 0, "", ""
+
+            reaper = WorkerReaper(orca_runner=fake_runner)
+            record = reaper.reap(task_id="t1", execute=True)
+
+            self.assertIn(tmp_path, removed_paths)
+            self.assertIn("worktree_removed:", record.actions_taken)
+
     def test_reap_appends_to_ledger(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ledger_path = Path(tmp) / "reap.jsonl"

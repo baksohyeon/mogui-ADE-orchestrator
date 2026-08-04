@@ -56,13 +56,14 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="worker-reap",
         description="Close settled worker terminals and clean up worktrees",
     )
-    parser.add_argument(
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument(
         "--task-id",
-        help="Task ID to reap (or use --dispatch-id)",
+        help="Task ID to reap",
     )
-    parser.add_argument(
+    group.add_argument(
         "--dispatch-id",
-        help="Dispatch ID to reap (or use --task-id)",
+        help="Dispatch ID to reap",
     )
     parser.add_argument(
         "--ledger",

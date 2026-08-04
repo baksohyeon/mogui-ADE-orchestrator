@@ -109,7 +109,6 @@ class WorkerReaper:
 
         # Plan reap actions
         actions = []
-        warnings = []
 
         # Close terminal
         if dispatch_state.terminal_id:
@@ -129,11 +128,9 @@ class WorkerReaper:
                         self._remove_worktree(worktree_path)
                     actions.append(f"worktree_removed:{worktree_path}")
                 else:
-                    actions.append(f"worktree_left:{worktree_path}")
-                    warnings.append(reason)
+                    actions.append(f"worktree_left:{worktree_path}:{reason}")
             except Exception as e:
-                warnings.append(f"Could not check worktree: {e}")
-                actions.append(f"worktree_left:{worktree_path}")
+                actions.append(f"worktree_left:{worktree_path}:Check failed: {e}")
 
         # Build record
         record = ReapRecord(
@@ -190,7 +187,7 @@ class WorkerReaper:
             (is_clean, is_merged, reason_if_not)
         """
         if not worktree_path.exists():
-            return True, True, ""
+            return False, False, f"Worktree path does not exist"
 
         # Check git status
         code, stdout, stderr = self.orca_runner(
@@ -217,7 +214,11 @@ class WorkerReaper:
             return False, False, f"Could not get current branch: {stderr}"
 
         current_branch = branch_output.strip()
-        merged_branches = [line.strip() for line in stdout.strip().split("\n") if line.strip()]
+        merged_branches = [
+            line.strip().lstrip("* ")
+            for line in stdout.strip().split("\n")
+            if line.strip()
+        ]
 
         if current_branch not in merged_branches:
             return False, False, f"Current branch {current_branch} is not merged to origin/main"

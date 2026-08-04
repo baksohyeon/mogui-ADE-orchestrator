@@ -22,7 +22,7 @@ $ { [ -e "{{WORKSPACE_ROOT}}/.beads" ] || [ -L "{{WORKSPACE_ROOT}}/.beads" ]; } 
 $ cd "{{WORKSPACE_ROOT}}" && bd where
 ```
 
-Immediately after `bd init`, compare `CLAUDE.md` and `AGENTS.md` before continuing. **Announce-and-proceed — do not open a choice for the byte-only case.**
+Immediately after `bd init`, compare the **ops repository agent instruction pair** — `{{OPS_REPO}}/CLAUDE.md` and `{{OPS_REPO}}/AGENTS.md` only — before continuing. Do not compare either file to `workspace-card/CLAUDE.md` or to the deployed workspace-root session card; those are a different document. **Announce-and-proceed — do not open a choice for the byte-only case.**
 
 - If they differ only at the byte level (whitespace, blank lines, or block order) while the semantic content is the same: re-unify automatically, write the same common block to both files, and tell the owner in ELI5 once, for example: "Two instruction files for different agent hosts had drifted in formatting only; I made them match again so both hosts see the same rules. No decision needed from you." Then continue.
 - If any substantive line or block exists in only one file: stop and ask whether to accept host-specific divergence before proceeding. That is the only branch that needs a question.

@@ -41,6 +41,23 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+Workspace session card onboarding (2026-08-05 owner decision; measured gap:
+no step created the workspace-root session card):
+
+- Skeleton: `master-ops/workspace-card/CLAUDE.md` (canonical session card with
+  `{{...}}` placeholders) and `README.md` (canonical vs root deploy; link base
+  is the workspace root, a deliberate exception to the working-directory
+  clause). Not the ops-repo agent instruction pair and not step 10's owner
+  operating card.
+- Step 05 fills the card with the rest of the ops repository, asserts no
+  placeholders remain, then deploys
+  `cp "{{OPS_REPO}}/workspace-card/CLAUDE.md" "{{WORKSPACE_ROOT}}/CLAUDE.md"`.
+  Placement is before `09-spawn.md` so the master has a card at boot.
+- Reverify check 7: root card matches ops canonical; report drift only, never
+  silent redeploy.
+- Name disambiguation in steps 03, 05, 06, and reverify so nobody `cmp`s the
+  wrong `CLAUDE.md` pair.
+
 Agent-inventory consent and default-on harness wiring (2026-08-04 owner
 decisions, two onboarding gaps):
 

@@ -42,12 +42,20 @@ MEASURED examples from 2026-08-02:
 
 - Grok: `--always-approve`.
 - Claude Code: `--dangerously-skip-permissions`.
-- Cursor Agent: `--force` (also exposed as `--yolo`) to force-allow commands unless explicitly denied, plus `--trust` to trust the current workspace without prompting.
+- Cursor Agent: `--force` (also exposed as `--yolo`) to force-allow commands unless explicitly denied, plus `--trust` to trust the current workspace without prompting. Source: `cursor-agent --help`. Re-measured 2026-08-04: `-f, --force  Force allow commands unless explicitly denied`; `--trust  Trust the current workspace without prompting`.
 - Codex: run `scripts/codex-worker-pretrust <worktree-path>` and retain the account-wide hooks trust posture; Codex uses this pre-trust path instead of a launch approval flag.
 
 MEASURED addition from 2026-08-03:
 
 - Cursor Agent pre-trust: run `scripts/cursor-worker-pretrust <worktree-path>` before attach and require exit status 0 with a summary that reports `added`, `updated`, or `already trusted` (not `skipped`); this uses Cursor Agent's measured `.workspace-trusted` storage instead of relying on `--trust` at worker launch. Follow-up measurement on `cursor-agent 2026.07.23-e383d2b` with a fresh workspace plus project-local `.cursor/hooks.json` showed no second startup gate: launch passed without extra prompts, hooks executed, and no `hooks.state`/`trusted_hash` persistence appeared in Cursor state.
+
+MEASURED addition from 2026-08-04:
+
+- Agy: `--dangerously-skip-permissions` (Auto-approve all tool permission requests without prompting). Source: `agy --help`.
+
+### Successor spawn versus worker pre-trust
+
+This section governs **worker** launch into isolated worktrees. Successor TUI spawn (`master-succeed spawn` / `_spawn_startup_command`) is a different entry point: it starts the next master seat in a host terminal, not a worktree worker under dispatch. For that path the runtime attaches the measured launch approval flags above (cursor-agent: `--force --trust`; agy: `--dangerously-skip-permissions`) so the seat is not prompt-blocked on its first tool call. That does not waive the worker pre-trust workflow. Worker attach into an isolated worktree still requires `scripts/cursor-worker-pretrust` (or the matching pre-trust path for the agent) as written above. Codex successors keep no launch flag and still rely on the account-wide pre-trust path because Codex has none.
 
 Three-vote review is the default for non-trivial merges or direct-push changes. Split review lenses:
 

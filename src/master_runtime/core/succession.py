@@ -1015,12 +1015,22 @@ def _spawn_startup_command(
         )
     if agent_key in ("cursor", "cursor-agent"):
         # The executable is cursor-agent; plain `cursor` is the updater.
+        # Flags measured from `cursor-agent --help` (2026-08-04):
+        #   -f, --force  Force allow commands unless explicitly denied
+        #   --trust      Trust the current workspace without prompting
+        # Successor TUI spawn is not worker attach: charter §4 still requires
+        # scripts/cursor-worker-pretrust before dispatching a Cursor worker into
+        # an isolated worktree. These launch flags keep the master seat from
+        # stalling on the first tool call; they do not replace that workflow.
         return "cd {0} && exec cursor-agent --model {1} --force --trust {2}".format(
             quoted_root,
             quoted_model,
             quoted_kickoff,
         )
     if agent_key in ("agy",):
+        # Flag measured from `agy --help` (2026-08-04):
+        #   --dangerously-skip-permissions  Auto-approve all tool permission
+        #   requests without prompting
         return "cd {0} && exec agy --model {1} --dangerously-skip-permissions {2}".format(
             quoted_root,
             quoted_model,

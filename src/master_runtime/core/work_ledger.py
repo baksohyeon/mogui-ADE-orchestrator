@@ -279,3 +279,80 @@ def _float_or_zero(value: object) -> float:
     if isinstance(value, (int, float)):
         return float(value)
     return 0.0
+
+
+@dataclass(frozen=True)
+class DispatchReapState:
+    """State of one dispatch for reap observability."""
+
+    dispatch_id: str
+    task_id: str
+    status: str
+    reaped_at: Optional[float] = None
+    is_reaped: bool = False
+
+    def is_unreaped_settled(self) -> bool:
+        """True if dispatch is settled but has no reap record."""
+        settled = self.status in ("COMPLETED", "ACCEPTED", "FAILED", "ABANDONED")
+        return settled and not self.is_reaped
+
+
+class ReapObservability:
+    """Detect unreaped settled leases and track reap status."""
+
+    def __init__(self, ledger_path: Union[str, Path]) -> None:
+        self.ledger_path = Path(ledger_path)
+
+    def unreaped_settled_leases(self) -> Mapping[str, DispatchReapState]:
+        """Find all settled dispatches with no reap record."""
+        dispatch_states: Dict[str, DispatchReapState] = {}
+
+        if not self.ledger_path.exists():
+            return dispatch_states
+
+        with self.ledger_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+
+                if not isinstance(event, dict):
+                    continue
+
+                event_type = event.get("event")
+                dispatch_id = event.get("dispatch_id")
+                if not dispatch_id:
+                    continue
+
+                if event_type == "dispatch_submitted":
+                    dispatch_states[dispatch_id] = DispatchReapState(
+                        dispatch_id=dispatch_id,
+                        task_id=str(event.get("task_id", "")),
+                        status=str(event.get("status", "UNKNOWN")),
+                        is_reaped=False,
+                    )
+                elif event_type == "dispatch_completed":
+                    current = dispatch_states.get(dispatch_id)
+                    if current:
+                        dispatch_states[dispatch_id] = replace(
+                            current,
+                            status=str(event.get("status", "COMPLETED")),
+                        )
+                elif event_type == "reap":
+                    if dispatch_id in dispatch_states:
+                        current = dispatch_states[dispatch_id]
+                        dispatch_states[dispatch_id] = replace(
+                            current,
+                            is_reaped=True,
+                            reaped_at=_float_or_zero(event.get("ts")),
+                        )
+
+        return {
+            did: state
+            for did, state in dispatch_states.items()
+            if state.is_unreaped_settled()
+        }

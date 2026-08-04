@@ -41,6 +41,18 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+Installer retirement by newborn master (2026-08-04 onboarding 09/10):
+
+- Step 8 now requires the founding kickoff to hand the newborn master an
+  installer retirement switch: installer terminal handle, pty id when exposed,
+  session id when exposed, exact `orca terminal close` command form, and a warm
+  resume note that says a later installer resume should treat itself as retired
+  unless the master is proven absent.
+- Step 10 no longer asks the owner to close the installer terminal. After the
+  operating card is printed and verification passes, the newborn master closes
+  the installer with that kill switch; unavailable handles or close failures are
+  reported plainly and do not trigger guessed terminal closure.
+
 Instance-validated asset promotion (2026-08-04 staging to template):
 
 - New `master-ops/docs/runbooks/contract-conventions.md` carries the authoring

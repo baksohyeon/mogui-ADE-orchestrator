@@ -16,6 +16,8 @@ Where we are: everything the master needs is in place. What we decide next: whet
 
 Reload the durable placement result from the seat step and confirm the selector still resolves on the host (`ORCA terminal list --worktree <selector> --json`). That listing is also the empty-seat gate: it must show **zero terminals in the seat**. Any existing terminal there — a leftover seat-check terminal, or a master from an earlier interrupted run of this step — is a hard stop: report it to the owner and do not spawn, because exactly one master may exist and a re-entered session cannot assume its earlier spawn failed. Only an empty seat proceeds; the spawn itself verifies placement against this selector again. Write a kickoff file containing Generation 1, this installer as founding origin, the callsign from the user-rules step, the boot sequence (rehydrate ops docs, declare Role State, measure model and placement), the initial queue, and the requirement to report the orchestration Task complete.
 
+The kickoff file also hands the newborn master the installer retirement switch: this installer's terminal handle, pty id when Orca exposes it, session id when Orca exposes it, and the exact close command form `ORCA terminal close --terminal <installer handle> --json`. Include a warm resume note before that kill switch, stating that the installation is complete once Step 10 verification passes, the operating card has been printed, the master terminal must remain running, and any later installer resume should treat itself as retired unless the master is proven absent. If the installer handle, pty id, or session id cannot be measured, write `unavailable` for that field in the kickoff and do not invent it.
+
 Before launching any worker, follow `docs/MASTER-OPERATIONS.md` §3: MEASURE the installed agent CLI's non-interactive approval flags from `--help` and never guess them.
 
 Before attaching a Codex worker, run `{{RUNTIME_ROOT}}/scripts/codex-worker-pretrust <worktree-path>` as the pre-trust step.
@@ -63,6 +65,7 @@ Require placement verification `MATCH` or `MATCH_REISSUED`; the latter must incl
 - exactly one new master process/session exists
 - placement is `MATCH` or valid `MATCH_REISSUED`
 - kickoff content received by the master matches the kickoff file byte-for-byte
+- the kickoff gives the master the installer kill switch and warm resume note
 - the coordinator processes and acknowledges deliveries, answers questions through orchestration, and waits until that Task's `worker_done`
 
 ### If fail
@@ -75,7 +78,7 @@ Require placement verification `MATCH` or `MATCH_REISSUED`; the latter must incl
 
 **Why/caution:** Model identity is measured, unavailable, or unsupported, never guessed.
 
-The master asks for the initial role or approval to start in Maintenance, plus permission for local read-only model and seat checks. It updates `docs/runbooks/role-state.md` for Generation 1, declares Role State in conversation (including the callsign), measures configured and actual model when exposed, captures placement evidence, appends Generation 1 to `docs/lineage/MASTER-LINEAGE.md`, then sends `worker_done` exactly once for the active Dispatch.
+The master asks for the initial role or approval to start in Maintenance, plus permission for local read-only model and seat checks. It updates `docs/runbooks/role-state.md` for Generation 1, declares Role State in conversation (including the callsign), measures configured and actual model when exposed, captures placement evidence, appends Generation 1 to `docs/lineage/MASTER-LINEAGE.md`, keeps the installer kill switch and warm resume note for Step 10, then sends `worker_done` exactly once for the active Dispatch.
 
 ### Verify (Step 9)
 

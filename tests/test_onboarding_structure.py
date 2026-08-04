@@ -113,6 +113,22 @@ def test_only_allowed_placeholders():
         assert not unknown, f"{path.name} uses placeholders outside the allowlist: {sorted(unknown)}"
 
 
+def test_founder_spawn_hands_installer_retirement_switch_to_master():
+    text = (STEP_DIR / "09-spawn.md").read_text(encoding="utf-8")
+    assert "installer retirement switch" in text
+    assert "warm resume note" in text
+    assert "ORCA terminal close --terminal <installer handle> --json" in text
+    assert "do not invent it" in text
+
+
+def test_final_onboarding_retirement_is_master_closed_not_owner_closed():
+    text = (STEP_DIR / "10-card-and-retire.md").read_text(encoding="utf-8")
+    assert "the master closes this installer terminal" in text
+    assert "newborn master was given the warm resume note and installer kill switch" in text
+    assert "newborn master closed the installer terminal" in text
+    assert "please close this installer terminal" not in text
+
+
 def test_entry_files_stay_byte_identical():
     claude = (REPO_ROOT / "CLAUDE.md").read_bytes()
     agents = (REPO_ROOT / "AGENTS.md").read_bytes()

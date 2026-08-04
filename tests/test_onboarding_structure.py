@@ -151,7 +151,7 @@ def test_owner_language_is_kind_modern_not_archaic():
         [router_text, *[path.read_text(encoding="utf-8") for path in STEP_DIR.glob("*.md")]]
     )
     sentence_cap = re.compile(
-        r"\b(?:\d+\s*[-–]\s*\d+|four\s+or\s+five)\s+sentences\b",
+        r"\b(?:\d+\s*[-–]\s*\d+|four\s+or\s+five)\s+sentences?\b",
         re.IGNORECASE,
     )
     assert sentence_cap.search(all_onboarding_text) is None
@@ -161,8 +161,7 @@ def _owner_language_sections() -> list[str]:
     sections = [_section_until_next_heading(ROUTER.read_text(encoding="utf-8"), "## Standing rules — owner-facing language")]
     for path in STEP_DIR.glob("*.md"):
         text = path.read_text(encoding="utf-8")
-        marker = re.search(r"^#{2,3}\s+Owner script\b.*$", text, re.MULTILINE)
-        if marker:
+        for marker in re.finditer(r"^#{2,3}\s+Owner script\b.*$", text, re.MULTILINE):
             sections.append(_section_until_next_heading(text[marker.start() :], marker.group(0)))
     return sections
 

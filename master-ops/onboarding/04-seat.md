@@ -2,7 +2,7 @@
 
 Load rule: read this file only when Step 3.5 begins. Router: [`../ONBOARDING.md`](../ONBOARDING.md). Next file after Verify passes: `05-placeholders.md`.
 
-**Position and action:** Step 3.5 begins after Step 3: register `{{WORKSPACE_ROOT}}` and the already-Git `{{OPS_REPO}}` with Orca, then seat the master terminal at the workspace level: the folder workspace of `{{WORKSPACE_ROOT}}` when the root is a folder containing repositories, or the repository's primary worktree when the workspace is a single repository.
+**Position and action:** Step 3.5 begins after Step 3: register `{{WORKSPACE_ROOT}}` and the already-Git `{{OPS_REPO}}` with Orca, then seat the master terminal at the workspace level: the folder workspace of `{{WORKSPACE_ROOT}}`. In a single-repository workspace, `{{WORKSPACE_ROOT}}` is the selected parent folder for that repository, not the repository's product worktree.
 
 **Why/caution:** The master coordinates every repository, so its seat is the workspace-level workspace, never one repository's worktree inside a multi-repository workspace. A master seated in a repository worktree binds correctly (cwd, hooks, session files) yet hangs under that one repository in the owner's sidebar and occupies a seat shaped for a worker; exactly this shipped as a measured misplacement on 2026-08-03. The folder route is verified from the CLI with the `id:folder:<uuid>` selector form: precheck listing, terminal create, and spawn placement match all pass (measured 2026-08-03). Bare `folder:<uuid>` is accepted by `terminal create` but rejected by `terminal list` (a measured subcommand asymmetry), and `path:` selectors are rejected by the placement comparison, so the durable record must use the `id:` prefixed form, which every consumer accepts. [docs/public/orca-concepts.md](../../docs/public/orca-concepts.md) holds the object model.
 
@@ -11,11 +11,11 @@ Load rule: read this file only when Step 3.5 begins. Router: [`../ONBOARDING.md`
 **Before any UI action, explain the whole flow to the owner in plain language. Do not start mid-step.** The plain framing is: before the Master is raised, the Herald must find the correct chair. Say, in substance:
 
 1. We register the ops repository with Orca (so workers can get worktrees from it later).
-2. If the workspace contains multiple repositories, add `{{WORKSPACE_ROOT}}` as an Orca project if needed and open its folder workspace. If it is a single repository, open that repository's primary worktree.
+2. Add `{{WORKSPACE_ROOT}}` as an Orca project if needed and open that folder workspace. For a single-repository workspace, this still means the selected parent folder for that repository, not the repository's product worktree.
 3. You open one **temporary plain terminal** there — not the Master. We only need its seat id. It will feel like "open, we measure, then close."
 4. You paste or send us that terminal's handle so we can read where it sits.
 5. We record the durable seat id in the ops repository.
-6. **You close that temporary terminal** (or we close it if it is ours). Leaving it open blocks founding spawn because the empty-seat gate will fail. The real Master is created only in the spawn step, and exactly one Master may exist.
+6. **You close that temporary terminal** (or we close it if it is ours). Leaving it open means the Master's chair is still occupied, so the spawn step must stop until the chair is empty. The real Master is created only in the spawn step, and exactly one Master may exist.
 
 Only after the owner has heard that sequence, ask them to perform steps 2–4.
 
@@ -39,7 +39,7 @@ Capture the returned selector only when the terminal metadata proves the workspa
 - the full open-measure-close sequence was explained before any temporary terminal was requested
 - `orca repo add --path "{{OPS_REPO}}" --json` succeeds or confirms the ops repository is already registered (worker worktrees are created from this registration)
 - `terminal show` measured the terminal metadata
-- the selector points at the workspace-level seat, never an individual repository worktree inside a multi-repository workspace
+- the selector points at the workspace-level seat, never an individual repository product worktree
 - the durable placement result exists in `id:` prefixed selector form before founding spawn
 - the temporary seat-check terminal is closed, so the founding spawn will be the only terminal in that seat
 

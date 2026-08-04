@@ -8,7 +8,7 @@ Load rule: read this file only when Step 5 begins. Router: [`../ONBOARDING.md`](
 
 ## Owner script (kind ELI5, adapt to the owner's language)
 
-Where we are: the ops repository is filled in, and now the Herald prepares the Master's task tracker. What we decide next: where day-to-day working state lives. Explain ELI5 that the supported Beads tracker is the Master’s working memory for tasks: it is reloaded at boot and after compaction, while long-term decisions still live in Git. Ask whether to initialize Beads now and which short issue prefix to use; propose a two- or three-character prefix beside the default and explain that IDs are spoken to the owner. Remind that this prefix is not the monitor namespace from the workspace-facts step.
+Where we are: the ops repository is filled in, and now the Herald prepares the Master's task tracker. What we decide next: where day-to-day working state lives. Explain ELI5 that the supported Beads tracker is the Master's working memory for tasks: it is reloaded at boot and after compaction, while long-term decisions still live in Git. Ask whether to initialize Beads now and which short issue prefix to use; if the owner declines and no tracker is already configured, stop and record that deferral instead of advancing. Propose a two- or three-character prefix beside the default and explain that IDs are spoken to the owner. Remind that this prefix is not the monitor namespace from the workspace-facts step.
 
 ## Run
 

@@ -10,9 +10,9 @@ Load rule: read this file only when the router's mode question answered **Reveri
 
 Where we are: this workspace was already set up, so nothing will be installed or changed at runtime. If the operating card is lost, reprinting it is the one allowed write. What happens next: a handful of checks — where the master sits, whether the tracker answers, and whether the governance records are current — and then a short pass/fail report. Provide the workspace root and ops repository path, or the operating card, before the checks when those facts are not already available.
 
-## Checklist (all read-only)
+## Checklist (read-only, except operating-card reprint)
 
-0. **Bootstrap the facts first**: this mode never loads the steps that establish the workspace facts, so ask the owner for the workspace root and ops repository path (or the operating card, which carries both), then read the durable placement result from that ops repository. Do not scan the disk for candidate workspaces, and do not substitute this orchestrator clone's paths. Every `{{...}}` value below means the measured value from that ops repository, not a literal.
+0. **Bootstrap the facts first**: this mode never loads the steps that establish the workspace facts, so ask the owner for the workspace root and ops repository path (or the operating card, which carries both), then read the durable placement result from that ops repository. Do not scan the disk for candidate workspaces, and do not substitute this orchestrator clone's paths. Every `{{...}}` value below means the measured value from that ops repository, not a literal. Keep checks read-only unless check 5 must reprint a lost operating card.
 1. **Seat**: the durable placement selector recorded in the ops repository still resolves on the host (`orca terminal list --worktree <selector> --json`), and exactly one live master terminal sits in it.
 2. **Tracker**: from `{{WORKSPACE_ROOT}}`, `bd where` (or the equivalent) resolves to the ops repository, and no tracker database shadows it from above.
 3. **Role state**: `docs/runbooks/role-state.md` names one active role with Role Lock state, and its Generation matches the last entry in `docs/lineage/MASTER-LINEAGE.md`.

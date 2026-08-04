@@ -128,18 +128,59 @@ scripts/master-succeed verify-successor \
   --json
 ```
 
-Only after successor verification should the predecessor be retired. The retire command resolves exactly one predecessor candidate and refuses ambiguous matches:
+Only after successor verification should the predecessor be retired. Freezing is not retirement. The tool that closes the predecessor is `scripts/master-succeed retire`; call it by that name. It resolves exactly one predecessor candidate, refuses a self-handle match, refuses ambiguous matches, dry-runs unless `--execute`, and refuses when the pane survives the close. On its own the close is an abortive path (TCP's `RST`): it does not talk to the agent inside the pane. Using it without consent is how a predecessor loses unflushed work.
+
+## Retirement Is A Handshake
+
+Retirement is a connection teardown between two live agents, so it is run as one.
+
+| TCP | Master retirement | Actor |
+|---|---|---|
+| `FIN →` | successor tells the predecessor to stop accepting work and flush | successor |
+| `← ACK` | predecessor acknowledges and enters CLOSE_WAIT | predecessor |
+| half-close | predecessor's send side stays open: it may still commit and report | predecessor |
+| `← FIN` | predecessor declares itself flushed with one exact line | predecessor |
+| `ACK →` | successor acknowledges | successor |
+| TIME_WAIT | successor measures a quiet window before closing anything | successor |
+| CLOSED | `master-succeed retire --execute`, then three disappearances | successor |
+| `RST` | abortive close with no consent — owner approval required | successor |
+
+CLOSE_WAIT means these six things (an unstated convention is not a convention):
+
+1. no new dispatches
+2. no peer-mailbox acks the successor is expected to drain (or both drain twice)
+3. send nothing further to orchestration; let CLOSED drop the Run binding by closing the pane. Do not invent a detach verb — the binding is per terminal and keyed to the pane, so the close is the release. Until then the predecessor's silence prevents a double ack.
+4. commit uncommitted state, or report its path and content when it cannot
+5. list the live workers it owns and every unfinished track by name
+6. emit the agreed FIN line and nothing after it
+
+Send the FIN into the predecessor's live prompt when it is idle; a mailbox the idle agent never reads is not delivery. Send-success is not consumption — verify by reading the pane. Choose a FIN marker the predecessor must produce that does not appear verbatim in the successor's own FIN text, or count occurrences and require at least two; quoting the marker inside the instruction string can put it on screen before the predecessor has answered.
+
+TIME_WAIT is not ceremony. A handle can rotate without a restart, and a session can hold two processes at once (one replaying the other's transcript). Closing the instant a FIN lands can close a pane whose incarnation is being recreated — the same hazard TIME_WAIT exists for in TCP. Wait for measured quiet on both the host's last-output timestamp and a pane read, then close.
+
+Carry the predecessor's pid and tty yourself. Host terminal lists often report `process_id: null` for the folder-workspace panes a master seat occupies, so the tool cannot invent those checks from the record. Pass what you measured:
 
 ```bash
 scripts/master-succeed retire \
-  --self-handle successor-handle \
+  --self-handle "$ORCA_TERMINAL_HANDLE" \
   --target-handle predecessor-handle \
-  --json
+  --target-pid <measured-pid> \
+  --target-tty <measured-tty> \
+  --json \
+  --execute
 ```
 
-Add `--execute` only when the operator intends to close the predecessor terminal.
+Each disappearance is reported separately under `disappearances` (`pane`, `process`, `tty`), each valued `measured`, `still_present`, or `skipped:<why>`. `CLOSED` means all three are `measured` and none is `still_present`. When process or tty was skipped, status is `CLOSED_PARTIAL` so a skip cannot read as a full pass. A survivor is a refusal. Without `--execute` the command dry-runs.
 
-Retiring a predecessor ends with three measured disappearances, never with a close command's return value: process, host pane, and tty. A frozen session also stays resumable forever from any terminal its agent CLI runs in, phones and remote machines included, so the boot card adds a revival check: scan running agent processes for lineage session ids (the session id is the portable key; resume flags differ per CLI), recover any unanswered owner instruction from a revived session, then take the revival through the same three disappearances. Four retired masters revived at once by a mobile resume is the measured incident behind the rule (2026-08-03).
+Sweep the predecessor's scratchpad before CLOSED. It dies with the session and is often the only place uncommitted work had to live. Copy the tree somewhere durable that is not a git repository, then diff each file against the trunk branch and record the verdict — including when salvage value is zero.
+
+`RST` is the only path that skips consent, and it needs owner approval. Before reaching for it, classify the pane by reading it: a limit condition, a start-screen gate, and a dead process are three different things with three different answers.
+
+## Retirement Completion And Revival
+
+Retirement ends with three measured disappearances, never with a close command's return value: process (pid gone), host pane (no live handle in the host's terminal list), and tty (device and login chain gone). Close command return values have been wrong in both directions on real hosts; the measurement decides.
+
+A frozen session also stays resumable forever from any terminal its agent CLI runs in, phones and remote machines included, so the boot card adds a revival check: scan running agent processes for lineage session ids (the session id is the portable key; resume flags differ per CLI), recover any unanswered owner instruction from a revived session, then take the revival through the same three disappearances. Four retired masters revived at once by a mobile resume is the measured incident behind the rule (2026-08-03).
 
 Early planned successions changed the procedure. One handoff described the predecessor as gone while the process was still alive, so runtime state is now checked separately from handoff text. Later successions added command-line and session-path matching before retirement, plus explicit cleanup and restart of monitors under the successor's ownership. A clean succession is therefore not only "the successor read the handoff"; it is a measured transfer of role, track, process ownership, and verification responsibility.
 

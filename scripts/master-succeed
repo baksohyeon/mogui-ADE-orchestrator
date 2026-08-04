@@ -76,6 +76,8 @@ def _dispatch(args, runner):
             target_handle=args.target_handle,
             target_pty_id=args.target_pty_id,
             target_session_id=args.target_session_id,
+            target_pid=args.target_pid,
+            target_tty=args.target_tty,
             orca_runner=runner,
             execute=args.execute,
         )
@@ -132,6 +134,22 @@ def _build_parser() -> argparse.ArgumentParser:
     retire.add_argument("--target-handle")
     retire.add_argument("--target-pty-id")
     retire.add_argument("--target-session-id")
+    retire.add_argument(
+        "--target-pid",
+        type=int,
+        help=(
+            "Externally measured predecessor pid. When the terminal record "
+            "reports process_id null (common for folder-workspace panes), pass "
+            "the pid you measured so CLOSED can include process disappearance."
+        ),
+    )
+    retire.add_argument(
+        "--target-tty",
+        help=(
+            "Externally measured predecessor tty (e.g. /dev/ttys147 or ttys147). "
+            "When omitted, the tty check is skipped and cannot count toward CLOSED."
+        ),
+    )
     retire.add_argument("--execute", action="store_true")
 
     spawn = subparsers.add_parser("spawn", parents=[common])

@@ -62,6 +62,16 @@ you build on it.
   `config/instance-runtime.json` (gitignored). Owner decision 2026-08-04:
   onboarding already asked these facts; they needed a durable landing place.
 
+### Changed
+
+- `master-succeed retire` now reports each of the three disappearances
+  (`pane`, `process`, `tty`) as `measured` / `still_present` / `skipped:<why>`.
+  Full `CLOSED` requires all three measured; any skip yields `CLOSED_PARTIAL`
+  so a null `process_id` on a folder-workspace pane can no longer read as a
+  complete retirement. Accepts optional `--target-pid` and `--target-tty` for
+  externally measured targets. Public lifecycle docs name the FIN/ACK
+  handshake and call `master-succeed retire` by name.
+
 ### Fixed
 
 - `dispatch-gate check` no longer denies repeated contract hashes as

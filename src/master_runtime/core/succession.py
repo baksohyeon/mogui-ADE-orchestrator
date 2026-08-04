@@ -7,7 +7,7 @@ import os
 import re
 import shlex
 import subprocess
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Callable, Mapping, Optional, Sequence, Tuple
 
 from master_runtime.core.bootstrap import RoleState
@@ -77,6 +77,17 @@ class SessionInfo:
         return asdict(self)
 
 
+# Per-check disappearance values on RetirementReport.disappearances.
+# CLOSED requires pane=measured and no still_present. Any skipped:* forces
+# CLOSED_PARTIAL so a partial measurement cannot read as a full three-way close.
+DISAPPEARANCE_MEASURED = "measured"
+DISAPPEARANCE_STILL_PRESENT = "still_present"
+STATUS_CLOSED = "CLOSED"
+STATUS_CLOSED_PARTIAL = "CLOSED_PARTIAL"
+STATUS_REFUSED = "REFUSED"
+STATUS_DRY_RUN = "DRY_RUN"
+
+
 @dataclass(frozen=True)
 class RetirementReport:
     status: str
@@ -85,11 +96,13 @@ class RetirementReport:
     candidates: Tuple[SessionInfo, ...]
     closed: bool = False
     match_attempts: Tuple[str, ...] = ()
+    disappearances: Mapping[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         payload = asdict(self)
         payload["candidates"] = [candidate.to_dict() for candidate in self.candidates]
         payload["match_attempts"] = list(self.match_attempts)
+        payload["disappearances"] = dict(self.disappearances)
         return payload
 
 
@@ -113,6 +126,7 @@ class SpawnReport:
 
 OrcaRunner = Callable[[Sequence[str]], Tuple[int, str, str]]
 ProcessProbe = Callable[[int], bool]
+TtyProbe = Callable[[str], bool]
 
 SPAWN_CREATE_ERROR = 20
 SPAWN_PARSE_ERROR = 21
@@ -332,11 +346,24 @@ def retire_predecessor(
     target_handle: Optional[str] = None,
     target_pty_id: Optional[str] = None,
     target_session_id: Optional[str] = None,
+    target_pid: Optional[int] = None,
+    target_tty: Optional[str] = None,
     process_probe: Optional[ProcessProbe] = None,
+    tty_probe: Optional[TtyProbe] = None,
 ) -> RetirementReport:
-    """Resolve and optionally close exactly one predecessor terminal."""
+    """Resolve and optionally close exactly one predecessor terminal.
+
+    ``CLOSED`` means three measured disappearances (pane, process, tty). When the
+    pane is gone and nothing is still present but process or tty was skipped,
+    status is ``CLOSED_PARTIAL`` so a skip cannot read as a full pass. Supply
+    ``target_pid`` / ``target_tty`` when the host terminal record omits them
+    (folder-workspace panes often report ``process_id: null``); this function
+    does not invent a pid from a null record.
+    """
 
     _require_handle(self_handle)
+    if target_pid is not None and target_pid <= 0:
+        raise SuccessionError("target_pid must be a positive integer")
     criteria = _retirement_criteria(
         predecessor_selector,
         expected_substr,
@@ -350,7 +377,7 @@ def retire_predecessor(
         raise SuccessionError("self_handle matched retirement candidate; refusing to close self")
     if not candidates:
         return RetirementReport(
-            "REFUSED",
+            STATUS_REFUSED,
             None,
             _retirement_refusal_reason("no predecessor candidates", candidates, attempts),
             candidates,
@@ -359,7 +386,7 @@ def retire_predecessor(
         )
     if len(candidates) > 1:
         return RetirementReport(
-            "REFUSED",
+            STATUS_REFUSED,
             None,
             _retirement_refusal_reason("ambiguous predecessor candidates", candidates, attempts),
             candidates,
@@ -369,7 +396,14 @@ def retire_predecessor(
 
     target = candidates[0]
     if not execute:
-        return RetirementReport("DRY_RUN", target.handle, "dry-run only", (target,), False, attempts)
+        return RetirementReport(
+            STATUS_DRY_RUN,
+            target.handle,
+            "dry-run only",
+            (target,),
+            False,
+            attempts,
+        )
 
     runner = orca_runner or _default_orca_runner
     code, stdout, stderr = runner(
@@ -377,7 +411,7 @@ def retire_predecessor(
     )
     if code != 0:
         return RetirementReport(
-            "REFUSED",
+            STATUS_REFUSED,
             target.handle,
             stderr.strip() or stdout.strip() or "orca terminal close failed",
             (target,),
@@ -385,41 +419,130 @@ def retire_predecessor(
             attempts,
         )
     remaining = find_sessions(runner)
-    if any(session.handle == target.handle for session in remaining):
-        return RetirementReport(
-            "REFUSED",
-            target.handle,
-            "target still present after close",
-            (target,),
-            False,
-            attempts,
-        )
-    if target.process_id is not None:
-        probe = process_probe or _default_process_probe
-        if probe(target.process_id):
-            return RetirementReport(
-                "REFUSED",
-                target.handle,
-                "target process still present after close: pid={0}".format(target.process_id),
-                (target,),
-                False,
-                attempts,
-            )
-        return RetirementReport(
-            "CLOSED",
-            target.handle,
-            "target disappeared after close; process gone: pid={0}".format(target.process_id),
-            (target,),
-            True,
-            attempts,
-        )
+    disappearances, measured_pid = _measure_disappearances(
+        target=target,
+        remaining=remaining,
+        target_pid=target_pid,
+        target_tty=target_tty,
+        process_probe=process_probe or _default_process_probe,
+        tty_probe=tty_probe or _default_tty_probe,
+    )
+    status, closed, reason = _retirement_outcome(
+        disappearances,
+        measured_pid=measured_pid,
+        target_tty=target_tty,
+    )
     return RetirementReport(
-        "CLOSED",
+        status,
         target.handle,
-        "target disappeared after close; no pid reported by terminal list",
+        reason,
         (target,),
-        True,
+        closed,
         attempts,
+        disappearances,
+    )
+
+
+def _measure_disappearances(
+    target: SessionInfo,
+    remaining: Sequence[SessionInfo],
+    target_pid: Optional[int],
+    target_tty: Optional[str],
+    process_probe: ProcessProbe,
+    tty_probe: TtyProbe,
+) -> Tuple[Mapping[str, str], Optional[int]]:
+    pane = (
+        DISAPPEARANCE_STILL_PRESENT
+        if any(session.handle == target.handle for session in remaining)
+        else DISAPPEARANCE_MEASURED
+    )
+
+    # Prefer an externally measured pid; otherwise keep today's terminal-record
+    # behaviour. Never invent a pid when the record is null — that is the caller's job.
+    if target_pid is not None:
+        process_pid: Optional[int] = target_pid
+        process_skip: Optional[str] = None
+    elif target.process_id is not None:
+        process_pid = target.process_id
+        process_skip = None
+    else:
+        process_pid = None
+        process_skip = "skipped:no target-pid and no pid reported by terminal list"
+
+    if process_skip is not None:
+        process = process_skip
+    elif process_probe(process_pid):  # type: ignore[arg-type]
+        process = DISAPPEARANCE_STILL_PRESENT
+    else:
+        process = DISAPPEARANCE_MEASURED
+
+    if target_tty:
+        tty = (
+            DISAPPEARANCE_STILL_PRESENT
+            if tty_probe(target_tty)
+            else DISAPPEARANCE_MEASURED
+        )
+    else:
+        tty = "skipped:no target-tty supplied"
+
+    return {"pane": pane, "process": process, "tty": tty}, process_pid
+
+
+def _retirement_outcome(
+    disappearances: Mapping[str, str],
+    measured_pid: Optional[int],
+    target_tty: Optional[str],
+) -> Tuple[str, bool, str]:
+    """Map per-check results to status / closed / reason.
+
+    Vocabulary:
+    - REFUSED: any check is still_present, or pane was not measured.
+    - CLOSED: pane, process, and tty are all measured (full three-disappearance).
+    - CLOSED_PARTIAL: pane measured, nothing still_present, but process and/or
+      tty is skipped:* — partial measurement must not read as a full CLOSED.
+    """
+
+    summary = "disappearances={0}".format(
+        ",".join("{0}={1}".format(key, disappearances[key]) for key in ("pane", "process", "tty"))
+    )
+    if disappearances.get("pane") == DISAPPEARANCE_STILL_PRESENT:
+        return STATUS_REFUSED, False, "target still present after close; " + summary
+    if disappearances.get("process") == DISAPPEARANCE_STILL_PRESENT:
+        return (
+            STATUS_REFUSED,
+            False,
+            "target process still present after close: pid={0}; {1}".format(
+                measured_pid,
+                summary,
+            ),
+        )
+    if disappearances.get("tty") == DISAPPEARANCE_STILL_PRESENT:
+        return (
+            STATUS_REFUSED,
+            False,
+            "target tty still present after close: {0}; {1}".format(target_tty, summary),
+        )
+    if disappearances.get("pane") != DISAPPEARANCE_MEASURED:
+        return STATUS_REFUSED, False, "pane disappearance not measured; " + summary
+
+    skipped = [
+        "{0}={1}".format(key, value)
+        for key, value in disappearances.items()
+        if str(value).startswith("skipped:")
+    ]
+    if skipped:
+        return (
+            STATUS_CLOSED_PARTIAL,
+            True,
+            "target pane disappeared after close; partial measurement ({0}); {1}".format(
+                ";".join(skipped),
+                summary,
+            ),
+        )
+    return (
+        STATUS_CLOSED,
+        True,
+        "target disappeared after close; three disappearances measured; " + summary,
     )
 
 
@@ -1168,6 +1291,33 @@ def _default_process_probe(pid: int) -> bool:
     return completed.returncode == 0 and bool(completed.stdout.strip())
 
 
+def _tty_bare_name(tty: str) -> str:
+    text = (tty or "").strip()
+    if text.startswith("/dev/"):
+        return text[len("/dev/") :]
+    return text
+
+
+def _default_tty_probe(tty: str) -> bool:
+    """Return True when a login/process chain still holds the tty.
+
+    Device nodes under /dev often persist after hangup on some hosts, so the
+    decisive measurement is whether any process still lists the tty. Inject a
+    ``tty_probe`` in tests rather than asserting this default.
+    """
+
+    bare = _tty_bare_name(tty)
+    if not bare:
+        return False
+    completed = subprocess.run(
+        ("ps", "-t", bare, "-o", "pid="),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return completed.returncode == 0 and bool(completed.stdout.strip())
+
+
 def _optional_int(value: object) -> Optional[int]:
     try:
         return int(value) if value not in (None, "") else None
@@ -1220,8 +1370,14 @@ def _require_substr(value: str, label: str) -> str:
 
 
 __all__ = (
+    "DISAPPEARANCE_MEASURED",
+    "DISAPPEARANCE_STILL_PRESENT",
     "FrozenState",
     "RetirementReport",
+    "STATUS_CLOSED",
+    "STATUS_CLOSED_PARTIAL",
+    "STATUS_DRY_RUN",
+    "STATUS_REFUSED",
     "SessionInfo",
     "SpawnReport",
     "SuccessionError",

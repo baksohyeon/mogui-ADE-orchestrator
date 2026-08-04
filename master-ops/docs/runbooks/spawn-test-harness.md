@@ -50,7 +50,7 @@ The harness tests a matrix of runtimes:
 1. Create temp directory under `$TMPDIR` or `/tmp`
 2. Clone mogui-ADE-orchestrator into sandbox (local copy)
 3. Record source commit: CLONE_SOURCE_COMMIT file
-4. Setup sandbox-local fire-log: `.fire-log/spawn-test-<runtime>.jsonl`
+4. Setup sandbox-local fire-log: `../.fire-log/spawn-test-<runtime>.jsonl` relative to the sandbox clone
 ```
 
 ### Installer Run

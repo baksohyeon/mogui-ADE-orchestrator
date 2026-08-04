@@ -20,14 +20,19 @@ matrix = defaultdict(lambda: defaultdict(lambda: {"count": 0, "last_ts": 0}))
 if not os.path.exists(logfile):
     print(f"No fire-log found at {logfile} (no hook invocations yet)\n")
 else:
-    with open(logfile) as f:
+    try:
+        f = open(logfile, encoding="utf-8")
+    except OSError as e:
+        print(f"Could not read fire-log at {logfile}: {e}\n")
+    else:
+      with f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
             try:
                 entry = json.loads(line)
-            except (OSError, json.JSONDecodeError):
+            except json.JSONDecodeError:
                 continue
             if not isinstance(entry, dict):
                 continue

@@ -40,7 +40,7 @@ One JSON line per hook invocation. Example:
 ## Log Location
 
 ```
-${MOGUI_HOOK_FIRE_LOG:-~/.mogui/hook-fire-log.jsonl}
+${MOGUI_HOOK_FIRE_LOG:-$HOME/.mogui/hook-fire-log.jsonl}
 ```
 
 Append-only; one line per invocation. Fails open (never blocks or breaks the hook if append fails).

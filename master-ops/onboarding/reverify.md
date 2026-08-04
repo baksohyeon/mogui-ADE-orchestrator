@@ -6,7 +6,7 @@ Load rule: read this file only when the router's mode question answered **Reveri
 
 **Standing block: do not spawn.** No new master terminal, no `master-succeed spawn`, no founding kickoff. If a check fails badly enough that a new master seems needed, that is a succession decision for the owner and the living master — not a reverify outcome.
 
-## Owner script (3–6 sentences, adapt to the owner's language)
+## Owner script (kind ELI5, adapt to the owner's language)
 
 Where we are: this workspace was already set up, so nothing will be installed or changed. What happens next: a handful of read-only checks — where the master sits, whether the tracker answers, and whether the governance records are current — and then a short pass/fail report. You do not need to type anything unless a check needs your decision.
 

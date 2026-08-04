@@ -8,9 +8,9 @@ Load rule: read this file only when Step 7 begins. Router: [`../ONBOARDING.md`](
 
 **Why/caution:** The template specifies hook behavior but does not ship hidden deny lists, credentials, secret paths, or environment-specific security implementation.
 
-### Owner script (3–6 sentences, adapt to the owner's language)
+### Owner script (kind ELI5, adapt to the owner's language)
 
-Where we are: the master's ground rules are saved. What we decide next: who owns the host settings and security-sensitive configuration, and which safety hooks to turn on. Ask which hosts run the master, who owns hooks/security-sensitive configuration, and whether dispatch warning, role-state injection, and compaction probe hooks should be enabled. Present the hook wiring spec from `docs/MASTER-OPERATIONS.md` in agent notes, not as a wall of text at the owner; delegate auth, permission, secrets, credentials, and production-data work to a dedicated security/operations session.
+Where we are: the Master's ground rules are saved, and the Herald now checks which host-side safeguards should be prepared before the Master rises. What we decide next: who owns the host settings and security-sensitive configuration, and which safety hooks to turn on. Explain ELI5 that hooks are small host-side reminders or checks that help the Master wake with the right state. Ask which hosts run the Master, who owns hooks/security-sensitive configuration, and whether dispatch warning, role-state injection, and compaction probe hooks should be enabled. Present the hook wiring spec from `docs/MASTER-OPERATIONS.md` in agent notes, not as a wall of text at the owner; delegate auth, permission, secrets, credentials, and production-data work to a dedicated security/operations session.
 
 ### Verify (Step 7)
 
@@ -86,9 +86,9 @@ Where the agent running onboarding has no interactive query interface, the re-as
 
 **Why/caution:** A gate that is trusted beyond its scope is worse than no gate, because it converts an unchecked surface into a believed-clean one.
 
-### Owner script (3–6 sentences, adapt to the owner's language)
+### Owner script (kind ELI5, adapt to the owner's language)
 
-The gates read repository content. Name the surfaces they do not read, so nobody assumes coverage that does not exist: pull request titles, bodies, and review comments; release notes and issue text; anything typed into a forge web interface. None of those are in the repository, so no scanner in this template sees them — and they are where internal names most easily arrive, because they are written in prose rather than code. The habit that works is to grep your own outgoing text for organization identifiers before posting it, exactly as the scan does for files. Explain the gap once, in plain language, then continue.
+The gates read repository content. This is one of the places where the Herald must be especially plain: name the surfaces they do not read, so nobody assumes coverage that does not exist. Those surfaces are pull request titles, bodies, and review comments; release notes and issue text; anything typed into a forge web interface. None of those are in the repository, so no scanner in this template sees them — and they are where internal names most easily arrive, because they are written in prose rather than code. The habit that works is to grep your own outgoing text for organization identifiers before posting it, exactly as the scan does for files. Explain the gap once, in plain language, then continue.
 
 Tell the user that organization-specific patterns live in a file outside version control, that the gates fail closed without it, and that its format is one rule per line as `id|description|regex`. That file is what makes the gates able to catch a workspace name; the shipped rules only catch generic provider secrets.
 

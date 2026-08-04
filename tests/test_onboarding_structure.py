@@ -123,10 +123,25 @@ def test_founder_spawn_hands_installer_retirement_switch_to_master():
 
 def test_final_onboarding_retirement_is_master_closed_not_owner_closed():
     text = (STEP_DIR / "10-card-and-retire.md").read_text(encoding="utf-8")
-    assert "the master closes this installer terminal" in text
+    assert "the Master closes this installer terminal" in text
     assert "newborn master was given the warm resume note and installer kill switch" in text
     assert "newborn master closed the installer terminal" in text
     assert "please close this installer terminal" not in text
+
+
+def test_owner_language_is_kind_modern_not_archaic():
+    router_text = ROUTER.read_text(encoding="utf-8")
+    assert "genuinely kind, unhurried ELI5" in router_text
+    assert "plain, warm, modern, and kind" in router_text
+    combined = "\n".join(
+        [router_text, *[path.read_text(encoding="utf-8") for path in STEP_DIR.glob("*.md")]]
+    )
+    forbidden = re.compile(
+        r"\b(?:hark|thy|thee|thou|shalt|risen)\b|Shakespeare|고어|나이다|옵니다",
+        re.IGNORECASE,
+    )
+    assert forbidden.search(combined) is None
+    assert "3–6 sentences" not in combined
 
 
 def test_entry_files_stay_byte_identical():

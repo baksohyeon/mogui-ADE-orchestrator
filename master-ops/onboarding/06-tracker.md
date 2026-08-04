@@ -6,9 +6,9 @@ Load rule: read this file only when Step 5 begins. Router: [`../ONBOARDING.md`](
 
 **Why/caution:** Execution state belongs in the tracker, but upward resolution can silently select a database above the workspace or stop at the wrong Git root.
 
-## Owner script (3–6 sentences, adapt to the owner's language)
+## Owner script (kind ELI5, adapt to the owner's language)
 
-Where we are: the ops repository is filled in. What we decide next: where day-to-day working state lives. Explain that the tracker is working-state SSOT reloaded at boot and after compaction. Ask which tracker to use, whether to initialize it now, and which short issue prefix to use; propose a two- or three-character prefix beside the default and explain that IDs are spoken to the owner. Remind that this prefix is not the monitor namespace from the workspace-facts step.
+Where we are: the ops repository is filled in, and now the Herald prepares the Master's daybook. What we decide next: where day-to-day working state lives. Explain ELI5 that the tracker is the Master’s working memory for tasks: it is reloaded at boot and after compaction, while long-term decisions still live in Git. Ask which tracker to use, whether to initialize it now, and which short issue prefix to use; propose a two- or three-character prefix beside the default and explain that IDs are spoken to the owner. Remind that this prefix is not the monitor namespace from the workspace-facts step.
 
 ## Run
 

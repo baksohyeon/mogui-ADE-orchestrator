@@ -6,9 +6,9 @@ Load rule: read this file only when Step 4 begins. Router: [`../ONBOARDING.md`](
 
 **Why/caution:** Keep product-specific rules in product repositories and keep `CLAUDE.md` and `AGENTS.md` byte-identical unless the user accepts host-specific divergence.
 
-## Owner script (3–6 sentences, adapt to the owner's language)
+## Owner script (kind ELI5, adapt to the owner's language)
 
-Where we are: the ops repository skeleton exists. What we decide next: the few remaining blanks that only the owner can confirm. Ask for each unresolved value and any coordination exclusions, one short turn at a time.
+Where we are: the ops repository skeleton exists; the Herald has the draft, but a few blanks still need the owner's confirmed names and choices. What we decide next: the remaining values that only the owner can confirm, plus any coordination exclusions. Ask for each unresolved value patiently, in small separate turns when that is clearer.
 
 ## Run
 

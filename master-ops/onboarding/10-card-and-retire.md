@@ -10,9 +10,9 @@ Load rule: read this file only when Step 10 begins. Router: [`../ONBOARDING.md`]
 
 Verify the conversation, not just the artifacts. The steps above ask questions; a run that produced files without answers is a run that guessed. Check that the workspace facts were confirmed rather than inferred, that the component choices are recorded including declines, and that each essential decline was re-asked once. If any answer is missing, ask now rather than recording an assumption as a decision.
 
-## Owner script (3–6 sentences, adapt to the owner's language)
+## Owner script (kind ELI5, adapt to the owner's language)
 
-Where we are: the master booted clean; the installation is done. What happens next: I hand you a short operating card — keep it wherever you keep notes, as plain text under a name you will find again, such as `llm.txt`; it is written to be pasted into any agent, so it does not depend on this session existing. After that, the master closes this installer terminal with the kill switch I handed it, because two agents holding one repository is how uncommitted work gets lost and the installer has no further role. The master's terminal stays running.
+Where we are: the Master booted clean; the Master is raised, and the installation is done. What happens next: the Herald hands the owner a short operating card — keep it wherever you keep notes, as plain text under a name you will find again, such as `llm.txt`; it is written to be pasted into any agent, so it does not depend on this installer session existing. Explain plainly that the card is not symbolic: it is the small set of phrases that lets the owner ask for role state, propose work, approve execution, delegate, and request succession. After that, the Master closes this installer terminal with the kill switch I handed it, because two agents holding one repository is how uncommitted work gets lost and the Herald has no further role. The Master's terminal stays running.
 
 ## The operating card
 

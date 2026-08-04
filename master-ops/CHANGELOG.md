@@ -41,6 +41,18 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+Onboarding Herald voice (2026-08-04 owner decision):
+
+- Router owner-facing rules now replace the old 3-6 sentence cap with
+  genuinely kind, unhurried ELI5: explain as long as clarity needs while still
+  keeping command blocks and charter text out of owner-facing speech.
+- Owner scripts in onboarding steps 00-10 now lightly frame the installer as a
+  faithful Herald that prepares the place and raises the Master, with step 09
+  and the founding kickoff carrying the clearest summoning language.
+- Owner-facing register stays plain, warm, modern, and exact. Archaic English
+  and Korean old-style honorific seasoning are explicitly not part of the
+  voice; technical values, ids, paths, commands, and model names remain modern.
+
 Installer retirement by newborn master (2026-08-04 onboarding 09/10):
 
 - Step 8 now requires the founding kickoff to hand the newborn master an

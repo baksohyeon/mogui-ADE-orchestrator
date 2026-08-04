@@ -17,6 +17,9 @@ coverage/
 # Supported format is JSON only (see config/instance-runtime.example.json).
 config/instance-runtime.json
 
+# instance-owned workspace inventory written by onboarding; template ships only the example
+config/workspace-descriptor.json
+
 # local-only redaction/sweep artifacts — these contain the very identifiers the
 # scanner protects, and a public repo must never accept them via `git add -A`
 *redact-result*

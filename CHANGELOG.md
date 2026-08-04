@@ -22,6 +22,22 @@ you build on it.
 
 ### Added
 
+- Workspace descriptor inventory (owner decision 2026-08-04; closes ledger item
+  mgm-tek.9 repository descriptor): ships
+  `config/workspace-descriptor.example.json` only (filled instance file is
+  gitignored). Per repository: `name`, workspace-root-relative `path`,
+  `remote`, `role` (`product`|`ops`), `capabilities`, `prohibited`. Workspace
+  fields: `workspace_root_is_plain_folder: true` (no submodules; plain folder
+  of siblings is intentional) and `master_seat`. Loader
+  `src/master_runtime/core/workspace_descriptor.py` resolves environment
+  override → instance file → honest unconfigured. Consumer:
+  `scripts/workspace-descriptor-check` and worker-routing guidance read
+  `prohibited` (for example `direct-main-commit`, `force-push`) instead of a
+  hardcoded product-path list. Onboarding step 02 writes the instance file
+  from the measured repository inventory. Docs:
+  `docs/public/orca-concepts.md` records that Orca "not a valid worktree
+  folder" on the plain root is expected.
+
 - Instance runtime config for onboarding answers: ships
   `config/instance-runtime.example.json` (template never commits a filled copy)
   with `master_host_runtime`, per-runtime `transcript_globs`, and optional

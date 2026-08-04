@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""Check whether an action is prohibited for a repository in the workspace descriptor.
+
+Exit codes:
+  0 — action is allowed (not listed under prohibited for the matched repo)
+  1 — action is prohibited
+  2 — could not decide (descriptor unconfigured, invalid, or bad usage)
+
+Fallback order matches the loader: WORKSPACE_DESCRIPTOR / MOGUI_WORKSPACE_DESCRIPTOR
+→ config/workspace-descriptor.json → honest unconfigured (exit 2).
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+
+SCRIPT_PATH = Path(__file__).resolve()
+REPO_ROOT = SCRIPT_PATH.parent.parent
+SRC_ROOT = REPO_ROOT / "src"
+sys.path.insert(0, str(SRC_ROOT))
+
+from master_runtime.core.workspace_descriptor import (  # noqa: E402
+    WorkspaceDescriptorError,
+    action_is_prohibited,
+    load_workspace_descriptor,
+)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Ask whether a workspace-descriptor prohibition applies to a "
+            "repository path and action (for example direct-main-commit)."
+        )
+    )
+    parser.add_argument(
+        "--path",
+        required=True,
+        help="Repository path (absolute or workspace-root-relative) to look up",
+    )
+    parser.add_argument(
+        "--action",
+        required=True,
+        help="Action name to test (for example direct-main-commit or force-push)",
+    )
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="Explicit descriptor path (overrides env and default config path)",
+    )
+    parser.add_argument(
+        "--allow-unknown-repo",
+        action="store_true",
+        help=(
+            "When the path matches no inventory entry, treat the action as "
+            "allowed instead of fail-closed"
+        ),
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print a machine-readable decision object on stdout",
+    )
+    args = parser.parse_args(argv)
+
+    try:
+        descriptor = load_workspace_descriptor(args.config)
+        if descriptor.source_path is None:
+            raise WorkspaceDescriptorError(
+                "workspace descriptor is unconfigured"
+            )
+        prohibited = action_is_prohibited(
+            args.path,
+            args.action,
+            config_path=args.config,
+            default_when_unknown_repo=not args.allow_unknown_repo,
+        )
+    except WorkspaceDescriptorError as exc:
+        message = str(exc)
+        if args.json:
+            print(
+                json.dumps(
+                    {
+                        "allow": False,
+                        "decidable": False,
+                        "path": args.path,
+                        "action": args.action,
+                        "reason": "unconfigured_or_invalid",
+                        "message": message,
+                    }
+                )
+            )
+        else:
+            print(f"workspace-descriptor-check: {message}", file=sys.stderr)
+        return 2
+
+    repo = descriptor.repository_for_path(args.path)
+    payload = {
+        "allow": not prohibited,
+        "decidable": True,
+        "path": args.path,
+        "action": args.action,
+        "prohibited": prohibited,
+        "repository": None
+        if repo is None
+        else {
+            "name": repo.name,
+            "path": repo.path,
+            "role": repo.role,
+            "prohibited": list(repo.prohibited),
+        },
+        "source_path": str(descriptor.source_path),
+    }
+    if args.json:
+        print(json.dumps(payload))
+    else:
+        status = "PROHIBITED" if prohibited else "ALLOWED"
+        repo_label = repo.name if repo is not None else "(unmatched)"
+        print(f"{status}: action={args.action} repo={repo_label} path={args.path}")
+    return 1 if prohibited else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

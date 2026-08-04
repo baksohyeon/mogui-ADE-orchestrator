@@ -60,6 +60,33 @@ no step created the workspace-root session card):
 - Name disambiguation in steps 03, 05, 06, and reverify so nobody `cmp`s the
   wrong `CLAUDE.md` pair.
 
+## v0.4.4
+
+Promotion sweep 2A verified tools (2026-08-04 staging to template):
+
+- New `master-ops/scripts/orca-wait`, `master-ops/scripts/hooks/bash-poll-warn.sh`,
+  and `master-ops/docs/runbooks/orca-wait.md` carry the deliveryId
+  ack-chain wait wrapper and hand-rolled poll-loop warning hook from the
+  authoring operations instance.
+- New `master-ops/scripts/conversation-redaction-scan`,
+  `master-ops/scripts/pr-body-check`, and
+  `master-ops/docs/runbooks/conversation-redaction.md` cover PR bodies,
+  PR comments, review-thread comments, and issue bodies for
+  conversation-surface home-path leaks without printing the matched value.
+- Hook fire-log observability is promoted through fail-open fire-log calls in
+  shipped hooks, the new `master-ops/scripts/hook-coverage-report`, and
+  `master-ops/docs/runbooks/hook-fire-observability.md`; each hook appends one
+  record before ordinary work, logging never blocks hook execution, and the log
+  path resolves as `${MOGUI_HOOK_FIRE_LOG:-$HOME/.mogui/hook-fire-log.jsonl}`.
+- New `master-ops/scripts/spawn-test` and
+  `master-ops/docs/runbooks/spawn-test-harness.md` carry the real-agent
+  installer E2E harness, including the founding-guard scenario because it was
+  present in the source operations `main` checkout when this sweep started.
+- Existing installations do not auto-update from this template. To adopt this
+  entry, copy the new scripts and runbooks into the generated operations
+  repository, wire any host hooks deliberately, set the spawn-test coordinator
+  environment for local runs, and merge local edits by hand.
+
 Agent-inventory consent and default-on harness wiring (2026-08-04 owner
 decisions, two onboarding gaps):
 

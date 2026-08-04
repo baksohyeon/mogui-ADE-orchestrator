@@ -313,10 +313,42 @@ emitting a link that goes nowhere; that case stays described as a name, not link
 Verify the links, do not assume them: resolve each target relative to the file that
 contains it and confirm the file exists before committing.
 
-## Grade distribution (2026-08-04)
+## 10. Working directory clause [measured]
+
+Every runnable command in a document states the directory it runs from, and a document
+that contains more than one command uses one base for all of them. Prefer forms that do
+not care where the shell is: `git -C <path>`, `gh --repo <owner/name>`, absolute paths.
+A script that needs its own repository should anchor on its file location, not on the
+invoking cwd, so that callers are free to stand anywhere.
+
+A relative path is only half an instruction. The other half is the base it resolves
+against, and when that half is unwritten the reader supplies it by guessing. This is the
+same defect as a document reference in backticks, one layer down: the string looks
+complete and silently means something different depending on where it is read.
+
+Basis, measured 2026-08-05 on the authoring instance. A document's spawn and
+duplicate-check steps were written against the workspace root while its seat-check step
+was written against the ops repository, and nothing in the document said to move between
+them. No single directory satisfied the document, so a successor following it in order
+would hit a false failure at whichever step did not match, and the failure would look
+like a broken tool rather than a broken path. The same day, a shell left inside a product
+checkout made `git archive` resolve against the wrong repository and made a stale
+worktree ref read as canonical — twice, in the space of one session.
+
+The fix is in that order: make the tool location-independent, then state one base, then
+write the commands. A self-check that needed its own repository was changed to anchor its
+repo-relative paths on its own file location and verified to produce byte-identical
+output and exit 0 from three different directories; its regression suite still passed.
+Only after that could the document's two bases be merged into one. The document can name
+a single base only once the tool no longer inherits the invoking cwd.
+
+Never leave the shell parked somewhere other than the seat. Reaching a repository is not
+a reason to move into it.
+
+## Grade distribution (2026-08-05)
 
 - machine-enforced: 1
-- measured: 6
+- measured: 7
 - prose: 2
 
 Distribution is non-uniform, so these grades are based on enforceability and

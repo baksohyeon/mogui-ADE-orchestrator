@@ -50,6 +50,12 @@ Two rules fall out:
 
 **Empty `worktreePath`** in `orca terminal list --json` output is the same fact from the CLI side: folder workspaces report a `worktreeId` of `folder:<uuid>` and an empty path. Judge placement by `worktreeId`, not by the path field or by the repository name shown in a pane's status line, which only reflects the shell's cwd.
 
+**"Not a valid worktree folder"** (or similar) on the plain workspace root is also expected. The workspace root is intentionally a plain folder that groups member repositories as siblings. It is not a git repository and must never become a submodule parent: parent-pins-child-SHA coupling is the opposite of an overseeing master, and the version management is misery. Orca still registers that folder as a project and seats the master in its folder workspace; the warning names "this folder is not a git worktree," not "this install is broken."
+
+## Workspace Descriptor (No Submodules)
+
+The declarative inventory of those sibling repositories lives in the instance file `config/workspace-descriptor.json` (template example only: `config/workspace-descriptor.example.json`). Onboarding writes it from the measured repository list: each entry carries `name`, workspace-root-relative `path`, canonical `remote`, `role` (`product` or `ops`), `capabilities`, and `prohibited` actions. Workspace-level fields record `workspace_root_is_plain_folder: true` and `master_seat`. Consumers such as worker routing and `scripts/workspace-descriptor-check` read `prohibited` from that file (environment override → file → unconfigured) instead of a hardcoded product-path list. Submodules are not a supported shape.
+
 ## Beyond This Machine
 
 Orca sessions are not bound to the desk they started on: the docs snapshot covers SSH remote worktrees (remote repo registration, relay grace periods, remote PTY leases), headless `orca serve` with pairing to a remote runtime, and a mobile companion app. Two consequences matter for this runtime. A frozen master session can be reopened from a phone, which is why retirement is only complete when process, pane, and tty are all measured gone and why boot includes a revival check. And a repository on a remote machine is observable only through its git remote and forge state, so claims about it need their own measurement.

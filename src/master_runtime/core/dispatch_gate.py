@@ -27,6 +27,9 @@ DEFAULT_LEDGER_PATH = Path(".dispatch-gate-ledger.jsonl")
 DEFAULT_TICKET_DIR = Path(".mogui") / "dispatch-tickets"
 DEFAULT_KNOWN_ROOTS_PATH = Path(".mogui") / "known-roots.json"
 DEFAULT_TIER_POLICY_RELATIVE_PATH = Path("master-ops") / "model-tier-policy.json"
+# Instance-owned policy written during onboarding (agent-inventory consent).
+# Preferred over the template fallback when present.
+INSTANCE_TIER_POLICY_RELATIVE_PATH = Path("config") / "model-tier-policy.json"
 # One day. The fan-out that caused the incident can be spread over sequential
 # dispatches, so the cap counts agents inside a window rather than at once.
 DEFAULT_TIER_WINDOW_SECONDS = 24 * 60 * 60
@@ -54,10 +57,21 @@ def _default_known_roots_path() -> Path:
 
 
 def _default_tier_policy_path() -> Path:
+    """Resolve the tier policy path with instance-first fallback.
+
+    Order:
+      1. DISPATCH_TIER_POLICY environment override
+      2. instance file config/model-tier-policy.json when present
+      3. template fallback master-ops/model-tier-policy.json
+    """
     value = os.environ.get("DISPATCH_TIER_POLICY")
     if value:
         return Path(value)
-    return Path(__file__).resolve().parents[3] / DEFAULT_TIER_POLICY_RELATIVE_PATH
+    repo_root = Path(__file__).resolve().parents[3]
+    instance_path = repo_root / INSTANCE_TIER_POLICY_RELATIVE_PATH
+    if instance_path.is_file():
+        return instance_path
+    return repo_root / DEFAULT_TIER_POLICY_RELATIVE_PATH
 
 
 class ReasonCode(str, Enum):

@@ -20,6 +20,10 @@ config/instance-runtime.json
 # instance-owned workspace inventory written by onboarding; template ships only the example
 config/workspace-descriptor.json
 
+# instance-owned model tier policy written after agent-inventory consent; template ships only the example
+# (master-ops/model-tier-policy.json remains the template fallback when no instance file exists)
+config/model-tier-policy.json
+
 # local-only redaction/sweep artifacts — these contain the very identifiers the
 # scanner protects, and a public repo must never accept them via `git add -A`
 *redact-result*

@@ -41,6 +41,26 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+Agent-inventory consent and default-on harness wiring (2026-08-04 owner
+decisions, two onboarding gaps):
+
+- Step 01 asks consent to probe installed agent CLIs with both purposes stated
+  (task↔model strength matching; top-tier fan-out cap). On yes, measure
+  runtimes/versions/model ids (never guess; use `unknown`); on no, write only
+  owner-named entries. Lands instance
+  `{{RUNTIME_ROOT}}/config/model-tier-policy.json` (template ships only
+  `config/model-tier-policy.example.json`). Gate resolution:
+  `DISPATCH_TIER_POLICY` → instance file → template
+  `master-ops/model-tier-policy.json`.
+- Step 08 wires every shipped hook/skill default-on; one owner sentence that
+  any piece can be disabled later by asking the master (who explains first).
+  Agent notes table documents disable paths. No per-item wiring opt-out
+  questions.
+- Existing installations do not auto-update. To adopt: copy the tier-policy
+  example, fill from a measured inventory (or manual names), point the gate at
+  it or rely on the new default path, and treat host hooks/skills as on unless
+  deliberately disabled.
+
 Workspace descriptor inventory (2026-08-04 owner decision; ledger mgm-tek.9
 repository descriptor):
 

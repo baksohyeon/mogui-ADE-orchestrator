@@ -1,0 +1,34 @@
+{
+  "_docs": {
+    "purpose": "Instance-owned tier policy the dispatch gate consumes. Written during onboarding after the owner consents to an agent-inventory probe (or after they name entries by hand). Template ships only this example; never commit a filled copy.",
+    "version": "Must be 2 for tier × fan-out caps. Version 1 identity allow/deny is legacy.",
+    "agents": "Inventory of measured agent CLIs. Each entry records runtime name, version when measurable, and model_ids the CLI actually advertised. Never guess a model id — use the string unknown when a field cannot be measured. The gate does not require this array; it is for humans and for rebuilding tiers after re-measure.",
+    "tiers": "Map of tier name to model id list. Put only measured (or owner-named) model ids here. Unlisted models fall into the reserved unknown tier and use fanout_caps.unknown.",
+    "fanout_caps": "Per-tier cap on agents dispatched inside window_seconds. unknown must always be present so unlisted models stay conservatively capped.",
+    "window_seconds": "Rolling window for the fan-out cap (seconds). Default 86400 (one day).",
+    "consent": "Record whether the owner allowed the inventory probe: yes, no, or manual-only. Does not affect gate parsing."
+  },
+  "version": 2,
+  "consent": "yes",
+  "agents": [
+    {
+      "runtime": "claude",
+      "version": "unknown",
+      "model_ids": ["unknown"]
+    },
+    {
+      "runtime": "codex",
+      "version": "unknown",
+      "model_ids": ["unknown"]
+    }
+  ],
+  "tiers": {
+    "top": [],
+    "efficient": []
+  },
+  "fanout_caps": {
+    "top": 1,
+    "unknown": 1
+  },
+  "window_seconds": 86400
+}

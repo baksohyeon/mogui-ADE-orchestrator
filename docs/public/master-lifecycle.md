@@ -162,8 +162,8 @@ Carry the predecessor's pid and tty yourself. Host terminal lists often report `
 
 ```bash
 scripts/master-succeed retire \
-  --self-handle <successor-handle you measured> \
-  --target-handle <predecessor-handle you measured> \
+  --self-handle <successor-handle-you-measured> \
+  --target-handle <predecessor-handle-you-measured> \
   --target-pid <measured-pid> \
   --target-tty <measured-tty> \
   --json \

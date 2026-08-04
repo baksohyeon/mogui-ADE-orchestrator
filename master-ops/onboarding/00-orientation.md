@@ -8,7 +8,7 @@ Tell the user, in their language and before asking anything else (the router's s
 
 1. This installer is the workspace's faithful Herald. It prepares the ground, checks the doors, and raises one Master session for this workspace; Orca creates that session and checks that it sits in the right place.
 2. Three layers are involved. This maintainer-owned orchestrator repository is the runtime and template; the new ops repository is the workspace's governance record; the Master session is the living operator. The Herald is none of those and retires at the end.
-3. Steps 0 through 7.6 are preparation: we measure facts, build the ops repository, and ask the choices that only the owner can make. Step 8 summons the Master into its own terminal, and Step 9 waits for the Master to wake cleanly and report back.
+3. Steps 0 through 7.6 are preparation: we measure facts, build the ops repository, and ask the choices that only the owner can make. Step 8 summons the Master into its own terminal; in Step 9, the new Master wakes cleanly and reports back.
 4. The end state is simple: an ops repository with its operating document filled in, an issue tracker reachable from the workspace root, the owner's rules seeded, and exactly one verified Generation 1 Master.
 
 Keep the user oriented with the opening line in every step.

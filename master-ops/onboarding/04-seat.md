@@ -11,11 +11,11 @@ Load rule: read this file only when Step 3.5 begins. Router: [`../ONBOARDING.md`
 **Before any UI action, explain the whole flow to the owner in plain language. Do not start mid-step.** The plain framing is: before the Master is raised, the Herald must find the correct chair. Say, in substance:
 
 1. We register the ops repository with Orca (so workers can get worktrees from it later).
-2. You add `{{WORKSPACE_ROOT}}` as an Orca project if needed (Browse folder accepts a folder that holds many repositories), and open that folder workspace.
+2. If the workspace contains multiple repositories, add `{{WORKSPACE_ROOT}}` as an Orca project if needed and open its folder workspace. If it is a single repository, open that repository's primary worktree.
 3. You open one **temporary plain terminal** there — not the Master. We only need its seat id. It will feel like "open, we measure, then close."
-4. You paste or send us that terminal's runtime handle so we can read where it sits.
+4. You paste or send us that terminal's handle so we can read where it sits.
 5. We record the durable seat id in the ops repository.
-6. **You close that temporary terminal** (or we close it if it is ours). Leaving it open means the spawn step would create a second terminal in the same seat. The real Master is created only in the spawn step, and exactly one Master may exist.
+6. **You close that temporary terminal** (or we close it if it is ours). Leaving it open blocks founding spawn because the empty-seat gate will fail. The real Master is created only in the spawn step, and exactly one Master may exist.
 
 Only after the owner has heard that sequence, ask them to perform steps 2–4.
 

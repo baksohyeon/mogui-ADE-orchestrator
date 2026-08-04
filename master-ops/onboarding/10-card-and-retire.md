@@ -4,7 +4,7 @@ Load rule: read this file only when Step 10 begins. Router: [`../ONBOARDING.md`]
 
 **Position and action:** Step 10 runs after the master reports a clean boot: verify the conversation actually happened, hand the user something portable, then let the newborn master close the installer terminal using the kill switch from Step 8.
 
-**Why/caution:** Everything installed here is worthless if the user does not know the four or five sentences that operate it, and an installer session left running is a second agent holding the same repository. The installer does not close itself; the master closes the installer after the installer has printed the operating card and verified that the master is alive.
+**Why/caution:** Everything installed here is worthless if the user leaves without knowing how to operate it, and an installer session left running is a second agent holding the same repository. The operating card must explain the practical commands and the safety handoff clearly, without a sentence-count cap. The installer does not close itself; the master closes the installer after the installer has printed the operating card and verified that the master is alive.
 
 ## Agent-only check first
 
@@ -56,7 +56,7 @@ If the user lingers with Orca questions before retirement, answer them here unde
 
 ## Installer retirement
 
-After the card is printed and the checks above pass, send the newborn master the warm resume note and kill switch from Step 8. The note must say that this installer has completed Step 10, the operating card was printed, the master terminal is the living session, and a resumed installer should do no further work unless it proves the master is absent. The master then closes the installer terminal with `ORCA terminal close --terminal <installer handle> --json`; if the close command fails or the handle is unavailable, report the failure plainly to the owner and leave the installer idle rather than guessing another terminal.
+After the card is printed and the checks above pass, send the newborn master the warm resume note and kill switch from Step 8. The note must say that this installer has completed Step 10, the operating card was printed, the master terminal is the living session, and a resumed installer should do no further work. If the master is proven absent later, do not rerun Founding; route recovery through `docs/runbooks/succession-boot-card.md`. The master then closes the installer terminal with `ORCA terminal close --terminal <installer handle> --json`; if the close command fails or the handle is unavailable, report the failure plainly to the owner and leave the installer idle rather than guessing another terminal.
 
 ## Verify
 

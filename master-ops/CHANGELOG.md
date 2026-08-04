@@ -44,8 +44,9 @@ installation was taken from alongside the tag.
 Onboarding Herald voice (2026-08-04 owner decision):
 
 - Router owner-facing rules now replace the old 3-6 sentence cap with
-  genuinely kind, unhurried ELI5: explain as long as clarity needs while still
-  keeping command blocks and charter text out of owner-facing speech.
+  genuinely kind, unhurried ELI5: explain as long as clarity needs, with no
+  sentence-count limit, while still keeping command blocks and charter text out
+  of owner-facing speech.
 - Owner scripts in onboarding steps 00-10 now lightly frame the installer as a
   faithful Herald that prepares the place and raises the Master, with step 09
   and the founding kickoff carrying the clearest summoning language.
@@ -59,11 +60,15 @@ Installer retirement by newborn master (2026-08-04 onboarding 09/10):
   installer retirement switch: installer terminal handle, pty id when exposed,
   session id when exposed, exact `orca terminal close` command form, and a warm
   resume note that says a later installer resume should treat itself as retired
-  unless the master is proven absent.
+  unless the master is proven absent. If the installer handle, pty id, or
+  session id cannot be measured, the kickoff records `unavailable` for that
+  field and does not invent it; an absent-Master case routes to
+  `docs/runbooks/succession-boot-card.md` and must not rerun Founding.
 - Step 10 no longer asks the owner to close the installer terminal. After the
   operating card is printed and verification passes, the newborn master closes
-  the installer with that kill switch; unavailable handles or close failures are
-  reported plainly and do not trigger guessed terminal closure.
+  the installer with that kill switch; unavailable handles, pty ids, session
+  ids, or close failures are reported plainly and do not trigger guessed
+  terminal closure.
 
 Instance runtime config landing (2026-08-04 owner onboarding-parameterization decision):
 

@@ -235,7 +235,8 @@ done <<< "$PR_JSON"
 
 # Fetch and scan issue bodies
 ISSUE_JSON=$(gh issue list --repo "$REPO" --state all --limit "$LIMIT" --json "number,author,body" --jq '.[]' 2>/dev/null) || {
-  echo "conversation-redaction-scan: WARNING - could not fetch issues from $REPO" >&2
+  echo "conversation-redaction-scan: FAIL - could not fetch issues from $REPO" >&2
+  exit 2
 }
 
 while IFS= read -r issue_line; do

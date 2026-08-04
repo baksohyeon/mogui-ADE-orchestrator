@@ -56,7 +56,9 @@ Promotion sweep 2A verified tools (2026-08-04 staging to template):
   conversation-surface home-path leaks without printing the matched value.
 - Hook fire-log observability is promoted through fail-open fire-log calls in
   shipped hooks, the new `master-ops/scripts/hook-coverage-report`, and
-  `master-ops/docs/runbooks/hook-fire-observability.md`.
+  `master-ops/docs/runbooks/hook-fire-observability.md`; each hook appends one
+  record before ordinary work, logging never blocks hook execution, and the log
+  path resolves as `${MOGUI_HOOK_FIRE_LOG:-$HOME/.mogui/hook-fire-log.jsonl}`.
 - New `master-ops/scripts/spawn-test` and
   `master-ops/docs/runbooks/spawn-test-harness.md` carry the real-agent
   installer E2E harness, including the founding-guard scenario because it was

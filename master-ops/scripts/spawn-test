@@ -28,8 +28,11 @@ REPORT_FILE="$REPORT_DIR/spawn-test-$TIMESTAMP.md"
 SCENARIO="${1:-happy-path}"
 
 # Results tracking
-RESULTS_DIR="/tmp/spawn-test-results-$$"
-mkdir -p "$RESULTS_DIR"
+RESULTS_DIR=$(mktemp -d "${TMPDIR:-/tmp}/spawn-test-results.XXXXXX") || {
+  echo "ERROR: failed to create results directory" >&2
+  exit 1
+}
+trap 'rm -rf "$RESULTS_DIR"' EXIT
 
 # Runtimes configuration
 RUNTIMES="${SPAWN_TEST_RUNTIMES:-claude codex grok agy cursor}"
@@ -500,32 +503,39 @@ launch_installer_agent() {
 
     # Assertion E: Check transcript for refusal language (Reverify, already founded, etc.) as supporting evidence
     local assertion_e="FAIL"
-    if echo "$term_state_after" | grep -Eiq 'Reverify|already.*founded|workspace.*exists|existing|found|mode question|session.*mode'; then
+    if [ -s "$transcript_file" ] && echo "$term_state_after" | grep -Eiq 'Reverify|already[[:space:]].*founded|workspace[[:space:]].*exists|mode question|session[[:space:]].*mode'; then
       assertion_e="PASS"
       log_msg "Found supporting refusal language in transcript"
     fi
     save_evidence "$runtime" "assertion-e" "$assertion_e"
 
     local pass_count=0
-    [ "$assertion_d" = "PASS" ] && pass_count=$(increment "$pass_count")
+    [ "$assertion_d" = "PASS" ] && [ "$assertion_e" = "PASS" ] && pass_count=$(increment "$pass_count")
 
     if [ "$pass_count" -eq 1 ]; then
-      log_msg "Founding-guard assertions passed: refusal verified (no spawn artifacts)"
-      if [ "$(get_evidence "$runtime" "assertion-e")" = "PASS" ]; then
-        log_msg "  + Confirmed by transcript evidence"
-      fi
+      log_msg "Founding-guard assertions passed: refusal verified by transcript and no spawn artifacts"
       save_result "$runtime" "PASS"
       return 0
     else
-      log_msg "Founding-guard assertions failed: spawn artifacts detected"
+      log_msg "Founding-guard assertions failed: missing refusal evidence or spawn artifacts detected"
       save_result "$runtime" "FAIL(founding-guard:spawn-detected)"
       return 1
     fi
   else
     # Happy-path scenario: normal assertions
-    # Assertion A: Sandbox structure check
+    # Assertion A: Generated operations repository check
     local assertion_a="FAIL"
-    if preflight_check "$sandbox_dir"; then
+    local generated_ops_candidates=("$sandbox_dir/mogui-master-ops" "$ade_clone/mogui-master-ops")
+    for generated_ops in "${generated_ops_candidates[@]}"; do
+      if [ -f "$generated_ops/docs/MASTER-OPERATIONS.md" ]; then
+        assertion_a="PASS"
+        break
+      fi
+    done
+    if [ "$assertion_a" != "PASS" ] && preflight_check "$sandbox_dir"; then
+      log_msg "Preflight structure exists, but generated operations repository was not found"
+    fi
+    if [ "$assertion_a" = "PASS" ]; then
       assertion_a="PASS"
     fi
     save_evidence "$runtime" "assertion-a" "$assertion_a"
@@ -702,7 +712,6 @@ generate_report() {
         if [ -n "$fire_log_path" ]; then
           fire_log_note="\`${fire_log_path##*/}\` ${fire_log_before:-0}->${fire_log_after:-0}"
         fi
-        local notes=""
 
         if [ "$status" = "blocked" ]; then
           echo "| $runtime | blocked | - | - | - | - |"
@@ -710,11 +719,9 @@ generate_report() {
           echo "| $runtime | PASS | 3/3 | ${time}s | $msg_id ($msg_subject) | $fire_log_note |"
         elif [[ "$status" == FAIL* ]]; then
           local sandbox=$(get_sandbox "$runtime")
-          local sandbox_info="none"
-          if [ -n "$sandbox" ]; then
-            sandbox_info="\`${sandbox##*/}\`"
-          fi
-          echo "| $runtime | FAIL | - | ${time}s | - | $fire_log_note |"
+          local sandbox_info="-"
+          [ -n "$sandbox" ] && sandbox_info="\`${sandbox##*/}\`"
+          echo "| $runtime | FAIL | - | ${time}s | $sandbox_info | $fire_log_note |"
         else
           echo "| $runtime | SKIP | - | - | - | - |"
         fi
@@ -856,8 +863,8 @@ generate_report() {
     echo "Each runtime run includes three assertions:"
     echo ""
     echo "**A. Structure Check (post-agent)**"
-    echo "- Verifies master-ops layer directories and files exist after agent onboarding"
-    echo "- Tests file paths: master-ops/, INSTALL-PROMPT.txt, master-ops/ONBOARDING.md"
+    echo "- Verifies the spawned agent generated an operations repository"
+    echo "- Tests for docs/MASTER-OPERATIONS.md in the expected sandbox ops-repository candidates"
     echo ""
     echo "**B. Hook Fire-Log (sandbox-local)**"
     echo "- Verifies at least one hook fires from the sandbox during agent processing"
@@ -989,9 +996,6 @@ main() {
       exit_code=1
     fi
   fi
-
-  # Now cleanup
-  rm -rf "$RESULTS_DIR"
 
   return "$exit_code"
 }

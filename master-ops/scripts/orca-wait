@@ -34,7 +34,7 @@ Drains the unread backlog via ack-chaining, then blocks on orchestration check.
 Prints one line per non-heartbeat message: type|id|from|subject
 
 Options:
-  --once          Exit after the first non-empty batch
+  --once          Exit after one wait cycle
   --timeout-ms N  Timeout per wait (default 3300000ms)
   --types X,Y,Z   Filter by message types (passed to orca check --types)
   --help          Show this message

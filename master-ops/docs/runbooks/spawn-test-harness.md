@@ -29,6 +29,8 @@ scripts/spawn-test
 - `orca` in PATH and running (checked at startup)
 - Local clone of `mogui-ADE-orchestrator` at `{{WORKSPACE_ROOT}}`
 - Writable temp directory (uses `$TMPDIR` or `/tmp`)
+- `SPAWN_TEST_COORDINATOR_TERMINAL` or `SPAWN_TEST_COORDINATOR_RUN` set so the
+  spawned agent can send the round-trip message to the coordinator
 
 ### Runtime Selection
 
@@ -49,14 +51,14 @@ The harness tests a matrix of runtimes:
 ```
 1. Create temp directory under `$TMPDIR` or `/tmp`
 2. Clone mogui-ADE-orchestrator into sandbox (local copy)
-3. Record source commit: CLONE_SOURCE_COMMIT file
+3. Record source commit as the `source-commit` evidence entry
 4. Setup sandbox-local fire-log: `../.fire-log/spawn-test-<runtime>.jsonl` relative to the sandbox clone
 ```
 
 ### Installer Run
 
 ```
-1. orca terminal create --worktree <sandbox> --command <runtime>
+1. `orca terminal create --worktree active --command 'cd <sandbox-clone> && exec <runtime>'`
 2. Feed INSTALL-PROMPT.txt from sandbox ADE repo
 3. Agent performs onboarding in sandbox isolation
 ```
@@ -66,7 +68,7 @@ The harness tests a matrix of runtimes:
 After installer completes:
 
 **A. Structure Check**
-- Verify the sandbox clone contains `master-ops/`, `INSTALL-PROMPT.txt`, and `master-ops/ONBOARDING.md`.
+- Verify the spawned agent generated an operations repository with `docs/MASTER-OPERATIONS.md`.
 - Output: PASS or FAIL in the report.
 
 **B. Hook Fires**
@@ -76,8 +78,8 @@ After installer completes:
 
 **C. Round-Trip**
 - Check for orca orchestration message from spawned master back to coordinator
-- Message ID recorded in sandbox (ROUND_TRIP_MSG file)
-- May arrive async; pending status is acceptable on first run
+- Message ID recorded as the `msg-id-<runtime>` results entry
+- A missing round-trip fails Assertion C
 
 ### Teardown
 
@@ -101,13 +103,12 @@ Generated at: `docs/reports/spawn-test-<YYYY-MM-DD>.md`
 ### Example Summary
 
 ```markdown
-| Runtime | Status | Assertions | Wall Time | Notes |
-|---------|--------|-----------|-----------|-------|
-| claude  | PASS | A/B/C     | 127s      | Sandbox cleaned |
-| codex   | PASS | A/B/C     | 95s       | Sandbox cleaned |
-| grok    | PENDING | A/B      | 340s      | Waiting for msg |
-| agy     | blocked: provider quota | - | - | authoring-instance measurement |
-| cursor  | blocked: provider quota | - | - | authoring-instance measurement |
+| Runtime | Status | Assertions | Wall Time | Message ID | Fire Log |
+|---------|--------|-----------|-----------|------------|----------|
+| claude  | PASS | 3/3     | 127s      | msg_abc (spawn-test-alive-claude-123) | spawn-test-claude.jsonl 0->2 |
+| codex   | PASS | 3/3     | 95s       | msg_def (spawn-test-alive-codex-123) | spawn-test-codex.jsonl 0->1 |
+| agy     | blocked | - | - | - | - |
+| cursor  | blocked | - | - | - | - |
 ```
 
 ## Interpreting Results
@@ -127,7 +128,7 @@ One or both of `claude`, `codex` failed.
 - Exit code: 1
 
 ### Grok / Blocked Runtimes
-- **Grok**: Best-effort; may return PENDING if round-trip async
+- **Grok**: Best-effort; missing round-trip evidence is a failed assertion
 - **Agy/Cursor**: Blocked due to quota; recorded with reset time
 
 ## Fire-Log Instrumentation

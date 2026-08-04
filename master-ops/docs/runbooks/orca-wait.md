@@ -48,9 +48,11 @@ Detects these patterns and emits one-line warning:
 
 Exit code always 0 (fail-open); warning goes to stdout.
 
-## Settings JSON for wiring bash-poll-warn
+## Host Settings JSON for wiring bash-poll-warn
 
-Add this block to `.claude/settings.json` (or project `.claude/settings.json`):
+Wire the hook in the host settings file used by the active runtime. For Claude,
+the settings file is usually `.claude/settings.json` in the project or
+`~/.claude/settings.json` globally:
 
 ```json
 {
@@ -66,11 +68,11 @@ Add this block to `.claude/settings.json` (or project `.claude/settings.json`):
 }
 ```
 
-**Important:** Settings hooks are inert until session restart. Changing settings does not take effect mid-conversation; start a new Claude Code session for the hook to fire.
+**Important:** Settings hooks are inert until session restart. Changing settings does not take effect mid-conversation; restart the host session for the hook to fire.
 
 ## Measurement value
 
-Each bash-poll-warn firing is logged to `~/.mogui/hook-fire-log.jsonl` with session kind (worker/unknown) and CWD. This provides evidence for the enforcement-vs-discipline question: Are agents adopting orca-wait, or still reaching for hand-rolled loops under pressure?
+Each bash-poll-warn firing is logged to the configured hook fire-log path, defaulting to `$HOME/.mogui/hook-fire-log.jsonl`, with session kind (master/worker/unknown) and CWD. This provides evidence for the enforcement-vs-discipline question: Are agents adopting orca-wait, or still reaching for hand-rolled loops under pressure?
 
 Fire log fields:
 - `ts`: Unix timestamp
@@ -78,7 +80,7 @@ Fire log fields:
 - `event`: "PreToolUse(Bash)"
 - `cwd`: Working directory
 - `runtime_hint`: Optional hint from `$MOGUI_RUNTIME_HINT`
-- `session_kind`: "worker" if in orca worktree or task, else "unknown"
+- `session_kind`: "master", "worker", or "unknown"
 
 ## Related docs
 

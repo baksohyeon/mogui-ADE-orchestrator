@@ -7,7 +7,7 @@ repo_base="$(cd "$(dirname "$0")/.." && pwd)"
 
 # Build matrix: hook -> (runtime_hint, session_kind) -> (ts, count)
 # Parse and aggregate JSON lines.
-REPO_BASE="$repo_base" python3 << 'PYTHON_END'
+REPO_BASE="$repo_base" MOGUI_HOOK_FIRE_LOG="$logfile" python3 << 'PYTHON_END'
 import json
 import os
 from collections import defaultdict
@@ -25,28 +25,28 @@ else:
     except OSError as e:
         print(f"Could not read fire-log at {logfile}: {e}\n")
     else:
-      with f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(entry, dict):
-                continue
+        with f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(entry, dict):
+                    continue
 
-            hook = entry.get("hook", "unknown")
-            runtime = entry.get("runtime_hint", "unknown")
-            session = entry.get("session_kind", "unknown")
-            ts = entry.get("ts", 0)
-            if not isinstance(ts, (int, float)):
-                continue
+                hook = entry.get("hook", "unknown")
+                runtime = entry.get("runtime_hint", "unknown")
+                session = entry.get("session_kind", "unknown")
+                ts = entry.get("ts", 0)
+                if not isinstance(ts, (int, float)):
+                    continue
 
-            key = f"{runtime}|{session}"
-            matrix[hook][key]["count"] += 1
-            matrix[hook][key]["last_ts"] = max(matrix[hook][key]["last_ts"], ts)
+                key = f"{runtime}|{session}"
+                matrix[hook][key]["count"] += 1
+                matrix[hook][key]["last_ts"] = max(matrix[hook][key]["last_ts"], ts)
 
 # Print matrix header
 print("=== Hook Fire Coverage Matrix ===\n")

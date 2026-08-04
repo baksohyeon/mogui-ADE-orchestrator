@@ -26,9 +26,10 @@ same shell the agent's tool calls use; a login shell can define a different
 value, and reading the wrong one turns the check into a pass.
 
 Every shipped hook should append one fail-open fire-log record to
-`~/.mogui/hook-fire-log.jsonl` before doing its ordinary work, then continue
-even if logging fails. Read `docs/runbooks/hook-fire-observability.md` and
-`scripts/hook-coverage-report` when measuring whether hooks actually fire.
+`${MOGUI_HOOK_FIRE_LOG:-$HOME/.mogui/hook-fire-log.jsonl}` before doing its
+ordinary work, then continue even if logging fails. Read
+`docs/runbooks/hook-fire-observability.md` and `scripts/hook-coverage-report`
+when measuring whether hooks actually fire.
 
 Context-quality monitor namespace: `{{MONITOR_NS}}`
 

@@ -22,7 +22,7 @@ scripts/pr-body-check <PR#> [--repo owner/repo]
 ```
 
 Output on redaction violation:
-```
+```text
 Problem: filled
 Why this approach: filled
 What this changes: filled
@@ -54,7 +54,7 @@ Options:
 - `--limit` - Maximum PRs to scan (default: 30, always stated in output)
 
 Output format (one line per finding):
-```
+```text
 surface|number|author|locator|pattern_class
 pr_body|72|dorito|PR#72|home_path
 pr_comment|71|someone|PR#71/comments|home_path_linux
@@ -110,7 +110,7 @@ To validate the scanner works, seed a synthetic marker in a test fixture and ver
    ```
 
    Expected output:
-   ```
+   ```text
    Problem: filled
    Why this approach: filled
    What this changes: filled

@@ -85,7 +85,7 @@ This line confirms the harness state. If a protection is missing or logged count
 
 1. Check the fire-log for recent entries: `tail -50 ~/.mogui/hook-fire-log.jsonl | grep "<hook-name>"`
 2. Run the coverage report: `scripts/hook-coverage-report`
-3. If zero entries: check the wiring in `~/.claude/settings.json` (global) or `.claude/settings.json` (project-level). Hooks bind only at session start; settings changes mid-session are inert.
+3. If zero entries: check the host hook settings file. For Claude, that is usually `~/.claude/settings.json` (global) or `.claude/settings.json` (project-level). Hooks bind only at session start; settings changes mid-session are inert.
 4. If recent entries but suspected misbehavior: the hook fired but may have a logic bug; review the script and run manual self-tests.
 
 ### Adding a new hook
@@ -128,18 +128,20 @@ This line confirms the harness state. If a protection is missing or logged count
 - Appending to the fire-log must be fail-open (never block or fail the hook; `|| true` on every path).
 - One line per invocation.
 - No message bodies or secrets in the line.
-- `session_kind=master` is emitted when the hook runs from a directory that
-  contains `docs/MASTER-OPERATIONS.md`; worker markers still take precedence.
+- `session_kind=worker` is emitted when dispatch/task markers or `.orca/worktrees`
+  identify a worker, `session_kind=master` is emitted when the hook runs from a
+  directory that contains `docs/MASTER-OPERATIONS.md`, and `unknown` is the
+  fallback.
 - Hook's existing behavior must be byte-identical otherwise.
 
 ## Implementation Notes
 
-- `session_kind` is derived cheaply (presence of a dispatch/task env var or `.orca/worktrees` in cwd = worker; otherwise unknown).
+- `session_kind` is derived cheaply: dispatch/task markers or `.orca/worktrees`
+  in cwd = worker; `docs/MASTER-OPERATIONS.md` in cwd = master; otherwise
+  unknown.
 - `runtime_hint` is set via the `MOGUI_RUNTIME_HINT` environment variable (or defaults to `unknown`).
-- Timestamp is Unix epoch seconds (`date +%s`).
+- Timestamp is Unix epoch seconds from the embedded Python `int(time.time())`.
 
 ## Further Reading
 
-- Contract: `contracts/2026-08-04-hook-fire-observability.md`
-- Hook specifications: `docs/specs/2026-08-03-master-hook-skill-harness-design.md`
 - Master operations: `docs/MASTER-OPERATIONS.md`

@@ -13,6 +13,10 @@ def _read(relative: str) -> str:
     return (MASTER_OPS / relative).read_text(encoding="utf-8")
 
 
+def _read_repo(relative: str) -> str:
+    return (REPO_ROOT / relative).read_text(encoding="utf-8")
+
+
 def test_instruction_stacking_countermeasure_is_in_constitution_and_execution():
     role = _read("charter/02-role-constitution.md")
     execution = _read("charter/03-execution-principles.md")
@@ -60,3 +64,15 @@ def test_contract_conventions_include_sweep_2b_clauses():
     assert "Clause 13 (`Chat-to-docs rule`)" in conventions
     assert "Clause 11 (`Chat-to-docs rule`)" not in conventions
     assert "Explanations written in chat to resolve owner confusion are documentation candidates" in records
+
+
+def test_template_dispatch_quotes_model_and_checks_top_before_gate():
+    dispatch = _read_repo("master-ops/scripts/dispatch")
+
+    assert "shell_quote()" in dispatch
+    assert "grok --model $model_arg --always-approve" in dispatch
+    assert "cursor-agent --model $model_arg --force --trust" in dispatch
+    assert "codex --model $model_arg" in dispatch
+    assert dispatch.index('TIER=$(tier_for_model "$MODEL"') < dispatch.index('CHK=$("$GATE"')
+    assert 'TOP_APPROVED_TEXT=${TOP_APPROVED//[[:space:]]/}' in dispatch
+    assert '[ "$TIER" = "top" ] && [ -n "$TOP_APPROVED_TEXT" ]' in dispatch

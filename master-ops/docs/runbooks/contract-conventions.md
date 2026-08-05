@@ -58,7 +58,7 @@ exact.
 **Ask for the verdict, never the path.** The first action reports whether the worker is
 in the right place, not where it is:
 
-```
+```text
 FIRST ACTION (report these three, and no absolute path):
 - in_expected_worktree: yes|no   # cwd contains the `.orca/worktrees/<repo>/<slug>` segment
 - is_master_checkout:   yes|no   # yes stops the contract immediately
@@ -75,7 +75,9 @@ forward at `75cd043`, and the owner accepted the existing public exposure on
 2026-08-05, but the template defect remains unless this clause changes.
 
 An absolute path is still correct in the contract *to* the worker, because the master
-writes that instruction and it never leaves the master. The asymmetry is deliberate:
+sends that exact target downward and the worker must know where to stand. It is not
+correct in the worker's report, commit message, pull request, or review reply, because
+those are the surfaces where the path leaks back out. The asymmetry is deliberate:
 paths flow down, verdicts flow up.
 
 For ops-repository work, create an isolated `git worktree` first. The master's own

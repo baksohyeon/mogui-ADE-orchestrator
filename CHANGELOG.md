@@ -74,6 +74,9 @@ you build on it.
 
 ### Fixed
 
+- `worker-reap` now accepts clean worktrees whose branch changes are already
+  present in `origin/main` after a squash merge. The guard still leaves dirty,
+  conflicting, or content-changing worktrees in place with a reason.
 - `dispatch-gate check` no longer denies repeated contract hashes as
   `DUPLICATE_CONTRACT`; repeated ALLOW rows now carry an `attempt` ordinal so
   the ledger identifies retries by `contract_sha` plus attempt.

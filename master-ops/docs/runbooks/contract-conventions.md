@@ -235,12 +235,6 @@ The worker reports `READY` with the four measurements, or reports the exact bloc
 what it tried and why it could not proceed. The merge itself stays with the master,
 because merging is outward-facing.
 
-At merge time, re-run the thread and review measurements instead of trusting the last
-worker report. Compare `reviews[].submittedAt` with the last measured time; any bot
-review submitted after that measurement must be read in full before merging. This rule
-comes from one merged-with-unread-findings incident followed by four valid catches from
-the re-measurement duty the same night.
-
 ## 7. Merge ordering [prose]
 
 Grade basis: no existing pre-merge overlap guard or merge preflight script was
@@ -411,13 +405,22 @@ default. The worker should judge in the same work cycle whether it belongs in pu
 template docs or operations guides and route it there when recurrence would cost more
 than the doc change. Chat is not a documentation surface.
 
+## 14. Merge-time re-measurement [measured]
+
+Grade basis: one merged-with-unread-findings incident followed by four valid catches from
+the same night's re-measurement duty.
+
+At merge time, re-run the thread and review measurements instead of trusting the last
+worker report. Record `review_measured_at` immediately after fetching `reviews[]`.
+Any bot review with `submittedAt` after `review_measured_at` must be read in full
+before merging. A clean worker report is stale the moment a later bot review exists,
+and merging before reading that later review is a missed finding, not an accepted risk.
+
 ## Grade distribution (2026-08-05)
 
 - machine-enforced: 1
-- measured: 9
+- measured: 10
 - prose: 3
-
-- prose: 2
 
 Distribution is non-uniform, so these grades are based on enforceability and
 observable evidence rather than intent.
@@ -432,7 +435,7 @@ observable evidence rather than intent.
   repository's `scripts/`; read branch file sets from
   `git diff --name-only origin/main...<branch>` for both pending branches and require an
   explicit strategy token (`pre-merge` or `redispatch`) when overlap is non-zero.
-- Clause 11 (`Chat-to-docs rule`): add a review checklist item that asks whether any
+- Clause 13 (`Chat-to-docs rule`): add a review checklist item that asks whether any
   owner-confusion answer in the run should land in docs before the PR is opened.
 - Honest limit: these clauses remain prose today because no current gate in this repository
   reads those artifacts during dispatch or merge flow.

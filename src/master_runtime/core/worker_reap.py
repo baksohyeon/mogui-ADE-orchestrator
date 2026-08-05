@@ -199,13 +199,6 @@ class WorkerReaper:
         if stdout.strip():
             return False, False, f"Worktree has uncommitted changes"
 
-        # Check if branch is merged
-        code, stdout, stderr = self.orca_runner(
-            ["git", "-C", str(worktree_path), "branch", "-a", "--merged", "origin/main"]
-        )
-        if code != 0:
-            return False, False, f"Could not check merge status: {stderr}"
-
         # Get current branch
         code, branch_output, stderr = self.orca_runner(
             ["git", "-C", str(worktree_path), "branch", "--show-current"]
@@ -214,16 +207,72 @@ class WorkerReaper:
             return False, False, f"Could not get current branch: {stderr}"
 
         current_branch = branch_output.strip()
+        if not current_branch:
+            return False, False, "Could not get current branch: detached HEAD"
+
+        # Check if branch is topologically merged.
+        code, stdout, stderr = self.orca_runner(
+            ["git", "-C", str(worktree_path), "branch", "-a", "--merged", "origin/main"]
+        )
+        if code != 0:
+            return False, False, f"Could not check merge status: {stderr}"
+
         merged_branches = [
             line.strip().lstrip("* ")
             for line in stdout.strip().split("\n")
             if line.strip()
         ]
 
-        if current_branch not in merged_branches:
-            return False, False, f"Current branch {current_branch} is not merged to origin/main"
+        if current_branch in merged_branches:
+            return True, True, ""
 
-        return True, True, ""
+        squash_included, squash_reason = self._branch_changes_included_in_origin_main(
+            worktree_path
+        )
+        if squash_included:
+            return True, True, ""
+
+        return False, False, (
+            f"Current branch {current_branch} is not merged to origin/main"
+            f" ({squash_reason})"
+        )
+
+    def _branch_changes_included_in_origin_main(
+        self, worktree_path: Path
+    ) -> tuple[bool, str]:
+        """
+        True when merging HEAD into origin/main would leave origin/main unchanged.
+
+        Squash merges erase ancestry, so `git branch --merged origin/main` cannot
+        prove inclusion. A virtual merge tree catches both normal no-op merges and
+        aggregate squash commits while leaving conflicts or new tree changes unsafe.
+        """
+        code, main_tree_stdout, stderr = self.orca_runner(
+            ["git", "-C", str(worktree_path), "rev-parse", "origin/main^{tree}"]
+        )
+        if code != 0:
+            return False, f"could not resolve origin/main tree: {stderr}"
+
+        code, merge_tree_stdout, stderr = self.orca_runner(
+            [
+                "git",
+                "-C",
+                str(worktree_path),
+                "merge-tree",
+                "--write-tree",
+                "origin/main",
+                "HEAD",
+            ]
+        )
+        if code != 0:
+            return False, f"virtual merge failed: {stderr or merge_tree_stdout}"
+
+        main_tree = main_tree_stdout.strip()
+        merge_tree = merge_tree_stdout.splitlines()[0].strip() if merge_tree_stdout else ""
+        if merge_tree == main_tree:
+            return True, "branch changes are already included in origin/main"
+
+        return False, "branch changes are not included in origin/main"
 
     def _remove_worktree(self, worktree_path: Path) -> None:
         """Remove a worktree safely."""

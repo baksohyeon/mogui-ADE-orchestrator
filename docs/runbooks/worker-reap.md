@@ -45,14 +45,14 @@ If the dispatch is settled, the reaper will:
 The reaper checks three conditions before removing the worktree:
 
 1. **Git status is clean** — no uncommitted changes (`git status --porcelain` is empty)
-2. **Current branch is merged** — the checked-out branch appears in `git branch -a --merged origin/main`
+2. **Current branch is included in `origin/main`** — either the checked-out branch appears in `git branch -a --merged origin/main`, or a virtual merge of `HEAD` into `origin/main` produces the same tree as `origin/main`
 3. **Worktree exists** — the path on disk is accessible
 
 If all three are true, the worktree is removed and `worktree_removed:<path>` is logged.
 
 If **any** condition fails, the worktree is left in place and the reason is logged:
 - `worktree_left:<path>` + reason
-- Example: "Current branch feature/x is not merged to origin/main"
+- Example: "Current branch feature/x is not merged to origin/main (branch changes are not included in origin/main)"
 
 ### 4. Record the Reap
 
@@ -76,6 +76,7 @@ The reaper verifies via `orca orchestration dispatch-show` that the dispatch is 
 If a worktree has:
 - Uncommitted changes
 - An unmerged branch
+- A branch whose changes are not already present in `origin/main`
 - Missing git metadata
 - Any I/O error during inspection
 
@@ -202,7 +203,7 @@ The worktree has unsaved work. Either:
 
 ### "Current branch ... is not merged to origin/main"
 
-The feature branch exists but is not yet merged. Either:
+The feature branch exists but is not yet merged and the reaper could not prove that a squash merge already carried its changes into `origin/main`. Either:
 1. Merge the branch to main, then reap
 2. Manually verify and clean the worktree
 3. Leave the worktree and reap only the terminal

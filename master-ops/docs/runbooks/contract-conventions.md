@@ -48,13 +48,37 @@ condition, including `contracts/2026-08-03-windows-ci-measurement.md`,
 `contracts/2026-08-03-cursor-worker-pretrust.md`, and
 `contracts/2026-08-03-worker-host-diversity-redispatch.md`.
 
-Give the absolute path the worker must work in, and require `pwd` plus
-`git branch --show-current` as the first action. Then name the master's own checkout
+Give the absolute path the worker must work in, and name the master's own checkout
 explicitly as a stop condition.
 
 Naming the forbidden path precisely while describing the required one vaguely produced
 four contaminations of the master's primary working tree in one day. Both paths must be
 exact.
+
+**Ask for the verdict, never the path.** The first action reports whether the worker is
+in the right place, not where it is:
+
+```text
+FIRST ACTION (report these three, and no absolute path):
+- in_expected_worktree: yes|no   # cwd contains the `.orca/worktrees/<repo>/<slug>` segment
+- is_master_checkout:   yes|no   # yes stops the contract immediately
+- branch:               `git branch --show-current`
+```
+
+This clause used to require `pwd` in the report, and on 2026-08-05 that is what put
+home paths into PUBLIC repository history. The measured exposures were
+`mogui-agent-harness` commit `c332386` (`pwd = /Users/<owner>/.../harness-survey-0805`)
+and `mogui-ADE-orchestrator` commit `f0eed0e`
+(`**pwd:** /Users/<owner>/.../onboarding-lane-0804`). Both workers complied exactly;
+the contract instructed the disclosure. Redaction later moved the orchestrator branch
+forward at `75cd043`, and the owner accepted the existing public exposure on
+2026-08-05, but the template defect remains unless this clause changes.
+
+An absolute path is still correct in the contract *to* the worker, because the master
+sends that exact target downward and the worker must know where to stand. It is not
+correct in the worker's report, commit message, pull request, or review reply, because
+those are the surfaces where the path leaks back out. The asymmetry is deliberate:
+paths flow down, verdicts flow up.
 
 For ops-repository work, create an isolated `git worktree` first. The master's own
 checkout is not a workspace to lend out.

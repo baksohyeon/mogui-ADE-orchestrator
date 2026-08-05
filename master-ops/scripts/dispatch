@@ -417,8 +417,6 @@ fi
 # and the fourth dispatch was denied at TIER_FANOUT_CAP. The succession boot
 # card tells the operator to dry-run first, so following the procedure was what
 # exhausted the cap.
-NO_RECORD_ARGS=()
-[ "$CHECK_ONLY" = 1 ] && NO_RECORD_ARGS=(--no-record)
 TIER=$(tier_for_model "$MODEL" 2>/dev/null || echo unknown)
 # Top tier asks the owner, once, per dispatch.
 #
@@ -435,10 +433,26 @@ if [ "$TIER" = "top" ] && [ -z "$TOP_APPROVED_TEXT" ]; then
   echo "  Ask the owner, then pass the answer: --top-approved \"<reason>\""
   exit 2
 fi
-CHK=$("$GATE" --ledger "$LEDGER" check --runtime "$RUNTIME" --model "$MODEL" \
+GATE_ARGS=(--ledger "$LEDGER" check --runtime "$RUNTIME" --model "$MODEL" \
       --tier-policy "$POLICY" --contract "$CONTRACT" --agents 1 \
-      --est-chars "$EST" --completion-channel orchestration \
-      "${NO_RECORD_ARGS[@]}" 2>/dev/null)
+      --est-chars "$EST" --completion-channel orchestration)
+CHK=$("$GATE" "${GATE_ARGS[@]}" --no-record 2>/dev/null)
+ALLOW=$(echo "$CHK" | jqf "d['allow']")
+SHA=$(echo "$CHK" | jqf "d.get('contract_sha') or ''")
+if [ "$ALLOW" != "True" ]; then
+  echo "✗ gate DENY · $(echo "$CHK" | jqf "d['reason']") · model=$MODEL tier=$TIER"
+  echo "$CHK"; exit 2
+fi
+if [ "$CHECK_ONLY" = 1 ]; then
+  [ "$TIER" = "top" ] && [ -n "$TOP_APPROVED_TEXT" ] && echo "🔓 top tier approved by owner · $TOP_APPROVED"
+  COLLISION_WARN=$("$COLLISION_CHECK" "$CONTRACT" "$LEDGER" 2>/dev/null || true)
+  [ -n "$COLLISION_WARN" ] && echo "$COLLISION_WARN"
+  echo "⚙ gate ✓ $TIER · $MODEL · est $((EST/1000)).$(( (EST%1000)/100 ))k · 계약 ${SHA:0:8}"
+  exit 0
+fi
+ensure_codex_pretrust "$RUNTIME" "$WORKTREE" || exit 2
+
+CHK=$("$GATE" "${GATE_ARGS[@]}" 2>/dev/null)
 ALLOW=$(echo "$CHK" | jqf "d['allow']")
 SHA=$(echo "$CHK" | jqf "d.get('contract_sha') or ''")
 if [ "$ALLOW" != "True" ]; then
@@ -453,8 +467,6 @@ fi
 COLLISION_WARN=$("$COLLISION_CHECK" "$CONTRACT" "$LEDGER" 2>/dev/null || true)
 [ -n "$COLLISION_WARN" ] && echo "$COLLISION_WARN"
 echo "⚙ gate ✓ $TIER · $MODEL · est $((EST/1000)).$(( (EST%1000)/100 ))k · 계약 ${SHA:0:8}"
-[ "$CHECK_ONLY" = 1 ] && exit 0
-ensure_codex_pretrust "$RUNTIME" "$WORKTREE" || exit 2
 
 # 2. task-create
 TASK=$(orca orchestration task-create --spec "$SPEC" --json 2>/dev/null | jqf "d['result']['task']['id']")

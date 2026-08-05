@@ -74,6 +74,11 @@ def test_template_dispatch_quotes_model_and_checks_top_before_gate():
     assert "cursor-agent --model $model_arg --force --trust" in dispatch
     assert "codex --model $model_arg" in dispatch
     assert dispatch.index('TIER=$(tier_for_model "$MODEL"') < dispatch.index('CHK=$("$GATE"')
-    assert dispatch.index('[ "$CHECK_ONLY" = 1 ] && exit 0') < dispatch.index('ensure_codex_pretrust "$RUNTIME" "$WORKTREE"')
+    preflight = 'CHK=$("$GATE" "${GATE_ARGS[@]}" --no-record'
+    pretrust = 'ensure_codex_pretrust "$RUNTIME" "$WORKTREE"'
+    recording = 'CHK=$("$GATE" "${GATE_ARGS[@]}" 2>/dev/null)'
+    assert dispatch.index(preflight) < dispatch.index('if [ "$CHECK_ONLY" = 1 ]; then')
+    assert dispatch.index('if [ "$CHECK_ONLY" = 1 ]; then') < dispatch.index(pretrust)
+    assert dispatch.index(pretrust) < dispatch.index(recording)
     assert 'TOP_APPROVED_TEXT=${TOP_APPROVED//[[:space:]]/}' in dispatch
     assert '[ "$TIER" = "top" ] && [ -n "$TOP_APPROVED_TEXT" ]' in dispatch

@@ -148,6 +148,7 @@ def test_tier_policy_allows_worker_model(tmp_path: Path) -> None:
 
 def test_check_can_evaluate_without_recording(tmp_path: Path) -> None:
     contract = _contract(tmp_path, "dry-run allowed tier model")
+    dry_run_contract = _contract(tmp_path, "dry-run separate contract")
     gate = _gate(tmp_path, now=1_000)
 
     recorded = gate.check(
@@ -165,7 +166,7 @@ def test_check_can_evaluate_without_recording(tmp_path: Path) -> None:
         DispatchRequest(
             runtime="codex",
             model="gpt-5.6-luna",
-            contract_path=contract,
+            contract_path=dry_run_contract,
             est_input_chars=10_000,
             n_agents=1,
         ),
@@ -175,6 +176,12 @@ def test_check_can_evaluate_without_recording(tmp_path: Path) -> None:
     assert recorded.allow is True
     assert dry_run.allow is True
     assert (tmp_path / "ledger.jsonl").read_text(encoding="utf-8") == before
+    dry_run_ticket = (
+        tmp_path
+        / "dispatch-tickets"
+        / f"codex-{_sha256(dry_run_contract)[:12]}.json"
+    )
+    assert not dry_run_ticket.exists()
 
 
 def test_tier_policy_denies_top_tier_and_ledgers_model(tmp_path: Path) -> None:

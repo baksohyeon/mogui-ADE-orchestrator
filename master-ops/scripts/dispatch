@@ -1,0 +1,487 @@
+#!/bin/bash
+# One-command supervised dispatch with mechanical live log (owner architecture
+# decision 2026-08-03: the log is script stdout, not agent-formatted tokens).
+# Pipeline: gate check -> task-create -> [terminal create] -> dispatch --inject -> register.
+# Encapsulates the measured frictions: tier-policy path, contract-sha disambiguation,
+# clean model-id probe output.
+set -u
+OPS={{OPS_REPO}}
+GATE={{RUNTIME_ROOT}}/scripts/dispatch-gate
+LEDGER=~/.mogui/dispatch-ledger.jsonl
+POLICY=$OPS/model-tier-policy.json
+PROBE_BIN={{RUNTIME_ROOT}}/scripts/model-identity-probe
+SCRIPTS_DIR=$(cd "$(dirname "$0")" && pwd)
+COLLISION_CHECK="$SCRIPTS_DIR/dispatch-collision-check"
+# Master host runtime. Resolution order, most authoritative first:
+#   1. MOGUI_MASTER_HOST_RUNTIME from the launching environment
+#   2. master_host_runtime in the instance runtime config that onboarding writes
+#   3. the hardcoded fallback below, with a warning
+#
+# Getting this wrong does not fail loudly, it fails BACKWARDS: choose_default_runtime
+# avoids whatever this says the master is, so a wrong value steers workers ONTO the
+# master's real host while the guard reports success. Measured 2026-08-05 — this
+# instance runs claude, the fallback said codex, so the guard skipped codex and
+# picked claude, the first installed candidate and the actual master host. The
+# host-diversity guard was never bypassed; it was aimed at the wrong target. The
+# instance runtime config that would have supplied the right answer was absent,
+# even though onboarding step 01 verifies its existence.
+DEFAULT_MASTER_HOST_RUNTIME=codex
+INSTANCE_RUNTIME_CONFIG=${MOGUI_INSTANCE_RUNTIME_CONFIG:-$SCRIPTS_DIR/../config/instance-runtime.json}
+
+measured_master_host_runtime() {
+  [ -f "$INSTANCE_RUNTIME_CONFIG" ] || return 1
+  python3 -c "
+import json,sys
+try:
+    v=json.load(open('$INSTANCE_RUNTIME_CONFIG')).get('master_host_runtime') or ''
+except Exception:
+    v=''
+print(v)
+sys.exit(0 if v else 1)" 2>/dev/null
+}
+
+if [ -n "${MOGUI_MASTER_HOST_RUNTIME:-}" ]; then
+  MASTER_HOST_RUNTIME=$MOGUI_MASTER_HOST_RUNTIME
+  MASTER_HOST_SOURCE=env
+elif MASTER_HOST_RUNTIME=$(measured_master_host_runtime); then
+  MASTER_HOST_SOURCE=instance-config
+else
+  MASTER_HOST_RUNTIME=$DEFAULT_MASTER_HOST_RUNTIME
+  MASTER_HOST_SOURCE=fallback
+fi
+RUNTIME_CANDIDATES="claude codex cursor grok gemini opencode"
+
+usage() {
+  echo "usage: dispatch --contract FILE --spec TEXT (--terminal HANDLE | --worktree SELECTOR) \\"
+  echo "                [--model ID] [--runtime NAME] [--same-host-reason TEXT]"
+  echo "                [--est-chars N] [--transcript-glob GLOB] [--check-only]"
+  echo "  --transcript-glob: worker transcript location for the model probe"
+  echo "                     (default: derived for claude from --worktree when possible)"
+  exit 1
+}
+
+MODEL=claude-haiku-4-5-20251001
+# 1 when the caller named the model. An explicit id is never silently replaced;
+# an unnamed one is derived for the chosen runtime from the tier policy.
+MODEL_EXPLICIT=0
+TGLOB_EXPLICIT=0
+EST=3000
+TERMINAL="" WORKTREE="" CONTRACT="" SPEC="" RUNTIME="" SAME_HOST_REASON="" CHECK_ONLY=0
+TGLOB=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --contract) CONTRACT=$2; shift 2;;
+    --spec) SPEC=$2; shift 2;;
+    --terminal) TERMINAL=$2; shift 2;;
+    --worktree) WORKTREE=$2; shift 2;;
+    --model) MODEL=$2; MODEL_EXPLICIT=1; shift 2;;
+    --runtime) RUNTIME=$2; shift 2;;
+    --same-host-reason) SAME_HOST_REASON=$2; shift 2;;
+    --est-chars) EST=$2; shift 2;;
+    --transcript-glob) TGLOB=$2; TGLOB_EXPLICIT=1; shift 2;;
+    --check-only) CHECK_ONLY=1; shift;;
+    *) usage;;
+  esac
+done
+[ -z "$CONTRACT" ] || [ ! -f "$CONTRACT" ] && { echo "✗ contract file missing: $CONTRACT" >&2; exit 1; }
+[ "$CHECK_ONLY" = 0 ] && [ -z "$SPEC" ] && usage
+
+jqf() { python3 -c "import json,sys;d=json.load(sys.stdin);print($1)"; }
+
+# model-identity-probe lives in the orchestrator and resolves its instance config
+# relative to that checkout, where the product-path guard correctly forbids the
+# master from writing. Point it at the operations copy instead, so there is one
+# file rather than two that can drift.
+export INSTANCE_RUNTIME_CONFIG="$INSTANCE_RUNTIME_CONFIG"
+
+# Transcript glob for a model probe, per runtime.
+#
+# A glob that is not scoped to this worker is worse than no probe: it picks the
+# newest match and "confirms" a model from an unrelated session, possibly the
+# master's own. Measured 2026-08-05 — an earlier dispatch printed a passing model
+# probe with nothing verifiable behind it.
+#
+# claude keys its transcript directory off the working directory, so an exact
+# per-worktree glob is derivable. Other runtimes store the working directory
+# inside the JSONL instead of in the path, so no glob can scope them; those
+# report unavailable rather than guessing.
+transcript_glob_for() {
+  local runtime="$1" wt="$2" mangled
+  case "$runtime" in
+    claude)
+      [ -n "$wt" ] || return 1
+      mangled=$(printf '%s' "${wt#path:}" | sed 's|[/.]|-|g')
+      echo "$HOME/.claude/projects/$mangled/*.jsonl"
+      ;;
+    *) return 1;;
+  esac
+}
+
+installed_runtimes() {
+  for runtime in $RUNTIME_CANDIDATES; do
+    if command -v "$runtime" >/dev/null 2>&1; then
+      printf '%s\n' "$runtime"
+    fi
+  done
+}
+
+join_csv() {
+  python3 -c "import sys; print(', '.join([x.strip() for x in sys.stdin if x.strip()]))"
+}
+
+choose_default_runtime() {
+  installed_runtimes | while IFS= read -r runtime; do
+    [ "$runtime" = "$MASTER_HOST_RUNTIME" ] && continue
+    echo "$runtime"
+    break
+  done
+}
+
+# Start-screen markers, per agent host. A start screen is IDLE, so
+# `terminal wait --for tui-idle` reports it ready and an inject sent there is
+# lost with every step still printing success. Extend this list the first time a
+# host shows a gate that is not here yet; a missing marker is a silent delivery
+# failure, which is the whole defect this guards (mgm-68m, mgm-wgk).
+START_SCREEN_MARKERS='Resume session|New worktree|Coming from Claude Code|Changelog$|Select a model|Welcome to Claude|Do you trust the files|Sign in|press enter to continue|/login'
+
+pane_gate() {
+  if orca terminal read --terminal "$1" --limit 40 2>/dev/null \
+     | grep -qE "$START_SCREEN_MARKERS"; then
+    echo start-screen
+  else
+    echo prompt
+  fi
+}
+
+pane_last_output() {
+  orca terminal show --terminal "$1" --json 2>/dev/null | python3 -c "
+import json,sys
+try: print(json.load(sys.stdin)['result']['terminal'].get('lastOutputAt') or 0)
+except Exception: print(0)"
+}
+
+# True when the pane emitted anything after the inject. This is evidence that
+# something arrived, never evidence that the spec was understood. Compares
+# against the value sampled immediately before the inject, because sampling
+# afterwards cannot see output that already landed.
+pane_advanced() {
+  local i after
+  for i in 1 2 3 4 5 6; do
+    sleep 5
+    after=$(pane_last_output "$1")
+    [ -n "$after" ] && [ "$after" != "$PRE_INJECT_AT" ] && return 0
+  done
+  return 1
+}
+
+runtime_command() {
+  case "$1" in
+    # Pass the model id through unchanged. This line used to strip a trailing
+    # -<digits> with ${MODEL%-[0-9]*}, which turns claude-sonnet-5 into
+    # claude-sonnet, claude-opus-5 into claude-opus, and claude-fable-5 into
+    # claude-fable — none of which exist. Measured 2026-08-05: a worker
+    # dispatched at claude-sonnet-5 came up reporting "there is an issue with
+    # the selected model (claude-sonnet)" and never began work, while the gate
+    # had already passed the correct id. Only the dated haiku id survived the
+    # strip, which is why the default kept working and every override died.
+    claude) echo "claude --model $MODEL --dangerously-skip-permissions";;
+    # Non-interactive approval flags, so a first visit to a worktree cannot stop
+    # a worker on a trust prompt. Every flag below was measured from that CLI's
+    # own --help on 2026-08-05, per the registry rule in MASTER-OPERATIONS
+    # "Agent Launch Approval Posture": use the installed CLI's flags to their
+    # maximum, measured, never guessed. Until 2026-08-05 only claude carried one
+    # and every other host launched bare, which is a trust prompt waiting to
+    # happen on each of them.
+    grok) echo "grok --always-approve";;
+    cursor) echo "cursor --force --trust";;
+    # Codex keeps the registry's pre-trust posture rather than a launch flag.
+    # It does now expose --dangerously-bypass-approvals-and-sandbox, measured
+    # 2026-08-05 and newer than the registry's 2026-08-02 entry, but that flag
+    # disables the sandbox as well as approvals. Weakening a sandbox is not a
+    # side effect to take on while fixing a delivery bug, so the safer measured
+    # path stays and the operator is told when it has not run.
+    codex) echo "codex";;
+    gemini) echo "gemini";;
+    opencode) echo "opencode";;
+    *) echo "$1";;
+  esac
+}
+
+PRETRUST_BIN={{RUNTIME_ROOT}}/scripts/codex-worker-pretrust
+
+# The registry prescribes pre-trust for codex instead of a launch flag. RUN it
+# here rather than telling the operator to. A manual step in front of a dispatch
+# is a step that gets skipped, and the thing it prevents is precisely the gate
+# that swallowed a dispatch on 2026-08-05: an untrusted worktree shows a trust
+# prompt, the prompt is idle, tui-idle calls it ready, and the injected spec is
+# lost while every step reports success.
+#
+# Fail closed on a skipped summary. The script says so itself: the skip path
+# leaves the trust prompt in place, so proceeding would hand the worker a gate.
+ensure_codex_pretrust() {
+  [ "$1" = "codex" ] || return 0
+  local wt_path="${2#path:}" out summary
+  if [ -z "$wt_path" ] || [ "${wt_path#/}" = "$wt_path" ]; then
+    echo "✗ codex needs an absolute worktree path to pre-trust; got '${2:-<none>}'" >&2
+    echo "  codex has no launch approval flag by registry decision, so an untrusted worktree" >&2
+    echo "  will stop the worker on a trust prompt that reads as idle. Dispatch with --worktree" >&2
+    echo "  path:<absolute-path>, or choose a runtime whose approval flag is measured." >&2
+    return 1
+  fi
+  if [ ! -x "$PRETRUST_BIN" ]; then
+    echo "✗ codex pre-trust script not executable: $PRETRUST_BIN" >&2
+    return 1
+  fi
+  out=$("$PRETRUST_BIN" "$wt_path" 2>&1) || {
+    echo "✗ codex pre-trust failed (exit $?)" >&2; printf '%s\n' "$out" >&2; return 1; }
+  summary=$(printf '%s\n' "$out" | grep -m1 '^Summary:' || true)
+  case "$summary" in
+    *skipped*)
+      echo "✗ codex pre-trust reported: $summary" >&2
+      echo "  A skipped summary leaves the trust prompt in place, which is a delivery gate," >&2
+      echo "  not a warning. Resolve pre-trust or dispatch to a different runtime." >&2
+      return 1;;
+    "")
+      echo "✗ codex pre-trust produced no Summary line — unmeasured, treating as not trusted" >&2
+      printf '%s\n' "$out" >&2; return 1;;
+    *)
+      echo "pre-trust ✓ codex · $summary";;
+  esac
+}
+
+record_host_diversity_audit() {
+  [ "$CHECK_ONLY" = 1 ] && return 0
+  python3 - "$LEDGER" "$RUNTIME" "$MASTER_HOST_RUNTIME" "$INSTALLED_RUNTIMES" "$ALTERNATIVE_RUNTIMES" "$SAME_HOST_REASON" "$TASK" "$DISP" "$SHA" <<'EOF'
+import json
+import sys
+import time
+
+ledger, runtime, master, installed, alternatives, reason, task, dispatch, sha = sys.argv[1:]
+entry = {
+    "ts": time.time(),
+    "kind": "host_diversity_audit",
+    "runtime": runtime,
+    "master_host_runtime": master,
+    "same_host": runtime == master,
+    "same_host_reason": reason or None,
+    "installed_runtimes": [x.strip() for x in installed.split(",") if x.strip()],
+    "alternative_runtimes": [x.strip() for x in alternatives.split(",") if x.strip()],
+    "orchestration_task": task,
+    "job_id": dispatch,
+    "contract_sha": sha,
+}
+with open(ledger, "a", encoding="utf-8") as fh:
+    fh.write(json.dumps(entry, sort_keys=True, separators=(",", ":")) + "\n")
+EOF
+}
+
+if [ -z "$RUNTIME" ]; then
+  RUNTIME=$(choose_default_runtime)
+fi
+[ -z "$RUNTIME" ] && RUNTIME=$MASTER_HOST_RUNTIME
+
+if [ "$MASTER_HOST_SOURCE" = fallback ]; then
+  echo "WARNING: master host runtime is the hardcoded fallback '$MASTER_HOST_RUNTIME' — not measured."
+  echo "         The host-diversity guard avoids whatever this says, so a wrong value aims it at the"
+  echo "         wrong host and sends workers onto the master's own runtime while reporting success."
+  echo "         Fix by writing master_host_runtime into $INSTANCE_RUNTIME_CONFIG (onboarding step 01"
+  echo "         already verifies that file), or export MOGUI_MASTER_HOST_RUNTIME for this shell."
+fi
+
+INSTALLED_RUNTIMES=$(installed_runtimes | join_csv)
+ALTERNATIVE_RUNTIMES=$(installed_runtimes | grep -vx "$MASTER_HOST_RUNTIME" | join_csv)
+ensure_codex_pretrust "$RUNTIME" "$WORKTREE" || exit 2
+
+# The model id and the runtime are chosen independently, so nothing stopped a
+# claude model id from being declared for a codex or grok worker. That is not a
+# cosmetic mismatch: the ledger records declared_model, and the register step
+# greps the worker's transcript for it, so a mismatch writes a false record and
+# then "verifies" it against the wrong string. Measured 2026-08-05: with
+# --runtime grok the gate line printed claude-haiku-4-5-20251001 while a Grok
+# pane was starting.
+#
+# Fail closed rather than inventing a runtime-to-model mapping here. The charter
+# already requires the exact model to be stated in every dispatch, so the fix is
+# to make the caller state it.
+model_vendor() {
+  case "$1" in
+    claude-*) echo claude;;
+    gpt-*|o3*|o4*|codex-*) echo codex;;
+    grok-*) echo grok;;
+    gemini-*) echo gemini;;
+    *) echo unknown;;
+  esac
+}
+# When the caller did not name a model, derive one for the chosen runtime from
+# the tier policy instead of leaving the claude-shaped default in place. No new
+# mapping is invented: the policy already lists the allowed ids, and the vendor
+# prefix already tells us which host can run each one. Prefer the efficient tier,
+# per the charter's lowest-sufficient-tier rule.
+default_model_for_runtime() {
+  python3 -c "
+import json,sys
+runtime='$1'
+def vendor(m):
+    m=m.lower()
+    if m.startswith('claude-'): return 'claude'
+    if m.startswith(('gpt-','o3','o4','codex-')): return 'codex'
+    if m.startswith('grok-'): return 'grok'
+    if m.startswith('gemini-'): return 'gemini'
+    return 'unknown'
+try:
+    tiers=json.load(open('$POLICY'))['tiers']
+except Exception:
+    sys.exit(1)
+for tier in ('efficient','top'):
+    for m in tiers.get(tier,[]):
+        if vendor(m)==runtime:
+            print(m); sys.exit(0)
+sys.exit(1)" 2>/dev/null
+}
+
+if [ "$MODEL_EXPLICIT" != 1 ]; then
+  if DERIVED=$(default_model_for_runtime "$RUNTIME") && [ -n "$DERIVED" ]; then
+    [ "$DERIVED" != "$MODEL" ] && echo "model derived for runtime $RUNTIME from tier policy: $DERIVED"
+    MODEL=$DERIVED
+  fi
+fi
+
+MODEL_VENDOR=$(model_vendor "$MODEL")
+if [ "$MODEL_VENDOR" != unknown ] && [ "$MODEL_VENDOR" != "$RUNTIME" ]; then
+  echo "✗ model/runtime mismatch · model=$MODEL (vendor $MODEL_VENDOR) runtime=$RUNTIME" >&2
+  echo "  A model id from one vendor cannot run on another host. Declaring it anyway writes a" >&2
+  echo "  false declared_model into the ledger and makes the register probe grep for a string" >&2
+  echo "  the worker will never emit." >&2
+  echo "  Pass --model with an id this runtime can run, or pass --runtime $MODEL_VENDOR." >&2
+  echo "  Installed runtimes here: ${INSTALLED_RUNTIMES:-none}. Allowed ids per tier: $POLICY" >&2
+  exit 2
+fi
+
+if [ "$RUNTIME" = "$MASTER_HOST_RUNTIME" ]; then
+  if [ -n "$SAME_HOST_REASON" ]; then
+    echo "same-host acknowledged: runtime=$RUNTIME matches master host; reason=$SAME_HOST_REASON; alternatives=${ALTERNATIVE_RUNTIMES:-none}"
+  else
+    echo "WARNING: worker runtime '$RUNTIME' matches master host '$MASTER_HOST_RUNTIME'; installed alternatives: ${ALTERNATIVE_RUNTIMES:-none}"
+  fi
+fi
+
+# 1. gate check
+CHK=$("$GATE" --ledger "$LEDGER" check --runtime "$RUNTIME" --model "$MODEL" \
+      --tier-policy "$POLICY" --contract "$CONTRACT" --agents 1 \
+      --est-chars "$EST" --completion-channel orchestration 2>/dev/null)
+ALLOW=$(echo "$CHK" | jqf "d['allow']")
+SHA=$(echo "$CHK" | jqf "d.get('contract_sha') or ''")
+TIER=$(python3 -c "
+import json
+p=json.load(open('$POLICY'))
+print(next((t for t,ms in p['tiers'].items() if '$MODEL'.lower() in [m.lower() for m in ms]),'unknown'))")
+if [ "$ALLOW" != "True" ]; then
+  echo "✗ gate DENY · $(echo "$CHK" | jqf "d['reason']") · model=$MODEL tier=$TIER"
+  echo "$CHK"; exit 2
+fi
+COLLISION_WARN=$("$COLLISION_CHECK" "$CONTRACT" "$LEDGER" 2>/dev/null || true)
+[ -n "$COLLISION_WARN" ] && echo "$COLLISION_WARN"
+echo "⚙ gate ✓ $TIER · $MODEL · est $((EST/1000)).$(( (EST%1000)/100 ))k · 계약 ${SHA:0:8}"
+[ "$CHECK_ONLY" = 1 ] && exit 0
+
+# 2. task-create
+TASK=$(orca orchestration task-create --spec "$SPEC" --json 2>/dev/null | jqf "d['result']['task']['id']")
+[ -z "$TASK" ] && { echo "✗ task-create failed" >&2; exit 3; }
+
+# 3. terminal (reuse or create in worktree)
+KIND="재사용"
+if [ -z "$TERMINAL" ]; then
+  KIND="신규"
+  TERMINAL=$(orca terminal create --worktree "$WORKTREE" \
+    --command "$(runtime_command "$RUNTIME")" --json 2>/dev/null \
+    | jqf "d['result']['terminal']['handle']")
+  [ -z "$TERMINAL" ] && { echo "✗ terminal create failed" >&2; exit 3; }
+  orca terminal wait --terminal "$TERMINAL" --for tui-idle --timeout-ms 60000 --json >/dev/null 2>&1
+fi
+echo "→ $TASK → $TERMINAL ($KIND)"
+
+# 4. dispatch --inject
+# Sample the pane's output clock BEFORE injecting. Sampling afterwards cannot
+# distinguish "the agent answered" from "nothing has happened yet", because both
+# read as whatever the last value happens to be.
+PRE_INJECT_AT=$(pane_last_output "$TERMINAL")
+DISP=$(orca orchestration dispatch --task "$TASK" --to "$TERMINAL" --inject --json 2>/dev/null \
+       | jqf "d['result']['dispatch']['id']")
+[ -z "$DISP" ] && { echo "✗ dispatch failed" >&2; exit 3; }
+
+# 5. resolve the model probe target honestly before registering.
+if [ "$TGLOB_EXPLICIT" = 1 ]; then
+  PROBE_STATE="explicit-glob"
+elif DERIVED_GLOB=$(transcript_glob_for "$RUNTIME" "$WORKTREE"); then
+  TGLOB=$DERIVED_GLOB
+  PROBE_STATE="scoped-to-worktree"
+else
+  PROBE_STATE="unavailable"
+fi
+
+MODEL_PROBE_ARGS=()
+if [ "$PROBE_STATE" != unavailable ]; then
+  MODEL_PROBE_ARGS=(--model-probe-cmd "$PROBE_BIN --transcript \$(ls -t $TGLOB 2>/dev/null | head -1) | grep -o '$MODEL' | head -1")
+fi
+
+# 5b. register (job probe = ledger-vs-dispatch-show; model probe only when it can
+# be scoped to THIS worker — an unscoped glob confirms a model from whatever
+# session happens to be newest, which is a false pass, not a measurement)
+REG=$("$GATE" --ledger "$LEDGER" register --job-id "$DISP" --contract-sha "$SHA" \
+      --runtime "$RUNTIME" --tier-policy "$POLICY" \
+      --probe-cmd "orca orchestration dispatch-show --task $TASK --json 2>/dev/null | grep -o $DISP | head -1" \
+      --orchestration-task "$TASK" --declared-model "$MODEL" \
+      "${MODEL_PROBE_ARGS[@]}" 2>/dev/null)
+if [ "$(echo "$REG" | jqf "d['allow']")" != "True" ]; then
+  echo "✗ register $(echo "$REG" | jqf "d['reason']") · dispatch=$DISP (worker IS running — resolve register manually)"
+  exit 4
+fi
+record_host_diversity_audit
+WARN=$(echo "$REG" | jqf "','.join(d.get('warnings',[]))")
+case "$PROBE_STATE" in
+  unavailable)
+    PROBE_LABEL="model=unavailable(no scoped transcript for runtime $RUNTIME — not a pass)";;
+  scoped-to-worktree) PROBE_LABEL="model=transcript실측(worktree-scoped)";;
+  *) PROBE_LABEL="model=transcript실측(caller glob)";;
+esac
+echo "⚡ register ✓ $DISP${WARN:+ · warn:$WARN} · probe: job=원장대조 $PROBE_LABEL"
+if [ "$PROBE_STATE" = unavailable ]; then
+  echo "  The declared model $MODEL was NOT verified against the worker. This runtime stores its"
+  echo "  working directory inside the transcript rather than in the path, so no glob can scope a"
+  echo "  probe to one worker. Verify by hand before treating declared_model as measured, or pass"
+  echo "  --transcript-glob with a path you have confirmed belongs to this worker."
+fi
+
+# 6. delivery check — register is not delivery.
+#
+# `terminal wait --for tui-idle` in step 3 cannot tell a prompt that is ready
+# from a start screen that is waiting on a menu: both are idle. So the inject in
+# step 4 can land on a menu and vanish while every step above reports success.
+# Measured 2026-08-05: a grok worker sat on New worktree / Resume session /
+# Changelog / Quit with an empty prompt after `register ✓` printed, and the spec
+# was never consumed (mgm-wgk, mgm-68m).
+#
+# Do not "fix" this by sending the spec again. Sending text into that menu exits
+# the pane — measured the same day, same worker.
+if [ "$(pane_gate "$TERMINAL")" = "start-screen" ]; then
+  echo "✗ delivery FAILED · pane is on a start-screen gate, not a prompt · the spec was NOT consumed"
+  echo "  task=$TASK terminal=$TERMINAL dispatch=$DISP"
+  echo "  Read the pane and classify it before doing anything else (worker-stall-triage):"
+  echo "    orca terminal read --terminal $TERMINAL --limit 40"
+  echo "  A start-screen gate, a limit condition, and a dead process need three different answers."
+  echo "  Do NOT re-send the spec into a menu; that exits the pane. Dismiss the gate first."
+  exit 5
+fi
+
+# Say which of the three outcomes happened. Silence would mean both "delivered"
+# and "the check never ran", and a surface where absence has two meanings is the
+# defect this whole file spent 2026-08-05 removing.
+if pane_advanced "$TERMINAL"; then
+  echo "✓ delivery ✓ pane produced output after inject · the spec reached the agent"
+  echo "  This is evidence something arrived, not that it was understood. Read the pane to check"
+  echo "  the agent is doing the contracted work: orca terminal read --terminal $TERMINAL --limit 40"
+else
+  echo "⚠ delivery UNVERIFIED · pane produced no new output after inject"
+  echo "  Not a failure and not a pass: the agent may be thinking, or may never have received the spec."
+  echo "  Verify before trusting the dispatch: orca terminal read --terminal $TERMINAL --limit 40"
+fi

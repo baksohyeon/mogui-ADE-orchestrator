@@ -1,52 +1,51 @@
 #!/bin/bash
-# Read-only coverage report: hook by (runtime_hint, session_kind) matrix with last-fired timestamp and count.
+# Read-only coverage report: hook × (runtime_hint, session_kind) matrix with last-fired timestamp and count.
 # Lists all hooks in scripts/hooks/ that have zero fire-log entries.
 
-logfile="${MOGUI_HOOK_FIRE_LOG:-$HOME/.mogui/hook-fire-log.jsonl}"
-repo_base="$(cd "$(dirname "$0")/.." && pwd)"
+logfile=~/.mogui/hook-fire-log.jsonl
+
+if [ ! -f "$logfile" ]; then
+  echo "No fire-log found at $logfile (no hook invocations yet)"
+  exit 0
+fi
 
 # Build matrix: hook -> (runtime_hint, session_kind) -> (ts, count)
-# Parse and aggregate JSON lines.
-REPO_BASE="$repo_base" MOGUI_HOOK_FIRE_LOG="$logfile" python3 << 'PYTHON_END'
+# Use awk to parse and aggregate JSON lines
+python3 << 'PYTHON_END'
 import json
 import os
 from collections import defaultdict
 from datetime import datetime
 
-logfile = os.environ.get("MOGUI_HOOK_FIRE_LOG") or os.path.expanduser("~/.mogui/hook-fire-log.jsonl")
+logfile = os.path.expanduser("~/.mogui/hook-fire-log.jsonl")
+if not os.path.exists(logfile):
+    print("No fire-log found (no hook invocations yet)")
+    exit(0)
 
 matrix = defaultdict(lambda: defaultdict(lambda: {"count": 0, "last_ts": 0}))
 
-if not os.path.exists(logfile):
-    print(f"No fire-log found at {logfile} (no hook invocations yet)\n")
-else:
-    try:
-        f = open(logfile, encoding="utf-8")
-    except OSError as e:
-        print(f"Could not read fire-log at {logfile}: {e}\n")
-    else:
-        with f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    entry = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(entry, dict):
-                    continue
+try:
+    with open(logfile) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
 
-                hook = entry.get("hook", "unknown")
-                runtime = entry.get("runtime_hint", "unknown")
-                session = entry.get("session_kind", "unknown")
-                ts = entry.get("ts", 0)
-                if not isinstance(ts, (int, float)):
-                    continue
+            hook = entry.get("hook", "unknown")
+            runtime = entry.get("runtime_hint", "unknown")
+            session = entry.get("session_kind", "unknown")
+            ts = entry.get("ts", 0)
 
-                key = f"{runtime}|{session}"
-                matrix[hook][key]["count"] += 1
-                matrix[hook][key]["last_ts"] = max(matrix[hook][key]["last_ts"], ts)
+            key = f"{runtime}|{session}"
+            matrix[hook][key]["count"] += 1
+            matrix[hook][key]["last_ts"] = max(matrix[hook][key]["last_ts"], ts)
+except Exception as e:
+    print(f"Error reading fire-log: {e}", file=__import__('sys').stderr)
+    exit(1)
 
 # Print matrix header
 print("=== Hook Fire Coverage Matrix ===\n")
@@ -54,24 +53,22 @@ print(f"{'Hook':<25} {'Runtime|Session':<20} {'Count':>6} {'Last Fired (UTC)':>2
 print("-" * 80)
 
 # Sort and print matrix entries
-if matrix:
-    for hook in sorted(matrix.keys()):
-        first = True
-        for key in sorted(matrix[hook].keys()):
-            count = matrix[hook][key]["count"]
-            ts = matrix[hook][key]["last_ts"]
-            last_fired = datetime.utcfromtimestamp(ts).isoformat() if ts > 0 else "never"
+for hook in sorted(matrix.keys()):
+    first = True
+    for key in sorted(matrix[hook].keys()):
+        count = matrix[hook][key]["count"]
+        ts = matrix[hook][key]["last_ts"]
+        last_fired = datetime.utcfromtimestamp(ts).isoformat() if ts > 0 else "never"
 
-            hook_display = hook if first else ""
-            print(f"{hook_display:<25} {key:<20} {count:>6} {last_fired:>26}")
-            first = False
-else:
-    print("(no hook invocations recorded)")
+        hook_display = hook if first else ""
+        print(f"{hook_display:<25} {key:<20} {count:>6} {last_fired:>26}")
+        first = False
 
 # List hooks with zero entries
 print("\n=== Never-Fired Hooks (Measurement Targets) ===\n")
 
-repo_base = os.environ.get("REPO_BASE", "")
+hooks_dir = os.path.expanduser("~/..")
+repo_base = "{{OPS_REPO}}"
 hooks_dir = os.path.join(repo_base, "scripts/hooks")
 
 if os.path.isdir(hooks_dir):

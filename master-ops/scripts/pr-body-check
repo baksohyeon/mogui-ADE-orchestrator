@@ -48,9 +48,6 @@ shift
 REPO_OVERRIDE=""
 BODY_FILE=""
 TEMPLATE_FILE=""
-TMP_PR_BODY=""
-TMP_TEMPLATE_BODY=""
-trap 'rm -f "$TMP_PR_BODY" "$TMP_TEMPLATE_BODY"' EXIT
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -94,17 +91,12 @@ if [ -n "$BODY_FILE" ]; then
     echo "error: body file not found: $BODY_FILE" >&2
     exit 2
   }
-  PR_BODY_PATH="$BODY_FILE"
+  PR_BODY="$(<"$BODY_FILE")"
 else
-  TMP_PR_BODY="$(mktemp)" || {
-    echo "error: failed to create temporary PR body file" >&2
-    exit 2
-  }
-  gh pr view "$PR_NUMBER" --repo "$REPO" --json body --jq .body > "$TMP_PR_BODY" 2>/dev/null || {
+  PR_BODY="$(gh pr view "$PR_NUMBER" --repo "$REPO" --json body --jq .body 2>/dev/null)" || {
     echo "error: failed to fetch PR #$PR_NUMBER body from $REPO" >&2
     exit 2
   }
-  PR_BODY_PATH="$TMP_PR_BODY"
 fi
 
 if [ -n "$TEMPLATE_FILE" ]; then
@@ -112,26 +104,17 @@ if [ -n "$TEMPLATE_FILE" ]; then
     echo "error: template file not found: $TEMPLATE_FILE" >&2
     exit 2
   }
-  TEMPLATE_BODY_PATH="$TEMPLATE_FILE"
+  TEMPLATE_BODY="$(<"$TEMPLATE_FILE")"
 else
-  TMP_TEMPLATE_BODY="$(mktemp)" || {
-    echo "error: failed to create temporary template body file" >&2
-    exit 2
-  }
-  TEMPLATE_CONTENT="$(gh api "repos/$REPO/contents/.github/pull_request_template.md" --jq '.content' 2>/dev/null)" || {
+  TEMPLATE_BODY="$(gh api "repos/$REPO/contents/.github/pull_request_template.md" --jq '.content' 2>/dev/null | python3 -c 'import base64,sys;print(base64.b64decode(sys.stdin.read()).decode("utf-8"))')" || {
     echo "error: failed to fetch .github/pull_request_template.md from $REPO" >&2
     exit 2
   }
-  printf '%s' "$TEMPLATE_CONTENT" | python3 -c 'import base64,sys;print(base64.b64decode(sys.stdin.read()).decode("utf-8"))' > "$TMP_TEMPLATE_BODY" || {
-    echo "error: failed to decode .github/pull_request_template.md from $REPO" >&2
-    exit 2
-  }
-  TEMPLATE_BODY_PATH="$TMP_TEMPLATE_BODY"
 fi
 
 SECTIONS_CSV="$(IFS=,; echo "${SECTION_HEADINGS[*]}")"
 
-python3 - "$SECTIONS_CSV" "$PR_BODY_PATH" "$TEMPLATE_BODY_PATH" <<'PY'
+python3 - "$SECTIONS_CSV" "$PR_BODY" "$TEMPLATE_BODY" <<'PY'
 import re
 import sys
 
@@ -172,7 +155,7 @@ def scan_redaction(text):
     """Check for redaction violations: absolute home paths, identity-bearing strings."""
     # Patterns from product repo gitleaks config
     redaction_patterns = [
-        ("home_path", "/" r"Users/[A-Za-z0-9._-]+"),
+        ("home_path", r"/Users/[A-Za-z0-9._-]+"),
         ("home_path_linux", r"/home/[A-Za-z0-9._-]+"),
     ]
 
@@ -187,10 +170,8 @@ def scan_redaction(text):
 
 
 target_sections = [item.strip() for item in sys.argv[1].split(",") if item.strip()]
-with open(sys.argv[2], "r", encoding="utf-8") as f:
-    pr_body = f.read()
-with open(sys.argv[3], "r", encoding="utf-8") as f:
-    template_body = f.read()
+pr_body = sys.argv[2]
+template_body = sys.argv[3]
 
 pr_sections = split_sections(pr_body)
 template_sections = split_sections(template_body)

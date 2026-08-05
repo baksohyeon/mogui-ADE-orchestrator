@@ -1,0 +1,198 @@
+#!/bin/bash
+# Fail-open warning helper: never gate dispatch, never non-zero on analysis misses.
+set -u
+
+CONTRACT=${1:-}
+LEDGER=${2:-"$HOME/.mogui/dispatch-ledger.jsonl"}
+MOGUI_PRODUCT_REPO=${MOGUI_PRODUCT_REPO:-"baksohyeon/mogui-ADE-orchestrator"}
+
+[ -z "$CONTRACT" ] && exit 0
+[ ! -f "$CONTRACT" ] && exit 0
+
+python3 - "$CONTRACT" "$LEDGER" "$MOGUI_PRODUCT_REPO" <<'PY'
+import fnmatch
+import hashlib
+import json
+import pathlib
+import re
+import subprocess
+import sys
+
+DONE = {"completed", "failed", "cancelled", "expired", "revoked"}
+MAX_DISPATCH_CHECKS = 64
+
+
+def scope_files(contract_text, tracked, root):
+    lines = contract_text.splitlines()
+    clause = ""
+    for i, line in enumerate(lines):
+        if not line.startswith("- Scope:"):
+            continue
+        parts = [line.split(":", 1)[1].strip()]
+        j = i + 1
+        while j < len(lines) and lines[j].startswith("  "):
+            parts.append(lines[j].strip())
+            j += 1
+        clause = " ".join([x for x in parts if x]).strip()
+        break
+    if not clause:
+        return []
+    raw_tokens = re.findall(r"`([^`]+)`", clause)
+    plain = re.sub(r"`[^`]+`", " ", clause)
+    raw_tokens += re.findall(r"(?<!\w)(?:\.?/)?[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)+(?:/)?", plain)
+    raw_tokens += re.findall(r"(?<!\w)(?:\.?/)?[A-Za-z0-9._-]+\.[A-Za-z0-9._-]+", plain)
+    files, seen = set(), set()
+    for token in raw_tokens:
+        token = token.strip().strip(".,;:()[]")
+        if not token:
+            continue
+        trailing = token.endswith("/")
+        token = token.replace("\\", "/")
+        if token.startswith("./"):
+            token = token[2:]
+        if token.startswith("master-ops/"):
+            token = token[len("master-ops/") :]
+        token = token.lstrip("/")
+        token = token.rstrip("/") + ("/" if trailing else "")
+        if (
+            not token
+            or " " in token
+            or token.startswith("##")
+            or token in {"json", "yaml", "yml", "md", "txt"}
+            or ("/" not in token and "." not in token)
+            or token in seen
+        ):
+            continue
+        seen.add(token)
+        if token.endswith("/"):
+            files.update([p for p in tracked if p.startswith(token)])
+            continue
+        if any(ch in token for ch in "*?["):
+            files.update([p for p in tracked if fnmatch.fnmatch(p, token)])
+            continue
+        if token in tracked:
+            files.add(token)
+            continue
+        joined = root / token
+        if joined.exists():
+            if joined.is_file():
+                files.add(token)
+            else:
+                files.update([p for p in tracked if p.startswith(token + "/")])
+            continue
+        files.add(token)
+    return sorted(files)
+
+
+def main():
+    try:
+        contract = pathlib.Path(sys.argv[1]).resolve()
+        ledger = pathlib.Path(sys.argv[2]).expanduser()
+        product_repo = sys.argv[3] if len(sys.argv) > 3 else "baksohyeon/mogui-ADE-orchestrator"
+        root = pathlib.Path(
+            subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip()
+        )
+        tracked = [x.strip() for x in subprocess.check_output(["git", "ls-files"], text=True).splitlines() if x.strip()]
+        current_files = scope_files(contract.read_text(encoding="utf-8"), tracked, root)
+        if not current_files:
+            return
+        current = set(current_files)
+
+        warnings = []
+        try:
+            prs = json.loads(
+                subprocess.check_output(
+                    ["gh", "pr", "list", "--state", "open", "--json", "number", "--repo", product_repo],
+                    text=True,
+                    stderr=subprocess.DEVNULL,
+                )
+            )
+        except Exception:
+            prs = []
+        for pr in prs:
+            number = str(pr.get("number", "")).strip()
+            if not number:
+                continue
+            try:
+                detail = json.loads(
+                    subprocess.check_output(
+                        ["gh", "pr", "view", number, "--json", "number,files", "--repo", product_repo],
+                        text=True,
+                        stderr=subprocess.DEVNULL,
+                    )
+                )
+            except Exception:
+                continue
+            pr_files = {f.get("path") for f in detail.get("files", []) if f.get("path")}
+            # Compare scope files (ops-relative) against PR files, accounting for master-ops/ prefix in PR
+            overlap_set = set()
+            for scope_file in current:
+                if scope_file in pr_files or f"master-ops/{scope_file}" in pr_files:
+                    overlap_set.add(scope_file)
+            overlap = sorted(overlap_set)
+            if overlap:
+                warnings.append((f"PR #{detail.get('number')}", overlap))
+
+        scoped_by_sha = {}
+        for md in sorted(contract.parent.glob("*.md")):
+            sha = hashlib.sha256(md.read_bytes()).hexdigest()
+            files = scope_files(md.read_text(encoding="utf-8"), tracked, root)
+            if files:
+                scoped_by_sha[sha] = files
+
+        recent = {}
+        if ledger.exists():
+            for raw in ledger.read_text(encoding="utf-8").splitlines():
+                if not raw.strip():
+                    continue
+                try:
+                    row = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if row.get("decision") != "ALLOW":
+                    continue
+                dispatch_id = row.get("job_id")
+                task_id = row.get("orchestration_task")
+                contract_sha = row.get("contract_sha")
+                if not dispatch_id or not task_id or not contract_sha:
+                    continue
+                prev = recent.get(dispatch_id)
+                ts = float(row.get("ts") or 0.0)
+                if prev is None or ts >= prev["ts"]:
+                    recent[dispatch_id] = {"task_id": task_id, "contract_sha": contract_sha, "ts": ts}
+        candidates = sorted(recent.items(), key=lambda item: item[1]["ts"], reverse=True)[:MAX_DISPATCH_CHECKS]
+        for dispatch_id, payload in candidates:
+            scoped = scoped_by_sha.get(payload["contract_sha"])
+            if not scoped:
+                continue
+            try:
+                detail = json.loads(
+                    subprocess.check_output(
+                        ["orca", "orchestration", "dispatch-show", "--task", payload["task_id"], "--json"],
+                        text=True,
+                        stderr=subprocess.DEVNULL,
+                        timeout=8,
+                    )
+                )
+            except Exception:
+                continue
+            dispatch = detail.get("result", {}).get("dispatch", {})
+            status = dispatch.get("status")
+            if not status or status in DONE:
+                continue
+            overlap = sorted(current.intersection(scoped))
+            if overlap:
+                owner = dispatch.get("id") or dispatch_id
+                warnings.append((f"dispatch {owner}", overlap))
+
+        for owner, files in warnings:
+            print(f"WARNING: scope overlap with {owner} on {', '.join(files)}")
+    except Exception:
+        # Constraint: warning analysis must never stop dispatch progress.
+        return
+
+
+main()
+PY
+
+exit 0

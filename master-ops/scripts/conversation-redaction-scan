@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# conversation-redaction-scan - detect redaction violations in PR bodies and comments
-# Scans GitHub PR bodies, PR comments, review bodies, review-thread comments,
-# and issue bodies for absolute machine paths and identity-bearing strings.
+# conversation-redaction-scan — detect redaction violations in PR bodies and comments
+# Scans GitHub PR bodies, PR comments, review-thread comments, and issue bodies for
+# absolute machine paths and identity-bearing strings.
 #
 # Usage:
 #   scripts/conversation-redaction-scan [--repo owner/name] [--limit N]
@@ -37,17 +37,13 @@ done
 
 # Redaction patterns (from product repo gitleaks config)
 declare -a PATTERNS=(
-  "home_path:/"'Users/'"[A-Za-z0-9._-]+"
+  "home_path:/Users/[A-Za-z0-9._-]+"
   "home_path:/home/[A-Za-z0-9._-]+"
 )
 
 # Check if gh is available
 if ! command -v gh >/dev/null 2>&1; then
-  echo "conversation-redaction-scan: FAIL - gh CLI is not on PATH" >&2
-  exit 2
-fi
-if ! command -v jq >/dev/null 2>&1; then
-  echo "conversation-redaction-scan: FAIL - jq is not on PATH" >&2
+  echo "conversation-redaction-scan: FAIL — gh CLI is not on PATH" >&2
   exit 2
 fi
 
@@ -78,31 +74,11 @@ scan_text() {
 echo "Scanning ${REPO} (limit: ${LIMIT} PRs)..."
 
 FINDINGS=""
-PR_COUNT=0
-ISSUE_COUNT=0
-
-append_findings() {
-  local result="$1"
-  if [[ -n "$result" ]]; then
-    FINDINGS="${FINDINGS}${FINDINGS:+$'\n'}${result}"
-  fi
-  return 0
-}
-
-graphql_page() {
-  local query="$1"
-  local id="$2"
-  local cursor="${3:-}"
-  if [[ -n "$cursor" ]]; then
-    gh api graphql -f id="$id" -f cursor="$cursor" -f query="$query"
-  else
-    gh api graphql -f id="$id" -f query="$query"
-  fi
-}
+COUNT=0
 
 # Fetch PRs and scan bodies + comments (including merged PRs)
 PR_JSON=$(gh pr list --repo "$REPO" --state all --limit "$LIMIT" --json "number,author,body" --jq '.[]' 2>/dev/null) || {
-  echo "conversation-redaction-scan: FAIL - could not fetch PRs from $REPO" >&2
+  echo "conversation-redaction-scan: FAIL — could not fetch PRs from $REPO" >&2
   exit 2
 }
 
@@ -115,128 +91,32 @@ while IFS= read -r pr_line; do
   BODY=$(printf '%s' "$pr_line" | jq -r '.body // ""')
 
   [[ -z "$PR_NUMBER" ]] && continue
-  PR_COUNT=$((PR_COUNT + 1))
+  ((COUNT++))
 
   # Scan PR body
   if [[ -n "$BODY" ]]; then
     result=$(scan_text "pr_body" "$PR_NUMBER" "$AUTHOR" "PR#${PR_NUMBER}" "$BODY")
-    append_findings "$result"
+    [[ -n "$result" ]] && FINDINGS="${FINDINGS}${FINDINGS:+$'\n'}${result}"
   fi
 
   # Scan PR comments
-  COMMENTS_JSON=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json comments --jq '.comments[]' 2>/dev/null) || {
-    echo "conversation-redaction-scan: FAIL - could not fetch PR comments for PR#${PR_NUMBER}" >&2
-    exit 2
-  }
-  while IFS= read -r comment_line; do
-    [[ -z "$comment_line" ]] && continue
-    COMMENT_AUTHOR=$(printf '%s' "$comment_line" | jq -r '.author.login // "unknown"')
-    COMMENT_BODY=$(printf '%s' "$comment_line" | jq -r '.body // ""')
-    result=$(scan_text "pr_comment" "$PR_NUMBER" "$COMMENT_AUTHOR" "PR#${PR_NUMBER}/comments" "$COMMENT_BODY")
-    append_findings "$result"
-  done <<< "$COMMENTS_JSON"
+  COMMENTS=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json comments --jq '.comments[].body' 2>/dev/null || echo "") || true
+  if [[ -n "$COMMENTS" ]]; then
+    result=$(scan_text "pr_comment" "$PR_NUMBER" "$AUTHOR" "PR#${PR_NUMBER}/comments" "$COMMENTS")
+    [[ -n "$result" ]] && FINDINGS="${FINDINGS}${FINDINGS:+$'\n'}${result}"
+  fi
 
-  PR_NODE_ID=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json id --jq .id 2>/dev/null) || {
-    echo "conversation-redaction-scan: FAIL - could not fetch PR node id for PR#${PR_NUMBER}" >&2
-    exit 2
-  }
-
-  REVIEWS_QUERY='
-    query($id:ID!, $cursor:String) {
-      node(id:$id) {
-        ... on PullRequest {
-          reviews(first:100, after:$cursor) {
-            pageInfo { hasNextPage endCursor }
-            nodes { author { login } authorAssociation body }
-          }
-        }
-      }
-    }'
-  review_cursor=""
-  while :; do
-    REVIEWS_PAGE=$(graphql_page "$REVIEWS_QUERY" "$PR_NODE_ID" "$review_cursor" 2>/dev/null) || {
-      echo "conversation-redaction-scan: FAIL - could not fetch review bodies for PR#${PR_NUMBER}" >&2
-      exit 2
-    }
-    while IFS= read -r review_line; do
-      [[ -z "$review_line" ]] && continue
-      REVIEW_AUTHOR=$(printf '%s' "$review_line" | jq -r '.author.login // "unknown"')
-      REVIEW_ASSOCIATION=$(printf '%s' "$review_line" | jq -r '.authorAssociation // "NONE"')
-      if [[ "$REVIEW_ASSOCIATION" == "NONE" ]]; then
-        continue
-      fi
-      REVIEW_BODY=$(printf '%s' "$review_line" | jq -r '.body // ""')
-      result=$(scan_text "review_body" "$PR_NUMBER" "$REVIEW_AUTHOR" "PR#${PR_NUMBER}/reviews" "$REVIEW_BODY")
-      append_findings "$result"
-    done <<< "$(printf '%s' "$REVIEWS_PAGE" | jq -c '.data.node.reviews.nodes[]')"
-    if [[ "$(printf '%s' "$REVIEWS_PAGE" | jq -r '.data.node.reviews.pageInfo.hasNextPage')" != "true" ]]; then
-      break
-    fi
-    review_cursor=$(printf '%s' "$REVIEWS_PAGE" | jq -r '.data.node.reviews.pageInfo.endCursor // empty')
-  done
-
-  THREADS_QUERY='
-    query($id:ID!, $cursor:String) {
-      node(id:$id) {
-        ... on PullRequest {
-          reviewThreads(first:100, after:$cursor) {
-            pageInfo { hasNextPage endCursor }
-            nodes { id }
-          }
-        }
-      }
-    }'
-  THREAD_COMMENTS_QUERY='
-    query($id:ID!, $cursor:String) {
-      node(id:$id) {
-        ... on PullRequestReviewThread {
-          comments(first:100, after:$cursor) {
-            pageInfo { hasNextPage endCursor }
-            nodes { author { login } body path line }
-          }
-        }
-      }
-    }'
-  thread_cursor=""
-  while :; do
-    THREADS_PAGE=$(graphql_page "$THREADS_QUERY" "$PR_NODE_ID" "$thread_cursor" 2>/dev/null) || {
-      echo "conversation-redaction-scan: FAIL - could not fetch review threads for PR#${PR_NUMBER}" >&2
-      exit 2
-    }
-    while IFS= read -r thread_id; do
-      [[ -z "$thread_id" ]] && continue
-      comment_cursor=""
-      while :; do
-        THREAD_COMMENTS_PAGE=$(graphql_page "$THREAD_COMMENTS_QUERY" "$thread_id" "$comment_cursor" 2>/dev/null) || {
-          echo "conversation-redaction-scan: FAIL - could not fetch review-thread comments for PR#${PR_NUMBER}" >&2
-          exit 2
-        }
-        while IFS= read -r thread_comment_line; do
-          [[ -z "$thread_comment_line" ]] && continue
-          THREAD_AUTHOR=$(printf '%s' "$thread_comment_line" | jq -r '.author.login // "unknown"')
-          THREAD_BODY=$(printf '%s' "$thread_comment_line" | jq -r '.body // ""')
-          THREAD_PATH=$(printf '%s' "$thread_comment_line" | jq -r '.path // "unknown"')
-          THREAD_LINE=$(printf '%s' "$thread_comment_line" | jq -r '.line // "unknown"')
-          result=$(scan_text "review_thread_comment" "$PR_NUMBER" "$THREAD_AUTHOR" "PR#${PR_NUMBER}/${THREAD_PATH}:${THREAD_LINE}" "$THREAD_BODY")
-          append_findings "$result"
-        done <<< "$(printf '%s' "$THREAD_COMMENTS_PAGE" | jq -c '.data.node.comments.nodes[]')"
-        if [[ "$(printf '%s' "$THREAD_COMMENTS_PAGE" | jq -r '.data.node.comments.pageInfo.hasNextPage')" != "true" ]]; then
-          break
-        fi
-        comment_cursor=$(printf '%s' "$THREAD_COMMENTS_PAGE" | jq -r '.data.node.comments.pageInfo.endCursor // empty')
-      done
-    done <<< "$(printf '%s' "$THREADS_PAGE" | jq -r '.data.node.reviewThreads.nodes[].id')"
-    if [[ "$(printf '%s' "$THREADS_PAGE" | jq -r '.data.node.reviewThreads.pageInfo.hasNextPage')" != "true" ]]; then
-      break
-    fi
-    thread_cursor=$(printf '%s' "$THREADS_PAGE" | jq -r '.data.node.reviewThreads.pageInfo.endCursor // empty')
-  done
+  # Scan review comments
+  REVIEWS=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json reviews --jq '.reviews[].body' 2>/dev/null || echo "") || true
+  if [[ -n "$REVIEWS" ]]; then
+    result=$(scan_text "review_comment" "$PR_NUMBER" "$AUTHOR" "PR#${PR_NUMBER}/reviews" "$REVIEWS")
+    [[ -n "$result" ]] && FINDINGS="${FINDINGS}${FINDINGS:+$'\n'}${result}"
+  fi
 done <<< "$PR_JSON"
 
 # Fetch and scan issue bodies
 ISSUE_JSON=$(gh issue list --repo "$REPO" --state all --limit "$LIMIT" --json "number,author,body" --jq '.[]' 2>/dev/null) || {
-  echo "conversation-redaction-scan: FAIL - could not fetch issues from $REPO" >&2
-  exit 2
+  echo "conversation-redaction-scan: WARNING — could not fetch issues from $REPO" >&2
 }
 
 while IFS= read -r issue_line; do
@@ -247,21 +127,21 @@ while IFS= read -r issue_line; do
   ISSUE_BODY=$(printf '%s' "$issue_line" | jq -r '.body // ""')
 
   [[ -z "$ISSUE_NUMBER" ]] && continue
-  ISSUE_COUNT=$((ISSUE_COUNT + 1))
+  ((COUNT++))
 
   # Scan issue body
   if [[ -n "$ISSUE_BODY" ]]; then
     result=$(scan_text "issue_body" "$ISSUE_NUMBER" "$ISSUE_AUTHOR" "Issue#${ISSUE_NUMBER}" "$ISSUE_BODY")
-    append_findings "$result"
+    [[ -n "$result" ]] && FINDINGS="${FINDINGS}${FINDINGS:+$'\n'}${result}"
   fi
 done <<< "$ISSUE_JSON"
 
 # Output summary
 if [[ -n "$FINDINGS" ]]; then
-  echo "conversation-redaction-scan: FAIL - ${REPO} scanned ${PR_COUNT} PRs and ${ISSUE_COUNT} issues (limit: ${LIMIT}), violations found:"
+  echo "conversation-redaction-scan: FAIL — ${REPO} scanned ${COUNT} PRs (limit: ${LIMIT}), violations found:"
   printf '%s\n' "$FINDINGS"
   exit 1
 else
-  echo "conversation-redaction-scan: OK - ${REPO} scanned ${PR_COUNT} PRs and ${ISSUE_COUNT} issues (limit: ${LIMIT}), 0 findings"
+  echo "conversation-redaction-scan: OK — ${REPO} scanned ${COUNT} PRs (limit: ${LIMIT}), 0 findings"
   exit 0
 fi

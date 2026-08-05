@@ -41,6 +41,29 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+Master tooling promotion from operations repository (2026-08-05 measurement,
+provenance `mgm-w7m.5`):
+
+- Promoted the measured operations `scripts/` tooling into the template so
+  cards and runbooks that call `dispatch`, `measure`, `harness-selfcheck.sh`,
+  collision checks, stewardship status, workstream rendering, spawn tests, and
+  Orca surface checks have delivered files in fresh installs.
+- De-instanced promoted scripts by replacing the source runtime root,
+  operations repository, and workspace root with existing onboarding tokens.
+  The substitution order is longest path first:
+  `{{RUNTIME_ROOT}}`, then `{{OPS_REPO}}`, then `{{WORKSPACE_ROOT}}`.
+- Kept the transcript probe default out of the template as a machine-specific
+  mangled Claude path; `dispatch` now derives a Claude transcript glob from the
+  worker worktree when it can be scoped, and otherwise records the probe as
+  unavailable instead of inheriting the source machine's directory name.
+- Left out `scripts/hooks/product-path-guard.sh` because it encodes the source
+  owner's sibling product repositories and has no existing template token that
+  can express that product list without leaking instance state.
+- Existing installations do not auto-update. To adopt this entry, copy or merge
+  the promoted scripts into the generated operations repository, keep local
+  instance config files and tier-policy values local, and wire hooks only after
+  confirming the target install's host settings.
+
 Workspace session card onboarding (2026-08-05 owner decision; measured gap:
 no step created the workspace-root session card):
 

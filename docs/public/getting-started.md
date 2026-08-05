@@ -42,7 +42,7 @@ From the clone of this repository, one command measures the full set including s
 $ bash scripts/onboarding-preflight.sh
 ```
 
-Any FAIL exits 1 with `BLOCKED`. WARNs do not exit 1 by themselves and, when essential, are repeated in the closing summary. `PREFLIGHT_WAIVE` can downgrade a named check from FAIL to a printed waiver; the summary says that out loud rather than pretending the tool is present. Onboarding runs this as Step 0, so you do not have to keep the table in your head.
+Any FAIL exits 1 with `BLOCKED`; if a required check cannot be satisfied, set `PREFLIGHT_WAIVE=<check-label>` to downgrade that named check to a printed, counted waiver. WARNs do not exit 1 by themselves and, when essential, are repeated in the closing summary. The summary says a waiver out loud rather than pretending the tool is present. Onboarding runs this as Step 0, so you do not have to keep the table in your head.
 
 Verified on the authoring host against the preflight script and live checks: `orca status` / `orca status --json`, `bash scripts/onboarding-preflight.sh`, `git --version`, `gh --version`, `python3 --version`, and the agent CLIs that resolve on `PATH`. Platform notes below that this host cannot open (Linux package names, Windows installer UI) are marked as such.
 

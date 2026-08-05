@@ -17,6 +17,8 @@ The kind determines what a session can do on its first command, not merely where
 
 **Terminal.** A live session inside a workspace. Agents, including masters, are terminals.
 
+**Run.** A durable orchestration context bound to a terminal that holds its tasks, dispatches, and mailbox across individual sessions.
+
 ## Where The Master Sits, And Why
 
 The master coordinates every repository in the workspace, so its seat is the workspace-level workspace:

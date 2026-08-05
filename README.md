@@ -104,7 +104,8 @@ The core is stdlib-only, so you can call it without Orca and without setup. You 
 $ cd mogui-ADE-orchestrator
 $ scripts/master-succeed detect "routine status update" --context-ratio 0.7 --json
 $ scripts/dispatch-gate --ledger /tmp/gate.jsonl check \
-  --runtime codex --contract README.md --agents 1 --est-chars 1000
+  --runtime codex --model grok-4.5 --contract README.md --agents 1 --est-chars 1000 \
+  --completion-channel orchestration
 $ scripts/adapter doctor
 ```
 

@@ -236,8 +236,12 @@ class DispatchGate:
         self.config = config or DispatchGateConfig()
         self._clock = clock or time.time
 
-    def check(self, request: DispatchRequest) -> GateDecision:
-        """Return a gate decision and append it to the ledger."""
+    def check(self, request: DispatchRequest, *, record: bool = True) -> GateDecision:
+        """Return a gate decision, optionally appending it to the ledger."""
+
+        def append_decision(decision: GateDecision) -> None:
+            if record:
+                self._append_decision(request, decision)
 
         # Per-call, reset before anything can append: entries written before the
         # policy loads must not inherit a digest from an earlier check. One gate
@@ -252,13 +256,13 @@ class DispatchGate:
         est_input_chars = request.est_input_chars
         if est_input_chars is None:
             decision = GateDecision(False, ReasonCode.CONTRACT_UNREADABLE)
-            self._append_decision(request, decision)
+            append_decision(decision)
             return decision
 
         validation_error = _validate_request(request)
         if validation_error is not None:
             decision = GateDecision(False, validation_error)
-            self._append_decision(request, decision)
+            append_decision(decision)
             return decision
 
         try:
@@ -269,7 +273,7 @@ class DispatchGate:
                 ReasonCode.TIER_POLICY_UNAVAILABLE,
                 message=f"tier_policy={self.config.tier_policy_path}",
             )
-            self._append_decision(request, decision)
+            append_decision(decision)
             return decision
 
         self._tier_policy_digest = tier_policy.digest
@@ -296,7 +300,7 @@ class DispatchGate:
                                 f"window_seconds={tier_policy.window_seconds}"
                             ),
                         )
-                        self._append_decision(request, decision)
+                        append_decision(decision)
                         return decision
                     tier_override = request.tier_override.strip()
             # An unlisted model resolves to the unknown tier rather than being
@@ -320,7 +324,7 @@ class DispatchGate:
                         ReasonCode.TIER_POLICY,
                         message=f"model={model}",
                     )
-                    self._append_decision(request, decision)
+                    append_decision(decision)
                     return decision
                 tier_override = request.tier_override.strip()
             else:
@@ -330,7 +334,7 @@ class DispatchGate:
             contract_content = _contract_content(request.contract_path)
         except FileNotFoundError:
             decision = GateDecision(False, ReasonCode.CONTRACT_UNREADABLE)
-            self._append_decision(request, decision)
+            append_decision(decision)
             return decision
         contract_sha = _contract_sha_from_content(contract_content)
         lint_warnings = _contract_lint_warnings(
@@ -355,7 +359,7 @@ class DispatchGate:
                 contract_sha=contract_sha,
                 cost_proxy=cost_proxy,
             )
-            self._append_decision(request, decision)
+            append_decision(decision)
             return decision
 
         if (
@@ -369,7 +373,7 @@ class DispatchGate:
                 contract_sha=contract_sha,
                 cost_proxy=cost_proxy,
             )
-            self._append_decision(request, decision)
+            append_decision(decision)
             return decision
 
         runtime = request.runtime.lower()
@@ -381,7 +385,7 @@ class DispatchGate:
                 contract_sha=contract_sha,
                 cost_proxy=cost_proxy,
             )
-            self._append_decision(request, decision)
+            append_decision(decision)
             return decision
 
         warnings = lint_warnings
@@ -396,8 +400,9 @@ class DispatchGate:
             cost_proxy=cost_proxy,
             tier_override=tier_override,
         )
-        self._append_decision(request, decision)
-        self._issue_dispatch_ticket(request, decision)
+        append_decision(decision)
+        if record:
+            self._issue_dispatch_ticket(request, decision)
         return decision
 
     def register_job(

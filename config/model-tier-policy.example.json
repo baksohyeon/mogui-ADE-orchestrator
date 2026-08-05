@@ -4,7 +4,7 @@
     "version": "Must be 2 for tier × fan-out caps. Version 1 identity allow/deny is legacy.",
     "agents": "Inventory of measured agent CLIs. Each entry records runtime name, version when measurable, and model_ids the CLI actually advertised. Never guess a model id — use the string unknown when a field cannot be measured. The gate does not require this array; it is for humans and for rebuilding tiers after re-measure.",
     "tiers": "Map of tier name to model id list. Put only measured (or owner-named) model ids here. Unlisted models fall into the reserved unknown tier.",
-    "fanout_caps": "Per-tier cap on agents dispatched inside window_seconds. A missing key, including for unknown, means uncapped (same rule for every tier). When set, unknown should stay looser than top so an unlisted model id is not punished as frontier. Owner directive 2026-08-04 retired the daily one-per-day top cap.",
+    "fanout_caps": "Per-tier cap on agents dispatched inside window_seconds. A missing key, including for top and unknown, means uncapped (same rule for every tier). Owner directive 2026-08-05 removed the top-tier fanout cap; top-tier dispatch asks the owner through master-ops/scripts/dispatch --top-approved instead.",
     "window_seconds": "Rolling window for the fan-out cap (seconds). Default 86400 (one day).",
     "consent": "Record whether the owner allowed the inventory probe: yes, no, or manual-only. Template default is no until onboarding writes the owner answer. Does not affect gate parsing."
   },
@@ -27,7 +27,6 @@
     "efficient": []
   },
   "fanout_caps": {
-    "top": 4,
     "unknown": 8
   },
   "window_seconds": 86400

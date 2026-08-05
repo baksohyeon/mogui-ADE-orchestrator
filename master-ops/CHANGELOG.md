@@ -57,6 +57,22 @@ Contract convention merge-time re-measurement and citation repair (2026-08-05 wo
   `docs/charter/04-worker-routing-review.md` into the generated operations
   repository and preserve local additions deliberately.
 
+Dispatch policy and review voice promotion from operations repository
+(owner directive 2026-08-05):
+
+- `master-ops/scripts/dispatch` now passes measured model flags through to
+  `codex`, `grok`, and `cursor-agent`, and uses `cursor-agent` rather than the
+  `cursor` updater command.
+- `dispatch --check-only` now calls `dispatch-gate check --no-record`, so dry
+  runs inspect the real ledger without appending a row that later fan-out caps
+  count as spent budget.
+- The shipped tier policy no longer caps `top`; top-tier dispatch now asks the
+  owner directly through `dispatch --top-approved "<reason>"`, while
+  `unknown: 8` stays capped.
+- `docs/runbooks/review-voice.md` now carries rules 8 through 10 and widens
+  those rules to every written surface, including chat, commit messages, code
+  comments, and self-checks.
+
 Master tooling promotion from operations repository (2026-08-05 measurement,
 provenance `mgm-w7m.5`):
 

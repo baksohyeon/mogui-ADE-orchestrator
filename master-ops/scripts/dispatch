@@ -8,7 +8,7 @@ set -u
 OPS={{OPS_REPO}}
 GATE={{RUNTIME_ROOT}}/scripts/dispatch-gate
 LEDGER=~/.mogui/dispatch-ledger.jsonl
-POLICY=$OPS/model-tier-policy.json
+TEMPLATE_POLICY=$OPS/model-tier-policy.json
 PROBE_BIN={{RUNTIME_ROOT}}/scripts/model-identity-probe
 SCRIPTS_DIR=$(cd "$(dirname "$0")" && pwd)
 COLLISION_CHECK="$SCRIPTS_DIR/dispatch-collision-check"
@@ -54,6 +54,8 @@ RUNTIME_CANDIDATES="claude codex cursor grok gemini opencode"
 usage() {
   echo "usage: dispatch --contract FILE --spec TEXT (--terminal HANDLE | --worktree SELECTOR) \\"
   echo "                [--model ID] [--runtime NAME] [--same-host-reason TEXT]"
+  echo "                [--top-approved TEXT]"
+  echo "                [--tier-policy FILE]"
   echo "                [--est-chars N] [--transcript-glob GLOB] [--check-only]"
   echo "  --transcript-glob: worker transcript location for the model probe"
   echo "                     (default: derived for claude from --worktree when possible)"
@@ -67,6 +69,9 @@ MODEL_EXPLICIT=0
 TGLOB_EXPLICIT=0
 EST=3000
 TERMINAL="" WORKTREE="" CONTRACT="" SPEC="" RUNTIME="" SAME_HOST_REASON="" CHECK_ONLY=0
+TIER_POLICY_OVERRIDE=""
+# Owner approval for a top-tier model, carrying the reason. Empty means unasked.
+TOP_APPROVED=""
 TGLOB=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -80,11 +85,33 @@ while [ $# -gt 0 ]; do
     --est-chars) EST=$2; shift 2;;
     --transcript-glob) TGLOB=$2; TGLOB_EXPLICIT=1; shift 2;;
     --check-only) CHECK_ONLY=1; shift;;
+    --top-approved) TOP_APPROVED=$2; shift 2;;
+    --tier-policy) TIER_POLICY_OVERRIDE=$2; shift 2;;
     *) usage;;
   esac
 done
 [ -z "$CONTRACT" ] || [ ! -f "$CONTRACT" ] && { echo "✗ contract file missing: $CONTRACT" >&2; exit 1; }
 [ "$CHECK_ONLY" = 0 ] && [ -z "$SPEC" ] && usage
+
+resolve_tier_policy() {
+  if [ -n "$TIER_POLICY_OVERRIDE" ]; then
+    echo "$TIER_POLICY_OVERRIDE"
+    return
+  fi
+  if [ -n "${DISPATCH_TIER_POLICY:-}" ]; then
+    echo "$DISPATCH_TIER_POLICY"
+    return
+  fi
+  runtime_root=$(cd "$(dirname "$GATE")/.." 2>/dev/null && pwd || true)
+  instance_policy=$runtime_root/config/model-tier-policy.json
+  if [ -n "$runtime_root" ] && [ -f "$instance_policy" ]; then
+    echo "$instance_policy"
+    return
+  fi
+  echo "$TEMPLATE_POLICY"
+}
+
+POLICY=$(resolve_tier_policy)
 
 jqf() { python3 -c "import json,sys;d=json.load(sys.stdin);print($1)"; }
 
@@ -174,7 +201,18 @@ pane_advanced() {
   return 1
 }
 
+shell_quote() {
+  python3 - "$1" <<'EOF'
+import shlex
+import sys
+
+print(shlex.quote(sys.argv[1]))
+EOF
+}
+
 runtime_command() {
+  local model_arg
+  model_arg=$(shell_quote "$MODEL")
   case "$1" in
     # Pass the model id through unchanged. This line used to strip a trailing
     # -<digits> with ${MODEL%-[0-9]*}, which turns claude-sonnet-5 into
@@ -184,7 +222,7 @@ runtime_command() {
     # the selected model (claude-sonnet)" and never began work, while the gate
     # had already passed the correct id. Only the dated haiku id survived the
     # strip, which is why the default kept working and every override died.
-    claude) echo "claude --model $MODEL --dangerously-skip-permissions";;
+    claude) echo "claude --model $model_arg --dangerously-skip-permissions";;
     # Non-interactive approval flags, so a first visit to a worktree cannot stop
     # a worker on a trust prompt. Every flag below was measured from that CLI's
     # own --help on 2026-08-05, per the registry rule in MASTER-OPERATIONS
@@ -192,15 +230,27 @@ runtime_command() {
     # maximum, measured, never guessed. Until 2026-08-05 only claude carried one
     # and every other host launched bare, which is a trust prompt waiting to
     # happen on each of them.
-    grok) echo "grok --always-approve";;
-    cursor) echo "cursor --force --trust";;
+    # Model flag measured from each CLI's own --help on 2026-08-05, same pass
+    # that found codex launching without one. gemini and opencode are absent
+    # from PATH here, so their flags stay unmeasured and their lines unchanged:
+    # an unmeasured flag is a guess, and the registry rule forbids guessing one.
+    grok) echo "grok --model $model_arg --always-approve";;
+    cursor) echo "cursor-agent --model $model_arg --force --trust";;
     # Codex keeps the registry's pre-trust posture rather than a launch flag.
     # It does now expose --dangerously-bypass-approvals-and-sandbox, measured
     # 2026-08-05 and newer than the registry's 2026-08-02 entry, but that flag
     # disables the sandbox as well as approvals. Weakening a sandbox is not a
     # side effect to take on while fixing a delivery bug, so the safer measured
     # path stays and the operator is told when it has not run.
-    codex) echo "codex";;
+    # The model flag is separate from the approval posture above and was missing
+    # here until 2026-08-05. The gate validated a model id, the tier policy
+    # recorded it, and the launcher dropped it: two codex dispatches declared
+    # gpt-5.6-luna and gpt-5.6-sol while the pane footer read gpt-5.5 both times,
+    # and MODEL_PROBE_FAILED meant nothing caught the gap. For codex the ledger
+    # entry was a claim, not a fact. `-m, --model <MODEL>` measured from
+    # `codex --help` on 2026-08-05, per the registry rule: use the installed
+    # CLI's own flags, measured, never guessed.
+    codex) echo "codex --model $model_arg";;
     gemini) echo "gemini";;
     opencode) echo "opencode";;
     *) echo "$1";;
@@ -290,7 +340,6 @@ fi
 
 INSTALLED_RUNTIMES=$(installed_runtimes | join_csv)
 ALTERNATIVE_RUNTIMES=$(installed_runtimes | grep -vx "$MASTER_HOST_RUNTIME" | join_csv)
-ensure_codex_pretrust "$RUNTIME" "$WORKTREE" || exit 2
 
 # The model id and the runtime are chosen independently, so nothing stopped a
 # claude model id from being declared for a codex or grok worker. That is not a
@@ -339,6 +388,23 @@ for tier in ('efficient','top'):
 sys.exit(1)" 2>/dev/null
 }
 
+tier_for_model() {
+  python3 - "$POLICY" "$1" <<'EOF'
+import json
+import sys
+
+policy_path, model = sys.argv[1:3]
+with open(policy_path, encoding="utf-8") as fh:
+    policy = json.load(fh)
+model_key = model.casefold()
+for tier, models in policy.get("tiers", {}).items():
+    if model_key in [str(item).casefold() for item in models]:
+        print(tier)
+        sys.exit(0)
+print("unknown")
+EOF
+}
+
 if [ "$MODEL_EXPLICIT" != 1 ]; then
   if DERIVED=$(default_model_for_runtime "$RUNTIME") && [ -n "$DERIVED" ]; then
     [ "$DERIVED" != "$MODEL" ] && echo "model derived for runtime $RUNTIME from tier policy: $DERIVED"
@@ -366,23 +432,69 @@ if [ "$RUNTIME" = "$MASTER_HOST_RUNTIME" ]; then
 fi
 
 # 1. gate check
-CHK=$("$GATE" --ledger "$LEDGER" check --runtime "$RUNTIME" --model "$MODEL" \
+#
+# Under --check-only the gate evaluates without recording. A dry run exists to
+# report whether the real ledger would pass, so it must not append a row that a
+# later fanout cap counts as spent budget. Measured 2026-08-05: three of the
+# four top-tier slots consumed that day were dry runs and one real worker ran,
+# and the fourth dispatch was denied at TIER_FANOUT_CAP. The succession boot
+# card tells the operator to dry-run first, so following the procedure was what
+# exhausted the cap.
+TIER=$(tier_for_model "$MODEL" 2>/dev/null || echo unknown)
+# Top tier asks the owner, once, per dispatch.
+#
+# This replaced a counting cap on 2026-08-05 by owner directive. The cap needed a
+# number to tune, a window, a refund rule for what the window had already spent,
+# and an override verb to get past it -- four moving parts wrapped around one
+# question: may this run on a top-tier model. The question goes to the owner
+# directly now, and the answer is recorded rather than counted. This check runs
+# before gate check so an unapproved top-tier request writes no ledger row and
+# issues no dispatch ticket.
+TOP_APPROVED_TEXT=${TOP_APPROVED//[[:space:]]/}
+if [ "$TIER" = "top" ] && [ -z "$TOP_APPROVED_TEXT" ]; then
+  echo "✗ top tier needs owner approval · model=$MODEL"
+  echo "  Ask the owner, then pass the answer: --top-approved \"<reason>\""
+  exit 2
+fi
+GATE_ARGS=(--ledger "$LEDGER" check --runtime "$RUNTIME" --model "$MODEL" \
       --tier-policy "$POLICY" --contract "$CONTRACT" --agents 1 \
-      --est-chars "$EST" --completion-channel orchestration 2>/dev/null)
+      --est-chars "$EST" --completion-channel orchestration)
+CHK=$("$GATE" "${GATE_ARGS[@]}" --no-record 2>/dev/null)
 ALLOW=$(echo "$CHK" | jqf "d['allow']")
 SHA=$(echo "$CHK" | jqf "d.get('contract_sha') or ''")
-TIER=$(python3 -c "
-import json
-p=json.load(open('$POLICY'))
-print(next((t for t,ms in p['tiers'].items() if '$MODEL'.lower() in [m.lower() for m in ms]),'unknown'))")
 if [ "$ALLOW" != "True" ]; then
   echo "✗ gate DENY · $(echo "$CHK" | jqf "d['reason']") · model=$MODEL tier=$TIER"
   echo "$CHK"; exit 2
 fi
+if [ "$CHECK_ONLY" = 1 ]; then
+  [ "$TIER" = "top" ] && [ -n "$TOP_APPROVED_TEXT" ] && echo "🔓 top tier approved by owner · $TOP_APPROVED"
+  COLLISION_WARN=$("$COLLISION_CHECK" "$CONTRACT" "$LEDGER" 2>/dev/null || true)
+  [ -n "$COLLISION_WARN" ] && echo "$COLLISION_WARN"
+  echo "⚙ gate ✓ $TIER · $MODEL · est $((EST/1000)).$(( (EST%1000)/100 ))k · 계약 ${SHA:0:8}"
+  exit 0
+fi
+# A concurrent dispatch can spend the budget after this preflight. If the final
+# recording gate denies, Codex pretrust may have prepared a worktree that never
+# receives a worker; dispatch-gate needs an atomic reservation API to close that
+# race. This ordering still keeps dry runs, gate denials, and pretrust failures
+# from spending budget.
+ensure_codex_pretrust "$RUNTIME" "$WORKTREE" || exit 2
+
+CHK=$("$GATE" "${GATE_ARGS[@]}" 2>/dev/null)
+ALLOW=$(echo "$CHK" | jqf "d['allow']")
+SHA=$(echo "$CHK" | jqf "d.get('contract_sha') or ''")
+if [ "$ALLOW" != "True" ]; then
+  echo "✗ gate DENY · $(echo "$CHK" | jqf "d['reason']") · model=$MODEL tier=$TIER"
+  echo "$CHK"; exit 2
+fi
+# The reason prints into this script's stdout, which is the run log by design.
+# The gate's register subcommand has no field for it, so it does not reach the
+# ledger. Once scripts/mogui_log.py lands it becomes an event-log.jsonl line
+# with outcome and evidence, per docs/runbooks/error-and-logging.md.
+[ "$TIER" = "top" ] && [ -n "$TOP_APPROVED_TEXT" ] && echo "🔓 top tier approved by owner · $TOP_APPROVED"
 COLLISION_WARN=$("$COLLISION_CHECK" "$CONTRACT" "$LEDGER" 2>/dev/null || true)
 [ -n "$COLLISION_WARN" ] && echo "$COLLISION_WARN"
 echo "⚙ gate ✓ $TIER · $MODEL · est $((EST/1000)).$(( (EST%1000)/100 ))k · 계약 ${SHA:0:8}"
-[ "$CHECK_ONLY" = 1 ] && exit 0
 
 # 2. task-create
 TASK=$(orca orchestration task-create --spec "$SPEC" --json 2>/dev/null | jqf "d['result']['task']['id']")

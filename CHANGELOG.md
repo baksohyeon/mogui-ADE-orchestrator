@@ -22,9 +22,15 @@ you build on it.
 
 ### Added
 
+- `dispatch-gate check --no-record` evaluates a dispatch decision without
+  appending a ledger row or issuing a ticket. `master-ops/scripts/dispatch
+  --check-only` uses it so dry runs do not spend the fan-out budget they are
+  inspecting.
+
 - Onboarding agent-inventory consent and default-on harness wiring (owner
   decisions 2026-08-04): step 01 asks consent to probe installed agent CLIs
-  (purpose: match task weight to model strength; cap top-tier fan-out), then
+  (purpose: match task weight to model strength and identify top-tier models
+  that need owner approval), then
   writes instance `config/model-tier-policy.json` from measured (or
   owner-named) runtimes, versions, and model ids — never guessed ids.
   Ships `config/model-tier-policy.example.json` only. Dispatch gate default

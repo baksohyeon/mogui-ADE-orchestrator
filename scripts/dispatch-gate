@@ -72,6 +72,11 @@ def _build_parser() -> argparse.ArgumentParser:
     check_parser.add_argument("--model")
     check_parser.add_argument("--tier-policy")
     check_parser.add_argument("--tier-override")
+    check_parser.add_argument(
+        "--no-record",
+        action="store_true",
+        help="evaluate the check without appending a ledger row or issuing a ticket",
+    )
     check_parser.add_argument("--contract", required=True)
     check_parser.add_argument("--agents", required=True, type=int)
     check_parser.add_argument("--est-chars", type=int)
@@ -137,7 +142,8 @@ def _check(args: argparse.Namespace) -> int:
             n_agents=args.agents,
             completion_channel=args.completion_channel,
             tier_override=args.tier_override,
-        )
+        ),
+        record=not args.no_record,
     )
     _print_decision(decision)
     if decision.allow:

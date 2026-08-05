@@ -146,6 +146,44 @@ def test_tier_policy_allows_worker_model(tmp_path: Path) -> None:
     assert decision.reason == ReasonCode.OK
 
 
+def test_check_can_evaluate_without_recording(tmp_path: Path) -> None:
+    contract = _contract(tmp_path, "dry-run allowed tier model")
+    dry_run_contract = _contract(tmp_path, "dry-run separate contract")
+    gate = _gate(tmp_path, now=1_000)
+
+    recorded = gate.check(
+        DispatchRequest(
+            runtime="codex",
+            model="gpt-5.6-luna",
+            contract_path=contract,
+            est_input_chars=10_000,
+            n_agents=1,
+        )
+    )
+    before = (tmp_path / "ledger.jsonl").read_text(encoding="utf-8")
+
+    dry_run = gate.check(
+        DispatchRequest(
+            runtime="codex",
+            model="gpt-5.6-luna",
+            contract_path=dry_run_contract,
+            est_input_chars=10_000,
+            n_agents=1,
+        ),
+        record=False,
+    )
+
+    assert recorded.allow is True
+    assert dry_run.allow is True
+    assert (tmp_path / "ledger.jsonl").read_text(encoding="utf-8") == before
+    dry_run_ticket = (
+        tmp_path
+        / "dispatch-tickets"
+        / f"codex-{_sha256(dry_run_contract)[:12]}.json"
+    )
+    assert not dry_run_ticket.exists()
+
+
 def test_tier_policy_denies_top_tier_and_ledgers_model(tmp_path: Path) -> None:
     contract = _contract(tmp_path, "denied tier model")
     gate = _gate(tmp_path, now=1_000)
@@ -290,11 +328,10 @@ def test_instance_tier_policy_example_is_loadable_version_2() -> None:
     )
     policy = dispatch_gate._load_tier_policy(example)
     assert policy.version >= 2
-    # Example ships the looser intended unknown cap (template-aligned), not the
-    # retired one-agent ceiling. Missing key would be uncapped; when present it
-    # must stay looser than top so fresh installs inherit the revised contract.
+    # Example ships no top cap. Top-tier approval is asked by master-ops/scripts/dispatch,
+    # while the gate treats missing caps as uncapped for every tier.
     assert policy.cap_for("unknown") == 8
-    assert policy.cap_for("top") == 4
+    assert policy.cap_for("top") is None
 
 
 def test_unparseable_tier_policy_fails_closed(tmp_path: Path) -> None:
@@ -2812,7 +2849,7 @@ def test_template_policy_resolves_claude_sonnet_5_as_efficient() -> None:
     assert policy.tier_of("claude-haiku-4-5") == "efficient"
     assert policy.tier_of("grok-4.5-fast") == "efficient"
     assert policy.tier_of("never-listed-anywhere") == "unknown"
-    assert policy.cap_for("top") == 4
+    assert policy.cap_for("top") is None
     assert policy.cap_for("unknown") == 8
     assert policy.cap_for("efficient") is None
 

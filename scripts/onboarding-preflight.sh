@@ -16,8 +16,7 @@ waived=0
 # A required check that cannot be waived pushes the operator toward skipping the
 # whole preflight, which loses every other check with it. PREFLIGHT_WAIVE names
 # checks to downgrade from FAIL to WARN, and a waiver is always printed and
-# counted: the escape exists, and it is never silent. Same shape as the gate's
-# ledgered --tier-override.
+# counted: the escape exists, and it is never silent.
 waive_list=()
 if [[ -n "${PREFLIGHT_WAIVE:-}" ]]; then
   IFS=',' read -r -a waive_list <<<"$PREFLIGHT_WAIVE"

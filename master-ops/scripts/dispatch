@@ -317,7 +317,6 @@ fi
 
 INSTALLED_RUNTIMES=$(installed_runtimes | join_csv)
 ALTERNATIVE_RUNTIMES=$(installed_runtimes | grep -vx "$MASTER_HOST_RUNTIME" | join_csv)
-ensure_codex_pretrust "$RUNTIME" "$WORKTREE" || exit 2
 
 # The model id and the runtime are chosen independently, so nothing stopped a
 # claude model id from being declared for a codex or grok worker. That is not a
@@ -455,6 +454,7 @@ COLLISION_WARN=$("$COLLISION_CHECK" "$CONTRACT" "$LEDGER" 2>/dev/null || true)
 [ -n "$COLLISION_WARN" ] && echo "$COLLISION_WARN"
 echo "⚙ gate ✓ $TIER · $MODEL · est $((EST/1000)).$(( (EST%1000)/100 ))k · 계약 ${SHA:0:8}"
 [ "$CHECK_ONLY" = 1 ] && exit 0
+ensure_codex_pretrust "$RUNTIME" "$WORKTREE" || exit 2
 
 # 2. task-create
 TASK=$(orca orchestration task-create --spec "$SPEC" --json 2>/dev/null | jqf "d['result']['task']['id']")

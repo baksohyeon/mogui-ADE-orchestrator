@@ -73,6 +73,10 @@ def test_template_dispatch_quotes_model_and_checks_top_before_gate():
     assert "grok --model $model_arg --always-approve" in dispatch
     assert "cursor-agent --model $model_arg --force --trust" in dispatch
     assert "codex --model $model_arg" in dispatch
+    assert "--tier-policy) TIER_POLICY_OVERRIDE=$2; shift 2;;" in dispatch
+    assert 'if [ -n "${DISPATCH_TIER_POLICY:-}" ]; then' in dispatch
+    assert "instance_policy=$runtime_root/config/model-tier-policy.json" in dispatch
+    assert 'echo "$TEMPLATE_POLICY"' in dispatch
     assert dispatch.index('TIER=$(tier_for_model "$MODEL"') < dispatch.index('CHK=$("$GATE"')
     preflight = 'CHK=$("$GATE" "${GATE_ARGS[@]}" --no-record'
     pretrust = 'ensure_codex_pretrust "$RUNTIME" "$WORKTREE"'

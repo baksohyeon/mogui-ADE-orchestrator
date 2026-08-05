@@ -8,7 +8,7 @@ set -u
 OPS={{OPS_REPO}}
 GATE={{RUNTIME_ROOT}}/scripts/dispatch-gate
 LEDGER=~/.mogui/dispatch-ledger.jsonl
-POLICY=$OPS/model-tier-policy.json
+TEMPLATE_POLICY=$OPS/model-tier-policy.json
 PROBE_BIN={{RUNTIME_ROOT}}/scripts/model-identity-probe
 SCRIPTS_DIR=$(cd "$(dirname "$0")" && pwd)
 COLLISION_CHECK="$SCRIPTS_DIR/dispatch-collision-check"
@@ -55,6 +55,7 @@ usage() {
   echo "usage: dispatch --contract FILE --spec TEXT (--terminal HANDLE | --worktree SELECTOR) \\"
   echo "                [--model ID] [--runtime NAME] [--same-host-reason TEXT]"
   echo "                [--top-approved TEXT]"
+  echo "                [--tier-policy FILE]"
   echo "                [--est-chars N] [--transcript-glob GLOB] [--check-only]"
   echo "  --transcript-glob: worker transcript location for the model probe"
   echo "                     (default: derived for claude from --worktree when possible)"
@@ -68,6 +69,7 @@ MODEL_EXPLICIT=0
 TGLOB_EXPLICIT=0
 EST=3000
 TERMINAL="" WORKTREE="" CONTRACT="" SPEC="" RUNTIME="" SAME_HOST_REASON="" CHECK_ONLY=0
+TIER_POLICY_OVERRIDE=""
 # Owner approval for a top-tier model, carrying the reason. Empty means unasked.
 TOP_APPROVED=""
 TGLOB=""
@@ -84,11 +86,32 @@ while [ $# -gt 0 ]; do
     --transcript-glob) TGLOB=$2; TGLOB_EXPLICIT=1; shift 2;;
     --check-only) CHECK_ONLY=1; shift;;
     --top-approved) TOP_APPROVED=$2; shift 2;;
+    --tier-policy) TIER_POLICY_OVERRIDE=$2; shift 2;;
     *) usage;;
   esac
 done
 [ -z "$CONTRACT" ] || [ ! -f "$CONTRACT" ] && { echo "✗ contract file missing: $CONTRACT" >&2; exit 1; }
 [ "$CHECK_ONLY" = 0 ] && [ -z "$SPEC" ] && usage
+
+resolve_tier_policy() {
+  if [ -n "$TIER_POLICY_OVERRIDE" ]; then
+    echo "$TIER_POLICY_OVERRIDE"
+    return
+  fi
+  if [ -n "${DISPATCH_TIER_POLICY:-}" ]; then
+    echo "$DISPATCH_TIER_POLICY"
+    return
+  fi
+  runtime_root=$(cd "$(dirname "$GATE")/.." 2>/dev/null && pwd || true)
+  instance_policy=$runtime_root/config/model-tier-policy.json
+  if [ -n "$runtime_root" ] && [ -f "$instance_policy" ]; then
+    echo "$instance_policy"
+    return
+  fi
+  echo "$TEMPLATE_POLICY"
+}
+
+POLICY=$(resolve_tier_policy)
 
 jqf() { python3 -c "import json,sys;d=json.load(sys.stdin);print($1)"; }
 
@@ -450,6 +473,11 @@ if [ "$CHECK_ONLY" = 1 ]; then
   echo "⚙ gate ✓ $TIER · $MODEL · est $((EST/1000)).$(( (EST%1000)/100 ))k · 계약 ${SHA:0:8}"
   exit 0
 fi
+# A concurrent dispatch can spend the budget after this preflight. If the final
+# recording gate denies, Codex pretrust may have prepared a worktree that never
+# receives a worker; dispatch-gate needs an atomic reservation API to close that
+# race. This ordering still keeps dry runs, gate denials, and pretrust failures
+# from spending budget.
 ensure_codex_pretrust "$RUNTIME" "$WORKTREE" || exit 2
 
 CHK=$("$GATE" "${GATE_ARGS[@]}" 2>/dev/null)

@@ -1,0 +1,40 @@
+#!/bin/bash
+# Run a command and put its exit status where it cannot be skipped.
+#
+# Why this exists: on 2026-08-04 a master read four commands' output without
+# reading their status and got four wrong answers from them. `ls-remote` died on
+# an SSH signing refusal and its empty output was reported as "0 branches on the
+# remote". A worker scan matched nothing because of a string-slicing bug and was
+# reported as "all nine workers dead". Absence and failure both look like an
+# empty result, and an empty result reads as a finding.
+#
+# The rule "check the exit code" was already known and was broken four times in
+# one day, so this is an affordance instead: status first, on its own line,
+# before any output, and empty output named as empty rather than shown as
+# nothing.
+#
+#   measure orca terminal list --json
+#   measure git ls-remote --heads origin
+#
+# Exit status is the command's own, so `measure` is safe inside `if` and `&&`.
+
+set -u
+
+if [ "${1:-}" = "--help" ] || [ $# -eq 0 ]; then
+  echo "usage: measure <command> [args...]"
+  echo "Prints 'exit=<status>' first, then the command's combined output."
+  echo "Empty output is printed as '(no output)'. Exits with the command's status."
+  [ $# -eq 0 ] && exit 2 || exit 0
+fi
+
+output=$("$@" 2>&1)
+status=$?
+
+echo "exit=$status"
+if [ -z "$output" ]; then
+  echo "(no output)"
+else
+  printf '%s\n' "$output"
+fi
+
+exit "$status"

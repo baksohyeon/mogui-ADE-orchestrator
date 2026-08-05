@@ -1,0 +1,270 @@
+#!/usr/bin/env bash
+# Merge stewardship status for a pull request.
+# Constraint: do not infer gate reruns from API data.
+set -euo pipefail
+
+NON_REPORTING_INTEGRATIONS=()
+
+usage() {
+  echo "usage: scripts/pr-steward-status <pr-number> [--repo owner/name]"
+  exit 1
+}
+
+if [ $# -lt 1 ]; then
+  usage
+fi
+
+PR_NUMBER="$1"
+shift
+REPO=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --repo)
+      [ $# -lt 2 ] && usage
+      REPO="$2"
+      shift 2
+      ;;
+    *)
+      usage
+      ;;
+  esac
+done
+
+if ! command -v gh >/dev/null 2>&1; then
+  echo "gh is required"
+  exit 2
+fi
+
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "python3 is required"
+  exit 2
+fi
+
+if [ -z "$REPO" ]; then
+  if [ -n "${GH_REPO:-}" ]; then
+    REPO="$GH_REPO"
+  else
+    if ! REPO="$(gh repo view --json nameWithOwner --jq '.nameWithOwner' 2>/dev/null)"; then
+      echo "unable to resolve repository; pass --repo owner/name"
+      exit 2
+    fi
+  fi
+fi
+
+OWNER="${REPO%%/*}"
+NAME="${REPO#*/}"
+if [ "$OWNER" = "$NAME" ]; then
+  echo "invalid repository '$REPO'; expected owner/name"
+  exit 2
+fi
+
+TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$TMP_DIR"' EXIT
+
+PR_FILE="$TMP_DIR/pr.json"
+THREADS_FILE="$TMP_DIR/threads.json"
+COMPARE_FILE="$TMP_DIR/compare.json"
+
+gh pr view "$PR_NUMBER" --repo "$REPO" \
+  --json number,url,mergeable,mergeStateStatus,baseRefName,headRefOid,statusCheckRollup \
+  >"$PR_FILE"
+
+gh api graphql \
+  -f owner="$OWNER" \
+  -f name="$NAME" \
+  -F number="$PR_NUMBER" \
+  -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { reviewThreads(first:100) { nodes { isResolved comments(first:100) { totalCount } } pageInfo { hasNextPage endCursor } } } } }' \
+  >"$THREADS_FILE"
+
+HEAD_REF_OID="$(python3 - "$PR_FILE" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as fh:
+    data = json.load(fh)
+print(data["headRefOid"])
+PY
+)"
+
+gh api "repos/$REPO/compare/main...$HEAD_REF_OID" >"$COMPARE_FILE"
+
+if [ "${#NON_REPORTING_INTEGRATIONS[@]}" -eq 0 ]; then
+  EXCLUDED_CSV=""
+else
+  EXCLUDED_CSV="$(IFS=,; echo "${NON_REPORTING_INTEGRATIONS[*]}")"
+fi
+
+python3 - "$PR_FILE" "$THREADS_FILE" "$COMPARE_FILE" "$PR_NUMBER" "$REPO" "$EXCLUDED_CSV" <<'PY'
+import json
+import sys
+from typing import List
+
+pr_file, threads_file, compare_file, pr_number, repo, excluded_csv = sys.argv[1:]
+
+with open(pr_file, encoding="utf-8") as fh:
+    pr = json.load(fh)
+with open(threads_file, encoding="utf-8") as fh:
+    threads_root = json.load(fh)
+with open(compare_file, encoding="utf-8") as fh:
+    compare = json.load(fh)
+
+excluded_names = [x.strip() for x in excluded_csv.split(",") if x.strip()]
+excluded_lc = {x.lower() for x in excluded_names}
+
+def is_excluded(check_name: str) -> bool:
+    return check_name.lower() in excluded_lc
+
+rollup = pr.get("statusCheckRollup") or []
+checks = []
+excluded_hits: List[str] = []
+pending_checks: List[str] = []
+
+for entry in rollup:
+    typename = entry.get("__typename", "")
+    if typename == "StatusContext":
+        name = entry.get("context", "unknown")
+        raw_value = entry.get("state", "")
+    else:
+        name = entry.get("name", "unknown")
+        raw_value = entry.get("conclusion", "")
+
+    raw_text = "" if raw_value is None else str(raw_value)
+    normalized = raw_text.lower() if raw_text else "pending"
+    excluded = is_excluded(name)
+    if excluded:
+        excluded_hits.append(name)
+    else:
+        if normalized == "pending":
+            pending_checks.append(name)
+
+    checks.append(
+        {
+            "name": name,
+            "typename": typename if typename else "CheckRun",
+            "value": normalized,
+            "raw": raw_text if raw_text else "(empty)",
+            "excluded": excluded,
+        }
+    )
+
+measured_checks = [c for c in checks if not c["excluded"]]
+if not measured_checks:
+    checks_verdict = "fail"
+    checks_reason = "no measurable checks remained after exclusions"
+elif pending_checks:
+    checks_verdict = "fail"
+    checks_reason = "pending checks: " + ", ".join(pending_checks)
+else:
+    checks_verdict = "pass"
+    checks_reason = "all measurable checks have non-empty reported outcomes"
+
+threads_info = (
+    threads_root.get("data", {})
+    .get("repository", {})
+    .get("pullRequest", {})
+    .get("reviewThreads", {})
+)
+thread_nodes = threads_info.get("nodes", [])
+threads_has_next = bool(threads_info.get("pageInfo", {}).get("hasNextPage"))
+total_threads = len(thread_nodes)
+unresolved_threads = sum(1 for t in thread_nodes if not t.get("isResolved", False))
+threads_with_reply = sum(
+    1 for t in thread_nodes if int((t.get("comments") or {}).get("totalCount", 0)) >= 2
+)
+threads_without_reply = total_threads - threads_with_reply
+
+if threads_has_next:
+    threads_verdict = "fail"
+    threads_reason = "more than 100 review threads; rerun with pagination"
+elif unresolved_threads == 0 and threads_without_reply == 0:
+    threads_verdict = "pass"
+    threads_reason = "all threads resolved and each thread has a reply"
+else:
+    threads_verdict = "fail"
+    reasons = []
+    if unresolved_threads:
+        reasons.append(f"{unresolved_threads} unresolved")
+    if threads_without_reply:
+        reasons.append(f"{threads_without_reply} without reply")
+    threads_reason = ", ".join(reasons)
+
+mergeable = pr.get("mergeable", "UNKNOWN")
+merge_state_status = pr.get("mergeStateStatus", "UNKNOWN")
+compare_status = str(compare.get("status", "unknown")).lower()
+contains_main = compare_status in {"ahead", "identical"}
+
+if mergeable == "MERGEABLE" and contains_main:
+    merge_verdict = "pass"
+    merge_reason = "mergeable and head contains origin/main"
+else:
+    merge_verdict = "fail"
+    merge_reasons = []
+    if mergeable != "MERGEABLE":
+        merge_reasons.append(f"mergeable={mergeable}")
+    if not contains_main:
+        merge_reasons.append(f"compare status={compare_status}")
+    merge_reason = ", ".join(merge_reasons)
+
+gates_verdict = "unverified"
+gates_commands = [
+    f"gh pr checkout {pr_number} --repo {repo}",
+    "git fetch origin main",
+    "git merge --no-ff origin/main",
+    "PYTHONPATH=src uv run --with pytest --no-project python3 -m pytest tests -q",
+    "REDACTION_REQUIRE_EXTRA=1 REDACTION_EXTRA_PATTERNS=~/.config/redaction-extra.txt ./scripts/redaction-scan.sh",
+    "REDACTION_REQUIRE_EXTRA=1 REDACTION_EXTRA_PATTERNS=~/.config/redaction-extra.txt ./scripts/redaction-inventory",
+]
+
+overall_reasons = []
+if checks_verdict != "pass":
+    overall_reasons.append("checks condition failed")
+if threads_verdict != "pass":
+    overall_reasons.append("threads condition failed")
+if merge_verdict != "pass":
+    overall_reasons.append("merge condition failed")
+overall_reasons.append("gates condition is unverified from API")
+overall = "READY" if not overall_reasons else "NOT READY"
+
+print(f"PR: {repo}#{pr.get('number')} {pr.get('url')}")
+print("")
+print(f"1) checks_concluded: {checks_verdict}")
+print(f"   reason: {checks_reason}")
+print(f"   excluded_non_reporting_integrations: {', '.join(excluded_names) if excluded_names else '(none)'}")
+print(f"   excluded_from_rollup: {', '.join(sorted(set(excluded_hits))) if excluded_hits else '(none)'}")
+for check in checks:
+    excluded_tag = " [excluded]" if check["excluded"] else ""
+    print(
+        f"   - {check['name']}{excluded_tag} -> {check['value']} "
+        f"(type={check['typename']}, raw={check['raw']})"
+    )
+
+print("")
+print(f"2) review_threads: {threads_verdict}")
+print(f"   reason: {threads_reason}")
+print(f"   unresolved_threads: {unresolved_threads}")
+print(f"   threads_with_reply: {threads_with_reply}")
+print(f"   threads_without_reply: {threads_without_reply}")
+print(f"   thread_sample_size: {total_threads}")
+print(f"   threads_truncated: {'yes' if threads_has_next else 'no'}")
+
+print("")
+print(f"3) merge_state: {merge_verdict}")
+print(f"   reason: {merge_reason}")
+print(f"   mergeable: {mergeable}")
+print(f"   merge_state_status: {merge_state_status}")
+print(f"   head_contains_origin_main: {'yes' if contains_main else 'no'}")
+print(f"   compare_main_to_head_status: {compare_status}")
+
+print("")
+print(f"4) gates_reran_after_merge: {gates_verdict}")
+print("   run:")
+for command in gates_commands:
+    print(f"   - {command}")
+
+print("")
+print(f"overall: {overall}")
+print("reasons:")
+for reason in overall_reasons:
+    print(f"- {reason}")
+sys.exit(0 if overall == "READY" else 1)
+PY

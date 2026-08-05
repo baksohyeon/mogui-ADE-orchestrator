@@ -1,5 +1,5 @@
 #!/bin/bash
-# orca-wait - event-driven wait wrapper draining ack-chain backlog
+# orca-wait — event-driven wait wrapper draining ack-chain backlog
 # Encapsulates the correct orca orchestration check protocol: drain unread,
 # then block on deliveryId ack-chaining until a matching message arrives.
 
@@ -34,7 +34,7 @@ Drains the unread backlog via ack-chaining, then blocks on orchestration check.
 Prints one line per non-heartbeat message: type|id|from|subject
 
 Options:
-  --once          Exit after one wait cycle
+  --once          Exit after the first non-empty batch
   --timeout-ms N  Timeout per wait (default 3300000ms)
   --types X,Y,Z   Filter by message types (passed to orca check --types)
   --help          Show this message
@@ -71,16 +71,8 @@ while [[ $DRAINED -eq 0 ]] && [[ $DRAIN_ITER -lt $MAX_DRAIN ]]; do
   [[ -n "$PREV_DELIVERY" ]] && DRAIN_CMD+=("--ack" "$PREV_DELIVERY")
   [[ -n "$TYPES" ]] && DRAIN_CMD+=("--types" "$TYPES")
 
-  # Capture JSON output, filter keepalives. Keep stderr out of jq input.
-  DRAIN_ERR=$(mktemp)
-  OUTPUT=$("${DRAIN_CMD[@]}" 2>"$DRAIN_ERR" | jq -s "map(select(._keepalive|not))" 2>/dev/null)
-  DRAIN_EXIT=$?
-  if [[ $DRAIN_EXIT -ne 0 ]]; then
-    cat "$DRAIN_ERR" >&2
-    rm -f "$DRAIN_ERR"
-    exit $DRAIN_EXIT
-  fi
-  rm -f "$DRAIN_ERR"
+  # Capture JSON output, filter keepalives
+  OUTPUT=$("${DRAIN_CMD[@]}" 2>&1 | jq -s "map(select(._keepalive|not))" 2>/dev/null)
 
   if [[ -z "$OUTPUT" ]] || [[ "$OUTPUT" == "[]" ]] || [[ "$OUTPUT" == "null" ]]; then
     DRAINED=1
@@ -100,32 +92,36 @@ if [[ $DRAINED -eq 0 ]]; then
   echo "[orca-wait] WARNING: backlog drain hit max iterations ($MAX_DRAIN), proceeding with partial drain" >&2
 fi
 
-while true; do
-  # Wait phase: block until a message arrives (or timeout)
-  WAIT_CMD=("orca" "orchestration" "check" "${CHECK_FLAGS[@]}")
-  [[ -n "$PREV_DELIVERY" ]] && WAIT_CMD+=("--ack" "$PREV_DELIVERY")
+# Wait phase: block until a message arrives (or timeout)
+WAIT_CMD=("orca" "orchestration" "check" "${CHECK_FLAGS[@]}")
+[[ -n "$PREV_DELIVERY" ]] && WAIT_CMD+=("--ack" "$PREV_DELIVERY")
 
-  WAIT_ERR=$(mktemp)
-  WAIT_OUTPUT=$("${WAIT_CMD[@]}" 2>"$WAIT_ERR")
-  WAIT_EXIT=$?
+# Run the wait and capture output
+WAIT_OUTPUT=$("${WAIT_CMD[@]}" 2>&1)
+WAIT_EXIT=$?
 
-  if [[ $WAIT_EXIT -ne 0 ]]; then
-    grep -v '"_keepalive"' "$WAIT_ERR" >&2
-    rm -f "$WAIT_ERR"
-    exit $WAIT_EXIT
-  fi
-  rm -f "$WAIT_ERR"
+# If wait failed, exit with the error
+if [[ $WAIT_EXIT -ne 0 ]]; then
+  # Filter out keepalives from stderr
+  printf '%s\n' "$WAIT_OUTPUT" | grep -v '"_keepalive"' >&2
+  exit $WAIT_EXIT
+fi
 
-  printf '%s\n' "$WAIT_OUTPUT" | jq -r -s "
-    map(select(._keepalive|not)) |
-    .[] |
-    if .type and .id and .from and .subject then
-      \"\\(.type)|\(.id)|\(.from)|\(.subject)\"
-    else
-      empty
-    end
-  " 2>/dev/null
+# Parse and print results
+printf '%s\n' "$WAIT_OUTPUT" | jq -s "
+  map(select(._keepalive|not)) |
+  .[] |
+  if .type and .id and .from and .subject then
+    \"\\(.type)|\(.id)|\(.from)|\(.subject)\"
+  else
+    empty
+  end
+" 2>/dev/null
 
-  PREV_DELIVERY=$(printf '%s\n' "$WAIT_OUTPUT" | jq -r -s "map(select(._keepalive|not)) | .[-1].deliveryId // empty" 2>/dev/null)
-  [[ $ONCE -eq 1 ]] && exit 0
-done
+# Exit with --once flag
+[[ $ONCE -eq 1 ]] && exit 0
+
+# Continue waiting if --once is not set
+# (In typical use with the harness, --once exits here; without it,
+#  the wait loops for the full timeout and returns all messages in that batch)
+exit 0

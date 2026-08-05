@@ -9,7 +9,7 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 INPUT="$(cat 2>/dev/null)"
-LEDGER_PATH="${CONTEXT_QUALITY_LOG:-$HOME/.mogui/monitors/{{MONITOR_NS}}/context-quality.jsonl}"
+LEDGER_PATH="${CONTEXT_QUALITY_LOG:-$HOME/.mogui/monitors/mg/context-quality.jsonl}"
 
 PROBE_INPUT="$INPUT" \
 LEDGER_PATH="$LEDGER_PATH" \
@@ -30,12 +30,12 @@ if payload.get("source") != "compact":
 session_id = payload.get("session_id") or "<unknown-session>"
 ledger_path = os.environ.get(
     "LEDGER_PATH",
-    os.path.expanduser("~/.mogui/monitors/{{MONITOR_NS}}/context-quality.jsonl"),
+    os.path.expanduser("~/.mogui/monitors/mg/context-quality.jsonl"),
 )
 
 record_template = {
     "ts": datetime.now(timezone.utc).isoformat(),
-    "workspace": "{{WORKSPACE_NAME}}",
+    "workspace": "mogui-master",
     "session": session_id,
     "event": "compact",
     "model": "<actual model/tool version stamp>",

@@ -1,0 +1,74 @@
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import re
+from pathlib import Path
+
+
+REPO = Path(__file__).resolve().parents[1]
+SCRIPT = REPO / "master-ops/scripts/onboarding-rehearsal"
+
+
+def make_install(tmp_path: Path) -> tuple[Path, Path]:
+    workspace = tmp_path / "workspace"
+    ops = tmp_path / "ops"
+    shutil.copytree(REPO / "master-ops", ops)
+    for path in ops.rglob("*"):
+        if path.is_file() and path.suffix in {".md", ".json", ".txt"}:
+            text = path.read_text(encoding="utf-8")
+            path.write_text(re.sub(r"\{\{(?!\.\.\.\}\})[^}]+\}\}", "filled", text), encoding="utf-8")
+    (workspace / "config").mkdir(parents=True)
+    (workspace / "CLAUDE.md").write_bytes((ops / "workspace-card/CLAUDE.md").read_bytes())
+    (ops / "CLAUDE.md").write_text("same\n", encoding="utf-8")
+    (ops / "AGENTS.md").write_text("same\n", encoding="utf-8")
+    (workspace / "config/workspace-descriptor.json").write_text(json.dumps({
+        "workspace_root": str(workspace.resolve()), "master_seat": "id:folder:test",
+    }), encoding="utf-8")
+    (workspace / "config/instance-runtime.json").write_text(json.dumps({
+        "master_host_runtime": "codex",
+    }), encoding="utf-8")
+    (ops / "docs/runbooks/role-state.md").parent.mkdir(parents=True, exist_ok=True)
+    (ops / "docs/runbooks/role-state.md").write_text("role\n", encoding="utf-8")
+    (ops / "docs/lineage/MASTER-LINEAGE.md").parent.mkdir(parents=True, exist_ok=True)
+    (ops / "docs/lineage/MASTER-LINEAGE.md").write_text("lineage\n", encoding="utf-8")
+    return workspace, ops
+
+
+def run(workspace: Path, ops: Path, *extra: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run([str(SCRIPT), "--workspace-root", str(workspace),
+                           "--ops-repo", str(ops), *extra],
+                          capture_output=True, text=True, env=os.environ.copy())
+
+
+def test_rehearsal_reports_passes_and_honest_live_gaps(tmp_path: Path):
+    workspace, ops = make_install(tmp_path)
+    completed = run(workspace, ops, "--json")
+    assert completed.returncode == 1  # live identity was not measured
+    report = json.loads(completed.stdout)
+    statuses = {row["id"]: row["status"] for row in report["results"]}
+    assert all(statuses[row] == "PASS" for row in ("P01", "P02", "P03", "P04", "P05", "P06", "P07", "P08"))
+    assert statuses["L01"] == "GAP"
+    assert statuses["L02"] == "GAP"
+    assert {row["id"] for row in report["gaps"]} == {"L01", "L02"}
+    assert report["failures"] == []
+
+
+def test_rehearsal_detects_card_drift(tmp_path: Path):
+    workspace, ops = make_install(tmp_path)
+    (workspace / "CLAUDE.md").write_text("drift\n", encoding="utf-8")
+    completed = run(workspace, ops, "--json")
+    report = json.loads(completed.stdout)
+    row = next(row for row in report["results"] if row["id"] == "P04")
+    assert row["status"] == "FAIL"
+    assert row["observed"] == "missing or different"
+
+
+def test_live_check_is_gap_when_orca_is_unavailable(tmp_path: Path):
+    workspace, ops = make_install(tmp_path)
+    completed = run(workspace, ops, "--live", "--orca-cli", "definitely-not-an-orca-cli", "--json")
+    report = json.loads(completed.stdout)
+    row = next(row for row in report["results"] if row["id"] == "L01")
+    assert row["status"] == "GAP"

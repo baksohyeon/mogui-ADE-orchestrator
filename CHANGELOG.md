@@ -22,6 +22,10 @@ you build on it.
 
 ### Added
 
+- A read-only onboarding rehearsal reports measurable postconditions, compares
+  the deployed workspace card with its canonical card, and keeps unmeasured
+  live-master facts in an explicit gap list.
+
 - `dispatch-gate check --no-record` evaluates a dispatch decision without
   appending a ledger row or issuing a ticket. `master-ops/scripts/dispatch
   --check-only` uses it so dry runs do not spend the fan-out budget they are

@@ -45,7 +45,8 @@ def test_contract_conventions_include_sweep_2b_clauses():
     routing = _read("charter/04-worker-routing-review.md")
     records = _read("charter/07-records.md")
 
-    assert "Compare `reviews[].submittedAt` with the last measured time" in conventions
+    assert "Record `review_measured_at` immediately after fetching `reviews[]`" in conventions
+    assert "Any bot review with `submittedAt` after `review_measured_at`" in conventions
     assert "Merge-time re-measurement" in conventions
     assert "Public-surface redaction clause" in conventions
     assert "Context-injection policy" in conventions
@@ -54,7 +55,7 @@ def test_contract_conventions_include_sweep_2b_clauses():
     assert "conversation surfaces" in conventions
     assert "Procedure slot clause" not in conventions
     assert "After a worker's pull request is merged" in routing
-    assert "`scripts/worker-reap`" in routing
+    assert "`scripts/worker-reap --task-id <task-id> --ledger <ledger-path>`" in routing
     assert "Ambiguous worktrees are not removed" in routing
     assert "Clause 13 (`Chat-to-docs rule`)" in conventions
     assert "Clause 11 (`Chat-to-docs rule`)" not in conventions

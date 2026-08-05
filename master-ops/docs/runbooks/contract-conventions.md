@@ -411,10 +411,10 @@ Grade basis: one merged-with-unread-findings incident followed by four valid cat
 the same night's re-measurement duty.
 
 At merge time, re-run the thread and review measurements instead of trusting the last
-worker report. Compare `reviews[].submittedAt` with the last measured time; any bot
-review submitted after that measurement must be read in full before merging. A clean
-worker report is stale the moment a later bot review exists, and merging before reading
-that later review is a missed finding, not an accepted risk.
+worker report. Record `review_measured_at` immediately after fetching `reviews[]`.
+Any bot review with `submittedAt` after `review_measured_at` must be read in full
+before merging. A clean worker report is stale the moment a later bot review exists,
+and merging before reading that later review is a missed finding, not an accepted risk.
 
 ## Grade distribution (2026-08-05)
 

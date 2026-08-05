@@ -67,4 +67,6 @@ Use the majority verdict, but a minority P1 `FIX_FIRST` finding must be addresse
 
 PR review-bot threads are always worker-handled without per-round owner instruction: dispatch a fix worker on arrival, the master verifies, the worker replies and resolves, and the master judges rejections only. (charter rule since template v5) On a repository with review bots attached, zero unresolved threads is a merge precondition: every thread gets a reply stating what was done or why not, and the merge waits for the bots' pass over the latest push. Verify a bot finding against the code before acting on it — bots produce false positives, and a thread resolved without measuring is silence dressed as review.
 
+After a worker's pull request is merged, recover the worker resources with `scripts/worker-reap` and record the reap in the ledger. Ambiguous worktrees are not removed: leave them in place and report the dirty, unmerged, inaccessible, or otherwise unsafe state.
+
 Do not run large fan-out from the master workflow by default. If it is unavoidable, report scale and estimated cost first.

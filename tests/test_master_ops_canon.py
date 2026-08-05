@@ -42,12 +42,20 @@ def test_orca_grounding_and_dispatch_ack_chaining_are_canon():
 
 def test_contract_conventions_include_sweep_2b_clauses():
     conventions = _read("runbooks/contract-conventions.md")
+    routing = _read("charter/04-worker-routing-review.md")
     records = _read("charter/07-records.md")
 
     assert "Compare `reviews[].submittedAt` with the last measured time" in conventions
+    assert "Merge-time re-measurement" in conventions
     assert "Public-surface redaction clause" in conventions
     assert "Context-injection policy" in conventions
     assert "Chat-to-docs rule" in conventions
     assert "repository scanners do not read forge" in conventions
     assert "conversation surfaces" in conventions
+    assert "Procedure slot clause" not in conventions
+    assert "After a worker's pull request is merged" in routing
+    assert "`scripts/worker-reap`" in routing
+    assert "Ambiguous worktrees are not removed" in routing
+    assert "Clause 13 (`Chat-to-docs rule`)" in conventions
+    assert "Clause 11 (`Chat-to-docs rule`)" not in conventions
     assert "Explanations written in chat to resolve owner confusion are documentation candidates" in records

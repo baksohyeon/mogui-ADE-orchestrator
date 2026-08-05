@@ -41,6 +41,20 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+Contract convention merge-time re-measurement and citation repair (2026-08-05 worker contract fix):
+
+- Added clause 14, Merge-time re-measurement, so merge decisions re-run thread
+  and review measurements and compare `reviews[].submittedAt` with the last
+  measured time before merging.
+- Corrected the prose backlog citation for Chat-to-docs from clause 11 to
+  clause 13 and removed the duplicate prose count in the grade distribution.
+- Worker routing now calls `scripts/worker-reap` after a worker pull request
+  merges and keeps ambiguous worktrees in place with a report.
+- Existing installations do not auto-update. To adopt this entry, copy or merge
+  `docs/runbooks/contract-conventions.md` and
+  `docs/charter/04-worker-routing-review.md` into the generated operations
+  repository and preserve local additions deliberately.
+
 Master tooling promotion from operations repository (2026-08-05 measurement,
 provenance `mgm-w7m.5`):
 

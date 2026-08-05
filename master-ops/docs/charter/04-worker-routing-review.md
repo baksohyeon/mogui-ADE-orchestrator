@@ -34,7 +34,7 @@ Worker contract clause library: `docs/runbooks/contract-conventions.md`.
 
 ## Worker Launch Approval Posture
 
-For operations-repository work, dispatch workers into an isolated `git worktree` and require first-action placement proof (`pwd`, `git branch --show-current`) in that worker checkout. If those measurements show the master's primary checkout instead, stop immediately: on 2026-08-03 this exact ambiguity caused four contaminations of the master's own tree in one day.
+For operations-repository work, dispatch workers into an isolated `git worktree` and require first-action placement verdicts in that worker checkout: `in_expected_worktree`, `is_master_checkout`, and `branch`, with no absolute path in the report. If the verdict shows the master's primary checkout instead, stop immediately: on 2026-08-03 this exact ambiguity caused four contaminations of the master's own tree in one day. Placement contracts still name exact paths downward to the worker; reports send verdicts upward.
 
 Workers launched into isolated worktrees must start with the agent's non-interactive approval flag, or the measured pre-trust posture below, so allowlist or trust prompts cannot block them mid-task. Pre-trust holds when the summary reports the worktree added, updated, or already trusted; the skip path (`Summary: skipped`) leaves the trust prompt in place and says so on stdout, so read the summary line before relying on it. At every dispatch, the master MEASURES the installed CLI's `--help` output and uses only flags present there; it never guesses flags from memory.
 

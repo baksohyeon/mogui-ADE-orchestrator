@@ -4,6 +4,7 @@ import json
 import subprocess
 import tempfile
 import unittest
+from collections.abc import Callable
 from pathlib import Path
 
 from master_runtime.core.worker_reap import (
@@ -142,30 +143,11 @@ class WorkerReaperTests(unittest.TestCase):
     def test_reap_removes_clean_merged_worktree(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = tmp
-            removed_paths = []
-
-            def fake_runner(cmd):
-                if "dispatch-show" in cmd:
-                    dispatch = {
-                        "dispatch_id": "d1",
-                        "task_id": "t1",
-                        "terminal_id": "term1",
-                        "status": "COMPLETED",
-                        "worktree_path": tmp_path,
-                    }
-                    return 0, json.dumps(dispatch), ""
-                if "git" in cmd and "status" in cmd:
-                    return 0, "", ""
-                if "git" in cmd and "branch" in cmd and "--show-current" in cmd:
-                    return 0, "main\n", ""
-                if "git" in cmd and "branch" in cmd and "--merged" in cmd:
-                    return 0, "* main\n  feature-x\n", ""
-                if "git" in cmd and "worktree" in cmd and "remove" in cmd:
-                    removed_paths.append(cmd[-1])
-                    return 0, "", ""
-                if "terminal" in cmd and "close" in cmd:
-                    return 0, "", ""
-                return 0, "", ""
+            fake_runner, removed_paths = _clean_worktree_runner(
+                tmp_path,
+                current_branch="main",
+                merged_branches="* main\n  feature-x\n",
+            )
 
             reaper = WorkerReaper(orca_runner=fake_runner)
             record = reaper.reap(task_id="t1", execute=True)
@@ -176,34 +158,13 @@ class WorkerReaperTests(unittest.TestCase):
     def test_reap_removes_clean_squash_merged_worktree(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = tmp
-            removed_paths = []
-
-            def fake_runner(cmd):
-                if "dispatch-show" in cmd:
-                    dispatch = {
-                        "dispatch_id": "d1",
-                        "task_id": "t1",
-                        "terminal_id": "term1",
-                        "status": "COMPLETED",
-                        "worktree_path": tmp_path,
-                    }
-                    return 0, json.dumps(dispatch), ""
-                if "git" in cmd and "status" in cmd:
-                    return 0, "", ""
-                if "git" in cmd and "branch" in cmd and "--show-current" in cmd:
-                    return 0, "feature-x\n", ""
-                if "git" in cmd and "branch" in cmd and "--merged" in cmd:
-                    return 0, "* main\n", ""
-                if "git" in cmd and "rev-parse" in cmd:
-                    return 0, "tree-main\n", ""
-                if "git" in cmd and "merge-tree" in cmd:
-                    return 0, "tree-main\n", ""
-                if "git" in cmd and "worktree" in cmd and "remove" in cmd:
-                    removed_paths.append(cmd[-1])
-                    return 0, "", ""
-                if "terminal" in cmd and "close" in cmd:
-                    return 0, "", ""
-                return 0, "", ""
+            fake_runner, removed_paths = _clean_worktree_runner(
+                tmp_path,
+                current_branch="feature-x",
+                merged_branches="* main\n",
+                origin_main_tree="tree-main",
+                virtual_merge_tree="tree-main",
+            )
 
             reaper = WorkerReaper(orca_runner=fake_runner)
             record = reaper.reap(task_id="t1", execute=True)
@@ -214,30 +175,13 @@ class WorkerReaperTests(unittest.TestCase):
     def test_reap_leaves_clean_unmerged_worktree_with_unique_changes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = tmp
-
-            def fake_runner(cmd):
-                if "dispatch-show" in cmd:
-                    dispatch = {
-                        "dispatch_id": "d1",
-                        "task_id": "t1",
-                        "terminal_id": "term1",
-                        "status": "COMPLETED",
-                        "worktree_path": tmp_path,
-                    }
-                    return 0, json.dumps(dispatch), ""
-                if "git" in cmd and "status" in cmd:
-                    return 0, "", ""
-                if "git" in cmd and "branch" in cmd and "--show-current" in cmd:
-                    return 0, "feature-x\n", ""
-                if "git" in cmd and "branch" in cmd and "--merged" in cmd:
-                    return 0, "* main\n", ""
-                if "git" in cmd and "rev-parse" in cmd:
-                    return 0, "tree-main\n", ""
-                if "git" in cmd and "merge-tree" in cmd:
-                    return 0, "tree-merged\n", ""
-                if "terminal" in cmd and "close" in cmd:
-                    return 0, "", ""
-                return 0, "", ""
+            fake_runner, _ = _clean_worktree_runner(
+                tmp_path,
+                current_branch="feature-x",
+                merged_branches="* main\n",
+                origin_main_tree="tree-main",
+                virtual_merge_tree="tree-merged",
+            )
 
             reaper = WorkerReaper(orca_runner=fake_runner)
             record = reaper.reap(task_id="t1", execute=True)
@@ -305,6 +249,46 @@ class WorkerReaperTests(unittest.TestCase):
 class _FakeRunner:
     def __call__(self, cmd: list[str]) -> tuple[int, str, str]:
         return 0, "", ""
+
+
+def _clean_worktree_runner(
+    worktree_path: str,
+    *,
+    current_branch: str,
+    merged_branches: str,
+    origin_main_tree: str | None = None,
+    virtual_merge_tree: str | None = None,
+) -> tuple[Callable[[list[str]], tuple[int, str, str]], list[str]]:
+    removed_paths = []
+
+    def fake_runner(cmd: list[str]) -> tuple[int, str, str]:
+        if "dispatch-show" in cmd:
+            dispatch = {
+                "dispatch_id": "d1",
+                "task_id": "t1",
+                "terminal_id": "term1",
+                "status": "COMPLETED",
+                "worktree_path": worktree_path,
+            }
+            return 0, json.dumps(dispatch), ""
+        if "git" in cmd and "status" in cmd:
+            return 0, "", ""
+        if "git" in cmd and "branch" in cmd and "--show-current" in cmd:
+            return 0, f"{current_branch}\n", ""
+        if "git" in cmd and "branch" in cmd and "--merged" in cmd:
+            return 0, merged_branches, ""
+        if "git" in cmd and "rev-parse" in cmd and origin_main_tree is not None:
+            return 0, f"{origin_main_tree}\n", ""
+        if "git" in cmd and "merge-tree" in cmd and virtual_merge_tree is not None:
+            return 0, f"{virtual_merge_tree}\n", ""
+        if "git" in cmd and "worktree" in cmd and "remove" in cmd:
+            removed_paths.append(cmd[-1])
+            return 0, "", ""
+        if "terminal" in cmd and "close" in cmd:
+            return 0, "", ""
+        return 0, "", ""
+
+    return fake_runner, removed_paths
 
 
 def _git(repo: Path, *args: str) -> str:

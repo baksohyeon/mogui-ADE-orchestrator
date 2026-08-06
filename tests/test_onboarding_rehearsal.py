@@ -54,25 +54,43 @@ def run(workspace: Path, ops: Path, *extra: str) -> subprocess.CompletedProcess[
                           capture_output=True, text=True, env=os.environ.copy())
 
 
+def report(completed: subprocess.CompletedProcess[str]) -> dict:
+    """Parse JSON only after exposing the real subprocess failure context."""
+    assert completed.returncode == 1, (
+        f"rehearsal exit={completed.returncode}; stderr:\n{completed.stderr}\n"
+        f"stdout:\n{completed.stdout}"
+    )
+    assert completed.stdout, (
+        f"rehearsal produced empty stdout; exit={completed.returncode}; "
+        f"stderr:\n{completed.stderr}"
+    )
+    try:
+        return json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise AssertionError(
+            f"rehearsal emitted invalid JSON; exit={completed.returncode}; "
+            f"stderr:\n{completed.stderr}\nstdout:\n{completed.stdout}"
+        ) from error
+
+
 def test_rehearsal_reports_passes_and_honest_live_gaps(tmp_path: Path):
     workspace, ops = make_install(tmp_path)
     completed = run(workspace, ops, "--json")
-    assert completed.returncode == 1  # live identity was not measured
-    report = json.loads(completed.stdout)
-    statuses = {row["id"]: row["status"] for row in report["results"]}
+    payload = report(completed)
+    statuses = {row["id"]: row["status"] for row in payload["results"]}
     assert all(statuses[row] == "PASS" for row in ("P01", "P02", "P03", "P04", "P05", "P06", "P07", "P08"))
     assert statuses["L01"] == "GAP"
     assert statuses["L02"] == "GAP"
-    assert {row["id"] for row in report["gaps"]} == {"L01", "L02"}
-    assert report["failures"] == []
+    assert {row["id"] for row in payload["gaps"]} == {"L01", "L02"}
+    assert payload["failures"] == []
 
 
 def test_rehearsal_detects_card_drift(tmp_path: Path):
     workspace, ops = make_install(tmp_path)
     (workspace / "CLAUDE.md").write_text("drift\n", encoding="utf-8")
     completed = run(workspace, ops, "--json")
-    report = json.loads(completed.stdout)
-    row = next(row for row in report["results"] if row["id"] == "P04")
+    payload = report(completed)
+    row = next(row for row in payload["results"] if row["id"] == "P04")
     assert row["status"] == "FAIL"
     assert row["observed"] == "missing or different"
 
@@ -80,6 +98,6 @@ def test_rehearsal_detects_card_drift(tmp_path: Path):
 def test_live_check_is_gap_when_orca_is_unavailable(tmp_path: Path):
     workspace, ops = make_install(tmp_path)
     completed = run(workspace, ops, "--live", "--orca-cli", "definitely-not-an-orca-cli", "--json")
-    report = json.loads(completed.stdout)
-    row = next(row for row in report["results"] if row["id"] == "L01")
+    payload = report(completed)
+    row = next(row for row in payload["results"] if row["id"] == "L01")
     assert row["status"] == "GAP"

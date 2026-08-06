@@ -22,12 +22,21 @@ EXCLUDE_FILES = frozenset(
         "TEMPLATE-VERSION",
         "CHANGELOG.md",
         "ONBOARDING.md",
+        ".coverage",
     }
 )
 EXCLUDE_DIRS = frozenset(
     {
         "onboarding",
         "docs/lineage",
+        ".git",
+        ".beads",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        "build",
+        "dist",
+        "htmlcov",
     }
 )
 
@@ -55,7 +64,11 @@ def iter_install_paths(skeleton: Path) -> list[str]:
         ):
             continue
         # Never install bytecode or other local caches.
-        if "__pycache__" in parts or rel.endswith((".pyc", ".pyo")):
+        if (
+            "__pycache__" in parts
+            or rel.endswith((".pyc", ".pyo"))
+            or any(part.endswith(".egg-info") for part in parts)
+        ):
             continue
         paths.append(rel)
     # MANIFEST.json is generated into the skeleton and is installed.

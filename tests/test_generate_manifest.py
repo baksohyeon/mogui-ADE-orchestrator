@@ -69,6 +69,10 @@ def test_generator_skips_symlinks_and_refuses_symlink_output(tmp_path: Path):
     skeleton.mkdir()
     (skeleton / "TEMPLATE-VERSION").write_text("v0.0.0\n", encoding="utf-8")
     (skeleton / "real.md").write_text("ok\n", encoding="utf-8")
+    for directory in (".git", ".beads", ".pytest_cache", "build", "dist"):
+        local_artifact = skeleton / directory
+        local_artifact.mkdir()
+        (local_artifact / "secret.txt").write_text("local\n", encoding="utf-8")
     outside = tmp_path / "outside.md"
     outside.write_text("outside\n", encoding="utf-8")
     (skeleton / "linked.md").symlink_to(outside)
@@ -80,6 +84,10 @@ def test_generator_skips_symlinks_and_refuses_symlink_output(tmp_path: Path):
     )
     assert generated.returncode == 0, generated.stderr
     assert "linked.md" not in json.loads(generated.stdout)["files"]
+    assert not any(
+        path.startswith((".git/", ".beads/", ".pytest_cache/", "build/", "dist/"))
+        for path in json.loads(generated.stdout)["files"]
+    )
 
     output = skeleton / "MANIFEST.json"
     output.symlink_to(outside)

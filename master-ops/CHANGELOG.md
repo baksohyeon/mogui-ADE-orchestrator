@@ -52,7 +52,8 @@ Workspace session-card host twin and deployment (2026-08-06):
 
 Successor-facing promotion audit and redacted knowledge promotion (2026-08-06):
 
-- Added the promotion inventory and redacted incident records under `docs/blame/`.
+- Added the promotion inventory at `docs/internal/promotion-audit-2026-08-06.md` and
+  redacted incident records under `docs/blame/`.
 - Added the boot comparison procedure and public lineage entry format.
 - Reconciled contract writing conventions and review voice through rule 11.
 - Shipped the product-repository path guard and documented both host hook matchers.
@@ -75,6 +76,17 @@ Contract convention merge-time re-measurement and citation repair (2026-08-05 wo
   `docs/runbooks/contract-conventions.md` and
   `docs/charter/04-worker-routing-review.md` into the generated operations
   repository and preserve local additions deliberately.
+
+Review follow-up for successor promotion (2026-08-06):
+
+- Product-path guard now fails closed for shell writes, git staging and alternate
+  work-tree forms, normalizes symlinked paths, reads the canonical `product_repo`
+  runtime key, resolves the runtime config location, and honors the hook fire-log
+  override. Regression coverage is in `scripts/test-product-path-guard.sh`.
+- The agy dispatch path now accepts its measured Gemini vendor mapping; the full
+  runtime capability table remains a separate contract. `scripts/test-dispatch-runtime.sh`
+  preserves this minimum behavior.
+- Removed a UUID and corrected public-document wording and structure identified by review.
 
 Dispatch policy and review voice promotion from operations repository
 (owner directive 2026-08-05):

@@ -14,7 +14,9 @@ Every entry records:
 - inherited role, open tracks, and verification result;
 - measured boot-comparison values and the instrument used for each value;
 - repeated-question, reopened-decision, and context-loss metrics when available;
-- unknown or unmeasured facts explicitly marked `unconfigured` or `미확인`.
+- unknown or unmeasured facts explicitly marked `미확인`; use `미확인` for both missing
+  measurements and values that could not be established, and reserve `unconfigured` for
+  machine-facing command output where the tool itself reports that configuration is absent.
 
 An entry without measured values is incomplete. Narrative claims do not replace the
 instrument output. When a handoff conflicts with a fresh measurement, retain the conflict

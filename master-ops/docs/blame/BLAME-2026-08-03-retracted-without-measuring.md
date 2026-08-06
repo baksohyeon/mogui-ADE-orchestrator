@@ -17,7 +17,7 @@ status: active
 
 ## 2. 증거 타임라인
 
-전부 transcript 직독 실측이다. 기억 출처 없음. 출처는 `<machine-path>>/<session>.jsonl`.
+전부 transcript 직독 실측이다. 기억 출처 없음. 출처는 `<machine-path>/<session>.jsonl`.
 
 | 시각 (UTC) | 행동 | 출처 | 등급 |
 |---|---|---|---|

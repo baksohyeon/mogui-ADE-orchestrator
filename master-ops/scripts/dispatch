@@ -419,7 +419,15 @@ if [ "$MODEL_EXPLICIT" != 1 ]; then
 fi
 
 MODEL_VENDOR=$(model_vendor "$MODEL")
-if [ "$MODEL_VENDOR" != unknown ] && [ "$MODEL_VENDOR" != "$RUNTIME" ]; then
+runtime_accepts_vendor() {
+  case "$1:$2" in
+    agy:gemini|gemini:gemini|claude:claude|codex:codex|grok:grok|cursor:cursor) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+# This is the minimal runtime capability mapping needed for agy in this PR. A
+# complete capability table is intentionally a separate contract.
+if [ "$MODEL_VENDOR" != unknown ] && ! runtime_accepts_vendor "$RUNTIME" "$MODEL_VENDOR"; then
   echo "✗ model/runtime mismatch · model=$MODEL (vendor $MODEL_VENDOR) runtime=$RUNTIME" >&2
   echo "  A model id from one vendor cannot run on another host. Declaring it anyway writes a" >&2
   echo "  false declared_model into the ledger and makes the register probe grep for a string" >&2

@@ -4,25 +4,33 @@
 # same-day violation). Override: MOGUI_INLINE_EDIT_OVERRIDE=1 — allowed but logged.
 
 log_fire() {
-  mkdir -p ~/.mogui
+  local fire_log="${MOGUI_HOOK_FIRE_LOG:-$HOME/.mogui/hook-fire-log.jsonl}"
+  mkdir -p "$(dirname "$fire_log")"
   local session_kind="unknown"
   if [ -n "$ORCA_TASK_ID" ] || [ -n "$ORCA_DISPATCH_ID" ] || [[ "$PWD" == *".orca/worktrees"* ]]; then
     session_kind="worker"
   fi
   printf '{"ts":%d,"hook":"product-path-guard","event":"PreToolUse","cwd":"%s","runtime_hint":"%s","session_kind":"%s"}\n' \
-    "$(date +%s)" "$PWD" "${MOGUI_RUNTIME_HINT:-unknown}" "$session_kind" >> ~/.mogui/hook-fire-log.jsonl 2>/dev/null || true
+    "$(date +%s)" "$PWD" "${MOGUI_RUNTIME_HINT:-unknown}" "$session_kind" >> "$fire_log" 2>/dev/null || true
 }
 
 log_fire
 
 input=$(cat)
 SCRIPTS_DIR=$(cd "$(dirname "$0")/.." && pwd)
-INSTANCE_RUNTIME_CONFIG=${MOGUI_INSTANCE_RUNTIME_CONFIG:-$SCRIPTS_DIR/../config/instance-runtime.json}
+# The onboarding schema owns this value in the runtime repository, not beside the
+# operations scripts. Tests and deliberate host overrides may set the env var.
+if [ -n "${MOGUI_INSTANCE_RUNTIME_CONFIG:-}" ]; then
+  INSTANCE_RUNTIME_CONFIG="$MOGUI_INSTANCE_RUNTIME_CONFIG"
+else
+  INSTANCE_RUNTIME_CONFIG="{{RUNTIME_ROOT}}/config/instance-runtime.json"
+fi
 
 log_override() {
   local guarded_path="$1"
-  mkdir -p ~/.mogui
-  printf '{"ts":"%s","path":"%s","kind":"override"}\n' "$(date -u +%FT%TZ)" "$guarded_path" >> ~/.mogui/guard-suppressions.jsonl
+  local suppression_log="${MOGUI_HOOK_SUPPRESSION_LOG:-$HOME/.mogui/guard-suppressions.jsonl}"
+  mkdir -p "$(dirname "$suppression_log")"
+  printf '{"ts":"%s","path":"%s","kind":"override"}\n' "$(date -u +%FT%TZ)" "$guarded_path" >> "$suppression_log"
 }
 
 load_product_repositories() {
@@ -39,21 +47,21 @@ except Exception as exc:
     print(f"configuration missing or unreadable: {path}: {exc}", file=sys.stderr)
     sys.exit(1)
 
-repos = data.get("product_repositories")
-if not isinstance(repos, list) or not repos:
-    print("configuration malformed: product_repositories must be a non-empty array", file=sys.stderr)
+repo = data.get("product_repo")
+if not isinstance(repo, str) or not repo.strip():
+    print("configuration malformed: product_repo must be a non-empty absolute path", file=sys.stderr)
     sys.exit(1)
 
-for repo in repos:
-    if not isinstance(repo, str) or not repo.strip() or not os.path.isabs(os.path.expanduser(repo)):
-        print("configuration malformed: product_repositories entries must be absolute paths", file=sys.stderr)
-        sys.exit(1)
-    print(os.path.normpath(os.path.expanduser(repo)))
+if not os.path.isabs(os.path.expanduser(repo)):
+    print("configuration malformed: product_repo must be an absolute path", file=sys.stderr)
+    sys.exit(1)
+print(os.path.realpath(os.path.expanduser(repo)))
 '
 }
 
 is_product_repo_path() {
-  local guarded_path="$1"
+  local guarded_path
+  guarded_path=$(python3 -c 'import os,sys; print(os.path.realpath(os.path.expanduser(sys.argv[1])))' "$1")
   local repo
   while IFS= read -r repo; do
     case "$guarded_path" in
@@ -64,7 +72,8 @@ is_product_repo_path() {
 }
 
 guard_path() {
-  local guarded_path="$1"
+  local guarded_path
+  guarded_path=$(python3 -c 'import os,sys; print(os.path.realpath(os.path.expanduser(sys.argv[1])))' "$1")
   local repos_output
   if ! repos_output=$(load_product_repositories 2>&1); then
     echo "[product-path-guard] BLOCKED: cannot load product repository configuration from $INSTANCE_RUNTIME_CONFIG ($repos_output). This guard fails closed; fix config/instance-runtime.json before editing guarded surfaces." >&2
@@ -80,6 +89,109 @@ guard_path() {
   fi
 }
 
+# Parse every Bash command, not only git. A non-git command can write through a
+# redirection or a tool argument, and a command parser that silently discards it
+# turns the guard into a git-only check. Unknown commands running from a product
+# repository fail closed; read-only commands remain allowed.
+guard_command_paths() {
+  local guarded_roots="$1"
+  local result
+  result=$(PRODUCT_ROOTS="$guarded_roots" python3 -c '
+import json, os, shlex, sys
+
+try:
+    payload = json.load(sys.stdin)
+except Exception:
+    print("UNSAFE:invalid-json")
+    raise SystemExit
+
+command = (payload.get("tool_input") or {}).get("command", "")
+if not command:
+    raise SystemExit
+roots = [os.path.realpath(os.path.expanduser(x)) for x in os.environ.get("PRODUCT_ROOTS", "").splitlines() if x]
+start = os.path.realpath(os.path.expanduser(
+    (payload.get("tool_input") or {}).get("working_directory")
+    or payload.get("cwd") or payload.get("working_directory") or os.getcwd()
+))
+readonly = {"pwd", "ls", "ll", "cat", "head", "tail", "grep", "rg", "find", "stat", "file", "whoami", "env", "true", "false", "test", "printf"}
+git_readonly = {"status", "log", "diff", "show", "rev-parse", "branch", "tag", " ls-files", "ls-files", "describe", "for-each-ref", "remote", "config --get"}
+def under(path):
+    path = os.path.realpath(os.path.expanduser(path))
+    return any(path == root or path.startswith(root + os.sep) for root in roots)
+def resolve(base, value):
+    value = os.path.expanduser(value)
+    return os.path.realpath(value if os.path.isabs(value) else os.path.join(base, value))
+try:
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|><")
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    tokens = list(lexer)
+except Exception:
+    print("UNSAFE:unparseable-command")
+    raise SystemExit
+
+segments, current = [], []
+for token in tokens:
+    if token in {";", "&&", "||", "|", "&"}:
+        if current: segments.append(current)
+        current = []
+    else:
+        current.append(token)
+if current: segments.append(current)
+
+for parts in segments:
+    if not parts: continue
+    if parts[0] == "cd":
+        if len(parts) < 2: print("UNSAFE:cd-without-target"); raise SystemExit
+        current = resolve(current, parts[1])
+        if under(current):
+            print("BLOCK:" + current); raise SystemExit
+        continue
+    command_name = os.path.basename(parts[0])
+    if command_name == "git":
+        idx, git_cwd, work_tree, git_dir, sub = 1, current, None, None, ""
+        while idx < len(parts):
+            token = parts[idx]
+            if token == "-C":
+                if idx + 1 >= len(parts): print("UNSAFE:git-C-without-target"); raise SystemExit
+                git_cwd = resolve(git_cwd, parts[idx + 1]); idx += 2; continue
+            if token.startswith("-C") and token != "-C":
+                git_cwd = resolve(git_cwd, token[2:]); idx += 1; continue
+            if token in ("--work-tree", "--git-dir"):
+                if idx + 1 >= len(parts): print("UNSAFE:git-option-without-value"); raise SystemExit
+                value = parts[idx + 1]
+                if token == "--work-tree": work_tree = resolve(git_cwd, value)
+                else: git_dir = resolve(git_cwd, value)
+                idx += 2; continue
+            if token.startswith("--work-tree="): work_tree = resolve(git_cwd, token.split("=", 1)[1]); idx += 1; continue
+            if token.startswith("--git-dir="): git_dir = resolve(git_cwd, token.split("=", 1)[1]); idx += 1; continue
+            if token.startswith("-"): idx += 1; continue
+            sub = token; break
+        read = sub in {"status", "log", "diff", "show", "rev-parse", "ls-files", "describe", "for-each-ref", "remote"}
+        if sub == "config" and idx + 1 < len(parts) and parts[idx + 1] in {"--get", "--get-all", "--list"}: read = True
+        if not read:
+            if git_dir and not work_tree:
+                print("UNSAFE:git-dir-without-work-tree"); raise SystemExit
+            target = work_tree or git_cwd
+            if under(target): print("BLOCK:" + os.path.realpath(target)); raise SystemExit
+        continue
+    # Redirection targets and absolute path arguments are write evidence.
+    for i, token in enumerate(parts[1:], 1):
+        if token in {">", ">>", "<", "2>", "2>>", "&>"} and i + 1 < len(parts):
+            candidate = resolve(current, parts[i + 1])
+            if under(candidate): print("BLOCK:" + candidate); raise SystemExit
+        elif token.startswith("/") or token.startswith("~/"):
+            candidate = resolve(current, token)
+            if under(candidate): print("BLOCK:" + candidate); raise SystemExit
+    if under(current) and command_name not in readonly:
+        print("BLOCK:" + current); raise SystemExit
+' <<<"$input")
+  case "$result" in
+    BLOCK:*) guard_path "${result#BLOCK:}" ;;
+    UNSAFE:*) echo "[product-path-guard] BLOCKED: cannot safely parse command (${result#UNSAFE:}); refusing to run it." >&2; exit 2 ;;
+  esac
+}
+
 path=$(printf '%s' "$input" | python3 -c "
 import json,sys
 try:
@@ -90,6 +202,12 @@ except Exception:
     print('')
 " 2>/dev/null)
 [ -n "$path" ] && guard_path "$path"
+
+configured_roots=$(load_product_repositories 2>/dev/null) || {
+  echo "[product-path-guard] BLOCKED: cannot load product repository configuration from $INSTANCE_RUNTIME_CONFIG; this guard fails closed." >&2
+  exit 2
+}
+guard_command_paths "$configured_roots"
 
 bash_git_write_target=$(printf '%s' "$input" | python3 -c "
 import json

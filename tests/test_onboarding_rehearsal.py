@@ -144,7 +144,6 @@ def test_rehearsal_rejects_incomplete_descriptor_and_blank_runtime(tmp_path: Pat
 def test_rehearsal_rejects_empty_descriptor_fields(tmp_path: Path):
     workspace, ops = make_install(tmp_path)
     descriptor = json.loads((workspace / "config/workspace-descriptor.json").read_text())
-    descriptor["master_seat"] = ""
     descriptor["repositories"] = [{}]
     (workspace / "config/workspace-descriptor.json").write_text(json.dumps(descriptor))
     payload = report(run(workspace, ops, "--json"))

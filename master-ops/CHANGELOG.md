@@ -84,8 +84,9 @@ Review follow-up for successor promotion (2026-08-06):
   root is denied unless its command class was measured as read-only in the event
   log; unresolved targets are denied with a reason. The flag is off by default so
   an unmeasured allowlist is never the default policy. The shipped allowlist is
-  empty because the existing log has 0 usable command observations, so the
-  measured rejection report is `0/0`, N/A rather than an inferred rate.
+  empty because the existing hook-fire log has 0 usable command observations;
+  command observations now go to the separate event log, so the measured
+  rejection report is `0/0`, N/A rather than an inferred rate.
   Symlink normalization, canonical `product_repo` configuration, runtime config
   resolution, configurable fire logs, and the requested bypass regressions are covered by
   `scripts/test-product-path-guard.sh`; run `scripts/measure-product-path-guard`

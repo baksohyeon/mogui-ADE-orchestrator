@@ -27,7 +27,8 @@ Wire every shipped hook and skill this template documents, without offering an o
   measured Bash inversion is opt-in via `MOGUI_PRODUCT_GUARD_FAIL_CLOSED=1`;
   it is off by default so an unmeasured allowlist is never the default policy.
   With the flag on, Bash allows only command classes measured as read-only in
-  the event log; unresolved targets and unmeasured commands are denied. If this is a multi-product
+  the event log when they target product-repository territory; unresolved targets
+  and unmeasured product-targeting commands are denied. If this is a multi-product
   workspace or the owner declines a primary product, leave the guard unwired
   until a real primary path is configured; otherwise its fail-closed behavior
   intentionally blocks all matching tool calls, including operations-repository

@@ -125,6 +125,7 @@ for token in tokens:
     else: current.append(token)
 if current: segments.append(current)
 current_cwd=cwd
+last_command_class=""
 allow=set()
 try:
     with open(os.environ["ALLOWLIST"], encoding="utf-8") as fh:
@@ -175,12 +176,16 @@ for parts in segments:
         command_class=name
         target=current_cwd
         if name in {"bash", "sh", "dash", "ksh", "zsh", "python", "python3", "perl", "ruby", "node"}:
-            if any(">" in token or root in token for token in parts[1:]):
+            if "-c" in parts[1:] or any(">" in token or root in token for token in parts[1:]):
                 print("DENY\t"+command_class+"\topaque interpreter command may contain an unparsed write")
                 raise SystemExit
+    last_command_class=command_class
+    if os.environ["FAIL_CLOSED"] == "1" and any(token in {"-exec","-execdir","xargs","--in-place","-i"} for token in parts[1:]):
+        print("DENY\t"+command_class+"\twrite-capable argument is not admitted")
+        raise SystemExit
     target_hits=[]
     for i,token in enumerate(parts[1:],1):
-        if token in {">",">>","2>","2>>","&>"}:
+        if token in {">",">>","2>","2>>","&>",">&"}:
             if i+1 >= len(parts): print("DENY\t"+command_class+"\tredirection target is missing"); raise SystemExit
             target_hits.append(resolve(current_cwd, parts[i+1]))
         elif token.startswith("/") or token.startswith("~/"):
@@ -188,7 +193,7 @@ for parts in segments:
     touches=under(target) or any(under(x) for x in target_hits)
     if not touches:
         continue
-    if any(token in {">",">>","2>","2>>","&>"} for token in parts):
+    if any(token in {">",">>","2>","2>>","&>",">&"} for token in parts):
         print("DENY\t"+command_class+"\tshell redirection is a write")
         raise SystemExit
     if os.environ["FAIL_CLOSED"] == "1" and command_class not in allow:
@@ -200,8 +205,12 @@ for parts in segments:
         if command_class not in legacy_readonly and command_class not in legacy_git_readonly:
             print("DENY\t"+command_class+"\tcommand is not in legacy read-only policy")
             raise SystemExit
-print("ALLOW\t" + (";".join(sorted(allow)) if allow else "empty") + "\tread-only allowlist")
+print("ALLOW\t" + (last_command_class or "empty") + "\tread-only allowlist")
 ' <<<"$input")
+parser_status=$?
+if [ "$parser_status" -ne 0 ]; then
+  blocked "cannot safely parse Bash command" "" unresolved_target
+fi
 decision=${result%%$'\t'*}
 command_class=${result#*$'\t'}
 command_class=${command_class%%$'\t'*}

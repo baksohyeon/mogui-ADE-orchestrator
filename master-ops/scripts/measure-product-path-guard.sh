@@ -1,5 +1,5 @@
 #!/bin/bash
-# Report measured Bash observations and the guard rejection rate.
+# Report measured Bash observations from event-log.jsonl and the rejection rate.
 set -u
 
 LOG=${MOGUI_EVENT_LOG:-$HOME/.mogui/event-log.jsonl}
@@ -19,7 +19,7 @@ try:
                 continue
             if record.get("event") != "product_path_guard":
                 continue
-            if not record.get("command_class"):
+            if not record.get("command_class") or record.get("command_class") in {"file-tool", "empty"}:
                 continue
             observed += 1
             if record.get("outcome") == "finding":

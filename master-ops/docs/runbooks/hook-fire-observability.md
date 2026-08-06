@@ -68,7 +68,7 @@ Prints a matrix of hook by (runtime_hint, session_kind) with last-fired timestam
 ### Product-path guard measurement
 
 ```bash
-scripts/measure-product-path-guard
+scripts/measure-product-path-guard.sh
 ```
 
 This reports the number of usable Bash command observations, blocked decisions,

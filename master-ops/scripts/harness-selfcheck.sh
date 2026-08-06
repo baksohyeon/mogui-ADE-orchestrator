@@ -229,8 +229,8 @@ else
 fi
 
 # --- Tracker check ---
-# Resolve candidates and compare real paths; substring basename matches can
-# accept a sibling directory that merely contains the same name fragment.
+# Resolve candidates and compare real paths; substring name matches can accept a
+# sibling directory that merely contains the same repository-name fragment.
 cd "$WORKSPACE_ROOT" || exit 2
 tracker_out=$(bd where 2>&1)
 allowed_beads_1=""
@@ -249,6 +249,25 @@ if [ -n "$tracker_path" ] && [ -e "$tracker_path" ]; then
   if [ -n "$tracker_real" ] && { [ "$tracker_real" = "$allowed_beads_1" ] || [ "$tracker_real" = "$allowed_beads_2" ]; }; then
     tracker_ok=1
   fi
+fi
+if [ "$tracker_ok" -ne 1 ]; then
+  while IFS= read -r tracker_line; do
+    # Some bd hosts prefix the path with a label. Accept only the path portion
+    # and verify its real location; never infer identity from a name fragment.
+    tracker_candidate="$tracker_line"
+    case "$tracker_candidate" in
+      *:*) tracker_candidate="${tracker_candidate##*:}" ;;
+    esac
+    tracker_candidate="${tracker_candidate#${tracker_candidate%%[![:space:]]*}}"
+    tracker_candidate="${tracker_candidate%${tracker_candidate##*[![:space:]]}}"
+    if [ -d "$tracker_candidate" ]; then
+      tracker_real=$(cd "$tracker_candidate" 2>/dev/null && pwd -P || true)
+      if [ -n "$tracker_real" ] && { [ "$tracker_real" = "$allowed_beads_1" ] || [ "$tracker_real" = "$allowed_beads_2" ]; }; then
+        tracker_ok=1
+        break
+      fi
+    fi
+  done <<< "$tracker_out"
 fi
 if [ "$tracker_ok" -eq 1 ]; then
   echo "Tracker: resolves to ops .beads"

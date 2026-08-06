@@ -273,8 +273,16 @@ def apply_planned(
     planned = [a for a in actions if a["action"] == "planned"]
     for item in planned:
         src = resolved_under(template_root, item["path"])
-        dest = ops_root.resolve() / item["path"]
-        if src is None or dest is None or not src.is_file():
+        resolved_dest = resolved_under(ops_root, item["path"])
+        lexical_dest = ops_root.resolve() / item["path"]
+        if (
+            src is None
+            or resolved_dest is None
+            or lexical_dest.is_symlink()
+            or lexical_dest != resolved_dest
+            or (lexical_dest.exists() and not lexical_dest.is_file())
+            or not src.is_file()
+        ):
             raise RuntimeError(f"preflight failed for {item['path']}")
 
     results: list[dict] = []

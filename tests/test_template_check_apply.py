@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import importlib.util
+import importlib.machinery
 import os
 import shutil
 import stat
@@ -462,6 +464,29 @@ def test_template_apply_rejects_overlap_and_invalid_destinations(tmp_path: Path)
     assert overlap.returncode == 2
 
 
+def test_template_apply_preflight_rechecks_destination_after_plan(tmp_path: Path):
+    loader = importlib.machinery.SourceFileLoader("template_apply_under_test", str(TEMPLATE_APPLY))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    template = tmp_path / "template"
+    ops = tmp_path / "ops"
+    template.mkdir()
+    ops.mkdir()
+    (template / "file.txt").write_text("new\n", encoding="utf-8")
+    manifest = {"template_version": "v0.0.0", "files": ["file.txt"]}
+    actions = module.plan_actions(template, ops, manifest, None)
+    external = tmp_path / "external.txt"
+    external.write_text("keep\n", encoding="utf-8")
+    (ops / "file.txt").symlink_to(external)
+
+    with pytest.raises(RuntimeError, match="preflight failed"):
+        module.apply_planned(template, ops, actions, {})
+    assert external.read_text(encoding="utf-8") == "keep\n"
+
+
 def test_template_apply_invalid_template_version_is_controlled_error(tmp_path: Path):
     template = tmp_path / "template"
     ops = tmp_path / "ops"
@@ -491,6 +516,8 @@ def test_frame_hygiene_guards_use_explicit_template_and_shared_skeleton_name():
     spawn = (SKELETON / "scripts" / "spawn-test").read_text(encoding="utf-8")
     assert "OPS_DIR/../mogui-ADE-orchestrator" not in harness
     assert "Fallback text match" not in harness
+    assert "while IFS= read -r tracker_line" in harness
+    assert "basename" not in harness[harness.index("# --- Tracker check ---") : harness.index("# --- Template currency check ---")]
     assert 'SKELETON_DIR="master"$\'-\'"ops"' in spawn
     assert 'local ade_clone_path="$sandbox_dir/$ADE_REPO_NAME"' in spawn
 
@@ -502,3 +529,4 @@ def test_onboarding_docs_name_template_root_and_placeholder_flags():
     assert "ops-side" in upgrade
     assert '"{{RUNTIME_ROOT}}/master-ops/scripts/template-check"' in reverify
     assert "do not guess a sibling directory" in reverify
+    assert "The ops-side" in upgrade and "{{REPO_LIST}}" in upgrade

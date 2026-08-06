@@ -12,7 +12,7 @@ Where we are: this workspace was already set up, and the book the Master reads f
 
 ## Checklist
 
-0. **Bootstrap the facts first**: ask the owner for the workspace root and ops repository path (or the operating card). Do not scan the disk for candidate workspaces. Do not substitute this orchestrator clone's paths. The ops-side `{{WORKSPACE_NAME}}`, `{{WORKSPACE_ROOT}}`, `{{OPS_REPO}}`, `{{MONITOR_NS}}`, and `{{MODEL_ID}}` values below mean values measured from that ops repository. `{{RUNTIME_ROOT}}` and `{{TEMPLATE_VERSION}}` come from the template clone.
+0. **Bootstrap the facts first**: ask the owner for the workspace root and ops repository path (or the operating card). Do not scan the disk for candidate workspaces. Do not substitute this orchestrator clone's paths. The ops-side `{{WORKSPACE_NAME}}`, `{{WORKSPACE_ROOT}}`, `{{OPS_REPO}}`, `{{MONITOR_NS}}`, `{{MODEL_ID}}`, and `{{REPO_LIST}}` values below mean values measured from that ops repository. `{{RUNTIME_ROOT}}` and `{{TEMPLATE_VERSION}}` come from the template clone.
 
 1. **Locate the template**: the live ADE clone that carries the current skeleton (the one this router was loaded from is the default). Record its path as the template root. An install too old to contain `scripts/template-check` is still checkable by running the script from the template side:
 

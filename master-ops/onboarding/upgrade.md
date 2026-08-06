@@ -17,13 +17,13 @@ Where we are: this workspace was already set up, and the book the Master reads f
 1. **Locate the template**: the live ADE clone that carries the current skeleton (the one this router was loaded from is the default). Record its path as the template root. An install too old to contain `scripts/template-check` is still checkable by running the script from the template side:
 
 ```console
-$ "{{RUNTIME_ROOT}}/master-ops/scripts/template-check" --ops "{{OPS_REPO}}" --template "{{RUNTIME_ROOT}}/master-ops"
+"{{RUNTIME_ROOT}}/master-ops/scripts/template-check" --ops "{{OPS_REPO}}" --template "{{RUNTIME_ROOT}}/master-ops"
 ```
 
 When the ops repository already has the script:
 
 ```console
-$ "{{OPS_REPO}}/scripts/template-check" --ops "{{OPS_REPO}}" --template "{{RUNTIME_ROOT}}/master-ops"
+"{{OPS_REPO}}/scripts/template-check" --ops "{{OPS_REPO}}" --template "{{RUNTIME_ROOT}}/master-ops"
 ```
 
 2. **Read the report**: the report states which set it produced (`install-manifest` alone, or `template-compare` when `--template` was given). Record installed version (or "undeterminable" when `MANIFEST.json` is absent), template version, absent required paths, and unknown present paths. A missing manifest is the expected shape for pre-manifest installs — continue by content presence, do not invent a version.
@@ -31,7 +31,7 @@ $ "{{OPS_REPO}}/scripts/template-check" --ops "{{OPS_REPO}}" --template "{{RUNTI
 3. **Dry-run apply (always first)**: print the exact file list and the reason for each path. No write yet.
 
 ```console
-$ "{{RUNTIME_ROOT}}/master-ops/scripts/template-apply" --ops "{{OPS_REPO}}" --template "{{RUNTIME_ROOT}}/master-ops"
+"{{RUNTIME_ROOT}}/master-ops/scripts/template-apply" --ops "{{OPS_REPO}}" --template "{{RUNTIME_ROOT}}/master-ops"
 ```
 
 4. **Owner confirmation**: show the dry-run plan in the owner's language. Require an explicit confirmation before any write. There is no silent apply and no flag that skips confirmation on any run. If the owner declines, stop and leave the report.
@@ -46,7 +46,7 @@ $ "{{RUNTIME_ROOT}}/master-ops/scripts/template-apply" --ops "{{OPS_REPO}}" --te
    - `contracts/`
    - anything the manifest does not claim
 
-   Per-file outcomes are one of: written, skipped-as-instance-owned, refused-not-in-manifest, error-invalid-path, error-missing-template-file. Any `error-*` outcome fails the plan (nonzero exit) before confirmation.
+   Per-file outcomes are one of: planned, written, skipped-as-instance-owned, refused-not-in-manifest, error-invalid-path, error-missing-template-file. Dry-run prints `planned` for each template-layer path that would write; any `error-*` outcome fails the plan (nonzero exit) before confirmation.
 
 7. **Re-check**: run `template-check` again with `--template` and confirm the report_set is `template-compare`. A clean shape is the goal; remaining unknown paths that are deliberate local additions stay listed as unknown and are not deleted.
 

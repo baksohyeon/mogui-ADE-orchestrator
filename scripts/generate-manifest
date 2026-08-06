@@ -34,6 +34,11 @@ EXCLUDE_DIRS = frozenset(
 # authoring ops repository name (design defects ② and ③).
 AUTHORING_OPS_NAME = "mogui-master-ops"
 FRAME_PATH_NEEDLE = "master-ops/"
+# Historical incident records preserve measured names and paths as evidence.
+# They are not procedure instructions; scrubbing them destroys the record.
+HYGIENE_EXEMPT_PREFIXES = (
+    "docs/blame/",
+)
 
 
 def iter_install_paths(skeleton: Path) -> list[str]:
@@ -42,8 +47,12 @@ def iter_install_paths(skeleton: Path) -> list[str]:
         if not path.is_file():
             continue
         rel = path.relative_to(skeleton).as_posix()
-        top = rel.split("/", 1)[0]
+        parts = rel.split("/")
+        top = parts[0]
         if rel in EXCLUDE_FILES or top in EXCLUDE_DIRS:
+            continue
+        # Never install bytecode or other local caches.
+        if "__pycache__" in parts or rel.endswith((".pyc", ".pyo")):
             continue
         paths.append(rel)
     # MANIFEST.json is generated into the skeleton and is installed.
@@ -58,7 +67,10 @@ def read_template_version(skeleton: Path) -> str:
     version_path = skeleton / "TEMPLATE-VERSION"
     if not version_path.is_file():
         raise SystemExit(f"generate-manifest: missing {version_path}")
-    version = version_path.read_text(encoding="utf-8").strip()
+    try:
+        version = version_path.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError) as exc:
+        raise SystemExit(f"generate-manifest: TEMPLATE-VERSION unreadable: {exc}") from exc
     if not version:
         raise SystemExit("generate-manifest: TEMPLATE-VERSION is empty")
     return version
@@ -70,6 +82,8 @@ def check_frame_hygiene(skeleton: Path, install_paths: list[str]) -> list[str]:
     author_bytes = AUTHORING_OPS_NAME.encode("utf-8")
     defects: list[str] = []
     for rel in install_paths:
+        if any(rel == p.rstrip("/") or rel.startswith(p) for p in HYGIENE_EXEMPT_PREFIXES):
+            continue
         if rel == "MANIFEST.json":
             # Generated after the walk; may not exist yet on first run.
             path = skeleton / rel
@@ -164,9 +178,17 @@ def main(argv: list[str] | None = None) -> int:
         # Compare the parsed document, not the raw text: Windows checkouts may
         # present CRLF, and Path walk order must not affect the files list.
         try:
-            existing_data = json.loads(out.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-            sys.stderr.write(f"generate-manifest: committed manifest malformed: {exc}\n")
+            existing_text = out.read_text(encoding="utf-8")
+        except OSError as exc:
+            sys.stderr.write(f"generate-manifest: committed manifest unreadable: {exc}\n")
+            return 1
+        except UnicodeDecodeError as exc:
+            sys.stderr.write(f"generate-manifest: committed manifest not valid UTF-8: {exc}\n")
+            return 1
+        try:
+            existing_data = json.loads(existing_text)
+        except json.JSONDecodeError as exc:
+            sys.stderr.write(f"generate-manifest: committed manifest malformed JSON: {exc}\n")
             return 1
         if existing_data != manifest:
             sys.stderr.write(

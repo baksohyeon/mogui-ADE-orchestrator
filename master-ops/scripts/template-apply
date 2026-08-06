@@ -14,6 +14,9 @@ Per-file outcomes:
   refused-not-in-manifest
   error-invalid-path
   error-missing-template-file
+
+Multi-file apply is preflighted then written file-by-file with per-file atomic
+replace. A mid-batch OS error can leave earlier files written; re-run after fix.
 """
 
 from __future__ import annotations
@@ -25,37 +28,17 @@ import sys
 import tempfile
 from pathlib import Path
 
-# Keep refusal names identical to template-check.
-INSTANCE_OWNED_PREFIXES = (
-    "docs/lineage/",
-    ".beads/",
-    "config/",
-    "contracts/",
-)
-INSTANCE_OWNED_EXACT = frozenset(
-    {
-        "docs/runbooks/role-state.md",
-    }
-)
-
-PLACEHOLDERS = (
-    "{{WORKSPACE_NAME}}",
-    "{{WORKSPACE_ROOT}}",
-    "{{OPS_REPO}}",
-    "{{MONITOR_NS}}",
-    "{{MODEL_ID}}",
-    "{{REPO_LIST}}",
-    "{{RUNTIME_ROOT}}",
-    "{{TEMPLATE_VERSION}}",
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+from template_common import (  # noqa: E402
+    INSTANCE_OWNED_EXACT,
+    INSTANCE_OWNED_PREFIXES,
+    PLACEHOLDERS,
+    is_instance_owned,
 )
 
 CONFIRM_PHRASE = "apply"
-
-
-def is_instance_owned(rel: str) -> bool:
-    if rel in INSTANCE_OWNED_EXACT:
-        return True
-    return any(rel == p.rstrip("/") or rel.startswith(p) for p in INSTANCE_OWNED_PREFIXES)
 
 
 def normalize_rel(rel: str) -> str | None:
@@ -179,28 +162,27 @@ def plan_actions(
                 }
             )
             continue
-        # If an in-root symlink redirects the destination into an instance-owned
-        # path, refuse by the resolved name — not only the claimed name.
-        if dest.exists() or dest.is_symlink():
-            effective = effective_rel_under(ops_root, dest)
-            if effective is None:
-                actions.append(
-                    {
-                        "path": rel,
-                        "action": "error-invalid-path",
-                        "reason": "destination resolves outside ops root",
-                    }
-                )
-                continue
-            if is_instance_owned(effective):
-                actions.append(
-                    {
-                        "path": rel,
-                        "action": "skipped-as-instance-owned",
-                        "reason": f"destination resolves to instance-owned path {effective}",
-                    }
-                )
-                continue
+        # Always evaluate the resolved destination (including dangling
+        # in-root symlinks) for escape and instance-owned targets.
+        effective = effective_rel_under(ops_root, dest)
+        if effective is None:
+            actions.append(
+                {
+                    "path": rel,
+                    "action": "error-invalid-path",
+                    "reason": "destination resolves outside ops root",
+                }
+            )
+            continue
+        if is_instance_owned(effective):
+            actions.append(
+                {
+                    "path": rel,
+                    "action": "skipped-as-instance-owned",
+                    "reason": f"destination resolves to instance-owned path {effective}",
+                }
+            )
+            continue
         if not src.is_file():
             actions.append(
                 {
@@ -279,18 +261,22 @@ def apply_planned(
         dest = resolved_under(ops_root, rel)
         if src is None or dest is None:
             raise RuntimeError(f"path escaped root during write: {rel}")
-        # Re-check instance-owned via resolved destination after confirmation.
-        if dest.exists() or dest.is_symlink():
-            effective = effective_rel_under(ops_root, dest)
-            if effective is None or is_instance_owned(effective):
-                raise RuntimeError(
-                    f"destination became instance-owned or escaped before write: {rel}"
-                )
+        # Re-check resolved destination after confirmation (unconditional).
+        effective = effective_rel_under(ops_root, dest)
+        if effective is None or is_instance_owned(effective):
+            raise RuntimeError(
+                f"destination became instance-owned or escaped before write: {rel}"
+            )
         text = src.read_text(encoding="utf-8")
         text = substitute(text, values)
         dest.parent.mkdir(parents=True, exist_ok=True)
         # Atomic replace within the destination directory so a crash mid-write
-        # does not leave a truncated target.
+        # does not leave a truncated target. Preserve destination mode when the
+        # target already exists; otherwise keep the source mode (not mkstemp 0600).
+        if dest.exists() and not dest.is_symlink():
+            mode = dest.stat().st_mode & 0o777
+        else:
+            mode = src.stat().st_mode & 0o777
         fd, tmp_name = tempfile.mkstemp(
             prefix=".template-apply-",
             dir=str(dest.parent),
@@ -298,8 +284,7 @@ def apply_planned(
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as tmp:
                 tmp.write(text)
-            if src.stat().st_mode & 0o111:
-                os.chmod(tmp_name, dest.stat().st_mode | 0o111 if dest.exists() else 0o755)
+            os.chmod(tmp_name, mode)
             os.replace(tmp_name, dest)
         except Exception:
             try:

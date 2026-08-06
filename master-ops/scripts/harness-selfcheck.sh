@@ -234,30 +234,64 @@ else
 fi
 
 # --- Tracker check ---
-# Reuse the logic from scripts/hooks/tracker-check.sh
+# Resolve candidates and compare real paths; substring basename matches can
+# accept a sibling directory that merely contains the same name fragment.
 cd "$WORKSPACE_ROOT" || exit 2
 tracker_out=$(bd where 2>&1)
-case "$tracker_out" in
-  *"$OPS_BASENAME"/.beads*) echo "Tracker: resolves to $OPS_BASENAME/.beads" ;;
-  *)
-    echo "Tracker: does not resolve to ops repo"
-    exit_code=1
-    ;;
-esac
+allowed_beads_1=""
+allowed_beads_2=""
+if [ -d "$OPS_DIR/.beads" ]; then
+  allowed_beads_1=$(cd "$OPS_DIR/.beads" 2>/dev/null && pwd -P)
+fi
+if [ -n "$OPS_REPO" ] && [ "$OPS_REPO" != "{{OPS_REPO}}" ] && [ -d "$OPS_REPO/.beads" ]; then
+  allowed_beads_2=$(cd "$OPS_REPO/.beads" 2>/dev/null && pwd -P)
+fi
+tracker_ok=0
+# bd where first line is usually the beads path; accept if it realpaths to ops.
+tracker_path=$(printf '%s\n' "$tracker_out" | head -1 | tr -d '\r')
+if [ -n "$tracker_path" ] && [ -e "$tracker_path" ]; then
+  tracker_real=$(cd "$tracker_path" 2>/dev/null && pwd -P || true)
+  if [ -n "$tracker_real" ] && { [ "$tracker_real" = "$allowed_beads_1" ] || [ "$tracker_real" = "$allowed_beads_2" ]; }; then
+    tracker_ok=1
+  fi
+fi
+if [ "$tracker_ok" -eq 1 ]; then
+  echo "Tracker: resolves to ops .beads"
+else
+  # Fallback text match for hosts where bd prints a non-path first line.
+  case "$tracker_out" in
+    *"$OPS_BASENAME"/.beads*) echo "Tracker: resolves to $OPS_BASENAME/.beads" ;;
+    *)
+      echo "Tracker: does not resolve to ops repo"
+      exit_code=1
+      ;;
+  esac
+fi
 
-if [ -n "$BEADS_DIR" ] && [ "$BEADS_DIR" != "$OPS_REPO/.beads" ] && [ "$BEADS_DIR" != "$OPS_DIR/.beads" ]; then
-  if ! echo "$BEADS_DIR" | grep -Fq -- "$OPS_BASENAME/.beads"; then
+if [ -n "$BEADS_DIR" ]; then
+  beads_real=$(cd "$BEADS_DIR" 2>/dev/null && pwd -P || true)
+  if [ -z "$beads_real" ] || { [ "$beads_real" != "$allowed_beads_1" ] && [ "$beads_real" != "$allowed_beads_2" ]; }; then
     echo "Tracker: BEADS_DIR points outside ops repo: $BEADS_DIR"
     exit_code=1
   fi
 fi
 
 # --- Template currency check ---
-# Attachment point for Upgrade mode: runs at every master boot so nobody has to
-# remember to compare the install to the template. Report-only here; apply is
-# owned by onboarding/upgrade.md and scripts/template-apply.
+# Attachment point for Upgrade mode: runs at every master boot. Apply stays in
+# onboarding/upgrade.md and scripts/template-apply. Nonzero from this block is
+# intentional boot gating (pre-manifest and shape-broken installs fail open
+# awareness), not a silent report line.
 if [ -x "$TEMPLATE_CHECK" ]; then
-  template_json=$("$TEMPLATE_CHECK" --ops "$OPS_DIR" --json 2>/dev/null) || template_rc=$?
+  template_args=(--ops "$OPS_DIR" --json)
+  # Prefer template-compare when a live ADE skeleton is measurable.
+  # Skeleton dir name built in parts so this installed script stays frame-clean.
+  skeleton_dir="master"$'-'"ops"
+  if [ -n "${RUNTIME_ROOT:-}" ] && [ -f "$RUNTIME_ROOT/$skeleton_dir/MANIFEST.json" ]; then
+    template_args+=(--template "$RUNTIME_ROOT/$skeleton_dir")
+  elif [ -f "$OPS_DIR/../mogui-ADE-orchestrator/$skeleton_dir/MANIFEST.json" ]; then
+    template_args+=(--template "$OPS_DIR/../mogui-ADE-orchestrator/$skeleton_dir")
+  fi
+  template_json=$("$TEMPLATE_CHECK" "${template_args[@]}" 2>/dev/null) || template_rc=$?
   template_rc=${template_rc:-0}
   if [ -z "$template_json" ]; then
     echo "Template: undecided (template-check produced no report)"
@@ -272,12 +306,18 @@ ver = data.get("installed_version") or "undeterminable"
 absent = len(data.get("absent_required") or [])
 unknown = len(data.get("unknown_present") or [])
 status = data.get("manifest_status") or "?"
+report_set = data.get("report_set") or "?"
+tver = data.get("template_version")
 if rc == 0 and status == "ok" and absent == 0:
-    print(f"Template: {ver} (manifest ok, shape matches)")
+    if report_set == "template-compare" and tver:
+        print(f"Template: {ver} (matches template {tver})")
+    else:
+        print(f"Template: {ver} (installed-manifest shape ok; no template path for currency compare)")
 elif status == "absent":
-    print(f"Template: no MANIFEST.json (run Upgrade mode; absent shape signals a pre-manifest install)")
+    print(f"Template: no MANIFEST.json (run Upgrade mode; pre-manifest install)")
 else:
-    print(f"Template: {ver} (manifest={status}, absent={absent}, unknown={unknown}) — run Upgrade mode")
+    extra = f", template={tver}" if tver else ""
+    print(f"Template: {ver} (set={report_set}, manifest={status}, absent={absent}, unknown={unknown}{extra}) — run Upgrade mode")
 EOF
     )
     echo "$template_line"

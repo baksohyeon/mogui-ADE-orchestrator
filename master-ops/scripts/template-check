@@ -23,20 +23,16 @@ import re
 import sys
 from pathlib import Path
 
-INSTANCE_OWNED_PREFIXES = (
-    "docs/lineage/",
-    ".beads/",
-    "config/",
-    "contracts/",
-)
-INSTANCE_OWNED_EXACT = frozenset(
-    {
-        "docs/runbooks/role-state.md",
-    }
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+from template_common import (  # noqa: E402
+    INSTANCE_OWNED_EXACT,
+    INSTANCE_OWNED_PREFIXES,
+    PLACEHOLDERS,
+    is_instance_owned,
 )
 
-# Template-side paths that never install. Present on the authoring skeleton;
-# never reported as "unknown" when someone points --ops at the skeleton itself.
 TEMPLATE_SIDE_FILES = frozenset(
     {
         "TEMPLATE-VERSION",
@@ -48,17 +44,6 @@ TEMPLATE_SIDE_DIRS = frozenset(
     {
         "onboarding",
     }
-)
-
-PLACEHOLDERS = (
-    "{{WORKSPACE_NAME}}",
-    "{{WORKSPACE_ROOT}}",
-    "{{OPS_REPO}}",
-    "{{MONITOR_NS}}",
-    "{{MODEL_ID}}",
-    "{{REPO_LIST}}",
-    "{{RUNTIME_ROOT}}",
-    "{{TEMPLATE_VERSION}}",
 )
 
 
@@ -125,11 +110,6 @@ def list_present_paths(root: Path) -> set[str]:
     return present
 
 
-def is_instance_owned(rel: str) -> bool:
-    if rel in INSTANCE_OWNED_EXACT:
-        return True
-    return any(rel == p.rstrip("/") or rel.startswith(p) for p in INSTANCE_OWNED_PREFIXES)
-
 
 def is_template_side(rel: str) -> bool:
     if rel in TEMPLATE_SIDE_FILES:
@@ -155,9 +135,12 @@ def read_template_version(template_root: Path) -> tuple[str | None, str | None]:
         return None, f"template manifest unreadable: {exc}"
     if err and err != "manifest absent":
         return None, f"template {err}"
-    if manifest:
-        return manifest.get("template_version"), None
-    return None, None
+    if not manifest:
+        return None, "template version undeterminable (no TEMPLATE-VERSION and no MANIFEST.json)"
+    version = manifest.get("template_version")
+    if not isinstance(version, str) or not version.strip():
+        return None, "template MANIFEST.json missing non-empty template_version"
+    return version.strip(), None
 
 
 def parse_changelog_sections(text: str) -> list[tuple[str, str]]:

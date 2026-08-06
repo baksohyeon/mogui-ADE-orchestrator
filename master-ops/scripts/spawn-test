@@ -276,7 +276,7 @@ wait_for_agent_round_trip() {
 # Stage 0: Pre-flight structural checks
 preflight_check() {
   local sandbox_dir=$1
-  local ade_clone="$sandbox_dir/mogui-ADE-orchestrator"
+  local ade_clone="$sandbox_dir/$ADE_REPO_NAME"
 
   # Verify master-ops directories exist
   if [ ! -d "$ade_clone/master-ops" ]; then

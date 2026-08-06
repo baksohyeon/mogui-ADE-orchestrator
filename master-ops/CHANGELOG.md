@@ -49,13 +49,16 @@ Upgrade mode — path in, detect drift, apply template layer (2026-08-06):
   out of onboarding prose into the generator; regenerating must produce no diff.
 - Generator frame hygiene fails the build when an install-bound file carries an
   ADE-frame `master-ops/` path or the authoring ops repository name.
+  `docs/blame/` is exempt: incident records keep measured names as evidence.
 - Added `scripts/template-check` (install report and optional `--template`
   compare, including template-side runs against an arbitrary ops path) and
-  `scripts/template-apply` (always dry-run first; interactive confirm; refuses
-  instance-owned paths by name).
-- Router mode 3 is Upgrade (`onboarding/upgrade.md`). The Founding guard routes
-  here instead of only refusing. Reverify gains check 8 (template currency,
-  report-only). `harness-selfcheck.sh` prints a `Template:` line at every boot.
+  `scripts/template-apply` (always dry-run first; interactive confirm phrase
+  required; refuses instance-owned paths and unclaimed paths by name).
+- Router mode 3 is Upgrade (`onboarding/upgrade.md`). Standing block: do not
+  spawn. The Founding guard routes here for template-layer catch-up instead of
+  only refusing; succession remains outside Upgrade. Reverify gains check 8
+  (template currency, report-only). `harness-selfcheck.sh` prints a `Template:`
+  line at every boot.
 - Existing installations do not auto-update. To adopt: copy `MANIFEST.json`,
   `scripts/template-check`, `scripts/template-apply`, and merge charter path
   cleanups; then run Upgrade mode against the template.

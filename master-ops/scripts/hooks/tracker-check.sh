@@ -28,11 +28,8 @@ fi
 # Boot briefing: active protections, one line (owner feedback 2026-08-03 — quiet
 # guards have zero presence; say what is standing watch).
 supp=$(wc -l < ~/.mogui/guard-suppressions.jsonl 2>/dev/null | tr -d ' ')
-# Count only ledger rows that name this install's policy path when possible;
-# fall back to the basename so a shared per-user ledger still yields a number.
+# Count only ledger rows that name this install's policy path (basename-scoped).
+# No bare filename fallback — a shared ledger must not import other installs.
 decisions=$(grep -cF -- "$OPS_BASENAME/model-tier-policy.json" ~/.mogui/dispatch-ledger.jsonl 2>/dev/null || true)
-if [ "${decisions:-0}" = "0" ]; then
-  decisions=$(grep -cF -- 'model-tier-policy.json' ~/.mogui/dispatch-ledger.jsonl 2>/dev/null || true)
-fi
 decisions=${decisions:-0}
 echo "[protections] active: role-state inject (every turn) | product-path hard block (overrides logged: ${supp:-0}) | bash trim-warn | dispatch gate+ledger (ops-policy decisions: ${decisions:-0}) | PreCompact memory reinject"

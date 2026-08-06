@@ -56,6 +56,13 @@ def scope_files(contract_text, tracked, root):
         skeleton_prefix = "master" + "-ops/"
         if token.startswith(skeleton_prefix):
             token = token[len(skeleton_prefix) :]
+            # Whole-tree skeleton scope: token becomes empty after the strip.
+            if not token and trailing:
+                if skeleton_prefix not in seen:
+                    seen.add(skeleton_prefix)
+                    nested = [p for p in tracked if p.startswith(skeleton_prefix)]
+                    files.update(nested if nested else tracked)
+                continue
         token = token.lstrip("/")
         token = token.rstrip("/") + ("/" if trailing else "")
         if (

@@ -48,13 +48,12 @@ def run(workspace: Path, ops: Path, *extra: str) -> subprocess.CompletedProcess[
     # instead of setup-python. Keep bash as the outer command, then let
     # cmd.exe execute the concrete interpreter path without MSYS translation.
     if os.name == "nt":
-        command = subprocess.list2cmdline(
-            [sys.executable, str(SCRIPT), "--workspace-root", str(workspace),
-             "--ops-repo", str(ops), *extra]
-        )
-        # Do not shell-quote the whole cmd command: those quotes would become
-        # part of `cmd /c`'s command string after bash removes its own layer.
-        shell_command = f"cmd.exe /d /c {command}"
+        windows_args = [sys.executable, str(SCRIPT), "--workspace-root", str(workspace),
+                        "--ops-repo", str(ops), *extra]
+        # Quote each argument for bash so its backslashes survive to cmd.exe;
+        # quoting the whole command loses the argument boundary at cmd /c.
+        bash_args = " ".join("'" + arg.replace("'", "'\\''") + "'" for arg in windows_args)
+        shell_command = f"cmd.exe /d /c {bash_args}"
     else:
         command = ["python3", SCRIPT.as_posix(), "--workspace-root", str(workspace),
                    "--ops-repo", str(ops), *extra]

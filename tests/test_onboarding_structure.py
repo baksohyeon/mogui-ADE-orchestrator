@@ -183,3 +183,7 @@ def test_entry_files_stay_byte_identical():
     claude = (REPO_ROOT / "CLAUDE.md").read_bytes()
     agents = (REPO_ROOT / "AGENTS.md").read_bytes()
     assert claude == agents, "CLAUDE.md and AGENTS.md diverged; re-unify or record intended divergence"
+
+    card_claude = (REPO_ROOT / "master-ops" / "workspace-card" / "CLAUDE.md").read_bytes()
+    card_agents = (REPO_ROOT / "master-ops" / "workspace-card" / "AGENTS.md").read_bytes()
+    assert card_claude == card_agents, "workspace-card/CLAUDE.md and AGENTS.md diverged"

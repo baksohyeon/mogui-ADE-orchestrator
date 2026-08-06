@@ -1,6 +1,6 @@
 # Workspace session card
 
-`CLAUDE.md` in this directory is the **canonical** master session card — the file the agent host reads at the workspace root to learn who the master is, what its execution rule is, and how requests route to skills. The copy at the workspace root is a **deployment** of it, placed there because that is where the agent host reads it from.
+`CLAUDE.md` and `AGENTS.md` in this directory are byte-identical **canonical** master session cards — the files the agent host reads at the workspace root to learn who the master is, what its execution rule is, and how requests route to skills. The copies at the workspace root are **deployments** of them, placed there because that is where the agent host reads them from.
 
 This is not the ops repository's own agent instruction file pair (`CLAUDE.md` / `AGENTS.md` at the ops repository root). Those files describe how an agent works *inside* the ops repository. This card is the workspace-root session card. It is also not the owner-facing operating card printed in onboarding step 10.
 
@@ -8,12 +8,13 @@ Owner decision, 2026-08-05: the card lives here (in the ops repository after ins
 
 ## Editing
 
-Edit the file here (or in the ops repository's `workspace-card/CLAUDE.md` after install), then redeploy to the workspace root. Never edit the root copy alone: it is the copy, and the next deployment overwrites it.
+Edit both canonical files here (or in the ops repository's `workspace-card/CLAUDE.md` and `AGENTS.md` after install), keeping them byte-identical, then redeploy to the workspace root. Never edit a root copy alone: it is a deployment, and the next deployment overwrites it.
 
 From the workspace root, after the card's installation values are filled (onboarding step 05 does this):
 
 ```bash
 cp "<ops-repo>/workspace-card/CLAUDE.md" "<workspace-root>/CLAUDE.md"
+cp "<ops-repo>/workspace-card/AGENTS.md" "<workspace-root>/AGENTS.md"
 ```
 
 Angle-bracket slots are filled by hand at redeploy time; this README carries no double-brace template placeholders, because step 03 copies it into the ops repository and step 05 asserts that no such placeholder remains there.

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import re
+import sys
 from pathlib import Path
 
 
@@ -38,8 +40,14 @@ def make_install(tmp_path: Path) -> tuple[Path, Path]:
 
 
 def run(workspace: Path, ops: Path, *extra: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run([str(SCRIPT), "--workspace-root", str(workspace),
-                           "--ops-repo", str(ops), *extra],
+    # Windows cannot execute a shebang script as a native application (WinError
+    # 193). GitHub's Windows runner provides bash, so invoke the same script
+    # through bash on every OS; bash then invokes the Python interpreter rather
+    # than treating this Python source as a shell program.
+    interpreter = "python" if os.name == "nt" else "python3"
+    command = [interpreter, SCRIPT.as_posix(), "--workspace-root", str(workspace),
+               "--ops-repo", str(ops), *extra]
+    return subprocess.run(["bash", "-c", shlex.join(command)],
                           capture_output=True, text=True, env=os.environ.copy())
 
 

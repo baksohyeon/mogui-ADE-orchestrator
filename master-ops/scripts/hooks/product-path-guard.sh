@@ -36,7 +36,7 @@ record = {
     "target_scope": os.environ["MG_TARGET_SCOPE"],
     "tool_kind": os.environ["MG_TOOL_KIND"],
 }
-os.makedirs(os.path.dirname(path), exist_ok=True)
+os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
 with open(path, "a", encoding="utf-8") as stream:
     stream.write(json.dumps(record, ensure_ascii=False) + "\n")
 PY
@@ -199,9 +199,6 @@ for parts in segments:
                 print("DENY\t"+command_class+"\topaque interpreter command may contain an unparsed write")
                 raise SystemExit
     last_command_class=command_class
-    if any(token in {"-exec","-execdir","xargs","--in-place","-i"} for token in parts[1:]):
-        print("DENY\t"+command_class+"\twrite-capable argument is not admitted")
-        raise SystemExit
     target_hits=[]
     for i,token in enumerate(parts[1:],1):
         if token in {">",">>","2>","2>>","&>",">&"}:
@@ -212,6 +209,16 @@ for parts in segments:
     touches=under(target) or any(under(x) for x in target_hits)
     if not touches:
         continue
+    write_args={"-exec","-execdir","xargs","--in-place"}
+    if name in {"sed","perl","python","python3","ruby"}:
+        write_args.add("-i")
+    git_mutation = name == "git" and (
+        (sub == "remote" and any(token in {"set-url","add","remove"} for token in parts))
+        or (sub == "diff" and any(token == "--output" or token.startswith("--output=") for token in parts))
+    )
+    if any(token in write_args for token in parts[1:]) or git_mutation:
+        print("DENY\t"+command_class+"\twrite-capable argument is not admitted")
+        raise SystemExit
     if any(token in {">",">>","2>","2>>","&>",">&"} for token in parts):
         print("DENY\t"+command_class+"\tshell redirection is a write")
         raise SystemExit

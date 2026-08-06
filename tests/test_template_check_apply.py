@@ -175,6 +175,9 @@ def test_template_apply_clean_write_after_confirm(tmp_path: Path):
     # byte-identical through apply.
     (ops / "docs" / "lineage").mkdir(parents=True)
     (ops / "docs" / "lineage" / "MASTER-LINEAGE.md").write_text("keep-me\n", encoding="utf-8")
+    # Instance-owned lineage dir may carry additional template files (e.g. README);
+    # apply refuses the whole prefix, so a founded install must already hold them.
+    (ops / "docs" / "lineage" / "README.md").write_text("lineage-readme\n", encoding="utf-8")
     (ops / "docs" / "runbooks").mkdir(parents=True)
     (ops / "docs" / "runbooks" / "role-state.md").write_text("role-keep\n", encoding="utf-8")
 

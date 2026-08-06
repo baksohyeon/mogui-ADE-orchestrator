@@ -2,7 +2,7 @@
 # Report measured Bash observations and the guard rejection rate.
 set -u
 
-LOG=${MOGUI_HOOK_FIRE_LOG:-$HOME/.mogui/hook-fire-log.jsonl}
+LOG=${MOGUI_EVENT_LOG:-$HOME/.mogui/event-log.jsonl}
 python3 - "$LOG" <<'PY'
 import json
 import sys
@@ -17,12 +17,12 @@ try:
                 record = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if record.get("hook") != "product-path-guard":
+            if record.get("event") != "product_path_guard":
                 continue
             if not record.get("command_class"):
                 continue
             observed += 1
-            if record.get("decision") == "blocked":
+            if record.get("outcome") == "finding":
                 rejected += 1
 except OSError:
     pass

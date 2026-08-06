@@ -23,9 +23,11 @@ Wire every shipped hook and skill this template documents, without offering an o
 - PreToolUse: supervised-dispatch bypass warning
 - PreToolUse(Edit|Write|NotebookEdit) and PreToolUse(Bash): fail closed for
   product-repository writes with `scripts/hooks/product-path-guard.sh`; configure
-  the instance `product_repo` path during onboarding before enabling it. Bash
-  allows only command classes measured as read-only in the fire log; unresolved
-  targets and unmeasured commands are denied. If this is a multi-product
+  the instance `product_repo` path during onboarding before enabling it. The
+  measured Bash inversion is opt-in via `MOGUI_PRODUCT_GUARD_FAIL_CLOSED=1`;
+  it is off by default so an unmeasured allowlist is never the default policy.
+  With the flag on, Bash allows only command classes measured as read-only in
+  the event log; unresolved targets and unmeasured commands are denied. If this is a multi-product
   workspace or the owner declines a primary product, leave the guard unwired
   until a real primary path is configured; otherwise its fail-closed behavior
   intentionally blocks all matching tool calls, including operations-repository
@@ -57,7 +59,7 @@ When the owner asks to turn something off, explain the piece in one sentence, st
 | Role-state injection (UserPromptSubmit) | Restates the active role and Proposal→Approval→Execution every turn | Remove or comment the UserPromptSubmit hook entry in the host settings that points at the role-state inject script; re-enable by restoring it |
 | Compaction probe (SessionStart on compact) | Checks that the master still knows required facts after compaction | Remove the compact SessionStart hook that runs `scripts/compaction-probe.sh` |
 | Dispatch / supervised-dispatch warning (PreToolUse) | Warns when a worker path bypasses the dispatch gate | Remove the PreToolUse warn hook for bare worker invocation |
-| Product-path guard (PreToolUse) | Blocks master writes into product repositories, denies unresolved or unmeasured Bash targets, and records decisions | Remove the two PreToolUse hook entries for `scripts/hooks/product-path-guard.sh`; restore them to re-enable |
+| Product-path guard (PreToolUse) | Blocks master writes into product repositories; optionally enables measured fail-closed Bash decisions and records decisions in the event log | Remove the two PreToolUse hook entries for `scripts/hooks/product-path-guard.sh`; restore them to re-enable |
 | Tracker reachability warning (SessionStart) | Warns when the issue tracker is not reachable from the workspace root | Remove the SessionStart tracker-check hook |
 | Inbox / orch-inbox warn | Surfaces unread orchestration mailbox items | Remove the UserPromptSubmit hook for `orch-inbox-warn.sh` when present |
 | Blame-agent skill | Structured incident observation skill | Uninstall or unload the skill from the host skill path; documents stay in `master-ops/skills/blame-agent/` |

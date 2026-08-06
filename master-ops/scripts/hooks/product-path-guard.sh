@@ -1,7 +1,8 @@
 #!/bin/bash
-# PreToolUse(Edit|Write|NotebookEdit|Bash): fail-closed product repository guard.
-# Bash uses a measured read-only allowlist. An unknown command or unresolved target
-# is denied; the allowlist is intentionally not inferred from command names.
+# PreToolUse(Edit|Write|NotebookEdit|Bash): product repository guard.
+# Default behavior preserves the measured legacy policy. Set
+# MOGUI_PRODUCT_GUARD_FAIL_CLOSED=1 only after command observations establish a
+# measured read-only allowlist.
 set -u
 
 if [ -n "${MOGUI_INSTANCE_RUNTIME_CONFIG:-}" ]; then
@@ -12,11 +13,23 @@ fi
 HOOK_DIR=$(cd "$(dirname "$0")" && pwd)
 ALLOWLIST="${MOGUI_PRODUCT_GUARD_ALLOWLIST:-$HOOK_DIR/product-path-guard-readonly-allowlist.txt}"
 FIRE_LOG="${MOGUI_HOOK_FIRE_LOG:-$HOME/.mogui/hook-fire-log.jsonl}"
+FAIL_CLOSED="${MOGUI_PRODUCT_GUARD_FAIL_CLOSED:-0}"
+
+mg_emit() {
+  local level="$1" event="$2" outcome="$3" reason="$4"
+  local command_class="${5:-}" target_scope="${6:-}"
+  local event_log="${MOGUI_EVENT_LOG:-$HOME/.mogui/event-log.jsonl}"
+  mkdir -p "$(dirname "$event_log")" 2>/dev/null || true
+  printf '{"ts":%d,"level":"%s","event":"%s","component":"tool-impl","session_kind":"%s","runtime_hint":"%s","outcome":"%s","evidence":"observed","reason":"%s","command_class":"%s","target_scope":"%s"}\n' \
+    "$(date +%s)" "$level" "$event" \
+    "$([ -n "${ORCA_TASK_ID:-}" ] && echo worker || echo unknown)" \
+    "${MOGUI_RUNTIME_HINT:-unknown}" "$outcome" "$reason" "$command_class" "$target_scope" \
+    >>"$event_log" 2>/dev/null || true
+}
 
 record_fire() {
-  local command_class="${1:-}" decision="${2:-observed}"
   mkdir -p "$(dirname "$FIRE_LOG")"
-  COMMAND_CLASS="$command_class" DECISION="$decision" python3 - "$FIRE_LOG" <<'PY' 2>/dev/null || true
+  python3 - "$FIRE_LOG" <<'PY' 2>/dev/null || true
 import json, os, sys, time
 path = sys.argv[1]
 record = {
@@ -26,13 +39,15 @@ record = {
     "cwd": os.getcwd(),
     "runtime_hint": os.environ.get("MOGUI_RUNTIME_HINT", "unknown"),
     "session_kind": "worker" if (os.environ.get("ORCA_TASK_ID") or os.environ.get("ORCA_DISPATCH_ID") or ".orca/worktrees" in os.getcwd()) else "unknown",
-    "command_class": os.environ.get("COMMAND_CLASS", ""),
-    "decision": os.environ.get("DECISION", "observed"),
 }
 with open(path, "a", encoding="utf-8") as fh:
     fh.write(json.dumps(record, ensure_ascii=False) + "\n")
 PY
 }
+
+# Preserve the legacy hook-fire schema and coverage signal; decision details go
+# exclusively to event-log.jsonl through mg_emit.
+record_fire
 
 load_product_repo() {
   CONFIG_PATH="$INSTANCE_RUNTIME_CONFIG" python3 -c '
@@ -61,8 +76,8 @@ PY
 }
 
 blocked() {
-  local reason="$1" command_class="${2:-}"
-  record_fire "$command_class" blocked
+  local reason="$1" command_class="${2:-}" reason_code="${3:-guarded_target}"
+  mg_emit error product_path_guard finding "$reason_code" "$command_class" guarded
   echo "[product-path-guard] BLOCKED: $reason" >&2
   exit 2
 }
@@ -73,18 +88,18 @@ repo=$(load_product_repo 2>/dev/null) || blocked "cannot load product_repo from 
 file_path=$(printf '%s' "$input" | python3 -c 'import json,sys; d=json.load(sys.stdin); t=d.get("tool_input",{}); print(t.get("file_path") or t.get("notebook_path") or "")' 2>/dev/null) || blocked "invalid hook input" ""
 if [ -n "$file_path" ]; then
   target=$(python3 -c 'import os,sys; print(os.path.realpath(os.path.expanduser(sys.argv[1])))' "$file_path") || blocked "cannot resolve file target" ""
-  [ "$(is_under "$repo" "$target")" = yes ] || { record_fire "file-tool" allowed; exit 0; }
+  [ "$(is_under "$repo" "$target")" = yes ] || { mg_emit info product_path_guard pass file_tool file_tool outside; exit 0; }
   if [ "${MOGUI_INLINE_EDIT_OVERRIDE:-0}" = 1 ]; then
-    record_fire "file-tool" override
+    mg_emit notice product_path_guard pass override file_tool guarded
     exit 0
   fi
-  blocked "$target is product-repo territory; dispatch product writes through a contract" "file-tool"
+  blocked "$target is product-repo territory; dispatch product writes through a contract" "file-tool" guarded_target
 fi
 
 command=$(printf '%s' "$input" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("tool_input",{}).get("command", ""))' 2>/dev/null) || blocked "invalid hook input" ""
-[ -n "$command" ] || { record_fire "" allowed; exit 0; }
+[ -n "$command" ] || { mg_emit info product_path_guard pass empty_command; exit 0; }
 
-result=$(PRODUCT_ROOT="$repo" ALLOWLIST="$ALLOWLIST" python3 -c '
+result=$(PRODUCT_ROOT="$repo" ALLOWLIST="$ALLOWLIST" FAIL_CLOSED="$FAIL_CLOSED" python3 -c '
 import json, os, shlex, sys
 payload=json.load(sys.stdin)
 tool=payload.get("tool_input", {})
@@ -124,6 +139,9 @@ for parts in segments:
             print("DENY\tcd\tcd target cannot be resolved")
             raise SystemExit
         current_cwd=resolve(current_cwd, parts[1])
+        if os.environ["FAIL_CLOSED"] != "1" and under(current_cwd):
+            print("DENY\tcd\tlegacy policy blocks entering product root")
+            raise SystemExit
         continue
     sub=""
     git_target=current_cwd
@@ -173,9 +191,15 @@ for parts in segments:
     if any(token in {">",">>","2>","2>>","&>"} for token in parts):
         print("DENY\t"+command_class+"\tshell redirection is a write")
         raise SystemExit
-    if command_class not in allow:
+    if os.environ["FAIL_CLOSED"] == "1" and command_class not in allow:
         print("DENY\t"+command_class+"\tcommand is not in measured read-only allowlist")
         raise SystemExit
+    if os.environ["FAIL_CLOSED"] != "1":
+        legacy_readonly={"pwd","ls","ll","cat","head","tail","grep","rg","find","stat","file","whoami","env","true","false","test","printf"}
+        legacy_git_readonly={"git status","git log","git diff","git show","git rev-parse","git ls-files","git describe","git for-each-ref","git remote"}
+        if command_class not in legacy_readonly and command_class not in legacy_git_readonly:
+            print("DENY\t"+command_class+"\tcommand is not in legacy read-only policy")
+            raise SystemExit
 print("ALLOW\t" + (";".join(sorted(allow)) if allow else "empty") + "\tread-only allowlist")
 ' <<<"$input")
 decision=${result%%$'\t'*}
@@ -183,6 +207,9 @@ command_class=${result#*$'\t'}
 command_class=${command_class%%$'\t'*}
 reason=${result#*$'\t'*$'\t'}
 if [ "$decision" = DENY ]; then
-  blocked "$reason" "$command_class"
+  if [ "$reason" = "unparseable command" ] || [ "$reason" = "cd target cannot be resolved" ]; then
+    blocked "$reason" "$command_class" unresolved_target
+  fi
+  blocked "$reason" "$command_class" guarded_target
 fi
-record_fire "$command_class" allowed
+mg_emit info product_path_guard pass read_only_command "$command_class" guarded

@@ -1,3 +1,4 @@
-# Measured allowlist for Bash commands targeting product-repository roots.
+# Measured read-only command classes, one per line.
+# This file is consulted only when MOGUI_PRODUCT_GUARD_FAIL_CLOSED=1.
 # The current hook-fire-log contains no command field (0 usable command observations),
-# so no command is admitted until a measurement run records its actual read-only use.
+# so no command is admitted until event-log measurement records actual read-only use.

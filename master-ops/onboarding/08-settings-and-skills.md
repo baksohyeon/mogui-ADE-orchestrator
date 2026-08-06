@@ -21,9 +21,26 @@ Wire every shipped hook and skill this template documents, without offering an o
 - PreCompact: reload or export tracker memory
 - UserPromptSubmit: role-state line + `Proposal -> Approval -> Execution` (see charter §8 / §9)
 - PreToolUse: supervised-dispatch bypass warning
+- PreToolUse(Edit|Write|NotebookEdit) and PreToolUse(Bash): hard-block writes into
+  product repositories with `scripts/hooks/product-path-guard.sh`; configure the
+  instance product-repository list during onboarding before enabling it
 - PostToolUse: non-sensitive audit markers when locally approved
 - SessionStart: tracker reachability from `{{WORKSPACE_ROOT}}`
 - Shipped skills under `master-ops/skills/` (for example blame-agent) and the recommended methodology / restraint / tracker skill layers named in the stack table below
+
+The host settings must wire the guard for both matchers, using the installed template
+path (the exact host settings file remains owner-managed):
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {"matcher": "Edit|Write|NotebookEdit", "hooks": [{"type": "command", "command": "bash \"{{OPS_REPO}}/scripts/hooks/product-path-guard.sh\""}]},
+      {"matcher": "Bash", "hooks": [{"type": "command", "command": "bash \"{{OPS_REPO}}/scripts/hooks/product-path-guard.sh\""}]}
+    ]
+  }
+}
+```
 
 Record in the ops notes that harness wiring is default-on as of this install. Do not edit host `settings.json` yourself when the host requires the owner to approve plugin installs — print the install commands and treat "printed and ready" as wired for onboarding purposes when the host blocks unattended writes.
 
@@ -36,6 +53,7 @@ When the owner asks to turn something off, explain the piece in one sentence, st
 | Role-state injection (UserPromptSubmit) | Restates the active role and Proposal→Approval→Execution every turn | Remove or comment the UserPromptSubmit hook entry in the host settings that points at the role-state inject script; re-enable by restoring it |
 | Compaction probe (SessionStart on compact) | Checks that the master still knows required facts after compaction | Remove the compact SessionStart hook that runs `scripts/compaction-probe.sh` |
 | Dispatch / supervised-dispatch warning (PreToolUse) | Warns when a worker path bypasses the dispatch gate | Remove the PreToolUse warn hook for bare worker invocation |
+| Product-path guard (PreToolUse) | Blocks master writes into product repositories and records explicit overrides | Remove the two PreToolUse hook entries for `scripts/hooks/product-path-guard.sh`; restore them to re-enable |
 | Tracker reachability warning (SessionStart) | Warns when the issue tracker is not reachable from the workspace root | Remove the SessionStart tracker-check hook |
 | Inbox / orch-inbox warn | Surfaces unread orchestration mailbox items | Remove the UserPromptSubmit hook for `orch-inbox-warn.sh` when present |
 | Blame-agent skill | Structured incident observation skill | Uninstall or unload the skill from the host skill path; documents stay in `master-ops/skills/blame-agent/` |

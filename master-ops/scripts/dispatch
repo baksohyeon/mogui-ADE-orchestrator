@@ -168,8 +168,8 @@ choose_default_runtime() {
 # `terminal wait --for tui-idle` reports it ready and an inject sent there is
 # lost with every step still printing success. Extend this list the first time a
 # host shows a gate that is not here yet; a missing marker is a silent delivery
-# failure, which is the whole defect this guards (mgm-68m, mgm-wgk).
-START_SCREEN_MARKERS='Resume session|New worktree|Coming from Claude Code|Changelog$|Select a model|Welcome to Claude|Do you trust the files|Sign in|press enter to continue|/login'
+# failure, which is the whole defect this guards (measured delivery incidents).
+START_SCREEN_MARKERS='Resume session|New worktree|Coming from Claude Code|Changelog$|Select a model|Welcome to Claude|Do you trust the files|Sign in|press enter to continue|/login|Antigravity CLI requires permission|I trust this folder'
 
 pane_gate() {
   if orca terminal read --terminal "$1" --limit 40 2>/dev/null \
@@ -253,6 +253,10 @@ runtime_command() {
     codex) echo "codex --model $model_arg";;
     gemini) echo "gemini";;
     opencode) echo "opencode";;
+    # agy is the Gemini host; `agy models` reports gemini-* ids. Its approval flag
+    # does not clear Antigravity's folder-trust gate, so the marker above remains
+    # required after launch.
+    agy) echo "agy --model $model_arg --dangerously-skip-permissions";;
     *) echo "$1";;
   esac
 }
@@ -370,6 +374,8 @@ default_model_for_runtime() {
   python3 -c "
 import json,sys
 runtime='$1'
+# Measured: agy is a Gemini host (`agy models` lists gemini-* ids).
+if runtime == 'agy': runtime = 'gemini'
 def vendor(m):
     m=m.lower()
     if m.startswith('claude-'): return 'claude'
@@ -571,7 +577,7 @@ fi
 # step 4 can land on a menu and vanish while every step above reports success.
 # Measured 2026-08-05: a grok worker sat on New worktree / Resume session /
 # Changelog / Quit with an empty prompt after `register ✓` printed, and the spec
-# was never consumed (mgm-wgk, mgm-68m).
+# was never consumed (measured delivery incidents).
 #
 # Do not "fix" this by sending the spec again. Sending text into that menu exits
 # the pane — measured the same day, same worker.

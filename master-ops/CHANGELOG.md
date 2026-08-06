@@ -50,6 +50,16 @@ Workspace session-card host twin and deployment (2026-08-06):
 - Onboarding now stops and re-syncs the canonical pair before redeploying when
   those source files diverge.
 
+Successor-facing promotion audit and redacted knowledge promotion (2026-08-06):
+
+- Added the promotion inventory and redacted incident records under `docs/blame/`.
+- Added the boot comparison procedure and public lineage entry format.
+- Reconciled contract writing conventions and review voice through rule 11.
+- Shipped the product-repository path guard and documented both host hook matchers.
+- Promoted measured `agy` Gemini-host mapping and Antigravity folder-trust markers.
+- Existing installations must merge these template changes deliberately; generated
+  operations repositories are copies and do not update automatically.
+
 Contract convention merge-time re-measurement and citation repair (2026-08-05 worker contract fix):
 
 - Added clause 14, Merge-time re-measurement, so merge decisions re-run thread

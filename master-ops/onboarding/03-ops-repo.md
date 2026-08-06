@@ -32,6 +32,6 @@ If new or empty, copy the Stage 1 skeleton from `{{RUNTIME_ROOT}}/master-ops/`, 
 
 ### Verify (Step 3)
 
-- the ops repository exists with its own agent instruction files `CLAUDE.md` and `AGENTS.md` (the ops-repo pair, kept byte-identical later — **not** the workspace session card), plus `docs/MASTER-OPERATIONS.md`, `workspace-card/CLAUDE.md` (canonical session card for later root deploy), and the rest of the Stage 1 skeleton
+- the ops repository exists with its own agent instruction files `CLAUDE.md` and `AGENTS.md` (the ops-repo pair, kept byte-identical later — **not** the workspace session card), plus `docs/MASTER-OPERATIONS.md`, byte-identical `workspace-card/CLAUDE.md` and `workspace-card/AGENTS.md` (canonical session-card pair for later root deploy), and the rest of the Stage 1 skeleton
 - only the allowed remaining placeholders are present
 - `TEMPLATE-VERSION`, `CHANGELOG.md`, `ONBOARDING.md`, and the `onboarding/` directory are absent from the generated repository

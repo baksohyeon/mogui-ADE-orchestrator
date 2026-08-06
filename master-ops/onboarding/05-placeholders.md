@@ -12,14 +12,14 @@ Where we are: the ops repository skeleton exists, and the earlier steps recorded
 
 ## Run
 
-1. Fill `{{RUNTIME_ROOT}}` from the current repository root and `{{TEMPLATE_VERSION}}` from its single-line `master-ops/TEMPLATE-VERSION`; do not ask for either. Pass `{{OPS_REPO}}/docs/MASTER-OPERATIONS.md` as `master-bootstrap-live --charter-pointer "Operations SSOT: {{OPS_REPO}}/docs/MASTER-OPERATIONS.md"`. Include every file under the ops repository that still carries `{{...}}`, including `workspace-card/CLAUDE.md`. Add no placeholders.
+1. Fill `{{RUNTIME_ROOT}}` from the current repository root and `{{TEMPLATE_VERSION}}` from its single-line `master-ops/TEMPLATE-VERSION`; do not ask for either. Pass `{{OPS_REPO}}/docs/MASTER-OPERATIONS.md` as `master-bootstrap-live --charter-pointer "Operations SSOT: {{OPS_REPO}}/docs/MASTER-OPERATIONS.md"`. Include every file under the ops repository that still carries `{{...}}`, including both files in `workspace-card/`. Add no placeholders.
 
 2. **Placeholder rule:** every `{{...}}` token in the ops repository must receive a confirmed or measured value in this step. The workspace session card is ordinary filled content — do not leave tokens in `workspace-card/`, do not special-case the assertion to ignore it, and **do not record a deferral** for any remaining token. An undecided value stops this step; ask, then fill. Never delete a placeholder to silence a check.
 
-3. Deploy the filled session card to the workspace root (overwrite the root copy; the ops repository file remains the canonical). This is a Run action that happens after fill and before Verify — Verify's session-card `cmp` expects the root file to already exist:
+3. Deploy the filled session card to the workspace root under both host-recognized names (overwrite both root copies; the ops repository files remain canonical). This is a Run action that happens after fill and before Verify — Verify's session-card `cmp` expects both root files to already exist:
 
 ```console
-$ cp "{{OPS_REPO}}/workspace-card/CLAUDE.md" "{{WORKSPACE_ROOT}}/CLAUDE.md" && echo deployed
+$ cp "{{OPS_REPO}}/workspace-card/CLAUDE.md" "{{WORKSPACE_ROOT}}/CLAUDE.md" && cp "{{OPS_REPO}}/workspace-card/AGENTS.md" "{{WORKSPACE_ROOT}}/AGENTS.md" && echo deployed
 deployed
 ```
 
@@ -34,13 +34,13 @@ $ ! rg --hidden -g '!.git/**' -g '!.beads/**' '\{\{[^}]+\}\}' "{{OPS_REPO}}" && 
 clean
 $ cmp "{{OPS_REPO}}/CLAUDE.md" "{{OPS_REPO}}/AGENTS.md" && echo match
 match
-$ cmp "{{WORKSPACE_ROOT}}/CLAUDE.md" "{{OPS_REPO}}/workspace-card/CLAUDE.md" && echo match
+$ cmp "{{WORKSPACE_ROOT}}/CLAUDE.md" "{{OPS_REPO}}/workspace-card/CLAUDE.md" && cmp "{{WORKSPACE_ROOT}}/AGENTS.md" "{{OPS_REPO}}/workspace-card/AGENTS.md" && echo match
 match
 ```
 
 - The first check: **no** `{{...}}` remains anywhere under `{{OPS_REPO}}` (including `workspace-card/`). No deferral list.
 - The first `cmp` is the **ops repository agent instruction pair** only (root `CLAUDE.md` vs `AGENTS.md` inside `{{OPS_REPO}}`).
-- The second `cmp` is the **workspace session card** (deployed root copy vs canonical `workspace-card/CLAUDE.md`). Never cross-compare those two pairs.
+- The second `cmp` sequence is the **workspace session card** (both deployed root copies vs their canonical `workspace-card/` twins). Never cross-compare those two pairs.
 
 Also verify no source workspace's private names were copied accidentally.
 
@@ -48,4 +48,4 @@ Also verify no source workspace's private names were copied accidentally.
 
 - `rg` still finds `{{...}}` tokens: fill each from the confirmed facts, or stop and ask for the missing decision. Do not record a deferral. Do not delete a placeholder to silence the check. Do not deploy (or re-deploy only after a clean fill).
 - ops-pair `cmp` shows `CLAUDE.md` and `AGENTS.md` differ: if the divergence is byte-only formatting, re-unify to one common block in both files; if a substantive line exists in only one file, stop and ask whether host-specific divergence is intended.
-- session-card `cmp` fails or the root file is missing: redeploy with the `cp` in Run from the filled canonical file; do not invent root-only edits.
+- session-card `cmp` fails or either root file is missing: redeploy with the `cp` commands in Run from the filled canonical files; do not invent root-only edits.

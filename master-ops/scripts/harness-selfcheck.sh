@@ -203,22 +203,24 @@ else
 fi
 
 # --- Workspace card check ---
-# The card at the workspace root is a deployed copy; the canonical file lives in
+# The cards at the workspace root are deployed copies; the canonical pair lives in
 # this repository. The root is outside every git repo, so a card edited only
 # there is versioned nowhere and a stale deployment governs behaviour silently.
-# Owner decision 2026-08-05: ops holds the canonical file, onboarding deploys it.
-CARD_CANONICAL="$OPS_DIR/workspace-card/CLAUDE.md"
-CARD_DEPLOYED="$WORKSPACE_ROOT/CLAUDE.md"
-if [ ! -f "$CARD_CANONICAL" ]; then
-  echo "Card: canonical missing at workspace-card/CLAUDE.md"
+# Owner decision 2026-08-05: ops holds the canonical pair, onboarding deploys it.
+CARD_CLAUDE_CANONICAL="$OPS_DIR/workspace-card/CLAUDE.md"
+CARD_AGENTS_CANONICAL="$OPS_DIR/workspace-card/AGENTS.md"
+CARD_CLAUDE_DEPLOYED="$WORKSPACE_ROOT/CLAUDE.md"
+CARD_AGENTS_DEPLOYED="$WORKSPACE_ROOT/AGENTS.md"
+if [ ! -f "$CARD_CLAUDE_CANONICAL" ] || [ ! -f "$CARD_AGENTS_CANONICAL" ]; then
+  echo "Card: canonical pair missing at workspace-card/{CLAUDE.md,AGENTS.md}"
   exit_code=1
-elif [ ! -f "$CARD_DEPLOYED" ]; then
-  echo "Card: not deployed to the workspace root — cp workspace-card/CLAUDE.md to $CARD_DEPLOYED"
+elif [ ! -f "$CARD_CLAUDE_DEPLOYED" ] || [ ! -f "$CARD_AGENTS_DEPLOYED" ]; then
+  echo "Card: not deployed to the workspace root — cp workspace-card/{CLAUDE.md,AGENTS.md} to the root"
   exit_code=1
-elif cmp -s "$CARD_CANONICAL" "$CARD_DEPLOYED"; then
+elif cmp -s "$CARD_CLAUDE_CANONICAL" "$CARD_CLAUDE_DEPLOYED" && cmp -s "$CARD_AGENTS_CANONICAL" "$CARD_AGENTS_DEPLOYED"; then
   echo "Card: deployed copy matches canonical"
 else
-  echo "Card: DRIFT — the root copy differs from workspace-card/CLAUDE.md; redeploy, or promote the root edit into the canonical file first"
+  echo "Card: DRIFT — a root copy differs from workspace-card/{CLAUDE.md,AGENTS.md}; redeploy, or promote the root edit into the canonical pair first"
   exit_code=1
 fi
 

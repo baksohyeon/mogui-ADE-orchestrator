@@ -41,6 +41,13 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+Workspace session-card host twin and deployment (2026-08-06):
+
+- Added byte-identical `workspace-card/AGENTS.md` alongside the canonical
+  `CLAUDE.md` card.
+- Onboarding, reverify, and harness self-check now deploy and validate both
+  host-recognized root card names.
+
 Contract convention merge-time re-measurement and citation repair (2026-08-05 worker contract fix):
 
 - Added clause 14, Merge-time re-measurement, so merge decisions re-run thread

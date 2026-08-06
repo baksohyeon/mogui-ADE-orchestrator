@@ -19,7 +19,7 @@ Observational fire-log first; active canaries later and only for hooks that neve
 
 - A wired-but-broken hook (e.g., script exits early, condition never true) and a not-wired hook **both show zero fire-log entries**. Distinguishing them requires an active canary (deliberately deferred).
 - Whether a hook's decision logic ran correctly (the log records only that the hook was invoked, not its outcome).
-- The product-path guard's Bash false-positive rate until command-class observations exist; use `scripts/measure-product-path-guard.sh` and report `N/A (0/0)` when none exist.
+- The product-path guard's Bash rejection rate is unavailable until command-class observations exist; use `scripts/measure-product-path-guard.sh` and report `N/A (0/0; no command observations)` when none exist.
 
 ## Fire-Log Schema
 

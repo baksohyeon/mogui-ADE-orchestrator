@@ -58,7 +58,7 @@ def run(workspace: Path, ops: Path, *extra: str) -> subprocess.CompletedProcess[
         return subprocess.run(command, capture_output=True, text=True,
                               env=os.environ.copy())
     else:
-        command = ["python3", SCRIPT.as_posix(), "--workspace-root", str(workspace),
+        command = [sys.executable, SCRIPT.as_posix(), "--workspace-root", str(workspace),
                    "--ops-repo", str(ops), *extra]
         shell_command = shlex.join(command)
     return subprocess.run(["bash", "-c", shell_command], capture_output=True,
@@ -133,6 +133,8 @@ def test_rehearsal_rejects_incomplete_descriptor_and_blank_runtime(tmp_path: Pat
     workspace, ops = make_install(tmp_path)
     descriptor = json.loads((workspace / "config/workspace-descriptor.json").read_text())
     descriptor["workspace_root_is_plain_folder"] = False
+    descriptor["master_seat"] = ""
+    descriptor["repositories"] = [{}]
     (workspace / "config/workspace-descriptor.json").write_text(json.dumps(descriptor))
     (workspace / "config/instance-runtime.json").write_text(json.dumps({"master_host_runtime": "  "}))
     payload = report(run(workspace, ops, "--json"))

@@ -5,12 +5,12 @@ founded workspace. It measures the artifacts that the onboarding steps promise,
 prints a postcondition table, and keeps a separate gap list for facts that are
 not observable from the supplied files or host.
 
-Run it from any directory after substituting the actual workspace and ops paths;
-the command uses a home-relative executable path so it is not limited to the
-repository's current directory:
+Run it from any directory after substituting the actual workspace and ops paths.
+The installed ops repository contains the script; invoke it with the platform's
+Python command:
 
 ```console
-$ ~/path/master-ops/scripts/onboarding-rehearsal \
+$ python3 ~/workspace-ops/scripts/onboarding-rehearsal \
     --workspace-root ~/workspace \
     --ops-repo ~/workspace-ops
 ```
@@ -19,11 +19,13 @@ Add `--live` only when the Orca CLI is available. This measures the recorded
 seat with `orca terminal list`; it does not spawn, close, or repair a terminal:
 
 ```console
-$ ~/path/master-ops/scripts/onboarding-rehearsal \
+$ python3 ~/workspace-ops/scripts/onboarding-rehearsal \
     --workspace-root ~/workspace \
     --ops-repo ~/workspace-ops \
     --live --json > onboarding-rehearsal.json
 ```
+
+On Windows, use `python` in place of `python3`.
 
 ## Postcondition table
 

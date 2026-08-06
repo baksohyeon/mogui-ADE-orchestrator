@@ -19,6 +19,7 @@ from pathlib import Path
 
 
 PLACEHOLDER = re.compile(r"\{\{[^}]+\}\}")
+ALLOWED_ROLES = {"product", "ops"}
 
 
 def safe_evidence(path: Path) -> str:
@@ -45,6 +46,51 @@ def read_json(path: Path):
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError):
         return None
+
+
+def descriptor_matches(descriptor: object, root: Path) -> bool:
+    if not isinstance(descriptor, dict):
+        return False
+    workspace_root = descriptor.get("workspace_root")
+    try:
+        root_match = (isinstance(workspace_root, str)
+                      and bool(workspace_root.strip())
+                      and Path(workspace_root.strip()).expanduser().resolve(strict=False) == root)
+    except (OSError, RuntimeError):
+        root_match = False
+    if not (root_match and descriptor.get("workspace_root_is_plain_folder") is True):
+        return False
+    seat = descriptor.get("master_seat")
+    repositories = descriptor.get("repositories")
+    if not isinstance(seat, str) or not seat.strip() or not isinstance(repositories, list) or not repositories:
+        return False
+    names: set[str] = set()
+    paths: set[str] = set()
+    for entry in repositories:
+        if not isinstance(entry, dict):
+            return False
+        name, path, role = entry.get("name"), entry.get("path"), entry.get("role")
+        if (not isinstance(name, str) or not name.strip()
+                or not isinstance(path, str) or not path.strip()
+                or not isinstance(role, str) or role.strip() not in ALLOWED_ROLES):
+            return False
+        remote = entry.get("remote", "")
+        if remote is None:
+            remote = ""
+        if not isinstance(remote, str):
+            return False
+        for field in ("capabilities", "prohibited"):
+            values = entry.get(field) if field in entry else ([] if field == "capabilities" else None)
+            if field == "prohibited" and values is None:
+                return False
+            if not isinstance(values, list) or any(not isinstance(value, str) or not value.strip() for value in values):
+                return False
+        name_key, path_key = name.strip(), path.strip().rstrip("/")
+        if name_key in names or path_key in paths:
+            return False
+        names.add(name_key)
+        paths.add(path_key)
+    return True
 
 
 def main() -> int:
@@ -106,15 +152,7 @@ def main() -> int:
 
     descriptor_path = root / "config" / "workspace-descriptor.json"
     descriptor = read_json(descriptor_path)
-    descriptor_ok = (
-        isinstance(descriptor, dict)
-        and descriptor.get("workspace_root") == str(root)
-        and descriptor.get("workspace_root_is_plain_folder") is True
-        and isinstance(descriptor.get("master_seat"), str)
-        and bool(descriptor.get("master_seat", "").strip())
-        and isinstance(descriptor.get("repositories"), list)
-        and bool(descriptor["repositories"])
-    )
+    descriptor_ok = descriptor_matches(descriptor, root)
     result(results, "P05", "workspace descriptor satisfies loader rules and names this root",
            "<workspace-root>" if descriptor_ok else "missing or invalid",
            "PASS" if descriptor_ok else "FAIL", "~/path/config/workspace-descriptor.json")
@@ -148,11 +186,11 @@ def main() -> int:
             try:
                 proc = subprocess.run(
                     [args.orca_cli, "terminal", "list", "--worktree", seat, "--json"],
-                    capture_output=True, text=True, timeout=30,
+                    capture_output=True, timeout=30,
                 )
             except subprocess.TimeoutExpired:
                 result(results, "L01", "exactly one live terminal in recorded master seat",
-                       "Orca command timed out after 30 seconds", "FAIL",
+                       "Orca command timed out after 30 seconds", "GAP",
                        f"{args.orca_cli} terminal list --worktree {seat} --json")
                 proc = None
             if proc is None:
@@ -162,7 +200,8 @@ def main() -> int:
             else:
                 payload = None
                 try:
-                    payload = json.loads(proc.stdout)
+                    output = proc.stdout.decode("utf-8", errors="replace")
+                    payload = json.loads(output)
                 except (UnicodeError, json.JSONDecodeError):
                     pass
                 if isinstance(payload, dict) and isinstance(payload.get("result"), dict):

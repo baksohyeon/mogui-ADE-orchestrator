@@ -5,10 +5,12 @@ founded workspace. It measures the artifacts that the onboarding steps promise,
 prints a postcondition table, and keeps a separate gap list for facts that are
 not observable from the supplied files or host.
 
-Run it from any directory after substituting the actual workspace and ops paths:
+Run it from any directory after substituting the actual workspace and ops paths;
+the command uses a home-relative executable path so it is not limited to the
+repository's current directory:
 
 ```console
-$ master-ops/scripts/onboarding-rehearsal \
+$ ~/path/master-ops/scripts/onboarding-rehearsal \
     --workspace-root ~/workspace \
     --ops-repo ~/workspace-ops
 ```
@@ -17,7 +19,7 @@ Add `--live` only when the Orca CLI is available. This measures the recorded
 seat with `orca terminal list`; it does not spawn, close, or repair a terminal:
 
 ```console
-$ master-ops/scripts/onboarding-rehearsal \
+$ ~/path/master-ops/scripts/onboarding-rehearsal \
     --workspace-root ~/workspace \
     --ops-repo ~/workspace-ops \
     --live --json > onboarding-rehearsal.json
@@ -28,10 +30,10 @@ $ master-ops/scripts/onboarding-rehearsal \
 | ID | Postcondition | Evidence | Pass condition |
 |---|---|---|---|
 | P01 | Router inventory is complete | `ONBOARDING.md` index and `onboarding/*.md` | The sets are equal |
-| P02 | Installation has no unresolved tokens | ops repository text files | No `{{...}}` token remains |
+| P02 | Installation has no unresolved tokens | installation text files, excluding `.git/` and `.beads/` | No unresolved allowed token remains; the literal `{{...}}` shape mention is not a token |
 | P03 | Ops host instructions agree | `CLAUDE.md` and `AGENTS.md` | Byte-identical |
 | P04 | Live workspace card equals canonical card | root `CLAUDE.md` and `workspace-card/CLAUDE.md` | Byte-identical |
-| P05 | Workspace identity is durable | `config/workspace-descriptor.json` | JSON exists and `workspace_root` equals the requested root |
+| P05 | Workspace descriptor satisfies loader rules | `config/workspace-descriptor.json` | JSON has the requested root, `workspace_root_is_plain_folder: true`, a nonempty `master_seat`, and a nonempty repository list |
 | P06 | Host runtime is durable | `config/instance-runtime.json` | JSON exists and has `master_host_runtime` |
 | P07 | Role state is present | `docs/runbooks/role-state.md` | File exists |
 | P08 | Lineage is present | `docs/lineage/MASTER-LINEAGE.md` | File exists |

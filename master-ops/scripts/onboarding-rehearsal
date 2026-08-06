@@ -12,8 +12,8 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
-import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -43,7 +43,7 @@ def result(results: list[Result], ident: str, expected: str, observed: str,
 def read_json(path: Path):
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeError, json.JSONDecodeError):
         return None
 
 
@@ -75,10 +75,19 @@ def main() -> int:
         result(results, "P01", "router and step directory exist", "missing",
                "FAIL", "~/path/ONBOARDING.md or ~/path/onboarding")
 
-    unresolved = [str(p.relative_to(ops)) for p in ops.rglob("*")
-                  if p.is_file() and p.suffix in {".md", ".json", ".txt"}
-                  for _ in [0] if any(token != "{{...}}" for token in
-                                      PLACEHOLDER.findall(p.read_text(encoding="utf-8", errors="replace")))]
+    unresolved: list[str] = []
+    for path in ops.rglob("*"):
+        relative = path.relative_to(ops)
+        if (not path.is_file() or path.suffix not in {".md", ".json", ".txt"}
+                or {".git", ".beads"}.intersection(relative.parts)):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            unresolved.append(f"{relative} (invalid UTF-8)")
+            continue
+        if any(token != "{{...}}" for token in PLACEHOLDER.findall(text)):
+            unresolved.append(str(relative))
     result(results, "P02", "no unresolved placeholders in ops repository",
            "none" if not unresolved else ", ".join(unresolved),
                "PASS" if not unresolved else "FAIL", "~/path/ops-repository")
@@ -97,14 +106,26 @@ def main() -> int:
 
     descriptor_path = root / "config" / "workspace-descriptor.json"
     descriptor = read_json(descriptor_path)
-    root_match = isinstance(descriptor, dict) and descriptor.get("workspace_root") == str(root)
-    result(results, "P05", "workspace descriptor exists and names this root",
-           "<workspace-root>" if root_match else "missing or invalid",
-           "PASS" if root_match else "FAIL", "~/path/config/workspace-descriptor.json")
+    descriptor_ok = (
+        isinstance(descriptor, dict)
+        and descriptor.get("workspace_root") == str(root)
+        and descriptor.get("workspace_root_is_plain_folder") is True
+        and isinstance(descriptor.get("master_seat"), str)
+        and bool(descriptor.get("master_seat", "").strip())
+        and isinstance(descriptor.get("repositories"), list)
+        and bool(descriptor["repositories"])
+    )
+    result(results, "P05", "workspace descriptor satisfies loader rules and names this root",
+           "<workspace-root>" if descriptor_ok else "missing or invalid",
+           "PASS" if descriptor_ok else "FAIL", "~/path/config/workspace-descriptor.json")
 
     runtime_path = root / "config" / "instance-runtime.json"
     runtime = read_json(runtime_path)
-    runtime_ok = isinstance(runtime, dict) and bool(runtime.get("master_host_runtime"))
+    runtime_ok = (
+        isinstance(runtime, dict)
+        and isinstance(runtime.get("master_host_runtime"), str)
+        and bool(runtime["master_host_runtime"].strip())
+    )
     result(results, "P06", "instance runtime names the master host runtime",
            str(runtime.get("master_host_runtime")) if isinstance(runtime, dict) else "missing or invalid",
            "PASS" if runtime_ok else "FAIL", "~/path/config/instance-runtime.json")
@@ -120,26 +141,41 @@ def main() -> int:
         if not seat:
             result(results, "L01", "live master seat is measurable", "no recorded master_seat", "GAP",
                    "~/path/config/workspace-descriptor.json")
-        elif not shutil_which(args.orca_cli):
+        elif not shutil.which(args.orca_cli):
             result(results, "L01", "live master seat is measurable", f"{args.orca_cli} unavailable", "GAP",
                    "install or expose Orca CLI")
         else:
-            proc = subprocess.run([args.orca_cli, "terminal", "list", "--worktree", seat, "--json"],
-                                  capture_output=True, text=True)
-            payload = None
             try:
-                payload = json.loads(proc.stdout)
-            except json.JSONDecodeError:
-                pass
-            terminals = payload.get("terminals") if isinstance(payload, dict) else None
-            count = len(terminals) if isinstance(terminals, list) else None
-            status = "PASS" if proc.returncode == 0 and count == 1 else "FAIL"
-            observed = f"{count} terminal(s)" if count is not None else "invalid Orca JSON"
-            result(results, "L01", "exactly one live terminal in recorded master seat", observed, status,
-                   f"{args.orca_cli} terminal list --worktree {seat} --json")
-            result(results, "L02", "live master role identity is independently evidenced",
-                   "not exposed by terminal list", "GAP",
-                   "terminal presence is not proof of master role; inspect role-state/lineage")
+                proc = subprocess.run(
+                    [args.orca_cli, "terminal", "list", "--worktree", seat, "--json"],
+                    capture_output=True, text=True, timeout=30,
+                )
+            except subprocess.TimeoutExpired:
+                result(results, "L01", "exactly one live terminal in recorded master seat",
+                       "Orca command timed out after 30 seconds", "FAIL",
+                       f"{args.orca_cli} terminal list --worktree {seat} --json")
+                proc = None
+            if proc is None:
+                result(results, "L02", "live master role identity is independently evidenced",
+                       "not exposed by terminal list", "GAP",
+                       "terminal presence is not proof of master role; inspect role-state/lineage")
+            else:
+                payload = None
+                try:
+                    payload = json.loads(proc.stdout)
+                except (UnicodeError, json.JSONDecodeError):
+                    pass
+                if isinstance(payload, dict) and isinstance(payload.get("result"), dict):
+                    payload = payload["result"]
+                terminals = payload.get("terminals") if isinstance(payload, dict) else None
+                count = len(terminals) if isinstance(terminals, list) else None
+                status = "PASS" if proc.returncode == 0 and count == 1 else "FAIL"
+                observed = f"{count} terminal(s)" if count is not None else "invalid Orca JSON"
+                result(results, "L01", "exactly one live terminal in recorded master seat", observed, status,
+                       f"{args.orca_cli} terminal list --worktree {seat} --json")
+                result(results, "L02", "live master role identity is independently evidenced",
+                       "not exposed by terminal list", "GAP",
+                       "terminal presence is not proof of master role; inspect role-state/lineage")
     else:
         result(results, "L01", "live master seat is measured", "live checks not requested", "GAP",
                "rerun with --live")
@@ -164,14 +200,6 @@ def main() -> int:
         for r in gaps:
             print(f"- {r.id}: {r.evidence}")
     return 0 if not gaps and all(r.status == "PASS" for r in results) else 1
-
-
-def shutil_which(command: str) -> str | None:
-    for directory in os.environ.get("PATH", "").split(os.pathsep):
-        candidate = Path(directory) / command
-        if candidate.is_file() and os.access(candidate, os.X_OK):
-            return str(candidate)
-    return None
 
 
 if __name__ == "__main__":

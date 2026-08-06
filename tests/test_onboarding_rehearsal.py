@@ -27,7 +27,11 @@ def make_install(tmp_path: Path) -> tuple[Path, Path]:
     (ops / "CLAUDE.md").write_text("same\n", encoding="utf-8")
     (ops / "AGENTS.md").write_text("same\n", encoding="utf-8")
     (workspace / "config/workspace-descriptor.json").write_text(json.dumps({
-        "workspace_root": str(workspace.resolve()), "master_seat": "id:folder:test",
+        "workspace_root": str(workspace.resolve()),
+        "workspace_root_is_plain_folder": True,
+        "master_seat": "id:folder:test",
+        "repositories": [{"name": "ops", "path": ".", "remote": "", "role": "ops",
+                           "capabilities": [], "prohibited": []}],
     }), encoding="utf-8")
     (workspace / "config/instance-runtime.json").write_text(json.dumps({
         "master_host_runtime": "codex",
@@ -108,3 +112,30 @@ def test_live_check_is_gap_when_orca_is_unavailable(tmp_path: Path):
     payload = report(completed)
     row = next(row for row in payload["results"] if row["id"] == "L01")
     assert row["status"] == "GAP"
+
+
+def test_rehearsal_excludes_metadata_and_measures_invalid_utf8(tmp_path: Path):
+    workspace, ops = make_install(tmp_path)
+    (ops / ".beads").mkdir()
+    (ops / ".beads/issue.md").write_text("{{UNRESOLVED}}", encoding="utf-8")
+    (ops / ".git").mkdir()
+    (ops / ".git/metadata.md").write_text("{{UNRESOLVED}}", encoding="utf-8")
+    (ops / "bad.md").write_bytes(b"\xff\xfe")
+    payload = report(run(workspace, ops, "--json"))
+    p02 = next(row for row in payload["results"] if row["id"] == "P02")
+    assert p02["status"] == "FAIL"
+    assert "bad.md (invalid UTF-8)" in p02["observed"]
+    assert ".beads" not in p02["observed"]
+    assert ".git" not in p02["observed"]
+
+
+def test_rehearsal_rejects_incomplete_descriptor_and_blank_runtime(tmp_path: Path):
+    workspace, ops = make_install(tmp_path)
+    descriptor = json.loads((workspace / "config/workspace-descriptor.json").read_text())
+    descriptor["workspace_root_is_plain_folder"] = False
+    (workspace / "config/workspace-descriptor.json").write_text(json.dumps(descriptor))
+    (workspace / "config/instance-runtime.json").write_text(json.dumps({"master_host_runtime": "  "}))
+    payload = report(run(workspace, ops, "--json"))
+    statuses = {row["id"]: row["status"] for row in payload["results"]}
+    assert statuses["P05"] == "FAIL"
+    assert statuses["P06"] == "FAIL"

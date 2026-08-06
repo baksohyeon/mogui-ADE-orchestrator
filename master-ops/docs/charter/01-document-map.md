@@ -6,7 +6,7 @@ Orca is REQUIRED infrastructure. Supervised dispatch = orca orchestration only. 
 
 The workspace master-operations SSOT is the charter index [`../MASTER-OPERATIONS.md`](../MASTER-OPERATIONS.md); this file is its Document Map section.
 
-- Template version: `{{TEMPLATE_VERSION}}` (source: `{{RUNTIME_ROOT}}/master-ops/CHANGELOG.md`)
+- Template version: `{{TEMPLATE_VERSION}}` (source: installed `MANIFEST.json`, filled at onboarding from the template version stamp)
 - Operations repository: `{{OPS_REPO}}`
 - Workspace root: `{{WORKSPACE_ROOT}}`
 - Workspace repositories: `{{REPO_LIST}}`

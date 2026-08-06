@@ -10,9 +10,10 @@ Before anything else — before orientation, before any measurement — ask the 
 
 1. **Founding** — a genuinely new workspace: build the ops repository and spawn a Generation 1 master. Path: step files `00` → `10`.
 2. **Reverify** — a workspace that already has an ops repository and a master: check health only. Path: `onboarding/reverify.md` alone. **Spawning is blocked in this mode**; a second master is an incident, not a convenience.
-3. **Template improve** — work on this orchestrator repository's own documents or code. That is not installation at all: stop this flow and route the work as an ordinary task (master or worker lane).
+3. **Upgrade** — a founded workspace whose ops repository is behind the current template: detect drift against `MANIFEST.json` and, with explicit owner confirmation, apply template-layer files only. Path: `onboarding/upgrade.md` alone. **Spawning is blocked in this mode** (same standing block as Reverify). Instance-owned records are refused by name.
+4. **Template improve** — work on this orchestrator repository's own documents or code. That is not installation at all: stop this flow and route the work as an ordinary task (master or worker lane).
 
-If evidence contradicts the chosen mode, stop and re-ask with the evidence — do not improvise a hybrid. The Founding guard triggers on an existing ops repository or lineage file, not only on a live master: a workspace whose master died, or a half-finished install, is **not** Founding — that is recovery or succession, owned by the ops repository's `docs/runbooks/succession-boot-card.md`, and re-running Founding against it corrupts lineage and governance records.
+If evidence contradicts the chosen mode, stop and re-ask with the evidence — do not improvise a hybrid. The Founding guard triggers on an existing ops repository or lineage file, not only on a live master: a workspace whose master died, or a half-finished install, is **not** Founding — re-running Founding against it corrupts lineage and governance records. When that guard fires because the ops tree already exists and needs the template layer brought forward, **route to Upgrade** (`onboarding/upgrade.md`) rather than only refusing. Upgrade detects and applies template drift only; a dead master, a half-finished Gen-1 boot, or succession of a living master remains owned by the ops repository's `docs/runbooks/succession-boot-card.md`.
 
 ## How to run this flow (agent rules)
 
@@ -58,3 +59,4 @@ The installer start path is `00-orientation.md` → `01-preflight.md` only. Defe
 | 09 | `onboarding/09-spawn.md` | Steps 8–9 | Gen-1 master spawned through orchestration; boot smoke |
 | 10 | `onboarding/10-card-and-retire.md` | Step 10 | operating card handed over; installer retires |
 | — | `onboarding/reverify.md` | Reverify mode | health checklist for an already-founded workspace; no spawn |
+| — | `onboarding/upgrade.md` | Upgrade mode | detect template drift and apply template-layer files; no spawn |

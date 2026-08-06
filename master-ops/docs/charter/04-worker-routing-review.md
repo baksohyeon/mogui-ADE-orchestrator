@@ -30,9 +30,9 @@ Exit `1` means prohibited; exit `0` means the descriptor does not list that acti
 
 The installation-specific worker tier mapping lives in the instance file `{{RUNTIME_ROOT}}/config/model-tier-policy.json` when onboarding wrote one (after agent-inventory consent), else the template `model-tier-policy.json`. It groups installed model identifiers into tiers; use the lowest sufficient tier for each worker lane. Measure what this host actually offers before filling it in: never guess a model id, and a model the file has never heard of is not blocked — it resolves to the `unknown` tier and uses that tier's stated cap when present, otherwise uncapped (same as any tier with no `fanout_caps` entry). An unlisted id must not be punished as if it were top tier.
 
-Owner directive 2026-08-05 removed the top-tier fanout cap; `master-ops/scripts/dispatch` refuses a top-tier model unless the supervised caller supplies the owner-approved reason as `--top-approved "<owner answer>"`.
+Owner directive 2026-08-05 removed the top-tier fanout cap; `scripts/dispatch` refuses a top-tier model unless the supervised caller supplies the owner-approved reason as `--top-approved "<owner answer>"`.
 
-Gate selection order: explicit `--tier-policy` CLI flag, then environment override, then instance `config/model-tier-policy.json`, then template `master-ops/model-tier-policy.json`.
+Gate selection order: explicit `--tier-policy` CLI flag, then environment override, then instance `config/model-tier-policy.json`, then template `model-tier-policy.json`.
 
 Worker contract clause library: `docs/runbooks/contract-conventions.md`.
 

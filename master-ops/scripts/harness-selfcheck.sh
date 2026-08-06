@@ -5,7 +5,7 @@
 set -e
 
 WORKSPACE_ROOT="{{WORKSPACE_ROOT}}"
-OPS_REPO="mogui-master-ops"
+OPS_REPO="{{OPS_REPO}}"
 # Anchor every repo-relative path on this script's own location, not on the
 # invoking cwd. The boot card runs some commands from the workspace root and
 # this one used to demand the ops repo, so no single directory satisfied the
@@ -15,6 +15,7 @@ OPS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SETTINGS_FILE="$WORKSPACE_ROOT/.claude/settings.json"
 SKILLS_DISCOVERY_PATH="$WORKSPACE_ROOT/.claude/skills"
 HOOKS_REPO_DIR="$OPS_DIR/scripts/hooks"
+TEMPLATE_CHECK="$OPS_DIR/scripts/template-check"
 
 exit_code=0
 
@@ -228,23 +229,118 @@ else
 fi
 
 # --- Tracker check ---
-# Reuse the logic from scripts/hooks/tracker-check.sh
+# Resolve candidates and compare real paths; substring name matches can accept a
+# sibling directory that merely contains the same repository-name fragment.
 cd "$WORKSPACE_ROOT" || exit 2
 tracker_out=$(bd where 2>&1)
-case "$tracker_out" in
-  *mogui-master-ops/.beads*) echo "Tracker: resolves to mogui-master-ops/.beads" ;;
-  *)
-    echo "Tracker: does not resolve to ops repo"
-    exit_code=1
-    ;;
-esac
+allowed_beads_1=""
+allowed_beads_2=""
+if [ -d "$OPS_DIR/.beads" ]; then
+  allowed_beads_1=$(cd "$OPS_DIR/.beads" 2>/dev/null && pwd -P)
+fi
+if [ -n "$OPS_REPO" ] && [ "$OPS_REPO" != "{{OPS_REPO}}" ] && [ -d "$OPS_REPO/.beads" ]; then
+  allowed_beads_2=$(cd "$OPS_REPO/.beads" 2>/dev/null && pwd -P)
+fi
+tracker_ok=0
+tracker_candidate_from_line() {
+  local tracker_candidate="$1"
+  # Preserve a real directory verbatim, including any colon in its path.
+  if [ ! -d "$tracker_candidate" ]; then
+    case "$tracker_candidate" in
+      *:[[:space:]]*) tracker_candidate="${tracker_candidate#*:}" ;;
+    esac
+  fi
+  tracker_candidate="${tracker_candidate#${tracker_candidate%%[![:space:]]*}}"
+  tracker_candidate="${tracker_candidate%${tracker_candidate##*[![:space:]]}}"
+  printf '%s\n' "$tracker_candidate"
+}
+# bd where first line is usually the beads path; accept if it realpaths to ops.
+tracker_path=$(printf '%s\n' "$tracker_out" | head -1 | tr -d '\r')
+if [ -n "$tracker_path" ] && [ -e "$tracker_path" ]; then
+  tracker_real=$(cd "$tracker_path" 2>/dev/null && pwd -P || true)
+  if [ -n "$tracker_real" ] && { [ "$tracker_real" = "$allowed_beads_1" ] || [ "$tracker_real" = "$allowed_beads_2" ]; }; then
+    tracker_ok=1
+  fi
+fi
+if [ "$tracker_ok" -ne 1 ]; then
+  while IFS= read -r tracker_line; do
+    # Some bd hosts prefix the path with a label. Accept only the path portion
+    # and verify its real location; never infer identity from a name fragment.
+    tracker_candidate=$(tracker_candidate_from_line "$tracker_line")
+    if [ -d "$tracker_candidate" ]; then
+      tracker_real=$(cd "$tracker_candidate" 2>/dev/null && pwd -P || true)
+      if [ -n "$tracker_real" ] && { [ "$tracker_real" = "$allowed_beads_1" ] || [ "$tracker_real" = "$allowed_beads_2" ]; }; then
+        tracker_ok=1
+        break
+      fi
+    fi
+  done <<< "$tracker_out"
+fi
+if [ "$tracker_ok" -eq 1 ]; then
+  echo "Tracker: resolves to ops .beads"
+else
+  echo "Tracker: does not resolve to ops repo"
+  exit_code=1
+fi
 
-if [ -n "$BEADS_DIR" ] && [ "$BEADS_DIR" != "$OPS_REPO/.beads" ]; then
-  # Check BEADS_DIR relative to workspace
-  if ! echo "$BEADS_DIR" | grep -q "mogui-master-ops/.beads"; then
+if [ -n "$BEADS_DIR" ]; then
+  beads_real=$(cd "$BEADS_DIR" 2>/dev/null && pwd -P || true)
+  if [ -z "$beads_real" ] || { [ "$beads_real" != "$allowed_beads_1" ] && [ "$beads_real" != "$allowed_beads_2" ]; }; then
     echo "Tracker: BEADS_DIR points outside ops repo: $BEADS_DIR"
     exit_code=1
   fi
+fi
+
+# --- Template currency check ---
+# Attachment point for Upgrade mode: runs at every master boot. Apply stays in
+# onboarding/upgrade.md and scripts/template-apply. Nonzero from this block is
+# intentional boot gating (pre-manifest and shape-broken installs fail open
+# awareness), not a silent report line.
+if [ -x "$TEMPLATE_CHECK" ]; then
+  template_args=(--ops "$OPS_DIR" --json)
+  # Prefer template-compare when a live ADE skeleton is measurable.
+  # Skeleton dir name built in parts so this installed script stays frame-clean.
+  skeleton_dir="master"$'-'"ops"
+  if [ -n "${RUNTIME_ROOT:-}" ] && [ -f "$RUNTIME_ROOT/$skeleton_dir/MANIFEST.json" ]; then
+    template_args+=(--template "$RUNTIME_ROOT/$skeleton_dir")
+  fi
+  template_json=$("$TEMPLATE_CHECK" "${template_args[@]}" 2>/dev/null) || template_rc=$?
+  template_rc=${template_rc:-0}
+  if [ -z "$template_json" ]; then
+    echo "Template: undecided (template-check produced no report)"
+    exit_code=1
+  else
+    template_line=$(
+      TEMPLATE_JSON="$template_json" TEMPLATE_RC="$template_rc" python3 - <<'EOF'
+import json, os
+data = json.loads(os.environ["TEMPLATE_JSON"])
+rc = int(os.environ["TEMPLATE_RC"])
+ver = data.get("installed_version") or "undeterminable"
+absent = len(data.get("absent_required") or [])
+unknown = len(data.get("unknown_present") or [])
+status = data.get("manifest_status") or "?"
+report_set = data.get("report_set") or "?"
+tver = data.get("template_version")
+if rc == 0 and status == "ok" and absent == 0:
+    if report_set == "template-compare" and tver:
+        print(f"Template: {ver} (matches template {tver})")
+    else:
+        print(f"Template: {ver} (installed-manifest shape ok; no template path for currency compare)")
+elif status == "absent":
+    print(f"Template: no MANIFEST.json (run Upgrade mode; pre-manifest install)")
+else:
+    extra = f", template={tver}" if tver else ""
+    print(f"Template: {ver} (set={report_set}, manifest={status}, absent={absent}, unknown={unknown}{extra}) — run Upgrade mode")
+EOF
+    )
+    echo "$template_line"
+    if [ "$template_rc" -ne 0 ]; then
+      exit_code=1
+    fi
+  fi
+else
+  echo "Template: undecided (scripts/template-check missing or not executable)"
+  exit_code=1
 fi
 
 exit "$exit_code"

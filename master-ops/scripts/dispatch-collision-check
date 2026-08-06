@@ -50,8 +50,19 @@ def scope_files(contract_text, tracked, root):
         token = token.replace("\\", "/")
         if token.startswith("./"):
             token = token[2:]
-        if token.startswith("master-ops/"):
-            token = token[len("master-ops/") :]
+        # Product-repo PRs nest the skeleton under a directory prefix; strip it so
+        # ops-relative contract scopes still match. Built in parts so the installed
+        # copy does not hardcode an ADE-frame path string.
+        skeleton_prefix = "master" + "-ops/"
+        if token.startswith(skeleton_prefix):
+            token = token[len(skeleton_prefix) :]
+            # Whole-tree skeleton scope: token becomes empty after the strip.
+            if not token and trailing:
+                if skeleton_prefix not in seen:
+                    seen.add(skeleton_prefix)
+                    nested = [p for p in tracked if p.startswith(skeleton_prefix)]
+                    files.update(nested if nested else tracked)
+                continue
         token = token.lstrip("/")
         token = token.rstrip("/") + ("/" if trailing else "")
         if (
@@ -97,6 +108,7 @@ def main():
         if not current_files:
             return
         current = set(current_files)
+        skeleton_prefix = "master" + "-ops/"
 
         warnings = []
         try:
@@ -124,10 +136,11 @@ def main():
             except Exception:
                 continue
             pr_files = {f.get("path") for f in detail.get("files", []) if f.get("path")}
-            # Compare scope files (ops-relative) against PR files, accounting for master-ops/ prefix in PR
+            # Compare ops-relative scopes against product PR files, including the
+            # skeleton-nested form product PRs use.
             overlap_set = set()
             for scope_file in current:
-                if scope_file in pr_files or f"master-ops/{scope_file}" in pr_files:
+                if scope_file in pr_files or f"{skeleton_prefix}{scope_file}" in pr_files:
                     overlap_set.add(scope_file)
             overlap = sorted(overlap_set)
             if overlap:

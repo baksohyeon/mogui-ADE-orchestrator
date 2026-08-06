@@ -4,7 +4,7 @@ How this workspace writes on public surfaces: pull-request bodies, replies to re
 
 Owner house style, fixed 2026-08-03. It was carried in the issue tracker's memory rather than in a file until 2026-08-05, which meant a fresh install of the template received the procedure and none of the voice.
 
-Public incident-record scope: documents under `master-ops/docs/blame/` are the
+Public incident-record scope: documents under `docs/blame/` are the
 public blame genre and intentionally identify the accountable role and generation
 (for example, “Generation 6”, “the master”, or “the PR #93 worker”). They do not
 publish human names, handles, or email addresses. Machine and session identifiers

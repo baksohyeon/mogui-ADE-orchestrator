@@ -162,7 +162,7 @@ echo $?  # 0 = pass, 1 = fail
 ### Re-Enter Failed Sandbox
 ```bash
 cd "$TMPDIR/mogui-spawn-test/claude-<timestamp>/mogui-ADE-orchestrator"
-find .. -path '*/mogui-master-ops/docs/MASTER-OPERATIONS.md' -print
+find .. -path '*/sandbox-ops/docs/MASTER-OPERATIONS.md' -print
 ```
 
 ### Check Round-Trip Message
@@ -193,9 +193,9 @@ Report is committed with evidence appended to `docs/reports/spawn-test-<date>.md
 
 ## Related Documentation
 
-- **Onboarding Flow**: `{{RUNTIME_ROOT}}/master-ops/ONBOARDING.md`
+- **Onboarding Flow**: `{{RUNTIME_ROOT}}` product skeleton `ONBOARDING.md` (template-side router; not installed into ops)
 - **Structure Check**: generated operations repository with `docs/MASTER-OPERATIONS.md`
-- **Master Operations**: `<sandbox>/mogui-master-ops/docs/MASTER-OPERATIONS.md` or `<sandbox>/mogui-ADE-orchestrator/mogui-master-ops/docs/MASTER-OPERATIONS.md`
+- **Master Operations**: `<sandbox>/sandbox-ops/docs/MASTER-OPERATIONS.md`
 - **Worker Contract**: `contracts/2026-08-04-spawn-test-harness.md`
 
 ---

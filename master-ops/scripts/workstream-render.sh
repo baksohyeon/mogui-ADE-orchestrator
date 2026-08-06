@@ -33,6 +33,6 @@ for d, e in rows:
     print(f"| {d.strftime('%H:%M')} | {kind} | {e.get('decision','?')} | {e.get('runtime','?')} "
           f"| {model} ({tier}) | {e.get('n_agents','')} | {e.get('cost_proxy','')} "
           f"| {job or task} | {'; '.join(note_bits)} |")
-print(f"\n{len(rows)} ledger entries. Contracts live in mogui-master-ops/contracts/; "
+print(f"\n{len(rows)} ledger entries. Contracts live in the ops repository under contracts/; "
       "probe commands are recorded per register entry in the ledger.")
 EOF

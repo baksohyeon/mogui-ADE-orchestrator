@@ -1,0 +1,250 @@
+#!/usr/bin/env python3
+"""Generate master-ops/MANIFEST.json from the Stage 1 skeleton.
+
+The install exclusion list lives here, not in onboarding prose. Regenerating
+must be a no-op when the committed manifest is current; tests assert that.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SKELETON = REPO_ROOT / "master-ops"
+
+# Files and directories that stay on the template side and never install.
+# Keep this list as the single executable source for Step 3 of onboarding.
+EXCLUDE_FILES = frozenset(
+    {
+        "TEMPLATE-VERSION",
+        "CHANGELOG.md",
+        "ONBOARDING.md",
+        ".coverage",
+    }
+)
+EXCLUDE_DIRS = frozenset(
+    {
+        "onboarding",
+        "docs/lineage",
+        ".git",
+        ".beads",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        "build",
+        "dist",
+        "htmlcov",
+    }
+)
+
+# Frame hygiene: installed files must not teach ADE-frame paths or bake in the
+# authoring ops repository name (design defects ② and ③).
+AUTHORING_OPS_NAME = "mogui-master-ops"
+FRAME_PATH_NEEDLE = "master-ops/"
+# Historical incident records preserve measured names and paths as evidence.
+# They are not procedure instructions; scrubbing them destroys the record.
+HYGIENE_EXEMPT_PREFIXES = (
+    "docs/blame/",
+)
+
+
+def iter_install_paths(skeleton: Path) -> list[str]:
+    paths: list[str] = []
+    for path in skeleton.rglob("*"):
+        if not path.is_file() or path.is_symlink():
+            continue
+        rel = path.relative_to(skeleton).as_posix()
+        parts = rel.split("/")
+        if rel in EXCLUDE_FILES or any(
+            rel == excluded or rel.startswith(excluded + "/")
+            for excluded in EXCLUDE_DIRS
+        ):
+            continue
+        # Never install bytecode or other local caches.
+        if (
+            "__pycache__" in parts
+            or rel.endswith((".pyc", ".pyo"))
+            or any(part.endswith(".egg-info") for part in parts)
+        ):
+            continue
+        paths.append(rel)
+    # MANIFEST.json is generated into the skeleton and is installed.
+    if "MANIFEST.json" not in paths:
+        paths.append("MANIFEST.json")
+    # Sort the posix strings, not Path objects: Path sort order differs by
+    # platform and made --check report a false stale on Windows CI.
+    return sorted(paths)
+
+
+def read_template_version(skeleton: Path) -> str:
+    version_path = skeleton / "TEMPLATE-VERSION"
+    if not version_path.is_file():
+        raise SystemExit(f"generate-manifest: missing {version_path}")
+    try:
+        version = version_path.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError) as exc:
+        raise SystemExit(f"generate-manifest: TEMPLATE-VERSION unreadable: {exc}") from exc
+    if not version:
+        raise SystemExit("generate-manifest: TEMPLATE-VERSION is empty")
+    return version
+
+
+def check_frame_hygiene(skeleton: Path, install_paths: list[str]) -> list[str]:
+    """Return human-readable defect lines; empty means clean."""
+    frame_bytes = FRAME_PATH_NEEDLE.encode("utf-8")
+    author_bytes = AUTHORING_OPS_NAME.encode("utf-8")
+    defects: list[str] = []
+    for rel in install_paths:
+        if any(rel == p.rstrip("/") or rel.startswith(p) for p in HYGIENE_EXEMPT_PREFIXES):
+            continue
+        if rel == "MANIFEST.json":
+            # Generated after the walk; may not exist yet on first run.
+            path = skeleton / rel
+            if not path.is_file():
+                continue
+        else:
+            path = skeleton / rel
+        try:
+            raw = path.read_bytes()
+        except OSError as exc:
+            defects.append(f"{rel}: unreadable ({exc})")
+            continue
+        if frame_bytes in raw:
+            defects.append(f"{rel}: contains {FRAME_PATH_NEEDLE!r} (ADE-frame path leak)")
+        if author_bytes in raw:
+            defects.append(
+                f"{rel}: contains authoring repository name {AUTHORING_OPS_NAME!r}"
+            )
+    return defects
+
+
+def build_manifest(skeleton: Path) -> dict:
+    version = read_template_version(skeleton)
+    files = iter_install_paths(skeleton)
+    defects = check_frame_hygiene(skeleton, [f for f in files if f != "MANIFEST.json"])
+    # Also check MANIFEST if present from a prior generation (should be clean).
+    if (skeleton / "MANIFEST.json").is_file():
+        defects.extend(check_frame_hygiene(skeleton, ["MANIFEST.json"]))
+    if defects:
+        sys.stderr.write("generate-manifest: frame hygiene failed\n")
+        for line in defects:
+            sys.stderr.write(f"  {line}\n")
+        raise SystemExit(1)
+    return {
+        "template_version": version,
+        "files": files,
+    }
+
+
+def render(manifest: dict) -> str:
+    return json.dumps(manifest, indent=2, sort_keys=False) + "\n"
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--skeleton",
+        type=Path,
+        default=SKELETON,
+        help="Path to the master-ops skeleton (default: repo master-ops/)",
+    )
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="Write path (default: <skeleton>/MANIFEST.json)",
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Exit 1 if committed MANIFEST.json differs from a fresh generate",
+    )
+    parser.add_argument(
+        "--stdout",
+        action="store_true",
+        help="Print the manifest to stdout instead of writing",
+    )
+    args = parser.parse_args(argv)
+
+    skeleton = args.skeleton.resolve()
+    if not skeleton.is_dir():
+        sys.stderr.write(f"generate-manifest: skeleton not a directory: {skeleton}\n")
+        return 2
+
+    try:
+        manifest = build_manifest(skeleton)
+    except SystemExit as exc:
+        # SystemExit may carry a string message (e.g. missing TEMPLATE-VERSION).
+        if isinstance(exc.code, int):
+            return exc.code
+        if exc.code:
+            sys.stderr.write(f"{exc.code}\n")
+        return 1
+
+    body = render(manifest)
+    out = args.out if args.out is not None else skeleton / "MANIFEST.json"
+
+    if args.check:
+        if not out.is_file():
+            sys.stderr.write(f"generate-manifest: missing committed manifest at {out}\n")
+            return 1
+        # Compare the parsed document, not the raw text: Windows checkouts may
+        # present CRLF, and Path walk order must not affect the files list.
+        try:
+            existing_text = out.read_text(encoding="utf-8")
+        except OSError as exc:
+            sys.stderr.write(f"generate-manifest: committed manifest unreadable: {exc}\n")
+            return 1
+        except UnicodeDecodeError as exc:
+            sys.stderr.write(f"generate-manifest: committed manifest not valid UTF-8: {exc}\n")
+            return 1
+        try:
+            existing_data = json.loads(existing_text)
+        except json.JSONDecodeError as exc:
+            sys.stderr.write(f"generate-manifest: committed manifest malformed JSON: {exc}\n")
+            return 1
+        if existing_data != manifest:
+            sys.stderr.write(
+                "generate-manifest: MANIFEST.json is stale; run scripts/generate-manifest\n"
+            )
+            # Emit a short structured diff so CI failures are actionable.
+            if isinstance(existing_data, dict):
+                old_files = existing_data.get("files")
+                new_files = manifest.get("files")
+                if old_files != new_files and isinstance(old_files, list) and isinstance(new_files, list):
+                    missing = sorted(set(new_files) - set(old_files))
+                    extra = sorted(set(old_files) - set(new_files))
+                    if missing:
+                        sys.stderr.write(f"  missing from committed: {missing}\n")
+                    if extra:
+                        sys.stderr.write(f"  extra in committed: {extra}\n")
+                    if not missing and not extra:
+                        sys.stderr.write("  files set matches but order differs\n")
+                if existing_data.get("template_version") != manifest.get("template_version"):
+                    sys.stderr.write(
+                        f"  version {existing_data.get('template_version')!r} -> "
+                        f"{manifest.get('template_version')!r}\n"
+                    )
+            return 1
+        return 0
+
+    if args.stdout:
+        sys.stdout.write(body)
+        return 0
+
+    if out.is_symlink() or (out.exists() and not out.is_file()):
+        sys.stderr.write(
+            f"generate-manifest: refusing non-regular output path: {out}\n"
+        )
+        return 1
+    out.write_text(body, encoding="utf-8")
+    rel_files = len(manifest["files"])
+    print(f"wrote {out} ({rel_files} paths, version {manifest['template_version']})")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -25,7 +25,11 @@ Wire every shipped hook and skill this template documents, without offering an o
   product-repository writes with `scripts/hooks/product-path-guard.sh`; configure
   the instance `product_repo` path during onboarding before enabling it. Bash
   allows only command classes measured as read-only in the fire log; unresolved
-  targets and unmeasured commands are denied.
+  targets and unmeasured commands are denied. If this is a multi-product
+  workspace or the owner declines a primary product, leave the guard unwired
+  until a real primary path is configured; otherwise its fail-closed behavior
+  intentionally blocks all matching tool calls, including operations-repository
+  paths that cannot be classified without a product root.
 - PostToolUse: non-sensitive audit markers when locally approved
 - SessionStart: tracker reachability from `{{WORKSPACE_ROOT}}`
 - Shipped skills under `master-ops/skills/` (for example blame-agent) and the recommended methodology / restraint / tracker skill layers named in the stack table below

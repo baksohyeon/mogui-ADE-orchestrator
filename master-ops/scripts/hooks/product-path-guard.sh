@@ -67,16 +67,6 @@ blocked() {
   exit 2
 }
 
-allowlisted() {
-  local command_class="$1"
-  [ -f "$ALLOWLIST" ] || return 1
-  awk -v wanted="$command_class" '
-    /^[[:space:]]*(#|$)/ { next }
-    $0 == wanted { found=1 }
-    END { exit(found ? 0 : 1) }
-  ' "$ALLOWLIST"
-}
-
 input=$(cat)
 repo=$(load_product_repo 2>/dev/null) || blocked "cannot load product_repo from $INSTANCE_RUNTIME_CONFIG" ""
 
@@ -166,6 +156,10 @@ for parts in segments:
     else:
         command_class=name
         target=current_cwd
+        if name in {"bash", "sh", "dash", "ksh", "zsh", "python", "python3", "perl", "ruby", "node"}:
+            if any(">" in token or root in token for token in parts[1:]):
+                print("DENY\t"+command_class+"\topaque interpreter command may contain an unparsed write")
+                raise SystemExit
     target_hits=[]
     for i,token in enumerate(parts[1:],1):
         if token in {">",">>","2>","2>>","&>"}:

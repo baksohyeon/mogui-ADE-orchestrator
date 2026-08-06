@@ -16,7 +16,7 @@ printf '{"master_host_runtime":"claude","product_repo":"%s"}\n' "$product" >"$TM
 
 run_file() {
   local path="$1"
-  python3 - "$path" <<'PY' | HOME="$TMP/home" MOGUI_INSTANCE_RUNTIME_CONFIG="${MOGUI_INSTANCE_RUNTIME_CONFIG:-$TMP/runtime.json}" MOGUI_HOOK_FIRE_LOG="${MOGUI_HOOK_FIRE_LOG:-$TMP/logs/fire.jsonl}" "$HOOK" >/dev/null 2>"$TMP/stderr"
+  python3 - "$path" <<'PY' | HOME="$TMP/home" MOGUI_INLINE_EDIT_OVERRIDE=0 MOGUI_INSTANCE_RUNTIME_CONFIG="${MOGUI_INSTANCE_RUNTIME_CONFIG:-$TMP/runtime.json}" MOGUI_HOOK_FIRE_LOG="${MOGUI_HOOK_FIRE_LOG:-$TMP/logs/fire.jsonl}" "$HOOK" >/dev/null 2>"$TMP/stderr"
 import json, sys
 print(json.dumps({"tool_input": {"file_path": sys.argv[1]}}))
 PY
@@ -24,7 +24,7 @@ PY
 
 run_file_config() {
   local config="$1" path="$2"
-  python3 - "$path" <<'PY' | HOME="$TMP/home" MOGUI_INSTANCE_RUNTIME_CONFIG="$config" MOGUI_HOOK_FIRE_LOG="$TMP/logs/fire.jsonl" "$HOOK" >/dev/null 2>"$TMP/stderr"
+  python3 - "$path" <<'PY' | HOME="$TMP/home" MOGUI_INLINE_EDIT_OVERRIDE=0 MOGUI_INSTANCE_RUNTIME_CONFIG="$config" MOGUI_HOOK_FIRE_LOG="$TMP/logs/fire.jsonl" "$HOOK" >/dev/null 2>"$TMP/stderr"
 import json, sys
 print(json.dumps({"tool_input": {"file_path": sys.argv[1]}}))
 PY
@@ -32,7 +32,8 @@ PY
 
 run_bash() {
   local command="$1"
-  python3 - "$command" <<'PY' | HOME="$TMP/home" MOGUI_INSTANCE_RUNTIME_CONFIG="${MOGUI_INSTANCE_RUNTIME_CONFIG:-$TMP/runtime.json}" MOGUI_HOOK_FIRE_LOG="${MOGUI_HOOK_FIRE_LOG:-$TMP/logs/fire.jsonl}" "$HOOK" >/dev/null 2>"$TMP/stderr"
+  local working_directory="${2:-.}"
+  python3 - "$command" "$working_directory" <<'PY' | HOME="$TMP/home" MOGUI_INLINE_EDIT_OVERRIDE=0 MOGUI_INSTANCE_RUNTIME_CONFIG="${MOGUI_INSTANCE_RUNTIME_CONFIG:-$TMP/runtime.json}" MOGUI_HOOK_FIRE_LOG="${MOGUI_HOOK_FIRE_LOG:-$TMP/logs/fire.jsonl}" "$HOOK" >/dev/null 2>"$TMP/stderr"
 import json, sys
 print(json.dumps({"tool_input": {"command": sys.argv[1], "working_directory": sys.argv[2] if len(sys.argv) > 2 else "."}}))
 PY
@@ -61,6 +62,8 @@ expect_blocked bash-cd-and-write run_bash "cd $product && echo bad > file.txt"
 expect_blocked bash-cp run_bash "cp /dev/null $product/file.txt"
 expect_blocked bash-mv run_bash "mv $ops/file.txt $product/file.txt"
 expect_blocked bash-tee run_bash "tee $product/file.txt"
+expect_blocked bash-opaque-wrapper run_bash "bash -c 'echo bad > $product/file.txt'"
+expect_blocked bash-relative-working-directory run_bash "echo bad > file.txt" "$product"
 expect_blocked git-add run_bash "git -C $product add file.txt"
 expect_blocked git-work-tree run_bash "git --git-dir=$TMP/repo.git --work-tree=$product add file.txt"
 expect_blocked symlink-path run_file "$link/file.txt"

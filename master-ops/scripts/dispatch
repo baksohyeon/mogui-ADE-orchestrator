@@ -421,7 +421,7 @@ fi
 MODEL_VENDOR=$(model_vendor "$MODEL")
 runtime_accepts_vendor() {
   case "$1:$2" in
-    agy:gemini|gemini:gemini|claude:claude|codex:codex|grok:grok|cursor:cursor) return 0 ;;
+    agy:gemini|gemini:gemini|claude:claude|codex:codex|grok:grok) return 0 ;;
     *) return 1 ;;
   esac
 }

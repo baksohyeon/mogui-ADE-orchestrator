@@ -44,16 +44,15 @@ def run(workspace: Path, ops: Path, *extra: str) -> subprocess.CompletedProcess[
     # 193). GitHub's Windows runner provides bash, so invoke the same script
     # through bash on every OS; bash then invokes the Python interpreter rather
     # than treating this Python source as a shell program.
-    # On Windows, command-name lookup inside Git Bash can resolve the WSL shim
-    # instead of setup-python. Keep bash as the outer command, then let
-    # cmd.exe execute the concrete interpreter path without MSYS translation.
+    # On Windows, Git Bash's Python/WSL shim intercepted every bash -> cmd
+    # route even when given the setup-python path (measured in CI stdout).
+    # Invoke the concrete setup-python interpreter directly on Windows; Unix
+    # keeps the explicit bash path used by the script's executable surface.
     if os.name == "nt":
-        windows_args = [sys.executable, str(SCRIPT), "--workspace-root", str(workspace),
-                        "--ops-repo", str(ops), *extra]
-        # Quote each argument for bash so its backslashes survive to cmd.exe;
-        # quoting the whole command loses the argument boundary at cmd /c.
-        bash_args = " ".join("'" + arg.replace("'", "'\\''") + "'" for arg in windows_args)
-        shell_command = f"cmd.exe /d /c {bash_args}"
+        command = [sys.executable, str(SCRIPT), "--workspace-root", str(workspace),
+                   "--ops-repo", str(ops), *extra]
+        return subprocess.run(command, capture_output=True, text=True,
+                              env=os.environ.copy())
     else:
         command = ["python3", SCRIPT.as_posix(), "--workspace-root", str(workspace),
                    "--ops-repo", str(ops), *extra]

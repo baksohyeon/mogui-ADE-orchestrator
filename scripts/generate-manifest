@@ -154,7 +154,9 @@ def main(argv: list[str] | None = None) -> int:
         if not out.is_file():
             sys.stderr.write(f"generate-manifest: missing committed manifest at {out}\n")
             return 1
-        existing = out.read_text(encoding="utf-8")
+        # Normalize newlines so a Windows checkout with CRLF does not report a
+        # false stale against an LF-generated body (CI matrix includes windows).
+        existing = out.read_text(encoding="utf-8").replace("\r\n", "\n")
         if existing != body:
             sys.stderr.write(
                 "generate-manifest: MANIFEST.json is stale; run scripts/generate-manifest\n"

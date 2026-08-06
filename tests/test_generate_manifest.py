@@ -25,6 +25,29 @@ def test_committed_manifest_matches_regenerate():
     assert result.returncode == 0, result.stderr
 
 
+def test_check_accepts_crlf_checkout(tmp_path: Path):
+    """Windows checkouts may present MANIFEST.json with CRLF; --check must not flinch."""
+    skeleton = tmp_path / "master-ops"
+    skeleton.mkdir()
+    (skeleton / "TEMPLATE-VERSION").write_text("v0.0.0\n", encoding="utf-8")
+    (skeleton / "ok.md").write_text("clean\n", encoding="utf-8")
+    write = subprocess.run(
+        [sys.executable, str(GENERATOR), "--skeleton", str(skeleton)],
+        capture_output=True,
+        text=True,
+    )
+    assert write.returncode == 0, write.stderr
+    manifest = skeleton / "MANIFEST.json"
+    lf = manifest.read_text(encoding="utf-8")
+    manifest.write_text(lf.replace("\n", "\r\n"), encoding="utf-8", newline="")
+    check = subprocess.run(
+        [sys.executable, str(GENERATOR), "--skeleton", str(skeleton), "--check"],
+        capture_output=True,
+        text=True,
+    )
+    assert check.returncode == 0, check.stderr
+
+
 def test_manifest_carries_template_version_and_sorted_files():
     data = json.loads(MANIFEST.read_text(encoding="utf-8"))
     version = (SKELETON / "TEMPLATE-VERSION").read_text(encoding="utf-8").strip()

@@ -191,6 +191,9 @@ for parts in segments:
         if sub == "remote":
             remote_index=parts.index("remote") + 1
             while remote_index < len(parts):
+                if parts[remote_index] in {"-v", "--verbose"}:
+                    remote_index += 1
+                    continue
                 if parts[remote_index].startswith("-"):
                     remote_index += 2
                     continue
@@ -215,7 +218,13 @@ for parts in segments:
             target_hits.append(resolve(current_cwd, parts[i+1]))
         elif token.startswith("/") or token.startswith("~/"):
             target_hits.append(resolve(current_cwd, token))
+        elif token == "--output" and i + 1 < len(parts):
+            target_hits.append(resolve(current_cwd, parts[i + 1]))
+        elif token.startswith("--output="):
+            target_hits.append(resolve(current_cwd, token.split("=", 1)[1]))
     touches=under(target) or any(under(x) for x in target_hits)
+    if "-exec" in parts and root in " ".join(parts):
+        touches=True
     write_args={"-exec","-execdir","xargs","--in-place"}
     if name in {"sed","perl","ruby"}:
         write_args.add("-i")
@@ -224,6 +233,9 @@ for parts in segments:
         or (sub == "diff" and any(token == "--output" or token.startswith("--output=") for token in parts))
     )
     write_capable=any(token in write_args for token in parts[1:]) or git_mutation
+    if "-exec" in parts and any(token in {"sh", "bash", "dash", "zsh", "ksh"} for token in parts):
+        print("DENY\t"+command_class+"\topaque find exec wrapper is not admitted")
+        raise SystemExit
     if write_capable:
         for token in parts[1:]:
             if not token.startswith("-") and token not in {";"}:

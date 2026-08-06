@@ -45,18 +45,20 @@ def run(workspace: Path, ops: Path, *extra: str) -> subprocess.CompletedProcess[
     # through bash on every OS; bash then invokes the Python interpreter rather
     # than treating this Python source as a shell program.
     # On Windows, command-name lookup inside Git Bash can resolve the WSL shim
-    # instead of setup-python. Convert this process's concrete interpreter to
-    # the MSYS /c/... form so bash executes the intended Windows binary.
+    # instead of setup-python. Keep bash as the outer command, then let
+    # cmd.exe execute the concrete interpreter path without MSYS translation.
     if os.name == "nt":
-        concrete = Path(sys.executable).as_posix()
-        drive, remainder = concrete[0], concrete[2:]
-        interpreter = f"/{drive.lower()}{remainder}"
+        command = subprocess.list2cmdline(
+            [sys.executable, str(SCRIPT), "--workspace-root", str(workspace),
+             "--ops-repo", str(ops), *extra]
+        )
+        shell_command = f"cmd.exe /d /s /c {shlex.quote(command)}"
     else:
-        interpreter = "python3"
-    command = [interpreter, SCRIPT.as_posix(), "--workspace-root", str(workspace),
-               "--ops-repo", str(ops), *extra]
-    return subprocess.run(["bash", "-c", shlex.join(command)],
-                          capture_output=True, text=True, env=os.environ.copy())
+        command = ["python3", SCRIPT.as_posix(), "--workspace-root", str(workspace),
+                   "--ops-repo", str(ops), *extra]
+        shell_command = shlex.join(command)
+    return subprocess.run(["bash", "-c", shell_command], capture_output=True,
+                          text=True, env=os.environ.copy())
 
 
 def report(completed: subprocess.CompletedProcess[str]) -> dict:

@@ -1,0 +1,247 @@
+#!/usr/bin/env python3
+"""Read-only, measurable post-install rehearsal for a founded workspace.
+
+The rehearsal deliberately reports GAP when a postcondition cannot be measured;
+absence of evidence is not a pass.  It never creates, overwrites, or repairs an
+installation.  Use ``--live`` to add the optional Orca seat check.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import shutil
+import subprocess
+from dataclasses import asdict, dataclass
+from pathlib import Path
+
+
+PLACEHOLDER = re.compile(r"\{\{[^}]+\}\}")
+ALLOWED_ROLES = {"product", "ops"}
+
+
+def safe_evidence(path: Path) -> str:
+    """Keep host-specific absolute paths out of reports."""
+    return f"~/path/{path.name}"
+
+
+@dataclass
+class Result:
+    id: str
+    expected: str
+    observed: str
+    status: str
+    evidence: str
+
+
+def result(results: list[Result], ident: str, expected: str, observed: str,
+           status: str, evidence: str) -> None:
+    results.append(Result(ident, expected, observed, status, evidence))
+
+
+def read_json(path: Path):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+
+
+def descriptor_matches(descriptor: object, root: Path) -> bool:
+    if not isinstance(descriptor, dict):
+        return False
+    workspace_root = descriptor.get("workspace_root")
+    try:
+        root_match = (isinstance(workspace_root, str)
+                      and bool(workspace_root.strip())
+                      and Path(workspace_root.strip()).expanduser().resolve(strict=False) == root)
+    except (OSError, RuntimeError, ValueError, UnicodeError):
+        root_match = False
+    if not (root_match and descriptor.get("workspace_root_is_plain_folder") is True):
+        return False
+    seat = descriptor.get("master_seat")
+    repositories = descriptor.get("repositories")
+    if not isinstance(seat, str) or not seat.strip() or not isinstance(repositories, list) or not repositories:
+        return False
+    names: set[str] = set()
+    paths: set[str] = set()
+    for entry in repositories:
+        if not isinstance(entry, dict):
+            return False
+        name, path, role = entry.get("name"), entry.get("path"), entry.get("role")
+        if (not isinstance(name, str) or not name.strip()
+                or not isinstance(path, str) or not path.strip()
+                or not isinstance(role, str) or role.strip() not in ALLOWED_ROLES):
+            return False
+        remote = entry.get("remote", "")
+        if remote is None:
+            remote = ""
+        if not isinstance(remote, str):
+            return False
+        for field in ("capabilities", "prohibited"):
+            values = entry.get(field) if field in entry else ([] if field == "capabilities" else None)
+            if field == "capabilities" and values is None:
+                values = []
+            if field == "prohibited" and values is None:
+                return False
+            if not isinstance(values, list) or any(not isinstance(value, str) or not value.strip() for value in values):
+                return False
+        name_key, path_key = name.strip(), path.strip().rstrip("/")
+        if name_key in names or path_key in paths:
+            return False
+        names.add(name_key)
+        paths.add(path_key)
+    return True
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--workspace-root", required=True, type=Path)
+    parser.add_argument("--ops-repo", required=True, type=Path)
+    parser.add_argument("--live", action="store_true",
+                        help="also measure the live Orca terminal in the recorded seat")
+    parser.add_argument("--orca-cli", default="orca",
+                        help="Orca executable used with --live (default: orca)")
+    parser.add_argument("--json", action="store_true", dest="json_output")
+    args = parser.parse_args()
+    root = args.workspace_root.resolve()
+    ops = args.ops_repo.resolve()
+    results: list[Result] = []
+
+    router = ops / "ONBOARDING.md"
+    steps = ops / "onboarding"
+    if router.is_file() and steps.is_dir():
+        indexed = re.findall(r"^\|\s*(?:\d{2}|—)\s*\|\s*`onboarding/([a-z0-9-]+\.md)`\s*\|",
+                             router.read_text(encoding="utf-8"), re.MULTILINE)
+        on_disk = sorted(p.name for p in steps.glob("*.md"))
+        result(results, "P01", "router index equals onboarding files",
+               f"{len(indexed)} indexed, {len(on_disk)} on disk",
+               "PASS" if sorted(indexed) == on_disk else "FAIL",
+               safe_evidence(router))
+    else:
+        result(results, "P01", "router and step directory exist", "missing",
+               "FAIL", "~/path/ONBOARDING.md or ~/path/onboarding")
+
+    unresolved: list[str] = []
+    for path in ops.rglob("*"):
+        relative = path.relative_to(ops)
+        if (not path.is_file() or path.suffix not in {".md", ".json", ".txt"}
+                or {".git", ".beads"}.intersection(relative.parts)):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            unresolved.append(f"{relative} (invalid UTF-8)")
+            continue
+        if any(token != "{{...}}" for token in PLACEHOLDER.findall(text)):
+            unresolved.append(str(relative))
+    result(results, "P02", "no unresolved placeholders in ops repository",
+           "none" if not unresolved else ", ".join(unresolved),
+               "PASS" if not unresolved else "FAIL", "~/path/ops-repository")
+
+    claude, agents = ops / "CLAUDE.md", ops / "AGENTS.md"
+    equal = claude.is_file() and agents.is_file() and claude.read_bytes() == agents.read_bytes()
+    result(results, "P03", "ops CLAUDE.md and AGENTS.md are byte-identical",
+           "byte-identical" if equal else "missing or different", "PASS" if equal else "FAIL",
+           "~/path/CLAUDE.md / ~/path/AGENTS.md")
+
+    canonical, deployed = ops / "workspace-card" / "CLAUDE.md", root / "CLAUDE.md"
+    card_equal = canonical.is_file() and deployed.is_file() and canonical.read_bytes() == deployed.read_bytes()
+    result(results, "P04", "deployed root card equals ops canonical card",
+           "byte-identical" if card_equal else "missing or different", "PASS" if card_equal else "FAIL",
+           "cmp ~/path/CLAUDE.md ~/path/workspace-card/CLAUDE.md")
+
+    descriptor_path = root / "config" / "workspace-descriptor.json"
+    descriptor = read_json(descriptor_path)
+    descriptor_ok = descriptor_matches(descriptor, root)
+    result(results, "P05", "workspace descriptor satisfies loader rules and names this root",
+           "<workspace-root>" if descriptor_ok else "missing or invalid",
+           "PASS" if descriptor_ok else "FAIL", "~/path/config/workspace-descriptor.json")
+
+    runtime_path = root / "config" / "instance-runtime.json"
+    runtime = read_json(runtime_path)
+    runtime_ok = (
+        isinstance(runtime, dict)
+        and isinstance(runtime.get("master_host_runtime"), str)
+        and bool(runtime["master_host_runtime"].strip())
+    )
+    result(results, "P06", "instance runtime names the master host runtime",
+           str(runtime.get("master_host_runtime")) if isinstance(runtime, dict) else "missing or invalid",
+           "PASS" if runtime_ok else "FAIL", "~/path/config/instance-runtime.json")
+
+    for ident, rel in (("P07", "docs/runbooks/role-state.md"),
+                       ("P08", "docs/lineage/MASTER-LINEAGE.md")):
+        path = ops / rel
+        result(results, f"{ident}", f"{rel} exists", "present" if path.is_file() else "missing",
+               "PASS" if path.is_file() else "FAIL", f"~/path/{rel}")
+
+    if args.live:
+        seat = descriptor.get("master_seat") if isinstance(descriptor, dict) else None
+        if not seat:
+            result(results, "L01", "live master seat is measurable", "no recorded master_seat", "GAP",
+                   "~/path/config/workspace-descriptor.json")
+        elif not shutil.which(args.orca_cli):
+            result(results, "L01", "live master seat is measurable", f"{args.orca_cli} unavailable", "GAP",
+                   "install or expose Orca CLI")
+        else:
+            try:
+                proc = subprocess.run(
+                    [args.orca_cli, "terminal", "list", "--worktree", seat, "--json"],
+                    capture_output=True, timeout=30,
+                )
+            except subprocess.TimeoutExpired:
+                result(results, "L01", "exactly one live terminal in recorded master seat",
+                       "Orca command timed out after 30 seconds", "GAP",
+                       f"{args.orca_cli} terminal list --worktree {seat} --json")
+                proc = None
+            if proc is None:
+                result(results, "L02", "live master role identity is independently evidenced",
+                       "not exposed by terminal list", "GAP",
+                       "terminal presence is not proof of master role; inspect role-state/lineage")
+            else:
+                payload = None
+                try:
+                    output = proc.stdout.decode("utf-8", errors="replace")
+                    payload = json.loads(output)
+                except (UnicodeError, json.JSONDecodeError):
+                    pass
+                if isinstance(payload, dict) and isinstance(payload.get("result"), dict):
+                    payload = payload["result"]
+                terminals = payload.get("terminals") if isinstance(payload, dict) else None
+                count = len(terminals) if isinstance(terminals, list) else None
+                status = "PASS" if proc.returncode == 0 and count == 1 else "FAIL"
+                observed = f"{count} terminal(s)" if count is not None else "invalid Orca JSON"
+                result(results, "L01", "exactly one live terminal in recorded master seat", observed, status,
+                       f"{args.orca_cli} terminal list --worktree {seat} --json")
+                result(results, "L02", "live master role identity is independently evidenced",
+                       "not exposed by terminal list", "GAP",
+                       "terminal presence is not proof of master role; inspect role-state/lineage")
+    else:
+        result(results, "L01", "live master seat is measured", "live checks not requested", "GAP",
+               "rerun with --live")
+        result(results, "L02", "live master role identity is measured", "live checks not requested", "GAP",
+               "rerun with --live; terminal presence alone remains insufficient")
+
+    gaps = [r for r in results if r.status == "GAP"]
+    failures = [r for r in results if r.status == "FAIL"]
+    if args.json_output:
+        print(json.dumps({"workspace_root": str(root), "ops_repo": str(ops),
+                          "results": [asdict(r) for r in results],
+                          "failures": [asdict(r) for r in failures],
+                          "gaps": [asdict(r) for r in gaps]}, ensure_ascii=False, indent=2))
+    else:
+        print("ID   STATUS  EXPECTED                                      OBSERVED")
+        for r in results:
+            print(f"{r.id:<4} {r.status:<7} {r.expected:<45} {r.observed}")
+        print(f"\nFAILURES ({len(failures)}):")
+        for r in failures:
+            print(f"- {r.id}: {r.evidence}")
+        print(f"\nGAPS ({len(gaps)}):")
+        for r in gaps:
+            print(f"- {r.id}: {r.evidence}")
+    return 0 if not gaps and all(r.status == "PASS" for r in results) else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

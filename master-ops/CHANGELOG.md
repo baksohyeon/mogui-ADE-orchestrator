@@ -62,6 +62,15 @@ Successor-facing promotion audit and redacted knowledge promotion (2026-08-06):
 - Existing installations must merge these template changes deliberately; generated
   operations repositories are copies and do not update automatically.
 
+Onboarding rehearsal measurement:
+
+- Added `scripts/onboarding-rehearsal`, a read-only post-install rehearsal with
+  postcondition results, JSON output, live-seat measurement, and an explicit
+  gap list that does not treat missing evidence as a pass.
+- Added the internal rehearsal report and focused tests. Existing generated
+  operations repositories do not auto-update; apply these template changes
+  deliberately when adopting the rehearsal.
+
 Contract convention merge-time re-measurement and citation repair (2026-08-05 worker contract fix):
 
 - Added clause 14, Merge-time re-measurement, so merge decisions re-run thread

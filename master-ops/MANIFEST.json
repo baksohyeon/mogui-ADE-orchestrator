@@ -61,6 +61,7 @@
     "scripts/hooks/tracker-check.sh",
     "scripts/measure",
     "scripts/measure-product-path-guard.sh",
+    "scripts/onboarding-rehearsal",
     "scripts/orca-surface-baseline.json",
     "scripts/orca-surface-check.sh",
     "scripts/orca-wait",

@@ -47,6 +47,8 @@ Workspace session-card host twin and deployment (2026-08-06):
   `CLAUDE.md` card.
 - Onboarding, reverify, and harness self-check now validate the canonical pair
   against itself before checking both host-recognized root card names.
+- Onboarding now stops and re-syncs the canonical pair before redeploying when
+  those source files diverge.
 
 Contract convention merge-time re-measurement and citation repair (2026-08-05 worker contract fix):
 

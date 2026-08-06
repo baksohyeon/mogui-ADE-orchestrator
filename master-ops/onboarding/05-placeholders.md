@@ -48,4 +48,5 @@ Also verify no source workspace's private names were copied accidentally.
 
 - `rg` still finds `{{...}}` tokens: fill each from the confirmed facts, or stop and ask for the missing decision. Do not record a deferral. Do not delete a placeholder to silence the check. Do not deploy (or re-deploy only after a clean fill).
 - ops-pair `cmp` shows `CLAUDE.md` and `AGENTS.md` differ: if the divergence is byte-only formatting, re-unify to one common block in both files; if a substantive line exists in only one file, stop and ask whether host-specific divergence is intended.
+- canonical workspace-card `cmp` fails: stop before redeploying, re-sync `workspace-card/CLAUDE.md` and `workspace-card/AGENTS.md` to one intended canonical card, then rerun the byte-identity test and Verify. Do not copy either divergent canonical file to the workspace root.
 - session-card `cmp` fails or either root file is missing: redeploy with the `cp` commands in Run from the filled canonical files; do not invent root-only edits.

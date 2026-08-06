@@ -214,6 +214,9 @@ CARD_AGENTS_DEPLOYED="$WORKSPACE_ROOT/AGENTS.md"
 if [ ! -f "$CARD_CLAUDE_CANONICAL" ] || [ ! -f "$CARD_AGENTS_CANONICAL" ]; then
   echo "Card: canonical pair missing at workspace-card/{CLAUDE.md,AGENTS.md}"
   exit_code=1
+elif ! cmp -s "$CARD_CLAUDE_CANONICAL" "$CARD_AGENTS_CANONICAL"; then
+  echo "Card: canonical pair DIVERGED — workspace-card/CLAUDE.md and workspace-card/AGENTS.md must be byte-identical"
+  exit_code=1
 elif [ ! -f "$CARD_CLAUDE_DEPLOYED" ] || [ ! -f "$CARD_AGENTS_DEPLOYED" ]; then
   echo "Card: not deployed to the workspace root — cp workspace-card/{CLAUDE.md,AGENTS.md} to the root"
   exit_code=1

@@ -34,13 +34,13 @@ $ ! rg --hidden -g '!.git/**' -g '!.beads/**' '\{\{[^}]+\}\}' "{{OPS_REPO}}" && 
 clean
 $ cmp "{{OPS_REPO}}/CLAUDE.md" "{{OPS_REPO}}/AGENTS.md" && echo match
 match
-$ cmp "{{WORKSPACE_ROOT}}/CLAUDE.md" "{{OPS_REPO}}/workspace-card/CLAUDE.md" && cmp "{{WORKSPACE_ROOT}}/AGENTS.md" "{{OPS_REPO}}/workspace-card/AGENTS.md" && echo match
+$ cmp "{{OPS_REPO}}/workspace-card/CLAUDE.md" "{{OPS_REPO}}/workspace-card/AGENTS.md" && cmp "{{WORKSPACE_ROOT}}/CLAUDE.md" "{{OPS_REPO}}/workspace-card/CLAUDE.md" && cmp "{{WORKSPACE_ROOT}}/AGENTS.md" "{{OPS_REPO}}/workspace-card/AGENTS.md" && echo match
 match
 ```
 
 - The first check: **no** `{{...}}` remains anywhere under `{{OPS_REPO}}` (including `workspace-card/`). No deferral list.
 - The first `cmp` is the **ops repository agent instruction pair** only (root `CLAUDE.md` vs `AGENTS.md` inside `{{OPS_REPO}}`).
-- The second `cmp` sequence is the **workspace session card** (both deployed root copies vs their canonical `workspace-card/` twins). Never cross-compare those two pairs.
+- The second `cmp` sequence first checks the **canonical workspace-card pair**, then checks both deployed root copies against their matching canonical files. Never cross-compare those two pairs.
 
 Also verify no source workspace's private names were copied accidentally.
 

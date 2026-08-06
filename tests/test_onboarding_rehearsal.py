@@ -52,7 +52,9 @@ def run(workspace: Path, ops: Path, *extra: str) -> subprocess.CompletedProcess[
             [sys.executable, str(SCRIPT), "--workspace-root", str(workspace),
              "--ops-repo", str(ops), *extra]
         )
-        shell_command = f"cmd.exe /d /s /c {shlex.quote(command)}"
+        # Do not shell-quote the whole cmd command: those quotes would become
+        # part of `cmd /c`'s command string after bash removes its own layer.
+        shell_command = f"cmd.exe /d /c {command}"
     else:
         command = ["python3", SCRIPT.as_posix(), "--workspace-root", str(workspace),
                    "--ops-repo", str(ops), *extra]

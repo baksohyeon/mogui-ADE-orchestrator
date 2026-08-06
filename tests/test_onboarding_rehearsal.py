@@ -44,10 +44,15 @@ def run(workspace: Path, ops: Path, *extra: str) -> subprocess.CompletedProcess[
     # 193). GitHub's Windows runner provides bash, so invoke the same script
     # through bash on every OS; bash then invokes the Python interpreter rather
     # than treating this Python source as a shell program.
-    # On Windows, the bare `python` name can resolve to the Microsoft Store
-    # shim inside Git Bash even after setup-python. `python.exe` resolves the
-    # setup-python entry on PATH; Unix runners use their normal `python3`.
-    interpreter = "python.exe" if os.name == "nt" else "python3"
+    # On Windows, command-name lookup inside Git Bash can resolve the WSL shim
+    # instead of setup-python. Convert this process's concrete interpreter to
+    # the MSYS /c/... form so bash executes the intended Windows binary.
+    if os.name == "nt":
+        concrete = Path(sys.executable).as_posix()
+        drive, remainder = concrete[0], concrete[2:]
+        interpreter = f"/{drive.lower()}{remainder}"
+    else:
+        interpreter = "python3"
     command = [interpreter, SCRIPT.as_posix(), "--workspace-root", str(workspace),
                "--ops-repo", str(ops), *extra]
     return subprocess.run(["bash", "-c", shlex.join(command)],

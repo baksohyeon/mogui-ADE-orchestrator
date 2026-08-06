@@ -138,20 +138,26 @@ def is_template_side(rel: str) -> bool:
     return top in TEMPLATE_SIDE_DIRS
 
 
-def read_template_version(template_root: Path) -> str | None:
+def read_template_version(template_root: Path) -> tuple[str | None, str | None]:
+    """Return (version, error). A non-None error means the version could not be checked."""
     version_file = template_root / "TEMPLATE-VERSION"
     if version_file.is_file():
         try:
-            return version_file.read_text(encoding="utf-8").strip() or None
-        except (OSError, UnicodeDecodeError):
-            return None
+            version = version_file.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError) as exc:
+            return None, f"template VERSION unreadable: {exc}"
+        if not version:
+            return None, "template VERSION is empty"
+        return version, None
     try:
-        manifest, _ = load_manifest(template_root / "MANIFEST.json")
-    except (OSError, UnicodeDecodeError):
-        return None
+        manifest, err = load_manifest(template_root / "MANIFEST.json")
+    except (OSError, UnicodeDecodeError) as exc:
+        return None, f"template manifest unreadable: {exc}"
+    if err and err != "manifest absent":
+        return None, f"template {err}"
     if manifest:
-        return manifest.get("template_version")
-    return None
+        return manifest.get("template_version"), None
+    return None, None
 
 
 def parse_changelog_sections(text: str) -> list[tuple[str, str]]:
@@ -261,8 +267,11 @@ def build_report(
                 f"template path unreadable: {template_root}"
             )
             return report, 2
-        t_version = read_template_version(template_root)
+        t_version, t_version_err = read_template_version(template_root)
         report["template_version"] = t_version
+        if t_version_err:
+            report["questions_unanswered"].append(t_version_err)
+            return report, 2
         t_manifest, t_err = load_manifest(template_root / "MANIFEST.json")
         if t_err and t_err != "manifest absent":
             report["questions_unanswered"].append(f"template {t_err}")

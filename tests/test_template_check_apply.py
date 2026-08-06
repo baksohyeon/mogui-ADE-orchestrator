@@ -275,6 +275,37 @@ def test_template_apply_declined_confirmation_writes_nothing(tmp_path: Path):
     assert list(ops.iterdir()) == []
 
 
+def test_template_check_unreadable_template_version_exit_2(tmp_path: Path):
+    ops = tmp_path / "ops"
+    ops.mkdir()
+    (ops / "MANIFEST.json").write_text(
+        json.dumps({"template_version": "v0.0.0", "files": []}) + "\n",
+        encoding="utf-8",
+    )
+    template = tmp_path / "template"
+    template.mkdir()
+    (template / "MANIFEST.json").write_text(
+        json.dumps({"template_version": "v0.0.0", "files": []}) + "\n",
+        encoding="utf-8",
+    )
+    # Invalid UTF-8 in TEMPLATE-VERSION must fail closed (exit 2), not look clean.
+    (template / "TEMPLATE-VERSION").write_bytes(b"\xff\xfe not-utf8")
+    result = _run(
+        [
+            sys.executable,
+            str(TEMPLATE_CHECK),
+            "--ops",
+            str(ops),
+            "--template",
+            str(template),
+            "--json",
+        ],
+    )
+    assert result.returncode == 2, result.stdout + result.stderr
+    report = json.loads(result.stdout)
+    assert any("VERSION" in q for q in report["questions_unanswered"])
+
+
 def test_template_apply_rejects_path_escape_and_missing_manifest_file(tmp_path: Path):
     ops = tmp_path / "ops"
     ops.mkdir()

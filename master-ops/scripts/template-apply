@@ -8,15 +8,21 @@ Instance-owned paths are refused by name:
   docs/lineage/, docs/runbooks/role-state.md, .beads/, config/, contracts/,
   and anything the manifest does not claim.
 
-Per-file outcomes: written | skipped-as-instance-owned | skipped-as-unknown |
-planned | refused-not-in-manifest.
+Per-file outcomes:
+  planned | written
+  skipped-as-instance-owned
+  refused-not-in-manifest
+  error-invalid-path
+  error-missing-template-file
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 # Keep refusal names identical to template-check.
@@ -73,13 +79,22 @@ def normalize_rel(rel: str) -> str | None:
 
 def resolved_under(root: Path, rel: str) -> Path | None:
     """Resolve root/rel and require the result to stay under root."""
-    root_res = root.resolve()
-    candidate = (root_res / rel).resolve()
     try:
+        root_res = root.resolve()
+        candidate = (root_res / rel).resolve()
         candidate.relative_to(root_res)
-    except ValueError:
+    except (OSError, ValueError, RuntimeError):
+        # Symlink loops and unreadable parents become invalid-path, not a crash.
         return None
     return candidate
+
+
+def effective_rel_under(root: Path, path: Path) -> str | None:
+    """Relative posix path of a resolved path under root, or None if outside."""
+    try:
+        return path.resolve().relative_to(root.resolve()).as_posix()
+    except (OSError, ValueError, RuntimeError):
+        return None
 
 
 def load_manifest(path: Path) -> dict:
@@ -116,11 +131,23 @@ def plan_actions(
 ) -> list[dict]:
     """Build the per-path plan. extra_targets are attempted writes outside the
     manifest — used only to prove refusal in tests; normal runs pass None."""
-    claimed_raw = [str(p) for p in manifest["files"]]
+    claimed_raw = list(manifest["files"])
     actions: list[dict] = []
     claimed: set[str] = set()
 
-    for raw in sorted(claimed_raw):
+    # Sort only string entries so non-strings still appear as plan errors.
+    sortable = [p for p in claimed_raw if isinstance(p, str)]
+    non_strings = [p for p in claimed_raw if not isinstance(p, str)]
+    for raw in non_strings:
+        actions.append(
+            {
+                "path": repr(raw),
+                "action": "error-invalid-path",
+                "reason": "manifest entry is not a string path",
+            }
+        )
+
+    for raw in sorted(sortable):
         rel = normalize_rel(raw)
         if rel is None:
             actions.append(
@@ -152,6 +179,28 @@ def plan_actions(
                 }
             )
             continue
+        # If an in-root symlink redirects the destination into an instance-owned
+        # path, refuse by the resolved name — not only the claimed name.
+        if dest.exists() or dest.is_symlink():
+            effective = effective_rel_under(ops_root, dest)
+            if effective is None:
+                actions.append(
+                    {
+                        "path": rel,
+                        "action": "error-invalid-path",
+                        "reason": "destination resolves outside ops root",
+                    }
+                )
+                continue
+            if is_instance_owned(effective):
+                actions.append(
+                    {
+                        "path": rel,
+                        "action": "skipped-as-instance-owned",
+                        "reason": f"destination resolves to instance-owned path {effective}",
+                    }
+                )
+                continue
         if not src.is_file():
             actions.append(
                 {
@@ -228,14 +277,36 @@ def apply_planned(
             continue
         src = resolved_under(template_root, rel)
         dest = resolved_under(ops_root, rel)
-        assert src is not None and dest is not None
+        if src is None or dest is None:
+            raise RuntimeError(f"path escaped root during write: {rel}")
+        # Re-check instance-owned via resolved destination after confirmation.
+        if dest.exists() or dest.is_symlink():
+            effective = effective_rel_under(ops_root, dest)
+            if effective is None or is_instance_owned(effective):
+                raise RuntimeError(
+                    f"destination became instance-owned or escaped before write: {rel}"
+                )
         text = src.read_text(encoding="utf-8")
         text = substitute(text, values)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(text, encoding="utf-8")
-        # Preserve executable bit for scripts without a suffix or with shebang.
-        if src.stat().st_mode & 0o111:
-            dest.chmod(dest.stat().st_mode | 0o111)
+        # Atomic replace within the destination directory so a crash mid-write
+        # does not leave a truncated target.
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=".template-apply-",
+            dir=str(dest.parent),
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as tmp:
+                tmp.write(text)
+            if src.stat().st_mode & 0o111:
+                os.chmod(tmp_name, dest.stat().st_mode | 0o111 if dest.exists() else 0o755)
+            os.replace(tmp_name, dest)
+        except Exception:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise
         results.append(
             {
                 "path": rel,

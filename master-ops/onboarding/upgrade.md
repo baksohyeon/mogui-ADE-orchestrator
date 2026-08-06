@@ -46,7 +46,7 @@ $ "{{RUNTIME_ROOT}}/master-ops/scripts/template-apply" --ops "{{OPS_REPO}}" --te
    - `contracts/`
    - anything the manifest does not claim
 
-   Per-file outcomes are one of: written, skipped-as-instance-owned, skipped-as-unknown (or refused-not-in-manifest).
+   Per-file outcomes are one of: written, skipped-as-instance-owned, refused-not-in-manifest, error-invalid-path, error-missing-template-file. Any `error-*` outcome fails the plan (nonzero exit) before confirmation.
 
 7. **Re-check**: run `template-check` again with `--template` and confirm the report_set is `template-compare`. A clean shape is the goal; remaining unknown paths that are deliberate local additions stay listed as unknown and are not deleted.
 

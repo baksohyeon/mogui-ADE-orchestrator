@@ -165,7 +165,7 @@ def main(argv: list[str] | None = None) -> int:
         # present CRLF, and Path walk order must not affect the files list.
         try:
             existing_data = json.loads(out.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             sys.stderr.write(f"generate-manifest: committed manifest malformed: {exc}\n")
             return 1
         if existing_data != manifest:

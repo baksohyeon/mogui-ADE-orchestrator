@@ -56,7 +56,7 @@ def descriptor_matches(descriptor: object, root: Path) -> bool:
         root_match = (isinstance(workspace_root, str)
                       and bool(workspace_root.strip())
                       and Path(workspace_root.strip()).expanduser().resolve(strict=False) == root)
-    except (OSError, RuntimeError):
+    except (OSError, RuntimeError, ValueError, UnicodeError):
         root_match = False
     if not (root_match and descriptor.get("workspace_root_is_plain_folder") is True):
         return False
@@ -81,6 +81,8 @@ def descriptor_matches(descriptor: object, root: Path) -> bool:
             return False
         for field in ("capabilities", "prohibited"):
             values = entry.get(field) if field in entry else ([] if field == "capabilities" else None)
+            if field == "capabilities" and values is None:
+                values = []
             if field == "prohibited" and values is None:
                 return False
             if not isinstance(values, list) or any(not isinstance(value, str) or not value.strip() for value in values):

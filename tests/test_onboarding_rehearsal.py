@@ -133,11 +133,30 @@ def test_rehearsal_rejects_incomplete_descriptor_and_blank_runtime(tmp_path: Pat
     workspace, ops = make_install(tmp_path)
     descriptor = json.loads((workspace / "config/workspace-descriptor.json").read_text())
     descriptor["workspace_root_is_plain_folder"] = False
-    descriptor["master_seat"] = ""
-    descriptor["repositories"] = [{}]
     (workspace / "config/workspace-descriptor.json").write_text(json.dumps(descriptor))
     (workspace / "config/instance-runtime.json").write_text(json.dumps({"master_host_runtime": "  "}))
     payload = report(run(workspace, ops, "--json"))
     statuses = {row["id"]: row["status"] for row in payload["results"]}
     assert statuses["P05"] == "FAIL"
     assert statuses["P06"] == "FAIL"
+
+
+def test_rehearsal_rejects_empty_descriptor_fields(tmp_path: Path):
+    workspace, ops = make_install(tmp_path)
+    descriptor = json.loads((workspace / "config/workspace-descriptor.json").read_text())
+    descriptor["master_seat"] = ""
+    descriptor["repositories"] = [{}]
+    (workspace / "config/workspace-descriptor.json").write_text(json.dumps(descriptor))
+    payload = report(run(workspace, ops, "--json"))
+    statuses = {row["id"]: row["status"] for row in payload["results"]}
+    assert statuses["P05"] == "FAIL"
+
+
+def test_rehearsal_accepts_null_capabilities_default(tmp_path: Path):
+    workspace, ops = make_install(tmp_path)
+    descriptor = json.loads((workspace / "config/workspace-descriptor.json").read_text())
+    descriptor["repositories"][0]["capabilities"] = None
+    (workspace / "config/workspace-descriptor.json").write_text(json.dumps(descriptor))
+    payload = report(run(workspace, ops, "--json"))
+    statuses = {row["id"]: row["status"] for row in payload["results"]}
+    assert statuses["P05"] == "PASS"

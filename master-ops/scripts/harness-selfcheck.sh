@@ -5,16 +5,22 @@
 set -e
 
 WORKSPACE_ROOT="{{WORKSPACE_ROOT}}"
-OPS_REPO="mogui-master-ops"
+OPS_REPO="{{OPS_REPO}}"
 # Anchor every repo-relative path on this script's own location, not on the
 # invoking cwd. The boot card runs some commands from the workspace root and
 # this one used to demand the ops repo, so no single directory satisfied the
 # card end to end and a successor following it in order hit a false failure.
 # The seat verdict still comes from ORCA_WORKSPACE_ID, never from $PWD.
 OPS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Basename of the ops repository path — used only for tracker resolution strings.
+OPS_BASENAME="$(basename "$OPS_REPO")"
+if [ "$OPS_BASENAME" = "{{OPS_REPO}}" ] || [ -z "$OPS_BASENAME" ]; then
+  OPS_BASENAME="$(basename "$OPS_DIR")"
+fi
 SETTINGS_FILE="$WORKSPACE_ROOT/.claude/settings.json"
 SKILLS_DISCOVERY_PATH="$WORKSPACE_ROOT/.claude/skills"
 HOOKS_REPO_DIR="$OPS_DIR/scripts/hooks"
+TEMPLATE_CHECK="$OPS_DIR/scripts/template-check"
 
 exit_code=0
 
@@ -232,19 +238,56 @@ fi
 cd "$WORKSPACE_ROOT" || exit 2
 tracker_out=$(bd where 2>&1)
 case "$tracker_out" in
-  *mogui-master-ops/.beads*) echo "Tracker: resolves to mogui-master-ops/.beads" ;;
+  *"$OPS_BASENAME"/.beads*) echo "Tracker: resolves to $OPS_BASENAME/.beads" ;;
   *)
     echo "Tracker: does not resolve to ops repo"
     exit_code=1
     ;;
 esac
 
-if [ -n "$BEADS_DIR" ] && [ "$BEADS_DIR" != "$OPS_REPO/.beads" ]; then
-  # Check BEADS_DIR relative to workspace
-  if ! echo "$BEADS_DIR" | grep -q "mogui-master-ops/.beads"; then
+if [ -n "$BEADS_DIR" ] && [ "$BEADS_DIR" != "$OPS_REPO/.beads" ] && [ "$BEADS_DIR" != "$OPS_DIR/.beads" ]; then
+  if ! echo "$BEADS_DIR" | grep -q "$OPS_BASENAME/.beads"; then
     echo "Tracker: BEADS_DIR points outside ops repo: $BEADS_DIR"
     exit_code=1
   fi
+fi
+
+# --- Template currency check ---
+# Attachment point for Upgrade mode: runs at every master boot so nobody has to
+# remember to compare the install to the template. Report-only here; apply is
+# owned by onboarding/upgrade.md and scripts/template-apply.
+if [ -x "$TEMPLATE_CHECK" ]; then
+  template_json=$("$TEMPLATE_CHECK" --ops "$OPS_DIR" --json 2>/dev/null) || template_rc=$?
+  template_rc=${template_rc:-0}
+  if [ -z "$template_json" ]; then
+    echo "Template: undecided (template-check produced no report)"
+    exit_code=1
+  else
+    template_line=$(
+      TEMPLATE_JSON="$template_json" TEMPLATE_RC="$template_rc" python3 - <<'EOF'
+import json, os
+data = json.loads(os.environ["TEMPLATE_JSON"])
+rc = int(os.environ["TEMPLATE_RC"])
+ver = data.get("installed_version") or "undeterminable"
+absent = len(data.get("absent_required") or [])
+unknown = len(data.get("unknown_present") or [])
+status = data.get("manifest_status") or "?"
+if rc == 0 and status == "ok" and absent == 0:
+    print(f"Template: {ver} (manifest ok, shape matches)")
+elif status == "absent":
+    print(f"Template: no MANIFEST.json (run Upgrade mode; absent shape signals a pre-manifest install)")
+else:
+    print(f"Template: {ver} (manifest={status}, absent={absent}, unknown={unknown}) — run Upgrade mode")
+EOF
+    )
+    echo "$template_line"
+    if [ "$template_rc" -ne 0 ]; then
+      exit_code=1
+    fi
+  fi
+else
+  echo "Template: undecided (scripts/template-check missing or not executable)"
+  exit_code=1
 fi
 
 exit "$exit_code"

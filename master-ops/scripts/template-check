@@ -1,0 +1,366 @@
+#!/usr/bin/env python3
+"""Report how an ops install compares to its template manifest.
+
+Exit status contract (fails closed; exit 2 is never collapsed to 0):
+  0  checked and current / no drift
+  1  checked and drift or behind
+  2  could not check (missing or malformed inputs)
+
+Two report sets exist. The report always states which set was produced:
+
+  install-manifest  — installed version, absent required paths, unknown paths
+  template-compare  — the above plus template version and CHANGELOG adoption notes
+
+`--template` also lets this run from the template side against an arbitrary ops
+path, so an install too old to contain this script is still checkable.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+from pathlib import Path
+
+INSTANCE_OWNED_PREFIXES = (
+    "docs/lineage/",
+    ".beads/",
+    "config/",
+    "contracts/",
+)
+INSTANCE_OWNED_EXACT = frozenset(
+    {
+        "docs/runbooks/role-state.md",
+    }
+)
+
+# Template-side paths that never install. Present on the authoring skeleton;
+# never reported as "unknown" when someone points --ops at the skeleton itself.
+TEMPLATE_SIDE_FILES = frozenset(
+    {
+        "TEMPLATE-VERSION",
+        "CHANGELOG.md",
+        "ONBOARDING.md",
+    }
+)
+TEMPLATE_SIDE_DIRS = frozenset(
+    {
+        "onboarding",
+    }
+)
+
+PLACEHOLDERS = (
+    "{{WORKSPACE_NAME}}",
+    "{{WORKSPACE_ROOT}}",
+    "{{OPS_REPO}}",
+    "{{MONITOR_NS}}",
+    "{{MODEL_ID}}",
+    "{{REPO_LIST}}",
+    "{{RUNTIME_ROOT}}",
+    "{{TEMPLATE_VERSION}}",
+)
+
+
+def _die(msg: str, code: int = 2) -> int:
+    sys.stderr.write(f"template-check: {msg}\n")
+    return code
+
+
+def resolve_ops_root(ops: Path | None, script_path: Path) -> Path | None:
+    if ops is not None:
+        return ops.resolve()
+    # Script lives at <ops>/scripts/template-check when installed.
+    candidate = script_path.resolve().parent.parent
+    if (candidate / "MANIFEST.json").is_file() or (candidate / "docs").is_dir():
+        return candidate
+    return None
+
+
+def resolve_template_root(template: Path | None) -> Path | None:
+    if template is None:
+        return None
+    path = template.resolve()
+    if (path / "MANIFEST.json").is_file() and (path / "TEMPLATE-VERSION").is_file():
+        return path
+    nested = path / "master-ops"
+    if (nested / "MANIFEST.json").is_file() or (nested / "TEMPLATE-VERSION").is_file():
+        return nested
+    if path.is_dir():
+        return path
+    return None
+
+
+def load_manifest(path: Path) -> tuple[dict | None, str | None]:
+    if not path.is_file():
+        return None, "manifest absent"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return None, f"manifest malformed: {exc}"
+    if not isinstance(data, dict):
+        return None, "manifest malformed: root is not an object"
+    if "files" not in data or not isinstance(data["files"], list):
+        return None, "manifest malformed: missing files list"
+    return data, None
+
+
+def list_present_paths(root: Path) -> set[str]:
+    present: set[str] = set()
+    if not root.is_dir():
+        return present
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        # Skip VCS / tracker internals for unknown-path reporting noise control,
+        # but still refuse them by name on apply.
+        rel = path.relative_to(root).as_posix()
+        if rel.startswith(".git/") or rel.startswith(".beads/"):
+            continue
+        present.add(rel)
+    return present
+
+
+def is_instance_owned(rel: str) -> bool:
+    if rel in INSTANCE_OWNED_EXACT:
+        return True
+    return any(rel == p.rstrip("/") or rel.startswith(p) for p in INSTANCE_OWNED_PREFIXES)
+
+
+def is_template_side(rel: str) -> bool:
+    if rel in TEMPLATE_SIDE_FILES:
+        return True
+    top = rel.split("/", 1)[0]
+    return top in TEMPLATE_SIDE_DIRS
+
+
+def read_template_version(template_root: Path) -> str | None:
+    version_file = template_root / "TEMPLATE-VERSION"
+    if version_file.is_file():
+        return version_file.read_text(encoding="utf-8").strip() or None
+    manifest, _ = load_manifest(template_root / "MANIFEST.json")
+    if manifest:
+        return manifest.get("template_version")
+    return None
+
+
+def parse_changelog_sections(text: str) -> list[tuple[str, str]]:
+    """Return [(version_heading, body), ...] newest first where possible."""
+    # Match ## v0.4.4 or ## [0.4.4] or ## Unreleased
+    pattern = re.compile(r"^##\s+(\[?[^\]]+\]?)\s*$", re.MULTILINE)
+    matches = list(pattern.finditer(text))
+    sections: list[tuple[str, str]] = []
+    for i, match in enumerate(matches):
+        heading = match.group(1).strip().strip("[]")
+        start = match.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        body = text[start:end].strip()
+        sections.append((heading, body))
+    return sections
+
+
+def adoption_notes_newer_than(changelog: Path, installed: str | None) -> list[dict]:
+    if not changelog.is_file():
+        return []
+    text = changelog.read_text(encoding="utf-8")
+    sections = parse_changelog_sections(text)
+    notes: list[dict] = []
+    for heading, body in sections:
+        if heading.lower() == "unreleased":
+            notes.append({"version": heading, "body": body})
+            continue
+        if installed is None:
+            notes.append({"version": heading, "body": body})
+            continue
+        # Include sections that are not the installed version. Ordering in the
+        # file is newest-first under Unreleased then released tags; stop once
+        # the installed tag heading is reached.
+        if heading == installed or heading == installed.lstrip("v") or f"v{heading}" == installed:
+            break
+        notes.append({"version": heading, "body": body})
+    return notes
+
+
+def build_report(
+    ops_root: Path,
+    template_root: Path | None,
+) -> tuple[dict, int]:
+    """Return (report, exit_code)."""
+    report: dict = {
+        "report_set": "install-manifest",
+        "ops_root": str(ops_root),
+        "installed_version": None,
+        "manifest_status": "ok",
+        "absent_required": [],
+        "unknown_present": [],
+        "template_version": None,
+        "adoption_notes": [],
+        "questions_unanswered": [],
+    }
+
+    manifest_path = ops_root / "MANIFEST.json"
+    manifest, err = load_manifest(manifest_path)
+    present = list_present_paths(ops_root)
+
+    if err == "manifest absent":
+        report["manifest_status"] = "absent"
+        report["questions_unanswered"].append(
+            "installed version undeterminable (no MANIFEST.json); compare by content presence only"
+        )
+        # Without a manifest, still emit a useful presence table when template given.
+        required: list[str] = []
+        installed_version = None
+    elif err:
+        report["manifest_status"] = "malformed"
+        report["questions_unanswered"].append(err)
+        return report, 2
+    else:
+        assert manifest is not None
+        required = [str(p) for p in manifest["files"]]
+        installed_version = manifest.get("template_version")
+        report["installed_version"] = installed_version
+
+    if required:
+        absent = sorted(p for p in required if p not in present)
+        unknown = sorted(
+            p
+            for p in present
+            if p not in required
+            and not is_instance_owned(p)
+            and not is_template_side(p)
+            and p != "MANIFEST.json"
+        )
+        # If MANIFEST is required and present, fine; if required list lacks it on
+        # old generators, do not flag it as unknown.
+        report["absent_required"] = absent
+        report["unknown_present"] = unknown
+
+    exit_code = 0
+    if report["manifest_status"] == "absent":
+        exit_code = 1  # checkable-but-undetermined shape still reports; not exit 2
+    if report["absent_required"] or report["unknown_present"]:
+        exit_code = 1
+
+    if template_root is not None:
+        report["report_set"] = "template-compare"
+        if not template_root.is_dir():
+            report["questions_unanswered"].append(
+                f"template path unreadable: {template_root}"
+            )
+            return report, 2
+        t_version = read_template_version(template_root)
+        report["template_version"] = t_version
+        t_manifest, t_err = load_manifest(template_root / "MANIFEST.json")
+        if t_err and t_err != "manifest absent":
+            report["questions_unanswered"].append(f"template {t_err}")
+            return report, 2
+        if t_manifest:
+            t_required = [str(p) for p in t_manifest["files"]]
+            # Recompute absence against template manifest (authoritative current set).
+            report["absent_required"] = sorted(p for p in t_required if p not in present)
+            report["unknown_present"] = sorted(
+                p
+                for p in present
+                if p not in t_required
+                and not is_instance_owned(p)
+                and not is_template_side(p)
+            )
+            if report["absent_required"] or report["unknown_present"]:
+                exit_code = 1
+            if installed_version and t_version and installed_version != t_version:
+                exit_code = 1
+            elif report["manifest_status"] == "absent":
+                exit_code = 1
+        elif report["manifest_status"] == "absent":
+            # Template has no manifest either: presence table only from walking
+            # the template skeleton with the same exclusion rules is not available
+            # here without the generator; report what we can.
+            exit_code = 1
+
+        changelog = template_root / "CHANGELOG.md"
+        report["adoption_notes"] = adoption_notes_newer_than(
+            changelog, report["installed_version"]
+        )
+        if report["adoption_notes"] and report["installed_version"] != t_version:
+            exit_code = 1
+
+    if report["questions_unanswered"] and report["manifest_status"] == "malformed":
+        return report, 2
+
+    return report, exit_code
+
+
+def format_human(report: dict) -> str:
+    lines: list[str] = []
+    lines.append(f"report_set: {report['report_set']}")
+    lines.append(f"ops: {report['ops_root']}")
+    lines.append(f"manifest: {report['manifest_status']}")
+    ver = report.get("installed_version") or "(undeterminable)"
+    lines.append(f"installed_version: {ver}")
+    if report["report_set"] == "template-compare":
+        tver = report.get("template_version") or "(unreadable)"
+        lines.append(f"template_version: {tver}")
+    absent = report.get("absent_required") or []
+    unknown = report.get("unknown_present") or []
+    lines.append(f"absent_required: {len(absent)}")
+    for p in absent:
+        lines.append(f"  - {p}")
+    lines.append(f"unknown_present: {len(unknown)}")
+    for p in unknown:
+        lines.append(f"  - {p}")
+    notes = report.get("adoption_notes") or []
+    if report["report_set"] == "template-compare":
+        lines.append(f"adoption_notes: {len(notes)} section(s)")
+        for note in notes:
+            lines.append(f"  ## {note['version']}")
+            body = note.get("body") or ""
+            preview = body.splitlines()[:8]
+            for bl in preview:
+                lines.append(f"    {bl}")
+            if len(body.splitlines()) > 8:
+                lines.append("    …")
+    unanswered = report.get("questions_unanswered") or []
+    if unanswered:
+        lines.append("questions_unanswered:")
+        for q in unanswered:
+            lines.append(f"  - {q}")
+    return "\n".join(lines) + "\n"
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--ops",
+        type=Path,
+        default=None,
+        help="Ops repository root (default: parent of this script's directory)",
+    )
+    parser.add_argument(
+        "--template",
+        type=Path,
+        default=None,
+        help="Template master-ops path or ADE clone root for comparison",
+    )
+    parser.add_argument("--json", action="store_true", help="Emit JSON")
+    args = parser.parse_args(argv)
+
+    script_path = Path(__file__)
+    ops_root = resolve_ops_root(args.ops, script_path)
+    if ops_root is None or not ops_root.is_dir():
+        return _die("ops root unreadable; pass --ops <path>", 2)
+
+    template_root = resolve_template_root(args.template)
+    if args.template is not None and template_root is None:
+        return _die(f"template path unreadable: {args.template}", 2)
+
+    report, code = build_report(ops_root, template_root)
+    if args.json:
+        json.dump(report, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+    else:
+        sys.stdout.write(format_human(report))
+    return code
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

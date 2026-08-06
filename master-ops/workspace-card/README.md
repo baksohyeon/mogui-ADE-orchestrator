@@ -4,7 +4,7 @@
 
 This is not the ops repository's own agent instruction file pair (`CLAUDE.md` / `AGENTS.md` at the ops repository root). Those files describe how an agent works *inside* the ops repository. This card is the workspace-root session card. It is also not the owner-facing operating card printed in onboarding step 10.
 
-Owner decision, 2026-08-05: the card lives here (in the ops repository after install; in the Stage 1 skeleton as `master-ops/workspace-card/`) and onboarding deploys a copy to the workspace root. The workspace root is a container for the product checkouts and is not itself a git repository, so a card kept only at the root is versioned nowhere, backed up nowhere, and shipped to a fresh install nowhere. That was the measured state until this directory existed.
+Owner decision, 2026-08-05: the card lives here (in the ops repository after install; in the Stage 1 skeleton as `workspace-card/`) and onboarding deploys a copy to the workspace root. The workspace root is a container for the product checkouts and is not itself a git repository, so a card kept only at the root is versioned nowhere, backed up nowhere, and shipped to a fresh install nowhere. That was the measured state until this directory existed.
 
 ## Editing
 

@@ -22,6 +22,12 @@ you build on it.
 
 ### Added
 
+- Upgrade mode for founded workspaces: give an ops path, detect template drift
+  via `master-ops/MANIFEST.json` + `scripts/template-check`, and apply
+  template-layer files through `scripts/template-apply` (dry-run first,
+  instance-owned paths refused by name). Router mode 3 and a boot-time
+  `Template:` line on `harness-selfcheck.sh` are the attachment points.
+
 - `dispatch-gate check --no-record` evaluates a dispatch decision without
   appending a ledger row or issuing a ticket. `master-ops/scripts/dispatch
   --check-only` uses it so dry runs do not spend the fan-out budget they are

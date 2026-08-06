@@ -74,6 +74,7 @@ def test_onboarding_inventory():
         "09-spawn.md",
         "10-card-and-retire.md",
         "reverify.md",
+        "upgrade.md",
     }
     assert set(indexed_files()) == expected, f"onboarding inventory drifted; expected {expected}"
 
@@ -100,9 +101,11 @@ def test_numbered_steps_carry_required_sections():
             assert "Verify" in text, f"{name} has no Verify section"
             assert "Owner script" in text, f"{name} has no Owner script block"
         else:
-            # reverify.md is a mode file, not a numbered step: its body IS the
-            # verification, structured as Checklist + Report.
+            # reverify.md / upgrade.md are mode files, not numbered steps: body
+            # is Checklist + Report (and Upgrade inherits the no-spawn block).
             assert "Checklist" in text and "Report" in text, f"{name} lost its Checklist/Report structure"
+            if name == "upgrade.md":
+                assert "Standing block: do not spawn" in text
 
 
 def test_only_allowed_placeholders():

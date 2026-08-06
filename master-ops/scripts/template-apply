@@ -1,0 +1,337 @@
+#!/usr/bin/env python3
+"""Apply template-layer files onto an ops install, gated by the template manifest.
+
+Always dry-runs first: prints the exact file list and the reason for each entry.
+A write pass requires an interactive confirmation phrase. There is no --yes.
+
+Instance-owned paths are refused by name:
+  docs/lineage/, docs/runbooks/role-state.md, .beads/, config/, contracts/,
+  and anything the manifest does not claim.
+
+Per-file outcomes: written | skipped-as-instance-owned | skipped-as-unknown |
+planned | refused-not-in-manifest.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+# Keep refusal names identical to template-check.
+INSTANCE_OWNED_PREFIXES = (
+    "docs/lineage/",
+    ".beads/",
+    "config/",
+    "contracts/",
+)
+INSTANCE_OWNED_EXACT = frozenset(
+    {
+        "docs/runbooks/role-state.md",
+    }
+)
+
+PLACEHOLDERS = (
+    "{{WORKSPACE_NAME}}",
+    "{{WORKSPACE_ROOT}}",
+    "{{OPS_REPO}}",
+    "{{MONITOR_NS}}",
+    "{{MODEL_ID}}",
+    "{{REPO_LIST}}",
+    "{{RUNTIME_ROOT}}",
+    "{{TEMPLATE_VERSION}}",
+)
+
+CONFIRM_PHRASE = "apply"
+
+
+def is_instance_owned(rel: str) -> bool:
+    if rel in INSTANCE_OWNED_EXACT:
+        return True
+    return any(rel == p.rstrip("/") or rel.startswith(p) for p in INSTANCE_OWNED_PREFIXES)
+
+
+def load_manifest(path: Path) -> dict:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or not isinstance(data.get("files"), list):
+        raise ValueError("manifest missing files list")
+    return data
+
+
+def resolve_template_root(template: Path) -> Path:
+    path = template.resolve()
+    if (path / "MANIFEST.json").is_file():
+        return path
+    nested = path / "master-ops"
+    if (nested / "MANIFEST.json").is_file():
+        return nested
+    raise FileNotFoundError(f"no MANIFEST.json under {template}")
+
+
+def substitute(text: str, values: dict[str, str]) -> str:
+    out = text
+    for key in PLACEHOLDERS:
+        name = key[2:-2]
+        if key in out and name in values:
+            out = out.replace(key, values[name])
+    return out
+
+
+def plan_actions(
+    template_root: Path,
+    ops_root: Path,
+    manifest: dict,
+    extra_targets: list[str] | None,
+) -> list[dict]:
+    """Build the per-path plan. extra_targets are attempted writes outside the
+    manifest — used only to prove refusal in tests; normal runs pass None."""
+    claimed = {str(p) for p in manifest["files"]}
+    actions: list[dict] = []
+
+    for rel in sorted(claimed):
+        if is_instance_owned(rel):
+            actions.append(
+                {
+                    "path": rel,
+                    "action": "skipped-as-instance-owned",
+                    "reason": "instance-owned by name",
+                }
+            )
+            continue
+        src = template_root / rel
+        if not src.is_file():
+            actions.append(
+                {
+                    "path": rel,
+                    "action": "skipped-as-unknown",
+                    "reason": "listed in manifest but missing from template tree",
+                }
+            )
+            continue
+        dest = ops_root / rel
+        if dest.is_file():
+            reason = "template-layer path; would overwrite existing file"
+        else:
+            reason = "template-layer path; would create missing file"
+        actions.append(
+            {
+                "path": rel,
+                "action": "planned",
+                "reason": reason,
+            }
+        )
+
+    for rel in extra_targets or []:
+        if is_instance_owned(rel):
+            actions.append(
+                {
+                    "path": rel,
+                    "action": "skipped-as-instance-owned",
+                    "reason": "instance-owned by name",
+                }
+            )
+        elif rel not in claimed:
+            actions.append(
+                {
+                    "path": rel,
+                    "action": "refused-not-in-manifest",
+                    "reason": "manifest does not claim this path",
+                }
+            )
+        # If it is claimed, it already appears above.
+    return actions
+
+
+def apply_planned(
+    template_root: Path,
+    ops_root: Path,
+    actions: list[dict],
+    values: dict[str, str],
+) -> list[dict]:
+    results: list[dict] = []
+    for item in actions:
+        rel = item["path"]
+        if item["action"] != "planned":
+            results.append(
+                {
+                    "path": rel,
+                    "action": item["action"],
+                    "reason": item["reason"],
+                }
+            )
+            continue
+        src = template_root / rel
+        dest = ops_root / rel
+        text = src.read_text(encoding="utf-8")
+        text = substitute(text, values)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(text, encoding="utf-8")
+        # Preserve executable bit for scripts without a suffix or with shebang.
+        if src.stat().st_mode & 0o111:
+            dest.chmod(dest.stat().st_mode | 0o111)
+        results.append(
+            {
+                "path": rel,
+                "action": "written",
+                "reason": item["reason"],
+            }
+        )
+    return results
+
+
+def format_plan(actions: list[dict]) -> str:
+    lines = ["dry-run plan (no writes):", f"entries: {len(actions)}"]
+    for item in actions:
+        lines.append(f"  {item['action']}: {item['path']} — {item['reason']}")
+    return "\n".join(lines) + "\n"
+
+
+def parse_placeholder_args(items: list[str] | None) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for item in items or []:
+        if "=" not in item:
+            raise SystemExit(f"template-apply: expected KEY=VALUE, got {item!r}")
+        key, value = item.split("=", 1)
+        key = key.strip()
+        if f"{{{{{key}}}}}" not in PLACEHOLDERS:
+            raise SystemExit(
+                f"template-apply: unknown placeholder {key!r}; "
+                f"allowed: {', '.join(p[2:-2] for p in PLACEHOLDERS)}"
+            )
+        values[key] = value
+    return values
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--ops",
+        type=Path,
+        required=True,
+        help="Target ops repository root",
+    )
+    parser.add_argument(
+        "--template",
+        type=Path,
+        required=True,
+        help="Template master-ops path or ADE clone root",
+    )
+    parser.add_argument(
+        "--placeholder",
+        action="append",
+        default=[],
+        help="KEY=VALUE for documented placeholders (repeatable)",
+    )
+    parser.add_argument(
+        "--write",
+        action="store_true",
+        help="After printing the plan, prompt for confirmation and write",
+    )
+    parser.add_argument(
+        "--attempt",
+        action="append",
+        default=[],
+        help=argparse.SUPPRESS,  # test-only: attempt a path to prove refusal
+    )
+    parser.add_argument(
+        "--confirm-input",
+        default=None,
+        help=argparse.SUPPRESS,  # test-only: feed confirmation without a TTY
+    )
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args(argv)
+
+    ops_root = args.ops.resolve()
+    if not ops_root.is_dir():
+        sys.stderr.write(f"template-apply: ops root not a directory: {ops_root}\n")
+        return 2
+
+    try:
+        template_root = resolve_template_root(args.template)
+    except FileNotFoundError as exc:
+        sys.stderr.write(f"template-apply: {exc}\n")
+        return 2
+
+    try:
+        manifest = load_manifest(template_root / "MANIFEST.json")
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        sys.stderr.write(f"template-apply: cannot read template manifest: {exc}\n")
+        return 2
+
+    try:
+        values = parse_placeholder_args(args.placeholder)
+    except SystemExit as exc:
+        return int(exc.code) if isinstance(exc.code, int) else 2
+
+    # Default TEMPLATE_VERSION from the template when not supplied.
+    if "TEMPLATE_VERSION" not in values:
+        version_file = template_root / "TEMPLATE-VERSION"
+        if version_file.is_file():
+            values["TEMPLATE_VERSION"] = version_file.read_text(encoding="utf-8").strip()
+
+    actions = plan_actions(template_root, ops_root, manifest, args.attempt)
+
+    # Always surface the plan before any write. Human mode prints it on stdout;
+    # JSON mode keeps stdout machine-readable and puts the plan on stderr when
+    # a write pass will follow.
+    plan_text = format_plan(actions)
+    if args.json:
+        if not args.write:
+            json.dump({"phase": "dry-run", "actions": actions}, sys.stdout, indent=2)
+            sys.stdout.write("\n")
+        else:
+            sys.stderr.write(plan_text)
+    else:
+        sys.stdout.write(plan_text)
+
+    refused = [
+        a
+        for a in actions
+        if a["action"]
+        in (
+            "skipped-as-instance-owned",
+            "refused-not-in-manifest",
+        )
+        and a["path"] in set(args.attempt)
+    ]
+    if args.attempt and refused and not args.write:
+        # Attempt-only dry-run that includes a refused path: exit 1 so tests
+        # can assert the refusal status as a number.
+        return 1
+
+    if not args.write:
+        return 0
+
+    # Interactive confirmation — no --yes.
+    prompt = (
+        f"Type {CONFIRM_PHRASE!r} to write template-layer files "
+        f"into {ops_root}: "
+    )
+    if args.confirm_input is not None:
+        answer = args.confirm_input
+    else:
+        try:
+            answer = input(prompt)
+        except EOFError:
+            sys.stderr.write("template-apply: no confirmation (EOF); aborting\n")
+            return 2
+    if answer.strip() != CONFIRM_PHRASE:
+        sys.stderr.write("template-apply: confirmation declined; no writes\n")
+        return 2
+
+    results = apply_planned(template_root, ops_root, actions, values)
+    if args.json:
+        json.dump({"phase": "write", "actions": results}, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+    else:
+        sys.stdout.write("write results:\n")
+        for item in results:
+            sys.stdout.write(
+                f"  {item['action']}: {item['path']} — {item['reason']}\n"
+            )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

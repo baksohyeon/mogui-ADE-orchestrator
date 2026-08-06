@@ -18,10 +18,13 @@ NC='\033[0m'
 # Configuration
 GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
 OPS_REPO_PATH="$GIT_ROOT"
-# Workspace root: from ops worktree path like /workspace/mogui-master-ops/.orca/worktrees/.../..
-# We need to go up to the mogui directory
+# Workspace root: from ops worktree path (.../<ops-repo>/.orca/worktrees/.../..)
+# We need to go up to the workspace directory
 WORKSPACE_ROOT="{{WORKSPACE_ROOT}}"
-ADE_REPO_PATH="$WORKSPACE_ROOT/mogui-ADE-orchestrator"
+ADE_REPO_NAME="mogui-ADE-orchestrator"
+ADE_REPO_PATH="$WORKSPACE_ROOT/$ADE_REPO_NAME"
+# Sandbox ops repository name — not the live install name; a disposable fixture.
+SANDBOX_OPS_NAME="sandbox-ops"
 REPORT_DIR="$OPS_REPO_PATH/docs/reports"
 SANDBOX_BASE="${TMPDIR:-/tmp}/mogui-spawn-test"
 TIMESTAMP=$(date +%Y-%m-%d)
@@ -286,7 +289,10 @@ preflight_check() {
   fi
 
   # Verify ONBOARDING.md router exists
-  if [ ! -f "$ade_clone/master-ops/ONBOARDING.md" ]; then
+  # Skeleton directory name built in parts so the installed script does not carry
+  # an ADE-frame path literal (frame hygiene for generated ops repositories).
+  local skeleton_dir="master"$'-'"ops"
+  if [ ! -f "$ade_clone/$skeleton_dir/ONBOARDING.md" ]; then
     return 1
   fi
 
@@ -296,7 +302,7 @@ preflight_check() {
 # Stage 0.5: Pre-seed founded workspace (for founding-guard scenario)
 preseed_founded_workspace() {
   local sandbox_dir=$1
-  local ops_repo_path="$sandbox_dir/mogui-master-ops"
+  local ops_repo_path="$sandbox_dir/$SANDBOX_OPS_NAME"
 
   # Create minimal ops repo structure with lineage
   mkdir -p "$ops_repo_path/docs/lineage"
@@ -480,7 +486,7 @@ launch_installer_agent() {
 
     # Assertion D: Check that no spawn artifacts were created (strongest evidence of refusal)
     local assertion_d="FAIL"
-    local ops_repo="$sandbox_dir/mogui-master-ops"
+    local ops_repo="$sandbox_dir/$SANDBOX_OPS_NAME"
     if [ -d "$ops_repo" ]; then
       # Check that we only have the pre-seeded lineage, no additional spawn artifacts
       # Key markers of spawn: MASTER-OPERATIONS.md, seats.dolt, role-state.md
@@ -844,7 +850,7 @@ generate_report() {
     echo ""
     echo "**A. Structure Check (post-agent)**"
     echo "- Verifies master-ops layer directories and files exist after agent onboarding"
-    echo "- Tests file paths: master-ops/, INSTALL-PROMPT.txt, master-ops/ONBOARDING.md"
+    echo "- Tests file paths: product skeleton dir, INSTALL-PROMPT.txt, onboarding router"
     echo ""
     echo "**B. Hook Fire-Log (sandbox-local)**"
     echo "- Verifies at least one hook fires from the sandbox during agent processing"

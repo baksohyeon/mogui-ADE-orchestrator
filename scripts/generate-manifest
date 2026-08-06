@@ -1,0 +1,176 @@
+#!/usr/bin/env python3
+"""Generate master-ops/MANIFEST.json from the Stage 1 skeleton.
+
+The install exclusion list lives here, not in onboarding prose. Regenerating
+must be a no-op when the committed manifest is current; tests assert that.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SKELETON = REPO_ROOT / "master-ops"
+DEFAULT_OUT = SKELETON / "MANIFEST.json"
+TEMPLATE_VERSION_FILE = SKELETON / "TEMPLATE-VERSION"
+
+# Files and directories that stay on the template side and never install.
+# Keep this list as the single executable source for Step 3 of onboarding.
+EXCLUDE_FILES = frozenset(
+    {
+        "TEMPLATE-VERSION",
+        "CHANGELOG.md",
+        "ONBOARDING.md",
+    }
+)
+EXCLUDE_DIRS = frozenset(
+    {
+        "onboarding",
+    }
+)
+
+# Frame hygiene: installed files must not teach ADE-frame paths or bake in the
+# authoring ops repository name (design defects ② and ③).
+AUTHORING_OPS_NAME = "mogui-master-ops"
+FRAME_PATH_NEEDLE = "master-ops/"
+
+
+def iter_install_paths(skeleton: Path) -> list[str]:
+    paths: list[str] = []
+    for path in sorted(skeleton.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(skeleton).as_posix()
+        top = rel.split("/", 1)[0]
+        if rel in EXCLUDE_FILES or top in EXCLUDE_DIRS:
+            continue
+        paths.append(rel)
+    # MANIFEST.json is generated into the skeleton and is installed.
+    if "MANIFEST.json" not in paths:
+        paths.append("MANIFEST.json")
+        paths.sort()
+    return paths
+
+
+def read_template_version(skeleton: Path) -> str:
+    version_path = skeleton / "TEMPLATE-VERSION"
+    if not version_path.is_file():
+        raise SystemExit(f"generate-manifest: missing {version_path}")
+    version = version_path.read_text(encoding="utf-8").strip()
+    if not version:
+        raise SystemExit("generate-manifest: TEMPLATE-VERSION is empty")
+    return version
+
+
+def check_frame_hygiene(skeleton: Path, install_paths: list[str]) -> list[str]:
+    """Return human-readable defect lines; empty means clean."""
+    defects: list[str] = []
+    for rel in install_paths:
+        if rel == "MANIFEST.json":
+            # Generated after the walk; may not exist yet on first run.
+            path = skeleton / rel
+            if not path.is_file():
+                continue
+        else:
+            path = skeleton / rel
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        if FRAME_PATH_NEEDLE in text:
+            defects.append(f"{rel}: contains {FRAME_PATH_NEEDLE!r} (ADE-frame path leak)")
+        if AUTHORING_OPS_NAME in text:
+            defects.append(
+                f"{rel}: contains authoring repository name {AUTHORING_OPS_NAME!r}"
+            )
+    return defects
+
+
+def build_manifest(skeleton: Path) -> dict:
+    version = read_template_version(skeleton)
+    files = iter_install_paths(skeleton)
+    defects = check_frame_hygiene(skeleton, [f for f in files if f != "MANIFEST.json"])
+    # Also check MANIFEST if present from a prior generation (should be clean).
+    if (skeleton / "MANIFEST.json").is_file():
+        defects.extend(check_frame_hygiene(skeleton, ["MANIFEST.json"]))
+    if defects:
+        sys.stderr.write("generate-manifest: frame hygiene failed\n")
+        for line in defects:
+            sys.stderr.write(f"  {line}\n")
+        raise SystemExit(1)
+    return {
+        "template_version": version,
+        "files": files,
+    }
+
+
+def render(manifest: dict) -> str:
+    return json.dumps(manifest, indent=2, sort_keys=False) + "\n"
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--skeleton",
+        type=Path,
+        default=SKELETON,
+        help="Path to the master-ops skeleton (default: repo master-ops/)",
+    )
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="Write path (default: <skeleton>/MANIFEST.json)",
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Exit 1 if committed MANIFEST.json differs from a fresh generate",
+    )
+    parser.add_argument(
+        "--stdout",
+        action="store_true",
+        help="Print the manifest to stdout instead of writing",
+    )
+    args = parser.parse_args(argv)
+
+    skeleton = args.skeleton.resolve()
+    if not skeleton.is_dir():
+        sys.stderr.write(f"generate-manifest: skeleton not a directory: {skeleton}\n")
+        return 2
+
+    try:
+        manifest = build_manifest(skeleton)
+    except SystemExit as exc:
+        return int(exc.code) if isinstance(exc.code, int) else 1
+
+    body = render(manifest)
+    out = args.out if args.out is not None else skeleton / "MANIFEST.json"
+
+    if args.check:
+        if not out.is_file():
+            sys.stderr.write(f"generate-manifest: missing committed manifest at {out}\n")
+            return 1
+        existing = out.read_text(encoding="utf-8")
+        if existing != body:
+            sys.stderr.write(
+                "generate-manifest: MANIFEST.json is stale; run scripts/generate-manifest\n"
+            )
+            return 1
+        return 0
+
+    if args.stdout:
+        sys.stdout.write(body)
+        return 0
+
+    out.write_text(body, encoding="utf-8")
+    rel_files = len(manifest["files"])
+    print(f"wrote {out} ({rel_files} paths, version {manifest['template_version']})")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

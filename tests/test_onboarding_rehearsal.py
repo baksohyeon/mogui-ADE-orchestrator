@@ -45,9 +45,9 @@ def run(workspace: Path, ops: Path, *extra: str) -> subprocess.CompletedProcess[
     # through bash on every OS; bash then invokes the Python interpreter rather
     # than treating this Python source as a shell program.
     # On Windows, the bare `python` name can resolve to the Microsoft Store
-    # shim inside Git Bash even after setup-python. Use this test process's
-    # concrete interpreter path instead.
-    interpreter = Path(sys.executable).as_posix()
+    # shim inside Git Bash even after setup-python. `python.exe` resolves the
+    # setup-python entry on PATH; Unix runners use their normal `python3`.
+    interpreter = "python.exe" if os.name == "nt" else "python3"
     command = [interpreter, SCRIPT.as_posix(), "--workspace-root", str(workspace),
                "--ops-repo", str(ops), *extra]
     return subprocess.run(["bash", "-c", shlex.join(command)],

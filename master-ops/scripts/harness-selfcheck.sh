@@ -242,6 +242,18 @@ if [ -n "$OPS_REPO" ] && [ "$OPS_REPO" != "{{OPS_REPO}}" ] && [ -d "$OPS_REPO/.b
   allowed_beads_2=$(cd "$OPS_REPO/.beads" 2>/dev/null && pwd -P)
 fi
 tracker_ok=0
+tracker_candidate_from_line() {
+  local tracker_candidate="$1"
+  # Preserve a real directory verbatim, including any colon in its path.
+  if [ ! -d "$tracker_candidate" ]; then
+    case "$tracker_candidate" in
+      *:[[:space:]]*) tracker_candidate="${tracker_candidate#*:}" ;;
+    esac
+  fi
+  tracker_candidate="${tracker_candidate#${tracker_candidate%%[![:space:]]*}}"
+  tracker_candidate="${tracker_candidate%${tracker_candidate##*[![:space:]]}}"
+  printf '%s\n' "$tracker_candidate"
+}
 # bd where first line is usually the beads path; accept if it realpaths to ops.
 tracker_path=$(printf '%s\n' "$tracker_out" | head -1 | tr -d '\r')
 if [ -n "$tracker_path" ] && [ -e "$tracker_path" ]; then
@@ -254,12 +266,7 @@ if [ "$tracker_ok" -ne 1 ]; then
   while IFS= read -r tracker_line; do
     # Some bd hosts prefix the path with a label. Accept only the path portion
     # and verify its real location; never infer identity from a name fragment.
-    tracker_candidate="$tracker_line"
-    case "$tracker_candidate" in
-      *:*) tracker_candidate="${tracker_candidate##*:}" ;;
-    esac
-    tracker_candidate="${tracker_candidate#${tracker_candidate%%[![:space:]]*}}"
-    tracker_candidate="${tracker_candidate%${tracker_candidate##*[![:space:]]}}"
+    tracker_candidate=$(tracker_candidate_from_line "$tracker_line")
     if [ -d "$tracker_candidate" ]; then
       tracker_real=$(cd "$tracker_candidate" 2>/dev/null && pwd -P || true)
       if [ -n "$tracker_real" ] && { [ "$tracker_real" = "$allowed_beads_1" ] || [ "$tracker_real" = "$allowed_beads_2" ]; }; then

@@ -52,6 +52,25 @@ EOF
 pass=0
 fail=0
 
+# Exercise the candidate-line parser directly without running the full self-check.
+eval "$(sed -n '/^tracker_candidate_from_line()/,/^}/p' "$SELFCHECK_BIN")"
+colon_path="$TMP/ops:colon/.beads"
+mkdir -p "$colon_path"
+if [ "$(tracker_candidate_from_line "$colon_path")" = "$colon_path" ]; then
+  echo "ok   — colon-bearing raw path is preserved"
+  pass=$((pass + 1))
+else
+  echo "FAIL — colon-bearing raw path is preserved"
+  fail=$((fail + 1))
+fi
+if [ "$(tracker_candidate_from_line "Tracker label: $colon_path")" = "$colon_path" ]; then
+  echo "ok   — labeled tracker path is extracted"
+  pass=$((pass + 1))
+else
+  echo "FAIL — labeled tracker path is extracted"
+  fail=$((fail + 1))
+fi
+
 run_seat() {
   ROLE_STATE_PATH="$TMP/role-state.md" \
   ORCA_DATA_PATH="$TMP/orca-data.json" \

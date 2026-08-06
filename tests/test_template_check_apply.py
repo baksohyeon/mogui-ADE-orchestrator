@@ -517,6 +517,8 @@ def test_frame_hygiene_guards_use_explicit_template_and_shared_skeleton_name():
     assert "OPS_DIR/../mogui-ADE-orchestrator" not in harness
     assert "Fallback text match" not in harness
     assert "while IFS= read -r tracker_line" in harness
+    assert 'if [ ! -d "$tracker_candidate" ]' in harness
+    assert '*:[[:space:]]*) tracker_candidate="${tracker_candidate#*:}"' in harness
     assert "basename" not in harness[harness.index("# --- Tracker check ---") : harness.index("# --- Template currency check ---")]
     assert 'SKELETON_DIR="master"$\'-\'"ops"' in spawn
     assert 'local ade_clone_path="$sandbox_dir/$ADE_REPO_NAME"' in spawn

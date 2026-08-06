@@ -17,7 +17,7 @@ try:
                 record = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if record.get("event") != "product_path_guard":
+            if record.get("event") != "product_path_guard" or record.get("tool_kind") != "bash":
                 continue
             if not record.get("command_class") or record.get("command_class") in {"file-tool", "file_tool", "empty"}:
                 continue

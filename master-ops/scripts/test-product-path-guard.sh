@@ -103,6 +103,18 @@ if [ ! -s "$TMP/home/.mogui/event-log.jsonl" ]; then
   echo "FAIL: event-log observation was not emitted" >&2
   exit 1
 fi
+python3 - "$TMP/home/.mogui/event-log.jsonl" <<'PY'
+import json, sys
+seen = set()
+for line in open(sys.argv[1], encoding="utf-8"):
+    record = json.loads(line)
+    if record.get("event") == "product_path_guard":
+        seen.add(record.get("tool_kind"))
+        if record.get("tool_kind") not in {"bash", "file"}:
+            raise SystemExit("FAIL: invalid product-path tool_kind")
+if seen != {"bash", "file"}:
+    raise SystemExit("FAIL: product-path tool_kind coverage incomplete")
+PY
 python3 - "$TMP/logs/fire.jsonl" <<'PY'
 import json, sys
 expected = {"ts", "hook", "event", "cwd", "runtime_hint", "session_kind"}

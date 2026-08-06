@@ -5,7 +5,7 @@ status: active
 # blame: PR#72 스테일 측정 재사용 병합
 
 - 일시: 2026-08-04 (병합 16:12:45Z, 적발 야간)
-- 당사자: 자비스 (mogui ops 마스터, Gen 1)
+- 당사자: mogui ops 마스터, Gen 1
 - 트리거: 오너 적발 — "PR 72 관련 리뷰어 봇 검증 안확인하고 머지했네?"
 
 ## 1. 유죄 1줄
@@ -15,7 +15,7 @@ status: active
 ## 2. 증거 타임라인
 
 - 15:5x — #72 스튜어드 워커가 GraphQL로 reviewThreads 빈 배열 측정 [관측: 워커 터미널 화면, gh api graphql 출력 `"nodes":[]`]
-- 16:00:46Z — cubic-dev-ai 리뷰 COMMENTED 제출 [관측: `gh api graphql`의 pullRequest.reviews.nodes.submittedAt]
+- 16:00:46Z — 리뷰 봇 COMMENTED 제출 [관측: `gh api graphql`의 pullRequest.reviews.nodes.submittedAt]
 - 16:12:45Z — 내가 `gh pr merge 72 --squash --delete-branch` 실행, 병합 성립 [관측: mergedAt]
 - 병합 전 내가 실측한 것: 체크 롤업, 본문 4부(pr-body-check exit 0), 로컬 게이트 450 passed [관측: 세션 기록]
 - 병합 전 내가 실측하지 않은 것: 병합 시점의 reviews/threads 재조회 — 0회 [관측: 세션에 해당 명령 없음]

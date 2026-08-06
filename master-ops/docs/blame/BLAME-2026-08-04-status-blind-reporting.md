@@ -5,7 +5,7 @@ status: active
 # blame: 종료 코드를 안 보고 출력만 읽어 없는 사실을 네 번 보고함
 
 - 일시: 2026-08-04 (Gen 2 세션 전반)
-- 당사자: 자비스 (mogui ops 마스터, Generation 2)
+- 당사자: mogui ops 마스터, Generation 2
 - 트리거: 오너 적발 4회 — 마지막이 "gh 인증 이미 해뒀잖아", 그 앞이 "야 너 blame 또 쓸래?"
 
 ## 1. 유죄

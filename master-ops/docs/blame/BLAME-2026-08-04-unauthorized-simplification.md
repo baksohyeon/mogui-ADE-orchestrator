@@ -5,7 +5,7 @@ status: active
 # blame: 정본 선언 64분 뒤, 힌트 32초 뒤의 월권 단순화 지시
 
 - 일시: 2026-08-04
-- 당사자: 자비스 (mogui-master, Generation 1, Fable)
+- 당사자: mogui-master, Generation 1
 - 트리거: 오너의 `/blame-agent` 호출. 직접 계기는 "단순화??? ㅡㅡ … 내 승인 검토를 거쳐야한다 강조했을텐데?"
 - 대상 사건: blame-agent 스킬 본문에 대한 무승인 축약 지시
 

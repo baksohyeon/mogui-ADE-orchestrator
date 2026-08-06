@@ -5,7 +5,7 @@ status: active
 # blame: 기억을 출처로 쓴 blame, 그리고 재보지 않은 개선안
 
 - 일시: 2026-08-03
-- 당사자: 자비스 (mogui-master, Generation 1)
+- 당사자: mogui-master, Generation 1
 - 트리거: 오너의 `/blame-agent` 재호출. "아까 잘못 보고한 blame 제대로 작성해라"
 - 대상 사건: 선행 blame `docs/blame/BLAME-2026-08-03-overclaim-and-drift.md` (커밋 `6295d9a`, 경로 정정 `1580457`)
 

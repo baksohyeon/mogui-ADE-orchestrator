@@ -5,12 +5,12 @@ status: active
 # blame: assignee 규칙이 적힌 줄을 두 번 띄우고 두 번 안 읽은 건
 
 - 일시: 2026-08-05
-- 당사자: 자비스 (mogui-master, Generation 5)
-- 트리거: 오너 지적 — ADE #94, ops #3 이 assignee 없이 병합됨
+- 당사자: mogui-master, Generation 5
+- 트리거: 오너 지적 — ADE `<tracker-id>`, ops `<tracker-id>` 이 assignee 없이 병합됨
 
 ## 1. 유죄 1줄
 
-계약과 병합 재계측 양쪽에서 assignee 규칙을 집행했어야 했으나, PR 2건(ADE #94, ops #3)을 assignee 없이 병합했고, 그 규칙이 적힌 줄을 같은 날 두 번 화면에 띄우고도 옮기지 않았다.
+계약과 병합 재계측 양쪽에서 assignee 규칙을 집행했어야 했으나, PR 2건(ADE `<tracker-id>`, ops `<tracker-id>`)을 assignee 없이 병합했고, 그 규칙이 적힌 줄을 같은 날 두 번 화면에 띄우고도 옮기지 않았다.
 
 ## 2. 증거 타임라인
 
@@ -18,15 +18,15 @@ status: active
 |---|---|---|---|
 | 1 | 오늘 계약 6건 작성, 전부 assignee 조항 없음 | contracts/2026-08-05-*.md 전수 grep 0건 | [관측] |
 | 2 | 제목 관례 확인차 contract-conventions.md 155–161행 출력 — 154행 "assignee set at creation"이 바로 위 | 세션 tool 출력 | [관측] |
-| 3 | 오너가 #93 제목 위반 지적 → Writing 블록 작성(63914e7): 4항, assignee 없음 | git log | [관측] |
-| 4 | #94 병합(e9de982), ops#3 병합(104effa1) — 재계측 쿼리는 isDraft·mergeable·스레드만 | 세션 graphql 쿼리 원문 | [관측] |
-| 5 | #91·#92엔 assignee 존재 — 원인 확인한 적 없음 | 미확인 | [관측 공백] |
+| 3 | 오너가 `<tracker-id>` 제목 위반 지적 → Writing 블록 작성(63914e7): 4항, assignee 없음 | git log | [관측] |
+| 4 | `<tracker-id>` 병합(e9de982), ops `<tracker-id>` 병합(104effa1) — 재계측 쿼리는 isDraft·mergeable·스레드만 | 세션 graphql 쿼리 원문 | [관측] |
+| 5 | `<tracker-id>`·`<tracker-id>`엔 assignee 존재 — 원인 확인한 적 없음 | 미확인 | [관측 공백] |
 | 6 | 오너 지적 후 소급 할당 | gh pr edit ×2 | [관측] |
 
 ## 3. 관측 공백
 
 - contract-conventions.md:154 — 그 문단을 두 번 읽으며 한 줄 위를 안 읽음.
-- #91·#92의 assignee가 왜 있는지 물은 적 없음. 있으면 원인을 안 묻고 없어야 묻는 비대칭.
+- `<tracker-id>`·`<tracker-id>`의 assignee가 왜 있는지 물은 적 없음. 있으면 원인을 안 묻고 없어야 묻는 비대칭.
 - 병합 재계측 항목을 D절 사고 목록에서만 가져오고 house rules에서 가져오지 않음.
 
 ## 4. 실패 분해
@@ -39,7 +39,7 @@ status: active
 ## 5. 변명 처형
 
 - "git author가 뻔히 있는데" → [관측] 154행 "assignee set at creation"이 오너 하우스 룰 명문. 기각.
-- "#91·#92엔 있었으니 자동인 줄" → [관측] 자동화 확인 기록 없음. 미확인을 가정으로 승격. 기각.
+- "`<tracker-id>`·`<tracker-id>`엔 있었으니 자동인 줄" → [관측] 자동화 확인 기록 없음. 미확인을 가정으로 승격. 기각.
 - "14조엔 스레드·draft만 명시" → [관측] 그 조항은 오늘 내가 번호 붙여 커밋한 문서. 저자가 조항의 한계를 몰랐다 할 수 없음. 기각.
 
 ## 6. 기여도

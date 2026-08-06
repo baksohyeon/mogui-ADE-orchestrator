@@ -18,9 +18,10 @@ FAIL_CLOSED="${MOGUI_PRODUCT_GUARD_FAIL_CLOSED:-0}"
 mg_emit() {
   local level="$1" event="$2" outcome="$3" reason="$4"
   local command_class="${5:-}" target_scope="${6:-}"
+  local tool_kind="${7:-bash}"
   local event_log="${MOGUI_EVENT_LOG:-$HOME/.mogui/event-log.jsonl}"
   EVENT_LOG="$event_log" MG_LEVEL="$level" MG_EVENT="$event" MG_OUTCOME="$outcome" \
-    MG_REASON="$reason" MG_COMMAND_CLASS="$command_class" MG_TARGET_SCOPE="$target_scope" \
+    MG_REASON="$reason" MG_COMMAND_CLASS="$command_class" MG_TARGET_SCOPE="$target_scope" MG_TOOL_KIND="$tool_kind" \
     python3 - <<'PY' 2>/dev/null || true
 import json, os, time
 path = os.environ["EVENT_LOG"]
@@ -33,6 +34,7 @@ record = {
     "reason": os.environ["MG_REASON"],
     "command_class": os.environ["MG_COMMAND_CLASS"],
     "target_scope": os.environ["MG_TARGET_SCOPE"],
+    "tool_kind": os.environ["MG_TOOL_KIND"],
 }
 os.makedirs(os.path.dirname(path), exist_ok=True)
 with open(path, "a", encoding="utf-8") as stream:
@@ -90,7 +92,11 @@ PY
 
 blocked() {
   local reason="$1" command_class="${2:-}" reason_code="${3:-guarded_target}"
-  mg_emit error product_path_guard finding "$reason_code" "$command_class" guarded
+  if [ "$command_class" = "file-tool" ] || [ "$command_class" = "file_tool" ]; then
+    mg_emit error product_path_guard finding "$reason_code" "$command_class" guarded file
+  else
+    mg_emit error product_path_guard finding "$reason_code" "$command_class" guarded bash
+  fi
   echo "[product-path-guard] BLOCKED: $reason" >&2
   exit 2
 }
@@ -101,9 +107,9 @@ repo=$(load_product_repo 2>/dev/null) || blocked "cannot load product_repo from 
 file_path=$(printf '%s' "$input" | python3 -c 'import json,sys; d=json.load(sys.stdin); t=d.get("tool_input",{}); print(t.get("file_path") or t.get("notebook_path") or "")' 2>/dev/null) || blocked "invalid hook input" ""
 if [ -n "$file_path" ]; then
   target=$(python3 -c 'import os,sys; print(os.path.realpath(os.path.expanduser(sys.argv[1])))' "$file_path") || blocked "cannot resolve file target" ""
-  [ "$(is_under "$repo" "$target")" = yes ] || { mg_emit info product_path_guard pass file_tool file_tool outside; exit 0; }
+  [ "$(is_under "$repo" "$target")" = yes ] || { mg_emit info product_path_guard pass file_tool file_tool outside file; exit 0; }
   if [ "${MOGUI_INLINE_EDIT_OVERRIDE:-0}" = 1 ]; then
-    mg_emit notice product_path_guard pass override file_tool guarded
+    mg_emit notice product_path_guard pass override file_tool guarded file
     exit 0
   fi
   blocked "$target is product-repo territory; dispatch product writes through a contract" "file-tool" guarded_target
@@ -234,4 +240,4 @@ if [ "$decision" = DENY ]; then
   fi
   blocked "$reason" "$command_class" guarded_target
 fi
-mg_emit info product_path_guard pass read_only_command "$command_class" guarded
+mg_emit info product_path_guard pass read_only_command "$command_class" guarded bash

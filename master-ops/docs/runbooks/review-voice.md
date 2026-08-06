@@ -4,6 +4,16 @@ How this workspace writes on public surfaces: pull-request bodies, replies to re
 
 Owner house style, fixed 2026-08-03. It was carried in the issue tracker's memory rather than in a file until 2026-08-05, which meant a fresh install of the template received the procedure and none of the voice.
 
+Public incident-record scope: documents under `master-ops/docs/blame/` are the
+public blame genre and intentionally identify the accountable role and generation
+(for example, “Generation 6”, “the master”, or “the PR #93 worker”). They do not
+publish human names, handles, or email addresses. Machine and session identifiers
+remain private: absolute paths, process ids, tty or terminal handles, workspace or
+session ids, and UUIDs are replaced with placeholders. Owner instructions may be
+quoted when they are evidence for a `[강제]` judgment; quote the instruction, not
+the person. Failure shapes, rejected excuses, contribution analysis, roast, and
+prevention rules remain public because they carry the transferable lesson.
+
 ## The rules
 
 1. **Keep the PR body current.** It describes the branch as it stands now, not as it stood when the branch was opened. A stale body is a false statement about live code.

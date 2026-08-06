@@ -5,7 +5,7 @@ status: active
 # blame: PR #93 제목 관례 위반 (워커 작성)
 
 - 일시: 2026-08-05
-- 당사자: promote-policy-0805 워커 (codex, PR #93)
+- 당사자: PR #93 워커
 - 수령 경로: orchestration msg, 마스터가 무편집 보관
 
 ## 1. 유죄

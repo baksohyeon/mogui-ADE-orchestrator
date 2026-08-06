@@ -9,7 +9,7 @@ compatible. New decision emitters write `~/.mogui/event-log.jsonl` instead.
 
 Each event is one JSON line with fixed, value-free metadata: `ts`, `level`,
 `event`, `component`, `session_kind`, `runtime_hint`, `outcome`, `evidence`,
-`reason`, `command_class`, and `target_scope`. `event` is a logical event name, not a hook lifecycle label. Raw
+`reason`, `command_class`, `target_scope`, and `tool_kind`. `event` is a logical event name, not a hook lifecycle label. Raw
 commands, absolute paths, credentials, and other values are forbidden; emit
 command names and target classifications only.
 
@@ -20,11 +20,10 @@ the guard decision.
 
 ```bash
 mg_emit() {
-  local level="$1" event="$2" outcome="$3" reason="$4" command_class="${5:-}" target_scope="${6:-}"
-  mkdir -p "$HOME/.mogui" 2>/dev/null || true
-  printf '{"ts":%d,"level":"%s","event":"%s","component":"tool-impl","session_kind":"%s","runtime_hint":"%s","outcome":"%s","evidence":"observed","reason":"%s"}\n' \
-    "$(date +%s)" "$level" "$event" "$([ -n "${ORCA_TASK_ID:-}" ] && echo worker || echo unknown)" \
-    "${MOGUI_RUNTIME_HINT:-unknown}" "$outcome" "$reason" "$command_class" "$target_scope" \
+  local level="$1" event="$2" outcome="$3" reason="$4"
+  local command_class="${5:-}" target_scope="${6:-}"
+  # Serialize all fields with json.dumps; append failure is always || true.
+  python3 ... "$level" "$event" "$outcome" "$reason" "$command_class" "$target_scope" \
     >> "$HOME/.mogui/event-log.jsonl" 2>/dev/null || true
 }
 ```

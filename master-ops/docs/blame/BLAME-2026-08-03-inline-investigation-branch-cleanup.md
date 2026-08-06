@@ -5,7 +5,7 @@ status: active
 # blame: 위임 규칙을 쓴 지 1시간 28분 만에 어긴 건
 
 - 일시: 2026-08-03
-- 당사자: 자비스 (mogui-master, Generation 1)
+- 당사자: mogui-master, Generation 1
 - 트리거: 오너의 `/blame-agent` 지정 재작성. "브랜치 정리 워커 발행했습니다 … 여기에 대해서 blame 쓰라고 했던거야."
 - 대상 사건: 브랜치 정리 지시를 받고 계약 대신 인라인 조사를 수행한 건
 

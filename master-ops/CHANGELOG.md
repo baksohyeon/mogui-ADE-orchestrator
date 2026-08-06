@@ -52,9 +52,10 @@ Workspace session-card host twin and deployment (2026-08-06):
 
 Successor-facing promotion audit and redacted knowledge promotion (2026-08-06):
 
-- Added the promotion inventory at `docs/internal/promotion-audit-2026-08-06.md` and
-  redacted incident records under `docs/blame/`.
-- Added the boot comparison procedure and public lineage entry format.
+- Added the [promotion inventory](../docs/internal/promotion-audit-2026-08-06.md) and
+  [redacted incident records](docs/blame/).
+- Added the [boot comparison procedure](docs/runbooks/boot-comparison-set.md) and
+  [public lineage entry format](docs/lineage/README.md).
 - Reconciled contract writing conventions and review voice through rule 11.
 - Shipped the product-repository path guard and documented both host hook matchers.
 - Promoted measured `agy` Gemini-host mapping and Antigravity folder-trust markers.

@@ -32,6 +32,11 @@ checked and agree, while measured prose differs.
   workspace identifiers, and tracker identifiers removed or replaced by placeholders.
   Their observed failure shapes, root causes, and measurement-based prevention rules are
   retained.
+- Public blame-scope audit: all 12 reports identify accountable roles and generations
+  only. Human names, handles, and email addresses are absent; machine and session
+  identifiers are placeholders. Owner instructions remain quoted only where they are
+  evidence for a forced judgment. No report required private retention after this
+  review because the transferable failure meaning survived the substitutions.
 - `boot-comparison-set.md` and `docs/lineage/README.md` carry the successor procedure and
   entry format. Generation records remain deliberately instance-only.
 - `product-path-guard.sh` is shipped and onboarding documents both PreToolUse matchers.

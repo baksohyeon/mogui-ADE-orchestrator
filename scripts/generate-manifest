@@ -40,7 +40,7 @@ FRAME_PATH_NEEDLE = "master-ops/"
 
 def iter_install_paths(skeleton: Path) -> list[str]:
     paths: list[str] = []
-    for path in sorted(skeleton.rglob("*")):
+    for path in skeleton.rglob("*"):
         if not path.is_file():
             continue
         rel = path.relative_to(skeleton).as_posix()
@@ -51,8 +51,9 @@ def iter_install_paths(skeleton: Path) -> list[str]:
     # MANIFEST.json is generated into the skeleton and is installed.
     if "MANIFEST.json" not in paths:
         paths.append("MANIFEST.json")
-        paths.sort()
-    return paths
+    # Sort the posix strings, not Path objects: Path sort order differs by
+    # platform and made --check report a false stale on Windows CI.
+    return sorted(paths)
 
 
 def read_template_version(skeleton: Path) -> str:
@@ -154,13 +155,35 @@ def main(argv: list[str] | None = None) -> int:
         if not out.is_file():
             sys.stderr.write(f"generate-manifest: missing committed manifest at {out}\n")
             return 1
-        # Normalize newlines so a Windows checkout with CRLF does not report a
-        # false stale against an LF-generated body (CI matrix includes windows).
-        existing = out.read_text(encoding="utf-8").replace("\r\n", "\n")
-        if existing != body:
+        # Compare the parsed document, not the raw text: Windows checkouts may
+        # present CRLF, and Path walk order must not affect the files list.
+        try:
+            existing_data = json.loads(out.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            sys.stderr.write(f"generate-manifest: committed manifest malformed: {exc}\n")
+            return 1
+        if existing_data != manifest:
             sys.stderr.write(
                 "generate-manifest: MANIFEST.json is stale; run scripts/generate-manifest\n"
             )
+            # Emit a short structured diff so CI failures are actionable.
+            if isinstance(existing_data, dict):
+                old_files = existing_data.get("files")
+                new_files = manifest.get("files")
+                if old_files != new_files and isinstance(old_files, list) and isinstance(new_files, list):
+                    missing = sorted(set(new_files) - set(old_files))
+                    extra = sorted(set(old_files) - set(new_files))
+                    if missing:
+                        sys.stderr.write(f"  missing from committed: {missing}\n")
+                    if extra:
+                        sys.stderr.write(f"  extra in committed: {extra}\n")
+                    if not missing and not extra:
+                        sys.stderr.write("  files set matches but order differs\n")
+                if existing_data.get("template_version") != manifest.get("template_version"):
+                    sys.stderr.write(
+                        f"  version {existing_data.get('template_version')!r} -> "
+                        f"{manifest.get('template_version')!r}\n"
+                    )
             return 1
         return 0
 

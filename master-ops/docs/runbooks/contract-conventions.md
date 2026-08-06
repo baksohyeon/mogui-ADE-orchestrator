@@ -65,14 +65,14 @@ FIRST ACTION (report these three, and no absolute path):
 - branch:               `git branch --show-current`
 ```
 
-This clause used to require `pwd` in the report, and on 2026-08-05 that is what put
-home paths into PUBLIC repository history. The measured exposures were
-`mogui-agent-harness` commit `c332386` (`pwd = /Users/<owner>/.../harness-survey-0805`)
-and `mogui-ADE-orchestrator` commit `f0eed0e`
-(`**pwd:** /Users/<owner>/.../onboarding-lane-0804`). Both workers complied exactly;
-the contract instructed the disclosure. Redaction later moved the orchestrator branch
-forward at `75cd043`, and the owner accepted the existing public exposure on
-2026-08-05, but the template defect remains unless this clause changes.
+The placement report is a verdict, not a path. A worker's contract may name the exact
+workspace it must enter; the outward report uses the boolean above so a public record
+cannot disclose a machine path.
+
+This clause used to require `pwd` in the report, which placed home paths into public
+repository history. Workers complied exactly; the contract instructed the disclosure.
+The measured lesson is that placement proof needs a boolean verdict, while the exact
+workspace path belongs only in the private dispatch contract.
 
 An absolute path is still correct in the contract *to* the worker, because the master
 sends that exact target downward and the worker must know where to stand. It is not
@@ -100,8 +100,6 @@ to batch rather than loop:
 
 Two things are never traded for speed, and the contract must say so: **one reply per
 thread**, and the task's own verification steps. Everything else is throughput.
-
-What those replies should sound like lives in [Review voice](review-voice.md).
 
 Iterating eighteen threads one at a time costs roughly an order of magnitude more turns
 than batching them, and the extra turns buy nothing.
@@ -166,6 +164,20 @@ Titles follow conventional commits: `<type>: <lowercase description>`, where typ
 of feat, fix, docs, refactor, test, chore, perf, ci. Spell this out in the contract rather
 than assuming it. A worker cannot follow a convention the contract never states, and a
 title written without it reads as a different project's work.
+
+### The Writing block every contract carries, verbatim
+
+```text
+## Writing
+- Titles (PR and commits): `<type>: <lowercase description>` — type is feat, fix, docs,
+  refactor, test, chore, perf, or ci.
+- PR body: fill the repository's `.github/pull_request_template.md` sections by their
+  own names. Do not invent a structure.
+- Voice: [docs/runbooks/review-voice.md](review-voice.md) rules 1-11, which also govern commit messages,
+  code comments, and thread replies.
+- Assignee set at PR creation (house rule, clause 4).
+- No absolute path or username in the title, body, commits, or comments.
+```
 
 ## 5. No maintainer oracle [prose]
 
@@ -312,8 +324,8 @@ surfaces all day and has nobody downstream to catch a misread.
 ## 9. Document reference clause [measured]
 
 A reference from one document to another is written as a real markdown link:
-`[readable title](relative/path/to/target.md)`. A path wrapped in backticks is not a
-reference; it is a string that happens to look like one.
+`[readable title](target.md)`. A path wrapped in backticks is not a reference; it is a
+string that happens to look like one.
 
 The reason is navigation. An agent reading a document follows links. A backticked path
 has to be recognised as a path, resolved against the reading agent's guess about which

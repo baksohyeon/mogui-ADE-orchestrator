@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The fire-log (`~/.mogui/hook-fire-log.jsonl`) records when ops hooks run, where they ran, and what runtime invoked them. It answers: **Which hooks actually fire in live operation?** across runtimes (Claude, Codex, Cursor, Grok, Antigravity/Gemini) and session kinds (master, dispatched worker).
+The fire-log (`~/.mogui/hook-fire-log.jsonl`) records when ops hooks run, where they ran, and what runtime invoked them. It answers: **Which hooks actually fire in live operation?** across runtimes (Claude, Codex, Cursor, Grok, Antigravity/Gemini) and session kinds (master, dispatched worker). Product-path decisions (`command_class`, `target_scope`, `outcome`, and `reason`) are written to the separate `event-log.jsonl`.
 
 ## Design Decision
 
@@ -19,6 +19,7 @@ Observational fire-log first; active canaries later and only for hooks that neve
 
 - A wired-but-broken hook (e.g., script exits early, condition never true) and a not-wired hook **both show zero fire-log entries**. Distinguishing them requires an active canary (deliberately deferred).
 - Whether a hook's decision logic ran correctly (the log records only that the hook was invoked, not its outcome).
+- The product-path guard's Bash rejection rate is unavailable until command-class observations exist; use `scripts/measure-product-path-guard.sh` and report `N/A (0/0; no command observations)` when none exist.
 
 ## Fire-Log Schema
 
@@ -61,6 +62,20 @@ scripts/hook-coverage-report
 ```
 
 Prints a matrix of hook by (runtime_hint, session_kind) with last-fired timestamp and count. Lists hooks with zero entries (measurement targets).
+
+### Product-path guard measurement
+
+```bash
+scripts/measure-product-path-guard.sh
+```
+
+This reads product-path decision events from the separate event log and reports the
+number of usable Bash command observations, blocked decisions, and the numeric
+rejection rate. The guard must not infer an allowlist from command
+names: populate `scripts/hooks/product-path-guard-readonly-allowlist.txt` only from
+measured read-only command classes. Until the log has command observations, the
+correct report is `bash_command_observations=0`, `guard_rejections=0`, and
+`rejection_rate=N/A (0/0; no command observations)`.
 
 ## Escalation Rule
 

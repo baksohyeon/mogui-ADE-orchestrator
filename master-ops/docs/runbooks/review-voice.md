@@ -1,8 +1,18 @@
 # Review voice
 
-How this workspace writes on public surfaces: pull-request bodies, replies to review bots and people, README and release prose. Rules 8 to 10 are wider and apply to every surface this workspace writes on, including commit messages, code comments, self-checks, and what the master says to the owner in chat. The procedure for handling review threads — pull them all at once, group the fixes, reply per thread, verify at the end of the round — lives in [contract conventions](contract-conventions.md). This file is the other half: what the writing sounds like once you are there.
+How this workspace writes on public surfaces: pull-request bodies, replies to review bots and people, README and release prose. Rules 8 to 11 are wider and apply to every surface this workspace writes on, including commit messages, code comments, self-checks, and what the master says to the owner in chat. The procedure for handling review threads — pull them all at once, group the fixes, reply per thread, verify at the end of the round — lives in [contract conventions](contract-conventions.md). This file is the other half: what the writing sounds like once you are there.
 
 Owner house style, fixed 2026-08-03. It was carried in the issue tracker's memory rather than in a file until 2026-08-05, which meant a fresh install of the template received the procedure and none of the voice.
+
+Public incident-record scope: documents under `master-ops/docs/blame/` are the
+public blame genre and intentionally identify the accountable role and generation
+(for example, “Generation 6”, “the master”, or “the PR #93 worker”). They do not
+publish human names, handles, or email addresses. Machine and session identifiers
+remain private: absolute paths, process ids, tty or terminal handles, workspace or
+session ids, and UUIDs are replaced with placeholders. Owner instructions may be
+quoted when they are evidence for a `[강제]` judgment; quote the instruction, not
+the person. Failure shapes, rejected excuses, contribution analysis, roast, and
+prevention rules remain public because they carry the transferable lesson.
 
 ## The rules
 
@@ -15,7 +25,8 @@ Owner house style, fixed 2026-08-03. It was carried in the issue tracker's memor
 7. **No internal tracker ids or codenames in PR or commit titles.** Traceability belongs in a provenance line in the body, where a reader outside this workspace can follow it or ignore it.
 8. **Given a correction, write the corrected sentence and stop.** Owner directive 2026-08-05. The wrong version stays out of the reply — no quoting it back, no summary of what it said, no line reporting that a change was made. `"A이다."` is the whole answer. Applies to chat, commit bodies, code comments, and self-checks alike.
 9. **Do not write "A가 아니라 B다".** Owner directive 2026-08-05, and it holds in English too: `not A but B`, `A rather than B`, `A라고 보기는 어렵고 B에 가깝다`, `A는 오해를 줄 수 있으므로 B가 적절하다`. Assert B. The reader has no use for the discarded option, and the construction lets a sentence sound like a decision while carrying none. Check for it before sending; it is the easiest of these to write by reflex.
-10. **A correction carries no citation.** Owner directive 2026-08-05. Make the change and leave it. No rule number, no issue id, no `removed as instructed`, no explanation of which policy produced the edit — `"DZ-iw3 으로 사용자가 지시하여 H82 규칙에 따라 제거하였다"` is the exact shape to avoid. When the history matters, git log holds it and the reader can be pointed there outside the correction reply. Anything git log already answers does not get restated in prose.
+10. **Home paths render as `~` in anything a person reads.** Owner directive 2026-08-05. Chat output, reports, tables, and log excerpts shown to the owner all use `~` for the home directory. Tool invocations keep absolute paths; shortening is for human-facing surfaces.
+11. **A correction carries no citation.** Owner directive 2026-08-05. Make the change and leave it. No rule number, issue id, `removed as instructed`, or explanation of which policy produced the edit. When history matters, git log holds it and the reader can be pointed there in one clause. Anything git log already answers does not get restated in prose.
 
 One hand-written review pass per pull request, on the final diff.
 

@@ -50,6 +50,18 @@ Workspace session-card host twin and deployment (2026-08-06):
 - Onboarding now stops and re-syncs the canonical pair before redeploying when
   those source files diverge.
 
+Successor-facing promotion audit and redacted knowledge promotion (2026-08-06):
+
+- Added the [promotion inventory](../docs/internal/promotion-audit-2026-08-06.md) and
+  [redacted incident records](docs/blame/).
+- Added the [boot comparison procedure](docs/runbooks/boot-comparison-set.md) and
+  [public lineage entry format](docs/lineage/README.md).
+- Reconciled contract writing conventions and review voice through rule 11.
+- Shipped the product-repository path guard and documented both host hook matchers.
+- Promoted measured `agy` Gemini-host mapping and Antigravity folder-trust markers.
+- Existing installations must merge these template changes deliberately; generated
+  operations repositories are copies and do not update automatically.
+
 Contract convention merge-time re-measurement and citation repair (2026-08-05 worker contract fix):
 
 - Added clause 14, Merge-time re-measurement, so merge decisions re-run thread
@@ -65,6 +77,25 @@ Contract convention merge-time re-measurement and citation repair (2026-08-05 wo
   `docs/runbooks/contract-conventions.md` and
   `docs/charter/04-worker-routing-review.md` into the generated operations
   repository and preserve local additions deliberately.
+
+Review follow-up for successor promotion (2026-08-06):
+
+- Product-path guard now supports an opt-in Bash policy inversion via
+  `MOGUI_PRODUCT_GUARD_FAIL_CLOSED=1`: any target normalized under the product
+  root is denied unless its command class was measured as read-only in the event
+  log; unresolved targets are denied with a reason. The flag is off by default so
+  an unmeasured allowlist is never the default policy. The shipped allowlist is
+  empty because the existing hook-fire log has 0 usable command observations;
+  command observations now go to the separate event log, so the measured
+  rejection report is `0/0`, N/A rather than an inferred rate.
+  Symlink normalization, canonical `product_repo` configuration, runtime config
+  resolution, configurable fire logs, and the requested bypass regressions are covered by
+  `scripts/test-product-path-guard.sh`; run `scripts/measure-product-path-guard.sh`
+  to report the live rate.
+- The agy dispatch path now accepts its measured Gemini vendor mapping; the full
+  runtime capability table remains a separate contract. `scripts/test-dispatch-runtime.sh`
+  preserves this minimum behavior.
+- Removed a UUID and corrected public-document wording and structure identified by review.
 
 Dispatch policy and review voice promotion from operations repository
 (owner directive 2026-08-05):

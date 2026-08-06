@@ -3101,16 +3101,39 @@ def _script() -> Path:
     return Path(__file__).resolve().parents[1] / "scripts" / "dispatch-gate"
 
 
-def test_probe_contract_exit_code_zero_and_job_id_in_stdout() -> None:
-    """Probe contract: gate requires returncode==0 AND job_id in stdout.
+def test_probe_contract_exit_code_zero_and_job_id_in_stdout(monkeypatch) -> None:
+    """The probe helper enforces both exit status and stdout evidence."""
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_probe_test")
+    cases = [
+        (0, "", "job-123", False),
+        # A filename-only stdout containing the id is accepted by the helper,
+        # but does not prove that the artifact contents were read.
+        (0, "/artifact/job-456.log", "job-456", True),
+        (1, "job-789", "job-789", False),
+        (0, "processed job-abc-123", "job-abc-123", True),
+    ]
 
-    Regression: four measured rows confirm implementation. See master-ops/docs/charter/05-dispatch-gate.md.
-    Row 1: exit 0, stdout empty => job_id not in stdout => UNVERIFIED_JOB.
-    Row 2: exit 0, filename contains job_id => grep -l false positive => OK.
-    Row 3: exit 1, stdout empty => UNVERIFIED_JOB.
-    Row 4: exit 0, stdout contains job_id => OK.
-    """
-    assert not (0 == 0 and "job-123" in "")
-    assert 0 == 0 and "job-456" in "/path/job-456-artifact.log"
-    assert not (1 == 0 and "job-789" in "")
-    assert 0 == 0 and "job-abc-123" in "processed job-abc-123"
+    for returncode, stdout, job_id, expected in cases:
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda *args, _returncode=returncode, _stdout=stdout, **kwargs: subprocess.CompletedProcess(
+                args[0], _returncode, stdout=_stdout, stderr=""
+            ),
+        )
+        assert script["_probe_contains_job_id"]("probe", job_id) is expected
+
+
+def test_public_probe_docs_state_exit_and_stdout_requirements() -> None:
+    repo_root = _script().parents[1]
+    for relative_path in (
+        "docs/public/delegation-and-review.md",
+        "docs/public/reference.md",
+    ):
+        text = (repo_root / relative_path).read_text(encoding="utf-8")
+        assert (
+            "exit 0" in text
+            or "exits 0" in text
+            or "exit with status 0" in text
+        )
+        assert "stdout" in text

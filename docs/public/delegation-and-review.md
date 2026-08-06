@@ -28,7 +28,9 @@ scripts/dispatch-gate \
   --est-chars 2000
 ```
 
-Example registration:
+Example registration. The probe must exit with status 0 and print the job id in
+stdout; a matching `grep` satisfies both requirements when the artifact contains
+the id:
 
 ```bash
 scripts/dispatch-gate \

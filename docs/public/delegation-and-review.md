@@ -35,7 +35,7 @@ scripts/dispatch-gate \
   --ledger ./.dispatch-ledger.jsonl \
   register \
   --job-id job-123 \
-  --probe-cmd 'test -f ./worker-evidence/job-123.txt' \
+  --probe-cmd 'grep job-123 ./worker.log' \
   --runtime codex \
   --contract-sha abc123abc123
 ```

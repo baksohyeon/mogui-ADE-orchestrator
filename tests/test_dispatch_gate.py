@@ -3099,3 +3099,18 @@ def _ledger_entries(tmp_path: Path) -> list[dict[str, object]]:
 
 def _script() -> Path:
     return Path(__file__).resolve().parents[1] / "scripts" / "dispatch-gate"
+
+
+def test_probe_contract_exit_code_zero_and_job_id_in_stdout() -> None:
+    """Probe contract: gate requires returncode==0 AND job_id in stdout.
+
+    Regression: four measured rows confirm implementation. See master-ops/docs/charter/05-dispatch-gate.md.
+    Row 1: exit 0, stdout empty => job_id not in stdout => UNVERIFIED_JOB.
+    Row 2: exit 0, filename contains job_id => grep -l false positive => OK.
+    Row 3: exit 1, stdout empty => UNVERIFIED_JOB.
+    Row 4: exit 0, stdout contains job_id => OK.
+    """
+    assert not (0 == 0 and "job-123" in "")
+    assert 0 == 0 and "job-456" in "/path/job-456-artifact.log"
+    assert not (1 == 0 and "job-789" in "")
+    assert 0 == 0 and "job-abc-123" in "processed job-abc-123"

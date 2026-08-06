@@ -16,7 +16,7 @@ L=~/.mogui/dispatch-ledger.jsonl
 
 "$G" --ledger "$L" check --runtime <runtime> --model <model-id> --contract <contract-file> --agents <n> --est-chars <n> --completion-channel orchestration
 <supervised dispatch command>
-"$G" --ledger "$L" register --job-id <job-id> --probe-cmd "<command proving the job-id appears in an artifact>" --orchestration-task <task-id> --declared-model <model-id> --model-probe-cmd "<command printing the worker's actual model id>"
+"$G" --ledger "$L" register --job-id <job-id> --probe-cmd "<command that prints job-id in stdout from an artifact>" --orchestration-task <task-id> --declared-model <model-id> --model-probe-cmd "<command printing the worker's actual model id>"
 ```
 
 Tier policy file selection: explicit `--tier-policy` on the CLI, then environment override named `DISPATCH_TIER_POLICY`, then instance `config/model-tier-policy.json` (written at onboarding after agent-inventory consent), then template `master-ops/model-tier-policy.json`.
@@ -28,6 +28,8 @@ Owner directive 2026-08-05: the top-tier fanout cap is removed. The template `ma
 For dry runs, `dispatch-gate check --no-record` evaluates the current ledger without appending a decision or issuing a ticket. Use it for `master-ops/scripts/dispatch --check-only`, because a dry run that writes a row spends the same fanout budget it exists to inspect.
 
 The gate writes its verdict as JSON on stdout and human diagnostics on stderr. Do not merge them: `2>&1` piped into a JSON parser fails, and the failure reads like malformed output rather than like two streams. Use `2>/dev/null` for machine use, and read stderr separately when a person needs the reason.
+
+The `--probe-cmd` must print the job id in stdout so the gate can verify it. The gate requires both exit code 0 AND the job id appearing in the command's stdout. This prevents false passes. Beware `grep -l` (list matching files): when a filename contains the job id, `grep -l` prints the filename and passes the gate without reading file contents, delivering a verification stamp on unread evidence. Use probe commands that output file contents, like `grep <job-id> logfile` or `cat evidence.txt`, not file lists. The wrong probe (`grep -l filename`) will silently pass when the filename matches, and the gate will not detect the difference.
 
 `register` compares the model the dispatch declared with the model the worker actually ran. Declare the measurement per dispatch with `--model-probe-cmd`, because every runtime reports differently and this gate is agent-neutral; the command must read an artifact the agent itself produced, such as its session transcript, for which `{{RUNTIME_ROOT}}/scripts/model-identity-probe` is the reference implementation. Do not scrape a TUI status line: that measures what a renderer drew, and authenticating a model against it leaves a verification stamp with no verification behind it.
 

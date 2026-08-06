@@ -92,6 +92,8 @@ expect_blocked strict-write-capable-argument run_bash_strict "find . -exec touch
 expect_allowed strict-read-search-flag run_bash_strict "rg -i needle" "$product"
 expect_blocked git-remote-mutation run_bash "git -C $product remote set-url origin https://example.invalid/repo"
 expect_blocked git-diff-output run_bash "git -C $product diff --output=result.txt"
+expect_blocked sed-relative-product-target run_bash "sed -i $product/file.txt"
+expect_allowed git-remote-show-argument run_bash "git -C $product remote show add"
 expect_allowed event-log-failure-does-not-block run_bash_event_failure "ls" "$product"
 expect_blocked git-add run_bash "git -C $product add file.txt"
 expect_blocked git-work-tree run_bash "git --git-dir=$TMP/repo.git --work-tree=$product add file.txt"

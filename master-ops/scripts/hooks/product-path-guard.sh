@@ -187,6 +187,15 @@ for parts in segments:
             if token.startswith("-"): i+=1; continue
             sub=token; break
         command_class="git" + (" " + sub if sub else "")
+        remote_action=""
+        if sub == "remote":
+            remote_index=parts.index("remote") + 1
+            while remote_index < len(parts):
+                if parts[remote_index].startswith("-"):
+                    remote_index += 2
+                    continue
+                remote_action=parts[remote_index]
+                break
         if git_dir and not work_tree:
             print("DENY\t"+command_class+"\tgit-dir has no resolvable work-tree")
             raise SystemExit
@@ -207,16 +216,22 @@ for parts in segments:
         elif token.startswith("/") or token.startswith("~/"):
             target_hits.append(resolve(current_cwd, token))
     touches=under(target) or any(under(x) for x in target_hits)
-    if not touches:
-        continue
     write_args={"-exec","-execdir","xargs","--in-place"}
-    if name in {"sed","perl","python","python3","ruby"}:
+    if name in {"sed","perl","ruby"}:
         write_args.add("-i")
     git_mutation = name == "git" and (
-        (sub == "remote" and any(token in {"set-url","add","remove"} for token in parts))
+        (sub == "remote" and remote_action in {"rename","set-head","set-branches","update","prune","set-url","add","remove"})
         or (sub == "diff" and any(token == "--output" or token.startswith("--output=") for token in parts))
     )
-    if any(token in write_args for token in parts[1:]) or git_mutation:
+    write_capable=any(token in write_args for token in parts[1:]) or git_mutation
+    if write_capable:
+        for token in parts[1:]:
+            if not token.startswith("-") and token not in {";"}:
+                target_hits.append(resolve(current_cwd, token))
+        touches=under(target) or any(under(x) for x in target_hits)
+    if not touches:
+        continue
+    if write_capable and touches:
         print("DENY\t"+command_class+"\twrite-capable argument is not admitted")
         raise SystemExit
     if any(token in {">",">>","2>","2>>","&>",">&"} for token in parts):

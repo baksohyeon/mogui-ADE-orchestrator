@@ -89,7 +89,7 @@ Review follow-up for successor promotion (2026-08-06):
   rejection report is `0/0`, N/A rather than an inferred rate.
   Symlink normalization, canonical `product_repo` configuration, runtime config
   resolution, configurable fire logs, and the requested bypass regressions are covered by
-  `scripts/test-product-path-guard.sh`; run `scripts/measure-product-path-guard`
+  `scripts/test-product-path-guard.sh`; run `scripts/measure-product-path-guard.sh`
   to report the live rate.
 - The agy dispatch path now accepts its measured Gemini vendor mapping; the full
   runtime capability table remains a separate contract. `scripts/test-dispatch-runtime.sh`

@@ -15,7 +15,7 @@ status: active
 ## 2. 증거 타임라인
 
 - 15:5x — #72 스튜어드 워커가 GraphQL로 reviewThreads 빈 배열 측정 [관측: 워커 터미널 화면, gh api graphql 출력 `"nodes":[]`]
-- 16:00:46Z — cubic-dev-ai 리뷰 COMMENTED 제출 [관측: `gh pr view 72 --json reviews` submittedAt]
+- 16:00:46Z — cubic-dev-ai 리뷰 COMMENTED 제출 [관측: `gh api graphql`의 pullRequest.reviews.nodes.submittedAt]
 - 16:12:45Z — 내가 `gh pr merge 72 --squash --delete-branch` 실행, 병합 성립 [관측: mergedAt]
 - 병합 전 내가 실측한 것: 체크 롤업, 본문 4부(pr-body-check exit 0), 로컬 게이트 450 passed [관측: 세션 기록]
 - 병합 전 내가 실측하지 않은 것: 병합 시점의 reviews/threads 재조회 — 0회 [관측: 세션에 해당 명령 없음]
@@ -23,7 +23,7 @@ status: active
 
 ## 3. 관측 공백
 
-- `gh pr view 72 --json reviews` 를 병합 전에 한 번도 안 침 — 쳤다면 16:00:46Z 리뷰가 보였다.
+- `gh api graphql`로 pullRequest의 `reviews`와 `reviewThreads`를 병합 전에 한 번도 재조회하지 않음 — 쳤다면 16:00:46Z 리뷰가 보였다.
 - cubic이 check는 pass로 주면서 findings를 리뷰 코멘트로 남긴다는 이원 표면을 측정하지 않고 check pass = 리뷰 무결로 등치했다.
 - 워커 측정의 **시각**을 기록만 하고 유효기간 개념 없이 소비했다.
 
@@ -49,7 +49,7 @@ reading-surface 독트린을 같은 주에 자기 손으로 쓴 자가, "창구�
 
 ## 8. 재발방지
 
-1. 트리거: 모든 `gh pr merge` 실행 직전 → 볼 신호: 그 자리에서 `gh pr view --json reviews,reviewThreads` 재조회, 최신 리뷰 submittedAt > 직전 측정 시각이면 본문 전부 읽음 → 실패 시: 병합 중단. (pr-house-rules v3에 등재 완료)
+1. 트리거: 모든 `gh pr merge` 실행 직전 → 볼 신호: 그 자리에서 `gh api graphql`로 pullRequest의 `reviews.nodes.submittedAt`와 `reviewThreads.nodes.isResolved` 재조회, 최신 리뷰 submittedAt > 직전 측정 시각이면 본문 전부 읽음 → 실패 시: 병합 중단. (pr-house-rules v3에 등재 완료)
 2. 트리거: 워커 측정 소비 시 → 볼 신호: 측정 시각과 소비 시각의 간격, 그 사이 이벤트(push, 봇 리뷰) 유무 → 실패 시: 재측정 없이는 병합·보고에 사용 금지.
 3. 트리거: 새 리뷰 봇 도입/관측 시 → 볼 신호: check 결과와 리뷰 코멘트가 별도 표면인지 1회 실측 기록 → 실패 시: 해당 봇의 pass를 리뷰 무결로 등치 금지.
 

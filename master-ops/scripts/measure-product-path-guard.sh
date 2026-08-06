@@ -19,7 +19,7 @@ try:
                 continue
             if record.get("event") != "product_path_guard":
                 continue
-            if not record.get("command_class") or record.get("command_class") in {"file-tool", "empty"}:
+            if not record.get("command_class") or record.get("command_class") in {"file-tool", "file_tool", "empty"}:
                 continue
             observed += 1
             if record.get("outcome") == "finding":

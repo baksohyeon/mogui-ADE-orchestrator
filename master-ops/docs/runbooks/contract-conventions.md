@@ -173,7 +173,7 @@ title written without it reads as a different project's work.
   refactor, test, chore, perf, or ci.
 - PR body: fill the repository's `.github/pull_request_template.md` sections by their
   own names. Do not invent a structure.
-- Voice: `docs/runbooks/review-voice.md` rules 1-11, which also govern commit messages,
+- Voice: [docs/runbooks/review-voice.md](review-voice.md) rules 1-11, which also govern commit messages,
   code comments, and thread replies.
 - Assignee set at PR creation (house rule, clause 4).
 - No absolute path or username in the title, body, commits, or comments.

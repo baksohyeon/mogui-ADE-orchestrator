@@ -16,7 +16,7 @@ printf '{"master_host_runtime":"claude","product_repo":"%s"}\n' "$product" >"$TM
 
 run_file() {
   local path="$1"
-  python3 - "$path" <<'PY' | HOME="$TMP/home" MOGUI_INLINE_EDIT_OVERRIDE=0 MOGUI_INSTANCE_RUNTIME_CONFIG="${MOGUI_INSTANCE_RUNTIME_CONFIG:-$TMP/runtime.json}" MOGUI_HOOK_FIRE_LOG="${MOGUI_HOOK_FIRE_LOG:-$TMP/logs/fire.jsonl}" "$HOOK" >/dev/null 2>"$TMP/stderr"
+  python3 - "$path" <<'PY' | HOME="$TMP/home" MOGUI_INLINE_EDIT_OVERRIDE=0 MOGUI_PRODUCT_GUARD_FAIL_CLOSED=0 MOGUI_EVENT_LOG="$TMP/home/.mogui/event-log.jsonl" MOGUI_INSTANCE_RUNTIME_CONFIG="$TMP/runtime.json" MOGUI_HOOK_FIRE_LOG="$TMP/logs/fire.jsonl" "$HOOK" >/dev/null 2>"$TMP/stderr"
 import json, sys
 print(json.dumps({"tool_input": {"file_path": sys.argv[1]}}))
 PY
@@ -24,7 +24,7 @@ PY
 
 run_file_config() {
   local config="$1" path="$2"
-  python3 - "$path" <<'PY' | HOME="$TMP/home" MOGUI_INLINE_EDIT_OVERRIDE=0 MOGUI_INSTANCE_RUNTIME_CONFIG="$config" MOGUI_HOOK_FIRE_LOG="$TMP/logs/fire.jsonl" "$HOOK" >/dev/null 2>"$TMP/stderr"
+  python3 - "$path" <<'PY' | HOME="$TMP/home" MOGUI_INLINE_EDIT_OVERRIDE=0 MOGUI_PRODUCT_GUARD_FAIL_CLOSED=0 MOGUI_EVENT_LOG="$TMP/home/.mogui/event-log.jsonl" MOGUI_INSTANCE_RUNTIME_CONFIG="$config" MOGUI_HOOK_FIRE_LOG="$TMP/logs/fire.jsonl" "$HOOK" >/dev/null 2>"$TMP/stderr"
 import json, sys
 print(json.dumps({"tool_input": {"file_path": sys.argv[1]}}))
 PY
@@ -33,7 +33,7 @@ PY
 run_bash() {
   local command="$1"
   local working_directory="${2:-.}"
-  python3 - "$command" "$working_directory" <<'PY' | HOME="$TMP/home" MOGUI_INLINE_EDIT_OVERRIDE=0 MOGUI_PRODUCT_GUARD_ALLOWLIST=/dev/null MOGUI_INSTANCE_RUNTIME_CONFIG="${MOGUI_INSTANCE_RUNTIME_CONFIG:-$TMP/runtime.json}" MOGUI_HOOK_FIRE_LOG="${MOGUI_HOOK_FIRE_LOG:-$TMP/logs/fire.jsonl}" "$HOOK" >/dev/null 2>"$TMP/stderr"
+  python3 - "$command" "$working_directory" <<'PY' | HOME="$TMP/home" MOGUI_INLINE_EDIT_OVERRIDE=0 MOGUI_PRODUCT_GUARD_FAIL_CLOSED=0 MOGUI_PRODUCT_GUARD_ALLOWLIST=/dev/null MOGUI_EVENT_LOG="$TMP/home/.mogui/event-log.jsonl" MOGUI_INSTANCE_RUNTIME_CONFIG="$TMP/runtime.json" MOGUI_HOOK_FIRE_LOG="$TMP/logs/fire.jsonl" "$HOOK" >/dev/null 2>"$TMP/stderr"
 import json, sys
 print(json.dumps({"tool_input": {"command": sys.argv[1], "working_directory": sys.argv[2] if len(sys.argv) > 2 else "."}}))
 PY
@@ -42,7 +42,7 @@ PY
 run_bash_strict() {
   local command="$1"
   local working_directory="${2:-.}"
-  python3 - "$command" "$working_directory" <<'PY' | HOME="$TMP/home" MOGUI_INLINE_EDIT_OVERRIDE=0 MOGUI_PRODUCT_GUARD_FAIL_CLOSED=1 MOGUI_PRODUCT_GUARD_ALLOWLIST="$TMP/allowlist.txt" MOGUI_INSTANCE_RUNTIME_CONFIG="${MOGUI_INSTANCE_RUNTIME_CONFIG:-$TMP/runtime.json}" MOGUI_HOOK_FIRE_LOG="${MOGUI_HOOK_FIRE_LOG:-$TMP/logs/fire.jsonl}" "$HOOK" >/dev/null 2>"$TMP/stderr"
+  python3 - "$command" "$working_directory" <<'PY' | HOME="$TMP/home" MOGUI_INLINE_EDIT_OVERRIDE=0 MOGUI_PRODUCT_GUARD_FAIL_CLOSED=1 MOGUI_PRODUCT_GUARD_ALLOWLIST="$TMP/allowlist.txt" MOGUI_EVENT_LOG="$TMP/home/.mogui/event-log.jsonl" MOGUI_INSTANCE_RUNTIME_CONFIG="$TMP/runtime.json" MOGUI_HOOK_FIRE_LOG="$TMP/logs/fire.jsonl" "$HOOK" >/dev/null 2>"$TMP/stderr"
 import json, sys
 print(json.dumps({"tool_input": {"command": sys.argv[1], "working_directory": sys.argv[2] if len(sys.argv) > 2 else "."}}))
 PY
@@ -51,7 +51,7 @@ PY
 run_bash_event_failure() {
   local command="$1"
   local working_directory="${2:-.}"
-  python3 - "$command" "$working_directory" <<'PY' | HOME="$TMP/home" MOGUI_INLINE_EDIT_OVERRIDE=0 MOGUI_EVENT_LOG=/dev/null/event-log.jsonl MOGUI_INSTANCE_RUNTIME_CONFIG="${MOGUI_INSTANCE_RUNTIME_CONFIG:-$TMP/runtime.json}" MOGUI_HOOK_FIRE_LOG="${MOGUI_HOOK_FIRE_LOG:-$TMP/logs/fire.jsonl}" "$HOOK" >/dev/null 2>"$TMP/stderr"
+  python3 - "$command" "$working_directory" <<'PY' | HOME="$TMP/home" MOGUI_INLINE_EDIT_OVERRIDE=0 MOGUI_PRODUCT_GUARD_FAIL_CLOSED=0 MOGUI_EVENT_LOG=/dev/null/event-log.jsonl MOGUI_INSTANCE_RUNTIME_CONFIG="$TMP/runtime.json" MOGUI_HOOK_FIRE_LOG="$TMP/logs/fire.jsonl" "$HOOK" >/dev/null 2>"$TMP/stderr"
 import json, sys
 print(json.dumps({"tool_input": {"command": sys.argv[1], "working_directory": sys.argv[2] if len(sys.argv) > 2 else "."}}))
 PY
@@ -103,10 +103,15 @@ if [ ! -s "$TMP/home/.mogui/event-log.jsonl" ]; then
   echo "FAIL: event-log observation was not emitted" >&2
   exit 1
 fi
-if rg -q 'command_class|decision|/tmp|workspace' "$TMP/logs/fire.jsonl"; then
-  echo "FAIL: hook-fire-log schema or redaction changed" >&2
-  exit 1
-fi
+python3 - "$TMP/logs/fire.jsonl" <<'PY'
+import json, sys
+expected = {"ts", "hook", "event", "cwd", "runtime_hint", "session_kind"}
+with open(sys.argv[1], encoding="utf-8") as stream:
+    for line in stream:
+        record = json.loads(line)
+        if set(record) != expected:
+            raise SystemExit("FAIL: hook-fire-log schema changed")
+PY
 
 printf '{"product_repo":"relative/product"}\n' >"$TMP/bad-schema.json"
 expect_blocked bad-schema run_file_config "$TMP/bad-schema.json" "$ops/file.txt"

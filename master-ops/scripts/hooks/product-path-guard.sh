@@ -19,12 +19,25 @@ mg_emit() {
   local level="$1" event="$2" outcome="$3" reason="$4"
   local command_class="${5:-}" target_scope="${6:-}"
   local event_log="${MOGUI_EVENT_LOG:-$HOME/.mogui/event-log.jsonl}"
-  mkdir -p "$(dirname "$event_log")" 2>/dev/null || true
-  printf '{"ts":%d,"level":"%s","event":"%s","component":"tool-impl","session_kind":"%s","runtime_hint":"%s","outcome":"%s","evidence":"observed","reason":"%s","command_class":"%s","target_scope":"%s"}\n' \
-    "$(date +%s)" "$level" "$event" \
-    "$([ -n "${ORCA_TASK_ID:-}" ] && echo worker || echo unknown)" \
-    "${MOGUI_RUNTIME_HINT:-unknown}" "$outcome" "$reason" "$command_class" "$target_scope" \
-    >>"$event_log" 2>/dev/null || true
+  EVENT_LOG="$event_log" MG_LEVEL="$level" MG_EVENT="$event" MG_OUTCOME="$outcome" \
+    MG_REASON="$reason" MG_COMMAND_CLASS="$command_class" MG_TARGET_SCOPE="$target_scope" \
+    python3 - <<'PY' 2>/dev/null || true
+import json, os, time
+path = os.environ["EVENT_LOG"]
+record = {
+    "ts": int(time.time()), "level": os.environ["MG_LEVEL"],
+    "event": os.environ["MG_EVENT"], "component": "tool-impl",
+    "session_kind": "worker" if os.environ.get("ORCA_TASK_ID") else "unknown",
+    "runtime_hint": os.environ.get("MOGUI_RUNTIME_HINT", "unknown"),
+    "outcome": os.environ["MG_OUTCOME"], "evidence": "observed",
+    "reason": os.environ["MG_REASON"],
+    "command_class": os.environ["MG_COMMAND_CLASS"],
+    "target_scope": os.environ["MG_TARGET_SCOPE"],
+}
+os.makedirs(os.path.dirname(path), exist_ok=True)
+with open(path, "a", encoding="utf-8") as stream:
+    stream.write(json.dumps(record, ensure_ascii=False) + "\n")
+PY
 }
 
 record_fire() {
@@ -180,7 +193,7 @@ for parts in segments:
                 print("DENY\t"+command_class+"\topaque interpreter command may contain an unparsed write")
                 raise SystemExit
     last_command_class=command_class
-    if os.environ["FAIL_CLOSED"] == "1" and any(token in {"-exec","-execdir","xargs","--in-place","-i"} for token in parts[1:]):
+    if any(token in {"-exec","-execdir","xargs","--in-place","-i"} for token in parts[1:]):
         print("DENY\t"+command_class+"\twrite-capable argument is not admitted")
         raise SystemExit
     target_hits=[]

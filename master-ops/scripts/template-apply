@@ -32,8 +32,6 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 from template_common import (  # noqa: E402
-    INSTANCE_OWNED_EXACT,
-    INSTANCE_OWNED_PREFIXES,
     PLACEHOLDERS,
     is_instance_owned,
 )
@@ -78,6 +76,21 @@ def effective_rel_under(root: Path, path: Path) -> str | None:
         return path.resolve().relative_to(root.resolve()).as_posix()
     except (OSError, ValueError, RuntimeError):
         return None
+
+
+def roots_overlap(first: Path, second: Path) -> bool:
+    first_resolved = first.resolve()
+    second_resolved = second.resolve()
+    try:
+        first_resolved.relative_to(second_resolved)
+        return True
+    except ValueError:
+        pass
+    try:
+        second_resolved.relative_to(first_resolved)
+        return True
+    except ValueError:
+        return False
 
 
 def load_manifest(path: Path) -> dict:
@@ -174,6 +187,25 @@ def plan_actions(
                 }
             )
             continue
+        lexical_dest = ops_root.resolve() / rel
+        if lexical_dest.is_symlink() or lexical_dest != dest:
+            actions.append(
+                {
+                    "path": rel,
+                    "action": "error-invalid-path",
+                    "reason": "destination path resolves through a symlink",
+                }
+            )
+            continue
+        if lexical_dest.exists() and not lexical_dest.is_file():
+            actions.append(
+                {
+                    "path": rel,
+                    "action": "error-invalid-path",
+                    "reason": "destination exists but is not a regular file",
+                }
+            )
+            continue
         if is_instance_owned(effective):
             actions.append(
                 {
@@ -241,7 +273,7 @@ def apply_planned(
     planned = [a for a in actions if a["action"] == "planned"]
     for item in planned:
         src = resolved_under(template_root, item["path"])
-        dest = resolved_under(ops_root, item["path"])
+        dest = ops_root.resolve() / item["path"]
         if src is None or dest is None or not src.is_file():
             raise RuntimeError(f"preflight failed for {item['path']}")
 
@@ -258,11 +290,14 @@ def apply_planned(
             )
             continue
         src = resolved_under(template_root, rel)
-        dest = resolved_under(ops_root, rel)
-        if src is None or dest is None:
+        dest = ops_root.resolve() / rel
+        resolved_dest = resolved_under(ops_root, rel)
+        if src is None or resolved_dest is None:
             raise RuntimeError(f"path escaped root during write: {rel}")
+        if dest.is_symlink() or dest != resolved_dest or (dest.exists() and not dest.is_file()):
+            raise RuntimeError(f"destination is not a regular file: {rel}")
         # Re-check resolved destination after confirmation (unconditional).
-        effective = effective_rel_under(ops_root, dest)
+        effective = effective_rel_under(ops_root, resolved_dest)
         if effective is None or is_instance_owned(effective):
             raise RuntimeError(
                 f"destination became instance-owned or escaped before write: {rel}"
@@ -375,6 +410,12 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(f"template-apply: {exc}\n")
         return 2
 
+    if roots_overlap(template_root, ops_root):
+        sys.stderr.write(
+            "template-apply: template and ops roots must be distinct and non-overlapping\n"
+        )
+        return 2
+
     try:
         manifest = load_manifest(template_root / "MANIFEST.json")
     except (OSError, ValueError, json.JSONDecodeError) as exc:
@@ -390,7 +431,11 @@ def main(argv: list[str] | None = None) -> int:
     if "TEMPLATE_VERSION" not in values:
         version_file = template_root / "TEMPLATE-VERSION"
         if version_file.is_file():
-            values["TEMPLATE_VERSION"] = version_file.read_text(encoding="utf-8").strip()
+            try:
+                values["TEMPLATE_VERSION"] = version_file.read_text(encoding="utf-8").strip()
+            except (OSError, UnicodeDecodeError) as exc:
+                sys.stderr.write(f"template-apply: cannot read template version: {exc}\n")
+                return 2
 
     actions = plan_actions(template_root, ops_root, manifest, args.attempt)
 

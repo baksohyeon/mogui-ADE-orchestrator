@@ -28,8 +28,6 @@
     "docs/charter/09-incident-derived-rules.md",
     "docs/charter/10-closed-principles-pointer.md",
     "docs/decisions/closed-decisions-and-facts.md",
-    "docs/lineage/MASTER-LINEAGE.md",
-    "docs/lineage/README.md",
     "docs/observability/README.md",
     "docs/orca-docs-grounding.md",
     "docs/retro/README.md",

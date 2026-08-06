@@ -341,3 +341,164 @@ def test_template_apply_rejects_path_escape_and_missing_manifest_file(tmp_path: 
     assert actions["missing.md"] == "error-missing-template-file"
     assert actions["../escape.md"] == "error-invalid-path"
     assert not (ops / "ok.md").exists()
+
+
+def test_template_check_empty_manifest_still_reports_unknown_paths(tmp_path: Path):
+    ops = tmp_path / "ops"
+    ops.mkdir()
+    (ops / "MANIFEST.json").write_text(
+        json.dumps({"template_version": "v0.0.0", "files": []}) + "\n",
+        encoding="utf-8",
+    )
+    (ops / "unexpected.txt").write_text("x\n", encoding="utf-8")
+    result = _run([sys.executable, str(TEMPLATE_CHECK), "--ops", str(ops), "--json"])
+    report = json.loads(result.stdout)
+    assert result.returncode == 1
+    assert report["unknown_present"] == ["unexpected.txt"]
+
+
+def test_template_check_rejects_symlink_and_bad_changelog(tmp_path: Path):
+    ops = tmp_path / "ops"
+    template = tmp_path / "template"
+    ops.mkdir()
+    template.mkdir()
+    (ops / "MANIFEST.json").write_text(
+        json.dumps({"template_version": "v0.0.0", "files": ["required.md"]}) + "\n",
+        encoding="utf-8",
+    )
+    outside = tmp_path / "outside.md"
+    outside.write_text("outside\n", encoding="utf-8")
+    (ops / "required.md").symlink_to(outside)
+    (template / "TEMPLATE-VERSION").write_text("v0.0.0\n", encoding="utf-8")
+    (template / "MANIFEST.json").write_text(
+        json.dumps({"template_version": "v0.0.0", "files": ["required.md"]}) + "\n",
+        encoding="utf-8",
+    )
+    (template / "CHANGELOG.md").write_bytes(b"\xff")
+    result = _run(
+        [
+            sys.executable,
+            str(TEMPLATE_CHECK),
+            "--ops",
+            str(ops),
+            "--template",
+            str(template),
+            "--json",
+        ]
+    )
+    report = json.loads(result.stdout)
+    assert result.returncode == 2
+    assert report["invalid_paths"] == ["required.md"]
+    assert any("CHANGELOG" in item for item in report["questions_unanswered"])
+
+
+def test_template_check_compares_version_without_template_manifest(tmp_path: Path):
+    ops = tmp_path / "ops"
+    template = tmp_path / "template"
+    ops.mkdir()
+    template.mkdir()
+    (ops / "MANIFEST.json").write_text(
+        json.dumps({"template_version": "v0.0.0", "files": []}) + "\n",
+        encoding="utf-8",
+    )
+    (template / "TEMPLATE-VERSION").write_text("v1.0.0\n", encoding="utf-8")
+    result = _run(
+        [
+            sys.executable,
+            str(TEMPLATE_CHECK),
+            "--ops",
+            str(ops),
+            "--template",
+            str(template),
+            "--json",
+        ]
+    )
+    assert result.returncode == 1
+
+
+def test_template_apply_rejects_overlap_and_invalid_destinations(tmp_path: Path):
+    template = tmp_path / "template"
+    ops = tmp_path / "ops"
+    template.mkdir()
+    ops.mkdir()
+    (template / "TEMPLATE-VERSION").write_text("v0.0.0\n", encoding="utf-8")
+    (template / "file.txt").write_text("new\n", encoding="utf-8")
+    (template / "MANIFEST.json").write_text(
+        json.dumps({"template_version": "v0.0.0", "files": ["file.txt", "dir"]}) + "\n",
+        encoding="utf-8",
+    )
+    (ops / "dir").mkdir()
+    external = tmp_path / "external.txt"
+    external.write_text("keep\n", encoding="utf-8")
+    (ops / "file.txt").symlink_to(external)
+
+    result = _run(
+        [
+            sys.executable,
+            str(TEMPLATE_APPLY),
+            "--ops",
+            str(ops),
+            "--template",
+            str(template),
+            "--json",
+        ]
+    )
+    assert result.returncode == 1
+    actions = {item["path"]: item["action"] for item in json.loads(result.stdout)["actions"]}
+    assert actions["file.txt"] == "error-invalid-path"
+    assert actions["dir"] == "error-invalid-path"
+    assert external.read_text(encoding="utf-8") == "keep\n"
+
+    overlap = _run(
+        [
+            sys.executable,
+            str(TEMPLATE_APPLY),
+            "--ops",
+            str(template),
+            "--template",
+            str(template),
+        ]
+    )
+    assert overlap.returncode == 2
+
+
+def test_template_apply_invalid_template_version_is_controlled_error(tmp_path: Path):
+    template = tmp_path / "template"
+    ops = tmp_path / "ops"
+    template.mkdir()
+    ops.mkdir()
+    (template / "TEMPLATE-VERSION").write_bytes(b"\xff")
+    (template / "MANIFEST.json").write_text(
+        json.dumps({"template_version": "v0.0.0", "files": []}) + "\n",
+        encoding="utf-8",
+    )
+    result = _run(
+        [
+            sys.executable,
+            str(TEMPLATE_APPLY),
+            "--ops",
+            str(ops),
+            "--template",
+            str(template),
+        ]
+    )
+    assert result.returncode == 2
+    assert "Traceback" not in result.stderr
+
+
+def test_frame_hygiene_guards_use_explicit_template_and_shared_skeleton_name():
+    harness = (SKELETON / "scripts" / "harness-selfcheck.sh").read_text(encoding="utf-8")
+    spawn = (SKELETON / "scripts" / "spawn-test").read_text(encoding="utf-8")
+    assert "OPS_DIR/../mogui-ADE-orchestrator" not in harness
+    assert "Fallback text match" not in harness
+    assert 'SKELETON_DIR="master"$\'-\'"ops"' in spawn
+    assert 'local ade_clone_path="$sandbox_dir/$ADE_REPO_NAME"' in spawn
+
+
+def test_onboarding_docs_name_template_root_and_placeholder_flags():
+    upgrade = (SKELETON / "onboarding" / "upgrade.md").read_text(encoding="utf-8")
+    reverify = (SKELETON / "onboarding" / "reverify.md").read_text(encoding="utf-8")
+    assert "--placeholder WORKSPACE_NAME" in upgrade
+    assert "ops-side" in upgrade
+    assert '"{{RUNTIME_ROOT}}/master-ops/scripts/template-check"' in reverify
+    assert "do not guess a sibling directory" in reverify

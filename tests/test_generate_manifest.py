@@ -61,6 +61,42 @@ def test_manifest_carries_template_version_and_sorted_files():
     assert "CHANGELOG.md" not in data["files"]
     assert "ONBOARDING.md" not in data["files"]
     assert not any(p.startswith("onboarding/") for p in data["files"])
+    assert not any(p.startswith("docs/lineage/") for p in data["files"])
+
+
+def test_generator_skips_symlinks_and_refuses_symlink_output(tmp_path: Path):
+    skeleton = tmp_path / "master-ops"
+    skeleton.mkdir()
+    (skeleton / "TEMPLATE-VERSION").write_text("v0.0.0\n", encoding="utf-8")
+    (skeleton / "real.md").write_text("ok\n", encoding="utf-8")
+    outside = tmp_path / "outside.md"
+    outside.write_text("outside\n", encoding="utf-8")
+    (skeleton / "linked.md").symlink_to(outside)
+
+    generated = subprocess.run(
+        [sys.executable, str(GENERATOR), "--skeleton", str(skeleton), "--stdout"],
+        capture_output=True,
+        text=True,
+    )
+    assert generated.returncode == 0, generated.stderr
+    assert "linked.md" not in json.loads(generated.stdout)["files"]
+
+    output = skeleton / "MANIFEST.json"
+    output.symlink_to(outside)
+    refused = subprocess.run(
+        [
+            sys.executable,
+            str(GENERATOR),
+            "--skeleton",
+            str(skeleton),
+            "--out",
+            str(output),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert refused.returncode == 1
+    assert outside.read_text(encoding="utf-8") == "outside\n"
 
 
 def test_frame_hygiene_rejects_master_ops_path(tmp_path: Path):

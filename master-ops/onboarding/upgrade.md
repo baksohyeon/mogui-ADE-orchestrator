@@ -12,7 +12,7 @@ Where we are: this workspace was already set up, and the book the Master reads f
 
 ## Checklist
 
-0. **Bootstrap the facts first**: ask the owner for the workspace root and ops repository path (or the operating card). Do not scan the disk for candidate workspaces. Do not substitute this orchestrator clone's paths. Every `{{...}}` value below means the measured value from that ops repository.
+0. **Bootstrap the facts first**: ask the owner for the workspace root and ops repository path (or the operating card). Do not scan the disk for candidate workspaces. Do not substitute this orchestrator clone's paths. The ops-side `{{WORKSPACE_NAME}}`, `{{WORKSPACE_ROOT}}`, `{{OPS_REPO}}`, `{{MONITOR_NS}}`, and `{{MODEL_ID}}` values below mean values measured from that ops repository. `{{RUNTIME_ROOT}}` and `{{TEMPLATE_VERSION}}` come from the template clone.
 
 1. **Locate the template**: the live ADE clone that carries the current skeleton (the one this router was loaded from is the default). Record its path as the template root. An install too old to contain `scripts/template-check` is still checkable by running the script from the template side:
 
@@ -36,7 +36,7 @@ When the ops repository already has the script:
 
 4. **Owner confirmation**: show the dry-run plan in the owner's language. Require an explicit confirmation before any write. There is no silent apply and no flag that skips confirmation on any run. If the owner declines, stop and leave the report.
 
-5. **Write pass (only after confirmation)**: re-run with `--write` and type the confirmation phrase the tool demands. Placeholder substitution uses only the documented set from the router (`{{WORKSPACE_NAME}}`, `{{WORKSPACE_ROOT}}`, `{{OPS_REPO}}`, `{{MONITOR_NS}}`, `{{MODEL_ID}}`, `{{REPO_LIST}}`, `{{RUNTIME_ROOT}}`, `{{TEMPLATE_VERSION}}`). Add none. Prefer values already measured from the existing install.
+5. **Write pass (only after confirmation)**: re-run with `--write` and type the confirmation phrase the tool demands. Placeholder substitution uses only the documented set from the router (`{{WORKSPACE_NAME}}`, `{{WORKSPACE_ROOT}}`, `{{OPS_REPO}}`, `{{MONITOR_NS}}`, `{{MODEL_ID}}`, `{{REPO_LIST}}`, `{{RUNTIME_ROOT}}`, `{{TEMPLATE_VERSION}}`). Add none. Prefer values already measured from the existing install. For example, repeat `--placeholder KEY=VALUE` for each measured value: `"{{RUNTIME_ROOT}}/master-ops/scripts/template-apply" --ops "{{OPS_REPO}}" --template "{{RUNTIME_ROOT}}/master-ops" --write --placeholder WORKSPACE_NAME="{{WORKSPACE_NAME}}" --placeholder WORKSPACE_ROOT="{{WORKSPACE_ROOT}}" --placeholder OPS_REPO="{{OPS_REPO}}" --placeholder MONITOR_NS="{{MONITOR_NS}}" --placeholder MODEL_ID="{{MODEL_ID}}" --placeholder REPO_LIST="{{REPO_LIST}}" --placeholder RUNTIME_ROOT="{{RUNTIME_ROOT}}" --placeholder TEMPLATE_VERSION="{{TEMPLATE_VERSION}}"`.
 
 6. **Refusals by name**: the apply step must refuse, and report as such, for:
    - `docs/lineage/`

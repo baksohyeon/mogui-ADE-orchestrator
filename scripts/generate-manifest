@@ -27,6 +27,7 @@ EXCLUDE_FILES = frozenset(
 EXCLUDE_DIRS = frozenset(
     {
         "onboarding",
+        "docs/lineage",
     }
 )
 
@@ -44,12 +45,14 @@ HYGIENE_EXEMPT_PREFIXES = (
 def iter_install_paths(skeleton: Path) -> list[str]:
     paths: list[str] = []
     for path in skeleton.rglob("*"):
-        if not path.is_file():
+        if not path.is_file() or path.is_symlink():
             continue
         rel = path.relative_to(skeleton).as_posix()
         parts = rel.split("/")
-        top = parts[0]
-        if rel in EXCLUDE_FILES or top in EXCLUDE_DIRS:
+        if rel in EXCLUDE_FILES or any(
+            rel == excluded or rel.startswith(excluded + "/")
+            for excluded in EXCLUDE_DIRS
+        ):
             continue
         # Never install bytecode or other local caches.
         if "__pycache__" in parts or rel.endswith((".pyc", ".pyo")):
@@ -219,6 +222,11 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.write(body)
         return 0
 
+    if out.is_symlink() or (out.exists() and not out.is_file()):
+        sys.stderr.write(
+            f"generate-manifest: refusing non-regular output path: {out}\n"
+        )
+        return 1
     out.write_text(body, encoding="utf-8")
     rel_files = len(manifest["files"])
     print(f"wrote {out} ({rel_files} paths, version {manifest['template_version']})")

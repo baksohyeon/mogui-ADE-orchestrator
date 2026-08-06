@@ -23,6 +23,7 @@ OPS_REPO_PATH="$GIT_ROOT"
 WORKSPACE_ROOT="{{WORKSPACE_ROOT}}"
 ADE_REPO_NAME="mogui-ADE-orchestrator"
 ADE_REPO_PATH="$WORKSPACE_ROOT/$ADE_REPO_NAME"
+SKELETON_DIR="master"$'-'"ops"
 # Sandbox ops repository name — not the live install name; a disposable fixture.
 SANDBOX_OPS_NAME="sandbox-ops"
 REPORT_DIR="$OPS_REPO_PATH/docs/reports"
@@ -279,7 +280,7 @@ preflight_check() {
   local ade_clone="$sandbox_dir/$ADE_REPO_NAME"
 
   # Verify master-ops directories exist
-  if [ ! -d "$ade_clone/master-ops" ]; then
+  if [ ! -d "$ade_clone/$SKELETON_DIR" ]; then
     return 1
   fi
 
@@ -289,10 +290,7 @@ preflight_check() {
   fi
 
   # Verify ONBOARDING.md router exists
-  # Skeleton directory name built in parts so the installed script does not carry
-  # an ADE-frame path literal (frame hygiene for generated ops repositories).
-  local skeleton_dir="master"$'-'"ops"
-  if [ ! -f "$ade_clone/$skeleton_dir/ONBOARDING.md" ]; then
+  if [ ! -f "$ade_clone/$SKELETON_DIR/ONBOARDING.md" ]; then
     return 1
   fi
 
@@ -323,7 +321,7 @@ EOF
 create_sandbox() {
   local runtime=$1
   local sandbox_dir="$SANDBOX_BASE/$runtime-$(date +%s)"
-  local ade_clone_path="$sandbox_dir/mogui-ADE-orchestrator"
+  local ade_clone_path="$sandbox_dir/$ADE_REPO_NAME"
 
   log_msg "Creating sandbox at: $sandbox_dir"
   mkdir -p "$sandbox_dir"

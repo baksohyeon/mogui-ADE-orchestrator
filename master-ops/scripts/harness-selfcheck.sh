@@ -12,11 +12,6 @@ OPS_REPO="{{OPS_REPO}}"
 # card end to end and a successor following it in order hit a false failure.
 # The seat verdict still comes from ORCA_WORKSPACE_ID, never from $PWD.
 OPS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-# Basename of the ops repository path — used only for tracker resolution strings.
-OPS_BASENAME="$(basename "$OPS_REPO")"
-if [ "$OPS_BASENAME" = "{{OPS_REPO}}" ] || [ -z "$OPS_BASENAME" ]; then
-  OPS_BASENAME="$(basename "$OPS_DIR")"
-fi
 SETTINGS_FILE="$WORKSPACE_ROOT/.claude/settings.json"
 SKILLS_DISCOVERY_PATH="$WORKSPACE_ROOT/.claude/skills"
 HOOKS_REPO_DIR="$OPS_DIR/scripts/hooks"
@@ -258,14 +253,8 @@ fi
 if [ "$tracker_ok" -eq 1 ]; then
   echo "Tracker: resolves to ops .beads"
 else
-  # Fallback text match for hosts where bd prints a non-path first line.
-  case "$tracker_out" in
-    *"$OPS_BASENAME"/.beads*) echo "Tracker: resolves to $OPS_BASENAME/.beads" ;;
-    *)
-      echo "Tracker: does not resolve to ops repo"
-      exit_code=1
-      ;;
-  esac
+  echo "Tracker: does not resolve to ops repo"
+  exit_code=1
 fi
 
 if [ -n "$BEADS_DIR" ]; then
@@ -288,8 +277,6 @@ if [ -x "$TEMPLATE_CHECK" ]; then
   skeleton_dir="master"$'-'"ops"
   if [ -n "${RUNTIME_ROOT:-}" ] && [ -f "$RUNTIME_ROOT/$skeleton_dir/MANIFEST.json" ]; then
     template_args+=(--template "$RUNTIME_ROOT/$skeleton_dir")
-  elif [ -f "$OPS_DIR/../mogui-ADE-orchestrator/$skeleton_dir/MANIFEST.json" ]; then
-    template_args+=(--template "$OPS_DIR/../mogui-ADE-orchestrator/$skeleton_dir")
   fi
   template_json=$("$TEMPLATE_CHECK" "${template_args[@]}" 2>/dev/null) || template_rc=$?
   template_rc=${template_rc:-0}

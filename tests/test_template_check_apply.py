@@ -270,3 +270,40 @@ def test_template_apply_declined_confirmation_writes_nothing(tmp_path: Path):
     )
     assert result.returncode == 2
     assert list(ops.iterdir()) == []
+
+
+def test_template_apply_rejects_path_escape_and_missing_manifest_file(tmp_path: Path):
+    ops = tmp_path / "ops"
+    ops.mkdir()
+    template = tmp_path / "template"
+    template.mkdir()
+    (template / "TEMPLATE-VERSION").write_text("v0.0.0\n", encoding="utf-8")
+    (template / "ok.md").write_text("ok\n", encoding="utf-8")
+    # Claim a missing file and a path-escape entry.
+    (template / "MANIFEST.json").write_text(
+        json.dumps(
+            {
+                "template_version": "v0.0.0",
+                "files": ["ok.md", "missing.md", "../escape.md"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    result = _run(
+        [
+            sys.executable,
+            str(TEMPLATE_APPLY),
+            "--ops",
+            str(ops),
+            "--template",
+            str(template),
+            "--json",
+        ],
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    actions = {a["path"]: a["action"] for a in payload["actions"]}
+    assert actions["missing.md"] == "error-missing-template-file"
+    assert actions["../escape.md"] == "error-invalid-path"
+    assert not (ops / "ok.md").exists()

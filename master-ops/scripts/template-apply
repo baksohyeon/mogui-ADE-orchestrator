@@ -52,6 +52,36 @@ def is_instance_owned(rel: str) -> bool:
     return any(rel == p.rstrip("/") or rel.startswith(p) for p in INSTANCE_OWNED_PREFIXES)
 
 
+def normalize_rel(rel: str) -> str | None:
+    """Return a normalized relative path, or None if it escapes the root."""
+    if not isinstance(rel, str) or not rel or rel.startswith("/"):
+        return None
+    # Reject Windows drive / UNC forms and null bytes early.
+    if "\x00" in rel or ":" in rel:
+        return None
+    parts: list[str] = []
+    for part in rel.replace("\\", "/").split("/"):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            return None
+        parts.append(part)
+    if not parts:
+        return None
+    return "/".join(parts)
+
+
+def resolved_under(root: Path, rel: str) -> Path | None:
+    """Resolve root/rel and require the result to stay under root."""
+    root_res = root.resolve()
+    candidate = (root_res / rel).resolve()
+    try:
+        candidate.relative_to(root_res)
+    except ValueError:
+        return None
+    return candidate
+
+
 def load_manifest(path: Path) -> dict:
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict) or not isinstance(data.get("files"), list):
@@ -86,10 +116,22 @@ def plan_actions(
 ) -> list[dict]:
     """Build the per-path plan. extra_targets are attempted writes outside the
     manifest — used only to prove refusal in tests; normal runs pass None."""
-    claimed = {str(p) for p in manifest["files"]}
+    claimed_raw = [str(p) for p in manifest["files"]]
     actions: list[dict] = []
+    claimed: set[str] = set()
 
-    for rel in sorted(claimed):
+    for raw in sorted(claimed_raw):
+        rel = normalize_rel(raw)
+        if rel is None:
+            actions.append(
+                {
+                    "path": raw,
+                    "action": "error-invalid-path",
+                    "reason": "manifest entry is not a safe relative path",
+                }
+            )
+            continue
+        claimed.add(rel)
         if is_instance_owned(rel):
             actions.append(
                 {
@@ -99,17 +141,26 @@ def plan_actions(
                 }
             )
             continue
-        src = template_root / rel
+        src = resolved_under(template_root, rel)
+        dest = resolved_under(ops_root, rel)
+        if src is None or dest is None:
+            actions.append(
+                {
+                    "path": rel,
+                    "action": "error-invalid-path",
+                    "reason": "resolved path escapes template or ops root",
+                }
+            )
+            continue
         if not src.is_file():
             actions.append(
                 {
                     "path": rel,
-                    "action": "skipped-as-unknown",
+                    "action": "error-missing-template-file",
                     "reason": "listed in manifest but missing from template tree",
                 }
             )
             continue
-        dest = ops_root / rel
         if dest.is_file():
             reason = "template-layer path; would overwrite existing file"
         else:
@@ -122,8 +173,9 @@ def plan_actions(
             }
         )
 
-    for rel in extra_targets or []:
-        if is_instance_owned(rel):
+    for raw in extra_targets or []:
+        rel = normalize_rel(raw) or raw
+        if is_instance_owned(rel if isinstance(rel, str) else raw):
             actions.append(
                 {
                     "path": rel,
@@ -143,12 +195,25 @@ def plan_actions(
     return actions
 
 
+def plan_has_errors(actions: list[dict]) -> bool:
+    return any(a["action"].startswith("error-") for a in actions)
+
+
 def apply_planned(
     template_root: Path,
     ops_root: Path,
     actions: list[dict],
     values: dict[str, str],
 ) -> list[dict]:
+    # Preflight every planned source before the first write so a missing file
+    # mid-pass does not leave a half-applied install.
+    planned = [a for a in actions if a["action"] == "planned"]
+    for item in planned:
+        src = resolved_under(template_root, item["path"])
+        dest = resolved_under(ops_root, item["path"])
+        if src is None or dest is None or not src.is_file():
+            raise RuntimeError(f"preflight failed for {item['path']}")
+
     results: list[dict] = []
     for item in actions:
         rel = item["path"]
@@ -161,8 +226,9 @@ def apply_planned(
                 }
             )
             continue
-        src = template_root / rel
-        dest = ops_root / rel
+        src = resolved_under(template_root, rel)
+        dest = resolved_under(ops_root, rel)
+        assert src is not None and dest is not None
         text = src.read_text(encoding="utf-8")
         text = substitute(text, values)
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -285,6 +351,10 @@ def main(argv: list[str] | None = None) -> int:
     else:
         sys.stdout.write(plan_text)
 
+    if plan_has_errors(actions):
+        # Missing or invalid manifest entries are apply errors, not a clean plan.
+        return 1
+
     refused = [
         a
         for a in actions
@@ -303,7 +373,8 @@ def main(argv: list[str] | None = None) -> int:
     if not args.write:
         return 0
 
-    # Interactive confirmation — no --yes.
+    # Interactive confirmation — no --yes. Prompt on stderr so --json stdout
+    # stays machine-readable.
     prompt = (
         f"Type {CONFIRM_PHRASE!r} to write template-layer files "
         f"into {ops_root}: "
@@ -312,7 +383,11 @@ def main(argv: list[str] | None = None) -> int:
         answer = args.confirm_input
     else:
         try:
-            answer = input(prompt)
+            sys.stderr.write(prompt)
+            sys.stderr.flush()
+            answer = sys.stdin.readline()
+            if answer == "":
+                raise EOFError
         except EOFError:
             sys.stderr.write("template-apply: no confirmation (EOF); aborting\n")
             return 2
@@ -320,7 +395,11 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write("template-apply: confirmation declined; no writes\n")
         return 2
 
-    results = apply_planned(template_root, ops_root, actions, values)
+    try:
+        results = apply_planned(template_root, ops_root, actions, values)
+    except (OSError, RuntimeError, UnicodeDecodeError) as exc:
+        sys.stderr.write(f"template-apply: write aborted: {exc}\n")
+        return 2
     if args.json:
         json.dump({"phase": "write", "actions": results}, sys.stdout, indent=2)
         sys.stdout.write("\n")

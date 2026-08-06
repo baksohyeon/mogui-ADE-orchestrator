@@ -34,7 +34,7 @@ $ "{{OPS_REPO}}/scripts/template-check" --ops "{{OPS_REPO}}" --template "{{RUNTI
 $ "{{RUNTIME_ROOT}}/master-ops/scripts/template-apply" --ops "{{OPS_REPO}}" --template "{{RUNTIME_ROOT}}/master-ops"
 ```
 
-4. **Owner confirmation**: show the dry-run plan in the owner's language. Require an explicit confirmation before any write. There is no silent apply and no skip-confirmation flag on the first run. If the owner declines, stop and leave the report.
+4. **Owner confirmation**: show the dry-run plan in the owner's language. Require an explicit confirmation before any write. There is no silent apply and no flag that skips confirmation on any run. If the owner declines, stop and leave the report.
 
 5. **Write pass (only after confirmation)**: re-run with `--write` and type the confirmation phrase the tool demands. Placeholder substitution uses only the documented set from the router (`{{WORKSPACE_NAME}}`, `{{WORKSPACE_ROOT}}`, `{{OPS_REPO}}`, `{{MONITOR_NS}}`, `{{MODEL_ID}}`, `{{REPO_LIST}}`, `{{RUNTIME_ROOT}}`, `{{TEMPLATE_VERSION}}`). Add none. Prefer values already measured from the existing install.
 

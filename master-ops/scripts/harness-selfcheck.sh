@@ -246,7 +246,7 @@ case "$tracker_out" in
 esac
 
 if [ -n "$BEADS_DIR" ] && [ "$BEADS_DIR" != "$OPS_REPO/.beads" ] && [ "$BEADS_DIR" != "$OPS_DIR/.beads" ]; then
-  if ! echo "$BEADS_DIR" | grep -q "$OPS_BASENAME/.beads"; then
+  if ! echo "$BEADS_DIR" | grep -Fq -- "$OPS_BASENAME/.beads"; then
     echo "Tracker: BEADS_DIR points outside ops repo: $BEADS_DIR"
     exit_code=1
   fi

@@ -14,8 +14,6 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SKELETON = REPO_ROOT / "master-ops"
-DEFAULT_OUT = SKELETON / "MANIFEST.json"
-TEMPLATE_VERSION_FILE = SKELETON / "TEMPLATE-VERSION"
 
 # Files and directories that stay on the template side and never install.
 # Keep this list as the single executable source for Step 3 of onboarding.
@@ -68,6 +66,8 @@ def read_template_version(skeleton: Path) -> str:
 
 def check_frame_hygiene(skeleton: Path, install_paths: list[str]) -> list[str]:
     """Return human-readable defect lines; empty means clean."""
+    frame_bytes = FRAME_PATH_NEEDLE.encode("utf-8")
+    author_bytes = AUTHORING_OPS_NAME.encode("utf-8")
     defects: list[str] = []
     for rel in install_paths:
         if rel == "MANIFEST.json":
@@ -78,12 +78,13 @@ def check_frame_hygiene(skeleton: Path, install_paths: list[str]) -> list[str]:
         else:
             path = skeleton / rel
         try:
-            text = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
+            raw = path.read_bytes()
+        except OSError as exc:
+            defects.append(f"{rel}: unreadable ({exc})")
             continue
-        if FRAME_PATH_NEEDLE in text:
+        if frame_bytes in raw:
             defects.append(f"{rel}: contains {FRAME_PATH_NEEDLE!r} (ADE-frame path leak)")
-        if AUTHORING_OPS_NAME in text:
+        if author_bytes in raw:
             defects.append(
                 f"{rel}: contains authoring repository name {AUTHORING_OPS_NAME!r}"
             )
@@ -146,7 +147,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         manifest = build_manifest(skeleton)
     except SystemExit as exc:
-        return int(exc.code) if isinstance(exc.code, int) else 1
+        # SystemExit may carry a string message (e.g. missing TEMPLATE-VERSION).
+        if isinstance(exc.code, int):
+            return exc.code
+        if exc.code:
+            sys.stderr.write(f"{exc.code}\n")
+        return 1
 
     body = render(manifest)
     out = args.out if args.out is not None else skeleton / "MANIFEST.json"

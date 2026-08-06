@@ -81,13 +81,17 @@ def resolve_template_root(template: Path | None) -> Path | None:
     if template is None:
         return None
     path = template.resolve()
-    if (path / "MANIFEST.json").is_file() and (path / "TEMPLATE-VERSION").is_file():
+    if not path.is_dir():
+        return None
+    # Require template identity: MANIFEST and/or TEMPLATE-VERSION. Never accept
+    # an arbitrary directory as a silent fallback.
+    if (path / "MANIFEST.json").is_file() or (path / "TEMPLATE-VERSION").is_file():
         return path
     nested = path / "master-ops"
-    if (nested / "MANIFEST.json").is_file() or (nested / "TEMPLATE-VERSION").is_file():
+    if nested.is_dir() and (
+        (nested / "MANIFEST.json").is_file() or (nested / "TEMPLATE-VERSION").is_file()
+    ):
         return nested
-    if path.is_dir():
-        return path
     return None
 
 
@@ -137,8 +141,14 @@ def is_template_side(rel: str) -> bool:
 def read_template_version(template_root: Path) -> str | None:
     version_file = template_root / "TEMPLATE-VERSION"
     if version_file.is_file():
-        return version_file.read_text(encoding="utf-8").strip() or None
-    manifest, _ = load_manifest(template_root / "MANIFEST.json")
+        try:
+            return version_file.read_text(encoding="utf-8").strip() or None
+        except (OSError, UnicodeDecodeError):
+            return None
+    try:
+        manifest, _ = load_manifest(template_root / "MANIFEST.json")
+    except (OSError, UnicodeDecodeError):
+        return None
     if manifest:
         return manifest.get("template_version")
     return None
@@ -146,8 +156,8 @@ def read_template_version(template_root: Path) -> str | None:
 
 def parse_changelog_sections(text: str) -> list[tuple[str, str]]:
     """Return [(version_heading, body), ...] newest first where possible."""
-    # Match ## v0.4.4 or ## [0.4.4] or ## Unreleased
-    pattern = re.compile(r"^##\s+(\[?[^\]]+\]?)\s*$", re.MULTILINE)
+    # Match ## v0.4.4 or ## [0.4.4] or ## Unreleased — single-line headings only.
+    pattern = re.compile(r"^##[ \t]+(\[?[^\]\r\n]+\]?)\s*$", re.MULTILINE)
     matches = list(pattern.finditer(text))
     sections: list[tuple[str, str]] = []
     for i, match in enumerate(matches):
@@ -162,7 +172,10 @@ def parse_changelog_sections(text: str) -> list[tuple[str, str]]:
 def adoption_notes_newer_than(changelog: Path, installed: str | None) -> list[dict]:
     if not changelog.is_file():
         return []
-    text = changelog.read_text(encoding="utf-8")
+    try:
+        text = changelog.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return []
     sections = parse_changelog_sections(text)
     notes: list[dict] = []
     for heading, body in sections:
@@ -264,6 +277,7 @@ def build_report(
                 if p not in t_required
                 and not is_instance_owned(p)
                 and not is_template_side(p)
+                and p != "MANIFEST.json"
             )
             if report["absent_required"] or report["unknown_present"]:
                 exit_code = 1
@@ -353,7 +367,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.template is not None and template_root is None:
         return _die(f"template path unreadable: {args.template}", 2)
 
-    report, code = build_report(ops_root, template_root)
+    try:
+        report, code = build_report(ops_root, template_root)
+    except (OSError, UnicodeDecodeError) as exc:
+        return _die(f"could not read inputs: {exc}", 2)
     if args.json:
         json.dump(report, sys.stdout, indent=2)
         sys.stdout.write("\n")

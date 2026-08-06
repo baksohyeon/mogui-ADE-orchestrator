@@ -79,10 +79,15 @@ Contract convention merge-time re-measurement and citation repair (2026-08-05 wo
 
 Review follow-up for successor promotion (2026-08-06):
 
-- Product-path guard now fails closed for shell writes, git staging and alternate
-  work-tree forms, normalizes symlinked paths, reads the canonical `product_repo`
-  runtime key, resolves the runtime config location, and honors the hook fire-log
-  override. Regression coverage is in `scripts/test-product-path-guard.sh`.
+- Product-path guard now inverts the Bash policy: any target normalized under the
+  product root is denied unless its command class was measured as read-only in
+  the fire log; unresolved targets are denied with a reason. The shipped measured
+  allowlist is empty because the existing log has 0 usable command observations,
+  so the measured rejection report is `0/0`, N/A rather than an inferred rate.
+  Symlink normalization, canonical `product_repo` configuration, runtime config
+  resolution, configurable fire logs, and the requested bypass regressions are covered by
+  `scripts/test-product-path-guard.sh`; run `scripts/measure-product-path-guard`
+  to report the live rate.
 - The agy dispatch path now accepts its measured Gemini vendor mapping; the full
   runtime capability table remains a separate contract. `scripts/test-dispatch-runtime.sh`
   preserves this minimum behavior.

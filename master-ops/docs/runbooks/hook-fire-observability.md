@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The fire-log (`~/.mogui/hook-fire-log.jsonl`) records when ops hooks run, where they ran, and what runtime invoked them. It answers: **Which hooks actually fire in live operation?** across runtimes (Claude, Codex, Cursor, Grok, Antigravity/Gemini) and session kinds (master, dispatched worker).
+The fire-log (`~/.mogui/hook-fire-log.jsonl`) records when ops hooks run, where they ran, and what runtime invoked them. It answers: **Which hooks actually fire in live operation?** across runtimes (Claude, Codex, Cursor, Grok, Antigravity/Gemini) and session kinds (master, dispatched worker). The product-path guard additionally records a command class and its allow/block decision, without recording the full command.
 
 ## Design Decision
 
@@ -19,6 +19,7 @@ Observational fire-log first; active canaries later and only for hooks that neve
 
 - A wired-but-broken hook (e.g., script exits early, condition never true) and a not-wired hook **both show zero fire-log entries**. Distinguishing them requires an active canary (deliberately deferred).
 - Whether a hook's decision logic ran correctly (the log records only that the hook was invoked, not its outcome).
+- The product-path guard's Bash false-positive rate until command-class observations exist; use `scripts/measure-product-path-guard` and report `N/A (0/0)` when none exist.
 
 ## Fire-Log Schema
 
@@ -36,6 +37,8 @@ One JSON line per hook invocation. Example:
 | `cwd` | string | Working directory when hook fired |
 | `runtime_hint` | string | Runtime identifier: `claude`, `codex`, `cursor`, `grok`, `antigravity`, or `unknown` |
 | `session_kind` | string | `master` (ops repo root) or `worker` (in `.orca/worktrees`), or `unknown` |
+| `command_class` | string | Product-path guard's command class; empty for hooks without command input |
+| `decision` | string | Product-path guard decision (`allowed`, `blocked`, or `override`); `observed` otherwise |
 
 ## Log Location
 
@@ -61,6 +64,19 @@ scripts/hook-coverage-report
 ```
 
 Prints a matrix of hook by (runtime_hint, session_kind) with last-fired timestamp and count. Lists hooks with zero entries (measurement targets).
+
+### Product-path guard measurement
+
+```bash
+scripts/measure-product-path-guard
+```
+
+This reports the number of usable Bash command observations, blocked decisions,
+and the numeric rejection rate. The guard must not infer an allowlist from command
+names: populate `scripts/hooks/product-path-guard-readonly-allowlist.txt` only from
+measured read-only command classes. Until the log has command observations, the
+correct report is `bash_command_observations=0`, `guard_rejections=0`, and
+`rejection_rate=N/A (0/0; no command observations)`.
 
 ## Escalation Rule
 

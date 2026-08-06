@@ -164,41 +164,47 @@ choose_default_runtime() {
   done
 }
 
-# Start-screen markers, per agent host. A start screen is IDLE, so
+# Pane classification markers, per agent host. A start screen is IDLE, so
 # `terminal wait --for tui-idle` reports it ready and an inject sent there is
 # lost with every step still printing success. Extend this list the first time a
 # host shows a gate that is not here yet; a missing marker is a silent delivery
 # failure, which is the whole defect this guards (measured delivery incidents).
-START_SCREEN_MARKERS='Resume session|New worktree|Coming from Claude Code|Changelog$|Select a model|Welcome to Claude|Do you trust the files|Sign in|press enter to continue|/login|Antigravity CLI requires permission|I trust this folder'
+HOOK_TRUST_MARKERS='^[[:space:]]*(Resume session.*|New worktree.*|Coming from Claude Code.*|Changelog.*|Select a model.*|Welcome to Claude.*|Do you trust the files.*|Sign in.*|press enter to continue.*|/login.*|Antigravity CLI requires permission.*|I trust this folder.*|trust this workspace.*|workspace trust.*|permission to access.*)[[:space:][:punct:]]*$'
+LIMIT_MARKERS='^[[:space:]]*(rate limit|rate-limit|too many requests|quota exceeded|out of credits|credits are exhausted|usage limit reached|you.?ve hit your limit|you have reached your limit|try again after)[[:space:][:punct:]]*.*$'
+PREPARED_PROMPT_MARKERS='^[[:space:]]*(claude|codex|grok|gemini)[[:space:]]*>[[:space:]]*$'
+PREPARED_UNICODE_PROMPT_MARKERS='^[[:space:]]*(❯|›|➜)[[:space:]]*$'
 
-pane_gate() {
-  if orca terminal read --terminal "$1" --limit 40 2>/dev/null \
-     | grep -qE "$START_SCREEN_MARKERS"; then
-    echo start-screen
+pane_classify_text() {
+  local pane="$1" state
+  # `terminal read` retains task text and prior output. Only the recent pane
+  # state area may classify a gate; matching the whole capture lets a spec
+  # mentioning a rate limit become a false provider failure.
+  state=$(printf '%s\n' "$pane" | tail -n 8)
+  if printf '%s\n' "$state" | grep -Eiq "$HOOK_TRUST_MARKERS"; then
+    echo hook-trust
+  elif printf '%s\n' "$state" | grep -Eiq "$LIMIT_MARKERS"; then
+    echo limit
+  elif printf '%s\n' "$state" | grep -Eq "$PREPARED_PROMPT_MARKERS" \
+      || printf '%s\n' "$state" | grep -Eq "$PREPARED_UNICODE_PROMPT_MARKERS"; then
+    echo prepared-prompt
   else
-    echo prompt
+    echo unknown
   fi
 }
 
-pane_last_output() {
-  orca terminal show --terminal "$1" --json 2>/dev/null | python3 -c "
-import json,sys
-try: print(json.load(sys.stdin)['result']['terminal'].get('lastOutputAt') or 0)
-except Exception: print(0)"
+delivery_result() {
+  case "$1:$2" in
+    prepared-prompt:unknown) echo agent-started;;
+    hook-trust:hook-trust) echo hook-trust;;
+    limit:limit) echo limit;;
+    *) echo unknown;;
+  esac
 }
 
-# True when the pane emitted anything after the inject. This is evidence that
-# something arrived, never evidence that the spec was understood. Compares
-# against the value sampled immediately before the inject, because sampling
-# afterwards cannot see output that already landed.
-pane_advanced() {
-  local i after
-  for i in 1 2 3 4 5 6; do
-    sleep 5
-    after=$(pane_last_output "$1")
-    [ -n "$after" ] && [ "$after" != "$PRE_INJECT_AT" ] && return 0
-  done
-  return 1
+pane_classification() {
+  local pane
+  pane=$(orca terminal read --terminal "$1" --limit 40 2>/dev/null || true)
+  pane_classify_text "$pane"
 }
 
 shell_quote() {
@@ -527,10 +533,7 @@ fi
 echo "→ $TASK → $TERMINAL ($KIND)"
 
 # 4. dispatch --inject
-# Sample the pane's output clock BEFORE injecting. Sampling afterwards cannot
-# distinguish "the agent answered" from "nothing has happened yet", because both
-# read as whatever the last value happens to be.
-PRE_INJECT_AT=$(pane_last_output "$TERMINAL")
+PRE_INJECT_CLASS=$(pane_classification "$TERMINAL")
 DISP=$(orca orchestration dispatch --task "$TASK" --to "$TERMINAL" --inject --json 2>/dev/null \
        | jqf "d['result']['dispatch']['id']")
 [ -z "$DISP" ] && { echo "✗ dispatch failed" >&2; exit 3; }
@@ -587,27 +590,30 @@ fi
 # Changelog / Quit with an empty prompt after `register ✓` printed, and the spec
 # was never consumed (measured delivery incidents).
 #
-# Do not "fix" this by sending the spec again. Sending text into that menu exits
-# the pane — measured the same day, same worker.
-if [ "$(pane_gate "$TERMINAL")" = "start-screen" ]; then
-  echo "✗ delivery FAILED · pane is on a start-screen gate, not a prompt · the spec was NOT consumed"
-  echo "  task=$TASK terminal=$TERMINAL dispatch=$DISP"
-  echo "  Read the pane and classify it before doing anything else (worker-stall-triage):"
-  echo "    orca terminal read --terminal $TERMINAL --limit 40"
-  echo "  A start-screen gate, a limit condition, and a dead process need three different answers."
-  echo "  Do NOT re-send the spec into a menu; that exits the pane. Dismiss the gate first."
-  exit 5
-fi
-
-# Say which of the three outcomes happened. Silence would mean both "delivered"
-# and "the check never ran", and a surface where absence has two meanings is the
-# defect this whole file spent 2026-08-05 removing.
-if pane_advanced "$TERMINAL"; then
-  echo "✓ delivery ✓ pane produced output after inject · the spec reached the agent"
-  echo "  This is evidence something arrived, not that it was understood. Read the pane to check"
-  echo "  the agent is doing the contracted work: orca terminal read --terminal $TERMINAL --limit 40"
-else
-  echo "⚠ delivery UNVERIFIED · pane produced no new output after inject"
-  echo "  Not a failure and not a pass: the agent may be thinking, or may never have received the spec."
-  echo "  Verify before trusting the dispatch: orca terminal read --terminal $TERMINAL --limit 40"
-fi
+# Do not "fix" this by sending the spec again. Sending text into a hook/trust
+# menu exits the pane. Classify the pane transition and report each class
+# explicitly; output bytes or output-clock changes are not delivery evidence.
+POST_INJECT_CLASS=unknown
+for _ in 1 2 3 4 5 6; do
+  sleep 5
+  POST_INJECT_CLASS=$(pane_classification "$TERMINAL")
+  [ "$POST_INJECT_CLASS" != prepared-prompt ] && break
+done
+DELIVERY_CLASS=$(delivery_result "$PRE_INJECT_CLASS" "$POST_INJECT_CLASS")
+echo "delivery pre=$PRE_INJECT_CLASS post=$POST_INJECT_CLASS class=$DELIVERY_CLASS"
+case "$DELIVERY_CLASS" in
+  hook-trust)
+    echo "✗ delivery FAILED · hook/trust gate is still present; the spec was NOT consumed"
+    echo "  Dismiss or pre-trust the gate before dispatching another task."
+    exit 5;;
+  limit)
+    echo "✗ delivery FAILED · provider limit is present; the spec was NOT consumed"
+    echo "  Wait for the provider limit to clear or use an available runtime."
+    exit 5;;
+  agent-started)
+    echo "✓ delivery ✓ agent left its prepared prompt after inject and began processing"
+    echo "  Read the pane to verify the contracted work: orca terminal read --terminal $TERMINAL --limit 40";;
+  *)
+    echo "⚠ delivery UNVERIFIED · pane is not a recognized prepared prompt"
+    echo "  Verify before trusting the dispatch: orca terminal read --terminal $TERMINAL --limit 40";;
+esac

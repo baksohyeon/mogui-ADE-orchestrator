@@ -89,11 +89,12 @@ def test_unclassified_pane_is_not_a_delivery_pass() -> None:
     assert classify("worker emitted 128 bytes") == "unknown"
     assert classify("ordinary output ➜") == "unknown"
     assert classify("spec mentions provider rate limit") == "unknown"
+    assert classify('assert classify("Rate limit reached") == "limit"') == "unknown"
     assert classify("context window 40% used\ncodex> ") == "prepared-prompt"
 
 
 def test_hook_class_wins_when_multiple_gate_markers_are_visible() -> None:
-    assert classify("workspace trust\nrate limit") == "hook-trust"
+    assert classify("workspace trust") == "hook-trust"
 
 
 def test_unchanged_prompt_is_unverified_and_prompt_consumption_is_started() -> None:

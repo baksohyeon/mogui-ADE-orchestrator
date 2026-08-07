@@ -176,10 +176,10 @@ PREPARED_UNICODE_PROMPT_MARKERS='^[[:space:]]*(❯|›|➜)[[:space:]]*$'
 
 pane_classify_text() {
   local pane="$1" state
-  # `terminal read` retains task text and prior output. Only the recent pane
-  # state area may classify a gate; matching the whole capture lets a spec
-  # mentioning a rate limit become a false provider failure.
-  state=$(printf '%s\n' "$pane" | tail -n 8)
+  # `terminal read` retains task text and prior output. Only the final
+  # non-empty pane state line may classify a gate; matching retained lines lets
+  # a spec or test source mentioning a rate limit become a false failure.
+  state=$(printf '%s\n' "$pane" | awk 'NF { line=$0 } END { print line }')
   if printf '%s\n' "$state" | grep -Eiq "$HOOK_TRUST_MARKERS"; then
     echo hook-trust
   elif printf '%s\n' "$state" | grep -Eiq "$LIMIT_MARKERS"; then

@@ -177,9 +177,9 @@ PREPARED_UNICODE_PROMPT_MARKERS='^[[:space:]]*(❯|›|➜)[[:space:]]*$'
 pane_classify_text() {
   local pane="$1" state
   # `terminal read` retains task text and prior output. Use the retained recent
-  # state area and line anchors for this dispatch contract, while recording the
-  # known limit: TUI text can still collide with task or agent output. Marker
-  # precision is tracked separately in mgm-hww.
+  # state area and line-prefix matching for this dispatch contract. A gate
+  # phrase at the start of a task-text or agent-output line can still be
+  # misclassified; marker precision is tracked separately in mgm-hww.
   state=$(printf '%s\n' "$pane" | tail -n 8)
   if printf '%s\n' "$state" | grep -Eiq "$HOOK_TRUST_MARKERS"; then
     echo hook-trust

@@ -58,7 +58,9 @@ Dispatch pane classification (2026-08-06):
   On 2026-08-07, the pane sweep classified this regression test's `Rate limit
   reached` literal as an ACTION limit until the pane was read; the test source
   was content, not a quota state. Pane consumers should apply the same recent
-  state-area and whole-line anchor rule used here.
+  state-area and line-prefix matching rule used here; a gate phrase at the
+  start of task text or agent output can still be misclassified, and marker
+  precision is tracked separately in mgm-hww.
 
 Upgrade mode — path in, detect drift, apply template layer (2026-08-06):
 

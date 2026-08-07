@@ -48,8 +48,10 @@ Dispatch pane classification (2026-08-06):
   prepared prompts, and unknown panes independently instead of treating output
   activity as delivery evidence. Pane classes use this precedence: hook/trust
   gate, provider limit, prepared prompt, then unknown, and matching is limited
-  to the final non-empty pane state line. After injection, visible hook/trust and limit gates
-  remain confirmed failures; the only positive transition is
+  to the retained recent state area with line anchors. TUI text can still
+  collide with task or agent output; marker precision is tracked separately in
+  mgm-hww. After injection, visible hook/trust and limit gates remain confirmed
+  failures; the only positive transition is
   prepared-prompt -> unknown, which returns agent-started. Every other
   transition remains unknown. Regression coverage records the measured Codex
   hook-trust swallow and the worktree-specific unreviewed-hook modal.

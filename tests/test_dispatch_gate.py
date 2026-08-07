@@ -4,6 +4,7 @@ from windows_exec_surface import skip_windows_exec_surface
 import hashlib
 import json
 import os
+import re
 import runpy
 import subprocess
 import threading
@@ -3099,3 +3100,46 @@ def _ledger_entries(tmp_path: Path) -> list[dict[str, object]]:
 
 def _script() -> Path:
     return Path(__file__).resolve().parents[1] / "scripts" / "dispatch-gate"
+
+
+def test_probe_contract_exit_code_zero_and_job_id_in_stdout(monkeypatch) -> None:
+    """The probe helper enforces both exit status and stdout evidence."""
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_probe_test")
+    cases = [
+        (0, "", "job-123", False),
+        # A filename-only stdout containing the id is accepted by the helper,
+        # but does not prove that the artifact contents were read.
+        (0, "/artifact/job-456.log", "job-456", True),
+        (1, "job-789", "job-789", False),
+        (0, "processed job-abc-123", "job-abc-123", True),
+    ]
+
+    for returncode, stdout, job_id, expected in cases:
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda *args, _returncode=returncode, _stdout=stdout, **kwargs: subprocess.CompletedProcess(
+                args[0], _returncode, stdout=_stdout, stderr=""
+            ),
+        )
+        assert script["_probe_contains_job_id"]("probe", job_id) is expected
+
+
+def test_public_probe_docs_state_exit_and_stdout_requirements() -> None:
+    repo_root = _script().parents[1]
+    requirements = {
+        "docs/public/delegation-and-review.md": re.compile(
+            r"probe must exit with status 0 and print the job id in\s+stdout"
+        ),
+        "docs/public/reference.md": re.compile(
+            r"probe exits 0 and confirms the job id appears in stdout"
+        ),
+    }
+    for relative_path, requirement in requirements.items():
+        text = (repo_root / relative_path).read_text(encoding="utf-8")
+        assert requirement.search(text)
+
+        # A future edit that removes the requirement must make this regression
+        # fail, even if unrelated prose still contains "stdout" or "job id".
+        requirement_removed = requirement.sub("", text, count=1)
+        assert not requirement.search(requirement_removed)

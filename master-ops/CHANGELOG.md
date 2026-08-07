@@ -53,6 +53,10 @@ Dispatch pane classification (2026-08-06):
   prepared-prompt -> unknown, which returns agent-started. Every other
   transition remains unknown. Regression coverage records the measured Codex
   hook-trust swallow and the worktree-specific unreviewed-hook modal.
+  On 2026-08-07, the pane sweep classified this regression test's `Rate limit
+  reached` literal as an ACTION limit until the pane was read; the test source
+  was content, not a quota state. Pane consumers should apply the same recent
+  state-area and whole-line anchor rule used here.
 
 Upgrade mode — path in, detect drift, apply template layer (2026-08-06):
 

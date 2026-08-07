@@ -101,6 +101,11 @@ def test_unchanged_prompt_is_unverified_and_prompt_consumption_is_started() -> N
     assert transition("codex> ", "working") == "agent-started"
 
 
+def test_post_injection_gate_transitions_are_confirmed_failures() -> None:
+    assert transition("codex> ", "Do you trust the files in this folder?") == "hook-trust"
+    assert transition("codex> ", "Rate limit reached") == "limit"
+
+
 def test_delivery_no_longer_uses_output_clock() -> None:
     source = SCRIPT.read_text(encoding="utf-8")
     assert "pane_advanced" not in source

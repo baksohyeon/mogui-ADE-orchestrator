@@ -193,10 +193,13 @@ pane_classify_text() {
 }
 
 delivery_result() {
+  # Post-injection gates take precedence over every prior state. The only
+  # positive transition is a prepared prompt becoming unknown; every other
+  # transition stays unverified.
   case "$1:$2" in
+    *:hook-trust) echo hook-trust;;
+    *:limit) echo limit;;
     prepared-prompt:unknown) echo agent-started;;
-    hook-trust:hook-trust) echo hook-trust;;
-    limit:limit) echo limit;;
     *) echo unknown;;
   esac
 }

@@ -14,13 +14,15 @@ First run is longer than cloning the repository. You install Orca, register its 
 
 Follow **[Getting Started](docs/public/getting-started.md)** for the measured checks, Orca vocabulary, onboarding decisions, proof of boot, and first supervised worker. The block below only opens that path.
 
+macOS:
+
 ```console
-$ brew install --cask stablyai/orca/orca
-$ git clone <repository-url>
-$ cd mogui-ADE-orchestrator
+brew install --cask stablyai/orca/orca
+git clone https://github.com/baksohyeon/mogui-ADE-orchestrator
+cd mogui-ADE-orchestrator
 ```
 
-Orca has Linux and Windows builds on its [download page](https://www.onorca.dev/download). `--cask` is macOS-only.
+Linux and Windows: install Orca from the [download page](https://www.onorca.dev/download), then clone the repository and enter the checkout.
 
 Open Orca and turn on **Settings > Orca CLI > Shell command**, then confirm `orca status` shows a ready runtime. Add the folder to Orca, open a terminal in this clone, start your agent CLI, and wake it with a setup phrase, for example `Wake the master.` The agent becomes the onboarding guide.
 
@@ -40,7 +42,7 @@ Failing the first three usually means a subscription presented as a dependency. 
 
 The workspace layer addresses three failures in long-lived coordination. Sessions end while work continues. A master that can spawn workers can waste them. Context loss after compaction can look like continuity. This runtime turns those failures into checks: guarded succession, append-only lineage, contract-gated dispatch, and boot probes that hold back state after compaction so recall can be measured.
 
-Orca is required for live operation. A master needs session lifetime, stable terminal handles, worktree-scoped placement, a durable Run mailbox, and supervised dispatch. Without Orca, the harness falls back to screen-polling and an unsupervised agent. Step 0 preflight refuses to proceed without it.
+Orca is required for live operation. A master needs session lifetime, stable terminal handles, worktree-scoped placement, a durable Run mailbox, and supervised dispatch. Step 0 preflight refuses to proceed until `orca status` reports a usable runtime.
 
 | Surface | Without Orca | With Orca |
 | --- | --- | --- |
@@ -172,7 +174,7 @@ Documentation in this repository is English. `master-ops/` is a template copied 
 
 ## Status
 
-Working and exercised, as of 2026-08-03: 441 unit tests pass, none skipped. Every unit listed below exists in `src/master_runtime/core/`. Succession, dispatch-gate, acceptance, compaction, and onboarding paths have run against real workspaces.
+Working and exercised, as of 2026-08-08: the repository test gate reports 579 passed tests and 13 passed subtests. Succession, dispatch-gate, acceptance, compaction, and onboarding paths have run against real workspaces.
 
 The current release is in `CHANGELOG.md`, which records every version since `0.1.0`. No CI: tests and redaction scanners run locally before push, so a passing count in a pull request is the author's word. While the major version is 0, interfaces, CLI flags, and file formats can change in a minor release. Pin a version if you build on it.
 
@@ -234,7 +236,7 @@ Two principles shape the layout:
 
 To use the system, follow [Getting Started](docs/public/getting-started.md). This section is for changing the harness itself.
 
-Prerequisites: macOS and the `python3` it already has. The runtime is stdlib-only. A tool that needs a more capable interpreter locates one itself at runtime, and the [Reference](docs/public/reference.md) table states each tool's behavior in its own row. The suite's collection imports `tomllib` and therefore needs Python 3.11 or newer.
+Prerequisites: macOS and Python 3.11 or newer for the test suite. The runtime is stdlib-only. A tool that needs a more capable interpreter locates one itself at runtime, and the [Reference](docs/public/reference.md) table states each tool's behavior in its own row. Contributors can select Python through `uv`, `pyenv`, or the system developer tools.
 
 All CLI entry points live in `scripts/` and are self-contained:
 
@@ -255,10 +257,10 @@ Tests are the agent's job. Ask the agent working on the harness to run them and 
 
 Local only.
 
-- No network calls. Every import in `src/` and `scripts/` is standard library, and none are networking imports. `git grep -nE "^[[:space:]]*(import|from)[[:space:]]+(urllib|http|socket|ssl|requests)" -- src scripts` returns nothing.
+- Repository code makes no direct network calls. Every import in `src/` and `scripts/` is standard library, and none are networking imports. `git grep -nE "^[[:space:]]*(import|from)[[:space:]]+(urllib|http|socket|ssl|requests)" -- src scripts` returns nothing.
 - No API key, model endpoint, or telemetry.
 - Reads the folder you point it at and paths you name in config. Redaction scanners read one repository's tracked files through `git ls-files`.
-- The CLIs it drives reach their own providers as before. No traffic added.
+- The CLIs it drives may reach their own providers. This project adds no provider traffic.
 - Master starts with approval prompts off, to run unattended. Shift-Tab cycles the mode.
 
 ## Limitations

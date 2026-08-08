@@ -24,6 +24,11 @@ cd mogui-ADE-orchestrator
 
 Linux and Windows: install Orca from the [download page](https://www.onorca.dev/download), then clone the repository and enter the checkout.
 
+```console
+git clone https://github.com/baksohyeon/mogui-ADE-orchestrator
+cd mogui-ADE-orchestrator
+```
+
 Open Orca and turn on **Settings > Orca CLI > Shell command**, then confirm `orca status` shows a ready runtime. Add the folder to Orca, open a terminal in this clone, start your agent CLI, and wake it with a setup phrase, for example `Wake the master.` The agent becomes the onboarding guide.
 
 ![Claude Code in Orca, opened on the cloned repository. The prompt reads "wake up, master." and the agent has started reading master-ops/ONBOARDING.md.](docs/assets/wake-up-master.png)

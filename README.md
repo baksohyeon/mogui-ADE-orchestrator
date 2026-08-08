@@ -4,7 +4,7 @@ Run one long-lived agent session as the master of a multi-repository workspace. 
 
 This is for people who already use coding-agent CLIs and want one supervised workspace layer above them. Any mix of worker CLIs can run in Orca terminals. Claude Code as the master is the path that has been exercised hardest.
 
-Existing installations: compare the `Template version` line in your operations repository's `docs/MASTER-OPERATIONS.md` with `master-ops/TEMPLATE-VERSION` in the current template, then read the matching entries in `master-ops/CHANGELOG.md`. Local edits win. Watching releases on this repository sends mail when that line moves.
+Existing installations: compare `TEMPLATE-VERSION` in your operations repository against `master-ops/TEMPLATE-VERSION` in the current template, then read the entries between them in `master-ops/CHANGELOG.md`. Local edits win.
 
 The orchestrating session is called the master in the docs. That is a role label. During install you pick a callsign for the live session, such as 자비스 / Jarvis, Friday, Alfred, HAL-but-nice, or another short name you will say out loud.
 

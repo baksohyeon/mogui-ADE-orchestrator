@@ -76,6 +76,8 @@ you build on it.
 
 ### Changed
 
+- Root README now starts with product summary, Quickstart, and the tool rationale, with overlapping Orca and tool-stack explanations consolidated.
+
 - `master-succeed retire` now reports each of the three disappearances
   (`pane`, `process`, `tty`) as `measured` / `still_present` / `skipped:<why>`.
   Full `CLOSED` requires all three measured; any skip yields `CLOSED_PARTIAL`

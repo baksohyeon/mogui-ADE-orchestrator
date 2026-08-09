@@ -48,7 +48,7 @@ This project was designed for the case where you already pay for coding-agent CL
 | Tool | What it does here | Replaceable |
 | --- | --- | --- |
 | [Orca](https://www.onorca.dev/download) | Execution substrate: terminal sessions that outlive windows, worktree placement, dispatch, and retirement. | No |
-| `bd` | Work ledger: issues, dependencies, active tracks, and boot-time task context through `master-bootstrap-live`. | Yes, through an adapter |
+| [`bd`](https://beads.gascity.com) | Work ledger: issues, dependencies, active tracks, and boot-time task context through `master-bootstrap-live`. | Yes, through an adapter |
 | [ctx](https://ctx.rs) | Cross-provider agent history index: one local query surface for prior session text, decisions, commands, and summaries. | Wired to `ctx`; alternatives exist but have not been evaluated here |
 | Git | Source of truth: charters, decisions, runbooks, lineage, and worktree isolation. | No |
 

@@ -49,7 +49,7 @@ owner-managed:
 ]
 ```
 
-Record in the ops notes that harness wiring is default-on as of this install. Do not edit host `settings.json` yourself when the host requires the owner to approve plugin installs — print the install commands and treat "printed and ready" as wired for onboarding purposes when the host blocks unattended writes.
+Record in the ops notes that harness wiring is default-on as of this install. Reuse the dependency-set approval from Step 0; if it was not asked there, ask it once here and name the `ctx` local history indexing side effect before running `--fix`. Ask a separate host-edit approval before changing host `settings.json`, hooks, or plugin configuration. If host-edit approval is declined, print the commands, record that wiring as pending, and continue only where unconfigured execution is allowed.
 
 ### Agent notes — disable guidance (for the master later)
 
@@ -82,13 +82,13 @@ When `--transcript` is omitted, consumers such as `{{RUNTIME_ROOT}}/scripts/mode
 - the hook spec is documented, no sensitive implementation was added, and its owner is explicit or unresolved
 - `config/instance-runtime.json` has a `transcript_globs` entry for `master_host_runtime` (and any other runtime names the owner expects to probe) when measurement or an explicit owner value exists; keys are runtime names, not host nicknames; missing globs are left unset rather than guessed
 
-## Step 7.5. Skill layer (default-on shipped stack; print install commands)
+## Step 7.5. Skill layer (default-on shipped stack; single approval)
 
-**Position and action:** Step 7.5 begins before the master is born: explain the stack this install wires by default, print host install commands for pieces the template cannot embed, and stop.
+**Position and action:** Step 7.5 begins before the master is born: explain the stack this install wires by default, reuse the Step 0 dependency-set approval when it exists, then either install the approved set or print the commands for manual execution. Host settings, hooks, and plugin configuration use a separate host-edit approval.
 
 **Why/caution:** Skills load into the founding session. Default-on means the recommended stack is on unless the owner later asks the master to disable a piece. Do not run a per-component shopping quiz during install.
 
-Explain each component in one sentence. Print approved install commands and stop; do not run them or edit `settings.json`, hooks, or plugin configuration unless the owner already approved unattended host edits earlier in this session.
+Explain each component in one sentence. The dependency approval question is for the tool set as a whole: using this harness means using the tools it runs on, the way a package manager installs a dependency tree. If the owner approves, run only the known-good install commands and re-measure each dependency after installation instead of trusting the installer exit code. If the owner declines, print the commands and continue only where the resulting consequences allow. Ask separately before editing `settings.json`, hooks, or plugin configuration; if that host-edit approval is declined, print the commands, record wiring as pending, and continue only where unconfigured execution is allowed.
 
 **Agent notes — five questions for any *new* component proposed after install** (not an install-time opt-in menu):
 
@@ -100,27 +100,35 @@ Explain each component in one sentence. Print approved install commands and stop
 
 A component that fails the first three is usually a subscription pretending to be a dependency. A component that passes them but answers nothing for the fifth is a preference, and should be labelled as one.
 
-The stack this template was built against (default-on for this install), with what each one is for and what it is deliberately not used for:
+The stack this template was built against (default-on for this install), with what each one is for, its install surface, and what changes if the owner declines:
 
-| component | role here | not used for |
-|---|---|---|
-| Orca | execution substrate: worktrees, terminals, sessions, supervised dispatch | required infrastructure, not a swappable preference |
-| tracker (Beads) | execution state that survives a session, as an issue graph | its memory is a short pointer cache toward Git, not the knowledge source of truth |
-| `ctx` | trace archive: cross-provider session history, queryable when handoff, ledger, and Git do not answer | not part of routine boot context |
-| `gitleaks` | matching engine for the publish gate | not the scope decision, which the wrapper keeps |
-| methodology skills | how the master plans and verifies | without them the charter reads as advice rather than procedure |
-| restraint skills | how much the master builds | pairs with the methodology layer rather than competing |
-| review graph | impact radius and review context, locally parsed | optional; its value is token cost, not correctness |
-| spec-driven framework | phase discipline from research through verification | installs lifecycle hooks; still default-on here — disable later via the master if unwanted |
-| worker runtime plugin | lets the master delegate implementation from inside its own session | one wiring of the adapter layer, not a harness requirement |
+| component | role here | install surface | consequence of declining |
+|---|---|---|---|
+| Orca | execution substrate: worktrees, terminals, sessions, supervised dispatch | macOS Homebrew cask: `brew install --cask stablyai/orca/orca`; other hosts use the official desktop installer | onboarding cannot proceed as the documented live orchestration flow |
+| tracker (Beads) | execution state that survives a session, as an issue graph | no known-good installer is embedded here; install the `bd` CLI and create or sync the local `.beads` database before onboarding | onboarding blocks until `bd` resolves in the ops repository; there is no degraded master path for a missing tracker |
+| `ctx` | cross-provider agent history in one local queryable index, including prior session text, decisions, commands, and summaries | `curl -fsSL https://ctx.rs/install \| CTX_INSTALL_NO_MODIFY_PATH=1 sh`; setup creates or updates the local history index; semantic search may add roughly 90MB later if enabled | the master cannot query cross-provider history; this workspace has repeatedly missed indexed decisions without a reachable index |
+| `gitleaks` | matching engine for publish-time redaction gates | macOS/Linux Homebrew formula: `brew install gitleaks`; other hosts use an official package or release binary | publishing is blocked by the redaction wrappers, but running a master that never publishes is not blocked |
+| methodology skills | how the master plans and verifies | host skill pack or plugin install for the selected agent | without them the charter reads as advice rather than procedure |
+| restraint skills | how much the master builds | host skill pack or plugin install for the selected agent | expect larger diffs and more speculative structure |
+| review graph | impact radius and review context, locally parsed | local parser/index tooling when installed | reviews use direct file reading without the token-saving graph |
+| spec-driven framework | phase discipline from research through verification | host plugin install; it may install lifecycle hooks | phase discipline is manual, and its lifecycle hooks are absent |
+| worker runtime plugin | lets the master delegate implementation from inside its own session | selected agent's plugin install command | the master can still run, but delegation through that adapter is unavailable |
 
 Each host carries its own agent model and worker runtime plugin ecosystem. A worker runtime such as Codex is a first-class executor rather than a fallback. Expect the preference to split hard between the two camps; the contracts hold either way, which is the point of an agent-neutral template.
 
 One asymmetry to plan around rather than discover: an agent without an interactive query interface cannot run the steps of this document that ask the user a question. Onboarding is a conversation. Run it from an agent that can ask, or supply every answer in the dispatch contract up front and record that the questions were answered in advance rather than asked.
 
-Install commands for the Claude Code case, printed and not run (default-on intent: the owner is expected to run these unless they already have the worker plugin):
+Known dependency install commands may be run only after dependency-install approval, and only on hosts where the named package manager or installer applies. Host plugin, settings, and hook commands require the separate host-edit approval; without it, print those commands and record the wiring as pending:
 
 ```console
+# macOS with Homebrew
+$ brew install --cask stablyai/orca/orca
+$ brew install gitleaks
+
+# Unix ctx installer
+$ curl -fsSL https://ctx.rs/install | CTX_INSTALL_NO_MODIFY_PATH=1 sh
+
+# Claude Code plugin host-edit flow
 $ /plugin marketplace add openai/codex-plugin-cc
 $ /plugin install codex@openai-codex
 $ /reload-plugins
@@ -133,13 +141,18 @@ Name the load-bearing consequence of each layer in one sentence while presenting
 - a restraint skill layer keeps the master from over-building; without it, expect larger diffs and more speculative structure
 - a tracker skill layer is what makes execution state survive a session; without it, state lives only in the transcript
 - a worker runtime is what makes delegation possible at all; without at least one, the master does every task itself
+- without a reachable `ctx` index, the master cannot query cross-provider history, and earlier generations of this workspace have reported an indexed decision as absent
+- without `gitleaks`, publish-time redaction wrappers cannot decide; this does not block a master that never publishes
 
 If the owner spontaneously declines a default-on piece during this step, restate the specific behaviour that changes, confirm once, then record the decline with what is being accepted. Do not open with declines. Disable paths for later are in the Step 7 agent notes table.
 
 ### Verify (Step 7.5)
 
-- the explanation preceded commands; the agent did not run a per-item opt-in menu; default-on intent is recorded
-- nothing was installed or configured by the agent unless the owner already approved unattended host edits
+- the explanation preceded commands; the agent asked once for the dependency set rather than running a per-item opt-in menu; default-on intent is recorded
+- every command that was run had a known install command and was re-measured afterward; commands that could not be run are named as unverified
+- nothing was installed unless the owner approved dependency installation, and no host settings, hooks, or plugin configuration were changed unless the owner separately approved host edits
+- declined host edits were printed as commands and recorded as pending wiring, not treated as configured
+- dependency rows without a known install command are recorded as prerequisites or unverified work, not as completed by `--fix`
 - any spontaneous decline was re-confirmed once with its consequence restated and recorded
 
 ## Step 7.6. State what the publish gates do not cover

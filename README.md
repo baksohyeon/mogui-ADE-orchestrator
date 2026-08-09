@@ -51,7 +51,7 @@ This project was designed for the case where you already pay for coding-agent CL
 | --- | --- | --- |
 | [Orca](https://www.onorca.dev/download) | Execution substrate: terminal sessions that outlive windows, worktree placement, dispatch, and retirement. | No |
 | `bd` | Work ledger: issues, dependencies, active tracks, and boot-time task context through `master-bootstrap-live`. | Yes, through an adapter |
-| [ctx](https://ctx.rs) | Session archive index: searches earlier session text and treats summaries as claims. | Yes, through an adapter |
+| [ctx](https://ctx.rs) | Cross-provider agent history index: one local query surface for prior session text, decisions, commands, and summaries. | Wired to `ctx`; alternatives exist but have not been evaluated here |
 | Git | Source of truth: charters, decisions, runbooks, lineage, and worktree isolation. | No |
 
 The optional skill layer is raised during onboarding. Declining all of it is normal; every script here runs with the base environment. The recommended set has four roles: method guidance, lifecycle hooks, task commands, and durable state. Some Claude Code plugins in that set edit user configuration during install, so onboarding prints commands for the human to run.

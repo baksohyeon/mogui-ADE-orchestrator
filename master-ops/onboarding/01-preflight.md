@@ -8,7 +8,7 @@ Load rule: read this file only when Step 0 begins. Router: [`../ONBOARDING.md`](
 
 ## Owner script (kind ELI5, adapt to the owner's language)
 
-Where we are: the Herald has explained the map, and nothing on the machine has been changed yet. What we decide next: whether this machine has the tools needed to raise the Master safely. Explain gently that these are read-only checks: we are looking at doors and keys, not moving furniture. Ask whether the owner is ready for local read-only checks, and which program they expect to use to run the Master (for example `claude`). If a check fails, say plainly that we fix it together before moving on; nothing is skipped silently, because a missing tool would make the later summoning look mysterious.
+Where we are: the Herald has explained the map, and nothing on the machine has been changed yet. What we decide next: whether this machine has the tools needed to raise the Master safely. Explain gently that the first no-flag preflight is read-only: we are looking at doors and keys, not moving furniture. Ask whether the owner is ready for local read-only checks, which program they expect to use to run the Master (for example `claude`), and whether they approve installing the known dependency set on this machine if the checks find missing tools with known install commands. Name the `ctx` side effect before asking: the installer sets up `ctx` and creates or updates a searchable local history index. If a check fails, say plainly that we fix it together before moving on; nothing is skipped silently, because a missing tool would make the later summoning look mysterious.
 
 **Measured-fallback for the agent CLI:** if this installer session can measure its own runtime (process name, parent argv, or a host-exported selection such as `ORCA_AGENT_CLI`), that measurement is the recommended candidate and beats an empty ask. Still confirm with the owner when measurement and their expectation could diverge. Never invent a runtime name when nothing was measured.
 
@@ -23,7 +23,7 @@ $ command -v "<user-named agent CLI>"
 $ command -v git
 ```
 
-Use `bash scripts/onboarding-preflight.sh --fix` only with approval; it may add or refresh the global Orca skills, while application installs remain manual.
+Use `bash scripts/onboarding-preflight.sh --fix` only after the owner approves installing the known dependency set and the `ctx` local history indexing that install performs. It may install Orca, install `ctx`, install `gitleaks`, set up the `ctx` index, and add or refresh the global Orca skills. Without that approval, run the no-flag form, print the commands, and continue only where the resulting consequences allow.
 
 ## Land the agent CLI answer in the instance runtime config
 

@@ -168,7 +168,7 @@ Documentation in this repository is English. `master-ops/` is a template copied 
 
 Working and exercised, as of 2026-08-08: the repository test gate reports 579 passed tests and 13 passed subtests. Succession, dispatch-gate, acceptance, compaction, and onboarding paths have run against real workspaces.
 
-The current release is in `CHANGELOG.md`, which records every version since `0.1.0`. No CI: tests and redaction scanners run locally before push, so a passing count in a pull request is the author's word. While the major version is 0, interfaces, CLI flags, and file formats can change in a minor release. Pin a version if you build on it.
+The current release is in `CHANGELOG.md`, which records every version since `0.1.0`. CI runs the test gate and committed-rule redaction scan; the local pre-push redaction scan can add organization rules that are absent from the repository. While the major version is 0, interfaces, CLI flags, and file formats can change in a minor release. Pin a version if you build on it.
 
 The template that onboarding copies is versioned separately at `master-ops/TEMPLATE-VERSION`; `master-ops/CHANGELOG.md` records each version. A generated operations repository keeps the template version it copied until you apply an upgrade.
 

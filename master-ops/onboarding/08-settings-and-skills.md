@@ -118,7 +118,7 @@ Each host carries its own agent model and worker runtime plugin ecosystem. A wor
 
 One asymmetry to plan around rather than discover: an agent without an interactive query interface cannot run the steps of this document that ask the user a question. Onboarding is a conversation. Run it from an agent that can ask, or supply every answer in the dispatch contract up front and record that the questions were answered in advance rather than asked.
 
-Known install commands may be run only after the single host-edit approval. Without that approval, print them and continue:
+Known dependency install commands may be run only after dependency-install approval. Host plugin, settings, and hook commands require the separate host-edit approval; without it, print those commands and record the wiring as pending:
 
 ```console
 $ brew install --cask stablyai/orca/orca

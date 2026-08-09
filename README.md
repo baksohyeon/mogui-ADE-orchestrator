@@ -2,15 +2,11 @@
 
 > I have agents running in tmux sessions. Can I still drive each one manually when I want, and at the same time orchestrate all of those sessions from above? Is tmux-based agent orchestration a thing?
 
-Yes. That is what this is. The harness accepts any agent behind a master that can reason. `AGENTS.md` and `CLAUDE.md` ship byte-identical, and a repository test asserts it on every change. Claude Code is what this has been run on hardest.
+Yes. That is what this is.
 
 Anyone running more than two agents at once hits this. Dorito hit it, got tired of it, and wrote this.
 
 Clone it, open it in Orca, start an agent inside the clone, and tell it to wake up. The agent runs the install interview and explains as it goes.
-
-The system underneath is deep. The reader does not need to understand the machinery before using it, because the agent does. It guides the first run, explains each decision, and keeps the orchestration state in the workspace.
-
-Orca is required. A live session has to outlive its window and be addressable by handle before this repository can orchestrate it. The preflight measures that in code.
 
 ## Quickstart
 1. Clone the repository and add it to Orca as a folder.
@@ -31,7 +27,11 @@ When the three moves are done, or if one fails, continue with **[Getting Started
 
 The workspace layer addresses three failures in long-lived coordination. Sessions end while work continues. A master that can spawn workers can waste them. Context loss after compaction can look like continuity. This runtime turns those failures into checks: guarded succession, append-only lineage, contract-gated dispatch, and boot probes that hold back state after compaction so recall can be measured.
 
+The harness accepts any agent behind a master that can reason. `AGENTS.md` and `CLAUDE.md` ship byte-identical, and a repository test asserts it on every change. Claude Code is what this has been run on hardest.
+
 Orca is the required execution substrate for live operation. It supplies session lifetime that outlives a window, stable terminal handles, worktree-scoped placement, a durable Run mailbox that survives restarts, a background receiver, supervised dispatch, and pane identity tied to a worktree. Step 0 preflight refuses to proceed until `orca status` reports a usable runtime.
+
+Orca is required. A live session has to outlive its window and be addressable by handle before this repository can orchestrate it. The preflight measures that in code.
 
 The Orca decision is also a labelled preference. It came from building this harness for a month and running it against other agent development environments. What they offered read as a subset of what Orca offers. That is a preference and it is recorded as one.
 

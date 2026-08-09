@@ -226,13 +226,13 @@ src/master_runtime/core/
 Two principles shape the layout:
 
 - **Core / adapter split.** `core/` modules avoid depending on any specific agent product. Process spawning, ledgers, and tool CLIs go through injected callables and `adapter/`, so core logic is testable with in-memory fakes.
-- **Vendor neutrality as a direction.** The master should run under different agent hosts. The spawn path still names `claude`, so Claude Code is the exercised host. The worker side is further along: `adapter/profile.py` ships synchronous CLI profiles for `codex` and `cursor-agent`. `adapter doctor` probes a fixed local tool set, and some Korean-language operator strings are embedded.
+- **Vendor neutrality as a direction.** The master should run under different agent hosts. The spawn path defaults to `claude`, onboarding asks for the agent CLI and can use a measured runtime as its fallback, and `core/succession.py` still treats the Claude CLI family specially. Claude Code remains the most exercised host. The worker side is further along: `adapter/profile.py` ships synchronous CLI profiles for `codex` and `cursor-agent`. `adapter doctor` probes a fixed local tool set, and some Korean-language operator strings are embedded.
 
 ## Working on the harness
 
 To use the system, follow [Getting Started](docs/public/getting-started.md). This section is for changing the harness itself.
 
-Prerequisites: macOS and Python 3.11 or newer for the test suite. The runtime is stdlib-only. A tool that needs a more capable interpreter locates one itself at runtime, and the [Reference](docs/public/reference.md) table states each tool's behavior in its own row. Contributors can select Python through `uv`, `pyenv`, or the system developer tools.
+Prerequisites: Python 3.11 or newer for the test suite. CI currently runs the test gate on `ubuntu-latest`, `macos-latest`, and `windows-latest` with Python 3.12; the Windows leg is measurement-only. The runtime is stdlib-only. A tool that needs a more capable interpreter locates one itself at runtime, and the [Reference](docs/public/reference.md) table states each tool's behavior in its own row. Contributors can select Python through `uv`, `pyenv`, or the system developer tools.
 
 All CLI entry points live in `scripts/` and are self-contained:
 
@@ -261,10 +261,10 @@ Local only.
 
 ## Limitations
 
-- **Master starts under Claude Code out of the box.** The spawn path in `core/succession.py` calls `claude`. Claude Code is what has been run, so it is what is recommended.
+- **Master defaults to Claude Code out of the box.** The spawn path in `core/succession.py` accepts an agent parameter, defaults it to `claude`, and handles the Claude CLI family specially. Onboarding asks for the agent CLI and records the confirmed runtime. Claude Code is what has been run most, so it is what is recommended.
 - **Workers can be any CLI.** A worker is a terminal session in an Orca pane, so it is whatever binary starts there. Claude, Codex, Cursor, Grok, and Gemini have all run this way under contract. No plugin for any of them.
 - **Codex as master is untried.** It should work by design. If you run it, a report or patch is useful.
-- **macOS is the exercised platform.** Orca ships Linux and Windows builds, and one user reported the install working on Linux. Neither path is exercised here.
+- **Platform evidence is mixed.** This repository's CI runs the test gate on Linux and macOS, with a measurement-only Windows leg for the Windows-compatible subset. Separately, user reports said Linux and Windows worked well, including Windows through WSL; WSL2 was reported as slightly ambiguous but still working. Versions, distributions, and coverage depth were not recorded.
 - **Orca required** for live sessions. Pure functions run without it.
 
 ## What this is not

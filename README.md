@@ -1,12 +1,16 @@
 # mogui-ADE-orchestrator
 
-Run one long-lived agent session as the master of a multi-repository workspace. The master plans work, dispatches isolated workers, verifies their reports, records lineage, and hands the role to a successor when the current session reaches its limits.
+> I have agents running in tmux sessions. Can I still drive each one manually when I want, and at the same time orchestrate all of those sessions from above? Is tmux-based agent orchestration a thing?
 
-This is for people who already use coding-agent CLIs and want one supervised workspace layer above them. Any mix of worker CLIs can run in Orca terminals. Claude Code as the master is the path that has been exercised hardest.
+Yes. That is what this is. The harness accepts any agent behind a master that can reason. `AGENTS.md` and `CLAUDE.md` ship byte-identical, and a repository test asserts it on every change. Claude Code is what this has been run on hardest.
 
-Existing installations: compare the `template_version` field in your operations repository `MANIFEST.json` against `master-ops/TEMPLATE-VERSION` in the current template, then read the entries between them in `master-ops/CHANGELOG.md`. Local edits win.
+Anyone running more than two agents at once hits this. Dorito hit it, got tired of it, and wrote this.
 
-The orchestrating session is called the master in the docs. That is a role label. During install you pick a callsign for the live session, such as 자비스 / Jarvis, Friday, Alfred, HAL-but-nice, or another short name you will say out loud.
+Clone it, open it in Orca, start an agent inside the clone, and tell it to wake up. The agent runs the install interview and explains as it goes.
+
+The system underneath is deep. The reader does not need to understand the machinery before using it, because the agent does. It guides the first run, explains each decision, and keeps the orchestration state in the workspace.
+
+Orca is required. A live session has to outlive its window and be addressable by handle before this repository can orchestrate it. The preflight measures that in code.
 
 ## Quickstart
 1. Clone the repository and add it to Orca as a folder.
@@ -25,7 +29,13 @@ When the three moves are done, or if one fails, continue with **[Getting Started
 
 ## Why these tools
 
-Five questions decide what belongs in the stack:
+The workspace layer addresses three failures in long-lived coordination. Sessions end while work continues. A master that can spawn workers can waste them. Context loss after compaction can look like continuity. This runtime turns those failures into checks: guarded succession, append-only lineage, contract-gated dispatch, and boot probes that hold back state after compaction so recall can be measured.
+
+Orca is the required execution substrate for live operation. It supplies session lifetime that outlives a window, stable terminal handles, worktree-scoped placement, a durable Run mailbox that survives restarts, a background receiver, supervised dispatch, and pane identity tied to a worktree. Step 0 preflight refuses to proceed until `orca status` reports a usable runtime.
+
+The Orca decision is also a labelled preference. It came from building this harness for a month and running it against other agent development environments. What they offered read as a subset of what Orca offers. That is a preference and it is recorded as one.
+
+For replaceable stack components, five questions decide what belongs in the stack:
 
 1. Does it require an API key?
 2. Does it force telemetry or collect more than the job needs?
@@ -34,17 +44,6 @@ Five questions decide what belongs in the stack:
 5. Every tool claims to help with agent context. What else does this one resolve?
 
 Failing the first three usually means a subscription presented as a dependency. Passing them while answering nothing for the fifth means a preference. Preferences are allowed, labelled, and kept out of gates. The maintainer-facing version is in `CONTRIBUTING.md`; the installer-facing version is in `master-ops/onboarding/08-settings-and-skills.md`, routed from `master-ops/ONBOARDING.md`.
-
-The workspace layer addresses three failures in long-lived coordination. Sessions end while work continues. A master that can spawn workers can waste them. Context loss after compaction can look like continuity. This runtime turns those failures into checks: guarded succession, append-only lineage, contract-gated dispatch, and boot probes that hold back state after compaction so recall can be measured.
-
-Orca is required for live operation. A master needs session lifetime, stable terminal handles, worktree-scoped placement, a durable Run mailbox, and supervised dispatch. Step 0 preflight refuses to proceed until `orca status` reports a usable runtime.
-
-| Surface | Without Orca | With Orca |
-| --- | --- | --- |
-| Completion detection | Screen polling | Run mailbox |
-| Master state | Bound to a watch loop | Background receiver |
-| Signal loss | Missed if the session dies | Durable mailbox survives restarts |
-| Placement | Inferred from text | Pane has a worktree identity |
 
 This project was designed for the case where you already pay for coding-agent CLIs and want a workspace orchestrator with no API key and no per-token bill. If you want an API-key process graph, [LangChain deepagents](https://docs.langchain.com/oss/python/deepagents/overview) is the adjacent project to inspect. The comparison entered this repository after the architecture existed; `git log -S deepagents --reverse` shows when that happened.
 
@@ -175,7 +174,11 @@ The current release is in `CHANGELOG.md`, which records every version since `0.1
 
 The template that onboarding copies is versioned separately at `master-ops/TEMPLATE-VERSION`; `master-ops/CHANGELOG.md` records each version. A generated operations repository keeps the template version it copied until you apply an upgrade.
 
+Existing installations: compare the `template_version` field in your operations repository `MANIFEST.json` against `master-ops/TEMPLATE-VERSION` in the current template to see whether the ops repository is behind, then start [`master-ops/ONBOARDING.md`](master-ops/ONBOARDING.md) and use its mode router for Reverify or Upgrade.
+
 ## Core concepts
+
+The orchestrating session is called the master in the docs. That is a role label. During install you pick a callsign for the live session, such as 자비스 / Jarvis, Friday, Alfred, HAL-but-nice, or another short name you will say out loud.
 
 ### Succession
 

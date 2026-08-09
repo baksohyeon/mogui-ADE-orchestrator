@@ -47,7 +47,7 @@ Blame-agent ctx tool names (2026-08-09):
 - Corrected `skills/blame-agent/SKILL.md` to name callable `mcp__ctx__*`
   tools and load their deferred schemas before the ctx coverage gate.
 
-Tools are dependencies onboarding approval (2026-08-09):
+Approval-gated onboarding dependency install (2026-08-09):
 
 - Step 0 now asks once for approval to install the dependency set and names the
   `ctx` local history indexing side effect before running `--fix`. Step 7.5

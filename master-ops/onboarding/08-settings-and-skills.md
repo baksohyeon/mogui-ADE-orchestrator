@@ -118,12 +118,17 @@ Each host carries its own agent model and worker runtime plugin ecosystem. A wor
 
 One asymmetry to plan around rather than discover: an agent without an interactive query interface cannot run the steps of this document that ask the user a question. Onboarding is a conversation. Run it from an agent that can ask, or supply every answer in the dispatch contract up front and record that the questions were answered in advance rather than asked.
 
-Known dependency install commands may be run only after dependency-install approval. Host plugin, settings, and hook commands require the separate host-edit approval; without it, print those commands and record the wiring as pending:
+Known dependency install commands may be run only after dependency-install approval, and only on hosts where the named package manager or installer applies. Host plugin, settings, and hook commands require the separate host-edit approval; without it, print those commands and record the wiring as pending:
 
 ```console
+# macOS with Homebrew
 $ brew install --cask stablyai/orca/orca
 $ brew install gitleaks
+
+# Unix ctx installer
 $ curl -fsSL https://ctx.rs/install | CTX_INSTALL_NO_MODIFY_PATH=1 sh
+
+# Claude Code plugin host-edit flow
 $ /plugin marketplace add openai/codex-plugin-cc
 $ /plugin install codex@openai-codex
 $ /reload-plugins

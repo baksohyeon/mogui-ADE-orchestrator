@@ -44,12 +44,13 @@ Use the evidence paths in strict priority:
 3. memory (last resort, must be marked)
 
 ctx coverage gate (required before citing ctx):
-1. Identify the target `ctx_session_id` with `ctx.show_session` (or locate first, then `ctx.show_session`).
-2. Measure indexed coverage with `ctx.sql`: `SELECT MAX(occurred_at_ms) AS max_indexed_ms FROM events WHERE ctx_session_id = '<target_ctx_session_id>';`
+Load deferred ctx tool schemas first: `ToolSearch(query="select:mcp__ctx__search,mcp__ctx__show_event,mcp__ctx__show_session,mcp__ctx__sql,mcp__ctx__status", max_results=5)`.
+1. Identify the target `ctx_session_id` with `mcp__ctx__show_session` (or locate first with `mcp__ctx__search`, then `mcp__ctx__show_session`).
+2. Measure indexed coverage with `mcp__ctx__sql`: `SELECT MAX(occurred_at_ms) AS max_indexed_ms FROM events WHERE ctx_session_id = '<target_ctx_session_id>';`
 3. Compare incident-time claims to `max_indexed_ms`.
    - Claim time `<= max_indexed_ms`: ctx can be used for that claim.
    - Claim time `> max_indexed_ms`: ctx is silent for that claim in this run.
-4. For in-coverage claims, collect user verbatim and event facts with `ctx.search`, `ctx.show_event`, and timestamp-ordered `ctx.sql`.
+4. For in-coverage claims, collect user verbatim and event facts with `mcp__ctx__search`, `mcp__ctx__show_event`, and timestamp-ordered `mcp__ctx__sql`.
 
 Provider transcript direct read (second choice):
 1. Build transcript path as `~/.claude/projects/<cwd with "/" replaced by "-">/<session-id>.jsonl`.

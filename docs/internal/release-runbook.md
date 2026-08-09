@@ -35,6 +35,7 @@ The scanners read tracked content, so an unstaged new file is invisible.
 ```console
 set -e
 PYTHONPATH=src uv run pytest tests -q
+bash master-ops/scripts/test-tool-naming.sh
 ./scripts/redaction-scan.sh
 rc=0
 ./scripts/redaction-inventory || rc=$?

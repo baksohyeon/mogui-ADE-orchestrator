@@ -10,28 +10,18 @@ The orchestrating session is called the master in the docs. That is a role label
 
 ## Quickstart
 
-First run is longer than cloning the repository. You install Orca, register its shell command, put this repository in front of an agent, answer an onboarding interview, watch Generation 1 boot, then give the master one small task and watch it hand that task to a worker.
-
-Follow **[Getting Started](docs/public/getting-started.md)** for the measured checks, Orca vocabulary, onboarding decisions, proof of boot, and first supervised worker. The block below only opens that path.
-
-macOS:
-
-```console
-brew install --cask stablyai/orca/orca
-git clone https://github.com/baksohyeon/mogui-ADE-orchestrator
-cd mogui-ADE-orchestrator
-```
-
-Linux and Windows: install Orca from the [download page](https://www.onorca.dev/download), then clone the repository and enter the checkout.
+1. Clone the repository and add it to Orca as a folder.
 
 ```console
 git clone https://github.com/baksohyeon/mogui-ADE-orchestrator
 cd mogui-ADE-orchestrator
 ```
 
-Open Orca and turn on **Settings > Orca CLI > Shell command**, then confirm `orca status` shows a ready runtime. Add the folder to Orca, open a terminal in this clone, start your agent CLI, and wake it with a setup phrase, for example `Wake the master.` The agent becomes the onboarding guide.
+2. Open a terminal in that folder and start your agent CLI.
+3. Say `일어나라 마스터여` / `Wake the master.`
 
 ![Claude Code in Orca, opened on the cloned repository. The prompt reads "wake up, master." and the agent has started reading master-ops/ONBOARDING.md.](docs/assets/wake-up-master.png)
+When the three moves are done, or if one fails, continue with **[Getting Started](docs/public/getting-started.md)**.
 
 ## Why these tools
 

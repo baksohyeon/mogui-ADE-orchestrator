@@ -9,7 +9,6 @@ Existing installations: compare the `template_version` field in your operations 
 The orchestrating session is called the master in the docs. That is a role label. During install you pick a callsign for the live session, such as 자비스 / Jarvis, Friday, Alfred, HAL-but-nice, or another short name you will say out loud.
 
 ## Quickstart
-
 1. Clone the repository and add it to Orca as a folder.
 
 ```console
@@ -21,6 +20,7 @@ cd mogui-ADE-orchestrator
 3. Say `일어나라 마스터여` / `Wake the master.`
 
 ![Claude Code in Orca, opened on the cloned repository. The prompt reads "wake up, master." and the agent has started reading master-ops/ONBOARDING.md.](docs/assets/wake-up-master.png)
+
 When the three moves are done, or if one fails, continue with **[Getting Started](docs/public/getting-started.md)**.
 
 ## Why these tools

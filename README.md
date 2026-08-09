@@ -4,7 +4,7 @@
 
 Yes. That is what this is.
 
-Anyone running more than two agents at once hits this. Dorito hit it, got tired of it, and wrote this.
+Anyone running more than two agents at once hits this; Dorito hit it, got tired of it, and did not want solving it to mean being tied to one vendor's tool.
 
 Clone it, open it in Orca, start an agent inside the clone, and tell it to wake up. The agent runs the install interview and explains as it goes.
 

@@ -42,6 +42,118 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+## v0.5.187
+
+Release verification (2026-08-09):
+
+- `PYTHONPATH=src uv run pytest tests -q` reported 582 passed and 13 subtests.
+- `python3 scripts/generate-manifest --check` exited 0.
+- `./scripts/redaction-scan.sh` exited 0.
+- `bash master-ops/scripts/test-tool-naming.sh` exited 0.
+- `./scripts/redaction-inventory` exited 2:
+  `redaction-inventory: FAIL. REDACTION_EXTRA_PATTERNS is unset. A blind spot
+  cannot be measured without rules.` This release proceeds by owner judgment
+  with organization rules unmeasured, not passed, because the repository's
+  redaction patterns are owner-local and singly owned. Follow-up: mgm-e7e.
+
+Upgrade mode and template currency (#98):
+
+- Upgrade mode brings operations repositories founded on old template copies up
+  to the current template layer. The release adds generated `MANIFEST.json`,
+  template-side `template-check` against arbitrary operations paths,
+  `template-apply` with dry-run and confirmation, Founding-guard routing to
+  Upgrade, and manifest enforcement that rejects instance-owned paths by name.
+  This replaces the earlier read-only Reverify-only skew story.
+
+Dispatch delivery classification (#100, #102):
+
+- Dispatch verification now names measured pane states instead of counting
+  output as delivery: hook/trust gates, provider limits, agent-started,
+  prepared prompts that did not change, and unclassified panes. The change is
+  grounded in two observed failures: a Codex hook-trust modal swallowed the
+  specification while a success line printed, and a runtime updated itself
+  during dispatch so a package-manager progress line made the check look green.
+
+Onboarding progressive loading and rehearsal (#58, #78, #95):
+
+- Onboarding is now a router that loads only one step file per turn, requires
+  the current step's `Verify` section to complete before the next step opens,
+  and never loads all step files at once. It has eleven step files, measured
+  postconditions per step, and a rehearsal harness. The router preserves Orca
+  as the required execution substrate while keeping template-improvement work
+  out of the founding flow.
+
+Derived release versioning (#72, #74):
+
+- Release numbers are derived as `MAJOR.MINOR.BUILD`, with BUILD coming from
+  the git commit count. Gaps between printed numbers are normal output, not
+  evidence that releases were skipped.
+
+Charter split (#67):
+
+- `MASTER-OPERATIONS.md` is now an index over ten charter section files instead
+  of the monolithic daily load surface. The split preserved rule text and moved
+  readers to section pointers.
+
+Succession, placement, and dispatch leases (#63, #83, #86):
+
+- Succession measurement now treats `retire` as three disappearances: process,
+  pane handle, and tty. Placement rules distinguish a folder workspace from a
+  repository worktree, and dispatch leases gained measured lifecycle handling
+  instead of relying on return values alone.
+
+Dispatch gates (#76, #84):
+
+- Dispatch attempts now carry contract-hash lineage across retries. The old
+  daily top-tier fan-out cap is replaced by per-dispatch owner approval, and
+  previously unseen model ids are recorded as unknown rather than punished as
+  policy violations by identity alone.
+
+Worker lifecycle and host cards (#81, #89, #92, #97):
+
+- Worker dispatch leases close, squash-merged worker branches are reaped by
+  measured tree comparison, and the workspace session card now ships as a
+  byte-identical `CLAUDE.md` / `AGENTS.md` pair. Repository tests assert both
+  canonical and deployed host-card twins.
+
+Template promotion sweep (#73, #80, #87, #88, #90, #93, #96, #102):
+
+- Successor knowledge, review-voice rules, dispatch policy, working-directory
+  clauses, sweep 2A tools, master-ops scripts, and six support scripts moved
+  from the authoring operations instance into the public template. Public prose
+  keeps measured cause and ownership boundaries without carrying private
+  machine or person identifiers.
+
+README and first-run documentation (#60, #61, #62, #65, #94, #101, #103, #104, #105, #107):
+
+- README and quickstart material now start with the problem they answer, reduce
+  first execution to three actions, and include first-run guidance for readers
+  who have not used Orca before.
+
+CI and release gates (#69, #70, #75, #106):
+
+- Windows is now part of the gate matrix while Unix-only script surfaces are
+  skipped there deliberately. `test-tool-naming.sh` is added to the release
+  runner gate list and the same change corrects a deployed skill that named ctx
+  tools the host could not call.
+
+Known defects shipping with this release:
+
+- The deployed template still cites 26 paths it does not deploy, including six
+  evidence lines in `contract-conventions.md`. Follow-up: mgm-mal.
+- Repository tests assert the host-card twin invariant, but the installed boot
+  check does not yet print a `Twins:` line. Follow-up: mgm-2il.
+- Two pane-classification consumers match markers independently, and three
+  misclassifications were measured across three days. Follow-up: mgm-hww.
+
+Existing installation upgrade:
+
+- Compare the generated operations repository's `MANIFEST.json`
+  `template_version` with this repository's `master-ops/TEMPLATE-VERSION`, read
+  the intervening entries in this changelog, and then follow the onboarding mode
+  router. Local edits in the generated operations repository win where they
+  conflict with the template layer.
+
 Blame-agent ctx tool names (2026-08-09):
 
 - Corrected `skills/blame-agent/SKILL.md` to name callable `mcp__ctx__*`

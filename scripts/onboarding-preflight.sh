@@ -140,6 +140,7 @@ fi
 printf 'INFO resolved Orca CLI: %s\n' "$orca_command"
 
 orca_ready=false
+orca_supported=false
 orca_basename="${orca_command##*/}"
 if ! command -v "$orca_command" >/dev/null 2>&1; then
   if [[ "$fix" == true ]] && install_command=$(orca_install_command); then
@@ -149,13 +150,20 @@ if ! command -v "$orca_command" >/dev/null 2>&1; then
   else
     fail "orca" "$orca_command is not available; $(orca_install_hint)"
   fi
-elif [[ "$orca_basename" != "orca" \
-    && "$orca_basename" != "orca-dev" \
-    && "$orca_basename" != "orca-ide" ]]; then
-  fail "orca" "$orca_command is not a supported Orca CLI; expose the CLI as 'orca', 'orca-dev', or 'orca-ide' before onboarding"
 fi
 
 if command -v "$orca_command" >/dev/null 2>&1; then
+  orca_basename="${orca_command##*/}"
+  if [[ "$orca_basename" != "orca" \
+    && "$orca_basename" != "orca-dev" \
+    && "$orca_basename" != "orca-ide" ]]; then
+    fail "orca" "$orca_command is not a supported Orca CLI; expose the CLI as 'orca', 'orca-dev', or 'orca-ide' before onboarding"
+  else
+    orca_supported=true
+  fi
+fi
+
+if [[ "$orca_supported" == true ]]; then
   status_output=""
   if status_output=$("$orca_command" status --json 2>&1); then
     if grep -Eq '"ok"[[:space:]]*:[[:space:]]*true' <<<"$status_output"; then

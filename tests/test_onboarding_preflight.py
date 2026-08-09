@@ -214,6 +214,29 @@ def test_bound_legacy_run_fails(tmp_path: Path) -> None:
 
 
 @skip_windows_exec_surface
+def test_unsupported_orca_command_does_not_run_status(tmp_path: Path) -> None:
+    env = _host(tmp_path)
+    probe_log = tmp_path / "wrong-orca.log"
+    _write_stub(
+        tmp_path / "bin" / "wrong-orca",
+        f"""#!/usr/bin/env bash
+printf '%s\\n' "$*" >> {probe_log}
+if [[ "$*" == "status --json" ]]; then
+  printf '%s\\n' '{{"ok":true}}'
+fi
+""",
+    )
+    env["ORCA_CLI_COMMAND"] = "wrong-orca"
+
+    result = _run(env, tmp_path)
+
+    assert "orca" in _labels(result.stdout, "FAIL"), result.stdout
+    assert "orca" not in _labels(result.stdout, "PASS"), result.stdout
+    assert "not checked because Orca status failed" in result.stdout
+    assert not probe_log.exists()
+
+
+@skip_windows_exec_surface
 def test_missing_agent_cli_selection_fails(tmp_path: Path) -> None:
     env = _host(tmp_path)
     env["ORCA_AGENT_CLI"] = ""

@@ -49,11 +49,13 @@ Blame-agent ctx tool names (2026-08-09):
 
 Tools are dependencies onboarding approval (2026-08-09):
 
-- Step 0 now asks once for approval to install the dependency set, and Step 7.5
+- Step 0 now asks once for approval to install the dependency set and names the
+  `ctx` local history indexing side effect before running `--fix`. Step 7.5
   reuses that answer before either running known install commands and
-  re-measuring each result or printing the commands for manual execution. The
-  trust boundary stays explicit: host settings, hooks, and plugin configuration
-  are edited only after that single host-edit approval.
+  re-measuring each result or printing the commands for manual execution.
+  Host settings, hooks, and plugin configuration require a separate host-edit
+  approval; when declined, commands are printed and wiring is recorded as
+  pending rather than configured.
   Existing installations do not auto-update; adopt this by merging
   `onboarding/08-settings-and-skills.md` and running the relevant onboarding or
   upgrade path.

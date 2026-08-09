@@ -378,6 +378,7 @@ def test_fix_installs_and_remeasures_known_dependencies(tmp_path: Path) -> None:
 
     env = _host(tmp_path, sanitized_path=True)
     bin_dir = tmp_path / "bin"
+    ctx_bin_dir = tmp_path / "home" / ".local" / "bin"
     install_log = tmp_path / "install.log"
     (bin_dir / "gitleaks").unlink()
     (bin_dir / "ctx").unlink()
@@ -399,10 +400,11 @@ fi
 printf '%s\\n' "$*" >> {install_log}
 cat <<'EOF'
 #!/usr/bin/env bash
-cat > {bin_dir / "ctx"} <<'CTX'
+mkdir -p {ctx_bin_dir}
+cat > {ctx_bin_dir / "ctx"} <<'CTX'
 {CTX_STUB.rstrip()}
 CTX
-chmod +x {bin_dir / "ctx"}
+chmod +x {ctx_bin_dir / "ctx"}
 EOF
 """,
     )
@@ -419,6 +421,7 @@ EOF
     log = install_log.read_text(encoding="utf-8")
     assert "install gitleaks" in log
     assert "-fsSL https://ctx.rs/install" in log
+    assert "CTX_INSTALL_NO_MODIFY_PATH=1" in result.stdout
 
 
 @skip_windows_exec_surface

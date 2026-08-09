@@ -95,6 +95,15 @@ run_install() {
   bash -c "$command"
 }
 
+include_ctx_install_dir() {
+  local ctx_bin_dir="${CTX_BIN_DIR:-$HOME/.local/bin}"
+  [[ -d "$ctx_bin_dir" ]] || return 0
+  case ":$PATH:" in
+    *":$ctx_bin_dir:"*) ;;
+    *) PATH="$ctx_bin_dir:$PATH" ;;
+  esac
+}
+
 orca_install_hint() {
   local install_command
   local install_source
@@ -522,7 +531,10 @@ if command -v ctx >/dev/null 2>&1; then
     fi
   fi
 elif [[ "$fix" == true && $(command -v curl 2>/dev/null || true) ]]; then
-  if run_install "ctx" "curl -fsSL https://ctx.rs/install | sh" && command -v ctx >/dev/null 2>&1; then
+  if run_install "ctx" "curl -fsSL https://ctx.rs/install | CTX_INSTALL_NO_MODIFY_PATH=1 sh"; then
+    include_ctx_install_dir
+  fi
+  if command -v ctx >/dev/null 2>&1; then
     if ctx_status=$(ctx status 2>&1); then
       pass "ctx" "$(ctx --version 2>&1 | head -1); index reachable"
     else

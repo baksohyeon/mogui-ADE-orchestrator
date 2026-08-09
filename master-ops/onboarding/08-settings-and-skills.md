@@ -49,7 +49,7 @@ owner-managed:
 ]
 ```
 
-Record in the ops notes that harness wiring is default-on as of this install. Reuse the dependency-set approval from Step 0; if it was not asked there, ask it once here. If yes, run the known-good install commands and report each measured result; if no, print the commands and treat "printed and ready" as wired for onboarding purposes when the host blocks unattended writes. Do not edit host `settings.json`, hooks, or plugin configuration unless that single approval was given.
+Record in the ops notes that harness wiring is default-on as of this install. Reuse the dependency-set approval from Step 0; if it was not asked there, ask it once here and name the `ctx` local history indexing side effect before running `--fix`. Ask a separate host-edit approval before changing host `settings.json`, hooks, or plugin configuration. If host-edit approval is declined, print the commands, record that wiring as pending, and continue only where unconfigured execution is allowed.
 
 ### Agent notes — disable guidance (for the master later)
 
@@ -84,11 +84,11 @@ When `--transcript` is omitted, consumers such as `{{RUNTIME_ROOT}}/scripts/mode
 
 ## Step 7.5. Skill layer (default-on shipped stack; single approval)
 
-**Position and action:** Step 7.5 begins before the master is born: explain the stack this install wires by default, reuse the Step 0 dependency-set approval when it exists, then either install the approved set or print the commands for manual execution.
+**Position and action:** Step 7.5 begins before the master is born: explain the stack this install wires by default, reuse the Step 0 dependency-set approval when it exists, then either install the approved set or print the commands for manual execution. Host settings, hooks, and plugin configuration use a separate host-edit approval.
 
 **Why/caution:** Skills load into the founding session. Default-on means the recommended stack is on unless the owner later asks the master to disable a piece. Do not run a per-component shopping quiz during install.
 
-Explain each component in one sentence. The approval question is for the dependency set as a whole: using this harness means using the tools it runs on, the way a package manager installs a dependency tree. If the owner approves, run only the known-good install commands and re-measure each dependency after installation instead of trusting the installer exit code. If the owner declines, print the commands and continue only where the resulting consequences allow. Never edit `settings.json`, hooks, or plugin configuration unless this single host-edit approval was given.
+Explain each component in one sentence. The dependency approval question is for the tool set as a whole: using this harness means using the tools it runs on, the way a package manager installs a dependency tree. If the owner approves, run only the known-good install commands and re-measure each dependency after installation instead of trusting the installer exit code. If the owner declines, print the commands and continue only where the resulting consequences allow. Ask separately before editing `settings.json`, hooks, or plugin configuration; if that host-edit approval is declined, print the commands, record wiring as pending, and continue only where unconfigured execution is allowed.
 
 **Agent notes — five questions for any *new* component proposed after install** (not an install-time opt-in menu):
 
@@ -106,7 +106,7 @@ The stack this template was built against (default-on for this install), with wh
 |---|---|---|---|
 | Orca | execution substrate: worktrees, terminals, sessions, supervised dispatch | macOS Homebrew cask: `brew install --cask stablyai/orca/orca`; other hosts use the official desktop installer | onboarding cannot proceed as the documented live orchestration flow |
 | tracker (Beads) | execution state that survives a session, as an issue graph | no known-good installer is embedded here; install the `bd` CLI and create or sync the local `.beads` database before onboarding | onboarding blocks until `bd` resolves in the ops repository; there is no degraded master path for a missing tracker |
-| `ctx` | cross-provider agent history in one local queryable index, including prior session text, decisions, commands, and summaries | `curl -fsSL https://ctx.rs/install \| sh`; semantic search may add roughly 90MB later if enabled | the master cannot query cross-provider history; this workspace has repeatedly missed indexed decisions without a reachable index |
+| `ctx` | cross-provider agent history in one local queryable index, including prior session text, decisions, commands, and summaries | `curl -fsSL https://ctx.rs/install \| CTX_INSTALL_NO_MODIFY_PATH=1 sh`; setup creates or updates the local history index; semantic search may add roughly 90MB later if enabled | the master cannot query cross-provider history; this workspace has repeatedly missed indexed decisions without a reachable index |
 | `gitleaks` | matching engine for publish-time redaction gates | macOS/Linux Homebrew formula: `brew install gitleaks`; other hosts use an official package or release binary | publishing is blocked by the redaction wrappers, but running a master that never publishes is not blocked |
 | methodology skills | how the master plans and verifies | host skill pack or plugin install for the selected agent | without them the charter reads as advice rather than procedure |
 | restraint skills | how much the master builds | host skill pack or plugin install for the selected agent | expect larger diffs and more speculative structure |
@@ -123,7 +123,7 @@ Known install commands may be run only after the single host-edit approval. With
 ```console
 $ brew install --cask stablyai/orca/orca
 $ brew install gitleaks
-$ curl -fsSL https://ctx.rs/install | sh
+$ curl -fsSL https://ctx.rs/install | CTX_INSTALL_NO_MODIFY_PATH=1 sh
 $ /plugin marketplace add openai/codex-plugin-cc
 $ /plugin install codex@openai-codex
 $ /reload-plugins
@@ -145,7 +145,8 @@ If the owner spontaneously declines a default-on piece during this step, restate
 
 - the explanation preceded commands; the agent asked once for the dependency set rather than running a per-item opt-in menu; default-on intent is recorded
 - every command that was run had a known install command and was re-measured afterward; commands that could not be run are named as unverified
-- nothing was installed or configured by the agent unless the owner approved unattended host edits for the dependency set
+- nothing was installed unless the owner approved dependency installation, and no host settings, hooks, or plugin configuration were changed unless the owner separately approved host edits
+- declined host edits were printed as commands and recorded as pending wiring, not treated as configured
 - dependency rows without a known install command are recorded as prerequisites or unverified work, not as completed by `--fix`
 - any spontaneous decline was re-confirmed once with its consequence restated and recorded
 

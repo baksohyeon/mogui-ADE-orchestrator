@@ -40,6 +40,8 @@ reporting the last released tag, so that value names the release it came from an
 not the exact body it received. When the difference matters, record the commit the
 installation was taken from alongside the tag.
 
+## Unreleased
+
 ## v0.5.187
 
 Release verification (2026-08-09):
@@ -74,10 +76,12 @@ Dispatch delivery classification (#100, #102):
 
 Onboarding progressive loading and rehearsal (#58, #78, #95):
 
-- Onboarding is now a router that loads one step file at a time, with eleven
-  step files, measured postconditions per step, and a rehearsal harness. The
-  router preserves Orca as the required execution substrate while keeping
-  template-improvement work out of the founding flow.
+- Onboarding is now a router that loads only one step file per turn, requires
+  the current step's `Verify` section to complete before the next step opens,
+  and never loads all step files at once. It has eleven step files, measured
+  postconditions per step, and a rehearsal harness. The router preserves Orca
+  as the required execution substrate while keeping template-improvement work
+  out of the founding flow.
 
 Derived release versioning (#72, #74):
 

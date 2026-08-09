@@ -42,6 +42,11 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+Blame-agent ctx tool names (2026-08-09):
+
+- Corrected `skills/blame-agent/SKILL.md` to name callable `mcp__ctx__*`
+  tools and load their deferred schemas before the ctx coverage gate.
+
 Support script promotion (2026-08-09):
 
 - Added `scripts/gate_runner.py` for fail-close gate execution, `scripts/hooks/worker-block-warn.sh`

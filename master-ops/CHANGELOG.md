@@ -42,6 +42,16 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+Support script promotion (2026-08-09):
+
+- Added `scripts/gate_runner.py` for fail-close gate execution, `scripts/hooks/worker-block-warn.sh`
+  for coordinator-visible blocked-pane warnings, `scripts/mogui_errors.py` for shared gate exit
+  vocabulary, `scripts/mogui_log.py` for fail-open structured event logging,
+  `scripts/test-mogui-logging.sh` for logging and gate regression coverage, and
+  `scripts/worker-pane-sweep` for live Orca pane classification. Nothing calls these files yet;
+  installations do not need to wire them until adopting the corresponding workflow. Copy the
+  regenerated `MANIFEST.json` with the scripts so template checks track the same required paths.
+
 Dispatch pane classification (2026-08-06):
 
 - Delivery verification now classifies hook/trust gates, provider limits,

@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# Classify every live Orca pane so a blocked worker is found by a sweep rather than by the owner.
+#
+# Why this exists. On 2026-08-06 a codex worker sat on an approval prompt and the owner cleared
+# it. Clearing an in-scope approval prompt is dispatch authority (charter 04), so that was the
+# coordinator's job, and the coordinator missed it because it polled the orchestration inbox and
+# pull-request state only. Neither surfaces a prompt: the inbox is empty while a worker waits,
+# and `dispatch`'s delivery check answers whether bytes appeared, not what the pane is asking.
+#
+# Classes, and why each needs its own answer:
+#   working      TUI is mid-turn. Leave alone.
+#   idle         at a ready prompt with no work. May need re-injection.
+#   approval     waiting on a permission/confirmation prompt. Coordinator clears it in scope.
+#   start-screen a launch menu. Text sent here is lost and can exit the pane. Dismiss, never inject.
+#   update       runtime replaced itself and wants a restart (measured runtime update incident). Relaunch in place.
+#   limit        quota or rate limit. No salvage; close and redispatch elsewhere.
+#   shell        agent is gone and a shell has the pty. Redispatch.
+#
+# Deliberately a classifier and not an actor: it prints a verdict per pane and exits non-zero when
+# any pane needs a human or coordinator decision. Acting on a misread pane is how a start screen
+# gets text fired into it.
+set -uo pipefail
+
+exit_code=0
+handles=$(orca terminal list 2>/dev/null | grep -oE '^term_[a-f0-9-]+' || true)
+[ -z "$handles" ] && { echo "sweep: no live terminals"; exit 0; }
+
+# Exclude this session's own pane. The coordinator discusses prompts, quotas, and restarts as
+# ordinary work, so its own frame matches every marker here. Measured 2026-08-06: the sweep
+# flagged the coordinator as blocked on approval while it was writing about approvals. Same
+# family as `grep -v grep` deleting the master from its own process scan, which was recorded
+# the same morning: a scanner that does not exclude itself reports itself.
+SELF_HANDLE="${ORCA_TERMINAL_HANDLE:-}"
+
+while IFS= read -r h; do
+  [ -z "$h" ] && continue
+  [ -n "$SELF_HANDLE" ] && [ "$h" = "$SELF_HANDLE" ] && { printf '%-6s %-13s %s  %s\n' "self" "coordinator" "${h:0:18}" "this session"; continue; }
+  frame=$(orca terminal read --terminal "$h" 2>/dev/null | tail -25)
+  title=$(orca terminal list 2>/dev/null | grep -F "$h" | head -1 | sed "s|^$h *||" | cut -c1-38)
+  # Strip the runtime status line before matching. It carries "always-approve", which is the
+  # opposite of a prompt, and the first draft flagged every pane that could not prompt at all.
+  lower=$(printf '%s' "$frame" | tr '[:upper:]' '[:lower:]' | sed 's/always-approve//g; s/bypass permissions//g')
+
+  verdict=unknown
+  if printf '%s' "$lower" | grep -qE "quota reached|resets in [0-9]|rate limit|usage limit|upgrade your subscription"; then
+    verdict=limit
+  elif printf '%s' "$lower" | grep -qE "please restart|update ran successfully|was successfully upgraded"; then
+    verdict=update
+  elif printf '%s' "$lower" | grep -qE "new worktree.*resume session|resume session.*changelog"; then
+    verdict=start-screen
+  elif printf '%s' "$lower" | grep -qE "do you want to proceed|1\. yes|2\. yes, and|\[y/n\]|\(y/n\)|press enter to continue|trust this (folder|workspace)"; then
+    verdict=approval
+  elif printf '%s' "$lower" | grep -qE "esc:cancel|esc to interrupt|working|thinking|churn"; then
+    verdict=working
+  fi
+
+  if [ "$verdict" = unknown ]; then
+    if printf '%s' "$frame" | grep -qE '^[[:space:]]*➜|\$ $'; then verdict=shell
+    elif printf '%s' "$frame" | grep -qE '❯[[:space:]]*$'; then verdict=idle
+    fi
+  fi
+
+  case "$verdict" in
+    approval|start-screen|update|limit) exit_code=1; mark="ACTION" ;;
+    shell)                                           mark="note" ;;
+    working|idle)                                    mark="ok" ;;
+    *)                                  exit_code=1; mark="UNREAD" ;;
+  esac
+  printf '%-6s %-13s %s  %s\n' "$mark" "$verdict" "${h:0:18}" "$title"
+done <<< "$handles"
+
+[ "$exit_code" != 0 ] && echo "sweep: at least one pane needs a decision — read it before acting"
+exit "$exit_code"

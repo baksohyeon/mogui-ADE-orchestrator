@@ -31,8 +31,6 @@ The harness accepts any agent behind a master that can reason. `AGENTS.md` and `
 
 Orca is the required execution substrate for live operation. It supplies session lifetime that outlives a window, stable terminal handles, worktree-scoped placement, a durable Run mailbox that survives restarts, a background receiver, supervised dispatch, and pane identity tied to a worktree. Step 0 preflight refuses to proceed until `orca status` reports a usable runtime.
 
-Orca is required. A live session has to outlive its window and be addressable by handle before this repository can orchestrate it. The preflight measures that in code.
-
 The Orca decision is also a labelled preference. It came from building this harness for a month and running it against other agent development environments. What they offered read as a subset of what Orca offers. That is a preference and it is recorded as one.
 
 For replaceable stack components, five questions decide what belongs in the stack:

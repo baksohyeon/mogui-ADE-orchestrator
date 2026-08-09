@@ -87,6 +87,14 @@ strip_ansi() {
   sed $'s/\033\\[[0-9;]*[[:alpha:]]//g'
 }
 
+run_install() {
+  local label="$1"
+  local command="$2"
+
+  printf 'FIX  %-14s %s\n' "$label" "$command"
+  bash -c "$command"
+}
+
 orca_install_hint() {
   local install_command
   local install_source
@@ -108,6 +116,18 @@ orca_install_hint() {
   printf '%s' 'follow-up: enable Settings > Orca CLI > Shell command'
 }
 
+orca_install_command() {
+  case "$(uname -s 2>/dev/null || printf unknown)" in
+    Darwin)
+      if command -v brew >/dev/null 2>&1; then
+        printf '%s' 'brew install --cask stablyai/orca/orca'
+        return 0
+      fi
+      ;;
+  esac
+  return 1
+}
+
 # Resolve once, before the first Orca invocation. Never fall through to another binary.
 if [[ -n "${ORCA_CLI_COMMAND:-}" ]]; then
   orca_command="$ORCA_CLI_COMMAND"
@@ -122,12 +142,20 @@ printf 'INFO resolved Orca CLI: %s\n' "$orca_command"
 orca_ready=false
 orca_basename="${orca_command##*/}"
 if ! command -v "$orca_command" >/dev/null 2>&1; then
-  fail "orca" "$orca_command is not available; $(orca_install_hint)"
+  if [[ "$fix" == true ]] && install_command=$(orca_install_command); then
+    if ! run_install "orca" "$install_command" || ! command -v "$orca_command" >/dev/null 2>&1; then
+      fail "orca" "$orca_command still unavailable after --fix; $(orca_install_hint)"
+    fi
+  else
+    fail "orca" "$orca_command is not available; $(orca_install_hint)"
+  fi
 elif [[ "$orca_basename" != "orca" \
     && "$orca_basename" != "orca-dev" \
     && "$orca_basename" != "orca-ide" ]]; then
   fail "orca" "$orca_command is not a supported Orca CLI; expose the CLI as 'orca', 'orca-dev', or 'orca-ide' before onboarding"
-else
+fi
+
+if command -v "$orca_command" >/dev/null 2>&1; then
   status_output=""
   if status_output=$("$orca_command" status --json 2>&1); then
     if grep -Eq '"ok"[[:space:]]*:[[:space:]]*true' <<<"$status_output"; then
@@ -455,6 +483,12 @@ done
 # summary repeats the consequence instead of letting a warning scroll past.
 if command -v gitleaks >/dev/null 2>&1; then
   pass "gitleaks" "$(gitleaks version 2>&1 | head -1)"
+elif [[ "$fix" == true && $(command -v brew 2>/dev/null || true) ]]; then
+  if run_install "gitleaks" "brew install gitleaks" && command -v gitleaks >/dev/null 2>&1; then
+    pass "gitleaks" "$(gitleaks version 2>&1 | head -1)"
+  else
+    warn "gitleaks" "gitleaks is still not on PATH after --fix; the redaction gate cannot decide without it and exits 2, so install it before publishing anything (brew install gitleaks, or see https://gitleaks.io)"
+  fi
 else
   warn "gitleaks" "gitleaks is not on PATH; the redaction gate cannot decide without it and exits 2, so install it before publishing anything (brew install gitleaks, or see https://gitleaks.io)"
 fi
@@ -467,10 +501,30 @@ if command -v ctx >/dev/null 2>&1; then
   if ctx_status=$(ctx status 2>&1); then
     pass "ctx" "$(ctx --version 2>&1 | head -1); index reachable"
   else
-    warn "ctx" "ctx is installed but 'ctx status' failed; run 'ctx setup' to create the local index, or the records practice cannot query history"
+    if [[ "$fix" == true ]]; then
+      printf 'FIX  %-14s %s\n' "ctx" "ctx setup"
+      ctx setup || true
+      if ctx_status=$(ctx status 2>&1); then
+        pass "ctx" "$(ctx --version 2>&1 | head -1); index reachable"
+      else
+        warn "ctx" "ctx is installed but 'ctx status' still failed after --fix; the master cannot query cross-provider history until the local index is reachable"
+      fi
+    else
+      warn "ctx" "ctx is installed but 'ctx status' failed; run 'ctx setup' to create the local index, or the master cannot query cross-provider history"
+    fi
+  fi
+elif [[ "$fix" == true && $(command -v curl 2>/dev/null || true) ]]; then
+  if run_install "ctx" "curl -fsSL https://ctx.rs/install | sh" && command -v ctx >/dev/null 2>&1; then
+    if ctx_status=$(ctx status 2>&1); then
+      pass "ctx" "$(ctx --version 2>&1 | head -1); index reachable"
+    else
+      warn "ctx" "ctx installed but 'ctx status' failed; run 'ctx setup' to create the local index, or the master cannot query cross-provider history"
+    fi
+  else
+    warn "ctx" "ctx is still not on PATH after --fix; the master cannot query cross-provider history until ctx is installed and its index is reachable"
   fi
 else
-  warn "ctx" "ctx is not on PATH; the records practice queries agent history across providers and cannot without it (see https://ctx.rs); ignore this on a host that does no history work"
+  warn "ctx" "ctx is not on PATH; the master cannot query cross-provider history without it (install: curl -fsSL https://ctx.rs/install | sh)"
 fi
 
 for repo_tool in git gh; do

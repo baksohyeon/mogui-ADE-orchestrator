@@ -43,6 +43,20 @@ exit 0
 """
 
 TRUE_STUB = "#!/usr/bin/env bash\nexit 0\n"
+GITLEAKS_STUB = """#!/usr/bin/env bash
+case "$1" in
+  version) printf '%s\n' 'gitleaks test-version' ;;
+  *) exit 0 ;;
+esac
+"""
+CTX_STUB = """#!/usr/bin/env bash
+case "$1" in
+  status) exit 0 ;;
+  --version) printf '%s\n' 'ctx test-version' ;;
+  setup) exit 0 ;;
+  *) exit 0 ;;
+esac
+"""
 
 RUN_BOUND = '{"ok":true,"result":{"run":{"id":"run_test","legacy":0}}}'
 RUN_NULL = '{"ok":true,"result":{"run":null}}'
@@ -89,8 +103,10 @@ def _host(
     _write_stub(bin_dir / "orca", ORCA_STUB)
     _write_stub(bin_dir / "bd", BD_STUB)
     _write_stub(bin_dir / "gh", GH_STUB)
-    for name in ("claude", "git", "gitleaks", "ctx", *worker_runtimes):
+    for name in ("claude", "git", *worker_runtimes):
         _write_stub(bin_dir / name, TRUE_STUB)
+    _write_stub(bin_dir / "gitleaks", GITLEAKS_STUB)
+    _write_stub(bin_dir / "ctx", CTX_STUB)
 
     env = dict(os.environ)
     # Sanitized PATH keeps a runtime absent even when the developer's machine has
@@ -120,9 +136,13 @@ def _host(
     return env
 
 
-def _run(env: dict, tmp_path: Path) -> subprocess.CompletedProcess:
+def _run(
+    env: dict,
+    tmp_path: Path,
+    args: tuple[str, ...] = (),
+) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["bash", str(PREFLIGHT)],
+        ["bash", str(PREFLIGHT), *args],
         env=env,
         cwd=str(tmp_path),
         capture_output=True,
@@ -301,6 +321,81 @@ def test_missing_ctx_warns_without_blocking(tmp_path: Path) -> None:
     assert "ctx" in _labels(result.stdout, "WARN"), result.stdout
     assert "ctx" not in _labels(result.stdout, "FAIL"), result.stdout
     assert "ctx.rs" in result.stdout
+
+
+@skip_windows_exec_surface
+def test_no_flag_does_not_run_available_installers(tmp_path: Path) -> None:
+    """No-flag preflight is a read-only measurement, even when installers exist."""
+
+    env = _host(tmp_path, sanitized_path=True)
+    bin_dir = tmp_path / "bin"
+    install_log = tmp_path / "install.log"
+    (bin_dir / "gitleaks").unlink()
+    (bin_dir / "ctx").unlink()
+    _write_stub(
+        bin_dir / "brew",
+        f"#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> {install_log}\nexit 0\n",
+    )
+    _write_stub(
+        bin_dir / "curl",
+        f"#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> {install_log}\nexit 0\n",
+    )
+
+    result = _run(env, tmp_path)
+
+    assert result.returncode == 0, result.stdout
+    assert "gitleaks" in _labels(result.stdout, "WARN"), result.stdout
+    assert "ctx" in _labels(result.stdout, "WARN"), result.stdout
+    assert not install_log.exists()
+
+
+@skip_windows_exec_surface
+def test_fix_installs_and_remeasures_known_dependencies(tmp_path: Path) -> None:
+    """--fix reports the install command, then trusts the measured artifact."""
+
+    env = _host(tmp_path, sanitized_path=True)
+    bin_dir = tmp_path / "bin"
+    install_log = tmp_path / "install.log"
+    (bin_dir / "gitleaks").unlink()
+    (bin_dir / "ctx").unlink()
+    _write_stub(
+        bin_dir / "brew",
+        f"""#!/usr/bin/env bash
+printf '%s\\n' "$*" >> {install_log}
+if [[ "$*" == "install gitleaks" ]]; then
+  cat > {bin_dir / "gitleaks"} <<'EOF'
+{GITLEAKS_STUB.rstrip()}
+EOF
+  chmod +x {bin_dir / "gitleaks"}
+fi
+""",
+    )
+    _write_stub(
+        bin_dir / "curl",
+        f"""#!/usr/bin/env bash
+printf '%s\\n' "$*" >> {install_log}
+cat <<'EOF'
+#!/usr/bin/env bash
+cat > {bin_dir / "ctx"} <<'CTX'
+{CTX_STUB.rstrip()}
+CTX
+chmod +x {bin_dir / "ctx"}
+EOF
+""",
+    )
+
+    result = _run(env, tmp_path, ("--fix",))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "FIX  gitleaks" in result.stdout
+    assert "FIX  ctx" in result.stdout
+    assert "gitleaks" in _labels(result.stdout, "PASS"), result.stdout
+    assert "ctx" in _labels(result.stdout, "PASS"), result.stdout
+    assert "gitleaks" not in _labels(result.stdout, "WARN"), result.stdout
+    assert "ctx" not in _labels(result.stdout, "WARN"), result.stdout
+    log = install_log.read_text(encoding="utf-8")
+    assert "install gitleaks" in log
+    assert "-fsSL https://ctx.rs/install" in log
 
 
 @skip_windows_exec_surface

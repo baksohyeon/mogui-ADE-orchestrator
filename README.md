@@ -23,6 +23,8 @@ cd mogui-ADE-orchestrator
 
 When the three moves are done, or if one fails, continue with **[Getting Started](docs/public/getting-started.md)**.
 
+For container setup and its coverage boundary, see [`.devcontainer/README.md`](.devcontainer/README.md).
+
 ## Why these tools
 
 The workspace layer addresses three failures in long-lived coordination. Sessions end while work continues. A master that can spawn workers can waste them. Context loss after compaction can look like continuity. This runtime turns those failures into checks: guarded succession, append-only lineage, contract-gated dispatch, and boot probes that hold back state after compaction so recall can be measured.

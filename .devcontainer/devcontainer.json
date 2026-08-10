@@ -5,6 +5,9 @@
     "context": ".."
   },
   "remoteUser": "vscode",
+  "containerEnv": {
+    "PYTHONPATH": "/workspaces/mogui-ADE-orchestrator/src"
+  },
   "workspaceFolder": "/workspaces/mogui-ADE-orchestrator",
   "customizations": {
     "vscode": {

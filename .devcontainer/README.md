@@ -11,9 +11,8 @@ The container cannot launch a master seat because Orca is a macOS application, n
 Run the gates from the repository root after starting the container:
 
 ```console
-export PATH=/opt/gitleaks/bin:$PATH
 PYTHONPATH=src python -m pytest tests -q
 ./scripts/redaction-scan.sh
 ```
 
-The redaction scan prints a warning when `REDACTION_EXTRA_PATTERNS` is unset, followed by its tracked-only result. Full organization-rule coverage requires running the scan on a host where that file is available.
+The image manifest is pinned and includes Linux amd64 and arm64 variants. The build and positive-control validation for this change were observed on Linux arm64 (Apple Silicon); amd64 execution was not part of this run. The redaction scan prints a warning when `REDACTION_EXTRA_PATTERNS` is unset, followed by its tracked-only result. Full organization-rule coverage requires running the scan on a host where that file is available.

@@ -29,9 +29,11 @@ RUN set -eux; \
     fixture="$(mktemp)"; \
     trap 'rm -f "${fixture}"' EXIT; \
     config=/tmp/gitleaks-config.toml; \
+    config_sha=e163e53b9e7e8a8511e77271e2b323ed057759542a6d988258afe3a1fa329caf; \
     curl --fail --silent --show-error --location \
       --output "${config}" \
       "https://raw.githubusercontent.com/gitleaks/gitleaks/v${GITLEAKS_VERSION}/config/gitleaks.toml"; \
+    echo "${config_sha}  ${config}" | sha256sum --check --strict; \
     token_prefix=ghp_; \
     token_suffix=012345678901234567890123456789012345; \
     printf 'token = "%s%s"\n' "${token_prefix}" "${token_suffix}" >"${fixture}"; \
@@ -42,6 +44,6 @@ RUN set -eux; \
     set -e; \
     cat /tmp/gitleaks-positive-control.log; \
     test "${status}" -eq 1; \
-    rm -f "${config}"
+    rm -f "${config}" /tmp/gitleaks-positive-control.log
 
 USER vscode

@@ -11,10 +11,10 @@ If a point could not be measured from this checkout, it is labeled `unmeasured`.
 - Host skill source 1 representative names: `orchestration`, `blame-agent`, many `gsd-*` entries (for example `gsd-debug`, `gsd-plan-phase`, `gsd-verify-work`).
 - Host skill source 2 (superpowers plugin cache): `~/.claude/plugins/cache/claude-plugins-official/superpowers/` has `3` cached builds (`6.2.0`, `6.3.0`, `b36e0829c6d0`), and each build exposes `14` skills under `skills/`.
 - Superpowers representative names from cache: `brainstorming`, `writing-plans`, `executing-plans`, `systematic-debugging`, `verification-before-completion`, `using-superpowers`.
-- Workspace discovery path measured from `master-ops/scripts/harness-selfcheck.sh`: `SKILLS_DISCOVERY_PATH="$WORKSPACE_ROOT/.claude/skills"`.
+- Workspace discovery path measured from `scripts/harness-selfcheck.sh`: `SKILLS_DISCOVERY_PATH="$WORKSPACE_ROOT/.claude/skills"`.
 - Workspace discovery path contents (measured): `ls ~/dev/personal/mogui/.claude/skills` => `2` entries (`anti-slop`, `blame-agent`).
 - Workspace `.claude/settings.json` contains hook wiring and no explicit skill-source field; skill-source override in settings is `unmeasured`.
-- Template-shipped ops skills measured from this repository: `ls master-ops/skills | wc -l` => `1`, and the entry is `blame-agent`.
+- Template-shipped ops skills measured from this repository: `ls skills | wc -l` => `1`, and the entry is `blame-agent`.
 
 ## What Each Layer Contributes
 
@@ -32,7 +32,7 @@ These two layers pull in opposite directions on purpose, and the ordering rule i
 
 ## Where It Lands In This Template
 
-The routing table below is adapted from `master-ops/workspace-card/CLAUDE.md` (identical in `master-ops/workspace-card/AGENTS.md`):
+The routing table below is adapted from `workspace-card/CLAUDE.md` (identical in `workspace-card/AGENTS.md`):
 
 > When a request matches a row, invoke the skill FIRST - before answering, exploring, or editing.
 >
@@ -45,7 +45,7 @@ The routing table below is adapted from `master-ops/workspace-card/CLAUDE.md` (i
 
 ## What Is Not Shipped
 
-The template ships only its own ops skill(s): measured in this checkout as `master-ops/skills/blame-agent`.
+The template ships only its own ops skill(s): measured in this checkout as `skills/blame-agent`.
 The process stack (`superpowers:*`) and restraint layer (`ponytail`) are host-level installs added by the operator, sourced from host skill stores like `~/.claude/skills` and plugin caches like `~/.claude/plugins/cache/claude-plugins-official/superpowers/<build>/skills/`.
 An installation without these host-level layers still runs the template mechanics (hooks, gates, dispatch), but it loses this composition behavior.
 

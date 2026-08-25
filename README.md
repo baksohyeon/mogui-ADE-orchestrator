@@ -1,3 +1,5 @@
+
+
 # mogui-ADE-orchestrator
 
 > I have agents running in tmux sessions. Can I still drive each one manually when I want, and at the same time orchestrate all of those sessions from above? Is tmux-based agent orchestration a thing?
@@ -17,11 +19,13 @@ cd mogui-ADE-orchestrator
 ```
 
 2. Open a terminal in that folder and start your agent CLI.
-3. Say `일어나라 마스터여` / `Wake the master.`
+3. Say `일어나라 마스터여` / `Wake the master.` The agent will ask a session-mode question to route onboarding.
 
-![Claude Code in Orca, opened on the cloned repository. The prompt reads "wake up, master." and the agent has started reading master-ops/ONBOARDING.md.](docs/assets/wake-up-master.png)
+![Claude Code in Orca, opened on the cloned repository. The prompt reads "Wake the master." and the agent has started reading master-ops/ONBOARDING.md.](docs/assets/wake-up-master.png)
 
-When the three moves are done, or if one fails, continue with **[Getting Started](docs/public/getting-started.md)**.
+When the three steps are done, or if one fails, continue with **[Getting Started](docs/public/getting-started.md)**.
+
+For container setup and its coverage boundary, see [`.devcontainer/README.md`](.devcontainer/README.md).
 
 ## Why these tools
 

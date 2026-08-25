@@ -42,6 +42,10 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+Skill-composition guide (2026-08-25):
+
+- Added `docs/guides/skill-composition.md`, documenting the workspace's adopted skill-layer composition with measured host-skill counts, measured template-shipped skills, the harness discovery path, the routing table source text, and explicit `unmeasured` labeling where checkout-local evidence is unavailable.
+
 ## v0.5.187
 
 Release verification (2026-08-09):

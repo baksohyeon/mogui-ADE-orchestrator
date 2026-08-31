@@ -1,0 +1,25 @@
+#!/bin/bash
+# Print the bare model id recorded in a codex rollout jsonl (first "model"
+# field), for use as dispatch-gate register's --model-probe-cmd on codex
+# workers.
+#
+# scripts/model-identity-probe reads Claude-shaped transcripts (a "model"
+# field adjacent to a role/type of "assistant") and cannot parse a codex
+# rollout's shape; run against one it measures model=<missing> and the gate
+# denies registration with MODEL_TIER_ESCALATION even though the model id is
+# sitting in the file (measured 2026-08-13). Probing the rollout directly with
+# `grep -o '"model":"[^"]*"'` is not a fix either: it returns the whole JSON
+# fragment rather than the bare id, so the gate's tier lookup never matches a
+# policy entry (measured=`"model":"gpt-5.6-luna"` tier=unknown, same date).
+# dispatch-gate's tier lookup needs the bare id, so extract just the capture
+# group.
+#
+# Usage: model-probe-rollout <rollout.jsonl>
+set -eu
+
+[ -n "${1:-}" ] && [ -f "$1" ] || {
+  echo "model-probe-rollout: no rollout file: ${1:-<empty>}" >&2
+  exit 1
+}
+
+sed -n 's/.*"model":"\([^"]*\)".*/\1/p' "$1" | head -1

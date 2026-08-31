@@ -113,7 +113,27 @@ resolve_tier_policy() {
 
 POLICY=$(resolve_tier_policy)
 
-jqf() { python3 -c "import json,sys;d=json.load(sys.stdin);print($1)"; }
+# dispatch-gate's contract is one JSON line on stdout with human diagnostics on
+# stderr, but a caller that ever sees a human line land on stdout ahead of the
+# JSON (mixed-stream measured 2026-08-13: "dispatch-gate: REASON ..." on stdout
+# followed by the JSON on the next line) must not crash on it. That measured
+# failure killed jqf with `Expecting value: line 2 column 1 (char 1)` mid-way
+# through register, which left the worker running and unregistered — the
+# ledger was never told the job existed. Parse defensively: take the last line
+# that looks like a JSON object, whichever stream mixing produced it. A single
+# clean JSON line (the normal case) still works unchanged.
+jqf() {
+  python3 -c "
+import json, sys
+lines = [ln for ln in sys.stdin.read().splitlines() if ln.strip()]
+json_line = next((ln for ln in reversed(lines) if ln.lstrip().startswith('{')), None)
+if json_line is None:
+    print('jqf: no JSON object line in gate output', file=sys.stderr)
+    sys.exit(1)
+d = json.loads(json_line)
+print($1)
+"
+}
 
 # model-identity-probe lives in the orchestrator and resolves its instance config
 # relative to that checkout, where the product-path guard correctly forbids the

@@ -87,5 +87,13 @@ $ python3 scripts/generate-manifest --check
 
 ```text
 $ PYTHONPATH=src python -m pytest tests -q
-582 passed, 13 subtests passed in 43.66s
+582 passed, 13 subtests passed in 45.23s
+```
+
+```text
+$ master-ops/scripts/pr-body-check 1 --body-file pr-body-guard-bash-writes.md --template-file .github/pull_request_template.md
+Problem: filled
+Why this approach: filled
+What this changes: filled
+Expected effect: filled
 ```

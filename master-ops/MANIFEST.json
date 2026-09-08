@@ -51,6 +51,7 @@
     "scripts/gate_runner.py",
     "scripts/harness-selfcheck.sh",
     "scripts/hook-coverage-report",
+    "scripts/hooks/bash-bare-cd-warn.sh",
     "scripts/hooks/bash-output-trim-warn.sh",
     "scripts/hooks/bash-poll-warn.sh",
     "scripts/hooks/orch-inbox-warn.sh",

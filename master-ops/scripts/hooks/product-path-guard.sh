@@ -1,5 +1,9 @@
 #!/bin/bash
 # PreToolUse(Edit|Write|NotebookEdit|Bash): product repository guard.
+# Bash command parsing is best effort. It blocks observed direct write shapes
+# (redirections, known write-capable commands, and selected mutating git
+# subcommands) but does not parse opaque script bodies, shell expansions, or
+# every command-specific path flag.
 # Default behavior preserves the measured legacy policy. Set
 # MOGUI_PRODUCT_GUARD_FAIL_CLOSED=1 only after command observations establish a
 # measured read-only allowlist.
@@ -164,6 +168,7 @@ for parts in segments:
             raise SystemExit
         continue
     sub=""
+    sub_pos=-1
     git_target=current_cwd
     work_tree=None
     git_dir=None
@@ -185,11 +190,11 @@ for parts in segments:
             if token.startswith("--work-tree="): work_tree=resolve(git_target, token.split("=",1)[1]); i+=1; continue
             if token.startswith("--git-dir="): git_dir=resolve(git_target, token.split("=",1)[1]); i+=1; continue
             if token.startswith("-"): i+=1; continue
-            sub=token; break
+            sub=token; sub_pos=i; break
         command_class="git" + (" " + sub if sub else "")
         remote_action=""
-        if sub == "remote":
-            remote_index=parts.index("remote") + 1
+        if sub == "remote" and sub_pos >= 0:
+            remote_index=sub_pos + 1
             while remote_index < len(parts):
                 if parts[remote_index] in {"-v", "--verbose"}:
                     remote_index += 1
@@ -228,16 +233,40 @@ for parts in segments:
     write_args={"-exec","-execdir","xargs","--in-place"}
     if name in {"sed","perl","ruby"}:
         write_args.add("-i")
+    git_always_mutating={
+        "add", "apply", "checkout", "cherry-pick", "commit", "merge",
+        "mv", "rebase", "reset", "restore", "revert", "rm",
+    }
+    git_subsub=""
+    if name == "git" and sub and sub_pos >= 0:
+        sub_index=sub_pos + 1
+        while sub_index < len(parts):
+            token=parts[sub_index]
+            if token.startswith("-"):
+                sub_index += 1
+                continue
+            git_subsub=token
+            break
     git_mutation = name == "git" and (
         (sub == "remote" and remote_action in {"rename","set-head","set-branches","update","prune","set-url","add","remove"})
         or (sub == "diff" and any(token == "--output" or token.startswith("--output=") for token in parts))
+        or (sub in git_always_mutating)
+        or (sub == "clean" and not any(token in {"-n", "--dry-run"} for token in parts))
+        or (sub == "stash" and git_subsub not in {"list", "show"})
+        or (sub == "worktree" and git_subsub not in {"list"})
     )
-    write_capable=any(token in write_args for token in parts[1:]) or git_mutation
+    command_write_capable = name in {
+        "cp", "mv", "rm", "rmdir", "mkdir", "install", "ln", "touch", "truncate", "tee", "dd"
+    }
+    write_capable=any(token in write_args for token in parts[1:]) or git_mutation or command_write_capable
     if "-exec" in parts and any(token in {"sh", "bash", "dash", "zsh", "ksh"} for token in parts):
         print("DENY\t"+command_class+"\topaque find exec wrapper is not admitted")
         raise SystemExit
     if write_capable:
         for token in parts[1:]:
+            if name == "dd" and token.startswith("of="):
+                target_hits.append(resolve(current_cwd, token.split("=", 1)[1]))
+                continue
             if not token.startswith("-") and token not in {";"}:
                 target_hits.append(resolve(current_cwd, token))
         touches=under(target) or any(under(x) for x in target_hits)

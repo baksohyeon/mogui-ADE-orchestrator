@@ -75,8 +75,6 @@
     "scripts/template-apply",
     "scripts/template-check",
     "scripts/template_common.py",
-    "scripts/test-dispatch-contract-delivery.sh",
-    "scripts/test-dispatch-multi-vendor-host.sh",
     "scripts/test-dispatch-runtime.sh",
     "scripts/test-measure.sh",
     "scripts/test-mogui-logging.sh",

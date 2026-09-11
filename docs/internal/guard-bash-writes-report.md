@@ -1,7 +1,5 @@
 # Product-path guard Bash write hardening report
 
-Acknowledgement token: `ack-9c62568b271f`
-
 ## What the Bash branch did before this change
 
 Before this patch, the Bash branch did parse and inspect the command string. It tokenized `tool_input.command` with `shlex`, split segments on shell control operators, resolved candidate paths against `working_directory`, denied known redirection writes, denied unparseable commands, denied opaque interpreter wrappers, and enforced legacy read-only command classes when `MOGUI_PRODUCT_GUARD_FAIL_CLOSED=0`.

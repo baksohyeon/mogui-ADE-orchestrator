@@ -37,8 +37,13 @@ import json
 import shlex
 import sys
 
-payload = json.load(sys.stdin)
-raw = payload.get("tool_input", {}).get("command", "")
+try:
+    payload = json.load(sys.stdin)
+    raw = payload.get("tool_input", {}).get("command", "")
+except (ValueError, AttributeError, TypeError):
+    # ValueError includes JSONDecodeError; all malformed/shape inputs should stay silent.
+    print("0")
+    raise SystemExit(0)
 
 # Some runtimes may encode command as a list of lines.
 if isinstance(raw, list):

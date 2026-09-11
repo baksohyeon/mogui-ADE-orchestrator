@@ -105,13 +105,18 @@ def _holdout_case_ids(casebook: CaseBook) -> tuple[str, ...]:
 
 
 def _find_holdout_identifier_leaks(
-    workspace: Path, holdout_case_ids: Sequence[str]
+    workspace: Path,
+    holdout_case_ids: Sequence[str],
+    ignored_literals: Sequence[str] = (),
 ) -> list[Path]:
     leaked: list[Path] = []
     for path in workspace.rglob("*"):
         if not path.is_file():
             continue
         text = path.read_text(encoding="utf-8", errors="replace")
+        for literal in ignored_literals:
+            if literal:
+                text = text.replace(literal, " ")
         if any(_contains_identifier(text, case_id) for case_id in holdout_case_ids):
             leaked.append(path)
     return leaked
@@ -198,14 +203,18 @@ def test_private_holdout_never_reaches_the_proposer_workspace(tmp_path: Path) ->
         / "001"
         / "proposer_workspace"
     )
-    leaked = _find_holdout_identifier_leaks(workspace, _holdout_case_ids(casebook))
+    leaked = _find_holdout_identifier_leaks(
+        workspace,
+        _holdout_case_ids(casebook),
+        ignored_literals=(str(config.run_dir),),
+    )
     assert leaked == []
     assert _contains_identifier(
         (workspace / "task.md").read_text(encoding="utf-8"), "t1"
     )
 
 
-@pytest.mark.parametrize("segment", ("a9h1z4q2", "q8h2w7m3"))
+@pytest.mark.parametrize("segment", ("a9h1z4q2", "q8h2w7m3", "h1", "h2"))
 def test_holdout_identifier_detector_ignores_path_substrings(
     tmp_path: Path, segment: str
 ) -> None:
@@ -228,12 +237,19 @@ def test_holdout_identifier_detector_ignores_path_substrings(
         / "001"
         / "proposer_workspace"
     )
-    leaked = _find_holdout_identifier_leaks(workspace, _holdout_case_ids(casebook))
+    leaked = _find_holdout_identifier_leaks(
+        workspace,
+        _holdout_case_ids(casebook),
+        ignored_literals=(str(config.run_dir),),
+    )
     assert leaked == []
 
 
-def test_holdout_identifier_detector_still_catches_real_leaks(tmp_path: Path) -> None:
-    config = _config(tmp_path / "a9h1z4q2")
+@pytest.mark.parametrize("segment", ("a9h1z4q2", "h1"))
+def test_holdout_identifier_detector_still_catches_real_leaks(
+    tmp_path: Path, segment: str
+) -> None:
+    config = _config(tmp_path / segment)
     casebook = _book()
 
     run_acceptance_loop(
@@ -253,7 +269,11 @@ def test_holdout_identifier_detector_still_catches_real_leaks(tmp_path: Path) ->
         / "proposer_workspace"
     )
     (workspace / "injected-leak.md").write_text("Holdout case id: h1", encoding="utf-8")
-    leaked = _find_holdout_identifier_leaks(workspace, _holdout_case_ids(casebook))
+    leaked = _find_holdout_identifier_leaks(
+        workspace,
+        _holdout_case_ids(casebook),
+        ignored_literals=(str(config.run_dir),),
+    )
     assert set(leaked) == {workspace / "injected-leak.md"}
 
 

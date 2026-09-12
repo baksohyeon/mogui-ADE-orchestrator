@@ -135,6 +135,27 @@ def resolve(base, value):
 def under(value):
     value=os.path.realpath(os.path.expanduser(value))
     return value == root or value.startswith(root + os.sep)
+def collect_non_option_operands(parts, start, options_with_values):
+    values=set(options_with_values)
+    index=start
+    out=[]
+    while index < len(parts):
+        token=parts[index]
+        if token == "--":
+            out.extend(parts[index + 1 :])
+            break
+        if token in values:
+            index += 2
+            continue
+        if any(option.startswith("--") and token.startswith(option + "=") for option in values):
+            index += 1
+            continue
+        if token.startswith("-") and token != "-":
+            index += 1
+            continue
+        out.append(token)
+        index += 1
+    return out
 try:
     tokens=list(shlex.shlex(command, posix=True, punctuation_chars=";&|><"))
 except Exception:
@@ -221,38 +242,52 @@ for parts in segments:
         if token in {">",">>","2>","2>>","&>",">&"}:
             if i+1 >= len(parts): print("DENY\t"+command_class+"\tredirection target is missing"); raise SystemExit
             target_hits.append(resolve(current_cwd, parts[i+1]))
-        elif token.startswith("/") or token.startswith("~/"):
+        elif (token.startswith("/") or token.startswith("~/")) and name not in {"cp", "install", "ln"}:
             target_hits.append(resolve(current_cwd, token))
         elif token == "--output" and i + 1 < len(parts):
             target_hits.append(resolve(current_cwd, parts[i + 1]))
         elif token.startswith("--output="):
             target_hits.append(resolve(current_cwd, token.split("=", 1)[1]))
-    touches=under(target) or any(under(x) for x in target_hits)
+    git_dir_touches=bool(git_dir and under(git_dir))
+    touches=under(target) or git_dir_touches or any(under(x) for x in target_hits)
     if "-exec" in parts and root in " ".join(parts):
         touches=True
     write_args={"-exec","-execdir","xargs","--in-place"}
     if name in {"sed","perl","ruby"}:
         write_args.add("-i")
     git_always_mutating={
-        "add", "apply", "checkout", "cherry-pick", "commit", "merge",
+        "add", "checkout", "cherry-pick", "commit", "merge",
         "mv", "rebase", "reset", "restore", "revert", "rm",
     }
     git_subsub=""
+    git_subsub_ambiguous=False
     if name == "git" and sub and sub_pos >= 0:
         sub_index=sub_pos + 1
+        stash_value_options={"-m", "--message"}
         while sub_index < len(parts):
             token=parts[sub_index]
+            if token in stash_value_options:
+                git_subsub_ambiguous=True
+                sub_index += 2
+                continue
+            if token.startswith("--message="):
+                git_subsub_ambiguous=True
+                sub_index += 1
+                continue
             if token.startswith("-"):
                 sub_index += 1
                 continue
             git_subsub=token
             break
+    apply_readonly_mode=any(token in {"--check", "--stat", "--numstat", "--summary"} for token in parts)
+    apply_force_mode=any(token == "--apply" for token in parts)
     git_mutation = name == "git" and (
         (sub == "remote" and remote_action in {"rename","set-head","set-branches","update","prune","set-url","add","remove"})
         or (sub == "diff" and any(token == "--output" or token.startswith("--output=") for token in parts))
         or (sub in git_always_mutating)
+        or (sub == "apply" and (not apply_readonly_mode or apply_force_mode))
         or (sub == "clean" and not any(token in {"-n", "--dry-run"} for token in parts))
-        or (sub == "stash" and git_subsub not in {"list", "show"})
+        or (sub == "stash" and (git_subsub_ambiguous or git_subsub not in {"list", "show"}))
         or (sub == "worktree" and git_subsub not in {"list"})
     )
     command_write_capable = name in {
@@ -263,13 +298,46 @@ for parts in segments:
         print("DENY\t"+command_class+"\topaque find exec wrapper is not admitted")
         raise SystemExit
     if write_capable:
-        for token in parts[1:]:
-            if name == "dd" and token.startswith("of="):
-                target_hits.append(resolve(current_cwd, token.split("=", 1)[1]))
-                continue
-            if not token.startswith("-") and token not in {";"}:
-                target_hits.append(resolve(current_cwd, token))
-        touches=under(target) or any(under(x) for x in target_hits)
+        write_targets=[]
+        if name == "dd":
+            for token in parts[1:]:
+                if token.startswith("of="):
+                    write_targets.append(token.split("=", 1)[1])
+        elif name == "cp":
+            cp_operands=collect_non_option_operands(parts, 1, {"-t", "--target-directory"})
+            for index,token in enumerate(parts[1:],1):
+                if token in {"-t", "--target-directory"} and index + 1 < len(parts):
+                    write_targets.append(parts[index + 1])
+                elif token.startswith("--target-directory="):
+                    write_targets.append(token.split("=", 1)[1])
+            if not write_targets and len(cp_operands) >= 2:
+                write_targets.append(cp_operands[-1])
+        elif name == "install":
+            install_value_options={"-g", "-m", "-o", "-S", "-t", "--suffix", "--target-directory", "--group", "--mode", "--owner", "--context"}
+            install_operands=collect_non_option_operands(parts, 1, install_value_options)
+            for index,token in enumerate(parts[1:],1):
+                if token in {"-t", "--target-directory"} and index + 1 < len(parts):
+                    write_targets.append(parts[index + 1])
+                elif token.startswith("--target-directory="):
+                    write_targets.append(token.split("=", 1)[1])
+            if not write_targets and len(install_operands) >= 2:
+                write_targets.append(install_operands[-1])
+        elif name == "ln":
+            ln_operands=collect_non_option_operands(parts, 1, {"-t", "--target-directory", "-S", "--suffix"})
+            for index,token in enumerate(parts[1:],1):
+                if token in {"-t", "--target-directory"} and index + 1 < len(parts):
+                    write_targets.append(parts[index + 1])
+                elif token.startswith("--target-directory="):
+                    write_targets.append(token.split("=", 1)[1])
+            if not write_targets and len(ln_operands) >= 2:
+                write_targets.append(ln_operands[-1])
+        else:
+            for token in parts[1:]:
+                if not token.startswith("-") and token not in {";"}:
+                    write_targets.append(token)
+        for value in write_targets:
+            target_hits.append(resolve(current_cwd, value))
+        touches=under(target) or git_dir_touches or any(under(x) for x in target_hits)
     if not touches:
         continue
     if write_capable and touches:

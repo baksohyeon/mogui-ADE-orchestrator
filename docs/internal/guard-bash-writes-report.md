@@ -89,7 +89,7 @@ $ PYTHONPATH=src python -m pytest tests -q
 ```
 
 ```text
-$ master-ops/scripts/pr-body-check 1 --body-file pr-body-guard-bash-writes.md --template-file .github/pull_request_template.md
+$ master-ops/scripts/pr-body-check 118 --repo baksohyeon/mogui-ADE-orchestrator
 Problem: filled
 Why this approach: filled
 What this changes: filled

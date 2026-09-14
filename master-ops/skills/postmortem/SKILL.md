@@ -312,7 +312,7 @@ code_refs: []
 
 이 절은 특정 저장소에 반영하는 요청에서만 적용한다. 값은 그 설치의 실제 규약으로 채운다. 아래 자리표시자를 그대로 두고 쓰지 않는다.
 
-- 정식 문서: `<DOC_REPO>/<POSTMORTEM_DIR>/` 아래에서 그 설치의 `docs/postmortem/README.md`가 규정한 파일명 규칙을 따른다.
+- 정식 문서: `<DOC_REPO>/<POSTMORTEM_DIR>/` 아래에서 그 설치의 `<DOC_REPO>/<POSTMORTEM_DIR>/README.md`가 규정한 파일명 규칙을 따른다.
 - 초안: `<DOC_REPO>/<POSTMORTEM_DIR>/temp/YYYY-MM-DD-<slug>.md`
 - 원문: 지정 세션 기록과 그 설치의 원문 대장. 대장에 없을 때만 추가 수집한다.
 - 작성자: 대상 작업 트리의 `git config user.name` 을 확인하고 규약대로 표기한다.

@@ -252,6 +252,8 @@ for parts in segments:
     touches=under(target) or git_dir_touches or any(under(x) for x in target_hits)
     if "-exec" in parts and root in " ".join(parts):
         touches=True
+    option_tokens=parts[1 : parts.index("--")] if "--" in parts[1:] else parts[1:]
+    apply_option_tokens=option_tokens
     write_args={"-exec","-execdir","xargs","--in-place"}
     if name in {"sed","perl","ruby"}:
         write_args.add("-i")
@@ -279,7 +281,6 @@ for parts in segments:
                 continue
             git_subsub=token
             break
-    apply_option_tokens=parts[1 : parts.index("--")] if "--" in parts[1:] else parts[1:]
     apply_readonly_mode=any(token in {"--check", "--stat", "--numstat", "--summary"} for token in apply_option_tokens)
     apply_force_mode=any(token == "--apply" for token in apply_option_tokens)
     stash_show_writes_output = (
@@ -328,7 +329,16 @@ for parts in segments:
                 elif token.startswith("--target-directory="):
                     write_targets.append(token.split("=", 1)[1])
             if not write_targets and install_operands:
-                if any(token in {"-d", "--directory"} for token in parts[1:]):
+                install_directory_mode=any(
+                    token == "--directory"
+                    or (
+                        token.startswith("-")
+                        and not token.startswith("--")
+                        and "d" in token[1:]
+                    )
+                    for token in option_tokens
+                )
+                if install_directory_mode:
                     write_targets.extend(install_operands)
                 elif len(install_operands) >= 2:
                     write_targets.append(install_operands[-1])
@@ -344,13 +354,11 @@ for parts in segments:
                     ln_destination_mode=True
             if not write_targets and len(ln_operands) >= 2:
                 write_targets.append(ln_operands[-1])
-            ln_symbolic=any(token in {"-s", "--symbolic"} for token in parts[1:])
-            if not ln_symbolic:
-                if ln_destination_mode:
-                    source_operands=ln_operands
-                else:
-                    source_operands=ln_operands[:-1] if len(ln_operands) >= 2 else []
-                write_targets.extend(source_operands)
+            if ln_destination_mode:
+                source_operands=ln_operands
+            else:
+                source_operands=ln_operands[:-1] if len(ln_operands) >= 2 else []
+            write_targets.extend(source_operands)
         else:
             for token in parts[1:]:
                 if not token.startswith("-") and token not in {";"}:

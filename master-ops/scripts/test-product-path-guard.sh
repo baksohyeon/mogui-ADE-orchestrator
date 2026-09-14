@@ -113,9 +113,11 @@ expect_blocked git-work-tree run_bash "git --git-dir=$TMP/repo.git --work-tree=$
 expect_allowed cp-source-in-product-destination-outside run_bash "cp $product/source.txt $ops/out.txt" "$ops"
 expect_blocked install-flagged-destination-in-product run_bash "install -b $ops/source.txt $product/out.txt" "$ops"
 expect_allowed install-source-in-product-destination-outside run_bash "install $product/source.txt $ops/out.txt" "$ops"
+expect_allowed install-double-dash-literal-directory-token run_bash "install -- $product/source.txt --directory" "$ops"
 expect_blocked install-directory-single-target run_bash "install -d $product/newdir" "$ops"
 expect_blocked install-directory-multi-target run_bash "install -d $ops/newdir $product/newdir2" "$ops"
 expect_blocked ln-source-in-product-destination-outside run_bash "ln $product/source.txt $ops/out.txt" "$ops"
+expect_blocked ln-symbolic-source-in-product-destination-outside run_bash "ln -s $product/source.txt $ops/link.txt" "$ops"
 expect_blocked symlink-path run_file "$link/file.txt"
 expect_allowed outside-read run_bash "printf ok > $ops/file.txt"
 

@@ -145,7 +145,7 @@ def redirects_into_root(value, base):
         body_tokens=list(shlex.shlex(value, posix=True, punctuation_chars=";&|><"))
     except Exception:
         return False
-    redirections={">",">>","2>","2>>","&>",">&"}
+    redirections={">",">>","2>","2>>","&>",">&",">|"}
     i=0
     while i < len(body_tokens):
         token=body_tokens[i]
@@ -285,6 +285,7 @@ for parts in segments:
         target=current_cwd
         if name in {"bash", "sh", "dash", "ksh", "zsh", "python", "python3", "perl", "ruby", "node"}:
             bare_dash_c = "-c" in parts[1:]
+            root_token_in_args = any(root in token for token in parts[1:])
             dash_c_body=""
             if bare_dash_c:
                 dash_c_index=parts.index("-c")
@@ -297,7 +298,7 @@ for parts in segments:
                     or root in dash_c_body
                     or redirects_into_root(dash_c_body, current_cwd)
                 )
-            if legacy_dash_c_body_denied or (
+            if root_token_in_args or legacy_dash_c_body_denied or (
                 bare_dash_c and (os.environ["FAIL_CLOSED"] == "1" or under(current_cwd))
             ):
                 print("DENY\t"+command_class+"\topaque interpreter command may contain an unparsed write")
@@ -305,7 +306,7 @@ for parts in segments:
     last_command_class=command_class
     target_hits=[]
     for i,token in enumerate(parts[1:],1):
-        if token in {">",">>","2>","2>>","&>",">&"}:
+        if token in {">",">>","2>","2>>","&>",">&",">|"}:
             if i+1 >= len(parts): print("DENY\t"+command_class+"\tredirection target is missing"); raise SystemExit
             target_hits.append(resolve(current_cwd, parts[i+1]))
         elif (token.startswith("/") or token.startswith("~/")) and name not in {"cp", "install", "ln"}:
@@ -429,7 +430,7 @@ for parts in segments:
     if write_capable and touches:
         print("DENY\t"+command_class+"\twrite-capable argument is not admitted")
         raise SystemExit
-    if any(token in {">",">>","2>","2>>","&>",">&"} for token in parts):
+    if any(token in {">",">>","2>","2>>","&>",">&",">|"} for token in parts):
         print("DENY\t"+command_class+"\tshell redirection is a write")
         raise SystemExit
     if os.environ["FAIL_CLOSED"] == "1" and command_class not in allow:

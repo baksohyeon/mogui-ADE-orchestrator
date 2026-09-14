@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import time
 from dataclasses import dataclass
@@ -45,21 +46,48 @@ class DispatchState:
 
     def __init__(self, dispatch_json: dict) -> None:
         self.raw = dispatch_json
-        self.dispatch_id = str(dispatch_json.get("dispatch_id", ""))
-        self.task_id = str(dispatch_json.get("task_id", ""))
-        self.terminal_id = str(dispatch_json.get("terminal_id", ""))
-        self.status = str(dispatch_json.get("status", "")).upper()
-        self.worktree_path = dispatch_json.get("worktree_path")
-        if self.worktree_path:
-            self.worktree_path = str(self.worktree_path)
+        dispatch_payload = dispatch_json
+        if isinstance(dispatch_json.get("result"), dict):
+            wrapped_dispatch = dispatch_json["result"].get("dispatch")
+            if isinstance(wrapped_dispatch, dict):
+                dispatch_payload = wrapped_dispatch
+
+        self.dispatch_id = str(
+            dispatch_payload.get("dispatch_id", dispatch_payload.get("id", ""))
+        )
+        self.task_id = str(dispatch_payload.get("task_id", ""))
+        self.terminal_id = str(
+            dispatch_payload.get(
+                "assignee_handle",
+                dispatch_payload.get("terminal_id", ""),
+            )
+        )
+        self.status = str(dispatch_payload.get("status", "")).upper()
+        self.worktree_path = self._derive_worktree_path(
+            dispatch_payload.get("process_incarnation")
+        )
 
     def is_settled(self) -> bool:
-        """True if dispatch is in a terminal state (completed/accepted)."""
+        """True if dispatch is in a terminal state (completed/accepted/failed/abandoned)."""
         return self.status in ("COMPLETED", "ACCEPTED", "FAILED", "ABANDONED")
 
     def is_success(self) -> bool:
         """True if dispatch completed or was accepted."""
         return self.status in ("COMPLETED", "ACCEPTED")
+
+    def _derive_worktree_path(self, process_incarnation: object) -> Optional[str]:
+        """Extract absolute worktree path from process_incarnation when present."""
+        if not isinstance(process_incarnation, str):
+            return None
+
+        match = re.fullmatch(r"[^:]+::(.+)@@.+", process_incarnation)
+        if not match:
+            return None
+
+        path = match.group(1)
+        if not Path(path).is_absolute():
+            return None
+        return path
 
 
 class WorkerReaper:
@@ -152,11 +180,13 @@ class WorkerReaper:
         self, task_id: Optional[str], dispatch_id: Optional[str]
     ) -> DispatchState:
         """Fetch dispatch state via orca orchestration dispatch-show."""
+        lookup_task_id = task_id
+        if not lookup_task_id and dispatch_id:
+            lookup_task_id = self._resolve_task_id_from_dispatch_id(dispatch_id)
+
         cmd = ["orca", "orchestration", "dispatch-show", "--json"]
-        if task_id:
-            cmd.extend(["--task", task_id])
-        elif dispatch_id:
-            cmd.extend(["--dispatch", dispatch_id])
+        if lookup_task_id:
+            cmd.extend(["--task", lookup_task_id])
 
         code, stdout, stderr = self.orca_runner(cmd)
         if code != 0:
@@ -170,6 +200,39 @@ class WorkerReaper:
             return DispatchState(payload)
         except (json.JSONDecodeError, ValueError) as e:
             raise ReapError(f"Could not parse dispatch JSON: {e}", 4)
+
+    def _resolve_task_id_from_dispatch_id(self, dispatch_id: str) -> str:
+        """Resolve task ID from dispatch ID using worker-list rows."""
+        code, stdout, stderr = self.orca_runner(
+            ["orca", "orchestration", "worker-list", "--json"]
+        )
+        if code != 0:
+            raise ReapError(
+                f"Failed to resolve dispatch via worker-list: {stderr or stdout}",
+                code,
+            )
+
+        try:
+            payload = json.loads(stdout)
+        except json.JSONDecodeError as exc:
+            raise ReapError(f"Could not parse worker-list JSON: {exc}", 4)
+
+        workers = (payload.get("result") or {}).get("workers", [])
+        for worker in workers:
+            row_dispatch_id = worker.get("dispatch_id", worker.get("dispatchId"))
+            if row_dispatch_id == dispatch_id:
+                task_id = worker.get("task_id", worker.get("taskId"))
+                if task_id:
+                    return str(task_id)
+                raise ReapError(
+                    f"worker-list row for dispatch {dispatch_id} has no task_id",
+                    2,
+                )
+
+        raise ReapError(
+            f"Could not resolve dispatch {dispatch_id}: worker-list had no row for it",
+            2,
+        )
 
     def _close_terminal(self, terminal_id: str) -> None:
         """Close a terminal via orca terminal close."""

@@ -16,9 +16,17 @@ from master_runtime.core.worker_reap import (
 
 
 class DispatchStateTests(unittest.TestCase):
-    def test_is_settled_detects_completed(self) -> None:
-        state = DispatchState({"status": "COMPLETED"})
+    def test_is_settled_detects_wrapped_completed(self) -> None:
+        state = DispatchState(_wrapped_dispatch_payload(status="completed"))
         self.assertTrue(state.is_settled())
+        self.assertEqual(state.dispatch_id, "ctx_done")
+        self.assertEqual(state.task_id, "task_done")
+        self.assertEqual(state.terminal_id, "term_done")
+        self.assertEqual(state.worktree_path, "/tmp/wt-done")
+
+    def test_is_settled_rejects_wrapped_dispatched(self) -> None:
+        state = DispatchState(_wrapped_dispatch_payload(status="dispatched"))
+        self.assertFalse(state.is_settled())
 
     def test_is_settled_detects_accepted(self) -> None:
         state = DispatchState({"status": "ACCEPTED"})
@@ -32,13 +40,30 @@ class DispatchStateTests(unittest.TestCase):
         state = DispatchState({"status": "ABANDONED"})
         self.assertTrue(state.is_settled())
 
-    def test_is_settled_rejects_running(self) -> None:
-        state = DispatchState({"status": "RUNNING"})
-        self.assertFalse(state.is_settled())
+    def test_flat_shape_still_parses(self) -> None:
+        state = DispatchState(
+            {
+                "dispatch_id": "d-flat",
+                "task_id": "t-flat",
+                "terminal_id": "term-flat",
+                "status": "COMPLETED",
+            }
+        )
+        self.assertEqual(state.dispatch_id, "d-flat")
+        self.assertEqual(state.task_id, "t-flat")
+        self.assertEqual(state.terminal_id, "term-flat")
+        self.assertTrue(state.is_settled())
 
-    def test_is_settled_rejects_registered(self) -> None:
-        state = DispatchState({"status": "REGISTERED"})
-        self.assertFalse(state.is_settled())
+    def test_flat_shape_prefers_dispatch_id_over_id(self) -> None:
+        state = DispatchState(
+            {
+                "id": "envelope-id",
+                "dispatch_id": "d-flat",
+                "task_id": "t-flat",
+                "status": "COMPLETED",
+            }
+        )
+        self.assertEqual(state.dispatch_id, "d-flat")
 
     def test_is_success_detects_completed(self) -> None:
         state = DispatchState({"status": "COMPLETED"})
@@ -114,6 +139,99 @@ class WorkerReaperTests(unittest.TestCase):
         self.assertIn("term1", closed_terminals)
         self.assertIn("terminal_closed:term1", record.actions_taken)
 
+    def test_reap_resolves_dispatch_id_via_worker_list(self) -> None:
+        commands: list[list[str]] = []
+
+        def fake_runner(cmd: list[str]) -> tuple[int, str, str]:
+            commands.append(cmd)
+            if "worker-list" in cmd:
+                worker_list_payload = {
+                    "result": {
+                        "workers": [
+                            {
+                                "dispatchId": "ctx_target",
+                                "taskId": "task_target",
+                            }
+                        ]
+                    }
+                }
+                return 0, json.dumps(worker_list_payload), ""
+            if "dispatch-show" in cmd:
+                dispatch = {
+                    "dispatch_id": "ctx_target",
+                    "task_id": "task_target",
+                    "terminal_id": "term-target",
+                    "status": "COMPLETED",
+                }
+                return 0, json.dumps(dispatch), ""
+            if "terminal" in cmd and "close" in cmd:
+                return 0, '{"ok":true}', ""
+            return 0, "", ""
+
+        reaper = WorkerReaper(orca_runner=fake_runner)
+        record = reaper.reap(dispatch_id="ctx_target", execute=True)
+
+        self.assertEqual(record.task_id, "task_target")
+        self.assertIn(["orca", "orchestration", "dispatch-show", "--json", "--task", "task_target"], commands)
+
+    def test_reap_errors_when_dispatch_id_missing_from_worker_list(self) -> None:
+        def fake_runner(cmd: list[str]) -> tuple[int, str, str]:
+            if "worker-list" in cmd:
+                worker_list_payload = {
+                    "result": {
+                        "workers": [
+                            {
+                                "dispatchId": "ctx_other",
+                                "taskId": "task_other",
+                            }
+                        ]
+                    }
+                }
+                return 0, json.dumps(worker_list_payload), ""
+            return 0, "", ""
+
+        reaper = WorkerReaper(orca_runner=fake_runner)
+        with self.assertRaisesRegex(
+            ReapError,
+            "Could not resolve dispatch ctx_missing: worker-list had no row for it",
+        ):
+            reaper.reap(dispatch_id="ctx_missing", execute=False)
+
+    def test_reap_errors_when_dispatch_row_has_no_task_id(self) -> None:
+        def fake_runner(cmd: list[str]) -> tuple[int, str, str]:
+            if "worker-list" in cmd:
+                worker_list_payload = {
+                    "result": {
+                        "workers": [
+                            {
+                                "dispatchId": "ctx_target",
+                            }
+                        ]
+                    }
+                }
+                return 0, json.dumps(worker_list_payload), ""
+            return 0, "", ""
+
+        reaper = WorkerReaper(orca_runner=fake_runner)
+        with self.assertRaisesRegex(
+            ReapError,
+            "worker-list row for dispatch ctx_target has no task_id",
+        ):
+            reaper.reap(dispatch_id="ctx_target", execute=False)
+
+    def test_reap_handles_worker_list_null_result_payload(self) -> None:
+        def fake_runner(cmd: list[str]) -> tuple[int, str, str]:
+            if "worker-list" in cmd:
+                return 0, json.dumps({"result": None}), ""
+            return 0, "", ""
+
+        reaper = WorkerReaper(orca_runner=fake_runner)
+        with self.assertRaisesRegex(
+            ReapError,
+            "Could not resolve dispatch ctx_missing: worker-list had no row for it",
+        ):
+            reaper.reap(dispatch_id="ctx_missing", execute=False)
+
     def test_reap_leaves_dirty_worktree(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = tmp
@@ -125,7 +243,7 @@ class WorkerReaperTests(unittest.TestCase):
                         "task_id": "t1",
                         "terminal_id": "term1",
                         "status": "COMPLETED",
-                        "worktree_path": tmp_path,
+                        "process_incarnation": f"repo::{tmp_path}@@worker",
                     }
                     return 0, json.dumps(dispatch), ""
                 # git status shows dirty
@@ -268,7 +386,7 @@ def _clean_worktree_runner(
                 "task_id": "t1",
                 "terminal_id": "term1",
                 "status": "COMPLETED",
-                "worktree_path": worktree_path,
+                "process_incarnation": f"repo::{worktree_path}@@worker",
             }
             return 0, json.dumps(dispatch), ""
         if "git" in cmd and "status" in cmd:
@@ -299,3 +417,42 @@ def _git(repo: Path, *args: str) -> str:
         text=True,
     )
     return result.stdout
+
+
+def _wrapped_dispatch_payload(*, status: str) -> dict[str, object]:
+    return {
+        "id": "local",
+        "ok": True,
+        "result": {
+            "dispatch": {
+                "assignee_handle": "term_done",
+                "assignee_pane_key": "pane_done",
+                "capability_hash": "cap_done",
+                "capability_revoked_at": None,
+                "completed_at": "2026-09-14T00:00:00Z",
+                "consumer_generation": 1,
+                "contract_version": "v1",
+                "created_at": "2026-09-14T00:00:00Z",
+                "creator_dispatch_id": "ctx_parent",
+                "creator_handle": "term_parent",
+                "creator_pane_key": "pane_parent",
+                "depth": 1,
+                "dispatched_at": "2026-09-14T00:00:00Z",
+                "failure_count": 0,
+                "host_scope": "local",
+                "id": "ctx_done",
+                "last_failure": None,
+                "last_heartbeat_at": "2026-09-14T00:00:00Z",
+                "launch_token_hash": "tok_done",
+                "process_incarnation": "repo::/tmp/wt-done@@proc",
+                "retry_of_dispatch_id": None,
+                "run_id": "run_done",
+                "status": status,
+                "task_id": "task_done",
+                "termination_reason": None,
+            }
+        },
+        "_meta": {
+            "runtimeId": "rt_done",
+        },
+    }

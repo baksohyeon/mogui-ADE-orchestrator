@@ -564,7 +564,7 @@ REG=$("$GATE" --ledger "$LEDGER" register --job-id "$DISP" --contract-sha "$SHA"
       --runtime "$RUNTIME" --tier-policy "$POLICY" \
       --probe-cmd "orca orchestration dispatch-show --task $TASK --json 2>/dev/null | grep -o $DISP | head -1" \
       --orchestration-task "$TASK" --declared-model "$MODEL" \
-      "${MODEL_PROBE_ARGS[@]}" 2>/dev/null)
+      "${MODEL_PROBE_ARGS[@]+"${MODEL_PROBE_ARGS[@]}"}" 2>/dev/null)
 if [ "$(echo "$REG" | jqf "d['allow']")" != "True" ]; then
   echo "✗ register $(echo "$REG" | jqf "d['reason']") · dispatch=$DISP (worker IS running — resolve register manually)"
   exit 4

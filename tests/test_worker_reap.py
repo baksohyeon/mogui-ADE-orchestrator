@@ -17,12 +17,27 @@ from master_runtime.core.worker_reap import (
 
 class DispatchStateTests(unittest.TestCase):
     def test_is_settled_detects_wrapped_completed(self) -> None:
-        state = DispatchState(_wrapped_dispatch_payload(status="completed"))
+        state = DispatchState(
+            _wrapped_dispatch_payload(
+                status="completed",
+                process_incarnation="repo::/tmp/wt-done@@proc",
+            )
+        )
         self.assertTrue(state.is_settled())
         self.assertEqual(state.dispatch_id, "ctx_done")
         self.assertEqual(state.task_id, "task_done")
         self.assertEqual(state.terminal_id, "term_done")
         self.assertEqual(state.worktree_path, "/tmp/wt-done")
+
+    def test_is_settled_detects_wrapped_completed_windows_path(self) -> None:
+        state = DispatchState(
+            _wrapped_dispatch_payload(
+                status="completed",
+                process_incarnation="repo::C:\\tmp\\wt-done@@proc",
+            )
+        )
+        self.assertTrue(state.is_settled())
+        self.assertEqual(state.worktree_path, "C:\\tmp\\wt-done")
 
     def test_is_settled_rejects_wrapped_dispatched(self) -> None:
         state = DispatchState(_wrapped_dispatch_payload(status="dispatched"))
@@ -419,7 +434,11 @@ def _git(repo: Path, *args: str) -> str:
     return result.stdout
 
 
-def _wrapped_dispatch_payload(*, status: str) -> dict[str, object]:
+def _wrapped_dispatch_payload(
+    *,
+    status: str,
+    process_incarnation: str = "repo::/tmp/wt-done@@proc",
+) -> dict[str, object]:
     return {
         "id": "local",
         "ok": True,
@@ -444,7 +463,7 @@ def _wrapped_dispatch_payload(*, status: str) -> dict[str, object]:
                 "last_failure": None,
                 "last_heartbeat_at": "2026-09-14T00:00:00Z",
                 "launch_token_hash": "tok_done",
-                "process_incarnation": "repo::/tmp/wt-done@@proc",
+                "process_incarnation": process_incarnation,
                 "retry_of_dispatch_id": None,
                 "run_id": "run_done",
                 "status": status,

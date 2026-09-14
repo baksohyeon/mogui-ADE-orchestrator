@@ -7,7 +7,7 @@ import re
 import subprocess
 import time
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Optional
 
 
@@ -85,7 +85,10 @@ class DispatchState:
             return None
 
         path = match.group(1)
-        if not Path(path).is_absolute():
+        is_absolute = PurePosixPath(path).is_absolute() or PureWindowsPath(
+            path
+        ).is_absolute()
+        if not is_absolute:
             return None
         return path
 

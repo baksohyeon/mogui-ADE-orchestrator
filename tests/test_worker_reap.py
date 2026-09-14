@@ -39,6 +39,18 @@ class DispatchStateTests(unittest.TestCase):
         self.assertTrue(state.is_settled())
         self.assertEqual(state.worktree_path, "C:\\tmp\\wt-done")
 
+    def test_flat_shape_uses_worktree_path_fallback(self) -> None:
+        state = DispatchState(
+            {
+                "dispatch_id": "d-flat",
+                "task_id": "t-flat",
+                "status": "COMPLETED",
+                "process_incarnation": "not-parseable",
+                "worktree_path": "/tmp/fallback-wt",
+            }
+        )
+        self.assertEqual(state.worktree_path, "/tmp/fallback-wt")
+
     def test_is_settled_rejects_wrapped_dispatched(self) -> None:
         state = DispatchState(_wrapped_dispatch_payload(status="dispatched"))
         self.assertFalse(state.is_settled())
@@ -154,11 +166,43 @@ class WorkerReaperTests(unittest.TestCase):
         self.assertIn("term1", closed_terminals)
         self.assertIn("terminal_closed:term1", record.actions_taken)
 
-    def test_reap_resolves_dispatch_id_via_worker_list(self) -> None:
+    def test_reap_resolves_dispatch_id_via_worker_list_snake_case(self) -> None:
         commands: list[list[str]] = []
 
         def fake_runner(cmd: list[str]) -> tuple[int, str, str]:
             commands.append(cmd)
+            if "worker-list" in cmd:
+                worker_list_payload = {
+                    "result": {
+                        "workers": [
+                            {
+                                "dispatch_id": "ctx_target",
+                                "task_id": "task_target",
+                            }
+                        ]
+                    }
+                }
+                return 0, json.dumps(worker_list_payload), ""
+            if "dispatch-show" in cmd:
+                dispatch = {
+                    "dispatch_id": "ctx_target",
+                    "task_id": "task_target",
+                    "terminal_id": "term-target",
+                    "status": "COMPLETED",
+                }
+                return 0, json.dumps(dispatch), ""
+            if "terminal" in cmd and "close" in cmd:
+                return 0, '{"ok":true}', ""
+            return 0, "", ""
+
+        reaper = WorkerReaper(orca_runner=fake_runner)
+        record = reaper.reap(dispatch_id="ctx_target", execute=True)
+
+        self.assertEqual(record.task_id, "task_target")
+        self.assertIn(["orca", "orchestration", "dispatch-show", "--json", "--task", "task_target"], commands)
+
+    def test_reap_resolves_dispatch_id_via_worker_list_camel_fallback(self) -> None:
+        def fake_runner(cmd: list[str]) -> tuple[int, str, str]:
             if "worker-list" in cmd:
                 worker_list_payload = {
                     "result": {
@@ -187,7 +231,38 @@ class WorkerReaperTests(unittest.TestCase):
         record = reaper.reap(dispatch_id="ctx_target", execute=True)
 
         self.assertEqual(record.task_id, "task_target")
-        self.assertIn(["orca", "orchestration", "dispatch-show", "--json", "--task", "task_target"], commands)
+
+    def test_reap_resolves_dispatch_id_when_snake_case_is_none(self) -> None:
+        def fake_runner(cmd: list[str]) -> tuple[int, str, str]:
+            if "worker-list" in cmd:
+                worker_list_payload = {
+                    "result": {
+                        "workers": [
+                            {
+                                "dispatch_id": None,
+                                "dispatchId": "ctx_target",
+                                "task_id": None,
+                                "taskId": "task_target",
+                            }
+                        ]
+                    }
+                }
+                return 0, json.dumps(worker_list_payload), ""
+            if "dispatch-show" in cmd:
+                dispatch = {
+                    "dispatch_id": "ctx_target",
+                    "task_id": "task_target",
+                    "terminal_id": "term-target",
+                    "status": "COMPLETED",
+                }
+                return 0, json.dumps(dispatch), ""
+            if "terminal" in cmd and "close" in cmd:
+                return 0, '{"ok":true}', ""
+            return 0, "", ""
+
+        reaper = WorkerReaper(orca_runner=fake_runner)
+        record = reaper.reap(dispatch_id="ctx_target", execute=True)
+        self.assertEqual(record.task_id, "task_target")
 
     def test_reap_errors_when_dispatch_id_missing_from_worker_list(self) -> None:
         def fake_runner(cmd: list[str]) -> tuple[int, str, str]:
@@ -246,6 +321,37 @@ class WorkerReaperTests(unittest.TestCase):
             "Could not resolve dispatch ctx_missing: worker-list had no row for it",
         ):
             reaper.reap(dispatch_id="ctx_missing", execute=False)
+
+    def test_reap_handles_worker_list_non_list_workers_payload(self) -> None:
+        def fake_runner(cmd: list[str]) -> tuple[int, str, str]:
+            if "worker-list" in cmd:
+                return 0, json.dumps({"result": {"workers": "not-a-list"}}), ""
+            return 0, "", ""
+
+        reaper = WorkerReaper(orca_runner=fake_runner)
+        with self.assertRaisesRegex(
+            ReapError,
+            "Could not resolve dispatch ctx_missing: worker-list had no row for it",
+        ):
+            reaper.reap(dispatch_id="ctx_missing", execute=False)
+
+    def test_reap_flow_uses_wrapped_dispatch_shape_end_to_end(self) -> None:
+        closed_terminals = []
+
+        def fake_runner(cmd: list[str]) -> tuple[int, str, str]:
+            if "dispatch-show" in cmd:
+                return 0, json.dumps(_wrapped_dispatch_payload(status="completed")), ""
+            if "terminal" in cmd and "close" in cmd:
+                closed_terminals.append(cmd[-1])
+                return 0, '{"ok":true}', ""
+            return 0, "", ""
+
+        reaper = WorkerReaper(orca_runner=fake_runner)
+        record = reaper.reap(task_id="task_done", execute=True)
+
+        self.assertEqual(closed_terminals, ["term_done"])
+        self.assertIn("terminal_closed:term_done", record.actions_taken)
+        self.assertIn("/tmp/wt-done", record.actions_taken)
 
     def test_reap_leaves_dirty_worktree(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

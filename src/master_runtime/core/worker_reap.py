@@ -53,18 +53,25 @@ class DispatchState:
                 dispatch_payload = wrapped_dispatch
 
         self.dispatch_id = str(
-            dispatch_payload.get("dispatch_id", dispatch_payload.get("id", ""))
+            dispatch_payload.get("dispatch_id")
+            or dispatch_payload.get("id")
+            or ""
         )
-        self.task_id = str(dispatch_payload.get("task_id", ""))
+        self.task_id = str(dispatch_payload.get("task_id") or "")
         self.terminal_id = str(
-            dispatch_payload.get(
-                "assignee_handle",
-                dispatch_payload.get("terminal_id", ""),
-            )
+            dispatch_payload.get("assignee_handle")
+            or dispatch_payload.get("terminal_id")
+            or ""
         )
         self.status = str(dispatch_payload.get("status", "")).upper()
-        self.worktree_path = self._derive_worktree_path(
+        derived_worktree_path = self._derive_worktree_path(
             dispatch_payload.get("process_incarnation")
+        )
+        flat_worktree_path = dispatch_payload.get("worktree_path")
+        self.worktree_path = (
+            derived_worktree_path
+            if derived_worktree_path is not None
+            else str(flat_worktree_path) if flat_worktree_path else None
         )
 
     def is_settled(self) -> bool:
@@ -220,11 +227,17 @@ class WorkerReaper:
         except json.JSONDecodeError as exc:
             raise ReapError(f"Could not parse worker-list JSON: {exc}", 4)
 
-        workers = (payload.get("result") or {}).get("workers", [])
+        result = payload.get("result") if isinstance(payload, dict) else None
+        workers = result.get("workers") if isinstance(result, dict) else None
+        if not isinstance(workers, list):
+            workers = []
+
         for worker in workers:
-            row_dispatch_id = worker.get("dispatch_id", worker.get("dispatchId"))
+            if not isinstance(worker, dict):
+                continue
+            row_dispatch_id = worker.get("dispatch_id") or worker.get("dispatchId")
             if row_dispatch_id == dispatch_id:
-                task_id = worker.get("task_id", worker.get("taskId"))
+                task_id = worker.get("task_id") or worker.get("taskId")
                 if task_id:
                     return str(task_id)
                 raise ReapError(

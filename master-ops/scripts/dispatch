@@ -10,6 +10,7 @@ GATE={{RUNTIME_ROOT}}/scripts/dispatch-gate
 LEDGER=~/.mogui/dispatch-ledger.jsonl
 TEMPLATE_POLICY=$OPS/model-tier-policy.json
 PROBE_BIN={{RUNTIME_ROOT}}/scripts/model-identity-probe
+ROLLOUT_PROBE_BIN={{RUNTIME_ROOT}}/scripts/model-probe-rollout
 SCRIPTS_DIR=$(cd "$(dirname "$0")" && pwd)
 COLLISION_CHECK="$SCRIPTS_DIR/dispatch-collision-check"
 # Master host runtime. Resolution order, most authoritative first:
@@ -113,7 +114,27 @@ resolve_tier_policy() {
 
 POLICY=$(resolve_tier_policy)
 
-jqf() { python3 -c "import json,sys;d=json.load(sys.stdin);print($1)"; }
+# dispatch-gate's contract is one JSON line on stdout with human diagnostics on
+# stderr, but a caller that ever sees a human line land on stdout ahead of the
+# JSON (mixed-stream measured 2026-08-13: "dispatch-gate: REASON ..." on stdout
+# followed by the JSON on the next line) must not crash on it. That measured
+# failure killed jqf with `Expecting value: line 2 column 1 (char 1)` mid-way
+# through register, which left the worker running and unregistered — the
+# ledger was never told the job existed. Parse defensively: take the last line
+# that looks like a JSON object, whichever stream mixing produced it. A single
+# clean JSON line (the normal case) still works unchanged.
+jqf() {
+  python3 -c "
+import json, sys
+lines = [ln for ln in sys.stdin.read().splitlines() if ln.strip()]
+json_line = next((ln for ln in reversed(lines) if ln.lstrip().startswith('{')), None)
+if json_line is None:
+    print('jqf: no JSON object line in gate output', file=sys.stderr)
+    sys.exit(1)
+d = json.loads(json_line)
+print($1)
+"
+}
 
 # model-identity-probe lives in the orchestrator and resolves its instance config
 # relative to that checkout, where the product-path guard correctly forbids the
@@ -139,6 +160,17 @@ transcript_glob_for() {
       [ -n "$wt" ] || return 1
       mangled=$(printf '%s' "${wt#path:}" | sed 's|[/.]|-|g')
       echo "$HOME/.claude/projects/$mangled/*.jsonl"
+      ;;
+    codex)
+      # Codex (launched via Orca) keys rollout files by account and calendar
+      # date, not by worktree — the working directory lives inside the JSONL
+      # rather than in the path, so this glob cannot be scoped to one worker
+      # the way the claude glob above is. Report the newest rollout across
+      # every account and date anyway (labeled honestly by the PROBE_STATE it
+      # produces below) rather than skip the probe outright: skipping it is
+      # what left MODEL_TIER_ESCALATION denying registration on model=<missing>
+      # (measured 2026-08-13) even though the real model id was on disk.
+      echo "$HOME/Library/Application\\ Support/orca/codex-accounts/*/home/sessions/*/*/*/rollout-*.jsonl"
       ;;
     *) return 1;;
   esac
@@ -547,14 +579,30 @@ if [ "$TGLOB_EXPLICIT" = 1 ]; then
   PROBE_STATE="explicit-glob"
 elif DERIVED_GLOB=$(transcript_glob_for "$RUNTIME" "$WORKTREE"); then
   TGLOB=$DERIVED_GLOB
-  PROBE_STATE="scoped-to-worktree"
+  case "$RUNTIME" in
+    codex) PROBE_STATE="codex-latest-rollout";;
+    *) PROBE_STATE="scoped-to-worktree";;
+  esac
 else
   PROBE_STATE="unavailable"
 fi
 
 MODEL_PROBE_ARGS=()
 if [ "$PROBE_STATE" != unavailable ]; then
-  MODEL_PROBE_ARGS=(--model-probe-cmd "$PROBE_BIN --transcript \$(ls -t $TGLOB 2>/dev/null | head -1) | grep -o '$MODEL' | head -1")
+  if [ "$RUNTIME" = codex ]; then
+    # model-identity-probe expects claude-shaped transcripts (a "model" field
+    # adjacent to role/type == "assistant"); a codex rollout does not match
+    # that shape and measured as model=<missing> (2026-08-13), denying
+    # registration with MODEL_TIER_ESCALATION even though the model id was in
+    # the file. Raw-grepping the rollout's `"model":"..."` fragment is worse,
+    # not better: it hands the gate the whole fragment instead of the bare id
+    # (measured="model":"gpt-5.6-luna" tier=unknown, same date), so tier
+    # lookup never matches. model-probe-rollout extracts just the bare id and
+    # is the probe wired for every codex dispatch, explicit glob or derived.
+    MODEL_PROBE_ARGS=(--model-probe-cmd "$ROLLOUT_PROBE_BIN \"\$(ls -t $TGLOB 2>/dev/null | head -1)\"")
+  else
+    MODEL_PROBE_ARGS=(--model-probe-cmd "$PROBE_BIN --transcript \$(ls -t $TGLOB 2>/dev/null | head -1) | grep -o '$MODEL' | head -1")
+  fi
 fi
 
 # 5b. register (job probe = ledger-vs-dispatch-show; model probe only when it can
@@ -575,6 +623,8 @@ case "$PROBE_STATE" in
   unavailable)
     PROBE_LABEL="model=unavailable(no scoped transcript for runtime $RUNTIME — not a pass)";;
   scoped-to-worktree) PROBE_LABEL="model=transcript실측(worktree-scoped)";;
+  codex-latest-rollout)
+    PROBE_LABEL="model=transcript실측(codex-latest-rollout — machine-wide newest rollout, not worker-scoped)";;
   *) PROBE_LABEL="model=transcript실측(caller glob)";;
 esac
 echo "⚡ register ✓ $DISP${WARN:+ · warn:$WARN} · probe: job=원장대조 $PROBE_LABEL"

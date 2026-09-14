@@ -156,6 +156,34 @@ def collect_non_option_operands(parts, start, options_with_values):
         out.append(token)
         index += 1
     return out
+def has_install_directory_mode(option_tokens):
+    install_value_short={"g", "m", "o", "S", "t"}
+    install_flag_short={"d"}
+    index=0
+    while index < len(option_tokens):
+        token=option_tokens[index]
+        if token == "--":
+            break
+        if token == "--directory":
+            return True
+        if token.startswith("--"):
+            index += 1
+            continue
+        if token.startswith("-") and token != "-":
+            short=token[1:]
+            pos=0
+            while pos < len(short):
+                flag=short[pos]
+                if flag in install_flag_short:
+                    return True
+                if flag in install_value_short:
+                    if pos + 1 < len(short):
+                        break
+                    index += 1
+                    break
+                pos += 1
+        index += 1
+    return False
 try:
     tokens=list(shlex.shlex(command, posix=True, punctuation_chars=";&|><"))
 except Exception:
@@ -329,15 +357,7 @@ for parts in segments:
                 elif token.startswith("--target-directory="):
                     write_targets.append(token.split("=", 1)[1])
             if not write_targets and install_operands:
-                install_directory_mode=any(
-                    token == "--directory"
-                    or (
-                        token.startswith("-")
-                        and not token.startswith("--")
-                        and "d" in token[1:]
-                    )
-                    for token in option_tokens
-                )
+                install_directory_mode=has_install_directory_mode(option_tokens)
                 if install_directory_mode:
                     write_targets.extend(install_operands)
                 elif len(install_operands) >= 2:
@@ -357,7 +377,7 @@ for parts in segments:
             if ln_destination_mode:
                 source_operands=ln_operands
             else:
-                source_operands=ln_operands[:-1] if len(ln_operands) >= 2 else []
+                source_operands=ln_operands[:-1] if len(ln_operands) >= 2 else ln_operands
             write_targets.extend(source_operands)
         else:
             for token in parts[1:]:

@@ -12,10 +12,6 @@ if [ -n "${MOGUI_INSTANCE_RUNTIME_CONFIG:-}" ]; then
 else
   INSTANCE_RUNTIME_CONFIG="{{RUNTIME_ROOT}}/config/instance-runtime.json"
 fi
-if [[ "$INSTANCE_RUNTIME_CONFIG" == *"{{RUNTIME_ROOT}}"* ]]; then
-  echo "[product-path-guard] BLOCKED: unsubstituted {{RUNTIME_ROOT}} token in INSTANCE_RUNTIME_CONFIG; set MOGUI_INSTANCE_RUNTIME_CONFIG to a real runtime config path" >&2
-  exit 2
-fi
 HOOK_DIR=$(cd "$(dirname "$0")" && pwd)
 ALLOWLIST="${MOGUI_PRODUCT_GUARD_ALLOWLIST:-$HOOK_DIR/product-path-guard-readonly-allowlist.txt}"
 FIRE_LOG="${MOGUI_HOOK_FIRE_LOG:-$HOME/.mogui/hook-fire-log.jsonl}"
@@ -69,6 +65,11 @@ PY
 # Preserve the legacy hook-fire schema and coverage signal; decision details go
 # exclusively to event-log.jsonl through mg_emit.
 record_fire
+
+if [[ "$INSTANCE_RUNTIME_CONFIG" == *"{{RUNTIME_ROOT}}"* ]]; then
+  echo "[product-path-guard] BLOCKED: unsubstituted {{RUNTIME_ROOT}} token in INSTANCE_RUNTIME_CONFIG; set MOGUI_INSTANCE_RUNTIME_CONFIG to a real runtime config path" >&2
+  exit 2
+fi
 
 load_product_repo() {
   CONFIG_PATH="$INSTANCE_RUNTIME_CONFIG" python3 -c '
@@ -125,7 +126,7 @@ command=$(printf '%s' "$input" | python3 -c 'import json,sys; d=json.load(sys.st
 [ -n "$command" ] || { mg_emit info product_path_guard pass empty_command; exit 0; }
 
 result=$(PRODUCT_ROOT="$repo" ALLOWLIST="$ALLOWLIST" FAIL_CLOSED="$FAIL_CLOSED" python3 -c '
-import json, os, shlex, sys
+import json, os, re, shlex, sys
 payload=json.load(sys.stdin)
 tool=payload.get("tool_input", {})
 command=tool.get("command", "")
@@ -137,6 +138,26 @@ def resolve(base, value):
 def under(value):
     value=os.path.realpath(os.path.expanduser(value))
     return value == root or value.startswith(root + os.sep)
+def contains_cd_token(value):
+    return re.search(r"(^|[\s;&|()])cd([\s;&|()]|$)", value) is not None
+def redirects_into_root(value, base):
+    try:
+        body_tokens=list(shlex.shlex(value, posix=True, punctuation_chars=";&|><"))
+    except Exception:
+        return False
+    redirections={">",">>","2>","2>>","&>",">&"}
+    i=0
+    while i < len(body_tokens):
+        token=body_tokens[i]
+        if token in redirections:
+            if i + 1 >= len(body_tokens):
+                return True
+            if under(resolve(base, body_tokens[i + 1])):
+                return True
+            i += 2
+            continue
+        i += 1
+    return False
 def collect_non_option_operands(parts, start, options_with_values):
     values=set(options_with_values)
     index=start
@@ -263,9 +284,20 @@ for parts in segments:
         command_class=name
         target=current_cwd
         if name in {"bash", "sh", "dash", "ksh", "zsh", "python", "python3", "perl", "ruby", "node"}:
-            opaque_interpreter_target = any(">" in token or root in token for token in parts[1:])
             bare_dash_c = "-c" in parts[1:]
-            if opaque_interpreter_target or (
+            dash_c_body=""
+            if bare_dash_c:
+                dash_c_index=parts.index("-c")
+                if dash_c_index + 1 < len(parts):
+                    dash_c_body=parts[dash_c_index + 1]
+            legacy_dash_c_body_denied=False
+            if bare_dash_c and os.environ["FAIL_CLOSED"] != "1" and not under(current_cwd):
+                legacy_dash_c_body_denied = (
+                    contains_cd_token(dash_c_body)
+                    or root in dash_c_body
+                    or redirects_into_root(dash_c_body, current_cwd)
+                )
+            if legacy_dash_c_body_denied or (
                 bare_dash_c and (os.environ["FAIL_CLOSED"] == "1" or under(current_cwd))
             ):
                 print("DENY\t"+command_class+"\topaque interpreter command may contain an unparsed write")

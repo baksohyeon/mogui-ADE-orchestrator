@@ -61,7 +61,7 @@ PY
 run_bash_default_config() {
   local command="$1"
   local working_directory="${2:-.}"
-  python3 - "$command" "$working_directory" <<'PY' | HOME="$TMP/home" MOGUI_INSTANCE_RUNTIME_CONFIG= MOGUI_INLINE_EDIT_OVERRIDE=0 MOGUI_PRODUCT_GUARD_FAIL_CLOSED=0 MOGUI_EVENT_LOG="$TMP/home/.mogui/event-log.jsonl" MOGUI_HOOK_FIRE_LOG="$TMP/logs/fire.jsonl" "$HOOK" >/dev/null 2>"$TMP/stderr"
+  python3 - "$command" "$working_directory" <<'PY' 2>/dev/null | HOME="$TMP/home" MOGUI_INSTANCE_RUNTIME_CONFIG= MOGUI_INLINE_EDIT_OVERRIDE=0 MOGUI_PRODUCT_GUARD_FAIL_CLOSED=0 MOGUI_EVENT_LOG="$TMP/home/.mogui/event-log.jsonl" MOGUI_HOOK_FIRE_LOG="$TMP/logs/fire.jsonl" "$HOOK" >/dev/null 2>"$TMP/stderr"
 import json, sys
 print(json.dumps({"tool_input": {"command": sys.argv[1], "working_directory": sys.argv[2] if len(sys.argv) > 2 else "."}}))
 PY
@@ -97,9 +97,11 @@ expect_blocked bash-combined-redirection run_bash "echo bad >& $product/file.txt
 expect_blocked bash-relative-working-directory run_bash "echo bad > file.txt" "$product"
 expect_allowed legacy-python3-c-outside-root run_bash "python3 -c 'print(1)'" "$ops"
 expect_allowed legacy-bash-c-outside-root run_bash "bash -c 'echo ok'" "$ops"
+expect_blocked legacy-bash-c-relative-cd-into-root run_bash "bash -c 'cd ../product && cp /dev/null x.txt'" "$ops"
+expect_blocked legacy-bash-c-relative-redirect-into-root run_bash "bash -c 'echo bad > ../product/x.txt'" "$ops"
 expect_blocked legacy-python3-c-inside-root run_bash "python3 -c 'print(1)'" "$product"
 expect_blocked strict-python3-c-outside-root run_bash_strict "python3 -c 'print(1)'" "$ops"
-expect_blocked legacy-python3-c-redirection-outside-root run_bash "python3 -c 'print(1)' > /tmp/guard-probe.txt" "$ops"
+expect_allowed legacy-python3-c-redirection-outside-root run_bash "python3 -c 'print(1)' > /tmp/guard-probe.txt" "$ops"
 expect_allowed legacy-read-only run_bash "ls" "$product"
 printf 'ls\nrg\n' >"$TMP/allowlist.txt"
 expect_allowed measured-read-only run_bash_strict "ls" "$product"

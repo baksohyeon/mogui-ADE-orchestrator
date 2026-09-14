@@ -71,7 +71,12 @@ class DispatchState:
         self.worktree_path = (
             derived_worktree_path
             if derived_worktree_path is not None
-            else str(flat_worktree_path) if flat_worktree_path else None
+            else (
+                flat_worktree_path
+                if isinstance(flat_worktree_path, str)
+                and self._is_absolute_path(flat_worktree_path)
+                else None
+            )
         )
 
     def is_settled(self) -> bool:
@@ -92,12 +97,13 @@ class DispatchState:
             return None
 
         path = match.group(1)
-        is_absolute = PurePosixPath(path).is_absolute() or PureWindowsPath(
-            path
-        ).is_absolute()
-        if not is_absolute:
+        if not self._is_absolute_path(path):
             return None
         return path
+
+    def _is_absolute_path(self, path: str) -> bool:
+        """True when path is absolute in either posix or windows form."""
+        return PurePosixPath(path).is_absolute() or PureWindowsPath(path).is_absolute()
 
 
 class WorkerReaper:

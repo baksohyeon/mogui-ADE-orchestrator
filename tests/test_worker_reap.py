@@ -51,6 +51,18 @@ class DispatchStateTests(unittest.TestCase):
         )
         self.assertEqual(state.worktree_path, "/tmp/fallback-wt")
 
+    def test_flat_shape_rejects_relative_worktree_path_fallback(self) -> None:
+        state = DispatchState(
+            {
+                "dispatch_id": "d-flat",
+                "task_id": "t-flat",
+                "status": "COMPLETED",
+                "process_incarnation": "not-parseable",
+                "worktree_path": "relative/wt",
+            }
+        )
+        self.assertIsNone(state.worktree_path)
+
     def test_is_settled_rejects_wrapped_dispatched(self) -> None:
         state = DispatchState(_wrapped_dispatch_payload(status="dispatched"))
         self.assertFalse(state.is_settled())
@@ -336,23 +348,42 @@ class WorkerReaperTests(unittest.TestCase):
             reaper.reap(dispatch_id="ctx_missing", execute=False)
 
     def test_reap_flow_uses_wrapped_dispatch_shape_end_to_end(self) -> None:
-        closed_terminals = []
+        with tempfile.TemporaryDirectory() as tmp:
+            wrapped_worktree = str(Path(tmp) / "wrapped-worktree")
+            Path(wrapped_worktree).mkdir(parents=True, exist_ok=True)
+            closed_terminals = []
+            removed_paths = []
 
-        def fake_runner(cmd: list[str]) -> tuple[int, str, str]:
-            if "dispatch-show" in cmd:
-                return 0, json.dumps(_wrapped_dispatch_payload(status="completed")), ""
-            if "terminal" in cmd and "close" in cmd:
-                closed_terminals.append(cmd[-1])
-                return 0, '{"ok":true}', ""
-            return 0, "", ""
+            def fake_runner(cmd: list[str]) -> tuple[int, str, str]:
+                if "dispatch-show" in cmd:
+                    return 0, json.dumps(
+                        _wrapped_dispatch_payload(
+                            status="completed",
+                            process_incarnation=f"repo::{wrapped_worktree}@@proc",
+                        )
+                    ), ""
+                if "terminal" in cmd and "close" in cmd:
+                    closed_terminals.append(cmd[-1])
+                    return 0, '{"ok":true}', ""
+                if "git" in cmd and "status" in cmd:
+                    return 0, "", ""
+                if "git" in cmd and "branch" in cmd and "--show-current" in cmd:
+                    return 0, "main\n", ""
+                if "git" in cmd and "branch" in cmd and "--merged" in cmd:
+                    return 0, "* main\n", ""
+                if "git" in cmd and "worktree" in cmd and "remove" in cmd:
+                    removed_paths.append(cmd[-1])
+                    return 0, "", ""
+                return 0, "", ""
 
-        reaper = WorkerReaper(orca_runner=fake_runner)
-        record = reaper.reap(task_id="task_done", execute=True)
+            reaper = WorkerReaper(orca_runner=fake_runner)
+            record = reaper.reap(task_id="task_done", execute=True)
 
-        self.assertEqual(closed_terminals, ["term_done"])
-        self.assertEqual(record.worktree_path, "/tmp/wt-done")
-        self.assertIn("terminal_closed:term_done", record.actions_taken)
-        self.assertIn(str(Path("/tmp/wt-done")), record.actions_taken)
+            self.assertEqual(closed_terminals, ["term_done"])
+            self.assertEqual(record.worktree_path, wrapped_worktree)
+            self.assertIn("terminal_closed:term_done", record.actions_taken)
+            self.assertIn(f"worktree_removed:{wrapped_worktree}", record.actions_taken)
+            self.assertIn(wrapped_worktree, removed_paths)
 
     def test_reap_leaves_dirty_worktree(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

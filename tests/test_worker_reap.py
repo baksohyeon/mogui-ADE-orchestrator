@@ -350,8 +350,9 @@ class WorkerReaperTests(unittest.TestCase):
         record = reaper.reap(task_id="task_done", execute=True)
 
         self.assertEqual(closed_terminals, ["term_done"])
+        self.assertEqual(record.worktree_path, "/tmp/wt-done")
         self.assertIn("terminal_closed:term_done", record.actions_taken)
-        self.assertIn("/tmp/wt-done", record.actions_taken)
+        self.assertIn(str(Path("/tmp/wt-done")), record.actions_taken)
 
     def test_reap_leaves_dirty_worktree(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

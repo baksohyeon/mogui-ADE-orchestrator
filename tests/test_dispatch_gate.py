@@ -653,6 +653,70 @@ def test_check_rejects_invalid_runtimes_without_ticket(
         assert not (case_dir.parent / "escape").exists()
 
 
+def test_runtime_allowlist_denies_unknown_runtime(tmp_path: Path) -> None:
+    contract = _contract(tmp_path, "unknown runtime")
+    gate = _gate(
+        tmp_path,
+        now=1_000,
+        tier_policy_path=_tier_policy_v2(tmp_path, runtimes=["codex", "cursor"]),
+    )
+
+    decision = gate.check(
+        DispatchRequest(
+            runtime="orca",
+            model="gpt-5.6-luna",
+            contract_path=contract,
+            est_input_chars=10_000,
+            n_agents=1,
+        )
+    )
+
+    assert decision.allow is False
+    assert decision.reason == ReasonCode.UNKNOWN_RUNTIME
+    assert "runtime=orca" in decision.message
+    assert not (tmp_path / "dispatch-tickets").exists()
+
+
+def test_runtime_allowlist_allows_known_runtime(tmp_path: Path) -> None:
+    contract = _contract(tmp_path, "known runtime")
+    gate = _gate(
+        tmp_path,
+        now=1_000,
+        tier_policy_path=_tier_policy_v2(tmp_path, runtimes=["codex", "cursor"]),
+    )
+
+    decision = gate.check(
+        DispatchRequest(
+            runtime="cursor",
+            model="gpt-5.6-luna",
+            contract_path=contract,
+            est_input_chars=10_000,
+            n_agents=1,
+        )
+    )
+
+    assert decision.allow is True
+    assert decision.reason == ReasonCode.OK
+
+
+def test_runtime_allowlist_missing_key_keeps_existing_behavior(tmp_path: Path) -> None:
+    contract = _contract(tmp_path, "runtime key omitted")
+    gate = _gate(tmp_path, now=1_000, tier_policy_path=_tier_policy_v2(tmp_path))
+
+    decision = gate.check(
+        DispatchRequest(
+            runtime="orca",
+            model="gpt-5.6-luna",
+            contract_path=contract,
+            est_input_chars=10_000,
+            n_agents=1,
+        )
+    )
+
+    assert decision.allow is True
+    assert decision.reason == ReasonCode.OK
+
+
 def test_issue_dispatch_ticket_confines_runtime_path_escape(
     tmp_path: Path,
 ) -> None:
@@ -2676,6 +2740,20 @@ def test_v2_policy_validation_fails_closed(tmp_path: Path) -> None:
             "fanout_caps": {"unknown": 1},
             "window_seconds": 0,
         },
+        {
+            "version": 2,
+            "runtimes": None,
+            "tiers": {"top": ["a"]},
+            "fanout_caps": {"unknown": 1},
+            "window_seconds": 86_400,
+        },
+        {
+            "version": 2,
+            "runtimes": ["ß"],
+            "tiers": {"top": ["a"]},
+            "fanout_caps": {"unknown": 1},
+            "window_seconds": 86_400,
+        },
     )
     for index, payload in enumerate(bad_payloads):
         case_dir = tmp_path / f"bad{index}"
@@ -3026,21 +3104,22 @@ def _tier_policy_v2(
     caps: dict | None = None,
     window_seconds: int = 86_400,
     name: str = "model-tier-policy-v2.json",
+    runtimes: list[str] | None = None,
 ) -> Path:
     policy = tmp_path / name
+    payload: dict[str, object] = {
+        "version": 2,
+        "tiers": {
+            "top": ["gpt-5.6-sol", "claude-opus-5"],
+            "efficient": ["gpt-5.6-luna", "claude-haiku-4-5"],
+        },
+        "fanout_caps": caps if caps is not None else {"top": 1, "unknown": 1},
+        "window_seconds": window_seconds,
+    }
+    if runtimes is not None:
+        payload["runtimes"] = runtimes
     policy.write_text(
-        json.dumps(
-            {
-                "version": 2,
-                "tiers": {
-                    "top": ["gpt-5.6-sol", "claude-opus-5"],
-                    "efficient": ["gpt-5.6-luna", "claude-haiku-4-5"],
-                },
-                "fanout_caps": caps if caps is not None else {"top": 1, "unknown": 1},
-                "window_seconds": window_seconds,
-            },
-            sort_keys=True,
-        )
+        json.dumps(payload, sort_keys=True)
         + "\n",
         encoding="utf-8",
     )

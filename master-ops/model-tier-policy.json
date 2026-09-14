@@ -1,5 +1,14 @@
 {
   "version": 2,
+  "runtimes": [
+    "claude",
+    "grok",
+    "cursor",
+    "codex",
+    "gemini",
+    "opencode",
+    "agy"
+  ],
   "tiers": {
     "top": [
       "gpt-5.6-sol",

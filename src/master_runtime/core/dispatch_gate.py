@@ -39,6 +39,7 @@ DEFAULT_EXPIRED_TICKET_GC_GRACE_SECONDS = 24 * 60 * 60
 RUNTIME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 USERS_ABSOLUTE_PATH_PATTERN = re.compile(r"/Users/[^\s\"'`<>{}\[\](),;:]+")
 COMPLETION_CHANNELS = frozenset({"orchestration", "sentinel-log"})
+_MISSING = object()
 
 
 def _default_ledger_path() -> Path:
@@ -110,6 +111,7 @@ class ReasonCode(str, Enum):
     MODEL_MISMATCH = "MODEL_MISMATCH"
     MODEL_UNVERIFIED = "MODEL_UNVERIFIED"
     MODEL_PROBE_FAILED = "MODEL_PROBE_FAILED"
+    UNKNOWN_RUNTIME = "UNKNOWN_RUNTIME"
 
 
 @dataclass(frozen=True)
@@ -200,6 +202,7 @@ class ModelTierPolicy:
     model_tiers: Mapping[str, str] = field(default_factory=dict)
     fanout_caps: Mapping[str, int] = field(default_factory=dict)
     window_seconds: int = DEFAULT_TIER_WINDOW_SECONDS
+    runtimes: frozenset[str] | None = None
 
     def tier_of(self, model_key: str) -> str:
         """Return the tier for a casefolded model id, or the unknown tier."""
@@ -277,6 +280,17 @@ class DispatchGate:
             return decision
 
         self._tier_policy_digest = tier_policy.digest
+        runtime = request.runtime.casefold()
+        if tier_policy.runtimes is not None and runtime not in tier_policy.runtimes:
+            # Keep behavior unchanged when policy omits runtimes during rollout.
+            decision = GateDecision(
+                False,
+                ReasonCode.UNKNOWN_RUNTIME,
+                message=f"runtime={request.runtime}",
+            )
+            append_decision(decision)
+            return decision
+
         tier_warning: ReasonCode | None = None
         tier_override: str | None = None
         model = request.model.strip() if request.model is not None else ""
@@ -965,11 +979,13 @@ def _load_tier_policy(path: Path) -> ModelTierPolicy:
     digest = hashlib.sha256(raw).hexdigest()
     if not isinstance(payload, dict) or isinstance(payload.get("version"), bool):
         raise ValueError("tier policy must be an object with a version")
+    runtimes_payload = payload.get("runtimes", _MISSING)
     if payload.get("version") == 2:
-        return _load_tier_policy_v2(payload, digest)
+        return _load_tier_policy_v2(payload, digest, runtimes_payload=runtimes_payload)
     if payload.get("version") != 1:
         raise ValueError("tier policy version must be 1 or 2")
 
+    runtimes = _runtime_list_or_none(runtimes_payload)
     worker_allowed = _model_list(payload.get("worker_allowed"))
     worker_denied_tiers = _model_list(payload.get("worker_denied_tiers"))
     unknown_model = payload.get("unknown_model")
@@ -982,10 +998,16 @@ def _load_tier_policy(path: Path) -> ModelTierPolicy:
         worker_denied_tiers=worker_denied_tiers,
         unknown_model=unknown_model,
         digest=digest,
+        runtimes=runtimes,
     )
 
 
-def _load_tier_policy_v2(payload: Mapping[str, object], digest: str) -> ModelTierPolicy:
+def _load_tier_policy_v2(
+    payload: Mapping[str, object],
+    digest: str,
+    *,
+    runtimes_payload: object = _MISSING,
+) -> ModelTierPolicy:
     """Parse a version 2 policy: tiers plus optional per-window agent caps.
 
     A model absent from every tier is `unknown`, which is a tier like any other.
@@ -998,6 +1020,7 @@ def _load_tier_policy_v2(payload: Mapping[str, object], digest: str) -> ModelTie
     stayed blocked until someone edited this file by hand.
     """
 
+    runtimes = _runtime_list_or_none(runtimes_payload)
     tiers = payload.get("tiers")
     if not isinstance(tiers, dict) or not tiers:
         raise ValueError("tiers must be a non-empty object")
@@ -1034,6 +1057,7 @@ def _load_tier_policy_v2(payload: Mapping[str, object], digest: str) -> ModelTie
         model_tiers=model_tiers,
         fanout_caps=fanout_caps,
         window_seconds=window_seconds,
+        runtimes=runtimes,
     )
 
 
@@ -1045,6 +1069,20 @@ def _model_list(value: object) -> frozenset[str]:
     if any(model != model.strip() for model in value):
         raise ValueError("model identifiers must not have surrounding whitespace")
     return frozenset(model.casefold() for model in value)
+
+
+def _runtime_list_or_none(value: object) -> frozenset[str] | None:
+    if value is _MISSING:
+        return None
+    if not isinstance(value, list):
+        raise ValueError("runtimes must be an array")
+    if any(not isinstance(runtime, str) or not runtime.strip() for runtime in value):
+        raise ValueError("runtime identifiers must be non-empty strings")
+    if any(runtime != runtime.strip() for runtime in value):
+        raise ValueError("runtime identifiers must not have surrounding whitespace")
+    if any(RUNTIME_PATTERN.fullmatch(runtime) is None for runtime in value):
+        raise ValueError("runtime identifiers must match the runtime pattern")
+    return frozenset(runtime.casefold() for runtime in value)
 
 
 def _dispatch_ticket_path(

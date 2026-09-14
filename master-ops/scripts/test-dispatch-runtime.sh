@@ -12,13 +12,9 @@ for pattern in \
 done
 
 probe_args_expansion_guard_test() {
-  local target="$1" probe_expansion
-  if grep -Fq '"${MODEL_PROBE_ARGS[@]+"${MODEL_PROBE_ARGS[@]}"}"' "$target"; then
-    probe_expansion='"${MODEL_PROBE_ARGS[@]+"${MODEL_PROBE_ARGS[@]}"}"'
-  elif grep -Fq '"${MODEL_PROBE_ARGS[@]}"' "$target"; then
-    probe_expansion='"${MODEL_PROBE_ARGS[@]}"'
-  else
-    echo "FAIL: missing MODEL_PROBE_ARGS expansion in dispatch register call" >&2
+  local target="$1" probe_expansion='"${MODEL_PROBE_ARGS[@]+"${MODEL_PROBE_ARGS[@]}"}"'
+  if ! grep -Fq "$probe_expansion" "$target"; then
+    echo "FAIL: missing guarded MODEL_PROBE_ARGS expansion in dispatch register call" >&2
     return 1
   fi
 

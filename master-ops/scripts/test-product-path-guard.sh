@@ -12,6 +12,7 @@ ops="$TMP/workspace/ops"
 link="$TMP/workspace/product-link"
 mkdir -p "$product" "$ops" "$TMP/home" "$TMP/logs"
 ln -s "$product" "$link"
+product_real=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$product")
 printf '{"master_host_runtime":"claude","product_repo":"%s"}\n' "$product" >"$TMP/runtime.json"
 
 run_file() {
@@ -57,6 +58,15 @@ print(json.dumps({"tool_input": {"command": sys.argv[1], "working_directory": sy
 PY
 }
 
+run_bash_default_config() {
+  local command="$1"
+  local working_directory="${2:-.}"
+  python3 - "$command" "$working_directory" <<'PY' | HOME="$TMP/home" MOGUI_INSTANCE_RUNTIME_CONFIG= MOGUI_INLINE_EDIT_OVERRIDE=0 MOGUI_PRODUCT_GUARD_FAIL_CLOSED=0 MOGUI_EVENT_LOG="$TMP/home/.mogui/event-log.jsonl" MOGUI_HOOK_FIRE_LOG="$TMP/logs/fire.jsonl" "$HOOK" >/dev/null 2>"$TMP/stderr"
+import json, sys
+print(json.dumps({"tool_input": {"command": sys.argv[1], "working_directory": sys.argv[2] if len(sys.argv) > 2 else "."}}))
+PY
+}
+
 expect_blocked() {
   local label="$1" rc
   shift
@@ -82,9 +92,14 @@ expect_blocked bash-mv run_bash "mv $ops/file.txt $product/file.txt"
 expect_blocked bash-tee run_bash "tee $product/file.txt"
 expect_blocked bash-dd-of-equals run_bash "dd if=/dev/null of=$product/file.txt"
 expect_blocked bash-opaque-wrapper run_bash "bash -c 'echo bad > $product/file.txt'"
-expect_blocked bash-hidden-relative-wrapper run_bash "sh -c 'cd $product && cp /dev/null file.txt'"
+expect_blocked bash-hidden-relative-wrapper run_bash "sh -c 'cd $product_real && cp /dev/null file.txt'"
 expect_blocked bash-combined-redirection run_bash "echo bad >& $product/file.txt"
 expect_blocked bash-relative-working-directory run_bash "echo bad > file.txt" "$product"
+expect_allowed legacy-python3-c-outside-root run_bash "python3 -c 'print(1)'" "$ops"
+expect_allowed legacy-bash-c-outside-root run_bash "bash -c 'echo ok'" "$ops"
+expect_blocked legacy-python3-c-inside-root run_bash "python3 -c 'print(1)'" "$product"
+expect_blocked strict-python3-c-outside-root run_bash_strict "python3 -c 'print(1)'" "$ops"
+expect_blocked legacy-python3-c-redirection-outside-root run_bash "python3 -c 'print(1)' > /tmp/guard-probe.txt" "$ops"
 expect_allowed legacy-read-only run_bash "ls" "$product"
 printf 'ls\nrg\n' >"$TMP/allowlist.txt"
 expect_allowed measured-read-only run_bash_strict "ls" "$product"
@@ -156,5 +171,8 @@ PY
 printf '{"product_repo":"relative/product"}\n' >"$TMP/bad-schema.json"
 expect_blocked bad-schema run_file_config "$TMP/bad-schema.json" "$ops/file.txt"
 expect_blocked missing-config run_file_config "$TMP/missing.json" "$ops/file.txt"
+expect_blocked unsubstituted-runtime-root-token run_bash_default_config "ls" "$ops"
+grep -q "{{RUNTIME_ROOT}}" "$TMP/stderr" || { echo "FAIL: unsubstituted-runtime-root-token missing token name" >&2; exit 1; }
+grep -q "MOGUI_INSTANCE_RUNTIME_CONFIG" "$TMP/stderr" || { echo "FAIL: unsubstituted-runtime-root-token missing override name" >&2; exit 1; }
 
 echo "product-path-guard regression tests passed"

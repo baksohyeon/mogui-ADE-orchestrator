@@ -4,15 +4,17 @@
 # (redirections, known write-capable commands, and selected mutating git
 # subcommands) but does not parse opaque script bodies, shell expansions, or
 # every command-specific path flag.
-# Default behavior preserves the measured legacy policy. Set
-# MOGUI_PRODUCT_GUARD_FAIL_CLOSED=1 only after command observations establish a
-# measured read-only allowlist.
+# Legacy mode admits opaque interpreter -c commands outside product root, while fail-closed mode denies unallowlisted interpreter commands regardless of cwd.
 set -u
 
 if [ -n "${MOGUI_INSTANCE_RUNTIME_CONFIG:-}" ]; then
   INSTANCE_RUNTIME_CONFIG="$MOGUI_INSTANCE_RUNTIME_CONFIG"
 else
   INSTANCE_RUNTIME_CONFIG="{{RUNTIME_ROOT}}/config/instance-runtime.json"
+fi
+if [[ "$INSTANCE_RUNTIME_CONFIG" == *"{{RUNTIME_ROOT}}"* ]]; then
+  echo "[product-path-guard] BLOCKED: unsubstituted {{RUNTIME_ROOT}} token in INSTANCE_RUNTIME_CONFIG; set MOGUI_INSTANCE_RUNTIME_CONFIG to a real runtime config path" >&2
+  exit 2
 fi
 HOOK_DIR=$(cd "$(dirname "$0")" && pwd)
 ALLOWLIST="${MOGUI_PRODUCT_GUARD_ALLOWLIST:-$HOOK_DIR/product-path-guard-readonly-allowlist.txt}"
@@ -261,7 +263,11 @@ for parts in segments:
         command_class=name
         target=current_cwd
         if name in {"bash", "sh", "dash", "ksh", "zsh", "python", "python3", "perl", "ruby", "node"}:
-            if "-c" in parts[1:] or any(">" in token or root in token for token in parts[1:]):
+            opaque_interpreter_target = any(">" in token or root in token for token in parts[1:])
+            bare_dash_c = "-c" in parts[1:]
+            if opaque_interpreter_target or (
+                bare_dash_c and (os.environ["FAIL_CLOSED"] == "1" or under(current_cwd))
+            ):
                 print("DENY\t"+command_class+"\topaque interpreter command may contain an unparsed write")
                 raise SystemExit
     last_command_class=command_class

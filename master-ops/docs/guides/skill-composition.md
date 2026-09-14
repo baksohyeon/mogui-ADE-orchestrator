@@ -22,7 +22,7 @@ Process skills decide how work proceeds before implementation starts. In this co
 
 Restraint (ponytail) decides how much to build while work is in progress. The ladder is: does this need to exist, is it already present, does the platform already solve it, can it be one line, and only then build; this counters over-building pressure.
 
-Domain and operations skills provide workspace-specific execution behavior once process and restraint have set direction. In this workspace, those include the observability genres the owner runs as separate artifacts (blame, retro, travelog, journal) and local ops routines such as dispatch and stewardship.
+Domain and operations skills provide workspace-specific execution behavior once process and restraint have set direction. In this workspace, those include the observability genres the owner runs as separate artifacts (blame, postmortem, travelog, journal) and local ops routines such as dispatch and stewardship.
 
 ## The Composition Rule
 
@@ -40,7 +40,7 @@ The routing table below is adapted from `workspace-card/CLAUDE.md` (identical in
 > - Bug, unexpected behavior, or "why is this broken" -> `superpowers:systematic-debugging` before proposing any fix.
 > - Any dispatch, worker, or multi-agent coordination -> `orchestration` skill; vendor-direct CLIs are never a dispatch path.
 > - Review-bot threads on PRs -> dispatched fix worker per charter section 4 (`docs/charter/04-worker-routing-review.md`); reply style is `docs/runbooks/review-voice.md`.
-> - Session observability (journey notes, field notes, retros) -> skills under `skills/` when present; judgment retros and generation logs go to the genres in `docs/observability/`.
+> - Session observability (journey notes, field notes, postmortems) -> skills under `skills/` when present; postmortem records and generation logs go to the genres in `docs/observability/`.
 > - Shipping product changes -> repo gate conventions, PR flow, squash merge only after zero unresolved review threads.
 
 ## What Is Not Shipped

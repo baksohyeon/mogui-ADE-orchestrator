@@ -31,7 +31,7 @@
     "docs/guides/skill-composition.md",
     "docs/observability/README.md",
     "docs/orca-docs-grounding.md",
-    "docs/retro/README.md",
+    "docs/postmortem/README.md",
     "docs/runbooks/boot-comparison-set.md",
     "docs/runbooks/contract-conventions.md",
     "docs/runbooks/conversation-redaction.md",
@@ -85,6 +85,7 @@
     "scripts/worker-pane-sweep",
     "scripts/workstream-render.sh",
     "skills/blame-agent/SKILL.md",
+    "skills/postmortem/SKILL.md",
     "workspace-card/AGENTS.md",
     "workspace-card/CLAUDE.md",
     "workspace-card/README.md"

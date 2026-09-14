@@ -404,7 +404,7 @@ Do not solve rule drift by injecting the whole constitution or contract-conventi
 runbook into every turn. Context injection stays minimal: role-state and the smallest
 active execution rule may be surfaced for boot or recovery, but canonical rule text lives
 in Git and drift is handled through canon text plus post-hoc observation such as fire logs
-and retros. A contract may require reading the relevant canon section; it must not require
+and postmortems. A contract may require reading the relevant canon section; it must not require
 building a per-turn rule bundle.
 
 ## 13. Chat-to-docs rule [prose]

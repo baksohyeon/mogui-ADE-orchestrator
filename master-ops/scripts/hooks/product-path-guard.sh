@@ -279,13 +279,20 @@ for parts in segments:
                 continue
             git_subsub=token
             break
-    apply_readonly_mode=any(token in {"--check", "--stat", "--numstat", "--summary"} for token in parts)
-    apply_force_mode=any(token == "--apply" for token in parts)
+    apply_option_tokens=parts[1 : parts.index("--")] if "--" in parts[1:] else parts[1:]
+    apply_readonly_mode=any(token in {"--check", "--stat", "--numstat", "--summary"} for token in apply_option_tokens)
+    apply_force_mode=any(token == "--apply" for token in apply_option_tokens)
+    stash_show_writes_output = (
+        sub == "stash"
+        and git_subsub == "show"
+        and any(token == "--output" or token.startswith("--output=") for token in parts[sub_pos + 1 :])
+    )
     git_mutation = name == "git" and (
         (sub == "remote" and remote_action in {"rename","set-head","set-branches","update","prune","set-url","add","remove"})
         or (sub == "diff" and any(token == "--output" or token.startswith("--output=") for token in parts))
         or (sub in git_always_mutating)
         or (sub == "apply" and (not apply_readonly_mode or apply_force_mode))
+        or stash_show_writes_output
         or (sub == "clean" and not any(token in {"-n", "--dry-run"} for token in parts))
         or (sub == "stash" and (git_subsub_ambiguous or git_subsub not in {"list", "show"}))
         or (sub == "worktree" and git_subsub not in {"list"})
@@ -320,17 +327,30 @@ for parts in segments:
                     write_targets.append(parts[index + 1])
                 elif token.startswith("--target-directory="):
                     write_targets.append(token.split("=", 1)[1])
-            if not write_targets and len(install_operands) >= 2:
-                write_targets.append(install_operands[-1])
+            if not write_targets and install_operands:
+                if any(token in {"-d", "--directory"} for token in parts[1:]):
+                    write_targets.extend(install_operands)
+                elif len(install_operands) >= 2:
+                    write_targets.append(install_operands[-1])
         elif name == "ln":
             ln_operands=collect_non_option_operands(parts, 1, {"-t", "--target-directory", "-S", "--suffix"})
+            ln_destination_mode=False
             for index,token in enumerate(parts[1:],1):
                 if token in {"-t", "--target-directory"} and index + 1 < len(parts):
                     write_targets.append(parts[index + 1])
+                    ln_destination_mode=True
                 elif token.startswith("--target-directory="):
                     write_targets.append(token.split("=", 1)[1])
+                    ln_destination_mode=True
             if not write_targets and len(ln_operands) >= 2:
                 write_targets.append(ln_operands[-1])
+            ln_symbolic=any(token in {"-s", "--symbolic"} for token in parts[1:])
+            if not ln_symbolic:
+                if ln_destination_mode:
+                    source_operands=ln_operands
+                else:
+                    source_operands=ln_operands[:-1] if len(ln_operands) >= 2 else []
+                write_targets.extend(source_operands)
         else:
             for token in parts[1:]:
                 if not token.startswith("-") and token not in {";"}:

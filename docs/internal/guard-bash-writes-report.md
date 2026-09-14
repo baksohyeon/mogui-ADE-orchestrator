@@ -64,7 +64,7 @@ STDERR:(empty)
 
 ```text
 CASE:uncovered_env_expansion
-INPUT:TARGET=<product_root>/file.txt cp /dev/null $TARGET
+INPUT:TARGET=<product_root>/file.txt; cp /dev/null "$TARGET"
 RC:0
 STDERR:(empty)
 ```

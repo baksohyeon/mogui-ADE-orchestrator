@@ -2740,6 +2740,20 @@ def test_v2_policy_validation_fails_closed(tmp_path: Path) -> None:
             "fanout_caps": {"unknown": 1},
             "window_seconds": 0,
         },
+        {
+            "version": 2,
+            "runtimes": None,
+            "tiers": {"top": ["a"]},
+            "fanout_caps": {"unknown": 1},
+            "window_seconds": 86_400,
+        },
+        {
+            "version": 2,
+            "runtimes": ["ß"],
+            "tiers": {"top": ["a"]},
+            "fanout_caps": {"unknown": 1},
+            "window_seconds": 86_400,
+        },
     )
     for index, payload in enumerate(bad_payloads):
         case_dir = tmp_path / f"bad{index}"

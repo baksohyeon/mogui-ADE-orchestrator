@@ -87,6 +87,7 @@
     "scripts/test-tool-naming.sh",
     "scripts/worker-pane-sweep",
     "scripts/workstream-render.sh",
+    "skills/anti-slop/SKILL.md",
     "skills/blame-agent/SKILL.md",
     "skills/postmortem/SKILL.md",
     "workspace-card/AGENTS.md",

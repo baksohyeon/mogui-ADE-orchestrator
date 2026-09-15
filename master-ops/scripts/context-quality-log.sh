@@ -59,7 +59,7 @@ if os.path.exists(ledger_path):
             if not isinstance(record, dict):
                 continue
             ts = parse_time(record.get("ts"))
-            if ts is not None and ts >= cutoff:
+            if ts is not None and cutoff <= ts <= now:
                 records.append(record)
 
 events = collections.Counter(str(record.get("event", "<missing>")) for record in records)

@@ -24,7 +24,7 @@ fi
 if ! command -v python3 >/dev/null 2>&1; then
   printf '# Context Quality Sampler\n'
   printf 'generated_at: unavailable\n\n'
-  printf 'notice: bd unavailable; beads sections skipped\n\n'
+  printf 'notice: python3 unavailable; all sections skipped\n\n'
   printf '## bd active tracks (in_progress)\nunavailable\n\n'
   printf '## bd ready (backlog, 참고용)\nunavailable\n\n'
   printf '## bd closed in last 24h\nunavailable\n\n'
@@ -43,6 +43,7 @@ admin_dir = os.environ.get("ADMIN_PLANNING_DIR") or os.getcwd()
 repo_root = os.environ.get("REPO_ROOT") or admin_dir
 anchor_label = os.environ.get("ANCHOR_LABEL") or os.path.basename(admin_dir)
 bd_available = shutil.which("bd") is not None
+command_timeout_seconds = 5
 now = dt.datetime.now(dt.timezone.utc)
 
 
@@ -55,7 +56,10 @@ def run(command, cwd):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             check=False,
+            timeout=command_timeout_seconds,
         )
+    except subprocess.TimeoutExpired:
+        return None
     except Exception:
         return None
 

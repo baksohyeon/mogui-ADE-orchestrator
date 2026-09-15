@@ -54,6 +54,20 @@ def test_context_budget_default_glob_matches_dispatch_mangling():
     assert default_glob("/a.b/c").endswith("/-a-b-c/*.jsonl")
 
 
+def test_context_budget_default_glob_normalizes_windows_separator():
+    namespace = runpy.run_path(str(CONTEXT_BUDGET), run_name="context_budget_test")
+    default_glob = namespace["default_glob"]
+    original_sep = namespace["os"].sep
+    original_abspath = namespace["os"].path.abspath
+    namespace["os"].sep = "\\"
+    namespace["os"].path.abspath = lambda value: value
+    try:
+        assert default_glob(r"C:\a.b\c").endswith("/C:-a-b-c/*.jsonl")
+    finally:
+        namespace["os"].sep = original_sep
+        namespace["os"].path.abspath = original_abspath
+
+
 def test_context_budget_reports_true_median_for_even_count(tmp_path: Path):
     sessions = tmp_path / "sessions"
     sessions.mkdir()
@@ -67,6 +81,19 @@ def test_context_budget_reports_true_median_for_even_count(tmp_path: Path):
     result = _run_budget("--glob", str(sessions / "*.jsonl"), "--limit", "4")
     assert result.returncode == 0, result.stderr
     assert "median 25" in result.stdout
+
+
+def test_context_budget_rejects_non_positive_limit(tmp_path: Path):
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    (sessions / "session.jsonl").write_text(
+        json.dumps({"message": {"usage": {"input_tokens": 10}}}) + "\n",
+        encoding="utf-8",
+    )
+
+    result = _run_budget("--glob", str(sessions / "*.jsonl"), "--limit", "0")
+    assert result.returncode == 2
+    assert "--limit must be greater than zero" in result.stderr
 
 
 def test_context_quality_log_summary_skips_non_object_lines(tmp_path: Path):
@@ -95,6 +122,48 @@ def test_context_quality_log_summary_skips_non_object_lines(tmp_path: Path):
     assert result.returncode == 0, result.stderr
     assert "records: 1" in result.stdout
     assert "proposed_succession_true: 1" in result.stdout
+
+
+def test_context_quality_log_summary_excludes_future_records(tmp_path: Path):
+    ledger = tmp_path / "context-quality.jsonl"
+    now = dt.datetime.now(dt.timezone.utc)
+    present_ts = now.isoformat()
+    future_ts = (now + dt.timedelta(days=1)).isoformat()
+    ledger.write_text(
+        json.dumps(
+            {
+                "ts": future_ts,
+                "session": "future",
+                "event": "compact",
+                "model": "m-1",
+                "recall": {"tracks": "future"},
+                "loss_notes": [],
+                "proposed_succession": False,
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "ts": present_ts,
+                "session": "present",
+                "event": "compact",
+                "model": "m-1",
+                "recall": {"tracks": "present"},
+                "loss_notes": [],
+                "proposed_succession": False,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env["CONTEXT_QUALITY_LOG"] = str(ledger)
+
+    result = _run_log("--summary", env=env)
+    assert result.returncode == 0, result.stderr
+    assert "records: 1" in result.stdout
+    assert "present" in result.stdout
+    assert "future" not in result.stdout
 
 
 def test_context_quality_log_accepts_proposed_succession_field(tmp_path: Path):
@@ -188,4 +257,44 @@ def test_context_quality_sampler_no_python3_fallback_prints_notice(tmp_path: Pat
     env["PATH"] = str(fake_bin)
     result = _run_sampler(env=env)
     assert result.returncode == 0, result.stderr
-    assert "notice: bd unavailable; beads sections skipped" in result.stdout
+    assert "notice: python3 unavailable; all sections skipped" in result.stdout
+
+
+def test_context_quality_sampler_no_python3_fallback_with_bd_still_reports_python3(tmp_path: Path):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    (fake_bin / "dirname").symlink_to("/usr/bin/dirname")
+    (fake_bin / "basename").symlink_to("/usr/bin/basename")
+    bd = fake_bin / "bd"
+    bd.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    bd.chmod(0o755)
+
+    env = os.environ.copy()
+    env["PATH"] = str(fake_bin)
+    result = _run_sampler(env=env)
+    assert result.returncode == 0, result.stderr
+    assert "notice: python3 unavailable; all sections skipped" in result.stdout
+
+
+def test_context_quality_sampler_treats_command_timeout_as_unavailable(tmp_path: Path):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    bd = fake_bin / "bd"
+    bd.write_text(
+        "#!/usr/bin/env bash\n"
+        "if [ \"$1\" = \"list\" ] && [ \"$2\" = \"--status=in_progress\" ] && [ \"$3\" = \"--json\" ]; then\n"
+        "  sleep 6\n"
+        "  printf '[]\\n'\n"
+        "  exit 0\n"
+        "fi\n"
+        "printf '[]\\n'\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    bd.chmod(0o755)
+
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+    result = _run_sampler(env=env)
+    assert result.returncode == 0, result.stderr
+    assert "## bd active tracks (in_progress)\nunavailable" in result.stdout

@@ -31,7 +31,8 @@ def default_glob(root=None):
     the moment this script is promoted to the public template.
     """
     root = os.path.abspath(root or os.getcwd())
-    mangled = re.sub(r"[/.]", "-", root)
+    normalized = root.replace(os.sep, "/")
+    mangled = re.sub(r"[/.]", "-", normalized)
     return os.path.expanduser(
         "~/.claude/projects/" + mangled + "/*.jsonl"
     )
@@ -99,6 +100,8 @@ def main():
     ap.add_argument("--json", action="store_true", help="emit JSON")
     ap.add_argument("--limit", type=int, default=15, help="newest N sessions")
     args = ap.parse_args()
+    if args.limit <= 0:
+        ap.error("--limit must be greater than zero")
 
     pattern = args.glob or default_glob(args.root)
     paths = sorted(

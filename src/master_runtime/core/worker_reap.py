@@ -259,7 +259,7 @@ class WorkerReaper:
     def _close_terminal(self, terminal_id: str) -> None:
         """Close a terminal via orca terminal close."""
         code, stdout, stderr = self.orca_runner(
-            ["orca", "terminal", "close", terminal_id]
+            ["orca", "terminal", "close", "--terminal", terminal_id]
         )
         if code != 0:
             raise ReapError(f"Failed to close terminal {terminal_id}: {stderr}", code)

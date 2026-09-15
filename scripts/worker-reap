@@ -63,7 +63,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     group.add_argument(
         "--dispatch-id",
-        help="Dispatch ID to reap",
+        help="Dispatch ID to reap (resolved to task ID via worker-list)",
     )
     parser.add_argument(
         "--ledger",

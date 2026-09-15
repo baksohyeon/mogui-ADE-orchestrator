@@ -8,6 +8,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+from windows_exec_surface import skip_windows_exec_surface
+
+pytestmark = skip_windows_exec_surface
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONTEXT_BUDGET = REPO_ROOT / "master-ops" / "scripts" / "context-budget"

@@ -157,6 +157,7 @@ class WorkerReaperTests(unittest.TestCase):
 
     def test_reap_closes_terminal_when_settled(self) -> None:
         closed_terminals = []
+        close_commands = []
 
         def fake_runner(cmd: list[str]) -> tuple[int, str, str]:
             if "dispatch-show" in cmd:
@@ -168,6 +169,7 @@ class WorkerReaperTests(unittest.TestCase):
                 }
                 return 0, json.dumps(dispatch), ""
             if "terminal" in cmd and "close" in cmd:
+                close_commands.append(cmd)
                 closed_terminals.append(cmd[-1])
                 return 0, '{"ok":true}', ""
             return 0, "", ""
@@ -176,6 +178,10 @@ class WorkerReaperTests(unittest.TestCase):
         record = reaper.reap(task_id="t1", execute=True)
 
         self.assertIn("term1", closed_terminals)
+        self.assertIn(
+            ["orca", "terminal", "close", "--terminal", "term1"],
+            close_commands,
+        )
         self.assertIn("terminal_closed:term1", record.actions_taken)
 
     def test_reap_resolves_dispatch_id_via_worker_list_snake_case(self) -> None:

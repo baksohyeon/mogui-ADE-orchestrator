@@ -4,9 +4,7 @@
 # (redirections, known write-capable commands, and selected mutating git
 # subcommands) but does not parse opaque script bodies, shell expansions, or
 # every command-specific path flag.
-# Default behavior preserves the measured legacy policy. Set
-# MOGUI_PRODUCT_GUARD_FAIL_CLOSED=1 only after command observations establish a
-# measured read-only allowlist.
+# Legacy mode admits opaque interpreter -c commands outside product root, while fail-closed mode denies unallowlisted interpreter commands regardless of cwd.
 set -u
 
 if [ -n "${MOGUI_INSTANCE_RUNTIME_CONFIG:-}" ]; then
@@ -68,6 +66,11 @@ PY
 # exclusively to event-log.jsonl through mg_emit.
 record_fire
 
+if [[ "$INSTANCE_RUNTIME_CONFIG" == *"{{RUNTIME_ROOT}}"* ]]; then
+  echo "[product-path-guard] BLOCKED: unsubstituted {{RUNTIME_ROOT}} token in INSTANCE_RUNTIME_CONFIG; set MOGUI_INSTANCE_RUNTIME_CONFIG to a real runtime config path" >&2
+  exit 2
+fi
+
 load_product_repo() {
   CONFIG_PATH="$INSTANCE_RUNTIME_CONFIG" python3 -c '
 import json, os, sys
@@ -123,7 +126,7 @@ command=$(printf '%s' "$input" | python3 -c 'import json,sys; d=json.load(sys.st
 [ -n "$command" ] || { mg_emit info product_path_guard pass empty_command; exit 0; }
 
 result=$(PRODUCT_ROOT="$repo" ALLOWLIST="$ALLOWLIST" FAIL_CLOSED="$FAIL_CLOSED" python3 -c '
-import json, os, shlex, sys
+import json, os, re, shlex, sys
 payload=json.load(sys.stdin)
 tool=payload.get("tool_input", {})
 command=tool.get("command", "")
@@ -135,6 +138,26 @@ def resolve(base, value):
 def under(value):
     value=os.path.realpath(os.path.expanduser(value))
     return value == root or value.startswith(root + os.sep)
+def contains_cd_token(value):
+    return re.search(r"(^|[\s;&|()])cd([\s;&|()]|$)", value) is not None
+def redirects_into_root(value, base):
+    try:
+        body_tokens=list(shlex.shlex(value, posix=True, punctuation_chars=";&|><"))
+    except Exception:
+        return False
+    redirections={">",">>","2>","2>>","&>",">&",">|"}
+    i=0
+    while i < len(body_tokens):
+        token=body_tokens[i]
+        if token in redirections:
+            if i + 1 >= len(body_tokens):
+                return True
+            if under(resolve(base, body_tokens[i + 1])):
+                return True
+            i += 2
+            continue
+        i += 1
+    return False
 def collect_non_option_operands(parts, start, options_with_values):
     values=set(options_with_values)
     index=start
@@ -261,13 +284,29 @@ for parts in segments:
         command_class=name
         target=current_cwd
         if name in {"bash", "sh", "dash", "ksh", "zsh", "python", "python3", "perl", "ruby", "node"}:
-            if "-c" in parts[1:] or any(">" in token or root in token for token in parts[1:]):
+            bare_dash_c = "-c" in parts[1:]
+            root_token_in_args = any(root in token for token in parts[1:])
+            dash_c_body=""
+            if bare_dash_c:
+                dash_c_index=parts.index("-c")
+                if dash_c_index + 1 < len(parts):
+                    dash_c_body=parts[dash_c_index + 1]
+            legacy_dash_c_body_denied=False
+            if bare_dash_c and os.environ["FAIL_CLOSED"] != "1" and not under(current_cwd):
+                legacy_dash_c_body_denied = (
+                    contains_cd_token(dash_c_body)
+                    or root in dash_c_body
+                    or redirects_into_root(dash_c_body, current_cwd)
+                )
+            if root_token_in_args or legacy_dash_c_body_denied or (
+                bare_dash_c and (os.environ["FAIL_CLOSED"] == "1" or under(current_cwd))
+            ):
                 print("DENY\t"+command_class+"\topaque interpreter command may contain an unparsed write")
                 raise SystemExit
     last_command_class=command_class
     target_hits=[]
     for i,token in enumerate(parts[1:],1):
-        if token in {">",">>","2>","2>>","&>",">&"}:
+        if token in {">",">>","2>","2>>","&>",">&",">|"}:
             if i+1 >= len(parts): print("DENY\t"+command_class+"\tredirection target is missing"); raise SystemExit
             target_hits.append(resolve(current_cwd, parts[i+1]))
         elif (token.startswith("/") or token.startswith("~/")) and name not in {"cp", "install", "ln"}:
@@ -391,7 +430,7 @@ for parts in segments:
     if write_capable and touches:
         print("DENY\t"+command_class+"\twrite-capable argument is not admitted")
         raise SystemExit
-    if any(token in {">",">>","2>","2>>","&>",">&"} for token in parts):
+    if any(token in {">",">>","2>","2>>","&>",">&",">|"} for token in parts):
         print("DENY\t"+command_class+"\tshell redirection is a write")
         raise SystemExit
     if os.environ["FAIL_CLOSED"] == "1" and command_class not in allow:

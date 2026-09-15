@@ -18,6 +18,8 @@ import glob
 import pathlib
 import json
 import os
+import re
+import statistics
 import sys
 
 def default_glob(root=None):
@@ -29,8 +31,9 @@ def default_glob(root=None):
     the moment this script is promoted to the public template.
     """
     root = os.path.abspath(root or os.getcwd())
+    mangled = re.sub(r"[/.]", "-", root)
     return os.path.expanduser(
-        "~/.claude/projects/" + root.replace(os.sep, "-") + "/*.jsonl"
+        "~/.claude/projects/" + mangled + "/*.jsonl"
     )
 
 # One usage row is a complete turn-0 measurement; only growth needs a second.
@@ -144,7 +147,7 @@ def main():
 
     turn0s = [r["turn0"] for r in records]
     print(f"\nturn-0 payload over {len(records)} sessions: "
-          f"min {min(turn0s)}  median {sorted(turn0s)[len(turn0s) // 2]}  "
+          f"min {min(turn0s)}  median {statistics.median(turn0s):g}  "
           f"max {max(turn0s)}")
     print("turn-0 is the fixed cost. Growth is the work.")
     return 0
@@ -154,6 +157,7 @@ def demo():
     """Self-check: payload arithmetic and the short-session guard."""
     assert default_glob("/a/b").endswith("/-a-b/*.jsonl"), default_glob("/a/b")
     assert default_glob("/x/y") != default_glob("/a/b"), "glob must follow the root"
+    assert default_glob("/a.b/c").endswith("/-a-b-c/*.jsonl"), default_glob("/a.b/c")
     # The expanded path carries the running user by design; the source must not.
     src = pathlib.Path(__file__).read_text()
     needle = "/" + "Users" + "/"   # split so this check is not its own hit

@@ -24,6 +24,7 @@ fi
 if ! command -v python3 >/dev/null 2>&1; then
   printf '# Context Quality Sampler\n'
   printf 'generated_at: unavailable\n\n'
+  printf 'notice: bd unavailable; beads sections skipped\n\n'
   printf '## bd active tracks (in_progress)\nunavailable\n\n'
   printf '## bd ready (backlog, 참고용)\nunavailable\n\n'
   printf '## bd closed in last 24h\nunavailable\n\n'
@@ -86,9 +87,12 @@ def parse_time(value):
     if not isinstance(value, str) or not value:
         return None
     try:
-        return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed.astimezone(dt.timezone.utc)
 
 
 print("# Context Quality Sampler")
@@ -159,7 +163,7 @@ print(f"## {anchor_label} git log --oneline -5")
 if shutil.which("git") is None:
     print("unavailable")
 else:
-    result = run(["git", "-C", admin_dir, "log", "--oneline", "-5"], admin_dir)
+    result = run(["git", "log", "--oneline", "-5"], admin_dir)
     if result is None or result.returncode != 0 or not result.stdout.strip():
         print("unavailable")
     else:

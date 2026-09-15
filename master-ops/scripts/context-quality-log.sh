@@ -56,6 +56,8 @@ if os.path.exists(ledger_path):
                 record = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if not isinstance(record, dict):
+                continue
             ts = parse_time(record.get("ts"))
             if ts is not None and ts >= cutoff:
                 records.append(record)
@@ -64,7 +66,7 @@ events = collections.Counter(str(record.get("event", "<missing>")) for record in
 models = collections.Counter(str(record.get("model", "<missing>")) for record in records)
 recall_values = collections.defaultdict(collections.Counter)
 loss_records = 0
-proposed_respawn = 0
+proposed_succession = 0
 
 for record in records:
     recall = record.get("recall")
@@ -74,8 +76,8 @@ for record in records:
     loss_notes = record.get("loss_notes")
     if isinstance(loss_notes, list) and loss_notes:
         loss_records += 1
-    if record.get("proposed_respawn") is True:
-        proposed_respawn += 1
+    if record.get("proposed_succession") is True:
+        proposed_succession += 1
 
 print("# Context Quality Summary")
 print(f"window: last 7 days")
@@ -84,7 +86,7 @@ print(f"records: {len(records)}")
 print("events: " + (", ".join(f"{key}={value}" for key, value in sorted(events.items())) or "none"))
 print("models: " + (", ".join(f"{key}={value}" for key, value in sorted(models.items())) or "none"))
 print(f"records_with_loss_notes: {loss_records}")
-print(f"proposed_respawn_true: {proposed_respawn}")
+print(f"proposed_succession_true: {proposed_succession}")
 print("recall:")
 if not recall_values:
     print("- none")
@@ -126,7 +128,7 @@ except json.JSONDecodeError as exc:
 if not isinstance(record, dict):
     fail("top-level value must be an object")
 
-required = ["ts", "session", "event", "model", "recall", "loss_notes", "proposed_respawn"]
+required = ["ts", "session", "event", "model", "recall", "loss_notes", "proposed_succession"]
 missing = [key for key in required if key not in record]
 if missing:
     fail("missing fields: " + ", ".join(missing))
@@ -152,8 +154,8 @@ if not isinstance(record.get("loss_notes"), list):
 if not all(isinstance(item, str) for item in record["loss_notes"]):
     fail("loss_notes entries must be strings")
 
-if not isinstance(record.get("proposed_respawn"), bool):
-    fail("proposed_respawn must be boolean")
+if not isinstance(record.get("proposed_succession"), bool):
+    fail("proposed_succession must be boolean")
 
 directory = os.path.dirname(ledger_path)
 if directory:

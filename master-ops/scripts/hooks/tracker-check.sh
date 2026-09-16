@@ -48,6 +48,7 @@ print("\n".join(h.get("command","") for arr in (d.get("hooks") or {}).values() f
 active=""; unwired=""
 for f in "$HOOKS_DIR"/*.sh; do
   n=$(basename "$f"); [ "$n" = "tracker-check.sh" ] && continue
-  case "$wired_blob" in *"$n"*) active="$active ${n%.sh}";; *) unwired="$unwired ${n%.sh}";; esac
+  # A hook counts as wired only when a command names it as a path token: /<name> followed by a quote, a space, or the end.
+  if printf '%s\n' "$wired_blob" | grep -qE "/$(printf '%s' "$n" | sed 's/\./\\./g')([\"' ]|\$)"; then active="$active ${n%.sh}"; else unwired="$unwired ${n%.sh}"; fi
 done
 echo "[protections] wired:${active:- none} (overrides logged: ${supp:-0}, ops-policy decisions: ${decisions:-0})${unwired:+ | NOT WIRED:$unwired}"

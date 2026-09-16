@@ -59,6 +59,11 @@ SCN=modal2 ORCA_BIN="$T/orca" "$S" term_x >"$T/out" 2>&1; rc=$?
 SCN=modal2 ORCA_BIN="$T/orca" "$T/stale-mutant" term_x >"$T/out" 2>&1 || true
 grep -q 'still blocked after answering (agent-hooks-review-prompt)' "$T/out" && ok "failability: stale mutant names the first prompt, so the refresh check would fail" || fail "failability: stale mutant did not name the first prompt: $(cat "$T/out" | tr '\n' ' ' | cut -c1-200)"
 
+# Unreachable orca: the fake prints nothing for an unknown scenario, so wait returns empty; exit 2 as documented.
+: > "$LOG"
+SCN=unreachable ORCA_BIN="$T/orca" "$S" term_x >"$T/out" 2>&1; rc=$?
+[ $rc -eq 2 ] && grep -q 'unreachable' "$T/out" && ok "unreachable orca: exit 2, named" || fail "unreachable: exit $rc: $(cat "$T/out" | tr '\n' ' ' | cut -c1-160)"
+
 # Failability: a copy of the script with the retry removed must leave no --retry-request in the call log.
 : > "$LOG"; sed 's/--retry-request "\$RID" //' "$S" > "$T/answer-mutant"; chmod +x "$T/answer-mutant"
 SCN=modal ORCA_BIN="$T/orca" "$T/answer-mutant" term_x >"$T/out" 2>&1 || true

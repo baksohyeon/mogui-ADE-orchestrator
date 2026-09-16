@@ -12,6 +12,10 @@
 # python's stdin for itself and the piped result would never reach json.load. Measured 2026-09-14
 # when the first version passed its own small-result test for exactly that reason.
 set -u
+# Fire-log record, fail-open, so hook coverage reporting can see that this hook runs.
+mkdir -p ~/.mogui 2>/dev/null || true
+printf '{"ts":%d,"hook":"bash-output-size-warn","event":"PostToolUse","cwd":"%s","runtime_hint":"%s","session_kind":"%s"}\n' \
+  "$(date +%s)" "$PWD" "${MOGUI_RUNTIME_HINT:-unknown}" "${MOGUI_SESSION_KIND:-master}" >> ~/.mogui/hook-fire-log.jsonl 2>/dev/null || true
 THRESH="${MOGUI_BASH_OUTPUT_WARN_CHARS:-6000}"
 INPUT=$(cat)
 printf '%s' "$INPUT" | python3 -c '
@@ -19,6 +23,8 @@ import json, sys
 try:
     d = json.load(sys.stdin)
 except Exception:
+    sys.exit(0)
+if not isinstance(d, dict):
     sys.exit(0)
 r = d.get("tool_response")
 if isinstance(r, dict):

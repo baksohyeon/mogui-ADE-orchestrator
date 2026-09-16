@@ -35,6 +35,7 @@ print(o if not isinstance(o,(dict,list)) else '')" "$1"; }
 wait_once() { "$ORCA" terminal wait --terminal "$H" --for tui-idle --timeout-ms "$TIMEOUT" --json 2>/dev/null; }
 
 W=$(wait_once)
+[ -n "$W" ] || { echo "hooks-review: orca unreachable or returned nothing for terminal wait" >&2; exit 2; }
 SAT=$(printf '%s' "$W" | jget result.wait.satisfied)
 BLK=$(printf '%s' "$W" | jget result.wait.blockedReason)
 if [ "$SAT" = "True" ]; then echo "hooks-review: not shown, terminal idle"; exit 0; fi

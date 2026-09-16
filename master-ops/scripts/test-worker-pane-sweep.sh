@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# worker-pane-sweep must classify a pane sitting on the codex hook-trust modal as `approval`
-# and exit 1, and must leave an idle pane at `idle` with exit 0. The sweep reads panes through
+# worker-pane-sweep must read the shared approval markers and classify a pane sitting on the codex
+# hook-trust modal as `approval`# with exit 1, and must leave an idle pane at `idle` with exit 0. The sweep reads panes through
 # bare `orca`, so a fake orca on PATH feeds it one pane whose frame is $SWEEP_FRAME.
 set -u
 SWEEP="$(cd "$(dirname "$0")" && pwd)/worker-pane-sweep"; FAILED=0
@@ -14,6 +14,9 @@ case "$1 $2" in
 esac
 FAKE
 chmod +x "$T/orca"
+
+grep -Fq 'approval-prompt-markers.txt' "$SWEEP" && ok "sweep reads the shared marker file" || fail "sweep does not reference approval-prompt-markers.txt"
+grep -qE 'grep -qE "do you want to proceed' "$SWEEP" && fail "sweep still carries an inline marker list" || ok "sweep carries no inline marker list"
 
 run() { env -u ORCA_TERMINAL_HANDLE SWEEP_FRAME="$1" PATH="$T:$PATH" "$SWEEP" 2>&1; }
 expect() { # label frame verdict exit

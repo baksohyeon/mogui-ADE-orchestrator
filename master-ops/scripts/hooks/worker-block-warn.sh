@@ -53,10 +53,16 @@ fi
 # are automatic, which is the opposite of a prompt.
 listing=$(printf '%s' "$listing" | sed 's/always-approve//g; s/bypass permissions//g')
 
-# A prompt is prompt-shaped: numbered choices, or an explicit proceed question. Matching the bare
-# word "approve" anywhere caught code listings on the first run, so the markers are narrower here.
-# Includes codex hook-trust modal markers measured as misses on 2026-09-14 and 2026-09-15.
-blocked=$(printf '%s' "$listing" | grep -icE "do you want to proceed|1\. yes|2\. yes, and|\[y/n\]|\(y/n\)|press enter to continue|trust this (folder|workspace)|hooks need review|trust all and continue|press enter to confirm" || true)
+# Approval markers live in one file that this hook and worker-pane-sweep both read; see the
+# header there for why. A missing file is reported, never silently treated as "no prompts".
+markers_file="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/approval-prompt-markers.txt"
+approval_re=$(grep -vE '^[[:space:]]*(#|$)' "$markers_file" 2>/dev/null | paste -sd'|' -)
+if [ -z "$approval_re" ]; then
+  echo "[worker-block] approval marker file unreadable or empty: $markers_file; approval prompts are not being detected"
+  blocked=0
+else
+  blocked=$(printf '%s' "$listing" | grep -icE "$approval_re" || true)
+fi
 limit=$(printf '%s'  "$listing" | grep -icE "quota reached|resets in [0-9]|rate limit|usage limit|upgrade your subscription" || true)
 update=$(printf '%s' "$listing" | grep -icE "please restart|update ran successfully|was successfully upgraded" || true)
 gate=$(printf '%s'   "$listing" | grep -icE "new worktree.*resume session|resume session.*changelog" || true)

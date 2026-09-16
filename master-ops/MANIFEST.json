@@ -45,6 +45,7 @@
     "docs/runbooks/succession-boot-card.md",
     "docs/travelog/README.md",
     "model-tier-policy.json",
+    "scripts/approval-prompt-markers.txt",
     "scripts/compaction-probe.sh",
     "scripts/context-budget",
     "scripts/context-quality-log.sh",

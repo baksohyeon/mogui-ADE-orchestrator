@@ -2,7 +2,7 @@
 # Small result: silent. Large stdout: one line naming the size. Malformed input: silent, exit 0.
 set -u
 H="$(cd "$(dirname "$0")" && pwd)/hooks/bash-output-size-warn.sh"; F=0
-export HOME="$(mktemp -d)"  # the hook appends a fire-log line under ~/.mogui; keep that out of the real home
+SCRATCH_HOME="$(mktemp -d)"; export HOME="$SCRATCH_HOME"; trap 'rm -rf "$SCRATCH_HOME"' EXIT  # the hook appends a fire-log line under ~/.mogui; keep that out of the real home and remove it after
 o=$(printf '{"tool_name":"Bash","tool_response":{"stdout":"ok","stderr":""}}' | "$H" 2>&1); rc=$?; [ $rc -eq 0 ] && [ -z "$o" ] && echo "  ok:   small result silent, exit 0" || { echo "  FAIL: small result: rc=$rc '$o'"; F=1; }
 big=$(python3 -c "print('x'*7000)")
 o=$(printf '{"tool_name":"Bash","tool_response":{"stdout":"%s","stderr":""}}' "$big" | "$H" 2>&1); rc=$?; case "$o" in *"7000 chars"*) [ $rc -eq 0 ] && [ "$(printf '%s' "$o" | wc -l | tr -d ' ')" -le 1 ] && echo "  ok:   large result named its size, one line, exit 0" || { echo "  FAIL: large result rc=$rc or extra lines: '$o'"; F=1; };; *) echo "  FAIL: large result: '$o'"; F=1;; esac

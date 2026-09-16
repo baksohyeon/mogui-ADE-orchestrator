@@ -7,8 +7,9 @@ S="$(cd "$(dirname "$0")" && pwd)"; HOOK="$S/hooks/worker-block-warn.sh"; MARKER
 fail() { echo "  FAIL: $*"; FAILED=1; }; ok() { echo "  ok:   $*"; }
 
 grep -Fq 'approval-prompt-markers.txt' "$HOOK" && ok "hook reads the shared marker file" || fail "hook does not reference approval-prompt-markers.txt"
-# Any marker word inside a double-quoted grep pattern is an inline copy; the loader's own grep uses single quotes.
-grep -qE 'grep -[A-Za-z]+ +"[^"$]*(proceed|yes|y/n|press enter|trust|hooks need review)' "$HOOK" && fail "hook still carries an inline marker list" || ok "hook carries no inline marker list"
+# No marker from the file may appear in the hook's own text, in any quoting: that is an inline copy.
+inline=0; while IFS= read -r m; do grep -qiE -- "$m" "$HOOK" && { fail "hook carries marker inline: $m"; inline=1; }; done < <(grep -vE '^[[:space:]]*(#|$)' "$MARKERS")
+[ "$inline" -eq 0 ] && ok "hook carries no inline marker list"
 
 PATTERN=$(grep -vE '^[[:space:]]*(#|$)' "$MARKERS" | paste -sd'|' -)
 [ -n "$PATTERN" ] && ok "marker file loads ($(printf '%s' "$PATTERN" | tr '|' '\n' | wc -l | tr -d ' ') markers)" || fail "marker file empty or unreadable"

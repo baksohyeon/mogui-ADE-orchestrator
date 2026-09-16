@@ -14,7 +14,9 @@ log_fire() {
 
 log_fire
 
-cd {{WORKSPACE_ROOT}} || exit 0
+# WORKSPACE_ROOT lets a test point the hook at a scratch tree; the install path is the default.
+ROOT_DEFAULT='{{WORKSPACE_ROOT}}'
+cd "${WORKSPACE_ROOT:-$ROOT_DEFAULT}" || exit 0
 OPS_BASENAME="$(basename "{{OPS_REPO}}")"
 out=$(bd where 2>&1)
 case "$out" in

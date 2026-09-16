@@ -86,6 +86,7 @@
     "scripts/test-spawn-test.sh",
     "scripts/test-tool-naming.sh",
     "scripts/test-worker-block-warn.sh",
+    "scripts/test-worker-pane-sweep.sh",
     "scripts/worker-pane-sweep",
     "scripts/workstream-render.sh",
     "skills/anti-slop/SKILL.md",

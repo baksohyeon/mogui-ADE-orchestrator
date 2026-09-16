@@ -48,7 +48,7 @@ while IFS= read -r h; do
     verdict=update
   elif printf '%s' "$lower" | grep -qE "new worktree.*resume session|resume session.*changelog"; then
     verdict=start-screen
-  elif printf '%s' "$lower" | grep -qE "do you want to proceed|1\. yes|2\. yes, and|\[y/n\]|\(y/n\)|press enter to continue|trust this (folder|workspace)"; then
+  elif printf '%s' "$lower" | grep -qE "do you want to proceed|1\. yes|2\. yes, and|\[y/n\]|\(y/n\)|press enter to continue|trust this (folder|workspace)|hooks need review|trust all and continue|press enter to confirm"; then
     verdict=approval
   elif printf '%s' "$lower" | grep -qE "esc:cancel|esc to interrupt|working|thinking|churn"; then
     verdict=working

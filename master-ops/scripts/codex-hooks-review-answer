@@ -55,6 +55,7 @@ if [ "$(printf '%s' "$S" | jget ok)" != "True" ]; then
 fi
 
 W=$(wait_once)
+BLK=$(printf '%s' "$W" | jget result.wait.blockedReason)
 if [ "$(printf '%s' "$W" | jget result.wait.satisfied)" = "True" ]; then
   echo "hooks-review ✓ codex · trusted ${N:-?} new/changed hook(s) by dispatch authority (charter §4)"; exit 0
 fi

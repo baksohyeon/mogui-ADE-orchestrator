@@ -21,6 +21,14 @@ case "$SCN:$1 $2" in
     case "$*" in *--retry-request*) echo '{"ok":true,"result":{"send":{"accepted":true}}}';;
       *) echo '{"ok":false,"error":{"code":"agent_prompt_blocked","data":{"orchestrationRequestId":"req-123"}}}';; esac;;
   other:"terminal wait")    echo '{"ok":true,"result":{"wait":{"satisfied":false,"blockedReason":"agent-login-prompt"}}}';;
+  modal2:"terminal wait")
+    n=$(grep -c 'terminal wait' "$LOG")
+    if [ "$n" -le 1 ]; then echo '{"ok":true,"result":{"wait":{"satisfied":false,"blockedReason":"agent-hooks-review-prompt"}}}'
+    else echo '{"ok":true,"result":{"wait":{"satisfied":false,"blockedReason":"agent-login-prompt"}}}'; fi;;
+  modal2:"terminal read")   echo 'Hooks need review. 2 hooks are new or changed.';;
+  modal2:"terminal send")
+    case "$*" in *--retry-request*) echo '{"ok":true,"result":{"send":{"accepted":true}}}';;
+      *) echo '{"ok":false,"error":{"code":"agent_prompt_blocked","data":{"orchestrationRequestId":"req-123"}}}';; esac;;
   other:"terminal read")    echo 'Sign in to continue';;
 esac
 FAKE
@@ -41,6 +49,15 @@ grep -q 'trusted 2 new/changed' "$T/out" && ok "modal: record names the count (2
 SCN=other ORCA_BIN="$T/orca" "$S" term_x >"$T/out" 2>&1; rc=$?
 [ $rc -eq 1 ] && grep -q 'agent-login-prompt' "$T/out" && ok "other prompt: exit 1, named the reason, did not answer" || fail "other: exit $rc: $(cat "$T/out")"
 [ "$(grep -c 'terminal send' "$LOG")" -eq 0 ] || fail "other: sent a keystroke to a non-hook prompt"
+
+# After answering, a different prompt must be reported by its own name, from the second wait.
+: > "$LOG"
+SCN=modal2 ORCA_BIN="$T/orca" "$S" term_x >"$T/out" 2>&1; rc=$?
+[ $rc -eq 1 ] && grep -q 'still blocked after answering (agent-login-prompt)' "$T/out" && ok "modal then other: names the second prompt" || fail "modal then other: exit $rc: $(cat "$T/out" | tr '\n' ' ' | cut -c1-200)"
+# Failability: a copy that never refreshes the reason names the first prompt instead.
+: > "$LOG"; sed '/^W=\$(wait_once)$/{n;/^BLK=/d;}' "$S" > "$T/stale-mutant"; chmod +x "$T/stale-mutant"
+SCN=modal2 ORCA_BIN="$T/orca" "$T/stale-mutant" term_x >"$T/out" 2>&1 || true
+grep -q 'still blocked after answering (agent-hooks-review-prompt)' "$T/out" && ok "failability: stale mutant names the first prompt, so the refresh check would fail" || fail "failability: stale mutant did not name the first prompt: $(cat "$T/out" | tr '\n' ' ' | cut -c1-200)"
 
 # Failability: a copy of the script with the retry removed must leave no --retry-request in the call log.
 : > "$LOG"; sed 's/--retry-request "\$RID" //' "$S" > "$T/answer-mutant"; chmod +x "$T/answer-mutant"

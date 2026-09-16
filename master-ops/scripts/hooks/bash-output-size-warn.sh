@@ -25,7 +25,11 @@ if isinstance(r, dict):
     text = "".join(str(r.get(k, "")) for k in ("stdout", "stderr", "output", "content")) or json.dumps(r, ensure_ascii=False)
 else:
     text = "" if r is None else str(r)
-n = len(text); thresh = int(sys.argv[1])
+n = len(text)
+try:
+    thresh = int(sys.argv[1])
+except (TypeError, ValueError):
+    sys.exit(0)
 if n > thresh:
     print(f"[output-size] this Bash result was {n} chars (~{n//4} tokens), over the {thresh}-char line. Next call: ask one question, filter every sub-command, grep instead of cat.")
 ' "$THRESH"

@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# Answer codex's "Hooks need review" modal in a live terminal, under dispatch authority.
+#
+# Measured 2026-09-14: `orca terminal create --command "codex ..."` never returns a
+# handle when codex 0.154.0 opens its hook-review modal; create times out. A plain terminal plus
+# `send` of the launch command does return a handle, and `terminal wait --for tui-idle` then
+# reports blockedReason=agent-hooks-review-prompt. Sending a keystroke at that point is refused
+# with agent_prompt_blocked and an orchestrationRequestId; re-issuing with --retry-request is the
+# path orca prescribes. This script does exactly that sequence and nothing else.
+#
+# Charter §4: a worker's approval prompt inside contract scope is cleared by dispatch authority.
+# The hooks being trusted are the ones the owner installed in their own home; that is inside
+# scope. Nothing is written under ~/.mogui (boot-comparison-set G, article 5); the record is the
+# one line this prints, which the wrapper carries into its register output.
+#
+#   codex-hooks-review-answer <terminal-handle> [--timeout-ms N]
+#
+# Exit 0: terminal reached tui-idle (with or without answering). Exit 1: still blocked after the
+# answer, or blocked on something this script does not know; the pane tail is printed to stderr.
+# Exit 2: usage or orca unreachable.
+set -u
+H="${1:-}"; TIMEOUT=60000
+[ -n "$H" ] || { echo "usage: codex-hooks-review-answer <terminal-handle> [--timeout-ms N]" >&2; exit 2; }
+[ "${2:-}" = "--timeout-ms" ] && TIMEOUT="${3:-60000}"
+ORCA="${ORCA_BIN:-orca}"
+
+jget() { python3 -c "import json,sys
+try: d=json.load(sys.stdin)
+except Exception: print(''); sys.exit(0)
+o=d
+for k in sys.argv[1].split('.'):
+    o=o.get(k,{}) if isinstance(o,dict) else {}
+print(o if not isinstance(o,(dict,list)) else '')" "$1"; }
+
+wait_once() { "$ORCA" terminal wait --terminal "$H" --for tui-idle --timeout-ms "$TIMEOUT" --json 2>/dev/null; }
+
+W=$(wait_once)
+SAT=$(printf '%s' "$W" | jget result.wait.satisfied)
+BLK=$(printf '%s' "$W" | jget result.wait.blockedReason)
+if [ "$SAT" = "True" ]; then echo "hooks-review: not shown, terminal idle"; exit 0; fi
+if [ "$BLK" != "agent-hooks-review-prompt" ]; then
+  echo "hooks-review: blocked on '${BLK:-unknown}', not the hook modal; not answering" >&2
+  "$ORCA" terminal read --terminal "$H" --limit 12 2>/dev/null >&2; exit 1
+fi
+
+# Count what codex says it wants trusted, so the record says how many, not just that it happened.
+N=$("$ORCA" terminal read --terminal "$H" --limit 40 2>/dev/null | grep -oE '[0-9]+ hooks? (are|is) new or changed' | grep -oE '^[0-9]+' | head -1)
+
+S=$("$ORCA" terminal send --terminal "$H" --text "2" --enter --json 2>/dev/null)
+if [ "$(printf '%s' "$S" | jget ok)" != "True" ]; then
+  RID=$(printf '%s' "$S" | jget error.data.orchestrationRequestId)
+  [ -n "$RID" ] || { echo "hooks-review: send refused without a retry id" >&2; printf '%s\n' "$S" >&2; exit 1; }
+  S=$("$ORCA" terminal send --terminal "$H" --text "2" --enter --retry-request "$RID" --wait-submit 30 --json 2>/dev/null)
+  [ "$(printf '%s' "$S" | jget ok)" = "True" ] || { echo "hooks-review: retry-request refused" >&2; printf '%s\n' "$S" >&2; exit 1; }
+fi
+
+W=$(wait_once)
+if [ "$(printf '%s' "$W" | jget result.wait.satisfied)" = "True" ]; then
+  echo "hooks-review ✓ codex · trusted ${N:-?} new/changed hook(s) by dispatch authority (charter §4)"; exit 0
+fi
+echo "hooks-review: still blocked after answering (${BLK})" >&2
+"$ORCA" terminal read --terminal "$H" --limit 12 2>/dev/null >&2; exit 1

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# worker-pane-sweep must classify a pane sitting on the codex hook-trust modal as `approval`
-# and exit 1, and must leave an idle pane at `idle` with exit 0. The sweep reads panes through
+# worker-pane-sweep must read the shared approval markers and classify a pane sitting on the codex
+# hook-trust modal as `approval`# with exit 1, and must leave an idle pane at `idle` with exit 0. The sweep reads panes through
 # bare `orca`, so a fake orca on PATH feeds it one pane whose frame is $SWEEP_FRAME.
 set -u
 SWEEP="$(cd "$(dirname "$0")" && pwd)/worker-pane-sweep"; FAILED=0
@@ -14,6 +14,12 @@ case "$1 $2" in
 esac
 FAKE
 chmod +x "$T/orca"
+
+grep -Fq 'approval-prompt-markers.txt' "$SWEEP" && ok "sweep reads the shared marker file" || fail "sweep does not reference approval-prompt-markers.txt"
+# No marker from the file may appear in the sweep's own text, in any quoting: that is an inline copy.
+MARKERS="$(dirname "$SWEEP")/approval-prompt-markers.txt"
+inline=0; while IFS= read -r m; do grep -qiE -- "$m" "$SWEEP" && { fail "sweep carries marker inline: $m"; inline=1; }; done < <(grep -vE '^[[:space:]]*(#|$)' "$MARKERS")
+[ "$inline" -eq 0 ] && ok "sweep carries no inline marker list"
 
 run() { env -u ORCA_TERMINAL_HANDLE SWEEP_FRAME="$1" PATH="$T:$PATH" "$SWEEP" 2>&1; }
 expect() { # label frame verdict exit
@@ -36,6 +42,11 @@ expect "proceed question" 'Do you want to proceed?' approval 1
 expect "marker alone: hooks need review" 'Hooks need review' approval 1
 expect "marker alone: trust all and continue" 'Trust all and continue' approval 1
 expect "marker alone: press enter to confirm" 'Press enter to confirm' approval 1
+# The sweep lowercases the pane; the pattern must still match if a marker is written with capitals.
+cp "$MARKERS" "$T/markers.bak"
+printf 'Capitalised Test Marker\n' >> "$MARKERS"
+expect "capitalised marker in the file" 'capitalised test marker' approval 1
+cp "$T/markers.bak" "$MARKERS"
 expect "idle prompt" '❯ ' idle 0
 expect "idle prompt under a status line that says always-approve bypass permissions" 'always-approve bypass permissions
 ❯ ' idle 0

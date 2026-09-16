@@ -32,6 +32,11 @@ handles=$(orca terminal list 2>/dev/null | grep -oE '^term_[a-f0-9-]+' || true)
 # the same morning: a scanner that does not exclude itself reports itself.
 SELF_HANDLE="${ORCA_TERMINAL_HANDLE:-}"
 
+# Approval markers are shared with hooks/worker-block-warn.sh through one file; see its header.
+markers_file="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/approval-prompt-markers.txt"
+approval_re=$(grep -vE '^[[:space:]]*(#|$)' "$markers_file" 2>/dev/null | paste -sd'|' -)
+[ -z "$approval_re" ] && { echo "sweep: approval marker file unreadable or empty: $markers_file; approval verdicts are off"; exit_code=1; }
+
 while IFS= read -r h; do
   [ -z "$h" ] && continue
   [ -n "$SELF_HANDLE" ] && [ "$h" = "$SELF_HANDLE" ] && { printf '%-6s %-13s %s  %s\n' "self" "coordinator" "${h:0:18}" "this session"; continue; }
@@ -48,7 +53,7 @@ while IFS= read -r h; do
     verdict=update
   elif printf '%s' "$lower" | grep -qE "new worktree.*resume session|resume session.*changelog"; then
     verdict=start-screen
-  elif printf '%s' "$lower" | grep -qE "do you want to proceed|1\. yes|2\. yes, and|\[y/n\]|\(y/n\)|press enter to continue|trust this (folder|workspace)|hooks need review|trust all and continue|press enter to confirm"; then
+  elif [ -n "$approval_re" ] && printf '%s' "$lower" | grep -qiE "$approval_re"; then
     verdict=approval
   elif printf '%s' "$lower" | grep -qE "esc:cancel|esc to interrupt|working|thinking|churn"; then
     verdict=working

@@ -53,7 +53,7 @@ while IFS= read -r h; do
     verdict=update
   elif printf '%s' "$lower" | grep -qE "new worktree.*resume session|resume session.*changelog"; then
     verdict=start-screen
-  elif [ -n "$approval_re" ] && printf '%s' "$lower" | grep -qE "$approval_re"; then
+  elif [ -n "$approval_re" ] && printf '%s' "$lower" | grep -qiE "$approval_re"; then
     verdict=approval
   elif printf '%s' "$lower" | grep -qE "esc:cancel|esc to interrupt|working|thinking|churn"; then
     verdict=working

@@ -16,7 +16,7 @@ FAKE
 chmod +x "$T/orca"
 
 grep -Fq 'approval-prompt-markers.txt' "$SWEEP" && ok "sweep reads the shared marker file" || fail "sweep does not reference approval-prompt-markers.txt"
-grep -qE 'grep -qE "do you want to proceed' "$SWEEP" && fail "sweep still carries an inline marker list" || ok "sweep carries no inline marker list"
+grep -qE 'grep -[A-Za-z]+ +"[^"$]*(proceed|yes|y/n|press enter|trust|hooks need review)' "$SWEEP" && fail "sweep still carries an inline marker list" || ok "sweep carries no inline marker list"
 
 run() { env -u ORCA_TERMINAL_HANDLE SWEEP_FRAME="$1" PATH="$T:$PATH" "$SWEEP" 2>&1; }
 expect() { # label frame verdict exit
@@ -39,6 +39,11 @@ expect "proceed question" 'Do you want to proceed?' approval 1
 expect "marker alone: hooks need review" 'Hooks need review' approval 1
 expect "marker alone: trust all and continue" 'Trust all and continue' approval 1
 expect "marker alone: press enter to confirm" 'Press enter to confirm' approval 1
+# The sweep lowercases the pane; the pattern must still match if a marker is written with capitals.
+MARKERS="$(dirname "$SWEEP")/approval-prompt-markers.txt"; cp "$MARKERS" "$T/markers.bak"
+printf 'Capitalised Test Marker\n' >> "$MARKERS"
+expect "capitalised marker in the file" 'capitalised test marker' approval 1
+cp "$T/markers.bak" "$MARKERS"
 expect "idle prompt" '❯ ' idle 0
 expect "idle prompt under a status line that says always-approve bypass permissions" 'always-approve bypass permissions
 ❯ ' idle 0

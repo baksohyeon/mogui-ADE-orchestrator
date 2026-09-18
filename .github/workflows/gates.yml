@@ -90,6 +90,11 @@ jobs:
           shopt -s nullglob
           tmpdir="$(mktemp -d)"
           trap 'rm -rf "$tmpdir"' EXIT
+          tests=(master-ops/scripts/test-*.sh)
+          if [ "${#tests[@]}" -eq 0 ]; then
+            echo "no shell tests matched master-ops/scripts/test-*.sh"
+            exit 1
+          fi
           passed=0
           failed=0
           skip_lines=0
@@ -111,7 +116,7 @@ jobs:
               cat "$out"
               echo "---- end $name output ----"
             fi
-          done < <(printf '%s\n' master-ops/scripts/test-*.sh | LC_ALL=C sort)
+          done < <(printf '%s\n' "${tests[@]}" | LC_ALL=C sort)
           echo "passed $passed failed $failed skip-lines $skip_lines"
           [ "$failed" -eq 0 ]
 

@@ -68,15 +68,15 @@ class DispatchStateTests(unittest.TestCase):
         self.assertFalse(state.is_settled())
 
     def test_is_settled_detects_accepted(self) -> None:
-        state = DispatchState({"status": "ACCEPTED"})
+        state = DispatchState({"dispatch_id": "d-accepted", "status": "ACCEPTED"})
         self.assertTrue(state.is_settled())
 
     def test_is_settled_detects_failed(self) -> None:
-        state = DispatchState({"status": "FAILED"})
+        state = DispatchState({"dispatch_id": "d-failed", "status": "FAILED"})
         self.assertTrue(state.is_settled())
 
     def test_is_settled_detects_abandoned(self) -> None:
-        state = DispatchState({"status": "ABANDONED"})
+        state = DispatchState({"dispatch_id": "d-abandoned", "status": "ABANDONED"})
         self.assertTrue(state.is_settled())
 
     def test_flat_shape_still_parses(self) -> None:
@@ -105,15 +105,15 @@ class DispatchStateTests(unittest.TestCase):
         self.assertEqual(state.dispatch_id, "d-flat")
 
     def test_is_success_detects_completed(self) -> None:
-        state = DispatchState({"status": "COMPLETED"})
+        state = DispatchState({"dispatch_id": "d-completed", "status": "COMPLETED"})
         self.assertTrue(state.is_success())
 
     def test_is_success_detects_accepted(self) -> None:
-        state = DispatchState({"status": "ACCEPTED"})
+        state = DispatchState({"dispatch_id": "d-accepted", "status": "ACCEPTED"})
         self.assertTrue(state.is_success())
 
     def test_is_success_rejects_failed(self) -> None:
-        state = DispatchState({"status": "FAILED"})
+        state = DispatchState({"dispatch_id": "d-failed", "status": "FAILED"})
         self.assertFalse(state.is_success())
 
 
@@ -352,6 +352,54 @@ class WorkerReaperTests(unittest.TestCase):
             "Could not resolve dispatch ctx_missing: worker-list had no row for it",
         ):
             reaper.reap(dispatch_id="ctx_missing", execute=False)
+
+    def test_reap_errors_when_dispatch_show_returns_wrapped_null_dispatch(self) -> None:
+        commands: list[list[str]] = []
+
+        def fake_runner(cmd: list[str]) -> tuple[int, str, str]:
+            commands.append(cmd)
+            if "dispatch-show" in cmd:
+                return 0, json.dumps(
+                    {
+                        "id": "0739e4b9-eb0b-4a0a-a2d3-eb3997d30288",
+                        "ok": True,
+                        "result": {"dispatch": None},
+                        "_meta": {"runtimeId": "rt-null"},
+                    }
+                ), ""
+            return 0, "", ""
+
+        reaper = WorkerReaper(orca_runner=fake_runner)
+        with self.assertRaisesRegex(ReapError, "no such task: task_0000deadbeef") as ctx:
+            reaper.reap(task_id="task_0000deadbeef", execute=True)
+
+        self.assertEqual(ctx.exception.exit_code, 5)
+        self.assertFalse(any("terminal" in cmd and "close" in cmd for cmd in commands))
+        self.assertFalse(any("git" in cmd and "worktree" in cmd and "remove" in cmd for cmd in commands))
+
+    def test_reap_errors_when_dispatch_show_result_omits_dispatch_key(self) -> None:
+        commands: list[list[str]] = []
+
+        def fake_runner(cmd: list[str]) -> tuple[int, str, str]:
+            commands.append(cmd)
+            if "dispatch-show" in cmd:
+                return 0, json.dumps(
+                    {
+                        "id": "0739e4b9-eb0b-4a0a-a2d3-eb3997d30288",
+                        "ok": True,
+                        "result": {},
+                        "_meta": {"runtimeId": "rt-null"},
+                    }
+                ), ""
+            return 0, "", ""
+
+        reaper = WorkerReaper(orca_runner=fake_runner)
+        with self.assertRaisesRegex(ReapError, "no such task: task_0000deadbeef") as ctx:
+            reaper.reap(task_id="task_0000deadbeef", execute=True)
+
+        self.assertEqual(ctx.exception.exit_code, 5)
+        self.assertFalse(any("terminal" in cmd and "close" in cmd for cmd in commands))
+        self.assertFalse(any("git" in cmd and "worktree" in cmd and "remove" in cmd for cmd in commands))
 
     def test_reap_flow_uses_wrapped_dispatch_shape_end_to_end(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

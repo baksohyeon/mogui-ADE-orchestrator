@@ -1,4 +1,11 @@
-"""Worker reap lifecycle: close settled dispatch terminals and clean up worktrees."""
+"""Worker reap lifecycle: close settled dispatch terminals and clean up worktrees.
+
+Exit codes:
+- 2: invalid invocation or unresolved dispatch lookup
+- 3: dispatch exists but is not settled
+- 4: malformed JSON payload from orchestration RPC
+- 5: no dispatch exists for the requested task
+"""
 
 from __future__ import annotations
 
@@ -41,6 +48,9 @@ class ReapError(Exception):
         self.exit_code = exit_code
 
 
+EXIT_NO_SUCH_TASK = 5
+
+
 class DispatchState:
     """Parsed dispatch state from orca orchestration dispatch-show."""
 
@@ -51,12 +61,14 @@ class DispatchState:
             wrapped_dispatch = dispatch_json["result"].get("dispatch")
             if isinstance(wrapped_dispatch, dict):
                 dispatch_payload = wrapped_dispatch
+            else:
+                dispatch_payload = {}
 
-        self.dispatch_id = str(
-            dispatch_payload.get("dispatch_id")
-            or dispatch_payload.get("id")
-            or ""
-        )
+        dispatch_id = dispatch_payload.get("dispatch_id") or dispatch_payload.get("id")
+        if not dispatch_id:
+            raise ReapError("Dispatch payload is missing dispatch_id/id", 4)
+
+        self.dispatch_id = str(dispatch_id)
         self.task_id = str(dispatch_payload.get("task_id") or "")
         self.terminal_id = str(
             dispatch_payload.get("assignee_handle")
@@ -213,6 +225,21 @@ class WorkerReaper:
 
         try:
             payload = json.loads(stdout)
+            result = payload.get("result") if isinstance(payload, dict) else None
+            if isinstance(result, dict):
+                dispatch_payload = result.get("dispatch")
+                if not isinstance(dispatch_payload, dict):
+                    if dispatch_id and not task_id and lookup_task_id:
+                        raise ReapError(
+                            f"no dispatch for task {lookup_task_id}",
+                            EXIT_NO_SUCH_TASK,
+                        )
+                    if lookup_task_id:
+                        raise ReapError(
+                            f"no such task: {lookup_task_id}",
+                            EXIT_NO_SUCH_TASK,
+                        )
+                    raise ReapError("no such task", EXIT_NO_SUCH_TASK)
             return DispatchState(payload)
         except (json.JSONDecodeError, ValueError) as e:
             raise ReapError(f"Could not parse dispatch JSON: {e}", 4)

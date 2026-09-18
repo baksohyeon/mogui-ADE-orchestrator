@@ -14,7 +14,9 @@ log_fire() {
 
 log_fire
 
-cd {{WORKSPACE_ROOT}} || exit 0
+# WORKSPACE_ROOT lets a test point the hook at a scratch tree; the install path is the default.
+ROOT_DEFAULT='{{WORKSPACE_ROOT}}'
+cd "${WORKSPACE_ROOT:-$ROOT_DEFAULT}" || exit 0
 OPS_BASENAME="$(basename "{{OPS_REPO}}")"
 out=$(bd where 2>&1)
 case "$out" in
@@ -25,11 +27,28 @@ if [ -n "$BEADS_DIR" ] && [ "$BEADS_DIR" != "{{OPS_REPO}}/.beads" ]; then
   echo "[tracker] WARNING: BEADS_DIR points outside the workspace ops repo: $BEADS_DIR"
 fi
 
-# Boot briefing: active protections, one line (owner feedback 2026-08-03 — quiet
-# guards have zero presence; say what is standing watch).
+# Boot briefing: one line naming which shipped protections are actually wired. Measured
+# 2026-09-14: the previous fixed string called two unwired guards "active" on a peer
+# seat while the same boot's self-check listed them as UNWIRED. Wiring is read from the
+# settings file; a shipped hook that no command references prints as NOT WIRED. Warn only.
 supp=$(wc -l < ~/.mogui/guard-suppressions.jsonl 2>/dev/null | tr -d ' ')
 # Count only ledger rows that name this install's policy path (basename-scoped).
 # No bare filename fallback — a shared ledger must not import other installs.
 decisions=$(grep -cF -- "$OPS_BASENAME/model-tier-policy.json" ~/.mogui/dispatch-ledger.jsonl 2>/dev/null || true)
 decisions=${decisions:-0}
-echo "[protections] active: role-state inject (every turn) | product-path hard block (overrides logged: ${supp:-0}) | bash trim-warn | dispatch gate+ledger (ops-policy decisions: ${decisions:-0}) | PreCompact memory reinject"
+HOOKS_DIR="${MOGUI_HOOKS_DIR:-$(cd "$(dirname "$0")" && pwd)}"
+# scripts/hooks -> scripts -> ops repo -> workspace root; seat settings live under root.
+SEAT_ROOT="${WORKSPACE_ROOT:-$(cd "$HOOKS_DIR/../../.." 2>/dev/null && pwd)}"
+SETTINGS="${MOGUI_SETTINGS_FILE:-$SEAT_ROOT/.claude/settings.json}"
+wired_blob=$(python3 -c '
+import json,sys
+try: d=json.load(open(sys.argv[1]))
+except Exception: sys.exit(0)
+print("\n".join(h.get("command","") for arr in (d.get("hooks") or {}).values() for m in arr for h in (m.get("hooks") or [])))' "$SETTINGS" 2>/dev/null)
+active=""; unwired=""
+for f in "$HOOKS_DIR"/*.sh; do
+  n=$(basename "$f"); [ "$n" = "tracker-check.sh" ] && continue
+  # A hook counts as wired only when a command names it as a path token: /<name> followed by a quote, a space, or the end.
+  if printf '%s\n' "$wired_blob" | grep -qE "/$(printf '%s' "$n" | sed 's/\./\\./g')([\"' ]|\$)"; then active="$active ${n%.sh}"; else unwired="$unwired ${n%.sh}"; fi
+done
+echo "[protections] wired:${active:- none} (overrides logged: ${supp:-0}, ops-policy decisions: ${decisions:-0})${unwired:+ | NOT WIRED:$unwired}"

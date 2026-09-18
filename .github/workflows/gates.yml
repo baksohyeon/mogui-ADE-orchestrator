@@ -72,6 +72,57 @@ jobs:
       - shell: bash
         run: PYTHONPATH=src python -m pytest tests -q
 
+  shell-tests:
+    # Runs all promoted shell tests under master-ops/scripts/test-*.sh.
+    # No Windows leg: these tests require the Unix script execution surface.
+    # Probe coverage for the failure path was proven in CI on 2026-09-18.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Run promoted shell tests
+        shell: bash
+        run: |
+          set -u
+          shopt -s nullglob
+          tmpdir="$(mktemp -d)"
+          trap 'rm -rf "$tmpdir"' EXIT
+          tests=(master-ops/scripts/test-*.sh)
+          if [ "${#tests[@]}" -eq 0 ]; then
+            echo "no shell tests matched master-ops/scripts/test-*.sh"
+            exit 1
+          fi
+          passed=0
+          failed=0
+          skip_lines=0
+          while IFS= read -r test_file; do
+            name="$(basename "$test_file")"
+            out="$tmpdir/$name.out"
+            if bash "$test_file" >"$out" 2>&1; then
+              code=0
+              passed=$((passed + 1))
+            else
+              code=$?
+              failed=$((failed + 1))
+            fi
+            file_skip="$(grep -c 'SKIP' "$out" || true)"
+            skip_lines=$((skip_lines + file_skip))
+            echo "$name exit=$code"
+            if [ "$code" -ne 0 ]; then
+              echo "---- $name output ----"
+              cat "$out"
+              echo "---- end $name output ----"
+            fi
+          done < <(printf '%s\n' "${tests[@]}" | LC_ALL=C sort)
+          echo "passed $passed failed $failed skip-lines $skip_lines"
+          [ "$failed" -eq 0 ]
+
   redaction:
     runs-on: ubuntu-latest
     steps:

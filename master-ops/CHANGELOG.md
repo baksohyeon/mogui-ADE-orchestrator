@@ -42,6 +42,10 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+Conversation-redaction-scan glob false positive (2026-09-22):
+
+- `master-ops/scripts/conversation-redaction-scan` no longer flags `/Users/` or `/home/` segments immediately preceded by a glob `*` (for example `codex-accounts/*/home/sessions`) as leaked home directories; real leaks still match. The summary line now labels the scanned total as items (PRs+issues) instead of calling the combined count PRs.
+
 Skill-composition guide (2026-08-25):
 
 - Added `docs/guides/skill-composition.md`, documenting the workspace's adopted skill-layer composition with measured host-skill counts, measured template-shipped skills, the harness discovery path, the routing table source text, and explicit `unmeasured` labeling where checkout-local evidence is unavailable.

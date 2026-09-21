@@ -39,7 +39,7 @@ log_fire() {
 }
 trap log_fire EXIT
 THRESH="${MOGUI_BASH_OUTPUT_WARN_CHARS:-6000}"
-if ! [ "$THRESH" -eq "$THRESH" ] 2>/dev/null; then
+if ! [[ "$THRESH" =~ ^[0-9]+$ ]]; then
   VERDICT="skip"
   exit 0
 fi

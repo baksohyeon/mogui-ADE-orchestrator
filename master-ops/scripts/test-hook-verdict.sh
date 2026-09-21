@@ -93,6 +93,23 @@ chmod +x "$T/role.warn.sh"
 MOGUI_HOOK_FIRE_LOG="$LOG" bash "$T/role.warn.sh" >"$T/role.out" 2>&1
 grep -q '\[role-state\] WARNING:' "$T/role.out" && ok "role-state warn path prints warning" || fail "role-state warn path missing warning output"
 assert_verdict warn "role-state warn path"
+cat > "$T/role.blank.md" <<'EOF'
+Current Role:
+Role Lock: worker
+EOF
+python3 - "$ROLE" "$T/role.blank.md" > "$T/role.blank.sh" <<'PY'
+import sys
+s = open(sys.argv[1]).read()
+for line in s.splitlines(True):
+    if line.startswith("RS="):
+        sys.stdout.write(f"RS={sys.argv[2]}\n")
+    else:
+        sys.stdout.write(line)
+PY
+chmod +x "$T/role.blank.sh"
+MOGUI_HOOK_FIRE_LOG="$LOG" bash "$T/role.blank.sh" >"$T/role.blank.out" 2>&1
+grep -q '\[role-state\] WARNING:' "$T/role.blank.out" && ok "role-state blank marker value warns" || fail "role-state blank marker value missing warning output"
+assert_verdict warn "role-state blank marker value"
 
 # bash-bare-cd-warn: pass/warn/skip
 out=$(printf '{"tool_input":{"command":"git status"}}' | MOGUI_HOOK_FIRE_LOG="$LOG" bash "$BARE_CD" 2>&1)

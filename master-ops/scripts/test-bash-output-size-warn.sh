@@ -28,6 +28,8 @@ o=$(printf '[1,2,3]' | "$H" 2>&1); rc=$?; [ $rc -eq 0 ] && [ -z "$o" ] && echo "
 o=$(printf '{"tool_response":{"stdout":"%s"}}' "$(python3 -c "print('y'*300)")" | MOGUI_BASH_OUTPUT_WARN_CHARS=100 "$H" 2>&1); rc=$?; case "$o" in *"300 chars"*) [ $rc -eq 0 ] && echo "  ok:   threshold env honoured, exit 0" || { echo "  FAIL: env threshold rc=$rc"; F=1; };; *) echo "  FAIL: env threshold: '$o'"; F=1;; esac
 o=$(printf '{"tool_response":{"stdout":"%s"}}' "$big" | MOGUI_BASH_OUTPUT_WARN_CHARS=abc "$H" 2>&1); rc=$?; [ $rc -eq 0 ] && [ -z "$o" ] && echo "  ok:   invalid threshold stays silent, exit 0" || { echo "  FAIL: invalid threshold: rc=$rc '$o'"; F=1; }
 expect_verdict skip "invalid threshold"
+o=$(printf '{"tool_response":{"stdout":"%s"}}' "$big" | MOGUI_BASH_OUTPUT_WARN_CHARS=-1 "$H" 2>&1); rc=$?; [ $rc -eq 0 ] && [ -z "$o" ] && echo "  ok:   negative threshold stays silent, exit 0" || { echo "  FAIL: negative threshold: rc=$rc '$o'"; F=1; }
+expect_verdict skip "negative threshold"
 # Failability: a copy of the hook whose size comparison is disabled must fail the large-result check.
 T=$(mktemp -d); sed 's/if n > thresh:/if False:/' "$H" > "$T/hook.sh"; chmod +x "$T/hook.sh"
 o=$(printf '{"tool_name":"Bash","tool_response":{"stdout":"%s","stderr":""}}' "$big" | "$T/hook.sh"); [ -z "$o" ] && echo "  ok:   failability: disabled comparison stays silent, so the large-result check would fail" || { echo "  FAIL: failability: mutant still warned: $o"; F=1; }

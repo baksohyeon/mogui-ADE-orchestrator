@@ -41,7 +41,9 @@ RS={{OPS_REPO}}/docs/runbooks/role-state.md
 if [ -r "$RS" ]; then
   role=$(grep -m1 '^Current Role:' "$RS")
   lock=$(grep -m1 '^Role Lock:' "$RS")
-  if [ -n "$role" ] && [ -n "$lock" ]; then
+  role_value="${role#Current Role:}"
+  lock_value="${lock#Role Lock:}"
+  if [ -n "$role" ] && [ -n "$lock" ] && [ -n "$(printf '%s' "$role_value" | tr -d '[:space:]')" ] && [ -n "$(printf '%s' "$lock_value" | tr -d '[:space:]')" ]; then
     echo "[role-state] ${role} | ${lock} | Execution rule: Proposal -> Approval -> Execution. Product-repo implementation goes to dispatched workers, never inline."
   else
     VERDICT="warn"

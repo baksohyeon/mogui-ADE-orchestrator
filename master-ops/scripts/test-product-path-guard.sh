@@ -155,8 +155,8 @@ expect_blocked bash-relative-working-directory run_bash "echo bad > file.txt" "$
 expect_verdict block bash-relative-working-directory
 expect_allowed legacy-python3-c-outside-root run_bash "python3 -c 'print(1)'" "$ops"
 expect_verdict pass legacy-python3-c-outside-root
-expect_allowed strict-unparseable-input-skip run_raw_payload "not json" 1
-expect_verdict skip strict-unparseable-input-skip
+expect_blocked strict-unparseable-input-block run_raw_payload "not json" 1
+expect_verdict block strict-unparseable-input-block
 expect_allowed legacy-bash-c-outside-root run_bash "bash -c 'echo ok'" "$ops"
 expect_verdict pass legacy-bash-c-outside-root
 expect_blocked legacy-python3-root-token-non-c-arg run_bash "python3 $product_real/probe.py" "$ops"

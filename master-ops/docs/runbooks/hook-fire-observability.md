@@ -133,8 +133,9 @@ This line confirms the harness state. If a protection is missing or logged count
        "$(date +%s)" "$(json_str "$PWD")" "$(json_str "${MOGUI_RUNTIME_HINT:-unknown}")" "$(json_str "$session_kind")" "$(json_str "$VERDICT")" >> "$fire_log" 2>/dev/null || true
    }
    ```
+   In this example, replace `<name>` with the hook script basename (without `.sh`) and `<event>` with the actual hook event.
 4. Set `VERDICT=pass` at the top, install `trap log_fire EXIT`, and set `VERDICT` before every early exit that changes the outcome.
-5. Self-test: invoke the hook the way the harness would, then verify the fire-log line appears.
+5. Self-test: invoke the hook the way the harness would, then verify the fire-log line appears and that the emitted `hook` field matches the script basename without `.sh`.
 
 ## Constraints
 

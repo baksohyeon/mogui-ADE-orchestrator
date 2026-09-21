@@ -119,13 +119,12 @@ blocked() {
 }
 
 input=$(cat)
-if ! printf '%s' "$input" | python3 -c 'import json,sys; json.load(sys.stdin)' >/dev/null 2>&1; then
-  VERDICT="skip"
-  exit 0
+if ! printf '%s' "$input" | python3 -c 'import json,sys; payload=json.load(sys.stdin); tool=payload.get("tool_input") if isinstance(payload, dict) else None; raise SystemExit(0 if isinstance(payload, dict) and isinstance(tool, dict) else 1)' >/dev/null 2>&1; then
+  blocked "invalid hook input" ""
 fi
 repo=$(load_product_repo 2>/dev/null) || blocked "cannot load product_repo from $INSTANCE_RUNTIME_CONFIG" ""
 
-file_path=$(printf '%s' "$input" | python3 -c 'import json,sys; d=json.load(sys.stdin); t=d.get("tool_input",{}) if isinstance(d, dict) else {}; print((t if isinstance(t, dict) else {}).get("file_path") or (t if isinstance(t, dict) else {}).get("notebook_path") or "")' 2>/dev/null) || { VERDICT="skip"; exit 0; }
+file_path=$(printf '%s' "$input" | python3 -c 'import json,sys; tool=json.load(sys.stdin)["tool_input"]; print(tool.get("file_path") or tool.get("notebook_path") or "")' 2>/dev/null) || blocked "invalid hook input" ""
 if [ -n "$file_path" ]; then
   target=$(python3 -c 'import os,sys; print(os.path.realpath(os.path.expanduser(sys.argv[1])))' "$file_path") || blocked "cannot resolve file target" ""
   [ "$(is_under "$repo" "$target")" = yes ] || { mg_emit info product_path_guard pass file_tool file_tool outside file; exit 0; }
@@ -137,7 +136,7 @@ if [ -n "$file_path" ]; then
   blocked "$target is product-repo territory; dispatch product writes through a contract" "file-tool" guarded_target
 fi
 
-command=$(printf '%s' "$input" | python3 -c 'import json,sys; d=json.load(sys.stdin); t=d.get("tool_input",{}) if isinstance(d, dict) else {}; print((t if isinstance(t, dict) else {}).get("command", ""))' 2>/dev/null) || { VERDICT="skip"; exit 0; }
+command=$(printf '%s' "$input" | python3 -c 'import json,sys; print(json.load(sys.stdin)["tool_input"].get("command", ""))' 2>/dev/null) || blocked "invalid hook input" ""
 [ -n "$command" ] || { mg_emit info product_path_guard pass empty_command; exit 0; }
 
 result=$(PRODUCT_ROOT="$repo" ALLOWLIST="$ALLOWLIST" FAIL_CLOSED="$FAIL_CLOSED" python3 -c '

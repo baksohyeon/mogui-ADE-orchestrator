@@ -5,14 +5,30 @@
 VERDICT="pass"
 FIRE_LOG="${MOGUI_HOOK_FIRE_LOG:-${HOME:-$(cd ~ && pwd)}/.mogui/hook-fire-log.jsonl}"
 HOOK_CWD="$PWD"
-HOOK_SESSION_KIND="unknown"
-if [ -n "${ORCA_TASK_ID:-}" ] || [ -n "${ORCA_DISPATCH_ID:-}" ] || [[ "$HOOK_CWD" == *".orca/worktrees"* ]]; then
-  HOOK_SESSION_KIND="worker"
+if [[ "$FIRE_LOG" != /* ]]; then
+  FIRE_LOG="$HOOK_CWD/$FIRE_LOG"
 fi
+json_str() {
+  local value="${1-}"
+  value=${value//\\/\\\\}
+  value=${value//\"/\\\"}
+  value=$(printf '%s' "$value" | tr -d '\000-\037\177')
+  printf '%s' "$value"
+}
+derive_session_kind() {
+  if [ -n "${ORCA_TASK_ID:-}" ] || [ -n "${ORCA_DISPATCH_ID:-}" ] || [[ "$HOOK_CWD" == *".orca/worktrees"* ]]; then
+    printf 'worker'
+  elif [ -f "$HOOK_CWD/docs/MASTER-OPERATIONS.md" ]; then
+    printf 'master'
+  else
+    printf 'unknown'
+  fi
+}
+HOOK_SESSION_KIND="$(derive_session_kind)"
 log_fire() {
   mkdir -p "$(dirname "$FIRE_LOG")" 2>/dev/null || true
   printf '{"ts":%d,"hook":"tracker-check","event":"SessionStart","cwd":"%s","runtime_hint":"%s","session_kind":"%s","verdict":"%s"}\n' \
-    "$(date +%s)" "$HOOK_CWD" "${MOGUI_RUNTIME_HINT:-unknown}" "$HOOK_SESSION_KIND" "$VERDICT" >> "$FIRE_LOG" 2>/dev/null || true
+    "$(date +%s)" "$(json_str "$HOOK_CWD")" "$(json_str "${MOGUI_RUNTIME_HINT:-unknown}")" "$(json_str "$HOOK_SESSION_KIND")" "$(json_str "$VERDICT")" >> "$FIRE_LOG" 2>/dev/null || true
 }
 trap log_fire EXIT
 

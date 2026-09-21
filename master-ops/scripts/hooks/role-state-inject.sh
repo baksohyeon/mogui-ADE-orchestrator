@@ -4,15 +4,29 @@
 
 VERDICT="pass"
 FIRE_LOG="${MOGUI_HOOK_FIRE_LOG:-${HOME:-$(cd ~ && pwd)}/.mogui/hook-fire-log.jsonl}"
+json_str() {
+  local value="${1-}"
+  value=${value//\\/\\\\}
+  value=${value//\"/\\\"}
+  value=$(printf '%s' "$value" | tr -d '\000-\037\177')
+  printf '%s' "$value"
+}
+derive_session_kind() {
+  if [ -n "${ORCA_TASK_ID:-}" ] || [ -n "${ORCA_DISPATCH_ID:-}" ] || [[ "$PWD" == *".orca/worktrees"* ]]; then
+    printf 'worker'
+  elif [ -f "$PWD/docs/MASTER-OPERATIONS.md" ]; then
+    printf 'master'
+  else
+    printf 'unknown'
+  fi
+}
 log_fire() {
   mkdir -p "$(dirname "$FIRE_LOG")" 2>/dev/null || true
   local event="$1"
-  local session_kind="unknown"
-  if [ -n "$ORCA_TASK_ID" ] || [ -n "$ORCA_DISPATCH_ID" ] || [[ "$PWD" == *".orca/worktrees"* ]]; then
-    session_kind="worker"
-  fi
+  local session_kind
+  session_kind="$(derive_session_kind)"
   printf '{"ts":%d,"hook":"role-state-inject","event":"%s","cwd":"%s","runtime_hint":"%s","session_kind":"%s","verdict":"%s"}\n' \
-    "$(date +%s)" "$event" "$PWD" "${MOGUI_RUNTIME_HINT:-unknown}" "$session_kind" "$VERDICT" >> "$FIRE_LOG" 2>/dev/null || true
+    "$(date +%s)" "$(json_str "$event")" "$(json_str "$PWD")" "$(json_str "${MOGUI_RUNTIME_HINT:-unknown}")" "$(json_str "$session_kind")" "$(json_str "$VERDICT")" >> "$FIRE_LOG" 2>/dev/null || true
 }
 
 # Detect hook event from stdin or environment
@@ -27,7 +41,12 @@ RS={{OPS_REPO}}/docs/runbooks/role-state.md
 if [ -r "$RS" ]; then
   role=$(grep -m1 '^Current Role:' "$RS")
   lock=$(grep -m1 '^Role Lock:' "$RS")
-  echo "[role-state] ${role:-Current Role: UNKNOWN} | ${lock:-Role Lock: UNKNOWN} | Execution rule: Proposal -> Approval -> Execution. Product-repo implementation goes to dispatched workers, never inline."
+  if [ -n "$role" ] && [ -n "$lock" ]; then
+    echo "[role-state] ${role} | ${lock} | Execution rule: Proposal -> Approval -> Execution. Product-repo implementation goes to dispatched workers, never inline."
+  else
+    VERDICT="warn"
+    echo "[role-state] WARNING: role-state markers missing in $RS — declare Current Role and Role Lock before proceeding."
+  fi
 else
   VERDICT="warn"
   echo "[role-state] WARNING: role-state.md unreadable at $RS — declare Role State before proceeding."

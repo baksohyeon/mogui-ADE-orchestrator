@@ -10,8 +10,7 @@ if [ ! -f "$logfile" ]; then
 fi
 
 # Build matrix: hook -> (runtime_hint, session_kind) -> (ts, count)
-# Use awk to parse and aggregate JSON lines
-HOOKS_DIR="$(cd "$(dirname "$0")/hooks" && pwd)"
+HOOKS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/hooks" && pwd -P)"
 
 LOGFILE="$logfile" HOOKS_DIR="$HOOKS_DIR" python3 << 'PYTHON_END'
 import json
@@ -83,7 +82,8 @@ for hook in sorted(verdict_counts.keys()):
         f"warn={counts.get('warn', 0)} "
         f"block={counts.get('block', 0)} "
         f"skip={counts.get('skip', 0)} "
-        f"override={counts.get('override', 0)}"
+        f"override={counts.get('override', 0)} "
+        f"unknown={counts.get('unknown', 0)}"
     )
 if unknown_total > 0:
     print(f"\nNote: {unknown_total} legacy record(s) lacked a verdict field and were counted as unknown.")

@@ -18,11 +18,27 @@ set -uo pipefail
 
 VERDICT="pass"
 FIRE_LOG="${MOGUI_HOOK_FIRE_LOG:-${HOME:-$(cd ~ && pwd)}/.mogui/hook-fire-log.jsonl}"
+json_str() {
+local value="${1-}"
+value=${value//\\/\\\\}
+value=${value//\"/\\\"}
+value=$(printf '%s' "$value" | tr -d '\000-\037\177')
+printf '%s' "$value"
+}
+derive_session_kind() {
+if [ -n "${ORCA_TASK_ID:-}" ] || [ -n "${ORCA_DISPATCH_ID:-}" ] || [[ "$PWD" == *".orca/worktrees"* ]]; then
+  printf 'worker'
+elif [ -f "$PWD/docs/MASTER-OPERATIONS.md" ]; then
+  printf 'master'
+else
+  printf 'unknown'
+fi
+}
 log_fire() {
 mkdir -p "$(dirname "$FIRE_LOG")" 2>/dev/null || true
-session_kind="${MOGUI_SESSION_KIND:-master}"
+session_kind="$(derive_session_kind)"
 printf '{"ts":%s,"hook":"worker-block-warn","event":"%s","cwd":"%s","runtime_hint":"%s","session_kind":"%s","verdict":"%s"}\n' \
-  "$(date +%s)" "${1:-UserPromptSubmit}" "$PWD" "${MOGUI_RUNTIME_HINT:-unknown}" "$session_kind" "$VERDICT" \
+  "$(date +%s)" "$(json_str "${1:-UserPromptSubmit}")" "$(json_str "$PWD")" "$(json_str "${MOGUI_RUNTIME_HINT:-unknown}")" "$(json_str "$session_kind")" "$(json_str "$VERDICT")" \
   >> "$FIRE_LOG" 2>/dev/null || true
 }
 hook_event="${1:-UserPromptSubmit}"

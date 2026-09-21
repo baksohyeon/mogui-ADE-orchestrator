@@ -15,7 +15,7 @@ else
 fi
 HOOK_DIR=$(cd "$(dirname "$0")" && pwd)
 ALLOWLIST="${MOGUI_PRODUCT_GUARD_ALLOWLIST:-$HOOK_DIR/product-path-guard-readonly-allowlist.txt}"
-FIRE_LOG="${MOGUI_HOOK_FIRE_LOG:-$HOME/.mogui/hook-fire-log.jsonl}"
+FIRE_LOG="${MOGUI_HOOK_FIRE_LOG:-${HOME:-$(cd ~ && pwd)}/.mogui/hook-fire-log.jsonl}"
 FAIL_CLOSED="${MOGUI_PRODUCT_GUARD_FAIL_CLOSED:-0}"
 
 mg_emit() {
@@ -56,7 +56,13 @@ record = {
     "event": "PreToolUse",
     "cwd": os.getcwd(),
     "runtime_hint": os.environ.get("MOGUI_RUNTIME_HINT", "unknown"),
-    "session_kind": "worker" if (os.environ.get("ORCA_TASK_ID") or os.environ.get("ORCA_DISPATCH_ID") or ".orca/worktrees" in os.getcwd()) else "unknown",
+    "session_kind": (
+        "worker"
+        if (os.environ.get("ORCA_TASK_ID") or os.environ.get("ORCA_DISPATCH_ID") or ".orca/worktrees" in os.getcwd())
+        else (
+            "master" if os.path.exists(os.path.join(os.getcwd(), "docs", "MASTER-OPERATIONS.md")) else "unknown"
+        )
+    ),
     "verdict": os.environ.get("VERDICT", "pass"),
 }
 with open(path, "a", encoding="utf-8") as fh:
@@ -113,9 +119,13 @@ blocked() {
 }
 
 input=$(cat)
+if ! printf '%s' "$input" | python3 -c 'import json,sys; json.load(sys.stdin)' >/dev/null 2>&1; then
+  VERDICT="skip"
+  exit 0
+fi
 repo=$(load_product_repo 2>/dev/null) || blocked "cannot load product_repo from $INSTANCE_RUNTIME_CONFIG" ""
 
-file_path=$(printf '%s' "$input" | python3 -c 'import json,sys; d=json.load(sys.stdin); t=d.get("tool_input",{}); print(t.get("file_path") or t.get("notebook_path") or "")' 2>/dev/null) || blocked "invalid hook input" ""
+file_path=$(printf '%s' "$input" | python3 -c 'import json,sys; d=json.load(sys.stdin); t=d.get("tool_input",{}) if isinstance(d, dict) else {}; print((t if isinstance(t, dict) else {}).get("file_path") or (t if isinstance(t, dict) else {}).get("notebook_path") or "")' 2>/dev/null) || { VERDICT="skip"; exit 0; }
 if [ -n "$file_path" ]; then
   target=$(python3 -c 'import os,sys; print(os.path.realpath(os.path.expanduser(sys.argv[1])))' "$file_path") || blocked "cannot resolve file target" ""
   [ "$(is_under "$repo" "$target")" = yes ] || { mg_emit info product_path_guard pass file_tool file_tool outside file; exit 0; }
@@ -127,7 +137,7 @@ if [ -n "$file_path" ]; then
   blocked "$target is product-repo territory; dispatch product writes through a contract" "file-tool" guarded_target
 fi
 
-command=$(printf '%s' "$input" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("tool_input",{}).get("command", ""))' 2>/dev/null) || blocked "invalid hook input" ""
+command=$(printf '%s' "$input" | python3 -c 'import json,sys; d=json.load(sys.stdin); t=d.get("tool_input",{}) if isinstance(d, dict) else {}; print((t if isinstance(t, dict) else {}).get("command", ""))' 2>/dev/null) || { VERDICT="skip"; exit 0; }
 [ -n "$command" ] || { mg_emit info product_path_guard pass empty_command; exit 0; }
 
 result=$(PRODUCT_ROOT="$repo" ALLOWLIST="$ALLOWLIST" FAIL_CLOSED="$FAIL_CLOSED" python3 -c '

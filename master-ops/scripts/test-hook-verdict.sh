@@ -43,7 +43,7 @@ assert_verdict skip "trim-warn skip path"
 mkdir -p "$T/bin"
 cat > "$T/bin/orca" <<'EOF'
 #!/usr/bin/env bash
-if [ "$1 $2 $3" = "orchestration check --peek" ]; then
+if [ "$*" = "orchestration check --peek --json" ]; then
   printf '%s\n' "$FAKE_ORCA_JSON"
   exit 0
 fi
@@ -124,7 +124,17 @@ sys.stdout.write(s.replace('VERDICT="warn"', 'VERDICT="pass"', 1))
 PY
 chmod +x "$T/trim.mut.sh"
 printf '{"tool_input":{"command":"git diff"}}' | MOGUI_HOOK_FIRE_LOG="$LOG" bash "$T/trim.mut.sh" >/dev/null 2>&1
-got="$(last_verdict 2>/dev/null || true)"
-[ "$got" = "pass" ] && ok "failability: trim mutant flips warn->pass so warn assertion would fail" || fail "failability: trim mutant did not change verdict as expected"
+assert_warn_expectation_fails() {
+  expected="$1"; label="$2"
+  got="$(last_verdict 2>/dev/null || true)"
+  [ "$got" = "$expected" ] && return 0
+  echo "mutant caught: $label expected=$expected got=${got:-<none>}" >&2
+  return 1
+}
+if assert_warn_expectation_fails warn "trim mutant"; then
+  fail "failability: trim mutant unexpectedly passed the warn assertion"
+else
+  ok "failability: trim mutant fails the real warn assertion"
+fi
 
 [ "$F" -eq 0 ] && echo "test-hook-verdict: OK" || { echo "test-hook-verdict: FAILED"; exit 1; }

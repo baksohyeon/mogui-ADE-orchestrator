@@ -14,13 +14,35 @@
 set -u
 VERDICT="pass"
 FIRE_LOG="${MOGUI_HOOK_FIRE_LOG:-${HOME:-$(cd ~ && pwd)}/.mogui/hook-fire-log.jsonl}"
+json_str() {
+  local value="${1-}"
+  value=${value//\\/\\\\}
+  value=${value//\"/\\\"}
+  value=$(printf '%s' "$value" | tr -d '\000-\037\177')
+  printf '%s' "$value"
+}
+derive_session_kind() {
+  if [ -n "${ORCA_TASK_ID:-}" ] || [ -n "${ORCA_DISPATCH_ID:-}" ] || [[ "$PWD" == *".orca/worktrees"* ]]; then
+    printf 'worker'
+  elif [ -f "$PWD/docs/MASTER-OPERATIONS.md" ]; then
+    printf 'master'
+  else
+    printf 'unknown'
+  fi
+}
 log_fire() {
   mkdir -p "$(dirname "$FIRE_LOG")" 2>/dev/null || true
+  local session_kind
+  session_kind="$(derive_session_kind)"
   printf '{"ts":%d,"hook":"bash-output-size-warn","event":"PostToolUse","cwd":"%s","runtime_hint":"%s","session_kind":"%s","verdict":"%s"}\n' \
-    "$(date +%s)" "$PWD" "${MOGUI_RUNTIME_HINT:-unknown}" "${MOGUI_SESSION_KIND:-master}" "$VERDICT" >> "$FIRE_LOG" 2>/dev/null || true
+    "$(date +%s)" "$(json_str "$PWD")" "$(json_str "${MOGUI_RUNTIME_HINT:-unknown}")" "$(json_str "$session_kind")" "$(json_str "$VERDICT")" >> "$FIRE_LOG" 2>/dev/null || true
 }
 trap log_fire EXIT
 THRESH="${MOGUI_BASH_OUTPUT_WARN_CHARS:-6000}"
+if ! [ "$THRESH" -eq "$THRESH" ] 2>/dev/null; then
+  VERDICT="skip"
+  exit 0
+fi
 INPUT=$(cat)
 if ! out=$(printf '%s' "$INPUT" | python3 -c '
 import json, sys
@@ -36,10 +58,7 @@ if isinstance(r, dict):
 else:
     text = "" if r is None else str(r)
 n = len(text)
-try:
-    thresh = int(sys.argv[1])
-except (TypeError, ValueError):
-    sys.exit(0)
+thresh = int(sys.argv[1])
 if n > thresh:
     print(f"[output-size] this Bash result was {n} chars (~{n//4} tokens), over the {thresh}-char line. Next call: ask one question, filter every sub-command, grep instead of cat.")
 ' "$THRESH"); then

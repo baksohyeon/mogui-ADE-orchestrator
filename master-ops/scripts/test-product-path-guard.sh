@@ -31,6 +31,14 @@ print(json.dumps({"tool_input": {"file_path": sys.argv[1]}}))
 PY
 }
 
+run_file_override() {
+  local path="$1"
+  python3 - "$path" <<'PY' | HOME="$TMP/home" MOGUI_INLINE_EDIT_OVERRIDE=1 MOGUI_PRODUCT_GUARD_FAIL_CLOSED=0 MOGUI_EVENT_LOG="$TMP/home/.mogui/event-log.jsonl" MOGUI_INSTANCE_RUNTIME_CONFIG="$TMP/runtime.json" MOGUI_HOOK_FIRE_LOG="$TMP/logs/fire.jsonl" "$HOOK" >/dev/null 2>"$TMP/stderr"
+import json, sys
+print(json.dumps({"tool_input": {"file_path": sys.argv[1]}}))
+PY
+}
+
 run_bash() {
   local command="$1"
   local working_directory="${2:-.}"
@@ -67,11 +75,21 @@ print(json.dumps({"tool_input": {"command": sys.argv[1], "working_directory": sy
 PY
 }
 
+run_raw_payload() {
+  local payload="$1"
+  local fail_closed="${2:-0}"
+  printf '%s' "$payload" | HOME="$TMP/home" MOGUI_INLINE_EDIT_OVERRIDE=0 MOGUI_PRODUCT_GUARD_FAIL_CLOSED="$fail_closed" MOGUI_EVENT_LOG="$TMP/home/.mogui/event-log.jsonl" MOGUI_INSTANCE_RUNTIME_CONFIG="$TMP/runtime.json" MOGUI_HOOK_FIRE_LOG="$TMP/logs/fire.jsonl" "$HOOK" >/dev/null 2>"$TMP/stderr"
+}
+
 expect_blocked() {
   local label="$1" rc
   shift
+  local before after
+  before=$(fire_count)
   "$@"; rc=$?
+  after=$(fire_count)
   [ "$rc" -eq 2 ] || { echo "FAIL: $label rc=$rc" >&2; cat "$TMP/stderr" >&2; exit 1; }
+  [ $((after - before)) -eq 1 ] || { echo "FAIL: $label expected exactly one new fire-log record, before=$before after=$after" >&2; exit 1; }
   grep -q BLOCKED "$TMP/stderr" || { echo "FAIL: $label had no BLOCKED" >&2; exit 1; }
   echo "PASS: $label"
 }
@@ -79,9 +97,21 @@ expect_blocked() {
 expect_allowed() {
   local label="$1" rc
   shift
+  local before after
+  before=$(fire_count)
   "$@"; rc=$?
+  after=$(fire_count)
   [ "$rc" -eq 0 ] || { echo "FAIL: $label rc=$rc" >&2; cat "$TMP/stderr" >&2; exit 1; }
+  [ $((after - before)) -eq 1 ] || { echo "FAIL: $label expected exactly one new fire-log record, before=$before after=$after" >&2; exit 1; }
   echo "PASS: $label"
+}
+
+fire_count() {
+  if [ -f "$TMP/logs/fire.jsonl" ]; then
+    wc -l < "$TMP/logs/fire.jsonl"
+  else
+    echo 0
+  fi
 }
 
 last_verdict() {
@@ -101,6 +131,8 @@ expect_verdict() {
 
 expect_blocked file-path run_file "$product/file.txt"
 expect_verdict block file-path
+expect_allowed file-path-override run_file_override "$product/file.txt"
+expect_verdict override file-path-override
 expect_blocked bash-redirection run_bash "echo bad > $product/file.txt"
 expect_verdict block bash-redirection
 expect_blocked bash-cd-and-write run_bash "cd $product && echo bad > file.txt"
@@ -123,6 +155,8 @@ expect_blocked bash-relative-working-directory run_bash "echo bad > file.txt" "$
 expect_verdict block bash-relative-working-directory
 expect_allowed legacy-python3-c-outside-root run_bash "python3 -c 'print(1)'" "$ops"
 expect_verdict pass legacy-python3-c-outside-root
+expect_allowed strict-unparseable-input-skip run_raw_payload "not json" 1
+expect_verdict skip strict-unparseable-input-skip
 expect_allowed legacy-bash-c-outside-root run_bash "bash -c 'echo ok'" "$ops"
 expect_verdict pass legacy-bash-c-outside-root
 expect_blocked legacy-python3-root-token-non-c-arg run_bash "python3 $product_real/probe.py" "$ops"
@@ -147,30 +181,46 @@ expect_verdict pass measured-read-only
 expect_blocked strict-unmeasured-read-only run_bash_strict "cat" "$product"
 expect_verdict block strict-unmeasured-read-only
 expect_blocked strict-write-capable-argument run_bash_strict "find . -exec touch file.txt \\;" "$product"
+expect_verdict block strict-write-capable-argument
 expect_allowed strict-read-search-flag run_bash_strict "rg -i needle" "$product"
 expect_verdict pass strict-read-search-flag
 printf 'git apply\ngit checkout\ngit reset\ngit stash\ngit worktree\n' >>"$TMP/allowlist.txt"
 expect_allowed strict-allowlisted-git-apply-check run_bash_strict "git -C $product apply --check patch.diff"
 expect_verdict pass strict-allowlisted-git-apply-check
 expect_blocked strict-apply-double-dash-check-bypass run_bash_strict "git -C $product apply -- --check"
+expect_verdict block strict-apply-double-dash-check-bypass
 expect_allowed strict-allowlisted-git-worktree-list run_bash_strict "git -C $product worktree list"
 expect_verdict pass strict-allowlisted-git-worktree-list
 expect_blocked strict-stash-message-list-bypass run_bash_strict "git -C $product stash --message list"
+expect_verdict block strict-stash-message-list-bypass
 expect_blocked strict-stash-show-output-flag run_bash_strict "git -C $product stash show --output result.patch"
+expect_verdict block strict-stash-show-output-flag
 expect_blocked strict-stash-show-output-equals run_bash_strict "git -C $product stash show --output=result.patch"
+expect_verdict block strict-stash-show-output-equals
 expect_blocked strict-git-dir-product-metadata-bypass run_bash_strict "git --git-dir=$product/.git --work-tree=$ops checkout -- ."
+expect_verdict block strict-git-dir-product-metadata-bypass
 expect_blocked git-remote-mutation run_bash "git -C $product remote set-url origin https://example.invalid/repo"
+expect_verdict block git-remote-mutation
 expect_blocked git-diff-output run_bash "git -C $product diff --output=result.txt"
+expect_verdict block git-diff-output
 expect_blocked strict-git-reset-hard run_bash_strict "git -C $product reset --hard"
+expect_verdict block strict-git-reset-hard
 expect_blocked sed-relative-product-target run_bash "sed -i $product/file.txt"
+expect_verdict block sed-relative-product-target
 expect_allowed git-remote-show-argument run_bash "git -C $product remote show add"
+expect_verdict pass git-remote-show-argument
 expect_blocked find-exec-shell-wrapper run_bash "find . -exec sh -c 'touch $product/nested.txt' \\;" "$ops"
+expect_verdict block find-exec-shell-wrapper
 expect_blocked git-remote-verbose-update run_bash "git -C $product remote -v update"
+expect_verdict block git-remote-verbose-update
 expect_blocked git-diff-output-equals run_bash "git -C $ops diff --output=$product/result.txt"
+expect_verdict block git-diff-output-equals
 expect_allowed event-log-failure-does-not-block run_bash_event_failure "ls" "$product"
 expect_verdict pass event-log-failure-does-not-block
 expect_blocked git-add run_bash "git -C $product add file.txt"
+expect_verdict block git-add
 expect_blocked git-work-tree run_bash "git --git-dir=$TMP/repo.git --work-tree=$product add file.txt"
+expect_verdict block git-work-tree
 expect_allowed cp-source-in-product-destination-outside run_bash "cp $product/source.txt $ops/out.txt" "$ops"
 expect_verdict pass cp-source-in-product-destination-outside
 expect_blocked install-flagged-destination-in-product run_bash "install -b $ops/source.txt $product/out.txt" "$ops"

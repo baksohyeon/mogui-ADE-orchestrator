@@ -189,6 +189,10 @@ if needle not in source:
     raise SystemExit("mutant patch anchor not found")
 pathlib.Path(sys.argv[2]).write_text(source.replace(needle, replacement, 1), encoding="utf-8")
 PY
+if [ ! -f "$MUTANT_HOOK" ] || cmp -s "$HOOK" "$MUTANT_HOOK"; then
+  echo "FAIL: mutant not generated" >&2
+  exit 1
+fi
 chmod +x "$MUTANT_HOOK"
 
 (

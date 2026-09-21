@@ -122,6 +122,10 @@ import sys
 s = open(sys.argv[1]).read()
 sys.stdout.write(s.replace('VERDICT="warn"', 'VERDICT="pass"', 1))
 PY
+if [ ! -f "$T/trim.mut.sh" ] || cmp -s "$TRIM" "$T/trim.mut.sh"; then
+  echo "FAIL: mutant not generated" >&2
+  exit 1
+fi
 chmod +x "$T/trim.mut.sh"
 printf '{"tool_input":{"command":"git diff"}}' | MOGUI_HOOK_FIRE_LOG="$LOG" bash "$T/trim.mut.sh" >/dev/null 2>&1
 assert_warn_expectation_fails() {

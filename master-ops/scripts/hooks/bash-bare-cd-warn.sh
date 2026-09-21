@@ -2,33 +2,20 @@
 # PreToolUse(Bash) hook: warn when command starts with bare `cd`.
 # This hook is warning-only and never blocks execution.
 
+VERDICT="pass"
+FIRE_LOG="${MOGUI_HOOK_FIRE_LOG:-${HOME:-$(cd ~ && pwd)}/.mogui/hook-fire-log.jsonl}"
 log_fire() {
-  local fire_log="${MOGUI_HOOK_FIRE_LOG:-$HOME/.mogui/hook-fire-log.jsonl}"
-  mkdir -p "$(dirname "$fire_log")" 2>/dev/null || return 0
+  mkdir -p "$(dirname "$FIRE_LOG")" 2>/dev/null || return 0
   local session_kind="unknown"
   if [ -n "${ORCA_TASK_ID:-}" ] || [ -n "${ORCA_DISPATCH_ID:-}" ] || [[ "$PWD" == *".orca/worktrees"* ]]; then
     session_kind="worker"
   elif [ -f "$PWD/docs/MASTER-OPERATIONS.md" ]; then
     session_kind="master"
   fi
-  python3 - "bash-bare-cd-warn" "PreToolUse(Bash)" "$PWD" "${MOGUI_RUNTIME_HINT:-unknown}" "$session_kind" <<'PY' >> "$fire_log" 2>/dev/null || true
-import json
-import sys
-import time
-
-_, hook, event, cwd, runtime_hint, session_kind = sys.argv
-print(json.dumps({
-    "ts": int(time.time()),
-    "hook": hook,
-    "event": event,
-    "cwd": cwd,
-    "runtime_hint": runtime_hint,
-    "session_kind": session_kind,
-}, separators=(",", ":")))
-PY
+  printf '{"ts":%d,"hook":"bash-bare-cd-warn","event":"PreToolUse(Bash)","cwd":"%s","runtime_hint":"%s","session_kind":"%s","verdict":"%s"}\n' \
+    "$(date +%s)" "$PWD" "${MOGUI_RUNTIME_HINT:-unknown}" "$session_kind" "$VERDICT" >> "$FIRE_LOG" 2>/dev/null || true
 }
-
-log_fire
+trap log_fire EXIT
 
 INPUT=$(cat)
 WARN=$(
@@ -42,7 +29,7 @@ try:
     raw = payload.get("tool_input", {}).get("command", "")
 except (ValueError, AttributeError, TypeError):
     # ValueError includes JSONDecodeError; all malformed/shape inputs should stay silent.
-    print("0")
+    print("skip")
     raise SystemExit(0)
 
 # Some runtimes may encode command as a list of lines.
@@ -54,7 +41,7 @@ else:
     command = str(raw or "")
 
 if not command.strip():
-    print("0")
+    print("pass")
     raise SystemExit(0)
 
 try:
@@ -63,7 +50,7 @@ try:
     tokens = list(lexer)
 except Exception:
     # Parsing failures should never block or warn.
-    print("0")
+    print("skip")
     raise SystemExit(0)
 
 first = ""
@@ -73,12 +60,15 @@ for token in tokens:
         break
 
 # Subshell-wrapped calls begin with "("; only bare first-token cd should warn.
-print("1" if first == "cd" else "0")
+print("warn" if first == "cd" else "pass")
 '
 )
 
-if [ "$WARN" = "1" ]; then
+if [ "$WARN" = "warn" ]; then
+  VERDICT="warn"
   echo "[bash-bare-cd-warn] first token is bare cd; shell state persists between Bash calls, use git -C/gh --repo/absolute paths." >&2
+elif [ "$WARN" = "skip" ]; then
+  VERDICT="skip"
 fi
 
 exit 0

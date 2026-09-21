@@ -2,36 +2,26 @@
 # PreToolUse(Bash) hook: detect hand-rolled poll loops and warn
 # Detects while+sleep, chained sleep patterns, and loop state checks.
 
+VERDICT="pass"
+FIRE_LOG="${MOGUI_HOOK_FIRE_LOG:-${HOME:-$(cd ~ && pwd)}/.mogui/hook-fire-log.jsonl}"
 log_fire() {
-  local fire_log="${MOGUI_HOOK_FIRE_LOG:-$HOME/.mogui/hook-fire-log.jsonl}"
-  mkdir -p "$(dirname "$fire_log")" 2>/dev/null || return 0
+  mkdir -p "$(dirname "$FIRE_LOG")" 2>/dev/null || return 0
   local session_kind="unknown"
   if [ -n "$ORCA_TASK_ID" ] || [ -n "$ORCA_DISPATCH_ID" ] || [[ "$PWD" == *".orca/worktrees"* ]]; then
     session_kind="worker"
   elif [ -f "$PWD/docs/MASTER-OPERATIONS.md" ]; then
     session_kind="master"
   fi
-  python3 - "bash-poll-warn" "PreToolUse(Bash)" "$PWD" "${MOGUI_RUNTIME_HINT:-unknown}" "$session_kind" <<'PY' >> "$fire_log" 2>/dev/null || true
-import json
-import sys
-import time
-
-_, hook, event, cwd, runtime_hint, session_kind = sys.argv
-print(json.dumps({
-    "ts": int(time.time()),
-    "hook": hook,
-    "event": event,
-    "cwd": cwd,
-    "runtime_hint": runtime_hint,
-    "session_kind": session_kind,
-}, separators=(",", ":")))
-PY
+  printf '{"ts":%d,"hook":"bash-poll-warn","event":"PreToolUse(Bash)","cwd":"%s","runtime_hint":"%s","session_kind":"%s","verdict":"%s"}\n' \
+    "$(date +%s)" "$PWD" "${MOGUI_RUNTIME_HINT:-unknown}" "$session_kind" "$VERDICT" >> "$FIRE_LOG" 2>/dev/null || true
 }
-
-log_fire
+trap log_fire EXIT
 
 INPUT=$(cat)
-CMD=$(printf '%s' "$INPUT" | python3 -c "import json,sys; print(json.load(sys.stdin).get('tool_input',{}).get('command',''))" 2>/dev/null)
+if ! CMD=$(printf '%s' "$INPUT" | python3 -c "import json,sys; print(json.load(sys.stdin).get('tool_input',{}).get('command',''))" 2>/dev/null); then
+  VERDICT="skip"
+  exit 0
+fi
 
 # Detect hand-rolled poll patterns:
 # 1. while true combined with sleep
@@ -58,6 +48,7 @@ if [[ "$CMD" =~ while ]]; then
 fi
 
 if [[ $POLL_DETECTED -eq 1 ]]; then
+  VERDICT="warn"
   echo "[bash-poll-warn] hand-rolled poll loop detected - event waits use scripts/orca-wait (charter section 4)"
 fi
 

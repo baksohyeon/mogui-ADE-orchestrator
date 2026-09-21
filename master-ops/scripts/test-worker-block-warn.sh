@@ -49,9 +49,19 @@ cat > "$T/orca" <<'FAKE'
 FAKE
 chmod +x "$T/orca"
 run_hook() { FAKE_LISTING="$1" MOGUI_HOOK_FIRE_LOG="$T/fire.jsonl" ORCA_TERMINAL_HANDLE="" PATH="$T:$PATH" bash "$2" UserPromptSubmit 2>&1; }
+last_verdict() {
+  python3 - "$T/fire.jsonl" <<'PY'
+import json, sys
+lines = [ln.strip() for ln in open(sys.argv[1], encoding="utf-8") if ln.strip()]
+print(json.loads(lines[-1]).get("verdict", ""))
+PY
+}
 out=$(run_hook "term_aaaaaaaa  worker  $CODEX_MODAL" "$HOOK"); printf '%s' "$out" | grep -q 'approval=1' && ok "hook end to end: modal listing warns approval=1" || fail "hook end to end: modal listing gave: $out"
+v=$(last_verdict 2>/dev/null || true); [ "$v" = "warn" ] && ok "hook verdict: modal listing -> warn" || fail "hook verdict: modal listing expected warn got ${v:-<none>}"
 out=$(run_hook "term_aaaaaaaa  worker  ❯ " "$HOOK"); [ -z "$out" ] && ok "hook end to end: idle listing stays silent" || fail "hook end to end: idle listing printed: $out"
+v=$(last_verdict 2>/dev/null || true); [ "$v" = "pass" ] && ok "hook verdict: idle listing -> pass" || fail "hook verdict: idle listing expected pass got ${v:-<none>}"
 mkdir -p "$T/nofile/hooks"; cp "$HOOK" "$T/nofile/hooks/"
 out=$(run_hook "term_aaaaaaaa  worker  $CODEX_MODAL" "$T/nofile/hooks/worker-block-warn.sh"); printf '%s' "$out" | grep -q 'approval marker file unreadable or empty' && ok "hook end to end: missing marker file is reported" || fail "hook end to end: missing file gave: $out"
+v=$(last_verdict 2>/dev/null || true); [ "$v" = "skip" ] && ok "hook verdict: missing marker file -> skip" || fail "hook verdict: missing marker expected skip got ${v:-<none>}"
 
 [ "$FAILED" -eq 0 ] && echo "worker-block-warn: all checks passed" || { echo "worker-block-warn: FAILED"; exit 1; }

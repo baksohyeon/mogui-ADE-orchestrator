@@ -7,6 +7,7 @@
 # Legacy mode admits opaque interpreter -c commands outside product root, while fail-closed mode denies unallowlisted interpreter commands regardless of cwd.
 set -u
 
+VERDICT="pass"
 if [ -n "${MOGUI_INSTANCE_RUNTIME_CONFIG:-}" ]; then
   INSTANCE_RUNTIME_CONFIG="$MOGUI_INSTANCE_RUNTIME_CONFIG"
 else
@@ -46,7 +47,7 @@ PY
 
 record_fire() {
   mkdir -p "$(dirname "$FIRE_LOG")"
-  python3 - "$FIRE_LOG" <<'PY' 2>/dev/null || true
+  VERDICT="$VERDICT" python3 - "$FIRE_LOG" <<'PY' 2>/dev/null || true
 import json, os, sys, time
 path = sys.argv[1]
 record = {
@@ -56,6 +57,7 @@ record = {
     "cwd": os.getcwd(),
     "runtime_hint": os.environ.get("MOGUI_RUNTIME_HINT", "unknown"),
     "session_kind": "worker" if (os.environ.get("ORCA_TASK_ID") or os.environ.get("ORCA_DISPATCH_ID") or ".orca/worktrees" in os.getcwd()) else "unknown",
+    "verdict": os.environ.get("VERDICT", "pass"),
 }
 with open(path, "a", encoding="utf-8") as fh:
     fh.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -64,9 +66,10 @@ PY
 
 # Preserve the legacy hook-fire schema and coverage signal; decision details go
 # exclusively to event-log.jsonl through mg_emit.
-record_fire
+trap record_fire EXIT
 
 if [[ "$INSTANCE_RUNTIME_CONFIG" == *"{{RUNTIME_ROOT}}"* ]]; then
+  VERDICT="block"
   echo "[product-path-guard] BLOCKED: unsubstituted {{RUNTIME_ROOT}} token in INSTANCE_RUNTIME_CONFIG; set MOGUI_INSTANCE_RUNTIME_CONFIG to a real runtime config path" >&2
   exit 2
 fi
@@ -99,6 +102,7 @@ PY
 
 blocked() {
   local reason="$1" command_class="${2:-}" reason_code="${3:-guarded_target}"
+  VERDICT="block"
   if [ "$command_class" = "file-tool" ] || [ "$command_class" = "file_tool" ]; then
     mg_emit error product_path_guard finding "$reason_code" "$command_class" guarded file
   else
@@ -116,6 +120,7 @@ if [ -n "$file_path" ]; then
   target=$(python3 -c 'import os,sys; print(os.path.realpath(os.path.expanduser(sys.argv[1])))' "$file_path") || blocked "cannot resolve file target" ""
   [ "$(is_under "$repo" "$target")" = yes ] || { mg_emit info product_path_guard pass file_tool file_tool outside file; exit 0; }
   if [ "${MOGUI_INLINE_EDIT_OVERRIDE:-0}" = 1 ]; then
+    VERDICT="override"
     mg_emit notice product_path_guard pass override file_tool guarded file
     exit 0
   fi

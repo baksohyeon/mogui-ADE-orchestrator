@@ -2,15 +2,17 @@
 # UserPromptSubmit/SessionStart: inject role state + execution rule.
 # Exists to counter host-injected autonomy defaults (MASTER-OPERATIONS §7/§8, owner-approved 2026-08-03).
 
+VERDICT="pass"
+FIRE_LOG="${MOGUI_HOOK_FIRE_LOG:-${HOME:-$(cd ~ && pwd)}/.mogui/hook-fire-log.jsonl}"
 log_fire() {
-  mkdir -p ~/.mogui
+  mkdir -p "$(dirname "$FIRE_LOG")" 2>/dev/null || true
   local event="$1"
   local session_kind="unknown"
   if [ -n "$ORCA_TASK_ID" ] || [ -n "$ORCA_DISPATCH_ID" ] || [[ "$PWD" == *".orca/worktrees"* ]]; then
     session_kind="worker"
   fi
-  printf '{"ts":%d,"hook":"role-state-inject","event":"%s","cwd":"%s","runtime_hint":"%s","session_kind":"%s"}\n' \
-    "$(date +%s)" "$event" "$PWD" "${MOGUI_RUNTIME_HINT:-unknown}" "$session_kind" >> ~/.mogui/hook-fire-log.jsonl 2>/dev/null || true
+  printf '{"ts":%d,"hook":"role-state-inject","event":"%s","cwd":"%s","runtime_hint":"%s","session_kind":"%s","verdict":"%s"}\n' \
+    "$(date +%s)" "$event" "$PWD" "${MOGUI_RUNTIME_HINT:-unknown}" "$session_kind" "$VERDICT" >> "$FIRE_LOG" 2>/dev/null || true
 }
 
 # Detect hook event from stdin or environment
@@ -19,7 +21,7 @@ if [ -z "$1" ] && [[ "$0" == *"SessionStart"* ]]; then
   hook_event="SessionStart"
 fi
 
-log_fire "$hook_event"
+trap 'log_fire "$hook_event"' EXIT
 
 RS={{OPS_REPO}}/docs/runbooks/role-state.md
 if [ -r "$RS" ]; then
@@ -27,5 +29,6 @@ if [ -r "$RS" ]; then
   lock=$(grep -m1 '^Role Lock:' "$RS")
   echo "[role-state] ${role:-Current Role: UNKNOWN} | ${lock:-Role Lock: UNKNOWN} | Execution rule: Proposal -> Approval -> Execution. Product-repo implementation goes to dispatched workers, never inline."
 else
+  VERDICT="warn"
   echo "[role-state] WARNING: role-state.md unreadable at $RS — declare Role State before proceeding."
 fi

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The fire-log (`~/.mogui/hook-fire-log.jsonl`) records when ops hooks run, where they ran, and what runtime invoked them. It answers: **Which hooks actually fire in live operation?** across runtimes (Claude, Codex, Cursor, Grok, Antigravity/Gemini) and session kinds (master, dispatched worker). Product-path decisions (`command_class`, `target_scope`, `outcome`, and `reason`) are written to the separate `event-log.jsonl`.
+The fire-log (`~/.mogui/hook-fire-log.jsonl`) records when ops hooks run, where they ran, what runtime invoked them, and the hook verdict. It answers: **Which hooks actually fire in live operation?** across runtimes (Claude, Codex, Cursor, Grok, Antigravity/Gemini) and session kinds (master, dispatched worker). Product-path decisions (`command_class`, `target_scope`, `outcome`, and `reason`) are written to the separate `event-log.jsonl`.
 
 ## Design Decision
 
@@ -14,11 +14,11 @@ Observational fire-log first; active canaries later and only for hooks that neve
 - How often?
 - In what runtimes and session kinds?
 - When was the last invocation?
+- What verdict the hook reached (`pass`, `warn`, `block`, `skip`, `override`)
 
 ## What the Log Cannot Answer
 
 - A wired-but-broken hook (e.g., script exits early, condition never true) and a not-wired hook **both show zero fire-log entries**. Distinguishing them requires an active canary (deliberately deferred).
-- Whether a hook's decision logic ran correctly (the log records only that the hook was invoked, not its outcome).
 - The product-path guard's Bash rejection rate is unavailable until command-class observations exist; use `scripts/measure-product-path-guard.sh` and report `N/A (0/0; no command observations)` when none exist.
 
 ## Fire-Log Schema
@@ -26,7 +26,7 @@ Observational fire-log first; active canaries later and only for hooks that neve
 One JSON line per hook invocation. Example:
 
 ```json
-{"ts": 1722728400, "hook": "role-state-inject", "event": "UserPromptSubmit", "cwd": "{{WORKSPACE_ROOT}}", "runtime_hint": "claude", "session_kind": "master"}
+{"ts": 1722728400, "hook": "role-state-inject", "event": "UserPromptSubmit", "cwd": "{{WORKSPACE_ROOT}}", "runtime_hint": "claude", "session_kind": "master", "verdict": "pass"}
 ```
 
 | Field | Type | Meaning |
@@ -37,12 +37,11 @@ One JSON line per hook invocation. Example:
 | `cwd` | string | Working directory when hook fired |
 | `runtime_hint` | string | Runtime identifier: `claude`, `codex`, `cursor`, `grok`, `antigravity`, or `unknown` |
 | `session_kind` | string | `master` (ops repo root) or `worker` (in `.orca/worktrees`), or `unknown` |
+| `verdict` | string | Hook outcome: `pass`, `warn`, `block`, `skip`, `override` (legacy lines without this field count as `unknown` in reports) |
 
 ## Log Location
 
-```
-${MOGUI_HOOK_FIRE_LOG:-$HOME/.mogui/hook-fire-log.jsonl}
-```
+`~/.mogui/hook-fire-log.jsonl` (or the configured hook fire-log environment override)
 
 Append-only; one line per invocation. Fails open (never blocks or breaks the hook if append fails).
 
@@ -61,7 +60,7 @@ jq '.hook' ~/.mogui/hook-fire-log.jsonl | sort | uniq -c
 scripts/hook-coverage-report
 ```
 
-Prints a matrix of hook by (runtime_hint, session_kind) with last-fired timestamp and count. Lists hooks with zero entries (measurement targets).
+Prints a matrix of hook by (runtime_hint, session_kind) with last-fired timestamp and count, plus per-hook verdict totals. Lists hooks with zero entries (measurement targets).
 
 ### Product-path guard measurement
 
@@ -110,32 +109,16 @@ This line confirms the harness state. If a protection is missing or logged count
 3. Add a `log_fire()` call at the top of the script body:
    ```bash
    log_fire() {
-     local fire_log="${MOGUI_HOOK_FIRE_LOG:-$HOME/.mogui/hook-fire-log.jsonl}"
-     mkdir -p "$(dirname "$fire_log")" 2>/dev/null || return 0
+     mkdir -p ~/.mogui
      local session_kind="unknown"
      if [ -n "$ORCA_TASK_ID" ] || [ -n "$ORCA_DISPATCH_ID" ] || [[ "$PWD" == *".orca/worktrees"* ]]; then
        session_kind="worker"
-     elif [ -f "$PWD/docs/MASTER-OPERATIONS.md" ]; then
-       session_kind="master"
      fi
-     python3 - "<name>" "<event>" "$PWD" "${MOGUI_RUNTIME_HINT:-unknown}" "$session_kind" <<'PY' >> "$fire_log" 2>/dev/null || true
-   import json
-   import sys
-   import time
-
-   _, hook, event, cwd, runtime_hint, session_kind = sys.argv
-   print(json.dumps({
-       "ts": int(time.time()),
-       "hook": hook,
-       "event": event,
-       "cwd": cwd,
-       "runtime_hint": runtime_hint,
-       "session_kind": session_kind,
-   }, separators=(",", ":")))
-   PY
+     printf '{"ts":%d,"hook":"<name>","event":"<event>","cwd":"%s","runtime_hint":"%s","session_kind":"%s","verdict":"%s"}\n' \
+       "$(date +%s)" "$PWD" "${MOGUI_RUNTIME_HINT:-unknown}" "$session_kind" "$VERDICT" >> "${MOGUI_HOOK_FIRE_LOG:-$HOME/.mogui/hook-fire-log.jsonl}" 2>/dev/null || true
    }
    ```
-4. Call `log_fire` at the start of the script body (fail-open: never block if logging fails).
+4. Set `VERDICT=pass` at the top, install `trap log_fire EXIT`, and set `VERDICT` before every early exit that changes the outcome.
 5. Self-test: invoke the hook the way the harness would, then verify the fire-log line appears.
 
 ## Constraints

@@ -42,6 +42,18 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+Seat-ahead promotion, batch 3 template one (2026-09-21):
+
+- `scripts/hooks/orch-inbox-warn.sh`: the `messages` type check now rejects a list containing non-dict
+  elements outright (`__SKIP__`) instead of silently filtering them out before use.
+- `scripts/test-tool-naming.sh`: added a self-test case proving a pattern for the wrong verb
+  (`ctx.zzz`) does not match the known-bad `ctx.sql` line, so the lint's failability is exercised.
+- `scripts/test-measure.sh`: added a mutant case proving `scripts/measure` fails case 2 (silent
+  failure) when its status-line `echo` is stripped out.
+- `model-tier-policy.json`: `tiers.top` now lists `claude-fable-5-1`, not `claude-fable-5`. Owner
+  decision 2026-09-21: two generations of drift audits on two seats measured `claude-fable-5-1` and
+  the old id never appeared in a transcript.
+
 Skill-composition guide (2026-08-25):
 
 - Added `docs/guides/skill-composition.md`, documenting the workspace's adopted skill-layer composition with measured host-skill counts, measured template-shipped skills, the harness discovery path, the routing table source text, and explicit `unmeasured` labeling where checkout-local evidence is unavailable.

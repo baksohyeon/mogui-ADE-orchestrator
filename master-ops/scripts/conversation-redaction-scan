@@ -36,9 +36,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Redaction patterns (from product repo gitleaks config)
+# A '*' immediately before the path marks a glob segment (e.g.
+# codex-accounts/*/home/sessions), not a leaked home directory.
 declare -a PATTERNS=(
-  "home_path:/Users/[A-Za-z0-9._-]+"
-  "home_path:/home/[A-Za-z0-9._-]+"
+  "home_path:(^|[^*])/Users/[A-Za-z0-9._-]+"
+  "home_path:(^|[^*])/home/[A-Za-z0-9._-]+"
 )
 
 # Check if gh is available
@@ -138,10 +140,10 @@ done <<< "$ISSUE_JSON"
 
 # Output summary
 if [[ -n "$FINDINGS" ]]; then
-  echo "conversation-redaction-scan: FAIL — ${REPO} scanned ${COUNT} PRs (limit: ${LIMIT}), violations found:"
+  echo "conversation-redaction-scan: FAIL — ${REPO} scanned ${COUNT} items (PRs+issues, limit: ${LIMIT} each), violations found:"
   printf '%s\n' "$FINDINGS"
   exit 1
 else
-  echo "conversation-redaction-scan: OK — ${REPO} scanned ${COUNT} PRs (limit: ${LIMIT}), 0 findings"
+  echo "conversation-redaction-scan: OK — ${REPO} scanned ${COUNT} items (PRs+issues, limit: ${LIMIT} each), 0 findings"
   exit 0
 fi

@@ -78,7 +78,9 @@ PY
 run_raw_payload() {
   local payload="$1"
   local fail_closed="${2:-0}"
-  printf '%s' "$payload" | HOME="$TMP/home" MOGUI_INLINE_EDIT_OVERRIDE=0 MOGUI_PRODUCT_GUARD_FAIL_CLOSED="$fail_closed" MOGUI_EVENT_LOG="$TMP/home/.mogui/event-log.jsonl" MOGUI_INSTANCE_RUNTIME_CONFIG="$TMP/runtime.json" MOGUI_HOOK_FIRE_LOG="$TMP/logs/fire.jsonl" "$HOOK" >/dev/null 2>"$TMP/stderr"
+  local config="${3:-$TMP/runtime.json}"
+  local hook="${4:-$HOOK}"
+  printf '%s' "$payload" | HOME="$TMP/home" MOGUI_INLINE_EDIT_OVERRIDE=0 MOGUI_PRODUCT_GUARD_FAIL_CLOSED="$fail_closed" MOGUI_EVENT_LOG="$TMP/home/.mogui/event-log.jsonl" MOGUI_INSTANCE_RUNTIME_CONFIG="$config" MOGUI_HOOK_FIRE_LOG="$TMP/logs/fire.jsonl" "$hook" >/dev/null 2>"$TMP/stderr"
 }
 
 expect_blocked() {
@@ -129,6 +131,14 @@ expect_verdict() {
   echo "PASS: $label verdict=$expected"
 }
 
+expect_invalid_input_blocked() {
+  local label="$1"
+  shift
+  expect_blocked "$label" "$@"
+  grep -q "invalid hook input" "$TMP/stderr" || { echo "FAIL: $label missing invalid hook input message" >&2; cat "$TMP/stderr" >&2; exit 1; }
+  expect_verdict block "$label"
+}
+
 expect_blocked file-path run_file "$product/file.txt"
 expect_verdict block file-path
 expect_allowed file-path-override run_file_override "$product/file.txt"
@@ -157,6 +167,43 @@ expect_allowed legacy-python3-c-outside-root run_bash "python3 -c 'print(1)'" "$
 expect_verdict pass legacy-python3-c-outside-root
 expect_blocked strict-unparseable-input-block run_raw_payload "not json" 1
 expect_verdict block strict-unparseable-input-block
+expect_invalid_input_blocked strict-json-array-input-block run_raw_payload "[]" 1
+expect_invalid_input_blocked strict-json-string-input-block run_raw_payload '"str"' 1
+expect_invalid_input_blocked strict-json-null-input-block run_raw_payload "null" 1
+expect_invalid_input_blocked strict-tool-input-null-block run_raw_payload '{"tool_input": null}' 1
+
+MUTANT_HOOK="$TMP/product-path-guard-mutant.sh"
+python3 - "$HOOK" "$MUTANT_HOOK" <<'PY'
+import pathlib, sys
+source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+needle = (
+    "if ! printf '%s' \"$input\" | python3 -c 'import json,sys; "
+    "payload=json.load(sys.stdin); tool=payload.get(\"tool_input\") if isinstance(payload, dict) else None; "
+    "raise SystemExit(0 if isinstance(payload, dict) and isinstance(tool, dict) else 1)' >/dev/null 2>&1; then"
+)
+replacement = (
+    "if ! printf '%s' \"$input\" | python3 -c 'import json,sys; json.load(sys.stdin); "
+    "raise SystemExit(0)' >/dev/null 2>&1; then"
+)
+if needle not in source:
+    raise SystemExit("mutant patch anchor not found")
+pathlib.Path(sys.argv[2]).write_text(source.replace(needle, replacement, 1), encoding="utf-8")
+PY
+chmod +x "$MUTANT_HOOK"
+
+(
+  expect_invalid_input_blocked failability-invalid-shape-load-order run_raw_payload "[]" 1 "$TMP/missing.json" "$MUTANT_HOOK"
+)
+mutant_exit=$?
+(
+  expect_invalid_input_blocked failability-invalid-shape-load-order run_raw_payload "[]" 1 "$TMP/missing.json" "$HOOK"
+)
+restored_exit=$?
+[ "$mutant_exit" -eq 1 ] || { echo "FAIL: failability mutant exit expected 1 got $mutant_exit" >&2; exit 1; }
+[ "$restored_exit" -eq 0 ] || { echo "FAIL: failability restored exit expected 0 got $restored_exit" >&2; exit 1; }
+echo "PASS: failability mutant exit code $mutant_exit"
+echo "PASS: failability restored exit code $restored_exit"
+
 expect_allowed legacy-bash-c-outside-root run_bash "bash -c 'echo ok'" "$ops"
 expect_verdict pass legacy-bash-c-outside-root
 expect_blocked legacy-python3-root-token-non-c-arg run_bash "python3 $product_real/probe.py" "$ops"

@@ -42,6 +42,10 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+Conversation-redaction-scan glob false positive (2026-09-22):
+
+- `master-ops/scripts/conversation-redaction-scan` no longer flags `/Users/` or `/home/` segments immediately preceded by a glob `*` (for example `codex-accounts/*/home/sessions`) as leaked home directories; real leaks still match. The summary line now labels the scanned total as items (PRs+issues) instead of calling the combined count PRs.
+
 Seat-ahead promotion, batch 3 template three (2026-09-22):
 
 - `scripts/test-spawn-test.sh`: added the failability block proving a `spawn-test` mutant whose

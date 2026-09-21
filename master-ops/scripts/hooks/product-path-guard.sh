@@ -7,6 +7,7 @@
 # Legacy mode admits opaque interpreter -c commands outside product root, while fail-closed mode denies unallowlisted interpreter commands regardless of cwd.
 set -u
 
+VERDICT="pass"
 if [ -n "${MOGUI_INSTANCE_RUNTIME_CONFIG:-}" ]; then
   INSTANCE_RUNTIME_CONFIG="$MOGUI_INSTANCE_RUNTIME_CONFIG"
 else
@@ -14,7 +15,7 @@ else
 fi
 HOOK_DIR=$(cd "$(dirname "$0")" && pwd)
 ALLOWLIST="${MOGUI_PRODUCT_GUARD_ALLOWLIST:-$HOOK_DIR/product-path-guard-readonly-allowlist.txt}"
-FIRE_LOG="${MOGUI_HOOK_FIRE_LOG:-$HOME/.mogui/hook-fire-log.jsonl}"
+FIRE_LOG="${MOGUI_HOOK_FIRE_LOG:-${HOME:-$(cd ~ && pwd)}/.mogui/hook-fire-log.jsonl}"
 FAIL_CLOSED="${MOGUI_PRODUCT_GUARD_FAIL_CLOSED:-0}"
 
 mg_emit() {
@@ -46,7 +47,7 @@ PY
 
 record_fire() {
   mkdir -p "$(dirname "$FIRE_LOG")"
-  python3 - "$FIRE_LOG" <<'PY' 2>/dev/null || true
+  VERDICT="$VERDICT" python3 - "$FIRE_LOG" <<'PY' 2>/dev/null || true
 import json, os, sys, time
 path = sys.argv[1]
 record = {
@@ -55,7 +56,14 @@ record = {
     "event": "PreToolUse",
     "cwd": os.getcwd(),
     "runtime_hint": os.environ.get("MOGUI_RUNTIME_HINT", "unknown"),
-    "session_kind": "worker" if (os.environ.get("ORCA_TASK_ID") or os.environ.get("ORCA_DISPATCH_ID") or ".orca/worktrees" in os.getcwd()) else "unknown",
+    "session_kind": (
+        "worker"
+        if (os.environ.get("ORCA_TASK_ID") or os.environ.get("ORCA_DISPATCH_ID") or ".orca/worktrees" in os.getcwd())
+        else (
+            "master" if os.path.exists(os.path.join(os.getcwd(), "docs", "MASTER-OPERATIONS.md")) else "unknown"
+        )
+    ),
+    "verdict": os.environ.get("VERDICT", "pass"),
 }
 with open(path, "a", encoding="utf-8") as fh:
     fh.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -64,9 +72,10 @@ PY
 
 # Preserve the legacy hook-fire schema and coverage signal; decision details go
 # exclusively to event-log.jsonl through mg_emit.
-record_fire
+trap record_fire EXIT
 
 if [[ "$INSTANCE_RUNTIME_CONFIG" == *"{{RUNTIME_ROOT}}"* ]]; then
+  VERDICT="block"
   echo "[product-path-guard] BLOCKED: unsubstituted {{RUNTIME_ROOT}} token in INSTANCE_RUNTIME_CONFIG; set MOGUI_INSTANCE_RUNTIME_CONFIG to a real runtime config path" >&2
   exit 2
 fi
@@ -99,6 +108,7 @@ PY
 
 blocked() {
   local reason="$1" command_class="${2:-}" reason_code="${3:-guarded_target}"
+  VERDICT="block"
   if [ "$command_class" = "file-tool" ] || [ "$command_class" = "file_tool" ]; then
     mg_emit error product_path_guard finding "$reason_code" "$command_class" guarded file
   else
@@ -109,20 +119,24 @@ blocked() {
 }
 
 input=$(cat)
+if ! printf '%s' "$input" | python3 -c 'import json,sys; payload=json.load(sys.stdin); tool=payload.get("tool_input") if isinstance(payload, dict) else None; raise SystemExit(0 if isinstance(payload, dict) and isinstance(tool, dict) else 1)' >/dev/null 2>&1; then
+  blocked "invalid hook input" ""
+fi
 repo=$(load_product_repo 2>/dev/null) || blocked "cannot load product_repo from $INSTANCE_RUNTIME_CONFIG" ""
 
-file_path=$(printf '%s' "$input" | python3 -c 'import json,sys; d=json.load(sys.stdin); t=d.get("tool_input",{}); print(t.get("file_path") or t.get("notebook_path") or "")' 2>/dev/null) || blocked "invalid hook input" ""
+file_path=$(printf '%s' "$input" | python3 -c 'import json,sys; tool=json.load(sys.stdin)["tool_input"]; print(tool.get("file_path") or tool.get("notebook_path") or "")' 2>/dev/null) || blocked "invalid hook input" ""
 if [ -n "$file_path" ]; then
   target=$(python3 -c 'import os,sys; print(os.path.realpath(os.path.expanduser(sys.argv[1])))' "$file_path") || blocked "cannot resolve file target" ""
   [ "$(is_under "$repo" "$target")" = yes ] || { mg_emit info product_path_guard pass file_tool file_tool outside file; exit 0; }
   if [ "${MOGUI_INLINE_EDIT_OVERRIDE:-0}" = 1 ]; then
+    VERDICT="override"
     mg_emit notice product_path_guard pass override file_tool guarded file
     exit 0
   fi
   blocked "$target is product-repo territory; dispatch product writes through a contract" "file-tool" guarded_target
 fi
 
-command=$(printf '%s' "$input" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("tool_input",{}).get("command", ""))' 2>/dev/null) || blocked "invalid hook input" ""
+command=$(printf '%s' "$input" | python3 -c 'import json,sys; print(json.load(sys.stdin)["tool_input"].get("command", ""))' 2>/dev/null) || blocked "invalid hook input" ""
 [ -n "$command" ] || { mg_emit info product_path_guard pass empty_command; exit 0; }
 
 result=$(PRODUCT_ROOT="$repo" ALLOWLIST="$ALLOWLIST" FAIL_CLOSED="$FAIL_CLOSED" python3 -c '

@@ -2,28 +2,47 @@
 # SessionStart: warn when the tracker does not resolve to the ops repository from the
 # workspace root (MASTER-OPERATIONS §7 — this failure is otherwise silent).
 
-log_fire() {
-  mkdir -p ~/.mogui
-  local session_kind="unknown"
-  if [ -n "$ORCA_TASK_ID" ] || [ -n "$ORCA_DISPATCH_ID" ] || [[ "$PWD" == *".orca/worktrees"* ]]; then
-    session_kind="worker"
-  fi
-  printf '{"ts":%d,"hook":"tracker-check","event":"SessionStart","cwd":"%s","runtime_hint":"%s","session_kind":"%s"}\n' \
-    "$(date +%s)" "$PWD" "${MOGUI_RUNTIME_HINT:-unknown}" "$session_kind" >> ~/.mogui/hook-fire-log.jsonl 2>/dev/null || true
+VERDICT="pass"
+FIRE_LOG="${MOGUI_HOOK_FIRE_LOG:-${HOME:-$(cd ~ && pwd)}/.mogui/hook-fire-log.jsonl}"
+HOOK_CWD="$PWD"
+if [[ "$FIRE_LOG" != /* ]]; then
+  FIRE_LOG="$HOOK_CWD/$FIRE_LOG"
+fi
+json_str() {
+  local value="${1-}"
+  value=${value//\\/\\\\}
+  value=${value//\"/\\\"}
+  value=$(printf '%s' "$value" | tr -d '\000-\037\177')
+  printf '%s' "$value"
 }
-
-log_fire
+derive_session_kind() {
+  if [ -n "${ORCA_TASK_ID:-}" ] || [ -n "${ORCA_DISPATCH_ID:-}" ] || [[ "$HOOK_CWD" == *".orca/worktrees"* ]]; then
+    printf 'worker'
+  elif [ -f "$HOOK_CWD/docs/MASTER-OPERATIONS.md" ]; then
+    printf 'master'
+  else
+    printf 'unknown'
+  fi
+}
+HOOK_SESSION_KIND="$(derive_session_kind)"
+log_fire() {
+  mkdir -p "$(dirname "$FIRE_LOG")" 2>/dev/null || true
+  printf '{"ts":%d,"hook":"tracker-check","event":"SessionStart","cwd":"%s","runtime_hint":"%s","session_kind":"%s","verdict":"%s"}\n' \
+    "$(date +%s)" "$(json_str "$HOOK_CWD")" "$(json_str "${MOGUI_RUNTIME_HINT:-unknown}")" "$(json_str "$HOOK_SESSION_KIND")" "$(json_str "$VERDICT")" >> "$FIRE_LOG" 2>/dev/null || true
+}
+trap log_fire EXIT
 
 # WORKSPACE_ROOT lets a test point the hook at a scratch tree; the install path is the default.
 ROOT_DEFAULT='{{WORKSPACE_ROOT}}'
-cd "${WORKSPACE_ROOT:-$ROOT_DEFAULT}" || exit 0
+cd "${WORKSPACE_ROOT:-$ROOT_DEFAULT}" || { VERDICT="skip"; exit 0; }
 OPS_BASENAME="$(basename "{{OPS_REPO}}")"
 out=$(bd where 2>&1)
 case "$out" in
   *"$OPS_BASENAME"/.beads*) echo "[tracker] bd resolves to $OPS_BASENAME/.beads (OK)" ;;
-  *) echo "[tracker] WARNING: bd where did not resolve to the ops repository from the workspace root. First line: $(printf '%s' "$out" | head -1)" ;;
+  *) VERDICT="warn"; echo "[tracker] WARNING: bd where did not resolve to the ops repository from the workspace root. First line: $(printf '%s' "$out" | head -1)" ;;
 esac
 if [ -n "$BEADS_DIR" ] && [ "$BEADS_DIR" != "{{OPS_REPO}}/.beads" ]; then
+  VERDICT="warn"
   echo "[tracker] WARNING: BEADS_DIR points outside the workspace ops repo: $BEADS_DIR"
 fi
 
@@ -51,4 +70,5 @@ for f in "$HOOKS_DIR"/*.sh; do
   # A hook counts as wired only when a command names it as a path token: /<name> followed by a quote, a space, or the end.
   if printf '%s\n' "$wired_blob" | grep -qE "/$(printf '%s' "$n" | sed 's/\./\\./g')([\"' ]|\$)"; then active="$active ${n%.sh}"; else unwired="$unwired ${n%.sh}"; fi
 done
+[ -n "$unwired" ] && VERDICT="warn"
 echo "[protections] wired:${active:- none} (overrides logged: ${supp:-0}, ops-policy decisions: ${decisions:-0})${unwired:+ | NOT WIRED:$unwired}"

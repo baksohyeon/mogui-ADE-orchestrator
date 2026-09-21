@@ -16,29 +16,36 @@
 # fail-open by contract: logging or RPC trouble must never block a turn.
 set -uo pipefail
 
-if [ -n "${MOGUI_HOOK_FIRE_LOG:-}" ]; then FIRE_LOG="$MOGUI_HOOK_FIRE_LOG"; else FIRE_LOG="$HOME/.mogui/hook-fire-log.jsonl"; fi
-session_kind="${MOGUI_SESSION_KIND:-master}"
-python3 - "$FIRE_LOG" "${1:-UserPromptSubmit}" "$PWD" "${MOGUI_RUNTIME_HINT:-unknown}" "$session_kind" <<'PY' >/dev/null 2>&1 || true
-import json
-import os
-import sys
-import time
+VERDICT="pass"
+FIRE_LOG="${MOGUI_HOOK_FIRE_LOG:-${HOME:-$(cd ~ && pwd)}/.mogui/hook-fire-log.jsonl}"
+json_str() {
+local value="${1-}"
+value=${value//\\/\\\\}
+value=${value//\"/\\\"}
+value=$(printf '%s' "$value" | tr -d '\000-\037\177')
+printf '%s' "$value"
+}
+derive_session_kind() {
+if [ -n "${ORCA_TASK_ID:-}" ] || [ -n "${ORCA_DISPATCH_ID:-}" ] || [[ "$PWD" == *".orca/worktrees"* ]]; then
+  printf 'worker'
+elif [ -f "$PWD/docs/MASTER-OPERATIONS.md" ]; then
+  printf 'master'
+else
+  printf 'unknown'
+fi
+}
+log_fire() {
+mkdir -p "$(dirname "$FIRE_LOG")" 2>/dev/null || true
+session_kind="$(derive_session_kind)"
+printf '{"ts":%s,"hook":"worker-block-warn","event":"%s","cwd":"%s","runtime_hint":"%s","session_kind":"%s","verdict":"%s"}\n' \
+  "$(date +%s)" "$(json_str "${1:-UserPromptSubmit}")" "$(json_str "$PWD")" "$(json_str "${MOGUI_RUNTIME_HINT:-unknown}")" "$(json_str "$session_kind")" "$(json_str "$VERDICT")" \
+  >> "$FIRE_LOG" 2>/dev/null || true
+}
+hook_event="${1:-UserPromptSubmit}"
+trap 'log_fire "$hook_event"' EXIT
 
-path, event, cwd, runtime_hint, session_kind = sys.argv[1:]
-os.makedirs(os.path.dirname(path), exist_ok=True)
-with open(path, "a", encoding="utf-8") as stream:
-    stream.write(json.dumps({
-        "ts": int(time.time()),
-        "hook": "worker-block-warn",
-        "event": event,
-        "cwd": cwd,
-        "runtime_hint": runtime_hint,
-        "session_kind": session_kind,
-    }, ensure_ascii=False) + "\n")
-PY
-
-listing=$(orca terminal list 2>/dev/null) || exit 0
-[ -z "$listing" ] && exit 0
+listing=$(orca terminal list 2>/dev/null) || { VERDICT="skip"; exit 0; }
+[ -z "$listing" ] && { VERDICT="skip"; exit 0; }
 
 # Drop this session's own pane and its preview before matching. The coordinator writes about
 # prompts, quotas, and restarts as ordinary work, so its own frame matches these markers.
@@ -58,6 +65,7 @@ listing=$(printf '%s' "$listing" | sed 's/always-approve//g; s/bypass permission
 markers_file="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/approval-prompt-markers.txt"
 approval_re=$(grep -vE '^[[:space:]]*(#|$)' "$markers_file" 2>/dev/null | paste -sd'|' -)
 if [ -z "$approval_re" ]; then
+  VERDICT="skip"
   echo "[worker-block] approval marker file unreadable or empty: $markers_file; approval prompts are not being detected"
   blocked=0
 else
@@ -70,6 +78,7 @@ gate=$(printf '%s'   "$listing" | grep -icE "new worktree.*resume session|resume
 total=$(( blocked + limit + update + gate ))
 [ "$total" -eq 0 ] && exit 0
 
+VERDICT="warn"
 parts=""
 [ "$blocked" -gt 0 ] && parts="$parts approval=$blocked"
 [ "$limit" -gt 0 ]   && parts="$parts limit=$limit"

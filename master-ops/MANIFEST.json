@@ -84,6 +84,7 @@
     "scripts/test-bash-output-size-warn.sh",
     "scripts/test-codex-hooks-review-answer.sh",
     "scripts/test-dispatch-runtime.sh",
+    "scripts/test-hook-verdict.sh",
     "scripts/test-measure.sh",
     "scripts/test-mogui-logging.sh",
     "scripts/test-product-path-guard.sh",

@@ -1,8 +1,8 @@
 #!/bin/bash
 # Read-only coverage report: hook × (runtime_hint, session_kind) matrix with last-fired timestamp and count.
-# Lists all hooks in scripts/hooks/ that have zero fire-log entries.
+# Also shows verdict counts per hook, counting missing verdict values as unknown.
 
-logfile=~/.mogui/hook-fire-log.jsonl
+logfile="${MOGUI_HOOK_FIRE_LOG:-$HOME/.mogui/hook-fire-log.jsonl}"
 
 if [ ! -f "$logfile" ]; then
   echo "No fire-log found at $logfile (no hook invocations yet)"
@@ -10,19 +10,22 @@ if [ ! -f "$logfile" ]; then
 fi
 
 # Build matrix: hook -> (runtime_hint, session_kind) -> (ts, count)
-# Use awk to parse and aggregate JSON lines
-python3 << 'PYTHON_END'
+HOOKS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/hooks" && pwd -P)"
+
+LOGFILE="$logfile" HOOKS_DIR="$HOOKS_DIR" python3 << 'PYTHON_END'
 import json
 import os
 from collections import defaultdict
 from datetime import datetime
 
-logfile = os.path.expanduser("~/.mogui/hook-fire-log.jsonl")
+logfile = os.path.expanduser(os.environ.get("LOGFILE", "~/.mogui/hook-fire-log.jsonl"))
 if not os.path.exists(logfile):
     print("No fire-log found (no hook invocations yet)")
     exit(0)
 
 matrix = defaultdict(lambda: defaultdict(lambda: {"count": 0, "last_ts": 0}))
+verdict_counts = defaultdict(lambda: defaultdict(int))
+unknown_total = 0
 
 try:
     with open(logfile) as f:
@@ -39,10 +42,16 @@ try:
             runtime = entry.get("runtime_hint", "unknown")
             session = entry.get("session_kind", "unknown")
             ts = entry.get("ts", 0)
+            verdict = entry.get("verdict")
 
             key = f"{runtime}|{session}"
             matrix[hook][key]["count"] += 1
             matrix[hook][key]["last_ts"] = max(matrix[hook][key]["last_ts"], ts)
+            if isinstance(verdict, str) and verdict:
+                verdict_counts[hook][verdict] += 1
+            else:
+                verdict_counts[hook]["unknown"] += 1
+                unknown_total += 1
 except Exception as e:
     print(f"Error reading fire-log: {e}", file=__import__('sys').stderr)
     exit(1)
@@ -64,12 +73,24 @@ for hook in sorted(matrix.keys()):
         print(f"{hook_display:<25} {key:<20} {count:>6} {last_fired:>26}")
         first = False
 
+print("\n=== Hook Verdict Coverage ===\n")
+for hook in sorted(verdict_counts.keys()):
+    counts = verdict_counts[hook]
+    print(
+        f"{hook:<25} "
+        f"pass={counts.get('pass', 0)} "
+        f"warn={counts.get('warn', 0)} "
+        f"block={counts.get('block', 0)} "
+        f"skip={counts.get('skip', 0)} "
+        f"override={counts.get('override', 0)} "
+        f"unknown={counts.get('unknown', 0)}"
+    )
+if unknown_total > 0:
+    print(f"\nNote: {unknown_total} legacy record(s) lacked a verdict field and were counted as unknown.")
+
 # List hooks with zero entries
 print("\n=== Never-Fired Hooks (Measurement Targets) ===\n")
-
-hooks_dir = os.path.expanduser("~/..")
-repo_base = "{{OPS_REPO}}"
-hooks_dir = os.path.join(repo_base, "scripts/hooks")
+hooks_dir = os.environ.get("HOOKS_DIR", "")
 
 if os.path.isdir(hooks_dir):
     try:

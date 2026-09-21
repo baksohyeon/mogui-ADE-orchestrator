@@ -4,7 +4,7 @@
 # something else. A fake orca on PATH replays the JSON shapes measured on 2026-09-14.
 set -u
 S="$(cd "$(dirname "$0")" && pwd)/codex-hooks-review-answer"
-T=$(mktemp -d); FAILED=0
+T=$(mktemp -d); trap 'rm -rf "$T"' EXIT; FAILED=0
 fail() { echo "  FAIL: $*"; FAILED=1; }; ok() { echo "  ok:   $*"; }
 cat > "$T/orca" <<'FAKE'
 #!/usr/bin/env bash
@@ -77,5 +77,4 @@ fi
 SCN=modal ORCA_BIN="$T/orca" "$T/answer-mutant" term_x >"$T/out" 2>&1 || true
 [ "$(grep -c -- '--retry-request req-123' "$LOG")" -eq 0 ] && ok "failability: mutant without the retry never re-sends, so the retry check would fail" || fail "failability: mutant still sent --retry-request"
 
-rm -rf "$T"
 [ $FAILED -eq 0 ] && echo "test-codex-hooks-review-answer: OK" || { echo "test-codex-hooks-review-answer: FAILED"; exit 1; }

@@ -31,7 +31,7 @@ expect_verdict skip "invalid threshold"
 o=$(printf '{"tool_response":{"stdout":"%s"}}' "$big" | MOGUI_BASH_OUTPUT_WARN_CHARS=-1 "$H" 2>&1); rc=$?; [ $rc -eq 0 ] && [ -z "$o" ] && echo "  ok:   negative threshold stays silent, exit 0" || { echo "  FAIL: negative threshold: rc=$rc '$o'"; F=1; }
 expect_verdict skip "negative threshold"
 # Failability: a copy of the hook whose size comparison is disabled must fail the large-result check.
-T=$(mktemp -d); sed 's/if n > thresh:/if False:/' "$H" > "$T/hook.sh"; chmod +x "$T/hook.sh"
+T=$(mktemp -d); trap 'rm -rf "$T"' EXIT; sed 's/if n > thresh:/if False:/' "$H" > "$T/hook.sh"; chmod +x "$T/hook.sh"
 if [ ! -f "$T/hook.sh" ] || cmp -s "$H" "$T/hook.sh"; then
   echo "FAIL: mutant not generated" >&2
   exit 1
@@ -66,5 +66,4 @@ if [ ! -f "$T/hook2.sh" ] || cmp -s "$H" "$T/hook2.sh"; then
 fi
 o=$(printf '{"tool_response":{"stdout":"x"}}' | MOGUI_BASH_OUTPUT_WARN_CHARS=abc "$T/hook2.sh" 2>&1)
 [ -z "$o" ] && [ "$(last_verdict 2>/dev/null || true)" = "pass" ] && echo "  ok:   failability: broken invalid-threshold guard flips skip->pass, so skip assertion would fail" || { echo "  FAIL: failability: broken guard did not alter invalid-threshold verdict"; F=1; }
-rm -rf "$T"
 [ $F -eq 0 ] && echo "test-bash-output-size-warn: OK" || { echo "test-bash-output-size-warn: FAILED"; exit 1; }

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The banner must name only hooks that a settings command references, and name the rest as NOT WIRED.
 set -u
-T="$(cd "$(dirname "$0")" && pwd)/hooks/tracker-check.sh"; TMP=$(mktemp -d); F=0
+T="$(cd "$(dirname "$0")" && pwd)/hooks/tracker-check.sh"; TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT; F=0
 LOG="$TMP/fire.jsonl"
 REAL_LOG="$HOME/.mogui/hook-fire-log.jsonl"
 real_before=$(wc -l < "$REAL_LOG" 2>/dev/null || echo 0)
@@ -45,4 +45,4 @@ env -u BEADS_DIR MOGUI_HOOK_FIRE_LOG="$LOG" WORKSPACE_ROOT="$TMP/missing-root" b
 v=$(last_verdict 2>/dev/null || true); [ "$v" = "skip" ] && echo "  ok:   verdict missing workspace -> skip" || { echo "  FAIL: verdict for missing workspace expected skip got ${v:-<none>}"; F=1; }
 real_after=$(wc -l < "$REAL_LOG" 2>/dev/null || echo 0)
 [ "$real_before" = "$real_after" ] && echo "  ok:   real hook fire log unchanged" || { echo "  FAIL: real hook fire log changed before=$real_before after=$real_after"; F=1; }
-rm -rf "$TMP"; [ $F -eq 0 ] && echo "test-tracker-check-banner: OK" || { echo "test-tracker-check-banner: FAILED"; exit 1; }
+[ $F -eq 0 ] && echo "test-tracker-check-banner: OK" || { echo "test-tracker-check-banner: FAILED"; exit 1; }

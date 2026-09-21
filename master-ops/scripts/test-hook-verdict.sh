@@ -27,6 +27,19 @@ assert_verdict() {
   expected="$1"; label="$2"; got="$(last_verdict 2>/dev/null || true)"
   [ "$got" = "$expected" ] && ok "$label verdict=$expected" || fail "$label verdict expected=$expected got=${got:-<none>}"
 }
+build_role_mutant() {
+  local source="$1" role_state="$2" out="$3"
+  python3 - "$source" "$role_state" > "$out" <<'PY'
+import sys
+s = open(sys.argv[1]).read()
+for line in s.splitlines(True):
+    if line.startswith("RS="):
+        sys.stdout.write(f"RS={sys.argv[2]}\n")
+    else:
+        sys.stdout.write(line)
+PY
+  chmod +x "$out"
+}
 
 # bash-output-trim-warn: pass/warn/skip
 out=$(printf '{"tool_input":{"command":"git log | head -1"}}' | MOGUI_HOOK_FIRE_LOG="$LOG" bash "$TRIM" 2>&1)
@@ -66,16 +79,7 @@ assert_verdict skip "orch-inbox skip path"
 
 # role-state-inject: pass on readable role-state; warn via unreadable-path mutant.
 ROLE_STATE="$S/../docs/runbooks/role-state.md"
-python3 - "$ROLE" "$ROLE_STATE" > "$T/role.pass.sh" <<'PY'
-import sys
-s = open(sys.argv[1]).read()
-for line in s.splitlines(True):
-    if line.startswith("RS="):
-        sys.stdout.write(f"RS={sys.argv[2]}\n")
-    else:
-        sys.stdout.write(line)
-PY
-chmod +x "$T/role.pass.sh"
+build_role_mutant "$ROLE" "$ROLE_STATE" "$T/role.pass.sh"
 MOGUI_HOOK_FIRE_LOG="$LOG" bash "$T/role.pass.sh" >/dev/null 2>&1
 assert_verdict pass "role-state pass path"
 python3 - "$T/role.pass.sh" > "$T/role.warn.sh" <<'PY'
@@ -97,19 +101,32 @@ cat > "$T/role.blank.md" <<'EOF'
 Current Role:
 Role Lock: worker
 EOF
-python3 - "$ROLE" "$T/role.blank.md" > "$T/role.blank.sh" <<'PY'
-import sys
-s = open(sys.argv[1]).read()
-for line in s.splitlines(True):
-    if line.startswith("RS="):
-        sys.stdout.write(f"RS={sys.argv[2]}\n")
-    else:
-        sys.stdout.write(line)
-PY
-chmod +x "$T/role.blank.sh"
+build_role_mutant "$ROLE" "$T/role.blank.md" "$T/role.blank.sh"
 MOGUI_HOOK_FIRE_LOG="$LOG" bash "$T/role.blank.sh" >"$T/role.blank.out" 2>&1
 grep -q '\[role-state\] WARNING:' "$T/role.blank.out" && ok "role-state blank marker value warns" || fail "role-state blank marker value missing warning output"
 assert_verdict warn "role-state blank marker value"
+python3 - <<'PY' > "$T/role.whitespace.md"
+print("Current Role:\t\nRole Lock: worker\n", end="")
+PY
+build_role_mutant "$ROLE" "$T/role.whitespace.md" "$T/role.whitespace.sh"
+MOGUI_HOOK_FIRE_LOG="$LOG" bash "$T/role.whitespace.sh" >"$T/role.whitespace.out" 2>&1
+grep -q '\[role-state\] WARNING:' "$T/role.whitespace.out" && ok "role-state whitespace marker value warns" || fail "role-state whitespace marker value missing warning output"
+assert_verdict warn "role-state whitespace marker value"
+cat > "$T/role.lock.empty.md" <<'EOF'
+Current Role: worker
+Role Lock:
+EOF
+build_role_mutant "$ROLE" "$T/role.lock.empty.md" "$T/role.lock.empty.sh"
+MOGUI_HOOK_FIRE_LOG="$LOG" bash "$T/role.lock.empty.sh" >"$T/role.lock.empty.out" 2>&1
+grep -q '\[role-state\] WARNING:' "$T/role.lock.empty.out" && ok "role-state empty role lock warns" || fail "role-state empty role lock missing warning output"
+assert_verdict warn "role-state empty role lock"
+python3 - <<'PY' > "$T/role.lock.whitespace.md"
+print("Current Role: worker\nRole Lock:\t\n", end="")
+PY
+build_role_mutant "$ROLE" "$T/role.lock.whitespace.md" "$T/role.lock.whitespace.sh"
+MOGUI_HOOK_FIRE_LOG="$LOG" bash "$T/role.lock.whitespace.sh" >"$T/role.lock.whitespace.out" 2>&1
+grep -q '\[role-state\] WARNING:' "$T/role.lock.whitespace.out" && ok "role-state whitespace role lock warns" || fail "role-state whitespace role lock missing warning output"
+assert_verdict warn "role-state whitespace role lock"
 
 # bash-bare-cd-warn: pass/warn/skip
 out=$(printf '{"tool_input":{"command":"git status"}}' | MOGUI_HOOK_FIRE_LOG="$LOG" bash "$BARE_CD" 2>&1)

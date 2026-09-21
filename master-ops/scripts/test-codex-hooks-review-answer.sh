@@ -56,6 +56,10 @@ SCN=modal2 ORCA_BIN="$T/orca" "$S" term_x >"$T/out" 2>&1; rc=$?
 [ $rc -eq 1 ] && grep -q 'still blocked after answering (agent-login-prompt)' "$T/out" && ok "modal then other: names the second prompt" || fail "modal then other: exit $rc: $(cat "$T/out" | tr '\n' ' ' | cut -c1-200)"
 # Failability: a copy that never refreshes the reason names the first prompt instead.
 : > "$LOG"; sed '/^W=\$(wait_once)$/{n;/^BLK=/d;}' "$S" > "$T/stale-mutant"; chmod +x "$T/stale-mutant"
+if [ ! -f "$T/stale-mutant" ] || cmp -s "$S" "$T/stale-mutant"; then
+  echo "FAIL: mutant not generated" >&2
+  exit 1
+fi
 SCN=modal2 ORCA_BIN="$T/orca" "$T/stale-mutant" term_x >"$T/out" 2>&1 || true
 grep -q 'still blocked after answering (agent-hooks-review-prompt)' "$T/out" && ok "failability: stale mutant names the first prompt, so the refresh check would fail" || fail "failability: stale mutant did not name the first prompt: $(cat "$T/out" | tr '\n' ' ' | cut -c1-200)"
 
@@ -66,6 +70,10 @@ SCN=unreachable ORCA_BIN="$T/orca" "$S" term_x >"$T/out" 2>&1; rc=$?
 
 # Failability: a copy of the script with the retry removed must leave no --retry-request in the call log.
 : > "$LOG"; sed 's/--retry-request "\$RID" //' "$S" > "$T/answer-mutant"; chmod +x "$T/answer-mutant"
+if [ ! -f "$T/answer-mutant" ] || cmp -s "$S" "$T/answer-mutant"; then
+  echo "FAIL: mutant not generated" >&2
+  exit 1
+fi
 SCN=modal ORCA_BIN="$T/orca" "$T/answer-mutant" term_x >"$T/out" 2>&1 || true
 [ "$(grep -c -- '--retry-request req-123' "$LOG")" -eq 0 ] && ok "failability: mutant without the retry never re-sends, so the retry check would fail" || fail "failability: mutant still sent --retry-request"
 

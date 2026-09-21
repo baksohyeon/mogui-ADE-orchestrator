@@ -17,6 +17,10 @@ out2=$(env -u BEADS_DIR MOGUI_HOOK_FIRE_LOG="$LOG" MOGUI_SETTINGS_FILE="$TMP/set
 case "${out2%%|*}" in *"b-warn"*) echo "  FAIL: mentioned-but-not-invoked hook counted as wired: '$out2'"; F=1;; *) echo "  ok:   mentioned-but-not-invoked hook stays NOT WIRED";; esac
 # Failability: a copy of the hook that reads no settings must call the wired hook NOT WIRED.
 sed 's/^wired_blob=\$(python3 -c/wired_blob=""; _ignored=\$(python3 -c/' "$T" > "$TMP/mutant.sh"
+if [ ! -f "$TMP/mutant.sh" ] || cmp -s "$T" "$TMP/mutant.sh"; then
+  echo "FAIL: mutant not generated" >&2
+  exit 1
+fi
 mout=$(env -u BEADS_DIR MOGUI_HOOK_FIRE_LOG="$LOG" MOGUI_SETTINGS_FILE="$TMP/settings.json" MOGUI_HOOKS_DIR="$TMP/hooks" WORKSPACE_ROOT="$TMP" bash "$TMP/mutant.sh" 2>/dev/null | grep '^\[protections\]')
 case "$mout" in *"NOT WIRED:"*"a-guard"*) echo "  ok:   failability: a hook that reads no settings misreports a-guard, so the wired check would fail";; *) echo "  FAIL: failability: mutant still called a-guard wired: '$mout'"; F=1;; esac
 last_verdict() {

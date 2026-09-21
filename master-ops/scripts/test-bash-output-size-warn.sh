@@ -32,6 +32,10 @@ o=$(printf '{"tool_response":{"stdout":"%s"}}' "$big" | MOGUI_BASH_OUTPUT_WARN_C
 expect_verdict skip "negative threshold"
 # Failability: a copy of the hook whose size comparison is disabled must fail the large-result check.
 T=$(mktemp -d); sed 's/if n > thresh:/if False:/' "$H" > "$T/hook.sh"; chmod +x "$T/hook.sh"
+if [ ! -f "$T/hook.sh" ] || cmp -s "$H" "$T/hook.sh"; then
+  echo "FAIL: mutant not generated" >&2
+  exit 1
+fi
 o=$(printf '{"tool_name":"Bash","tool_response":{"stdout":"%s","stderr":""}}' "$big" | "$T/hook.sh"); [ -z "$o" ] && echo "  ok:   failability: disabled comparison stays silent, so the large-result check would fail" || { echo "  FAIL: failability: mutant still warned: $o"; F=1; }
 # Failability: a copy that forces warn to pass must be caught by the verdict assertion.
 python3 - "$H" > "$T/hook3.sh" <<'PY'
@@ -40,6 +44,10 @@ s = open(sys.argv[1]).read()
 sys.stdout.write(s.replace('VERDICT="warn"', 'VERDICT="pass"', 1))
 PY
 chmod +x "$T/hook3.sh"
+if [ ! -f "$T/hook3.sh" ] || cmp -s "$H" "$T/hook3.sh"; then
+  echo "FAIL: mutant not generated" >&2
+  exit 1
+fi
 printf '{"tool_name":"Bash","tool_response":{"stdout":"%s","stderr":""}}' "$big" | "$T/hook3.sh" >/dev/null 2>&1
 got="$(last_verdict 2>/dev/null || true)"
 [ "$got" = "pass" ] && echo "  ok:   failability: verdict mutant produces pass instead of warn, so verdict assertion would fail" || { echo "  FAIL: failability: verdict mutant did not alter verdict as expected"; F=1; }
@@ -47,12 +55,15 @@ got="$(last_verdict 2>/dev/null || true)"
 python3 - "$H" > "$T/hook2.sh" <<'PY'
 import sys
 s = open(sys.argv[1]).read()
-guarded = 'if ! [ "$THRESH" -eq "$THRESH" ] 2>/dev/null; then\n  VERDICT="skip"\n  exit 0\nfi\n'
-assert s.count(guarded) == 1, "shell threshold guard not found exactly once"
-mutant = 'if ! [ "$THRESH" -eq "$THRESH" ] 2>/dev/null; then\n  VERDICT="pass"\n  exit 0\nfi\n'
+guarded = 'if ! [[ "$THRESH" =~ ^[0-9]+$ ]]; then\n  VERDICT="skip"\n  exit 0\nfi\n'
+mutant = 'if ! [[ "$THRESH" =~ ^[0-9]+$ ]]; then\n  VERDICT="pass"\n  exit 0\nfi\n'
 sys.stdout.write(s.replace(guarded, mutant))
 PY
 chmod +x "$T/hook2.sh"
+if [ ! -f "$T/hook2.sh" ] || cmp -s "$H" "$T/hook2.sh"; then
+  echo "FAIL: mutant not generated" >&2
+  exit 1
+fi
 o=$(printf '{"tool_response":{"stdout":"x"}}' | MOGUI_BASH_OUTPUT_WARN_CHARS=abc "$T/hook2.sh" 2>&1)
 [ -z "$o" ] && [ "$(last_verdict 2>/dev/null || true)" = "pass" ] && echo "  ok:   failability: broken invalid-threshold guard flips skip->pass, so skip assertion would fail" || { echo "  FAIL: failability: broken guard did not alter invalid-threshold verdict"; F=1; }
 rm -rf "$T"

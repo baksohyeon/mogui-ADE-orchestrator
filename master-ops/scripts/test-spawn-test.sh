@@ -70,8 +70,9 @@ done
 
 
 # Failability: a spawn-test whose FAIL* arm reports SKIP must fail the failure-kind cases.
-MUT="./scripts/.spawn-test.mutant.$$"; sed 's/^    FAIL\*)    echo "FAIL" ;;$/    FAIL*)    echo "SKIP" ;;/' ./scripts/spawn-test > "$MUT"
+MUT="./scripts/.spawn-test.mutant.$$"
 trap 'rm -f "$MUT"' EXIT
+sed 's/^    FAIL\*)    echo "FAIL" ;;$/    FAIL*)    echo "SKIP" ;;/' ./scripts/spawn-test > "$MUT"
 if [ ! -f "$MUT" ] || cmp -s ./scripts/spawn-test "$MUT"; then
   echo "FAIL: mutant not generated" >&2
   exit 1

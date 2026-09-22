@@ -56,6 +56,8 @@ Seat-ahead promotion, batch 3 template one (2026-09-21):
 - `model-tier-policy.json`: `tiers.top` now lists `claude-fable-5-1`, not `claude-fable-5`. Owner
   decision 2026-09-21: two generations of drift audits on two seats measured `claude-fable-5-1` and
   the old id never appeared in a transcript.
+- `onboarding/02-workspace-facts.md`: the master-session model table's `claude` row now recommends
+  `claude-fable-5-1`, matching the identifier `model-tier-policy.json` has recommended since PR #137.
 
 Skill-composition guide (2026-08-25):
 

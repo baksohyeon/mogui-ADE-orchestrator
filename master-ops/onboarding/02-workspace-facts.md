@@ -31,7 +31,7 @@ Master model criteria (for the later model question in 1C; do not ask model yet)
 
 | Agent CLI | Master-session top-tier candidate |
 | --- | --- |
-| `claude` | `claude-fable-5` |
+| `claude` | `claude-fable-5-1` |
 | `codex` | `gpt-5.6-sol` |
 | `grok` | `grok-4.5` |
 | `cursor-agent` | measured at boot; no fixed identifier yet |

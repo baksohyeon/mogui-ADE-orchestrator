@@ -68,6 +68,17 @@ for rt in claude codex grok; do
   check "$rt launches unchanged" "$rt" "$(runtime_launch_command $rt)"
 done
 
+
+# Failability: a spawn-test whose FAIL* arm reports SKIP must fail the failure-kind cases.
+MUT="./scripts/.spawn-test.mutant.$$"; sed 's/^    FAIL\*)    echo "FAIL" ;;$/    FAIL*)    echo "SKIP" ;;/' ./scripts/spawn-test > "$MUT"
+trap 'rm -f "$MUT"' EXIT
+if [ ! -f "$MUT" ] || cmp -s ./scripts/spawn-test "$MUT"; then
+  echo "FAIL: mutant not generated" >&2
+  exit 1
+fi
+mkind=$( . "$MUT" >/dev/null 2>&1; report_status_kind 'FAIL(clone)' ); rm -f "$MUT"
+check "failability: mutant reports a clone failure as SKIP, so the FAIL cases would fail" "SKIP" "$mkind"
+
 echo "----"
 echo "passed: $pass  failed: $fail"
 [ "$fail" -eq 0 ]

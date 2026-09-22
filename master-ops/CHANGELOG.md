@@ -42,6 +42,13 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+Seat-ahead promotion, batch 3 template three (2026-09-22):
+
+- `scripts/test-spawn-test.sh`: added the failability block proving a `spawn-test` mutant whose
+  `FAIL*` arm reports `SKIP` makes the failure-kind cases fail, plus the generated-mutant guard the
+  other template tests carry (`FAIL: mutant not generated`, exit 1, cleanup via an `EXIT` trap) so a
+  no-op `sed` cannot pass silently.
+
 Seat-ahead promotion, batch 3 template one (2026-09-21):
 
 - `scripts/hooks/orch-inbox-warn.sh`: the `messages` type check now rejects a list containing non-dict

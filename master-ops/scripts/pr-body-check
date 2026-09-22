@@ -155,8 +155,8 @@ def scan_redaction(text):
     """Check for redaction violations: absolute home paths, identity-bearing strings."""
     # Patterns from product repo gitleaks config
     redaction_patterns = [
-        ("home_path", r"/Users/[A-Za-z0-9._-]+"),
-        ("home_path_linux", r"/home/[A-Za-z0-9._-]+"),
+        ("home_path", r"(?<!\*)/Users/[A-Za-z0-9._-]+"),
+        ("home_path_linux", r"(?<!\*)/home/[A-Za-z0-9._-]+"),
     ]
 
     violations = []

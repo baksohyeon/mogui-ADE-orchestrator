@@ -77,6 +77,12 @@ else
   fail=$((fail + 1))
 fi
 
+
+# Failability: a measure that never prints the status line must fail case 2.
+MUT="./scripts/.measure.mutant.$$"; sed '/^echo "exit=\$status"$/d' "$MEASURE" > "$MUT"; chmod +x "$MUT"
+mfirst=$("$MUT" sh -c 'exit 1' 2>&1 | sed -n 1p); rm -f "$MUT"
+if [ "$mfirst" != "exit=1" ]; then echo "ok   — failability: mutant without the status line misses exit=1"; pass=$((pass + 1)); else echo "FAIL — failability: mutant still printed exit=1"; fail=$((fail + 1)); fi
+
 echo "----"
 echo "passed: $pass  failed: $fail"
 [ "$fail" -eq 0 ]

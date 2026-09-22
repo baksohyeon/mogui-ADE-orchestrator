@@ -39,10 +39,10 @@ try:
     raise SystemExit
   r=payload.get("result")
   messages=r.get("messages")
-  if not isinstance(messages, list):
+  if not isinstance(messages, list) or not all(isinstance(m, dict) for m in messages):
     print("__SKIP__")
     raise SystemExit
-  ms=[m for m in messages if isinstance(m, dict)]
+  ms=messages
   act=[m for m in ms if m.get("type") != "heartbeat"]
   hb=len(ms)-len(act)
   if not act:

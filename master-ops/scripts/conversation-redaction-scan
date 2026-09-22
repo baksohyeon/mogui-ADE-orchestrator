@@ -40,7 +40,7 @@ done
 # codex-accounts/*/home/sessions), not a leaked home directory.
 declare -a PATTERNS=(
   "home_path:(^|[^*])/Users/[A-Za-z0-9._-]+"
-  "home_path:(^|[^*])/home/[A-Za-z0-9._-]+"
+  "home_path_linux:(^|[^*])/home/[A-Za-z0-9._-]+"
 )
 
 # Check if gh is available
@@ -73,7 +73,7 @@ scan_text() {
   printf '%s' "$violations"
 }
 
-echo "Scanning ${REPO} (limit: ${LIMIT} PRs)..."
+echo "Scanning ${REPO} (limit: ${LIMIT} each for PRs and issues)..."
 
 FINDINGS=""
 COUNT=0
@@ -118,7 +118,8 @@ done <<< "$PR_JSON"
 
 # Fetch and scan issue bodies
 ISSUE_JSON=$(gh issue list --repo "$REPO" --state all --limit "$LIMIT" --json "number,author,body" --jq '.[]' 2>/dev/null) || {
-  echo "conversation-redaction-scan: WARNING — could not fetch issues from $REPO" >&2
+  echo "conversation-redaction-scan: FAIL — could not fetch issues from $REPO" >&2
+  exit 2
 }
 
 while IFS= read -r issue_line; do

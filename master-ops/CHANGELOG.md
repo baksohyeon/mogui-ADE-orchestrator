@@ -42,6 +42,18 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+Seat-ahead promotion, batch 3 template four (2026-09-24):
+
+- `scripts/harness-selfcheck.sh`: ported the seat's `Template:` probe as the first check, reading
+  `MANIFEST.json` and an adoption-ledger path from `TEMPLATE_MANIFEST_FILE`/`TEMPLATE_ADOPTION_LEDGER`
+  (both overridable, defaulting to the ops repository root and the seat's ledger file name). An
+  install's boot banner can now say which template version it was stamped from and whether adoption
+  is recorded, the same as the seat.
+- `scripts/test-seat-check.sh`: ported the seat's `check_template` cases (manifest absent, stamped
+  with the ledger missing, stamped with the ledger present), each with its own generated-mutant
+  failability guard (`FAIL: mutant not generated` on a no-op `sed`, verdict-text mutation asserted to
+  change the reported line).
+
 Seat-ahead promotion, batch 3 template three (2026-09-22):
 
 - `scripts/test-spawn-test.sh`: added the failability block proving a `spawn-test` mutant whose

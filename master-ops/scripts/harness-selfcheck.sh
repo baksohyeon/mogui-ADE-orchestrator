@@ -19,6 +19,55 @@ TEMPLATE_CHECK="$OPS_DIR/scripts/template-check"
 
 exit_code=0
 
+# --- Seat's template-adoption check ---
+# Ported from the seat's harness-selfcheck.sh (owner direction 2026-09-23): a
+# generated operations repository stamps the template version it was created
+# from into MANIFEST.json, then records adoption progress in a ledger under
+# docs/observability/. Neither file exists in this template itself, so both
+# variables are overridable, letting a test fixture stand in for either.
+TEMPLATE_MANIFEST_FILE="${TEMPLATE_MANIFEST_FILE:-$OPS_DIR/MANIFEST.json}"
+TEMPLATE_ADOPTION_LEDGER="${TEMPLATE_ADOPTION_LEDGER:-$OPS_DIR/docs/observability/template-adoption-2026-08-08.md}"
+
+if [ ! -f "$TEMPLATE_MANIFEST_FILE" ]; then
+  echo "Template: absent (MANIFEST.json missing)"
+  exit_code=1
+else
+  template_probe=$(python3 - "$TEMPLATE_MANIFEST_FILE" << 'EOFTEMPLATE' 2>/dev/null
+import json, sys
+
+manifest_path = sys.argv[1]
+manifest = json.load(open(manifest_path, encoding="utf-8"))
+manifest_version = manifest.get("template_version")
+files = manifest.get("files")
+if not isinstance(manifest_version, str) or not manifest_version.strip():
+    print("ERROR|MANIFEST.json template_version missing")
+elif not isinstance(files, list):
+    print("ERROR|MANIFEST.json files list missing")
+else:
+    print(f"OK|{manifest_version.strip()}")
+EOFTEMPLATE
+  )
+  case "$template_probe" in
+    OK\|*)
+      stamped_version=${template_probe#OK|}
+      if [ -f "$TEMPLATE_ADOPTION_LEDGER" ]; then
+        echo "Template: $stamped_version stamped, adoption incomplete (see $TEMPLATE_ADOPTION_LEDGER)"
+      else
+        echo "Template: $stamped_version stamped, adoption ledger missing"
+        exit_code=1
+      fi
+      ;;
+    ERROR\|*)
+      echo "Template: undecided (${template_probe#ERROR|})"
+      exit_code=1
+      ;;
+    *)
+      echo "Template: undecided (could not read TEMPLATE-VERSION or MANIFEST.json)"
+      exit_code=1
+      ;;
+  esac
+fi
+
 # --- Seat check ---
 # A master that is seated in the wrong place passes every other check in this
 # script, and passed all three placement-evidence checks in the succession

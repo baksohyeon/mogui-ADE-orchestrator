@@ -34,7 +34,7 @@ def resolve_product_repos(raw):
     if isinstance(parsed, list):
         if not parsed or any(not isinstance(item, str) or not item.strip() for item in parsed):
             raise ValueError(f"MOGUI_PRODUCT_REPO must be a non-empty array of strings: {raw!r}")
-        return [item.strip() for item in parsed]
+        return list(dict.fromkeys(item.strip() for item in parsed))
     if isinstance(parsed, str) and parsed.strip():
         return [parsed.strip()]
     raise ValueError(f"MOGUI_PRODUCT_REPO must be an owner/repo string or a JSON array of them: {raw!r}")

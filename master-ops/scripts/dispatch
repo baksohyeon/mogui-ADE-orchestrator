@@ -375,6 +375,25 @@ model_vendor() {
     *) echo unknown;;
   esac
 }
+# A host is not a vendor. `cursor-agent models` lists ids from several vendors
+# (measured 2026-08-25: gpt-5.3-codex and its variants, gpt-5.2, gpt-5.6-sol-*,
+# cursor-grok-4.6-high-fast, claude-opus-5-thinking-high, composer-2.5). Comparing a
+# model's vendor prefix against the host name refuses every real combination on such a
+# host, so this one is validated against its own list instead. Vendor-level matching is
+# also not enough here: the efficient tier opens with gpt-5.6-luna, which cursor does not
+# offer, so a vendor match would declare a model the worker can never emit. That is the
+# exact harm the mismatch check exists to prevent.
+MULTI_VENDOR_HOSTS="cursor"
+is_multi_vendor_host() { case " $MULTI_VENDOR_HOSTS " in *" $1 "*) return 0;; *) return 1;; esac; }
+host_model_ids() {
+  case "$1" in
+    cursor)
+      command -v cursor-agent >/dev/null 2>&1 || return 1
+      cursor-agent models 2>/dev/null | sed -n 's/^\([A-Za-z0-9._-][A-Za-z0-9._-]*\) - .*$/\1/p'
+      ;;
+    *) return 1;;
+  esac
+}
 # When the caller did not name a model, derive one for the chosen runtime from
 # the tier policy instead of leaving the claude-shaped default in place. No new
 # mapping is invented: the policy already lists the allowed ids, and the vendor
@@ -437,7 +456,26 @@ runtime_accepts_vendor() {
 }
 # This is the minimal runtime capability mapping needed for agy in this PR. A
 # complete capability table is intentionally a separate contract.
-if [ "$MODEL_VENDOR" != unknown ] && ! runtime_accepts_vendor "$RUNTIME" "$MODEL_VENDOR"; then
+if is_multi_vendor_host "$RUNTIME"; then
+  HOST_IDS=$(host_model_ids "$RUNTIME") || {
+    echo "✗ cannot ask $RUNTIME which models it offers; refusing to guess" >&2
+    echo "  A declared model this host cannot run writes a false declared_model into the" >&2
+    echo "  ledger and makes the register probe grep for a string that never appears." >&2
+    exit 2
+  }
+  if ! printf '%s\n' "$HOST_IDS" | grep -qx -- "$MODEL"; then
+    echo "✗ $RUNTIME does not offer model=$MODEL" >&2
+    echo "  This host runs several vendors' models, so the check is its own list rather" >&2
+    echo "  than a vendor prefix. Ids it offers that the tier policy also allows:" >&2
+    python3 -c "
+import json,sys
+ids=set(sys.stdin.read().split())
+tiers=json.load(open('$POLICY'))['tiers']
+ok=[m for t in ('efficient','top') for m in tiers.get(t,[]) if m in ids]
+print('   ', ', '.join(ok) if ok else '(none)')" <<<"$HOST_IDS" >&2
+    exit 2
+  fi
+elif [ "$MODEL_VENDOR" != unknown ] && ! runtime_accepts_vendor "$RUNTIME" "$MODEL_VENDOR"; then
   echo "✗ model/runtime mismatch · model=$MODEL (vendor $MODEL_VENDOR) runtime=$RUNTIME" >&2
   echo "  A model id from one vendor cannot run on another host. Declaring it anyway writes a" >&2
   echo "  false declared_model into the ledger and makes the register probe grep for a string" >&2
@@ -519,6 +557,54 @@ fi
 COLLISION_WARN=$("$COLLISION_CHECK" "$CONTRACT" "$LEDGER" 2>/dev/null || true)
 [ -n "$COLLISION_WARN" ] && echo "$COLLISION_WARN"
 echo "⚙ gate ✓ $TIER · $MODEL · est $((EST/1000)).$(( (EST%1000)/100 ))k · 계약 ${SHA:0:8}"
+
+# 1.5 deliver the contract, and make the delivery provable.
+#
+# Measured 2026-08-10: until this block existed, $CONTRACT reached the gate and never
+# reached the worker. Only --spec was sent. Two dispatches that day looked like worker
+# defects and were coordinator defects: one stopped at staging because it never received
+# the clause requiring a pull request, and one asked for a line the contract quoted
+# verbatim. Both were rescued by hand-delivering the text over a terminal, which made
+# that hand step load-bearing and unrecorded.
+#
+# The copy goes outside product territory on purpose. Writing into the worker's worktree
+# is currently possible only because the product-path guard does not stop bash writes,
+# and using a known hole to fix a bug is not a fix. The cost is that the contract is not
+# on the worker's own branch; that part stays open.
+#
+# The token proves the file was opened rather than that a path was printed. It lives only
+# inside the delivered copy: a token quoted in the spec could be echoed back by a worker
+# that never read anything. Derived from characters the dispatch output never shows.
+if [ -n "$CONTRACT" ]; then
+  CONTRACT_DIR="$HOME/.mogui/dispatch-contracts"
+  if ! mkdir -p "$CONTRACT_DIR" 2>/dev/null; then
+    echo "✗ cannot create contract delivery directory: $CONTRACT_DIR" >&2; exit 3
+  fi
+  CONTRACT_DEST="$CONTRACT_DIR/${SHA:0:8}-$(basename "$CONTRACT")"
+  cp "$CONTRACT" "$CONTRACT_DEST" || { echo "✗ contract copy failed" >&2; exit 3; }
+  # A copy that truncated silently is worse than no copy.
+  cmp -s "$CONTRACT" "$CONTRACT_DEST" || { echo "✗ delivered contract differs from source" >&2; exit 3; }
+  READ_TOKEN="ack-${SHA:8:12}"
+  if [ -z "${SHA:8:12}" ]; then
+    echo "✗ contract sha too short to derive a read token" >&2; exit 3
+  fi
+  {
+    printf '\n---\n\n## Acknowledgement token\n\n'
+    printf 'Quote this token in your report. It exists so the coordinator can tell a worker\n'
+    printf 'that read this contract from one that only received a path.\n\n'
+    printf '    %s\n' "$READ_TOKEN"
+  } >> "$CONTRACT_DEST" || { echo "✗ cannot append read token" >&2; exit 3; }
+  SPEC="$SPEC
+
+Read your contract before doing anything. It is at this absolute path and it is the
+authority for this task, over anything in this line:
+
+    $CONTRACT_DEST
+
+It states an acknowledgement token. Quote that token in your report. A report without it
+tells the coordinator nothing about whether the contract was read."
+  echo "📄 contract delivered · $CONTRACT_DEST · read-token required"
+fi
 
 # 2. task-create
 TASK=$(orca orchestration task-create --spec "$SPEC" --json 2>/dev/null | jqf "d['result']['task']['id']")

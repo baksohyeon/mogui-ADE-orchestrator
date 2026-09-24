@@ -348,6 +348,14 @@ expect_blocked bad-schema run_file_config "$TMP/bad-schema.json" "$ops/file.txt"
 expect_verdict block bad-schema
 expect_blocked missing-config run_file_config "$TMP/missing.json" "$ops/file.txt"
 expect_verdict block missing-config
+printf '{"master_host_runtime":"claude","product_repositories":["%s"],"product_repo":"%s"}\n' "$product" "$product_legacy" >"$TMP/runtime-both.json"
+expect_allowed both-fields-warning-outside run_file_config "$TMP/runtime-both.json" "$ops/file.txt"
+expect_verdict pass both-fields-warning-outside
+grep -q "configuration warning: product_repositories and product_repo are both set" "$TMP/stderr" || { echo "FAIL: both-fields-warning-outside missing configuration warning" >&2; cat "$TMP/stderr" >&2; exit 1; }
+printf '{"master_host_runtime":"claude","product_repositories":["%s"],"product_repo":"relative/product"}\n' "$product" >"$TMP/runtime-both-malformed.json"
+expect_blocked both-fields-malformed-legacy-blocked run_file_config "$TMP/runtime-both-malformed.json" "$ops/file.txt"
+expect_verdict block both-fields-malformed-legacy-blocked
+grep -q "cannot load product_repositories" "$TMP/stderr" || { echo "FAIL: both-fields-malformed-legacy-blocked missing load failure message" >&2; cat "$TMP/stderr" >&2; exit 1; }
 expect_blocked unsubstituted-runtime-root-token run_bash_default_config "ls" "$ops"
 expect_verdict block unsubstituted-runtime-root-token
 grep -q "{{RUNTIME_ROOT}}" "$TMP/stderr" || { echo "FAIL: unsubstituted-runtime-root-token missing token name" >&2; exit 1; }

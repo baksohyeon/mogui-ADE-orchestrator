@@ -140,7 +140,12 @@ for r in repos:
   [ -n "$paths" ] || return 1
   while IFS= read -r path; do
     [ -n "$path" ] || continue
-    slug=$(git -C "$path" remote get-url origin 2>/dev/null | python3 -c "
+    remote_url=$(git -C "$path" remote get-url origin 2>/dev/null)
+    if [ -z "$remote_url" ]; then
+      echo "dispatch: '$path' has no git remote 'origin'; excluded from the collision scan" >&2
+      continue
+    fi
+    slug=$(printf '%s' "$remote_url" | python3 -c "
 import re, sys
 remote = sys.stdin.read().strip()
 for pattern in (
@@ -153,12 +158,17 @@ for pattern in (
         print(match.group(1))
         sys.exit(0)
 sys.exit(1)
-" 2>/dev/null) && [ -n "$slug" ] && slugs+=("$slug")
+" 2>/dev/null)
+    if [ -n "$slug" ]; then
+      slugs+=("$slug")
+    else
+      echo "dispatch: git remote 'origin' for '$path' ('$remote_url') is not a github.com URL; excluded from the collision scan" >&2
+    fi
   done <<<"$paths"
   [ "${#slugs[@]}" -gt 0 ] || return 1
   python3 -c "import json,sys; print(json.dumps(sys.argv[1:]))" "${slugs[@]}"
 }
-PRODUCT_REPO_ARG=$(resolve_product_repo_arg || true)
+PRODUCT_REPO_ARG=$(resolve_product_repo_arg || printf '%s' "${MOGUI_PRODUCT_REPO:-}")
 
 # model-identity-probe lives in the orchestrator and resolves its instance config
 # relative to that checkout, where the product-path guard correctly forbids the

@@ -87,7 +87,15 @@ class InstanceRuntimeConfig:
                 f"(default {DEFAULT_RELATIVE_CONFIG_PATH}; override path with "
                 f"{CONFIG_PATH_ENV})"
             )
-        return self.product_repositories
+        # Validated lazily, here, rather than at load(): MOGUI_PRODUCT_REPO is
+        # also used elsewhere in this repo with owner/repo slug semantics
+        # (dispatch-collision-check), and a caller that never asks for product
+        # repositories (e.g. model-identity-probe) must not crash just because
+        # that unrelated env var happens to be set when it loads the config.
+        return tuple(
+            _require_absolute_path(entry, "product_repositories")
+            for entry in self.product_repositories
+        )
 
 
 def default_config_path(repo_root: Path | None = None) -> Path:
@@ -146,9 +154,9 @@ def load_instance_runtime_config(
 
     product_env = _optional_str(env.get(PRODUCT_REPO_ENV))
     if product_env is not None:
-        product_repositories: tuple[str, ...] = (
-            _require_absolute_path(product_env, PRODUCT_REPO_ENV),
-        )
+        # Not validated here: see require_product_repositories(), which is
+        # where this is checked lazily.
+        product_repositories: tuple[str, ...] = (product_env,)
         warnings: tuple[str, ...] = ()
     else:
         product_repositories, warnings = _parse_product_repositories(payload)

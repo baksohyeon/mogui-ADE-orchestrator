@@ -183,10 +183,28 @@ def test_malformed_product_repo_does_not_block_valid_array(tmp_path: Path) -> No
 
 def test_product_repo_env_relative_path_is_malformed(tmp_path: Path) -> None:
     config_path = _write_config(tmp_path / "instance-runtime.json", {})
+    loaded = load_instance_runtime_config(
+        config_path, environ={PRODUCT_REPO_ENV: "relative/env-path"}
+    )
     with pytest.raises(InstanceRuntimeConfigError, match="absolute path"):
-        load_instance_runtime_config(
-            config_path, environ={PRODUCT_REPO_ENV: "relative/env-path"}
-        )
+        loaded.require_product_repositories()
+
+
+def test_product_repo_env_with_slug_semantics_does_not_crash_unrelated_load(
+    tmp_path: Path,
+) -> None:
+    # MOGUI_PRODUCT_REPO is also used elsewhere (dispatch-collision-check) as an
+    # owner/repo slug, not an absolute path. A caller that loads the config for
+    # something else entirely (e.g. model-identity-probe, which never calls
+    # require_product_repositories()) must not crash just because that env var
+    # happens to be set with slug semantics.
+    config_path = _write_config(
+        tmp_path / "instance-runtime.json", {"master_host_runtime": "claude"}
+    )
+    loaded = load_instance_runtime_config(
+        config_path, environ={PRODUCT_REPO_ENV: "owner/repo"}
+    )
+    assert loaded.require_master_host_runtime() == "claude"
 
 
 def test_product_repo_tilde_is_expanded(tmp_path: Path, monkeypatch) -> None:

@@ -95,6 +95,7 @@
     "scripts/test-hook-verdict.sh",
     "scripts/test-measure.sh",
     "scripts/test-mogui-logging.sh",
+    "scripts/test-pr-body-check-redaction.sh",
     "scripts/test-product-path-guard.sh",
     "scripts/test-seat-check.sh",
     "scripts/test-spawn-test.sh",

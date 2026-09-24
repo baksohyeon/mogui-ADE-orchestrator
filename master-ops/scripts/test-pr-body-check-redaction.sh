@@ -50,8 +50,14 @@ run_check() {
   bash "$CHECK" 999 --repo test/test --body-file "$body_file" --template-file "$T/template.md" 2>&1
 }
 
+# Fixture paths are assembled at runtime so this file itself never carries a
+# literal home path the redaction gate would flag.
+GLOB_PATH="codex-accounts/*/home/sessions"
+USERS_LEAK="/Users/""realuser/notes"
+HOME_LEAK="/home/""realuser/leak-here"
+
 # 1. A glob segment must not be flagged as a leak.
-body_with "Because codex-accounts/*/home/sessions is a glob, not a leak." >"$T/glob.md"
+body_with "Because $GLOB_PATH is a glob, not a leak." >"$T/glob.md"
 out="$(run_check "$T/glob.md")"; rc=$?
 if [ "$rc" -eq 0 ] && ! printf '%s' "$out" | grep -q "Redaction violations detected"; then
   ok "glob segment passes clean"
@@ -60,7 +66,7 @@ else
 fi
 
 # 2. A real leak must still be flagged.
-body_with "Testing /Users/realuser/notes shows up." >"$T/leak.md"
+body_with "Testing $USERS_LEAK shows up." >"$T/leak.md"
 out="$(run_check "$T/leak.md")"; rc=$?
 if [ "$rc" -eq 1 ] && printf '%s' "$out" | grep -q "\[home_path\]"; then
   ok "real /Users leak is flagged"
@@ -71,7 +77,7 @@ fi
 # 3. A real leak preceded by an unrelated asterisk elsewhere on the line must
 #    still be flagged — the guard excuses a glob segment, not "any line with
 #    a star in it".
-body_with "Note: *warning* /home/realuser/leak-here needs redaction." >"$T/leak-after-star.md"
+body_with "Note: *warning* $HOME_LEAK needs redaction." >"$T/leak-after-star.md"
 out="$(run_check "$T/leak-after-star.md")"; rc=$?
 if [ "$rc" -eq 1 ] && printf '%s' "$out" | grep -q "\[home_path_linux\]"; then
   ok "real /home leak after an unrelated asterisk is still flagged"

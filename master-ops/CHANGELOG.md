@@ -42,6 +42,16 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+Seat-ahead promotion, batch 4 runbooks (2026-09-24):
+
+- `docs/runbooks/ctx-query-doctrine.md`, `docs/runbooks/dispatch-collision-warning.md`,
+  `docs/runbooks/harness-selfcheck.md`, `docs/runbooks/host-harness-inventory.md`,
+  `docs/runbooks/master-placement.md`, `docs/runbooks/orca-surface-drift.md`,
+  `docs/runbooks/pr-body-check.md`, `docs/runbooks/worker-host-diversity.md`: promoted from the
+  seat with seat identifiers (session ids, terminal handles, workspace selectors, tracker ids,
+  a peer seat name, Korean example text) de-instanced. Draft PR: the owner reads every file
+  before it leaves draft, per charter 01 section 1.1.
+
 Seat-ahead promotion, batch 3 template three (2026-09-22):
 
 - `scripts/test-spawn-test.sh`: added the failability block proving a `spawn-test` mutant whose

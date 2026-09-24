@@ -72,25 +72,26 @@ else
 fi
 
 # Ported from the seat's check_template cases (owner direction 2026-09-23).
-# TEMPLATE_MANIFEST_FILE and TEMPLATE_ADOPTION_LEDGER are overridable, so each
-# case points them at a fixture instead of this repository's own MANIFEST.json.
-run_template() {
-  # $1 = TEMPLATE_MANIFEST_FILE, $2 = TEMPLATE_ADOPTION_LEDGER
-  TEMPLATE_MANIFEST_FILE="$1" \
-  TEMPLATE_ADOPTION_LEDGER="$2" \
-  "$SELFCHECK_BIN" 2>/dev/null | grep -m1 '^Template:'
-}
+# Exercise template_adoption_probe directly, like tracker_candidate_from_line
+# above, instead of running the whole self-check: the later Skills/Hooks/Card
+# checks abort this script early in a bare template checkout (no real
+# WORKSPACE_ROOT), which would make the aggregate exit code meaningless for
+# asserting this probe's own exit-code contribution.
+eval "$(sed -n '/^template_adoption_probe()/,/^}/p' "$SELFCHECK_BIN")"
 
 check_template() {
-  local name="$1" expect="$2" manifest="$3" ledger="$4" line
-  line=$(run_template "$manifest" "$ledger")
-  if printf '%s' "$line" | grep -qF "$expect"; then
+  # $1 = case name, $2 = expected substring, $3 = expected exit code,
+  # $4 = TEMPLATE_MANIFEST_FILE, $5 = TEMPLATE_ADOPTION_LEDGER
+  local name="$1" expect="$2" expect_rc="$3" manifest="$4" ledger="$5" line rc
+  line=$(TEMPLATE_MANIFEST_FILE="$manifest" TEMPLATE_ADOPTION_LEDGER="$ledger" template_adoption_probe)
+  rc=$?
+  if printf '%s' "$line" | grep -qF "$expect" && [ "$rc" -eq "$expect_rc" ]; then
     echo "ok   — $name"
     pass=$((pass + 1))
   else
     echo "FAIL — $name"
-    echo "       expected substring: $expect"
-    echo "       actual line:        $line"
+    echo "       expected substring: $expect (exit $expect_rc)"
+    echo "       actual line:        $line (exit $rc)"
     fail=$((fail + 1))
   fi
 }
@@ -106,8 +107,10 @@ template_mutant_check() {
     echo "FAIL: mutant not generated" >&2
     exit 1
   fi
-  chmod +x "$mut"
-  mline=$(SELFCHECK_BIN="$mut" run_template "$manifest" "$ledger")
+  mline=$(
+    eval "$(sed -n '/^template_adoption_probe()/,/^}/p' "$mut")"
+    TEMPLATE_MANIFEST_FILE="$manifest" TEMPLATE_ADOPTION_LEDGER="$ledger" template_adoption_probe
+  )
   rm -f "$mut"
   case "$mline" in
     *"$original"*)
@@ -130,27 +133,27 @@ TEMPLATE_LEDGER_MISSING="$TMP/no-ledger.md"
 TEMPLATE_LEDGER_PRESENT="$TMP/template-adoption-2026-08-08.md"
 echo "# Adoption ledger" > "$TEMPLATE_LEDGER_PRESENT"
 
-# T1. Manifest absent.
+# T1. Manifest absent: non-zero exit.
 check_template "manifest absent is reported" \
-  "Template: absent (MANIFEST.json missing)" \
+  "Template: absent (MANIFEST.json missing)" 1 \
   "$TEMPLATE_MANIFEST_ABSENT" "$TEMPLATE_LEDGER_MISSING"
 template_mutant_check "manifest-absent" \
   's/absent (MANIFEST.json missing)/MUTANT-VERDICT/' \
   "$TEMPLATE_MANIFEST_ABSENT" "$TEMPLATE_LEDGER_MISSING" \
   "absent (MANIFEST.json missing)"
 
-# T2. Stamped manifest, adoption ledger missing.
+# T2. Stamped manifest, adoption ledger missing: non-zero exit.
 check_template "stamped manifest with missing ledger is reported" \
-  "Template: v0.4.1 stamped, adoption ledger missing" \
+  "Template: v0.4.1 stamped, adoption ledger missing" 1 \
   "$TEMPLATE_MANIFEST_STAMPED" "$TEMPLATE_LEDGER_MISSING"
 template_mutant_check "ledger-missing" \
   's/stamped, adoption ledger missing/MUTANT-VERDICT/' \
   "$TEMPLATE_MANIFEST_STAMPED" "$TEMPLATE_LEDGER_MISSING" \
   "stamped, adoption ledger missing"
 
-# T3. Stamped manifest, adoption ledger present.
+# T3. Stamped manifest, adoption ledger present: zero exit.
 check_template "stamped manifest with ledger present is reported" \
-  "Template: v0.4.1 stamped, adoption incomplete" \
+  "Template: v0.4.1 stamped, adoption incomplete" 0 \
   "$TEMPLATE_MANIFEST_STAMPED" "$TEMPLATE_LEDGER_PRESENT"
 template_mutant_check "ledger-present" \
   's/stamped, adoption incomplete/MUTANT-VERDICT/' \

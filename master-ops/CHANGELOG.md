@@ -44,15 +44,20 @@ installation was taken from alongside the tag.
 
 Seat-ahead promotion, batch 3 template four (2026-09-24):
 
-- `scripts/harness-selfcheck.sh`: ported the seat's `Template:` probe as the first check, reading
-  `MANIFEST.json` and an adoption-ledger path from `TEMPLATE_MANIFEST_FILE`/`TEMPLATE_ADOPTION_LEDGER`
-  (both overridable, defaulting to the ops repository root and the seat's ledger file name). An
-  install's boot banner can now say which template version it was stamped from and whether adoption
-  is recorded, the same as the seat.
+- `scripts/harness-selfcheck.sh`: ported the seat's `Template:` probe as the first check, into a
+  `template_adoption_probe` function, reading `MANIFEST.json` and an adoption-ledger path from
+  `TEMPLATE_MANIFEST_FILE`/`TEMPLATE_ADOPTION_LEDGER` (both overridable, defaulting to the ops
+  repository root and the seat's ledger file name; this template ships its own `MANIFEST.json` but no
+  ledger, so a default run here takes the "ledger missing" branch). The python substitution is guarded
+  with `|| probe=""` under `set -e`, so a malformed `MANIFEST.json` falls through to the "undecided"
+  line instead of aborting the script with no output. An install's boot banner can now say which
+  template version it was stamped from and whether adoption is recorded, the same as the seat.
 - `scripts/test-seat-check.sh`: ported the seat's `check_template` cases (manifest absent, stamped
-  with the ledger missing, stamped with the ledger present), each with its own generated-mutant
-  failability guard (`FAIL: mutant not generated` on a no-op `sed`, verdict-text mutation asserted to
-  change the reported line).
+  with the ledger missing, stamped with the ledger present), each asserting `template_adoption_probe`'s
+  exit-code contribution (1, 1, 0) as well as its printed line — exercised directly via `eval` of the
+  function body sourced from `harness-selfcheck.sh` — plus each case's own generated-mutant failability
+  guard (`FAIL: mutant not generated` on a no-op `sed`, verdict-text mutation asserted to change the
+  reported line).
 
 Seat-ahead promotion, batch 3 template three (2026-09-22):
 

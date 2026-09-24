@@ -23,16 +23,27 @@ exit_code=0
 # Ported from the seat's harness-selfcheck.sh (owner direction 2026-09-23): a
 # generated operations repository stamps the template version it was created
 # from into MANIFEST.json, then records adoption progress in a ledger under
-# docs/observability/. Neither file exists in this template itself, so both
-# variables are overridable, letting a test fixture stand in for either.
+# docs/observability/. This template ships its own MANIFEST.json but no
+# ledger, so a default run here takes the "ledger missing" branch; both paths
+# stay overridable so a test fixture can stand in for either.
 TEMPLATE_MANIFEST_FILE="${TEMPLATE_MANIFEST_FILE:-$OPS_DIR/MANIFEST.json}"
 TEMPLATE_ADOPTION_LEDGER="${TEMPLATE_ADOPTION_LEDGER:-$OPS_DIR/docs/observability/template-adoption-2026-08-08.md}"
 
-if [ ! -f "$TEMPLATE_MANIFEST_FILE" ]; then
-  echo "Template: absent (MANIFEST.json missing)"
-  exit_code=1
-else
-  template_probe=$(python3 - "$TEMPLATE_MANIFEST_FILE" << 'EOFTEMPLATE' 2>/dev/null
+# A function, not inline code, so a test can exercise it directly (like
+# tracker_candidate_from_line below) instead of running the whole script and
+# hitting whatever the later Skills/Hooks/Card checks do in that environment.
+# Return status doubles as this probe's exit-code contribution.
+template_adoption_probe() {
+  if [ ! -f "$TEMPLATE_MANIFEST_FILE" ]; then
+    echo "Template: absent (MANIFEST.json missing)"
+    return 1
+  fi
+  local probe
+  # The `|| probe=""` guard matters under `set -e`: without it, a python3
+  # failure (malformed MANIFEST.json) fails the assignment itself and aborts
+  # the whole script with no output instead of falling through to the
+  # "undecided" case below.
+  probe=$(python3 - "$TEMPLATE_MANIFEST_FILE" << 'EOFTEMPLATE' 2>/dev/null
 import json, sys
 
 manifest_path = sys.argv[1]
@@ -46,27 +57,30 @@ elif not isinstance(files, list):
 else:
     print(f"OK|{manifest_version.strip()}")
 EOFTEMPLATE
-  )
-  case "$template_probe" in
+  ) || probe=""
+  case "$probe" in
     OK\|*)
-      stamped_version=${template_probe#OK|}
+      local stamped_version="${probe#OK|}"
       if [ -f "$TEMPLATE_ADOPTION_LEDGER" ]; then
         echo "Template: $stamped_version stamped, adoption incomplete (see $TEMPLATE_ADOPTION_LEDGER)"
+        return 0
       else
         echo "Template: $stamped_version stamped, adoption ledger missing"
-        exit_code=1
+        return 1
       fi
       ;;
     ERROR\|*)
-      echo "Template: undecided (${template_probe#ERROR|})"
-      exit_code=1
+      echo "Template: undecided (${probe#ERROR|})"
+      return 1
       ;;
     *)
       echo "Template: undecided (could not read TEMPLATE-VERSION or MANIFEST.json)"
-      exit_code=1
+      return 1
       ;;
   esac
-fi
+}
+
+template_adoption_probe || exit_code=1
 
 # --- Seat check ---
 # A master that is seated in the wrong place passes every other check in this

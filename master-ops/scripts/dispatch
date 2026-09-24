@@ -463,7 +463,7 @@ if is_multi_vendor_host "$RUNTIME"; then
     echo "  ledger and makes the register probe grep for a string that never appears." >&2
     exit 2
   }
-  if ! printf '%s\n' "$HOST_IDS" | grep -qx -- "$MODEL"; then
+  if ! printf '%s\n' "$HOST_IDS" | grep -Fxq -- "$MODEL"; then
     echo "✗ $RUNTIME does not offer model=$MODEL" >&2
     echo "  This host runs several vendors' models, so the check is its own list rather" >&2
     echo "  than a vendor prefix. Ids it offers that the tier policy also allows:" >&2

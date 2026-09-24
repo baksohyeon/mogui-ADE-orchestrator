@@ -235,7 +235,7 @@ contract_delivery_test() (
   set +e
   set -u
   local dispatch="$1" work block contract fake_home sha script_file
-  local out status dest token_line_no mutant_block
+  local out status dest token_line_no mutant_block spec_tail
 
   block=$(awk '$0=="if [ -n \"$CONTRACT\" ]; then"{f=1} f{print} f&&$0=="fi"{exit}' "$dispatch")
   [ -n "$block" ] || { echo "FAIL: could not extract the contract delivery block" >&2; return 1; }
@@ -288,7 +288,11 @@ contract_delivery_test() (
     echo "FAIL: dispatch did not print the contract-delivered confirmation line" >&2
     return 1
   fi
-  if ! printf '%s\n' "$out" | grep -qF "SPEC_TAIL::" || ! printf '%s\n' "$out" | grep -qF "$dest"; then
+  # Match only inside the SPEC_TAIL:: marker's own output: $dest also appears in
+  # the "contract delivered" confirmation line above, so matching against all of
+  # $out would pass even if the path were never written into $SPEC.
+  spec_tail=$(printf '%s\n' "$out" | awk '/^SPEC_TAIL::/{f=1} f{print}')
+  if [ -z "$spec_tail" ] || ! printf '%s\n' "$spec_tail" | grep -qF "$dest"; then
     echo "FAIL: delivered contract path was not written into the spec" >&2
     return 1
   fi

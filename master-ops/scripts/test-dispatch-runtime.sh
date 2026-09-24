@@ -292,7 +292,11 @@ contract_delivery_test() (
   # the "contract delivered" confirmation line above, so matching against all of
   # $out would pass even if the path were never written into $SPEC.
   spec_tail=$(printf '%s\n' "$out" | awk '/^SPEC_TAIL::/{f=1} f{print}')
-  if [ -z "$spec_tail" ] || ! printf '%s\n' "$spec_tail" | grep -qF "$dest"; then
+  if [ -z "$spec_tail" ]; then
+    echo "FAIL: dispatch output has no SPEC_TAIL:: marker" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$spec_tail" | grep -qF "$dest"; then
     echo "FAIL: delivered contract path was not written into the spec" >&2
     return 1
   fi

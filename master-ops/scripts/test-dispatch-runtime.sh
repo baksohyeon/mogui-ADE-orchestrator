@@ -323,4 +323,87 @@ contract_delivery_test() (
 )
 contract_delivery_test "$dispatch" || exit 1
 
-echo "dispatch multi-vendor / check-only / contract-delivery regression tests passed"
+# --- Feature: cursor pre-trust before launch --------------------------------
+#
+# Cursor Agent's launch flags (--force --trust) cover the approval/permission
+# prompt but not the first-visit workspace-trust prompt (charter's
+# dispatch-gate and worker-routing-review docs), so dispatch must run
+# scripts/cursor-worker-pretrust before a cursor launch and fail closed on a
+# skipped summary, the same way ensure_codex_pretrust does for codex. Extracts
+# ensure_cursor_pretrust and runs it against a fake cursor-worker-pretrust.
+cursor_pretrust_test() (
+  set +e
+  set -u
+  local dispatch="$1" work fn script_file out status mutant_fn
+
+  fn=$(awk '$0=="ensure_cursor_pretrust() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  [ -n "$fn" ] || { echo "FAIL: could not extract ensure_cursor_pretrust" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-cursor-pretrust-test.$$"
+  mkdir -p "$work"
+  trap 'rm -rf "$work"' EXIT
+  cat > "$work/cursor-worker-pretrust" <<'BIN'
+#!/bin/bash
+printf '%s/.workspace-trusted: already trusted\n' "$1"
+printf 'Summary: 0 added, 0 updated, 1 already trusted\n'
+BIN
+  chmod +x "$work/cursor-worker-pretrust"
+
+  write_script() {
+    local outfile="$1" body="$2"
+    {
+      echo 'set -u'
+      printf 'CURSOR_PRETRUST_BIN=%s\n' "$work/cursor-worker-pretrust"
+      printf '%s\n' "$body"
+      printf 'ensure_cursor_pretrust cursor %s && echo TRUSTED\n' "$work"
+    } > "$outfile"
+  }
+
+  script_file="$work/run.sh"
+  write_script "$script_file" "$fn"
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^TRUSTED$' \
+      || ! printf '%s\n' "$out" | grep -q 'pre-trust ✓ cursor'; then
+    echo "FAIL: ensure_cursor_pretrust should succeed against a fake pre-trust binary reporting a trusted summary" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   — ensure_cursor_pretrust succeeds against a fake cursor-worker-pretrust reporting a trusted summary"
+
+  # A skipped summary must fail closed: it leaves the trust prompt in place.
+  cat > "$work/cursor-worker-pretrust" <<'BIN'
+#!/bin/bash
+printf 'SKIP no python3 found\n'
+printf 'Summary: skipped — 0 added, 0 updated, 0 already trusted\n'
+BIN
+  chmod +x "$work/cursor-worker-pretrust"
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ]; then
+    echo "FAIL: ensure_cursor_pretrust should fail closed on a skipped pre-trust summary" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   — ensure_cursor_pretrust fails closed on a skipped pre-trust summary"
+
+  # Failability: if the *skipped*) case stopped matching, a worktree the
+  # pretrust binary could not actually trust would still be launched into.
+  mutant_fn=${fn/'*skipped*)'/'*nevermatches*)'}
+  if [ "$mutant_fn" = "$fn" ]; then
+    echo "FAIL: skipped-case mutant did not change the source" >&2
+    return 1
+  fi
+  write_script "$script_file" "$mutant_fn"
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^TRUSTED$'; then
+    echo "FAIL: failability — mutant dropping the *skipped*) case should have wrongly succeeded, but still failed closed" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   — failability: dropping the *skipped*) case makes the fail-closed assertion above fail"
+)
+cursor_pretrust_test "$dispatch" || exit 1
+
+echo "dispatch multi-vendor / check-only / contract-delivery / cursor-pretrust regression tests passed"

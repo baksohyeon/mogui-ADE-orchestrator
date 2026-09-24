@@ -272,6 +272,7 @@ runtime_command() {
 }
 
 PRETRUST_BIN={{RUNTIME_ROOT}}/scripts/codex-worker-pretrust
+CURSOR_PRETRUST_BIN={{RUNTIME_ROOT}}/scripts/cursor-worker-pretrust
 
 # The registry prescribes pre-trust for codex instead of a launch flag. RUN it
 # here rather than telling the operator to. A manual step in front of a dispatch
@@ -310,6 +311,44 @@ ensure_codex_pretrust() {
       printf '%s\n' "$out" >&2; return 1;;
     *)
       echo "pre-trust ✓ codex · $summary";;
+  esac
+}
+
+# Cursor Agent's launch flags (--force --trust) cover the approval/permission
+# prompt but not the first-visit workspace-trust prompt, which Cursor Agent
+# stores separately under ~/.cursor/projects (measured 2026-08-03, per the
+# charter's dispatch-gate and worker-routing-review docs). Run pre-trust here
+# for the same reason ensure_codex_pretrust does: a manual step in front of a
+# dispatch is a step that gets skipped, and an unresolved trust prompt reads
+# as idle, so the injected spec is lost while every step reports success.
+ensure_cursor_pretrust() {
+  [ "$1" = "cursor" ] || return 0
+  local wt_path="${2#path:}" out summary
+  if [ -z "$wt_path" ] || [ "${wt_path#/}" = "$wt_path" ]; then
+    echo "✗ cursor needs an absolute worktree path to pre-trust; got '${2:-<none>}'" >&2
+    echo "  Cursor Agent's --force --trust flags do not cover the first-visit workspace-trust" >&2
+    echo "  prompt, which is stored separately. Dispatch with --worktree path:<absolute-path>," >&2
+    echo "  or choose a runtime whose approval flags are measured to cover it." >&2
+    return 1
+  fi
+  if [ ! -x "$CURSOR_PRETRUST_BIN" ]; then
+    echo "✗ cursor pre-trust script not executable: $CURSOR_PRETRUST_BIN" >&2
+    return 1
+  fi
+  out=$("$CURSOR_PRETRUST_BIN" "$wt_path" 2>&1) || {
+    echo "✗ cursor pre-trust failed (exit $?)" >&2; printf '%s\n' "$out" >&2; return 1; }
+  summary=$(printf '%s\n' "$out" | grep -m1 '^Summary:' || true)
+  case "$summary" in
+    *skipped*)
+      echo "✗ cursor pre-trust reported: $summary" >&2
+      echo "  A skipped summary leaves the trust prompt in place, which is a delivery gate," >&2
+      echo "  not a warning. Resolve pre-trust or dispatch to a different runtime." >&2
+      return 1;;
+    "")
+      echo "✗ cursor pre-trust produced no Summary line — unmeasured, treating as not trusted" >&2
+      printf '%s\n' "$out" >&2; return 1;;
+    *)
+      echo "pre-trust ✓ cursor · $summary";;
   esac
 }
 
@@ -541,6 +580,7 @@ fi
 # race. This ordering still keeps dry runs, gate denials, and pretrust failures
 # from spending budget.
 ensure_codex_pretrust "$RUNTIME" "$WORKTREE" || exit 2
+ensure_cursor_pretrust "$RUNTIME" "$WORKTREE" || exit 2
 
 CHK=$("$GATE" "${GATE_ARGS[@]}" 2>/dev/null)
 ALLOW=$(echo "$CHK" | jqf "d['allow']")

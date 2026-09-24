@@ -36,11 +36,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Redaction patterns (from product repo gitleaks config)
-# A '*' immediately before the path marks a glob segment (e.g.
-# codex-accounts/*/home/sessions), not a leaked home directory.
 declare -a PATTERNS=(
-  "home_path:(^|[^*])/Users/[A-Za-z0-9._-]+"
-  "home_path_linux:(^|[^*])/home/[A-Za-z0-9._-]+"
+  "home_path:/Users/[A-Za-z0-9._-]+"
+  "home_path_linux:/home/[A-Za-z0-9._-]+"
 )
 
 # Check if gh is available
@@ -59,13 +57,24 @@ scan_text() {
   local violations=""
   local line_num=1
   while IFS= read -r line; do
-    for pattern_def in "${PATTERNS[@]}"; do
-      pattern_name="${pattern_def%%:*}"
-      pattern_re="${pattern_def#*:}"
-      if printf '%s' "$line" | grep -qE "$pattern_re"; then
-        # Record violation without printing the actual matched value
-        violations="${violations}${violations:+\n}${surface}|${number}|${author}|${locator}|${pattern_name}"
+    local -a tokens
+    read -ra tokens <<< "$line"
+    for token in "${tokens[@]}"; do
+      # A '*/' or '/*/' anywhere in the same whitespace-delimited path token
+      # marks a glob segment (e.g. codex-accounts/*/home/sessions), not a
+      # leaked home directory. A real leak elsewhere on the line, or in a
+      # different token, still matches below.
+      if printf '%s' "$token" | grep -qE '(\*/|/\*/)'; then
+        continue
       fi
+      for pattern_def in "${PATTERNS[@]}"; do
+        pattern_name="${pattern_def%%:*}"
+        pattern_re="${pattern_def#*:}"
+        if printf '%s' "$token" | grep -qE "$pattern_re"; then
+          # Record violation without printing the actual matched value
+          violations="${violations}${violations:+\n}${surface}|${number}|${author}|${locator}|${pattern_name}"
+        fi
+      done
     done
     ((line_num++))
   done <<< "$text"
@@ -102,14 +111,20 @@ while IFS= read -r pr_line; do
   fi
 
   # Scan PR comments
-  COMMENTS=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json comments --jq '.comments[].body' 2>/dev/null || echo "") || true
+  COMMENTS=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json comments --jq '.comments[].body' 2>/dev/null) || {
+    echo "conversation-redaction-scan: FAIL — could not fetch comments for PR#${PR_NUMBER} from $REPO" >&2
+    exit 2
+  }
   if [[ -n "$COMMENTS" ]]; then
     result=$(scan_text "pr_comment" "$PR_NUMBER" "$AUTHOR" "PR#${PR_NUMBER}/comments" "$COMMENTS")
     [[ -n "$result" ]] && FINDINGS="${FINDINGS}${FINDINGS:+$'\n'}${result}"
   fi
 
   # Scan review comments
-  REVIEWS=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json reviews --jq '.reviews[].body' 2>/dev/null || echo "") || true
+  REVIEWS=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json reviews --jq '.reviews[].body' 2>/dev/null) || {
+    echo "conversation-redaction-scan: FAIL — could not fetch reviews for PR#${PR_NUMBER} from $REPO" >&2
+    exit 2
+  }
   if [[ -n "$REVIEWS" ]]; then
     result=$(scan_text "review_comment" "$PR_NUMBER" "$AUTHOR" "PR#${PR_NUMBER}/reviews" "$REVIEWS")
     [[ -n "$result" ]] && FINDINGS="${FINDINGS}${FINDINGS:+$'\n'}${result}"

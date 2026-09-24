@@ -71,6 +71,28 @@ Seat-ahead promotion, batch 4 runbooks (2026-09-24):
   a peer seat name, Korean example text) de-instanced. Draft PR: the owner reads every file
   before it leaves draft, per charter 01 section 1.1.
 
+Product-repositories schema, template-to-seat (2026-09-23):
+
+- `scripts/hooks/product-path-guard.sh`: `load_product_repo` (single string) is now
+  `load_product_repositories`, printing one absolute path per line; every guarded
+  target check (`Edit`/`Write`/`NotebookEdit` file paths and the Bash command
+  parser's `PRODUCT_ROOT`) now matches under any listed repository instead of one.
+  Reads the canonical `product_repositories` array, still accepts the one-entry
+  `product_repo` string, and warns to stderr when both are set. Fixes a seat whose
+  live config carries three product repositories under `product_repositories`:
+  installing this guard verbatim blocked every tool call with `cannot load
+  product_repo`.
+- `scripts/test-product-path-guard.sh`: fixture config now uses a two-repository
+  `product_repositories` array; added cases for the second repository (file-path
+  and Bash write) and a path outside both. All prior cases stay green.
+- `scripts/dispatch-collision-check`: `MOGUI_PRODUCT_REPO` now accepts either a
+  single `owner/repo` string or a JSON array of them, scanning PRs across every
+  configured product repository instead of one.
+- `config/instance-runtime.example.json`, `onboarding/01-preflight.md`,
+  `02-workspace-facts.md`, `08-settings-and-skills.md`: document
+  `product_repositories` as the canonical key, with `product_repo` named as the
+  still-accepted one-entry form.
+
 Seat-ahead promotion, batch 3 template three (2026-09-22):
 
 - `scripts/test-spawn-test.sh`: added the failability block proving a `spawn-test` mutant whose

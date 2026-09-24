@@ -42,6 +42,35 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+Dispatch seat-ahead features (2026-09-24):
+
+- `scripts/dispatch`: ported `MULTI_VENDOR_HOSTS`, `is_multi_vendor_host`, and `host_model_ids` from
+  the seat, plus the mismatch-check branch that validates a model against a multi-vendor host's own
+  list (`cursor-agent models`) instead of a vendor prefix. `runtime_accepts_vendor` still handles
+  single-vendor hosts.
+- `scripts/dispatch`: ported the contract-delivery block that copies `--contract` into
+  `$HOME/.mogui/dispatch-contracts/<hash>-<name>.md`, appends an acknowledgement token, prints
+  `contract delivered · <path> · read-token required`, and writes the delivered path into the spec
+  the worker receives.
+- Did not port the seat's `GATE_LEDGER` mktemp/cp/`EXIT`-trap workaround for `--check-only`: this
+  template already keeps a dry run from consuming the fanout cap through `dispatch-gate`'s own
+  `--no-record` flag, which the seat has not adopted yet. Porting the seat's copy here would add dead
+  machinery beside the mechanism already doing the job.
+- `scripts/test-dispatch-runtime.sh`: added one case per feature above (including the already-met
+  check-only case, to guard `--no-record` going forward), each extracting its function or block by
+  exact-line range and running it in an isolated subshell against a fake `cursor-agent`/`dispatch-gate`
+  or `$HOME`, paired with a mutant-based failability check.
+
+Seat-ahead promotion, batch 4 runbooks (2026-09-24):
+
+- `docs/runbooks/ctx-query-doctrine.md`, `docs/runbooks/dispatch-collision-warning.md`,
+  `docs/runbooks/harness-selfcheck.md`, `docs/runbooks/host-harness-inventory.md`,
+  `docs/runbooks/master-placement.md`, `docs/runbooks/orca-surface-drift.md`,
+  `docs/runbooks/pr-body-check.md`, `docs/runbooks/worker-host-diversity.md`: promoted from the
+  seat with seat identifiers (session ids, terminal handles, workspace selectors, tracker ids,
+  a peer seat name, Korean example text) de-instanced. Draft PR: the owner reads every file
+  before it leaves draft, per charter 01 section 1.1.
+
 Seat-ahead promotion, batch 3 template four (2026-09-24):
 
 - `scripts/harness-selfcheck.sh`: ported the seat's `Template:` probe as the first check, into a

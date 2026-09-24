@@ -42,10 +42,31 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+Conversation-redaction-scan glob false positive, follow-up (2026-09-24):
+
+- `master-ops/scripts/conversation-redaction-scan`: the glob guard is now scoped to the
+  whitespace-delimited path token (`*/` or `/*/` anywhere in the same token), replacing the
+  single-preceding-character check that could excuse a real leak sitting right after an
+  unrelated `*`. The PR-comment and PR-review-body fetches now fail closed (exit 2) like the
+  PR-list and issue-list fetches, instead of swallowing a fetch failure and reporting 0 findings.
+- Added `master-ops/scripts/test-pr-body-check-redaction.sh` covering `pr-body-check`'s
+  `(?<!\*)` guard: glob passes, real leak fails, real leak after an unrelated asterisk still
+  fails, plus a failability mutant.
+
 Conversation-redaction-scan glob false positive (2026-09-22):
 
 - `master-ops/scripts/conversation-redaction-scan` no longer flags `/Users/` or `/home/` segments immediately preceded by a glob `*` (for example `codex-accounts/*/home/sessions`) as leaked home directories; real leaks still match. The summary line now labels the scanned total as items (PRs+issues) instead of calling the combined count PRs.
 - The `/home/` finding class is now `home_path_linux`, issue-list failures fail closed, and `master-ops/scripts/pr-body-check` applies the same glob guard as the conversation scan.
+
+Seat-ahead promotion, batch 4 runbooks (2026-09-24):
+
+- `docs/runbooks/ctx-query-doctrine.md`, `docs/runbooks/dispatch-collision-warning.md`,
+  `docs/runbooks/harness-selfcheck.md`, `docs/runbooks/host-harness-inventory.md`,
+  `docs/runbooks/master-placement.md`, `docs/runbooks/orca-surface-drift.md`,
+  `docs/runbooks/pr-body-check.md`, `docs/runbooks/worker-host-diversity.md`: promoted from the
+  seat with seat identifiers (session ids, terminal handles, workspace selectors, tracker ids,
+  a peer seat name, Korean example text) de-instanced. Draft PR: the owner reads every file
+  before it leaves draft, per charter 01 section 1.1.
 
 Seat-ahead promotion, batch 3 template three (2026-09-22):
 

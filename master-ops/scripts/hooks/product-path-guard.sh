@@ -104,8 +104,13 @@ if repos_value is not None:
         print("configuration malformed: product_repositories must be a non-empty array", file=sys.stderr)
         raise SystemExit(1)
     repos = [absolute(entry, "product_repositories") for entry in repos_value]
-    if isinstance(repo_value, str) and repo_value.strip():
-        print("configuration warning: product_repositories and product_repo are both set; product_repositories wins", file=sys.stderr)
+    if repo_value is not None:
+        if not isinstance(repo_value, str):
+            print("configuration malformed: product_repo must be a string or null", file=sys.stderr)
+            raise SystemExit(1)
+        if repo_value.strip():
+            absolute(repo_value, "product_repo")
+            print("configuration warning: product_repositories and product_repo are both set; product_repositories wins", file=sys.stderr)
 elif repo_value is not None:
     repos = [absolute(repo_value, "product_repo")]
 else:
@@ -148,7 +153,7 @@ input=$(cat)
 if ! printf '%s' "$input" | python3 -c 'import json,sys; payload=json.load(sys.stdin); tool=payload.get("tool_input") if isinstance(payload, dict) else None; raise SystemExit(0 if isinstance(payload, dict) and isinstance(tool, dict) else 1)' >/dev/null 2>&1; then
   blocked "invalid hook input" ""
 fi
-repos=$(load_product_repositories 2>/dev/null) || blocked "cannot load product_repositories from $INSTANCE_RUNTIME_CONFIG" ""
+repos=$(load_product_repositories) || blocked "cannot load product_repositories from $INSTANCE_RUNTIME_CONFIG" ""
 repo_array=()
 while IFS= read -r repo_line; do
   [ -n "$repo_line" ] && repo_array+=("$repo_line")

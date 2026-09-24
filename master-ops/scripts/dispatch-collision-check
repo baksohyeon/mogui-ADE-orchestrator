@@ -31,11 +31,13 @@ def resolve_product_repos(raw):
         parsed = json.loads(raw)
     except json.JSONDecodeError:
         return [raw]
-    if isinstance(parsed, list) and parsed:
-        repos = [str(item).strip() for item in parsed if str(item).strip()]
-        if repos:
-            return repos
-    return [raw]
+    if isinstance(parsed, list):
+        if not parsed or any(not isinstance(item, str) or not item.strip() for item in parsed):
+            raise ValueError(f"MOGUI_PRODUCT_REPO must be a non-empty array of strings: {raw!r}")
+        return [item.strip() for item in parsed]
+    if isinstance(parsed, str) and parsed.strip():
+        return [parsed.strip()]
+    raise ValueError(f"MOGUI_PRODUCT_REPO must be an owner/repo string or a JSON array of them: {raw!r}")
 
 
 def scope_files(contract_text, tracked, root):
@@ -115,9 +117,13 @@ def main():
     try:
         contract = pathlib.Path(sys.argv[1]).resolve()
         ledger = pathlib.Path(sys.argv[2]).expanduser()
-        product_repos = resolve_product_repos(
-            sys.argv[3] if len(sys.argv) > 3 else "baksohyeon/mogui-ADE-orchestrator"
-        )
+        try:
+            product_repos = resolve_product_repos(
+                sys.argv[3] if len(sys.argv) > 3 else "baksohyeon/mogui-ADE-orchestrator"
+            )
+        except ValueError as exc:
+            print(f"WARNING: {exc}")
+            return
         root = pathlib.Path(
             subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip()
         )

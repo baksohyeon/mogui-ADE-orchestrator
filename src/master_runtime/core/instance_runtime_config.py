@@ -146,7 +146,9 @@ def load_instance_runtime_config(
 
     product_env = _optional_str(env.get(PRODUCT_REPO_ENV))
     if product_env is not None:
-        product_repositories: tuple[str, ...] = (product_env,)
+        product_repositories: tuple[str, ...] = (
+            _require_absolute_path(product_env, PRODUCT_REPO_ENV),
+        )
         warnings: tuple[str, ...] = ()
     else:
         product_repositories, warnings = _parse_product_repositories(payload)
@@ -210,7 +212,6 @@ def _parse_product_repositories(payload: Mapping[str, Any]) -> tuple[tuple[str, 
     raw_list = payload.get("product_repositories")
     raw_string = payload.get("product_repo")
 
-    repos_from_list: tuple[str, ...] | None = None
     if raw_list is not None:
         if not isinstance(raw_list, list) or not raw_list:
             raise InstanceRuntimeConfigError(
@@ -219,8 +220,20 @@ def _parse_product_repositories(payload: Mapping[str, Any]) -> tuple[tuple[str, 
         repos_from_list = tuple(
             _require_absolute_path(entry, "product_repositories") for entry in raw_list
         )
+        # product_repositories wins outright: a malformed legacy product_repo
+        # must not block a valid array, so it is never validated here, only
+        # checked for presence to raise the redundancy warning.
+        warnings = (
+            (
+                "product_repositories and product_repo are both set in the "
+                "instance runtime config; product_repositories wins and "
+                "product_repo is ignored",
+            )
+            if _product_repo_is_present(raw_string)
+            else ()
+        )
+        return repos_from_list, warnings
 
-    repo_from_string: str | None = None
     if raw_string is not None:
         if not isinstance(raw_string, str):
             raise InstanceRuntimeConfigError(
@@ -228,31 +241,27 @@ def _parse_product_repositories(payload: Mapping[str, Any]) -> tuple[tuple[str, 
             )
         stripped = raw_string.strip()
         if stripped:
-            repo_from_string = _require_absolute_path(stripped, "product_repo")
+            return (_require_absolute_path(stripped, "product_repo"),), ()
 
-    if repos_from_list is not None:
-        warnings = (
-            (
-                "product_repositories and product_repo are both set in the "
-                "instance runtime config; product_repositories wins and "
-                "product_repo is ignored",
-            )
-            if repo_from_string is not None
-            else ()
-        )
-        return repos_from_list, warnings
-    if repo_from_string is not None:
-        return (repo_from_string,), ()
     return (), ()
+
+
+def _product_repo_is_present(raw_string: object) -> bool:
+    if raw_string is None:
+        return False
+    if isinstance(raw_string, str):
+        return bool(raw_string.strip())
+    return True
 
 
 def _require_absolute_path(value: object, field: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise InstanceRuntimeConfigError(f"{field} entries must be non-empty strings")
     stripped = value.strip()
-    if not os.path.isabs(os.path.expanduser(stripped)):
+    expanded = os.path.expanduser(stripped)
+    if not os.path.isabs(expanded):
         raise InstanceRuntimeConfigError(f"{field} entries must be absolute paths: {stripped!r}")
-    return stripped
+    return os.path.abspath(expanded)
 
 
 def _optional_str(value: object) -> str | None:

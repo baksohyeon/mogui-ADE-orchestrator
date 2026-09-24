@@ -9,12 +9,17 @@ trap 'rm -rf "$TMP"' EXIT
 
 product="$TMP/workspace/product"
 product2="$TMP/workspace/product-two"
+product_legacy="$TMP/workspace/product-legacy"
 ops="$TMP/workspace/ops"
 link="$TMP/workspace/product-link"
-mkdir -p "$product" "$product2" "$ops" "$TMP/home" "$TMP/logs"
+mkdir -p "$product" "$product2" "$product_legacy" "$ops" "$TMP/home" "$TMP/logs"
 ln -s "$product" "$link"
 product_real=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$product")
 printf '{"master_host_runtime":"claude","product_repositories":["%s","%s"]}\n' "$product" "$product2" >"$TMP/runtime.json"
+# Legacy one-entry string form must stay covered by a valid fixture: the
+# array fixture above exercises only product_repositories, and the only
+# other product_repo fixture (below) is intentionally malformed.
+printf '{"master_host_runtime":"claude","product_repo":"%s"}\n' "$product_legacy" >"$TMP/runtime-legacy.json"
 
 run_file() {
   local path="$1"
@@ -301,8 +306,12 @@ expect_blocked file-path-repo-two run_file "$product2/file.txt"
 expect_verdict block file-path-repo-two
 expect_blocked bash-repo-two run_bash "cp /dev/null $product2/file.txt"
 expect_verdict block bash-repo-two
-expect_allowed outside-both-repos run_bash "ls" "$ops"
+expect_allowed outside-both-repos run_bash "printf ok > file-two.txt" "$ops"
 expect_verdict pass outside-both-repos
+expect_blocked legacy-string-config-file-path run_file_config "$TMP/runtime-legacy.json" "$product_legacy/file.txt"
+expect_verdict block legacy-string-config-file-path
+expect_allowed legacy-string-config-outside run_file_config "$TMP/runtime-legacy.json" "$ops/file.txt"
+expect_verdict pass legacy-string-config-outside
 
 if [ ! -s "$TMP/logs/fire.jsonl" ]; then
   echo "FAIL: MOGUI_HOOK_FIRE_LOG was ignored" >&2

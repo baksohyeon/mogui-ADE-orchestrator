@@ -171,6 +171,24 @@ def test_product_repo_relative_path_is_malformed(tmp_path: Path) -> None:
         load_instance_runtime_config(config_path, environ={})
 
 
+def test_malformed_product_repo_does_not_block_valid_array(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "instance-runtime.json",
+        {"product_repositories": ["/repo-one"], "product_repo": 123},
+    )
+    loaded = load_instance_runtime_config(config_path, environ={})
+    assert loaded.require_product_repositories() == ("/repo-one",)
+    assert len(loaded.warnings) == 1
+
+
+def test_product_repo_env_relative_path_is_malformed(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path / "instance-runtime.json", {})
+    with pytest.raises(InstanceRuntimeConfigError, match="absolute path"):
+        load_instance_runtime_config(
+            config_path, environ={PRODUCT_REPO_ENV: "relative/env-path"}
+        )
+
+
 def test_underscore_doc_keys_are_ignored(tmp_path: Path) -> None:
     config_path = _write_config(
         tmp_path / "instance-runtime.json",

@@ -74,6 +74,16 @@ you build on it.
   `config/instance-runtime.json` (gitignored). Owner decision 2026-08-04:
   onboarding already asked these facts; they needed a durable landing place.
 
+- `product_repositories` (non-empty array of absolute paths) is now the
+  canonical instance-runtime-config key for multi-product installs; the
+  one-entry string `product_repo` is still accepted, and `product_repositories`
+  wins with a warning when both are set. `require_product_repositories()`
+  replaces `require_product_repo()` on `InstanceRuntimeConfig`. Fixes a seat
+  whose real config already carried three product repositories under
+  `product_repositories` but whose template guard only read the single
+  `product_repo` string, blocking every guarded tool call with `cannot load
+  product_repo`.
+
 ### Changed
 
 - Root README now starts with product summary, Quickstart, and the tool rationale, with overlapping Orca and tool-stack explanations consolidated.

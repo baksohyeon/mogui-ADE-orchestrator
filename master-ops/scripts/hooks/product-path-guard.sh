@@ -80,29 +80,55 @@ if [[ "$INSTANCE_RUNTIME_CONFIG" == *"{{RUNTIME_ROOT}}"* ]]; then
   exit 2
 fi
 
-load_product_repo() {
+load_product_repositories() {
   CONFIG_PATH="$INSTANCE_RUNTIME_CONFIG" python3 -c '
 import json, os, sys
 path = os.environ["CONFIG_PATH"]
 try:
     with open(path, encoding="utf-8") as fh:
-        value = json.load(fh).get("product_repo")
+        data = json.load(fh)
 except Exception as exc:
     print(f"configuration missing or unreadable: {path}: {exc}", file=sys.stderr)
     raise SystemExit(1)
-if not isinstance(value, str) or not value.strip() or not os.path.isabs(os.path.expanduser(value)):
-    print("configuration malformed: product_repo must be an absolute path", file=sys.stderr)
+
+def absolute(value, field):
+    if not isinstance(value, str) or not value.strip() or not os.path.isabs(os.path.expanduser(value)):
+        print(f"configuration malformed: {field} must be an absolute path", file=sys.stderr)
+        raise SystemExit(1)
+    return os.path.realpath(os.path.expanduser(value))
+
+repos_value = data.get("product_repositories")
+repo_value = data.get("product_repo")
+if repos_value is not None:
+    if not isinstance(repos_value, list) or not repos_value:
+        print("configuration malformed: product_repositories must be a non-empty array", file=sys.stderr)
+        raise SystemExit(1)
+    repos = [absolute(entry, "product_repositories") for entry in repos_value]
+    if isinstance(repo_value, str) and repo_value.strip():
+        print("configuration warning: product_repositories and product_repo are both set; product_repositories wins", file=sys.stderr)
+elif repo_value is not None:
+    repos = [absolute(repo_value, "product_repo")]
+else:
+    print("configuration malformed: product_repositories (or product_repo) is required", file=sys.stderr)
     raise SystemExit(1)
-print(os.path.realpath(os.path.expanduser(value)))
+
+for repo in repos:
+    print(repo)
 '
 }
 
-is_under() {
-  python3 - "$1" "$2" <<'PY'
+is_under_any() {
+  local target="$1"
+  shift
+  python3 - "$target" "$@" <<'PY'
 import os, sys
-root = os.path.realpath(os.path.expanduser(sys.argv[1]))
-target = os.path.realpath(os.path.expanduser(sys.argv[2]))
-print("yes" if target == root or target.startswith(root + os.sep) else "no")
+target = os.path.realpath(os.path.expanduser(sys.argv[1]))
+for root in sys.argv[2:]:
+    root = os.path.realpath(os.path.expanduser(root))
+    if target == root or target.startswith(root + os.sep):
+        print("yes")
+        raise SystemExit
+print("no")
 PY
 }
 
@@ -122,12 +148,16 @@ input=$(cat)
 if ! printf '%s' "$input" | python3 -c 'import json,sys; payload=json.load(sys.stdin); tool=payload.get("tool_input") if isinstance(payload, dict) else None; raise SystemExit(0 if isinstance(payload, dict) and isinstance(tool, dict) else 1)' >/dev/null 2>&1; then
   blocked "invalid hook input" ""
 fi
-repo=$(load_product_repo 2>/dev/null) || blocked "cannot load product_repo from $INSTANCE_RUNTIME_CONFIG" ""
+repos=$(load_product_repositories 2>/dev/null) || blocked "cannot load product_repositories from $INSTANCE_RUNTIME_CONFIG" ""
+repo_array=()
+while IFS= read -r repo_line; do
+  [ -n "$repo_line" ] && repo_array+=("$repo_line")
+done <<<"$repos"
 
 file_path=$(printf '%s' "$input" | python3 -c 'import json,sys; tool=json.load(sys.stdin)["tool_input"]; print(tool.get("file_path") or tool.get("notebook_path") or "")' 2>/dev/null) || blocked "invalid hook input" ""
 if [ -n "$file_path" ]; then
   target=$(python3 -c 'import os,sys; print(os.path.realpath(os.path.expanduser(sys.argv[1])))' "$file_path") || blocked "cannot resolve file target" ""
-  [ "$(is_under "$repo" "$target")" = yes ] || { mg_emit info product_path_guard pass file_tool file_tool outside file; exit 0; }
+  [ "$(is_under_any "$target" "${repo_array[@]}")" = yes ] || { mg_emit info product_path_guard pass file_tool file_tool outside file; exit 0; }
   if [ "${MOGUI_INLINE_EDIT_OVERRIDE:-0}" = 1 ]; then
     VERDICT="override"
     mg_emit notice product_path_guard pass override file_tool guarded file
@@ -139,19 +169,19 @@ fi
 command=$(printf '%s' "$input" | python3 -c 'import json,sys; print(json.load(sys.stdin)["tool_input"].get("command", ""))' 2>/dev/null) || blocked "invalid hook input" ""
 [ -n "$command" ] || { mg_emit info product_path_guard pass empty_command; exit 0; }
 
-result=$(PRODUCT_ROOT="$repo" ALLOWLIST="$ALLOWLIST" FAIL_CLOSED="$FAIL_CLOSED" python3 -c '
+result=$(PRODUCT_ROOTS="$repos" ALLOWLIST="$ALLOWLIST" FAIL_CLOSED="$FAIL_CLOSED" python3 -c '
 import json, os, re, shlex, sys
 payload=json.load(sys.stdin)
 tool=payload.get("tool_input", {})
 command=tool.get("command", "")
 cwd=os.path.realpath(os.path.expanduser(tool.get("working_directory") or payload.get("cwd") or os.getcwd()))
-root=os.path.realpath(os.path.expanduser(os.environ["PRODUCT_ROOT"]))
+roots=[os.path.realpath(os.path.expanduser(line)) for line in os.environ["PRODUCT_ROOTS"].splitlines() if line.strip()]
 def resolve(base, value):
     value=os.path.expanduser(value)
     return os.path.realpath(value if os.path.isabs(value) else os.path.join(base, value))
 def under(value):
     value=os.path.realpath(os.path.expanduser(value))
-    return value == root or value.startswith(root + os.sep)
+    return any(value == root or value.startswith(root + os.sep) for root in roots)
 def contains_cd_token(value):
     return re.search(r"(^|[\s;&|()])cd([\s;&|()]|$)", value) is not None
 def redirects_into_root(value, base):
@@ -299,7 +329,7 @@ for parts in segments:
         target=current_cwd
         if name in {"bash", "sh", "dash", "ksh", "zsh", "python", "python3", "perl", "ruby", "node"}:
             bare_dash_c = "-c" in parts[1:]
-            root_token_in_args = any(root in token for token in parts[1:])
+            root_token_in_args = any(any(root in token for root in roots) for token in parts[1:])
             dash_c_body=""
             if bare_dash_c:
                 dash_c_index=parts.index("-c")
@@ -309,7 +339,7 @@ for parts in segments:
             if bare_dash_c and os.environ["FAIL_CLOSED"] != "1" and not under(current_cwd):
                 legacy_dash_c_body_denied = (
                     contains_cd_token(dash_c_body)
-                    or root in dash_c_body
+                    or any(root in dash_c_body for root in roots)
                     or redirects_into_root(dash_c_body, current_cwd)
                 )
             if root_token_in_args or legacy_dash_c_body_denied or (
@@ -331,7 +361,7 @@ for parts in segments:
             target_hits.append(resolve(current_cwd, token.split("=", 1)[1]))
     git_dir_touches=bool(git_dir and under(git_dir))
     touches=under(target) or git_dir_touches or any(under(x) for x in target_hits)
-    if "-exec" in parts and root in " ".join(parts):
+    if "-exec" in parts and any(root in " ".join(parts) for root in roots):
         touches=True
     option_tokens=parts[1 : parts.index("--")] if "--" in parts[1:] else parts[1:]
     apply_option_tokens=option_tokens

@@ -8,12 +8,13 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
 product="$TMP/workspace/product"
+product2="$TMP/workspace/product-two"
 ops="$TMP/workspace/ops"
 link="$TMP/workspace/product-link"
-mkdir -p "$product" "$ops" "$TMP/home" "$TMP/logs"
+mkdir -p "$product" "$product2" "$ops" "$TMP/home" "$TMP/logs"
 ln -s "$product" "$link"
 product_real=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$product")
-printf '{"master_host_runtime":"claude","product_repo":"%s"}\n' "$product" >"$TMP/runtime.json"
+printf '{"master_host_runtime":"claude","product_repositories":["%s","%s"]}\n' "$product" "$product2" >"$TMP/runtime.json"
 
 run_file() {
   local path="$1"
@@ -296,6 +297,12 @@ expect_blocked symlink-path run_file "$link/file.txt"
 expect_verdict block symlink-path
 expect_allowed outside-read run_bash "printf ok > $ops/file.txt"
 expect_verdict pass outside-read
+expect_blocked file-path-repo-two run_file "$product2/file.txt"
+expect_verdict block file-path-repo-two
+expect_blocked bash-repo-two run_bash "cp /dev/null $product2/file.txt"
+expect_verdict block bash-repo-two
+expect_allowed outside-both-repos run_bash "ls" "$ops"
+expect_verdict pass outside-both-repos
 
 if [ ! -s "$TMP/logs/fire.jsonl" ]; then
   echo "FAIL: MOGUI_HOOK_FIRE_LOG was ignored" >&2

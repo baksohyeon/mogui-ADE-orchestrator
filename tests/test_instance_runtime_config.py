@@ -37,7 +37,7 @@ def test_example_file_is_valid_json_with_documented_keys() -> None:
     assert "transcript_globs" in payload
     docs = payload.get("_docs")
     assert isinstance(docs, dict)
-    for key in ("master_host_runtime", "transcript_globs", "product_repo"):
+    for key in ("master_host_runtime", "transcript_globs", "product_repositories"):
         assert key in docs
         assert docs[key].strip()
 
@@ -69,7 +69,7 @@ def test_file_value_used_when_env_absent(tmp_path: Path) -> None:
     loaded = load_instance_runtime_config(config_path, environ={})
     assert loaded.require_master_host_runtime() == "grok"
     assert loaded.require_transcript_glob("grok") == "/tmp/grok/*.jsonl"
-    assert loaded.require_product_repo() == "/tmp/product"
+    assert loaded.require_product_repositories() == ("/tmp/product",)
 
 
 def test_missing_file_and_env_is_honest_unconfigured(tmp_path: Path) -> None:
@@ -80,7 +80,7 @@ def test_missing_file_and_env_is_honest_unconfigured(tmp_path: Path) -> None:
     with pytest.raises(InstanceRuntimeConfigError, match="unconfigured"):
         loaded.require_transcript_glob("claude")
     with pytest.raises(InstanceRuntimeConfigError, match="unconfigured"):
-        loaded.require_product_repo()
+        loaded.require_product_repositories()
 
 
 def test_transcript_glob_env_overrides_file(tmp_path: Path) -> None:
@@ -107,7 +107,68 @@ def test_product_repo_env_overrides_file(tmp_path: Path) -> None:
         config_path,
         environ={PRODUCT_REPO_ENV: "/from-env"},
     )
-    assert loaded.require_product_repo() == "/from-env"
+    assert loaded.require_product_repositories() == ("/from-env",)
+
+
+def test_product_repositories_array_is_canonical(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "instance-runtime.json",
+        {"product_repositories": ["/repo-one", "/repo-two"]},
+    )
+    loaded = load_instance_runtime_config(config_path, environ={})
+    assert loaded.require_product_repositories() == ("/repo-one", "/repo-two")
+    assert loaded.warnings == ()
+
+
+def test_product_repo_string_is_one_entry_form(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "instance-runtime.json",
+        {"product_repo": "/solo-repo"},
+    )
+    loaded = load_instance_runtime_config(config_path, environ={})
+    assert loaded.require_product_repositories() == ("/solo-repo",)
+
+
+def test_product_repositories_wins_over_product_repo_with_warning(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "instance-runtime.json",
+        {
+            "product_repositories": ["/repo-one"],
+            "product_repo": "/legacy-repo",
+        },
+    )
+    loaded = load_instance_runtime_config(config_path, environ={})
+    assert loaded.require_product_repositories() == ("/repo-one",)
+    assert len(loaded.warnings) == 1
+    assert "product_repositories" in loaded.warnings[0]
+    assert "product_repo" in loaded.warnings[0]
+
+
+def test_product_repositories_empty_array_is_malformed(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "instance-runtime.json",
+        {"product_repositories": []},
+    )
+    with pytest.raises(InstanceRuntimeConfigError, match="non-empty array"):
+        load_instance_runtime_config(config_path, environ={})
+
+
+def test_product_repositories_relative_path_is_malformed(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "instance-runtime.json",
+        {"product_repositories": ["relative/product"]},
+    )
+    with pytest.raises(InstanceRuntimeConfigError, match="absolute paths"):
+        load_instance_runtime_config(config_path, environ={})
+
+
+def test_product_repo_relative_path_is_malformed(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "instance-runtime.json",
+        {"product_repo": "relative/product"},
+    )
+    with pytest.raises(InstanceRuntimeConfigError, match="absolute path"):
+        load_instance_runtime_config(config_path, environ={})
 
 
 def test_underscore_doc_keys_are_ignored(tmp_path: Path) -> None:

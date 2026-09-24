@@ -1,7 +1,7 @@
 """Load instance-owned runtime facts written during onboarding.
 
 Instance facts (which agent CLI hosts the master, where each runtime keeps
-session transcripts, optional primary product repo) must not be baked into the
+session transcripts, optional product repositories) must not be baked into the
 template. Onboarding writes them to an instance config file; consumers resolve
 values with a fixed fallback order and refuse to invent defaults.
 
@@ -43,9 +43,10 @@ class InstanceRuntimeConfig:
 
     master_host_runtime: str | None
     transcript_globs: Mapping[str, str]
-    product_repo: str | None
+    product_repositories: tuple[str, ...]
     source_path: Path | None
     transcript_glob_env_override: str | None = None
+    warnings: tuple[str, ...] = ()
 
     def require_master_host_runtime(self) -> str:
         if self.master_host_runtime is None or not self.master_host_runtime.strip():
@@ -77,15 +78,16 @@ class InstanceRuntimeConfig:
             )
         return str(glob).strip()
 
-    def require_product_repo(self) -> str:
-        if self.product_repo is None or not self.product_repo.strip():
+    def require_product_repositories(self) -> tuple[str, ...]:
+        if not self.product_repositories:
             raise InstanceRuntimeConfigError(
-                "product_repo is unconfigured: set "
-                f"{PRODUCT_REPO_ENV}, or write product_repo in the instance "
-                f"config file (default {DEFAULT_RELATIVE_CONFIG_PATH}; override "
-                f"path with {CONFIG_PATH_ENV})"
+                "product_repositories is unconfigured: set "
+                f"{PRODUCT_REPO_ENV}, or write product_repositories (array) or "
+                "product_repo (one-entry string) in the instance config file "
+                f"(default {DEFAULT_RELATIVE_CONFIG_PATH}; override path with "
+                f"{CONFIG_PATH_ENV})"
             )
-        return self.product_repo.strip()
+        return self.product_repositories
 
 
 def default_config_path(repo_root: Path | None = None) -> Path:
@@ -131,7 +133,6 @@ def load_instance_runtime_config(
     payload = _read_payload(config_path)
 
     file_master = _config_optional_str(payload.get("master_host_runtime"), "master_host_runtime")
-    file_product = _config_optional_str(payload.get("product_repo"), "product_repo")
     file_globs = _parse_transcript_globs(payload.get("transcript_globs"))
 
     master = (
@@ -139,17 +140,24 @@ def load_instance_runtime_config(
         or _optional_str(env.get(MASTER_HOST_RUNTIME_ENV_ALT))
         or file_master
     )
-    product = _optional_str(env.get(PRODUCT_REPO_ENV)) or file_product
     # Env transcript glob is runtime-agnostic so a single override can target
     # the active probe without inventing per-runtime env var names.
     transcript_env = _optional_str(env.get(TRANSCRIPT_GLOB_ENV))
 
+    product_env = _optional_str(env.get(PRODUCT_REPO_ENV))
+    if product_env is not None:
+        product_repositories: tuple[str, ...] = (product_env,)
+        warnings: tuple[str, ...] = ()
+    else:
+        product_repositories, warnings = _parse_product_repositories(payload)
+
     return InstanceRuntimeConfig(
         master_host_runtime=master,
         transcript_globs=file_globs,
-        product_repo=product,
+        product_repositories=product_repositories,
         source_path=config_path if config_path.is_file() else None,
         transcript_glob_env_override=transcript_env,
+        warnings=warnings,
     )
 
 
@@ -191,6 +199,60 @@ def _parse_transcript_globs(value: object) -> dict[str, str]:
             )
         globs[key.strip()] = raw.strip()
     return globs
+
+
+def _parse_product_repositories(payload: Mapping[str, Any]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Resolve product_repositories (canonical array) vs product_repo (one-entry string).
+
+    product_repositories wins when both are present, with a warning naming the
+    redundancy. Returns (repositories, warnings).
+    """
+    raw_list = payload.get("product_repositories")
+    raw_string = payload.get("product_repo")
+
+    repos_from_list: tuple[str, ...] | None = None
+    if raw_list is not None:
+        if not isinstance(raw_list, list) or not raw_list:
+            raise InstanceRuntimeConfigError(
+                "product_repositories must be a non-empty array of absolute paths"
+            )
+        repos_from_list = tuple(
+            _require_absolute_path(entry, "product_repositories") for entry in raw_list
+        )
+
+    repo_from_string: str | None = None
+    if raw_string is not None:
+        if not isinstance(raw_string, str):
+            raise InstanceRuntimeConfigError(
+                "product_repo must be a string or null in the instance runtime config"
+            )
+        stripped = raw_string.strip()
+        if stripped:
+            repo_from_string = _require_absolute_path(stripped, "product_repo")
+
+    if repos_from_list is not None:
+        warnings = (
+            (
+                "product_repositories and product_repo are both set in the "
+                "instance runtime config; product_repositories wins and "
+                "product_repo is ignored",
+            )
+            if repo_from_string is not None
+            else ()
+        )
+        return repos_from_list, warnings
+    if repo_from_string is not None:
+        return (repo_from_string,), ()
+    return (), ()
+
+
+def _require_absolute_path(value: object, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise InstanceRuntimeConfigError(f"{field} entries must be non-empty strings")
+    stripped = value.strip()
+    if not os.path.isabs(os.path.expanduser(stripped)):
+        raise InstanceRuntimeConfigError(f"{field} entries must be absolute paths: {stripped!r}")
+    return stripped
 
 
 def _optional_str(value: object) -> str | None:

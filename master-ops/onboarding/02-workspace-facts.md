@@ -73,9 +73,9 @@ When the user names a repository that lives outside the confirmed workspace root
 
 Ask for workspace name (default: confirmed root basename), monitor namespace, and default model identifier to measure at boot, with measured candidates, a recommendation and reason, and a free-form option for each when available; explain why each is needed. Remind once that monitor namespace is not the Beads/issue prefix.
 
-## Land optional product_repo and seed transcript_globs in the instance runtime config
+## Land optional product_repositories and seed transcript_globs in the instance runtime config
 
-When the inventory has a single primary product repository the master is for (owner-confirmed, not guessed from folder layout alone), write its absolute path as `product_repo` in `{{RUNTIME_ROOT}}/config/instance-runtime.json`. If the workspace is multi-product or the owner declines a primary, leave `product_repo` null or omit it. Do not invent a product path.
+When the inventory has one or more product repositories the master is for (owner-confirmed, not guessed from folder layout alone), write their absolute paths as the array `product_repositories` in `{{RUNTIME_ROOT}}/config/instance-runtime.json`. A single product repository may still be written as the one-entry string `product_repo`; a multi-product workspace needs the array. If the owner declines naming any, leave both keys unset. Do not invent a product path.
 
 Also seed `transcript_globs` for the confirmed master host runtime when a transcript location can be **measured** on this host (for example Claude Code projects under `~/.claude/projects/`). Measurement beats asking; when nothing measurable exists for a runtime, leave that runtime's glob unset rather than pasting another installation's path.
 
@@ -112,7 +112,7 @@ Resolution order for consumers (same shape as instance runtime config): environm
 - `{{WORKSPACE_NAME}}` is explicit or is the confirmed root basename approved by the user
 - `{{REPO_LIST}}` defaults to every measured immediate child repository, with only explicit opt-outs removed
 - every repository the user named that lives outside the root was offered move/clone first; if still outside, it is recorded as an external lane with access rules; none is left implicit
-- `config/instance-runtime.json` still has `master_host_runtime` from the preflight step; `product_repo` is set only when the owner confirmed a primary product path; any `transcript_globs` entry came from measurement or an explicit owner value, never a copied foreign path
+- `config/instance-runtime.json` still has `master_host_runtime` from the preflight step; `product_repositories` (or the one-entry `product_repo`) is set only when the owner confirmed one or more product paths; any `transcript_globs` entry came from measurement or an explicit owner value, never a copied foreign path
 - `config/workspace-descriptor.json` exists (instance-owned, not committed) with `workspace_root_is_plain_folder: true`, `workspace_root` equal to the confirmed absolute root, a `master_seat` value, and one repository entry per confirmed `{{REPO_LIST}}` member under the root; product entries default-prohibit `direct-main-commit` and `force-push` unless the owner changed them; remotes were measured under `{{WORKSPACE_ROOT}}`; the template example was not replaced in git
 
 ## If fail

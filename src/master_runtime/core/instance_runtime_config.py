@@ -261,7 +261,10 @@ def _require_absolute_path(value: object, field: str) -> str:
     expanded = os.path.expanduser(stripped)
     if not os.path.isabs(expanded):
         raise InstanceRuntimeConfigError(f"{field} entries must be absolute paths: {stripped!r}")
-    return os.path.abspath(expanded)
+    # Only expand "~"; os.path.abspath/realpath would rewrite an already-absolute
+    # POSIX-style path (e.g. "/repo-one") into a drive-rooted Windows path on that
+    # platform, which is not what "expand ~" was asking for.
+    return expanded
 
 
 def _optional_str(value: object) -> str | None:

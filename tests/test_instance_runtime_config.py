@@ -189,6 +189,19 @@ def test_product_repo_env_relative_path_is_malformed(tmp_path: Path) -> None:
         )
 
 
+def test_product_repo_tilde_is_expanded(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    config_path = _write_config(
+        tmp_path / "instance-runtime.json",
+        {"product_repo": "~/solo-repo"},
+    )
+    loaded = load_instance_runtime_config(config_path, environ={})
+    expected = os.path.expanduser("~/solo-repo")
+    assert expected != "~/solo-repo"
+    assert loaded.require_product_repositories() == (expected,)
+
+
 def test_underscore_doc_keys_are_ignored(tmp_path: Path) -> None:
     config_path = _write_config(
         tmp_path / "instance-runtime.json",

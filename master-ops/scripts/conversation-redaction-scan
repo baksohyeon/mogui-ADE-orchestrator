@@ -70,7 +70,14 @@ scan_text() {
         for pattern_def in "${PATTERNS[@]}"; do
           pattern_name="${pattern_def%%:*}"
           pattern_re="${pattern_def#*:}"
-          match="$(printf '%s' "$candidate" | grep -oE "$pattern_re" | head -1)"
+          # An ordinary candidate that doesn't match this pattern is the
+          # common case, not an error: guard the capture as an `if`
+          # condition so `set -e` doesn't abort the whole scan, and drain
+          # the full grep stream (sed, not `head -1`) so grep never sees
+          # SIGPIPE under `pipefail` on a multi-match candidate.
+          if ! match="$(printf '%s' "$candidate" | grep -oE "$pattern_re" | sed -n '1p')"; then
+            continue
+          fi
           [ -n "$match" ] || continue
           # A glob segment only disqualifies a match that comes after it in
           # the same candidate (e.g. .../*/home/sessions templates the home

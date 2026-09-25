@@ -49,9 +49,14 @@ Conversation-redaction-scan glob guard, per-match follow-up (2026-09-25):
   glob segment and a real home path no longer loses the real path when the glob segment follows it,
   and a glob path comma-joined to a real leak in one whitespace token no longer excuses the leak —
   candidates now split on commas as well as whitespace.
-- `master-ops/scripts/test-pr-body-check-redaction.sh`: added one fixture per shape above (glob
-  then real path in one token; comma-joined), each with a failability mutant, alongside the
+- `master-ops/scripts/test-pr-body-check-redaction.sh`: added one fixture per shape above (real
+  path then glob in one token; comma-joined), each with a failability mutant, alongside the
   existing glob-only and real-leak fixtures.
+- Added `master-ops/scripts/test-conversation-redaction-scan-glob-guard.sh`: the same fixtures
+  driven through `conversation-redaction-scan`'s own `scan_text`, plus a regression case proving an
+  ordinary non-matching candidate no longer aborts the scan under `set -euo pipefail` (the capture
+  that fed the glob-guard decision was an unguarded command substitution, which failed the whole
+  scan on the first candidate that matched no pattern — the common case for real scanned text).
 
 Conversation-redaction-scan glob false positive, follow-up (2026-09-24):
 

@@ -46,6 +46,7 @@
     "docs/runbooks/orca-wait.md",
     "docs/runbooks/orch-inbox-warn.md",
     "docs/runbooks/pr-body-check.md",
+    "docs/runbooks/product-path-guard.md",
     "docs/runbooks/review-voice.md",
     "docs/runbooks/role-state.md",
     "docs/runbooks/spawn-test-harness.md",

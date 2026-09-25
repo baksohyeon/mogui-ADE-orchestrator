@@ -57,8 +57,11 @@ Product-path guard admits three measured read-only shapes (2026-09-25):
   scrutiny a `-c` body already gets — a `cd`, a root substring, or a redirect into the root denies
   the command outright, in both modes, closing a gap the stripping would otherwise have opened (an
   opaque interpreter script that used to leak into the general token scan and get caught by
-  accident would otherwise now be invisible). An unterminated heredoc is still unparseable, as
-  before.
+  accident would otherwise now be invisible). The interpreter need not be the operator line's
+  first token — `true && bash <<'EOF'`, `cd /tmp; python3 <<EOF`, `echo x | sh <<EOF` all get the
+  same scrutiny, by segmenting the operator line on `;`/`&&`/`||`/`|`/`&` the same way the main
+  parser does and checking every segment that itself carries the heredoc redirect. An unterminated
+  heredoc is still unparseable, as before.
 - `scripts/hooks/product-path-guard.sh`: an interpreter command (`bash`, `sh`, `dash`, `ksh`,
   `zsh`, `python`, `python3`, `perl`, `ruby`, `node`) no longer denies merely because some plain
   argument's text contains a product root. A plain argument now denies only when it is a write
@@ -78,13 +81,16 @@ Product-path guard admits three measured read-only shapes (2026-09-25):
   worktree list` passes), `git fetch`. `diff`/`cmp`/`sort` lose that admission if an `-o`/
   `--output` flag points into the root (`sort -o <root>/out` writes there); `uniq`/`xxd` lose it
   if their second positional operand — an optional output file, not an input — resolves into the
-  root. `sed` and `awk` are admitted through a separate branch, not this set: only without `-i`,
-  without `-f` (an external script file this guard cannot inspect), and without an unsafe
-  construct in the program text: a `w`/`W` command for either, or `awk`'s `system(` call
-  specifically. `python3` admits, when it reaches this gate at all (see above), only with no `-c`
-  and a first non-flag argument that is `-` or outside every product root. `git branch` admits
-  only the exact `--show-current` invocation, so creating, deleting, or renaming a branch is still
-  denied.
+  root, tracking each command's own value-taking options first so a flag's value is never
+  mistaken for that positional operand. `sed` and `awk` are admitted through a separate branch,
+  not this set: without `-i` (anywhere in a combined short-flag cluster, not just as its own
+  token), without `-f` (an external script file this guard cannot inspect), and without an unsafe
+  construct in the program text — a `w`, `W`, or `e` command for `sed` (`e` and `s///e` execute a
+  shell command), or a `system(` call, `>`, or `|` for `awk` (`print > file`, `print | "cmd"`, and
+  `"cmd" | getline` are program-level I/O this guard cannot otherwise see). `python3` admits, when
+  it reaches this gate at all (see above), only with no `-c` and a first non-flag argument that is
+  `-` or outside every product root. `git branch` admits only the exact `--show-current`
+  invocation, so creating, deleting, or renaming a branch is still denied.
 - `scripts/test-product-path-guard.sh`: a pass/deny pair per shape above, plus `git blame`, `git
   worktree list`, `git fetch`, `git branch --show-current`, and `git branch <name>` staying
   denied.

@@ -348,6 +348,18 @@ expect_allowed heredoc-fed-interpreter-body-outside-root run_bash "bash <<'EOF'
 echo hello
 EOF" "$ops"
 expect_verdict pass heredoc-fed-interpreter-body-outside-root
+expect_blocked heredoc-fed-interpreter-not-first-token-and run_bash "true && bash <<'EOF'
+rm -rf $product_real/file
+EOF" "$ops"
+expect_verdict block heredoc-fed-interpreter-not-first-token-and
+expect_blocked heredoc-fed-interpreter-not-first-token-semicolon run_bash "cd /tmp; python3 <<'EOF'
+open(\"$product_real/x\", \"w\")
+EOF" "$ops"
+expect_verdict block heredoc-fed-interpreter-not-first-token-semicolon
+expect_blocked heredoc-fed-interpreter-not-first-token-pipe run_bash "echo x | sh <<'EOF'
+rm -rf $product_real/file
+EOF" "$ops"
+expect_verdict block heredoc-fed-interpreter-not-first-token-pipe
 
 # Shape 2: a plain argument beside an interpreter's -c body is a read (the
 # interpreter is only given the path to open); the -c body itself is still
@@ -371,7 +383,8 @@ expect_verdict block sed-dash-f-external-script-not-admitted
 expect_allowed sed-dash-n-print-range-passes run_bash "sed -n '1,5p' $product/in.txt" "$ops"
 expect_verdict pass sed-dash-n-print-range-passes
 expect_blocked heredoc-comment-not-misparsed-as-operator run_bash "echo hi # see <<EOF below
-rm -rf $product_real/file" "$ops"
+rm -rf $product_real/file
+EOF" "$ops"
 expect_verdict block heredoc-comment-not-misparsed-as-operator
 expect_blocked sort-dash-o-write-into-root run_bash "sort -o $product/out $product/in" "$ops"
 expect_verdict block sort-dash-o-write-into-root
@@ -383,6 +396,22 @@ expect_allowed uniq-single-operand-passes run_bash "uniq $product/in" "$ops"
 expect_verdict pass uniq-single-operand-passes
 expect_blocked xxd-second-positional-write-into-root run_bash "xxd $product/in $product/out" "$ops"
 expect_verdict block xxd-second-positional-write-into-root
+expect_blocked xxd-value-option-shifts-positional-still-blocks run_bash "xxd -s 0x10 $product/in $product/out" "$ops"
+expect_verdict block xxd-value-option-shifts-positional-still-blocks
+expect_allowed xxd-value-option-single-file-passes run_bash "xxd -s 0x10 $product/in" "$ops"
+expect_verdict pass xxd-value-option-single-file-passes
+expect_blocked uniq-value-option-shifts-positional-still-blocks run_bash "uniq -s 2 $product/in $product/out" "$ops"
+expect_verdict block uniq-value-option-shifts-positional-still-blocks
+expect_blocked sed-write-flag-no-space-before-filename run_bash "sed -e 's/a/b/w$product/out' $product/in" "$ops"
+expect_verdict block sed-write-flag-no-space-before-filename
+expect_blocked sed-e-command-not-admitted run_bash "sed '1e whoami' $product/in" "$ops"
+expect_verdict block sed-e-command-not-admitted
+expect_blocked sed-combined-short-flags-with-inplace run_bash "sed -ni '1p' $product/in" "$ops"
+expect_verdict block sed-combined-short-flags-with-inplace
+expect_blocked awk-output-redirect-not-admitted run_bash "awk '{print > \"out\"}' $product/in" "$ops"
+expect_verdict block awk-output-redirect-not-admitted
+expect_blocked awk-pipe-getline-not-admitted run_bash "awk 'BEGIN{\"id\" | getline}' $product/in" "$ops"
+expect_verdict block awk-pipe-getline-not-admitted
 
 if [ ! -s "$TMP/logs/fire.jsonl" ]; then
   echo "FAIL: MOGUI_HOOK_FIRE_LOG was ignored" >&2

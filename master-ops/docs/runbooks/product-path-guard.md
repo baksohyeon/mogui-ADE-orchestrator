@@ -33,10 +33,14 @@ is a bare interpreter invocation with no `-c` — `bash <<'EOF'`, `python3
 body, so it gets the same scrutiny before being stripped: a `cd`, a root
 substring anywhere in the body, or a redirect into the root denies the
 command outright (`opaque interpreter heredoc body may contain an unparsed
-write`), applied regardless of mode. A heredoc consumed as plain data by a
-non-interpreter command, or as stdin data alongside an explicit `-c` script,
-is not treated this way — only an interpreter reading its own code from the
-heredoc is.
+write`), applied regardless of mode. The interpreter need not be the line's
+first token: the operator line is segmented on `;`/`&&`/`||`/`|`/`&`, the
+same way the main parser segments a whole command, so `true && bash
+<<'EOF'`, `cd /tmp; python3 <<EOF`, and `echo x | sh <<EOF` all get scrutiny
+on whichever segment carries the redirect. A heredoc consumed as plain data
+by a non-interpreter command, or as stdin data alongside an explicit `-c`
+script, is not treated this way — only an interpreter reading its own code
+from the heredoc is.
 
 ## Interpreter arguments
 
@@ -75,16 +79,23 @@ and denied as write-capable before this gate is reached — in practice only
 `-o`/`--output` flag resolves into the root (`sort -o <root>/out` writes
 there, unlike its other listed siblings); `uniq`/`xxd` lose it if their
 second positional operand — an optional output file, not an input file —
-resolves into the root.
+resolves into the root, after first accounting for each command's own
+value-taking options (`-s`, `-f`, `-w` for `uniq`; `-s`, `-l`, `-c`, `-g` for
+`xxd`) so a flag's value is never mistaken for that operand.
 
 `sed` and `awk` are admitted through a separate branch, not the
-`legacy_readonly` set: only without `-i`, without `-f` (an external script
-file this guard cannot read the contents of), and without an unsafe
-construct in the inspected program text: a `w`/`W` command for either, or a
-`system(` call for `awk` specifically (`awk 'BEGIN{system("rm ...")}'` would
-otherwise execute a write without ever naming a write-capable command). Any
-one of these keeps the denial (an in-place edit is already caught earlier as
-write-capable when it touches the root).
+`legacy_readonly` set: without `-i` anywhere in a combined short-flag
+cluster (`-ni` disqualifies just as `-i` alone does), without `-f` (an
+external script file this guard cannot read the contents of), and without an
+unsafe construct in the inspected program text. For `sed` that is a `w`, `W`,
+or `e` command — `w`/`W` need not be followed by whitespace (`s/a/b/w/path`
+is a valid write with no space before the filename), and `e` (standalone or
+as the `s///e` flag) executes its match as a shell command. For `awk` that is
+a `system(` call, or a literal `>` or `|` in the program text (`print >
+file`, `print | "cmd"`, and `"cmd" | getline` are program-level I/O and
+command execution this guard has no other way to see). Any one of these
+keeps the denial (an in-place edit is already caught earlier as write-capable
+when it touches the root).
 
 `python3` admits, when it reaches this gate (see above — cwd under the root
 is the common way), only when it has no `-c` argument and its first

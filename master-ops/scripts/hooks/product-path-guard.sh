@@ -222,6 +222,38 @@ def find_heredoc_operators(line):
         word=next(g for g in match.groups()[1:] if g is not None)
         operators.append((word, bool(match.group(1))))
     return operators
+def heredoc_bearing_interpreter_segments(line):
+    try:
+        line_tokens=list(shlex.shlex(line, posix=True, punctuation_chars=";&|><"))
+    except Exception:
+        return []
+    segments=[]
+    current=[]
+    for token in line_tokens:
+        if token in {";","&&","||","|","&"}:
+            if current: segments.append(current)
+            current=[]
+        else:
+            current.append(token)
+    if current: segments.append(current)
+    found=[]
+    for segment in segments:
+        if not any(token.startswith("<<") for token in segment):
+            continue
+        index=0
+        while index < len(segment):
+            token=segment[index]
+            if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token) or token in ("env", "exec"):
+                index += 1
+                continue
+            break
+        if index >= len(segment):
+            continue
+        seg_name=os.path.basename(segment[index])
+        seg_has_dash_c="-c" in segment[index + 1 :]
+        if seg_name in INTERPRETER_NAMES and not seg_has_dash_c:
+            found.append(seg_name)
+    return found
 def strip_heredocs(text):
     lines=text.split("\n")
     out=[]
@@ -233,15 +265,7 @@ def strip_heredocs(text):
         out.append(line)
         operators=find_heredoc_operators(line)
         if operators:
-            operator_line_name=""
-            operator_line_has_dash_c=False
-            try:
-                operator_line_tokens=list(shlex.shlex(line, posix=True, punctuation_chars=";&|><"))
-                if operator_line_tokens:
-                    operator_line_name=os.path.basename(operator_line_tokens[0])
-                    operator_line_has_dash_c="-c" in operator_line_tokens[1:]
-            except Exception:
-                pass
+            opaque_interpreter_segments=heredoc_bearing_interpreter_segments(line)
             j=i + 1
             for word, strip_tabs in operators:
                 body_lines=[]
@@ -259,14 +283,17 @@ def strip_heredocs(text):
                 # A heredoc feeding an interpreter stdin is as opaque as a -c
                 # body (no -c means the heredoc itself is the script), so it
                 # gets the same root/cd/redirect scrutiny before being admitted.
-                if operator_line_name in INTERPRETER_NAMES and not operator_line_has_dash_c:
+                # The interpreter need not be the line first token (true &&
+                # bash <<EOF, cd /tmp; python3 <<EOF), so every segment on the
+                # line that itself carries a heredoc redirect is checked.
+                if opaque_interpreter_segments:
                     body_text="\n".join(body_lines)
                     if (
                         contains_cd_token(body_text)
                         or any(root in body_text for root in roots)
                         or redirects_into_root(body_text, cwd)
                     ):
-                        forced_deny_name=operator_line_name
+                        forced_deny_name=opaque_interpreter_segments[0]
             i=j
             continue
         i += 1
@@ -628,17 +655,26 @@ for parts in segments:
             if output_flag_operand is not None and under(resolve(current_cwd, output_flag_operand)):
                 is_measured_readonly=False
         if is_measured_readonly and name in ("uniq", "xxd"):
-            positional_operands=collect_non_option_operands(parts, 1, set())
+            value_options = {"-f", "-s", "-w"} if name == "uniq" else {"-s", "-l", "-c", "-g"}
+            positional_operands=collect_non_option_operands(parts, 1, value_options)
             if len(positional_operands) >= 2 and under(resolve(current_cwd, positional_operands[1])):
                 is_measured_readonly=False
         if not is_measured_readonly and name in ("sed", "awk"):
-            has_inplace = any(token == "-i" or token.startswith("-i") for token in parts[1:])
+            has_inplace = any(
+                token.startswith("-") and not token.startswith("--") and "i" in token[1:]
+                for token in parts[1:]
+            )
             has_external_script_file = any(token == "-f" or token.startswith("-f") for token in parts[1:])
             program_option_values = {"-v"} if name == "awk" else set()
             program_operands = collect_non_option_operands(parts, 1, program_option_values)
-            has_unsafe_command = any(re.search(r"(^|[^A-Za-z])[wW](\s|$)", operand) for operand in program_operands)
-            if name == "awk":
-                has_unsafe_command = has_unsafe_command or any("system(" in operand for operand in program_operands)
+            if name == "sed":
+                has_unsafe_command = any(
+                    re.search(r"(^|[^A-Za-z])[wWe]($|[^A-Za-z])", operand) for operand in program_operands
+                )
+            else:
+                has_unsafe_command = any(
+                    "system(" in operand or ">" in operand or "|" in operand for operand in program_operands
+                )
             if not has_inplace and not has_external_script_file and not has_unsafe_command:
                 is_measured_readonly=True
         if not is_measured_readonly and name == "python3" and not bare_dash_c:

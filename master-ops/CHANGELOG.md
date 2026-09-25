@@ -46,10 +46,9 @@ Conversation-redaction-scan glob guard, per-match follow-up (2026-09-25):
 
 - `master-ops/scripts/conversation-redaction-scan` and `master-ops/scripts/pr-body-check`: the
   glob guard now decides per home-path match, not per whitespace token. A token that holds both a
-  glob segment and a real home path (`/Users/alice/*/notes`) no longer loses the real path, and a
-  glob path comma-joined to a real leak in one whitespace token
-  (`codex-accounts/*/home/sessions,/Users/alice`) no longer excuses the leak — candidates now split
-  on commas as well as whitespace.
+  glob segment and a real home path no longer loses the real path when the glob segment follows it,
+  and a glob path comma-joined to a real leak in one whitespace token no longer excuses the leak —
+  candidates now split on commas as well as whitespace.
 - `master-ops/scripts/test-pr-body-check-redaction.sh`: added one fixture per shape above (glob
   then real path in one token; comma-joined), each with a failability mutant, alongside the
   existing glob-only and real-leak fixtures.

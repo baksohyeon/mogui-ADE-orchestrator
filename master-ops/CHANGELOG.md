@@ -53,10 +53,24 @@ Conversation-redaction-scan glob false positive, follow-up (2026-09-24):
   `(?<!\*)` guard: glob passes, real leak fails, real leak after an unrelated asterisk still
   fails, plus a failability mutant.
 
-Conversation-redaction-scan glob false positive (2026-09-22):
+Dispatch seat-ahead features (2026-09-24):
 
-- `master-ops/scripts/conversation-redaction-scan` no longer flags `/Users/` or `/home/` segments immediately preceded by a glob `*` (for example `codex-accounts/*/home/sessions`) as leaked home directories; real leaks still match. The summary line now labels the scanned total as items (PRs+issues) instead of calling the combined count PRs.
-- The `/home/` finding class is now `home_path_linux`, issue-list failures fail closed, and `master-ops/scripts/pr-body-check` applies the same glob guard as the conversation scan.
+- `scripts/dispatch`: ported `MULTI_VENDOR_HOSTS`, `is_multi_vendor_host`, and `host_model_ids` from
+  the seat, plus the mismatch-check branch that validates a model against a multi-vendor host's own
+  list (`cursor-agent models`) instead of a vendor prefix. `runtime_accepts_vendor` still handles
+  single-vendor hosts.
+- `scripts/dispatch`: ported the contract-delivery block that copies `--contract` into
+  `$HOME/.mogui/dispatch-contracts/<hash>-<name>.md`, appends an acknowledgement token, prints
+  `contract delivered · <path> · read-token required`, and writes the delivered path into the spec
+  the worker receives.
+- Did not port the seat's `GATE_LEDGER` mktemp/cp/`EXIT`-trap workaround for `--check-only`: this
+  template already keeps a dry run from consuming the fanout cap through `dispatch-gate`'s own
+  `--no-record` flag, which the seat has not adopted yet. Porting the seat's copy here would add dead
+  machinery beside the mechanism already doing the job.
+- `scripts/test-dispatch-runtime.sh`: added one case per feature above (including the already-met
+  check-only case, to guard `--no-record` going forward), each extracting its function or block by
+  exact-line range and running it in an isolated subshell against a fake `cursor-agent`/`dispatch-gate`
+  or `$HOME`, paired with a mutant-based failability check.
 
 Seat-ahead promotion, batch 4 runbooks (2026-09-24):
 
@@ -67,6 +81,50 @@ Seat-ahead promotion, batch 4 runbooks (2026-09-24):
   seat with seat identifiers (session ids, terminal handles, workspace selectors, tracker ids,
   a peer seat name, Korean example text) de-instanced. Draft PR: the owner reads every file
   before it leaves draft, per charter 01 section 1.1.
+
+Seat-ahead promotion, batch 3 template four (2026-09-24):
+
+- `scripts/harness-selfcheck.sh`: ported the seat's `Template:` probe as the first check, into a
+  `template_adoption_probe` function, reading `MANIFEST.json` and an adoption-ledger path from
+  `TEMPLATE_MANIFEST_FILE`/`TEMPLATE_ADOPTION_LEDGER` (both overridable, defaulting to the ops
+  repository root and the seat's ledger file name; this template ships its own `MANIFEST.json` but no
+  ledger, so a default run here takes the "ledger missing" branch). The python substitution is guarded
+  with `|| probe=""` under `set -e`, so a malformed `MANIFEST.json` falls through to the "undecided"
+  line instead of aborting the script with no output. An install's boot banner can now say which
+  template version it was stamped from and whether adoption is recorded, the same as the seat.
+- `scripts/test-seat-check.sh`: ported the seat's `check_template` cases (manifest absent, stamped
+  with the ledger missing, stamped with the ledger present), each asserting `template_adoption_probe`'s
+  exit-code contribution (1, 1, 0) as well as its printed line — exercised directly via `eval` of the
+  function body sourced from `harness-selfcheck.sh` — plus each case's own generated-mutant failability
+  guard (`FAIL: mutant not generated` on a no-op `sed`, verdict-text mutation asserted to change the
+  reported line).
+
+Product-repositories schema, template-to-seat (2026-09-23):
+
+- `scripts/hooks/product-path-guard.sh`: `load_product_repo` (single string) is now
+  `load_product_repositories`, printing one absolute path per line; every guarded
+  target check (`Edit`/`Write`/`NotebookEdit` file paths and the Bash command
+  parser's `PRODUCT_ROOT`) now matches under any listed repository instead of one.
+  Reads the canonical `product_repositories` array, still accepts the one-entry
+  `product_repo` string, and warns to stderr when both are set. Fixes a seat whose
+  live config carries three product repositories under `product_repositories`:
+  installing this guard verbatim blocked every tool call with `cannot load
+  product_repo`.
+- `scripts/test-product-path-guard.sh`: fixture config now uses a two-repository
+  `product_repositories` array; added cases for the second repository (file-path
+  and Bash write) and a path outside both. All prior cases stay green.
+- `scripts/dispatch-collision-check`: `MOGUI_PRODUCT_REPO` now accepts either a
+  single `owner/repo` string or a JSON array of them, scanning PRs across every
+  configured product repository instead of one.
+- `config/instance-runtime.example.json`, `onboarding/01-preflight.md`,
+  `02-workspace-facts.md`, `08-settings-and-skills.md`: document
+  `product_repositories` as the canonical key, with `product_repo` named as the
+  still-accepted one-entry form.
+
+Conversation-redaction-scan glob false positive (2026-09-22):
+
+- `master-ops/scripts/conversation-redaction-scan` no longer flags `/Users/` or `/home/` segments immediately preceded by a glob `*` (for example `codex-accounts/*/home/sessions`) as leaked home directories; real leaks still match. The summary line now labels the scanned total as items (PRs+issues) instead of calling the combined count PRs.
+- The `/home/` finding class is now `home_path_linux`, issue-list failures fail closed, and `master-ops/scripts/pr-body-check` applies the same glob guard as the conversation scan.
 
 Seat-ahead promotion, batch 3 template three (2026-09-22):
 

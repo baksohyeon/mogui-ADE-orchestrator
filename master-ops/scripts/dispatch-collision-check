@@ -22,6 +22,24 @@ DONE = {"completed", "failed", "cancelled", "expired", "revoked"}
 MAX_DISPATCH_CHECKS = 64
 
 
+def resolve_product_repos(raw):
+    # MOGUI_PRODUCT_REPO accepts either a single "owner/repo" string or a JSON
+    # array of them, the same array-or-string rule instance-runtime.json uses
+    # for product_repositories / product_repo.
+    raw = (raw or "").strip()
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return [raw]
+    if isinstance(parsed, list):
+        if not parsed or any(not isinstance(item, str) or not item.strip() for item in parsed):
+            raise ValueError(f"MOGUI_PRODUCT_REPO must be a non-empty array of strings: {raw!r}")
+        return list(dict.fromkeys(item.strip() for item in parsed))
+    if isinstance(parsed, str) and parsed.strip():
+        return [parsed.strip()]
+    raise ValueError(f"MOGUI_PRODUCT_REPO must be an owner/repo string or a JSON array of them: {raw!r}")
+
+
 def scope_files(contract_text, tracked, root):
     lines = contract_text.splitlines()
     clause = ""
@@ -99,7 +117,13 @@ def main():
     try:
         contract = pathlib.Path(sys.argv[1]).resolve()
         ledger = pathlib.Path(sys.argv[2]).expanduser()
-        product_repo = sys.argv[3] if len(sys.argv) > 3 else "baksohyeon/mogui-ADE-orchestrator"
+        try:
+            product_repos = resolve_product_repos(
+                sys.argv[3] if len(sys.argv) > 3 else "baksohyeon/mogui-ADE-orchestrator"
+            )
+        except ValueError as exc:
+            print(f"WARNING: {exc}")
+            return
         root = pathlib.Path(
             subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip()
         )
@@ -111,40 +135,41 @@ def main():
         skeleton_prefix = "master" + "-ops/"
 
         warnings = []
-        try:
-            prs = json.loads(
-                subprocess.check_output(
-                    ["gh", "pr", "list", "--state", "open", "--json", "number", "--repo", product_repo],
-                    text=True,
-                    stderr=subprocess.DEVNULL,
-                )
-            )
-        except Exception:
-            prs = []
-        for pr in prs:
-            number = str(pr.get("number", "")).strip()
-            if not number:
-                continue
+        for product_repo in product_repos:
             try:
-                detail = json.loads(
+                prs = json.loads(
                     subprocess.check_output(
-                        ["gh", "pr", "view", number, "--json", "number,files", "--repo", product_repo],
+                        ["gh", "pr", "list", "--state", "open", "--json", "number", "--repo", product_repo],
                         text=True,
                         stderr=subprocess.DEVNULL,
                     )
                 )
             except Exception:
-                continue
-            pr_files = {f.get("path") for f in detail.get("files", []) if f.get("path")}
-            # Compare ops-relative scopes against product PR files, including the
-            # skeleton-nested form product PRs use.
-            overlap_set = set()
-            for scope_file in current:
-                if scope_file in pr_files or f"{skeleton_prefix}{scope_file}" in pr_files:
-                    overlap_set.add(scope_file)
-            overlap = sorted(overlap_set)
-            if overlap:
-                warnings.append((f"PR #{detail.get('number')}", overlap))
+                prs = []
+            for pr in prs:
+                number = str(pr.get("number", "")).strip()
+                if not number:
+                    continue
+                try:
+                    detail = json.loads(
+                        subprocess.check_output(
+                            ["gh", "pr", "view", number, "--json", "number,files", "--repo", product_repo],
+                            text=True,
+                            stderr=subprocess.DEVNULL,
+                        )
+                    )
+                except Exception:
+                    continue
+                pr_files = {f.get("path") for f in detail.get("files", []) if f.get("path")}
+                # Compare ops-relative scopes against product PR files, including the
+                # skeleton-nested form product PRs use.
+                overlap_set = set()
+                for scope_file in current:
+                    if scope_file in pr_files or f"{skeleton_prefix}{scope_file}" in pr_files:
+                        overlap_set.add(scope_file)
+                overlap = sorted(overlap_set)
+                if overlap:
+                    warnings.append((f"{product_repo} PR #{detail.get('number')}", overlap))
 
         scoped_by_sha = {}
         for md in sorted(contract.parent.glob("*.md")):

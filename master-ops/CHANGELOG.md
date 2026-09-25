@@ -47,26 +47,39 @@ Product-path guard admits three measured read-only shapes (2026-09-25):
 - `scripts/hooks/product-path-guard.sh`: a heredoc body (`<<WORD`, `<<-WORD`, `<<'WORD'`,
   `<<"WORD"`, `<<\WORD`) is now stripped, terminator line included, before the command is
   tokenized, so prose with an apostrophe in the body no longer unbalances the tokenizer into a
-  fail-closed "unparseable command" denial. The operator's own line keeps its tokens, so a
-  redirect into a product root on that line still denies; an unterminated heredoc is still
-  unparseable, as before.
+  fail-closed "unparseable command" denial. Recognizing the operator is quote-aware (`<<` inside a
+  quoted string is not a heredoc) and does not require whitespace before it (`cat<<EOF` is
+  recognized, not just `cat << EOF`). The operator's own line keeps its tokens, so a redirect into
+  a product root on that line still denies. When the operator line is a bare interpreter
+  invocation with no `-c` (`bash <<'EOF'`), the heredoc body is the whole script and gets the same
+  scrutiny a `-c` body already gets — a `cd`, a root substring, or a redirect into the root denies
+  the command outright, in both modes, closing a gap the stripping would otherwise have opened (an
+  opaque interpreter script that used to leak into the general token scan and get caught by
+  accident would otherwise now be invisible). An unterminated heredoc is still unparseable, as
+  before.
 - `scripts/hooks/product-path-guard.sh`: an interpreter command (`bash`, `sh`, `dash`, `ksh`,
   `zsh`, `python`, `python3`, `perl`, `ruby`, `node`) no longer denies merely because some plain
   argument's text contains a product root. A plain argument now denies only when it is a write
   shape — a product path following `-o`, `--output`, or a literal `>` inside that argument — and a
   plain argument no longer counts as a touch on its own, matching that the interpreter is only
-  given a path to open. A `-c` body is unaffected: it still denies on a `cd`, a root substring
-  anywhere in the body, or a redirect into the root, and every existing fail-closed rule is
-  unchanged (`FAIL_CLOSED=1` keeps the old blanket substring check, so this widens legacy mode
-  only).
+  given a path to open (this means `python3 <root>/script.py` from a cwd outside the root is now a
+  read, regardless of the `legacy_readonly` entry below — that entry only matters when the command
+  touches the root some other way, e.g. a cwd already under it). A `-c` body is unaffected: it
+  still denies on a `cd`, a root substring anywhere in the body, or a redirect into the root, and
+  every existing fail-closed rule is unchanged (`FAIL_CLOSED=1` keeps the old blanket substring
+  check, so this widens legacy mode only).
 - `scripts/hooks/product-path-guard.sh`: `legacy_readonly` gained `diff`, `cmp`, `comm`, `sed`,
   `awk`, `wc`, `sort`, `uniq`, `cut`, `tr`, `shasum`, `sha256sum`, `md5`, `xxd`, `od`, `less`,
   `more`, `jq`; `legacy_git_readonly` gained `git blame`, `git cat-file`, `git ls-tree`, `git
-  merge-base`, `git merge-tree`, `git rev-list`, `git branch --show-current`, `git worktree`, `git
-  fetch`. `sed`/`awk` admit only without `-i` and without a `w`/`W` command in the program text;
-  `python3` admits only with no `-c` and a first non-flag argument that is `-` or outside every
-  product root; `git branch` admits only the exact `--show-current` invocation, so creating,
-  deleting, or renaming a branch is still denied.
+  merge-base`, `git merge-tree`, `git rev-list`, `git branch --show-current`, `git worktree`
+  (`git worktree add`/etc. are independently denied as write-capable before this gate, so in
+  practice only `git worktree list` passes), `git fetch`. `sed`/`awk` admit only without `-i`,
+  without `-f` (an external script file this guard cannot inspect), and without an unsafe
+  construct in the program text: a `w`/`W` command for either, or `awk`'s `system(` call
+  specifically. `python3` admits, when it reaches this gate at all (see above), only with no `-c`
+  and a first non-flag argument that is `-` or outside every product root. `git branch` admits
+  only the exact `--show-current` invocation, so creating, deleting, or renaming a branch is still
+  denied.
 - `scripts/test-product-path-guard.sh`: a pass/deny pair per shape above, plus `git blame`, `git
   worktree list`, `git fetch`, `git branch --show-current`, and `git branch <name>` staying
   denied.

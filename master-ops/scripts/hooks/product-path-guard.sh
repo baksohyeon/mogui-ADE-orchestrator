@@ -186,13 +186,31 @@ INTERPRETER_NAMES = {"bash", "sh", "dash", "ksh", "zsh", "python", "python3", "p
 PLAIN_PATH_TARGET_EXEMPT = {"cp", "install", "ln"} | (INTERPRETER_NAMES if LEGACY_MODE else set())
 SQ=chr(39)
 HEREDOC_OPERATOR_RE = re.compile(r"<<(?!<)(-)?\s*(?:" + SQ + r"([^" + SQ + r"]*)" + SQ + r"|\"([^\"]*)\"|\\(\S+)|([^\s<>|&;()]+))")
+def unquoted_mask(line):
+    mask=[]
+    in_single=False
+    in_double=False
+    escaped=False
+    for ch in line:
+        mask.append(not in_single and not in_double)
+        if escaped:
+            escaped=False
+            continue
+        if ch == "\\" and not in_single:
+            escaped=True
+        elif ch == SQ and not in_double:
+            in_single = not in_single
+        elif ch == chr(34) and not in_single:
+            in_double = not in_double
+    return mask
 def find_heredoc_operators(line):
+    mask=unquoted_mask(line)
     operators=[]
     for match in HEREDOC_OPERATOR_RE.finditer(line):
         start=match.start()
         if start > 0 and line[start - 1] == "<":
             continue
-        if start > 0 and line[start - 1] not in " \t;&|()":
+        if start < len(mask) and not mask[start]:
             continue
         word=next(g for g in match.groups()[1:] if g is not None)
         operators.append((word, bool(match.group(1))))
@@ -202,26 +220,50 @@ def strip_heredocs(text):
     out=[]
     i=0
     n=len(lines)
+    forced_deny_name=None
     while i < n:
         line=lines[i]
         out.append(line)
         operators=find_heredoc_operators(line)
         if operators:
+            operator_line_name=""
+            operator_line_has_dash_c=False
+            try:
+                operator_line_tokens=list(shlex.shlex(line, posix=True, punctuation_chars=";&|><"))
+                if operator_line_tokens:
+                    operator_line_name=os.path.basename(operator_line_tokens[0])
+                    operator_line_has_dash_c="-c" in operator_line_tokens[1:]
+            except Exception:
+                pass
             j=i + 1
             for word, strip_tabs in operators:
+                body_lines=[]
                 terminated=False
                 while j < n:
-                    candidate=lines[j].lstrip("\t") if strip_tabs else lines[j]
+                    raw_line=lines[j]
+                    candidate=raw_line.lstrip("\t") if strip_tabs else raw_line
                     j += 1
                     if candidate == word:
                         terminated=True
                         break
+                    body_lines.append(raw_line)
                 if not terminated:
-                    return None
+                    return None, None
+                # A heredoc feeding an interpreter stdin is as opaque as a -c
+                # body (no -c means the heredoc itself is the script), so it
+                # gets the same root/cd/redirect scrutiny before being admitted.
+                if operator_line_name in INTERPRETER_NAMES and not operator_line_has_dash_c:
+                    body_text="\n".join(body_lines)
+                    if (
+                        contains_cd_token(body_text)
+                        or any(root in body_text for root in roots)
+                        or redirects_into_root(body_text, cwd)
+                    ):
+                        forced_deny_name=operator_line_name
             i=j
             continue
         i += 1
-    return "\n".join(out)
+    return "\n".join(out), forced_deny_name
 def resolve(base, value):
     value=os.path.expanduser(value)
     return os.path.realpath(value if os.path.isabs(value) else os.path.join(base, value))
@@ -297,9 +339,12 @@ def has_install_directory_mode(option_tokens):
                 pos += 1
         index += 1
     return False
-heredoc_stripped_command=strip_heredocs(command)
+heredoc_stripped_command, heredoc_forced_deny_name=strip_heredocs(command)
 if heredoc_stripped_command is None:
     print("DENY\tunparseable\tunparseable command")
+    raise SystemExit
+if heredoc_forced_deny_name:
+    print("DENY\t" + heredoc_forced_deny_name + "\topaque interpreter heredoc body may contain an unparsed write")
     raise SystemExit
 try:
     tokens=list(shlex.shlex(heredoc_stripped_command, posix=True, punctuation_chars=";&|><"))
@@ -566,9 +611,13 @@ for parts in segments:
         is_measured_readonly = command_class in legacy_readonly or command_class in legacy_git_readonly
         if not is_measured_readonly and name in ("sed", "awk"):
             has_inplace = any(token == "-i" or token.startswith("-i") for token in parts[1:])
-            program_operands = collect_non_option_operands(parts, 1, {"-e"} if name == "sed" else {"-f", "-v"})
-            has_write_command = any(re.search(r"(^|[^A-Za-z])[wW](\s|$)", operand) for operand in program_operands)
-            if not has_inplace and not has_write_command:
+            has_external_script_file = any(token == "-f" or token.startswith("-f") for token in parts[1:])
+            program_option_values = {"-v"} if name == "awk" else set()
+            program_operands = collect_non_option_operands(parts, 1, program_option_values)
+            has_unsafe_command = any(re.search(r"(^|[^A-Za-z])[wW](\s|$)", operand) for operand in program_operands)
+            if name == "awk":
+                has_unsafe_command = has_unsafe_command or any("system(" in operand for operand in program_operands)
+            if not has_inplace and not has_external_script_file and not has_unsafe_command:
                 is_measured_readonly=True
         if not is_measured_readonly and name == "python3" and not bare_dash_c:
             non_flag_args=[token for token in parts[1:] if not token.startswith("-")]

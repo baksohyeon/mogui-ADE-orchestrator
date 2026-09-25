@@ -15,11 +15,25 @@ widen fail-closed mode.
 A heredoc body (`<<WORD`, `<<-WORD`, `<<'WORD'`, `<<"WORD"`, `<<\WORD`) is
 stripped, terminator line included, before the command is tokenized. Prose in
 the body — an apostrophe, unbalanced quotes, anything — can no longer break
-the tokenizer into a fail-closed "unparseable command" denial. The operator's
-own line keeps its tokens: a redirect into a product root on that line
-(`cat > <root>/file <<'EOF'`) still denies. A `<<<` here-string is not a
-heredoc and is untouched. If a heredoc's terminator is never found, the
-command is still treated as unparseable, exactly as before this change.
+the tokenizer into a fail-closed "unparseable command" denial. Detecting the
+operator itself is quote-aware (`printf "%s" "use <<EOF"` is not a heredoc,
+since the `<<` sits inside a double-quoted string) and does not require
+whitespace before `<<` (`cat<<EOF` is recognized same as `cat << EOF`). A
+`<<<` here-string is not a heredoc and is untouched. If a heredoc's
+terminator is never found, the command is still treated as unparseable,
+exactly as before this change.
+
+The operator's own line keeps its tokens: a redirect into a product root on
+that line (`cat > <root>/file <<'EOF'`) still denies. When the operator line
+is a bare interpreter invocation with no `-c` — `bash <<'EOF'`, `python3
+<<'EOF'` — the heredoc body is the whole script, exactly as opaque as a `-c`
+body, so it gets the same scrutiny before being stripped: a `cd`, a root
+substring anywhere in the body, or a redirect into the root denies the
+command outright (`opaque interpreter heredoc body may contain an unparsed
+write`), applied regardless of mode. A heredoc consumed as plain data by a
+non-interpreter command, or as stdin data alongside an explicit `-c` script,
+is not treated this way — only an interpreter reading its own code from the
+heredoc is.
 
 ## Interpreter arguments
 
@@ -40,16 +54,34 @@ fail-closed rule.
 
 ## Legacy read-only policy
 
+This section covers commands that reach the `legacy_readonly`/
+`legacy_git_readonly` gate — that is, a command that touches a product root
+some way other than a plain interpreter argument (shape 2 above already
+admits that case without reaching this gate at all: `python3
+<root>/script.py` from a cwd outside the root is a read regardless of this
+section, since the argument alone is never counted as a touch).
+
 `legacy_readonly` gained `diff`, `cmp`, `comm`, `sed`, `awk`, `wc`, `sort`,
 `uniq`, `cut`, `tr`, `shasum`, `sha256sum`, `md5`, `xxd`, `od`, `less`,
-`more`, `jq`, and `git blame`, `git cat-file`, `git ls-tree`, `git
-merge-base`, `git merge-tree`, `git rev-list`, `git branch --show-current`,
-`git worktree`, `git fetch` joined `legacy_git_readonly`. `sed` and `awk`
-admit only without `-i` and without a `w`/`W` command in the program text;
-either one keeps the denial (an in-place edit is already caught earlier as
-write-capable when it touches the root). `python3` admits only when it has no
-`-c` argument and its first non-flag argument is `-` or resolves outside
-every product root; a script path inside the root, or any `-c`, still denies.
+`more`, `jq`; `git blame`, `git cat-file`, `git ls-tree`, `git merge-base`,
+`git merge-tree`, `git rev-list`, `git branch --show-current`, `git
+worktree`, `git fetch` joined `legacy_git_readonly`. `git worktree` is
+listed as its raw command class, but `git worktree add`/`remove`/etc. are
+still independently caught and denied as write-capable before this gate is
+reached — in practice only `git worktree list` passes.
+
+`sed` and `awk` admit only without `-i`, without `-f` (an external script
+file this guard cannot read the contents of), and without an unsafe
+construct in the inspected program text: a `w`/`W` command for either, or a
+`system(` call for `awk` specifically (`awk 'BEGIN{system("rm ...")}'` would
+otherwise execute a write without ever naming a write-capable command). Any
+one of these keeps the denial (an in-place edit is already caught earlier as
+write-capable when it touches the root).
+
+`python3` admits, when it reaches this gate (see above — cwd under the root
+is the common way), only when it has no `-c` argument and its first
+non-flag argument is `-` or resolves outside every product root.
+
 `git branch` admits only the exact `--show-current` invocation; any other
 `git branch` invocation (creating, deleting, renaming a branch) is still a
 write and is unaffected by this addition.

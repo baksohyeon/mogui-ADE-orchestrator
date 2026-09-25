@@ -334,6 +334,20 @@ expect_blocked heredoc-operator-line-redirect-into-root-still-blocks run_bash "c
 body text
 EOF" "$ops"
 expect_verdict block heredoc-operator-line-redirect-into-root-still-blocks
+expect_allowed heredoc-quoted-angle-brackets-not-misparsed run_bash 'printf "%s\n" "use <<EOF"' "$ops"
+expect_verdict pass heredoc-quoted-angle-brackets-not-misparsed
+expect_allowed heredoc-operator-with-no-space-before-it run_bash "cat<<'EOF' > $ops/out.txt
+the PR's body
+EOF" "$ops"
+expect_verdict pass heredoc-operator-with-no-space-before-it
+expect_blocked heredoc-fed-interpreter-body-writes-into-root run_bash "bash <<'EOF'
+rm -rf $product_real/file
+EOF" "$ops"
+expect_verdict block heredoc-fed-interpreter-body-writes-into-root
+expect_allowed heredoc-fed-interpreter-body-outside-root run_bash "bash <<'EOF'
+echo hello
+EOF" "$ops"
+expect_verdict pass heredoc-fed-interpreter-body-outside-root
 
 # Shape 2: a plain argument beside an interpreter's -c body is a read (the
 # interpreter is only given the path to open); the -c body itself is still
@@ -348,6 +362,14 @@ expect_verdict block python3-dash-c-body-writes-into-root
 # above) still blocks since it is write-capable regardless of this addition.
 expect_allowed diff-reads-product-blob-passes run_bash "diff $ops/file.txt $product/file.txt" "$ops"
 expect_verdict pass diff-reads-product-blob-passes
+expect_blocked awk-system-call-not-admitted run_bash "awk 'BEGIN{system(\"touch out\")}' $product/in.txt" "$ops"
+expect_verdict block awk-system-call-not-admitted
+expect_blocked sed-dash-e-write-command-not-admitted run_bash "sed -e 'w $product/out' $product/in.txt" "$ops"
+expect_verdict block sed-dash-e-write-command-not-admitted
+expect_blocked sed-dash-f-external-script-not-admitted run_bash "sed -f script.sed $product/in.txt" "$ops"
+expect_verdict block sed-dash-f-external-script-not-admitted
+expect_allowed sed-dash-n-print-range-passes run_bash "sed -n '1,5p' $product/in.txt" "$ops"
+expect_verdict pass sed-dash-n-print-range-passes
 
 if [ ! -s "$TMP/logs/fire.jsonl" ]; then
   echo "FAIL: MOGUI_HOOK_FIRE_LOG was ignored" >&2

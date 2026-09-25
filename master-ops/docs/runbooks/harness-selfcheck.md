@@ -19,6 +19,9 @@ Also detects hook scripts under `scripts/hooks/` that exist but are not wired to
 ### Tracker resolution
 Confirms the tracker (`bd where`) resolves from the workspace root to the ops repository, and that `BEADS_DIR` (if set) points to the correct location. Reuses the logic from `scripts/hooks/tracker-check.sh`.
 
+### Twins: entry-file agreement
+`CLAUDE.md` and `AGENTS.md` are twins: a master hosted by Claude reads one, a master hosted by Codex reads the other, and they must carry the same card. The `Twins:` check, in `twins_probe()`, confirms three pairs stay byte-identical — the canonical pair under `workspace-card/`, the deployed `AGENTS.md` at the workspace root against its canonical copy, and this repository's own `CLAUDE.md`/`AGENTS.md` at its root. A diverged pair means a codex-hosted master boots with a different session card than a claude-hosted one, silently.
+
 ## Running the check
 
 ```bash

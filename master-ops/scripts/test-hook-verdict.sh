@@ -139,16 +139,23 @@ out=$(printf 'not json' | MOGUI_HOOK_FIRE_LOG="$LOG" bash "$BARE_CD" 2>&1)
 [ -z "$out" ] && ok "bare-cd skip path stays silent" || fail "bare-cd skip path printed: $out"
 assert_verdict skip "bare-cd skip path"
 
-# bash-poll-warn: pass/warn/skip
-out=$(printf '{"tool_input":{"command":"git status"}}' | MOGUI_HOOK_FIRE_LOG="$LOG" bash "$POLL" 2>&1)
-[ -z "$out" ] && ok "poll-warn pass path stays silent" || fail "poll-warn pass path printed: $out"
-assert_verdict pass "poll-warn pass path"
-out=$(printf '{"tool_input":{"command":"while true; do sleep 5; orca orchestration check --terminal t --json; done"}}' | MOGUI_HOOK_FIRE_LOG="$LOG" bash "$POLL" 2>&1)
-printf '%s' "$out" | grep -q '\[bash-poll-warn\]' && ok "poll-warn warn path prints warning" || fail "poll-warn warn path missing warning"
-assert_verdict warn "poll-warn warn path"
-out=$(printf 'not json' | MOGUI_HOOK_FIRE_LOG="$LOG" bash "$POLL" 2>&1)
-[ -z "$out" ] && ok "poll-warn skip path stays silent" || fail "poll-warn skip path printed: $out"
-assert_verdict skip "poll-warn skip path"
+# bash-poll-warn: pass/warn/skip. Skipped whole when the hook itself is
+# absent — the seat retired it 2026-08-05 by owner decision, and this test
+# ran its cases unconditionally, which blocked the seat from adopting this
+# file's other cases verbatim.
+if [ -f "$POLL" ]; then
+  out=$(printf '{"tool_input":{"command":"git status"}}' | MOGUI_HOOK_FIRE_LOG="$LOG" bash "$POLL" 2>&1)
+  [ -z "$out" ] && ok "poll-warn pass path stays silent" || fail "poll-warn pass path printed: $out"
+  assert_verdict pass "poll-warn pass path"
+  out=$(printf '{"tool_input":{"command":"while true; do sleep 5; orca orchestration check --terminal t --json; done"}}' | MOGUI_HOOK_FIRE_LOG="$LOG" bash "$POLL" 2>&1)
+  printf '%s' "$out" | grep -q '\[bash-poll-warn\]' && ok "poll-warn warn path prints warning" || fail "poll-warn warn path missing warning"
+  assert_verdict warn "poll-warn warn path"
+  out=$(printf 'not json' | MOGUI_HOOK_FIRE_LOG="$LOG" bash "$POLL" 2>&1)
+  [ -z "$out" ] && ok "poll-warn skip path stays silent" || fail "poll-warn skip path printed: $out"
+  assert_verdict skip "poll-warn skip path"
+else
+  echo "skip: bash-poll-warn.sh absent, poll-warn cases not exercised"
+fi
 
 # Failability: a trim-warn mutant that downgrades warn to pass should break verdict expectations.
 python3 - "$TRIM" > "$T/trim.mut.sh" <<'PY'

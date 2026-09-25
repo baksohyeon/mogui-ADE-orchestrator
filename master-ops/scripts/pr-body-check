@@ -72,7 +72,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-if ! printf '%s' "$PR_NUMBER" | rg '^[0-9]+$' >/dev/null; then
+if [[ ! "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
   echo "error: pull request number must be numeric: $PR_NUMBER" >&2
   exit 2
 fi
@@ -158,14 +158,32 @@ def scan_redaction(text):
         ("home_path", r"/Users/[A-Za-z0-9._-]+"),
         ("home_path_linux", r"/home/[A-Za-z0-9._-]+"),
     ]
+    glob_segment_re = re.compile(r"\*/|/\*/")
 
     violations = []
     lines = text.split("\n")
     for line_num, line in enumerate(lines, 1):
+        # A comma can join two unrelated paths inside one whitespace-delimited
+        # token (a glob path template and a real home path), so split on
+        # commas too and judge each candidate's match on its own. Matches
+        # conversation-redaction-scan's per-match guard.
+        candidates = [c for piece in line.split() for c in piece.split(",") if c]
         for pattern_name, pattern_re in redaction_patterns:
-            if re.search(pattern_re, line):
+            for candidate in candidates:
+                match = re.search(pattern_re, candidate)
+                if not match:
+                    continue
+                # A glob segment only disqualifies a match that comes after it
+                # in the same candidate (e.g. .../*/home/sessions templates
+                # the home path). A real home path that merely has a glob
+                # segment later in the same token still counts as a genuine
+                # leak. The match's own leading '/' can be the closing slash
+                # of a '*/' marker, so include it in the prefix checked.
+                if glob_segment_re.search(candidate[: match.start() + 1]):
+                    continue
                 # Don't print the matched value itself; just the class and location
                 violations.append(f"  Line {line_num}: [{pattern_name}] absolute path detected")
+                break
     return violations
 
 

@@ -38,7 +38,7 @@ done
 # Redaction patterns (from product repo gitleaks config)
 declare -a PATTERNS=(
   "home_path:/Users/[A-Za-z0-9._-]+"
-  "home_path:/home/[A-Za-z0-9._-]+"
+  "home_path_linux:/home/[A-Za-z0-9._-]+"
 )
 
 # Check if gh is available
@@ -57,13 +57,42 @@ scan_text() {
   local violations=""
   local line_num=1
   while IFS= read -r line; do
-    for pattern_def in "${PATTERNS[@]}"; do
-      pattern_name="${pattern_def%%:*}"
-      pattern_re="${pattern_def#*:}"
-      if printf '%s' "$line" | grep -qE "$pattern_re"; then
-        # Record violation without printing the actual matched value
-        violations="${violations}${violations:+\n}${surface}|${number}|${author}|${locator}|${pattern_name}"
-      fi
+    local -a tokens
+    read -ra tokens <<< "$line"
+    for token in "${tokens[@]+"${tokens[@]}"}"; do
+      # A comma can join two unrelated paths inside one whitespace-delimited
+      # token (a glob path template and a real home path), so split on
+      # commas too before judging each candidate on its own.
+      local -a candidates
+      IFS=',' read -ra candidates <<< "$token"
+      for candidate in "${candidates[@]+"${candidates[@]}"}"; do
+        [ -n "$candidate" ] || continue
+        for pattern_def in "${PATTERNS[@]}"; do
+          pattern_name="${pattern_def%%:*}"
+          pattern_re="${pattern_def#*:}"
+          # An ordinary candidate that doesn't match this pattern is the
+          # common case, not an error: guard the capture as an `if`
+          # condition so `set -e` doesn't abort the whole scan, and drain
+          # the full grep stream (sed, not `head -1`) so grep never sees
+          # SIGPIPE under `pipefail` on a multi-match candidate.
+          if ! match="$(printf '%s' "$candidate" | grep -oE "$pattern_re" | sed -n '1p')"; then
+            continue
+          fi
+          [ -n "$match" ] || continue
+          # A glob segment only disqualifies a match that comes after it in
+          # the same candidate (e.g. .../*/home/sessions templates the home
+          # path). A real home path that merely has a glob segment later in
+          # the same token still counts as a genuine leak. The match's own
+          # leading '/' can be the closing slash of a '*/' marker, so
+          # include it in the prefix checked.
+          prefix="${candidate%%"$match"*}${match:0:1}"
+          if printf '%s' "$prefix" | grep -qE '(\*/|/\*/)'; then
+            continue
+          fi
+          # Record violation without printing the actual matched value
+          violations="${violations}${violations:+$'\n'}${surface}|${number}|${author}|${locator}|${pattern_name}"
+        done
+      done
     done
     ((line_num++))
   done <<< "$text"
@@ -71,7 +100,7 @@ scan_text() {
   printf '%s' "$violations"
 }
 
-echo "Scanning ${REPO} (limit: ${LIMIT} PRs)..."
+echo "Scanning ${REPO} (limit: ${LIMIT} each for PRs and issues)..."
 
 FINDINGS=""
 COUNT=0
@@ -100,14 +129,20 @@ while IFS= read -r pr_line; do
   fi
 
   # Scan PR comments
-  COMMENTS=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json comments --jq '.comments[].body' 2>/dev/null || echo "") || true
+  COMMENTS=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json comments --jq '.comments[].body' 2>/dev/null) || {
+    echo "conversation-redaction-scan: FAIL — could not fetch comments for PR#${PR_NUMBER} from $REPO" >&2
+    exit 2
+  }
   if [[ -n "$COMMENTS" ]]; then
     result=$(scan_text "pr_comment" "$PR_NUMBER" "$AUTHOR" "PR#${PR_NUMBER}/comments" "$COMMENTS")
     [[ -n "$result" ]] && FINDINGS="${FINDINGS}${FINDINGS:+$'\n'}${result}"
   fi
 
   # Scan review comments
-  REVIEWS=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json reviews --jq '.reviews[].body' 2>/dev/null || echo "") || true
+  REVIEWS=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json reviews --jq '.reviews[].body' 2>/dev/null) || {
+    echo "conversation-redaction-scan: FAIL — could not fetch reviews for PR#${PR_NUMBER} from $REPO" >&2
+    exit 2
+  }
   if [[ -n "$REVIEWS" ]]; then
     result=$(scan_text "review_comment" "$PR_NUMBER" "$AUTHOR" "PR#${PR_NUMBER}/reviews" "$REVIEWS")
     [[ -n "$result" ]] && FINDINGS="${FINDINGS}${FINDINGS:+$'\n'}${result}"
@@ -116,7 +151,8 @@ done <<< "$PR_JSON"
 
 # Fetch and scan issue bodies
 ISSUE_JSON=$(gh issue list --repo "$REPO" --state all --limit "$LIMIT" --json "number,author,body" --jq '.[]' 2>/dev/null) || {
-  echo "conversation-redaction-scan: WARNING — could not fetch issues from $REPO" >&2
+  echo "conversation-redaction-scan: FAIL — could not fetch issues from $REPO" >&2
+  exit 2
 }
 
 while IFS= read -r issue_line; do
@@ -138,10 +174,10 @@ done <<< "$ISSUE_JSON"
 
 # Output summary
 if [[ -n "$FINDINGS" ]]; then
-  echo "conversation-redaction-scan: FAIL — ${REPO} scanned ${COUNT} PRs (limit: ${LIMIT}), violations found:"
+  echo "conversation-redaction-scan: FAIL — ${REPO} scanned ${COUNT} items (PRs+issues, limit: ${LIMIT} each), violations found:"
   printf '%s\n' "$FINDINGS"
   exit 1
 else
-  echo "conversation-redaction-scan: OK — ${REPO} scanned ${COUNT} PRs (limit: ${LIMIT}), 0 findings"
+  echo "conversation-redaction-scan: OK — ${REPO} scanned ${COUNT} items (PRs+issues, limit: ${LIMIT} each), 0 findings"
   exit 0
 fi

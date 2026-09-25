@@ -42,6 +42,33 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+Conversation-redaction-scan glob guard, per-match follow-up (2026-09-25):
+
+- `master-ops/scripts/conversation-redaction-scan` and `master-ops/scripts/pr-body-check`: the
+  glob guard now decides per home-path match, not per whitespace token. A token that holds both a
+  glob segment and a real home path no longer loses the real path when the glob segment follows it,
+  and a glob path comma-joined to a real leak in one whitespace token no longer excuses the leak —
+  candidates now split on commas as well as whitespace.
+- `master-ops/scripts/test-pr-body-check-redaction.sh`: added one fixture per shape above (real
+  path then glob in one token; comma-joined), each with a failability mutant, alongside the
+  existing glob-only and real-leak fixtures.
+- Added `master-ops/scripts/test-conversation-redaction-scan-glob-guard.sh`: the same fixtures
+  driven through `conversation-redaction-scan`'s own `scan_text`, plus a regression case proving an
+  ordinary non-matching candidate no longer aborts the scan under `set -euo pipefail` (the capture
+  that fed the glob-guard decision was an unguarded command substitution, which failed the whole
+  scan on the first candidate that matched no pattern — the common case for real scanned text).
+
+Conversation-redaction-scan glob false positive, follow-up (2026-09-24):
+
+- `master-ops/scripts/conversation-redaction-scan`: the glob guard is now scoped to the
+  whitespace-delimited path token (`*/` or `/*/` anywhere in the same token), replacing the
+  single-preceding-character check that could excuse a real leak sitting right after an
+  unrelated `*`. The PR-comment and PR-review-body fetches now fail closed (exit 2) like the
+  PR-list and issue-list fetches, instead of swallowing a fetch failure and reporting 0 findings.
+- Added `master-ops/scripts/test-pr-body-check-redaction.sh` covering `pr-body-check`'s
+  `(?<!\*)` guard: glob passes, real leak fails, real leak after an unrelated asterisk still
+  fails, plus a failability mutant.
+
 Dispatch seat-ahead features (2026-09-24):
 
 - `scripts/dispatch`: ported `MULTI_VENDOR_HOSTS`, `is_multi_vendor_host`, and `host_model_ids` from
@@ -109,6 +136,11 @@ Product-repositories schema, template-to-seat (2026-09-23):
   `02-workspace-facts.md`, `08-settings-and-skills.md`: document
   `product_repositories` as the canonical key, with `product_repo` named as the
   still-accepted one-entry form.
+
+Conversation-redaction-scan glob false positive (2026-09-22):
+
+- `master-ops/scripts/conversation-redaction-scan` no longer flags `/Users/` or `/home/` segments immediately preceded by a glob `*` (for example `codex-accounts/*/home/sessions`) as leaked home directories; real leaks still match. The summary line now labels the scanned total as items (PRs+issues) instead of calling the combined count PRs.
+- The `/home/` finding class is now `home_path_linux`, issue-list failures fail closed, and `master-ops/scripts/pr-body-check` applies the same glob guard as the conversation scan.
 
 Seat-ahead promotion, batch 3 template three (2026-09-22):
 

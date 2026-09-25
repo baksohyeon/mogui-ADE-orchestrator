@@ -115,6 +115,61 @@ POLICY=$(resolve_tier_policy)
 
 jqf() { python3 -c "import json,sys;d=json.load(sys.stdin);print($1)"; }
 
+# Resolve product_repositories (or product_repo) from the instance runtime
+# config into owner/repo slugs via each path's git remote origin, serialized
+# for dispatch-collision-check's MOGUI_PRODUCT_REPO-compatible third argument.
+# Without this, dispatch-collision-check only ever scans its hardcoded
+# default repository, missing collisions in every other configured product
+# repository.
+resolve_product_repo_arg() {
+  local paths path slug slugs=()
+  paths=$(python3 -c "
+import json
+try:
+    data = json.load(open('$INSTANCE_RUNTIME_CONFIG'))
+except Exception:
+    raise SystemExit(1)
+repos = data.get('product_repositories')
+if not isinstance(repos, list) or not repos:
+    single = data.get('product_repo')
+    repos = [single] if isinstance(single, str) and single.strip() else []
+for r in repos:
+    if isinstance(r, str) and r.strip():
+        print(r.strip())
+" 2>/dev/null) || return 1
+  [ -n "$paths" ] || return 1
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    remote_url=$(git -C "$path" remote get-url origin 2>/dev/null)
+    if [ -z "$remote_url" ]; then
+      echo "dispatch: '$path' has no git remote 'origin'; excluded from the collision scan" >&2
+      continue
+    fi
+    slug=$(printf '%s' "$remote_url" | python3 -c "
+import re, sys
+remote = sys.stdin.read().strip()
+for pattern in (
+    r'^git@github\.com:([^/]+/[^/]+?)(?:\.git)?\$',
+    r'^https://github\.com/([^/]+/[^/]+?)(?:\.git)?\$',
+    r'^ssh://git@github\.com/([^/]+/[^/]+?)(?:\.git)?\$',
+):
+    match = re.match(pattern, remote)
+    if match:
+        print(match.group(1))
+        sys.exit(0)
+sys.exit(1)
+" 2>/dev/null)
+    if [ -n "$slug" ]; then
+      slugs+=("$slug")
+    else
+      echo "dispatch: git remote 'origin' for '$path' ('$remote_url') is not a github.com URL; excluded from the collision scan" >&2
+    fi
+  done <<<"$paths"
+  [ "${#slugs[@]}" -gt 0 ] || return 1
+  python3 -c "import json,sys; print(json.dumps(sys.argv[1:]))" "${slugs[@]}"
+}
+PRODUCT_REPO_ARG=$(resolve_product_repo_arg || printf '%s' "${MOGUI_PRODUCT_REPO:-}")
+
 # model-identity-probe lives in the orchestrator and resolves its instance config
 # relative to that checkout, where the product-path guard correctly forbids the
 # master from writing. Point it at the operations copy instead, so there is one
@@ -569,7 +624,7 @@ if [ "$ALLOW" != "True" ]; then
 fi
 if [ "$CHECK_ONLY" = 1 ]; then
   [ "$TIER" = "top" ] && [ -n "$TOP_APPROVED_TEXT" ] && echo "🔓 top tier approved by owner · $TOP_APPROVED"
-  COLLISION_WARN=$("$COLLISION_CHECK" "$CONTRACT" "$LEDGER" 2>/dev/null || true)
+  COLLISION_WARN=$(MOGUI_PRODUCT_REPO="${PRODUCT_REPO_ARG:-}" "$COLLISION_CHECK" "$CONTRACT" "$LEDGER" 2>/dev/null || true)
   [ -n "$COLLISION_WARN" ] && echo "$COLLISION_WARN"
   echo "⚙ gate ✓ $TIER · $MODEL · est $((EST/1000)).$(( (EST%1000)/100 ))k · 계약 ${SHA:0:8}"
   exit 0
@@ -594,7 +649,7 @@ fi
 # ledger. Once scripts/mogui_log.py lands it becomes an event-log.jsonl line
 # with outcome and evidence, per docs/runbooks/error-and-logging.md.
 [ "$TIER" = "top" ] && [ -n "$TOP_APPROVED_TEXT" ] && echo "🔓 top tier approved by owner · $TOP_APPROVED"
-COLLISION_WARN=$("$COLLISION_CHECK" "$CONTRACT" "$LEDGER" 2>/dev/null || true)
+COLLISION_WARN=$(MOGUI_PRODUCT_REPO="${PRODUCT_REPO_ARG:-}" "$COLLISION_CHECK" "$CONTRACT" "$LEDGER" 2>/dev/null || true)
 [ -n "$COLLISION_WARN" ] && echo "$COLLISION_WARN"
 echo "⚙ gate ✓ $TIER · $MODEL · est $((EST/1000)).$(( (EST%1000)/100 ))k · 계약 ${SHA:0:8}"
 

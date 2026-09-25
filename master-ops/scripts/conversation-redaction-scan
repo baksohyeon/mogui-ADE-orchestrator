@@ -59,7 +59,7 @@ scan_text() {
   while IFS= read -r line; do
     local -a tokens
     read -ra tokens <<< "$line"
-    for token in "${tokens[@]}"; do
+    for token in "${tokens[@]+"${tokens[@]}"}"; do
       # A '*/' or '/*/' anywhere in the same whitespace-delimited path token
       # marks a glob segment (e.g. codex-accounts/*/home/sessions), not a
       # leaked home directory. A real leak elsewhere on the line, or in a
@@ -72,7 +72,7 @@ scan_text() {
         pattern_re="${pattern_def#*:}"
         if printf '%s' "$token" | grep -qE "$pattern_re"; then
           # Record violation without printing the actual matched value
-          violations="${violations}${violations:+\n}${surface}|${number}|${author}|${locator}|${pattern_name}"
+          violations="${violations}${violations:+$'\n'}${surface}|${number}|${author}|${locator}|${pattern_name}"
         fi
       done
     done

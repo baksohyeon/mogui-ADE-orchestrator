@@ -155,15 +155,22 @@ def scan_redaction(text):
     """Check for redaction violations: absolute home paths, identity-bearing strings."""
     # Patterns from product repo gitleaks config
     redaction_patterns = [
-        ("home_path", r"(?<!\*)/Users/[A-Za-z0-9._-]+"),
-        ("home_path_linux", r"(?<!\*)/home/[A-Za-z0-9._-]+"),
+        ("home_path", r"/Users/[A-Za-z0-9._-]+"),
+        ("home_path_linux", r"/home/[A-Za-z0-9._-]+"),
     ]
+    glob_segment_re = re.compile(r"\*/|/\*/")
 
     violations = []
     lines = text.split("\n")
     for line_num, line in enumerate(lines, 1):
+        tokens = [t for t in line.split() if not glob_segment_re.search(t)]
+        # A '*/' or '/*/' anywhere in the same whitespace-delimited path token
+        # marks a glob segment (e.g. codex-accounts/*/home/sessions), not a
+        # leaked home directory. A real leak elsewhere on the line, or in a
+        # different token, still matches below. Matches
+        # conversation-redaction-scan's per-token guard.
         for pattern_name, pattern_re in redaction_patterns:
-            if re.search(pattern_re, line):
+            if any(re.search(pattern_re, token) for token in tokens):
                 # Don't print the matched value itself; just the class and location
                 violations.append(f"  Line {line_num}: [{pattern_name}] absolute path detected")
     return violations

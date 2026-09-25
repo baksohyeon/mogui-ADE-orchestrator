@@ -85,10 +85,10 @@ else
   fail "real /home leak after an unrelated asterisk was excused (exit=$rc)"; echo "       got: $out"
 fi
 
-# Failability: a mutant that drops the (?<!\*) guard must flag the glob
-# fixture, proving case 1 above actually exercises the guard.
+# Failability: a mutant that drops the per-token glob guard must flag the
+# glob fixture, proving case 1 above actually exercises the guard.
 MUT="$T/pr-body-check.mutant"
-sed -E 's/\(\?<!\\\*\)//g' "$CHECK" >"$MUT"
+sed -E 's/tokens = \[t for t in line\.split\(\) if not glob_segment_re\.search\(t\)\]/tokens = line.split()/' "$CHECK" >"$MUT"
 chmod +x "$MUT"
 mut_out="$(bash "$MUT" 999 --repo test/test --body-file "$T/glob.md" --template-file "$T/template.md" 2>&1)"
 if printf '%s' "$mut_out" | grep -q "Redaction violations detected"; then

@@ -291,6 +291,51 @@ else
   exit_code=1
 fi
 
+# --- Twin entry-file check ---
+# Ported from the seat's harness-selfcheck.sh (owner instruction 2026-08-06,
+# stated unconditionally): CLAUDE.md and AGENTS.md are twins. A master hosted
+# by codex reads AGENTS.md; a diverged twin boots that master with a different
+# card than the one CLAUDE.md carries. Paths through the same CARD_* variables
+# the check above already resolved, plus this repository's own entry files —
+# a pair the Card: check above never looks at, since it only compares the
+# canonical pair against the deployed one.
+#
+# A function, not inline code, for the same reason as template_adoption_probe
+# above: a test can call it directly with CARD_* and OPS_DIR overridden,
+# instead of running the whole script.
+twins_probe() {
+  local fail=0
+  if [ ! -f "$CARD_CLAUDE_CANONICAL" ] || [ ! -f "$CARD_AGENTS_CANONICAL" ]; then
+    echo "Twins: canonical pair missing at workspace-card/{CLAUDE.md,AGENTS.md} — a codex master would boot with no card"
+    fail=1
+  elif ! cmp -s "$CARD_CLAUDE_CANONICAL" "$CARD_AGENTS_CANONICAL"; then
+    echo "Twins: canonical pair DIVERGED — workspace-card/CLAUDE.md and workspace-card/AGENTS.md must be byte-identical"
+    fail=1
+  fi
+  if [ ! -f "$CARD_AGENTS_DEPLOYED" ]; then
+    echo "Twins: AGENTS.md not deployed to the workspace root — cp workspace-card/AGENTS.md to $CARD_AGENTS_DEPLOYED"
+    fail=1
+  elif [ -f "$CARD_AGENTS_CANONICAL" ] && ! cmp -s "$CARD_AGENTS_CANONICAL" "$CARD_AGENTS_DEPLOYED"; then
+    echo "Twins: deployed AGENTS.md differs from canonical; redeploy, or promote the root edit first"
+    fail=1
+  fi
+  if [ -f "$OPS_DIR/CLAUDE.md" ] && [ -f "$OPS_DIR/AGENTS.md" ]; then
+    cmp -s "$OPS_DIR/CLAUDE.md" "$OPS_DIR/AGENTS.md" || {
+      echo "Twins: this repository's own CLAUDE.md and AGENTS.md diverged"
+      fail=1
+    }
+  else
+    echo "Twins: this repository is missing one of its own entry files"
+    fail=1
+  fi
+  if [ "$fail" = 0 ]; then
+    echo "Twins: canonical, deployed, and ops entry pairs all byte-identical"
+  fi
+  return "$fail"
+}
+
+twins_probe || exit_code=1
+
 # --- Tracker check ---
 # Resolve candidates and compare real paths; substring name matches can accept a
 # sibling directory that merely contains the same repository-name fragment.

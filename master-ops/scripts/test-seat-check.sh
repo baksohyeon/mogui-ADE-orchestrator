@@ -160,6 +160,143 @@ template_mutant_check "ledger-present" \
   "$TEMPLATE_MANIFEST_STAMPED" "$TEMPLATE_LEDGER_PRESENT" \
   "stamped, adoption incomplete"
 
+# Ported from the seat's Twins: probe (owner instruction 2026-08-06, seat lines
+# 282-311), now that harness-selfcheck.sh carries twins_probe(). Exercised the
+# same way as template_adoption_probe above: directly, with CARD_* and OPS_DIR
+# overridden, since running the whole script aborts at Hooks: in a bare
+# template checkout (no real WORKSPACE_ROOT).
+eval "$(sed -n '/^twins_probe()/,/^}/p' "$SELFCHECK_BIN")"
+
+check_twins() {
+  # $1 = case name, $2 = expected substring, $3 = expected exit code,
+  # $4 = OPS_DIR, $5 = CARD_CLAUDE_CANONICAL, $6 = CARD_AGENTS_CANONICAL,
+  # $7 = CARD_AGENTS_DEPLOYED
+  local name="$1" expect="$2" expect_rc="$3" ops_dir="$4" claude_c="$5" agents_c="$6" agents_d="$7" out rc
+  out=$(OPS_DIR="$ops_dir" CARD_CLAUDE_CANONICAL="$claude_c" CARD_AGENTS_CANONICAL="$agents_c" CARD_AGENTS_DEPLOYED="$agents_d" twins_probe)
+  rc=$?
+  if printf '%s' "$out" | grep -qF "$expect" && [ "$rc" -eq "$expect_rc" ]; then
+    echo "ok   — $name"
+    pass=$((pass + 1))
+  else
+    echo "FAIL — $name"
+    echo "       expected substring: $expect (exit $expect_rc)"
+    echo "       actual output:      $out (exit $rc)"
+    fail=$((fail + 1))
+  fi
+}
+
+# Generated-mutant guard: a no-op sed must not pass this failability check silently.
+twins_mutant_check() {
+  # $1 = case label, $2 = sed pattern to break the verdict, $3 = OPS_DIR,
+  # $4 = CARD_CLAUDE_CANONICAL, $5 = CARD_AGENTS_CANONICAL, $6 = CARD_AGENTS_DEPLOYED,
+  # $7 = the untouched verdict substring the mutant must lose.
+  local label="$1" pattern="$2" ops_dir="$3" claude_c="$4" agents_c="$5" agents_d="$6" original="$7"
+  local mut="$TMP/harness-selfcheck.mutant.$$.sh" mline
+  sed "$pattern" "$SELFCHECK_BIN" > "$mut"
+  if [ ! -f "$mut" ] || cmp -s "$SELFCHECK_BIN" "$mut"; then
+    echo "FAIL: mutant not generated" >&2
+    exit 1
+  fi
+  mline=$(
+    eval "$(sed -n '/^twins_probe()/,/^}/p' "$mut")"
+    OPS_DIR="$ops_dir" CARD_CLAUDE_CANONICAL="$claude_c" CARD_AGENTS_CANONICAL="$agents_c" CARD_AGENTS_DEPLOYED="$agents_d" twins_probe
+  )
+  rm -f "$mut"
+  case "$mline" in
+    *"$original"*)
+      echo "FAIL — failability: $label mutant still reported the original verdict"
+      fail=$((fail + 1))
+      ;;
+    *)
+      echo "ok   — failability: $label mutant verdict differs, so the case would fail"
+      pass=$((pass + 1))
+      ;;
+  esac
+}
+
+TWINS_CARD_DIR="$TMP/twins-card"
+TWINS_OPS_DIR="$TMP/twins-ops"
+mkdir -p "$TWINS_CARD_DIR" "$TWINS_OPS_DIR"
+echo "workspace card content" > "$TWINS_CARD_DIR/CLAUDE.md"
+cp "$TWINS_CARD_DIR/CLAUDE.md" "$TWINS_CARD_DIR/AGENTS.md"
+TWINS_DEPLOYED_AGENTS="$TMP/twins-deployed-AGENTS.md"
+cp "$TWINS_CARD_DIR/AGENTS.md" "$TWINS_DEPLOYED_AGENTS"
+cp "$TWINS_CARD_DIR/CLAUDE.md" "$TWINS_OPS_DIR/CLAUDE.md"
+cp "$TWINS_CARD_DIR/CLAUDE.md" "$TWINS_OPS_DIR/AGENTS.md"
+echo "diverged" > "$TWINS_CARD_DIR/AGENTS.md.diverged"
+
+# W1. Canonical pair diverged: non-zero exit.
+check_twins "canonical pair diverged is reported" \
+  "Twins: canonical pair DIVERGED" 1 \
+  "$TWINS_OPS_DIR" "$TWINS_CARD_DIR/CLAUDE.md" "$TWINS_CARD_DIR/AGENTS.md.diverged" "$TWINS_DEPLOYED_AGENTS"
+twins_mutant_check "canonical-diverged" \
+  's/canonical pair DIVERGED/MUTANT-VERDICT/' \
+  "$TWINS_OPS_DIR" "$TWINS_CARD_DIR/CLAUDE.md" "$TWINS_CARD_DIR/AGENTS.md.diverged" "$TWINS_DEPLOYED_AGENTS" \
+  "canonical pair DIVERGED"
+
+# W2. Deployed copy missing: non-zero exit.
+check_twins "deployed AGENTS.md missing is reported" \
+  "Twins: AGENTS.md not deployed to the workspace root" 1 \
+  "$TWINS_OPS_DIR" "$TWINS_CARD_DIR/CLAUDE.md" "$TWINS_CARD_DIR/AGENTS.md" "$TMP/twins-nonexistent-AGENTS.md"
+twins_mutant_check "deployed-missing" \
+  's/AGENTS.md not deployed to the workspace root/MUTANT-VERDICT/' \
+  "$TWINS_OPS_DIR" "$TWINS_CARD_DIR/CLAUDE.md" "$TWINS_CARD_DIR/AGENTS.md" "$TMP/twins-nonexistent-AGENTS.md" \
+  "AGENTS.md not deployed to the workspace root"
+
+# W3. Canonical, deployed, and ops pairs all identical: zero exit.
+check_twins "all pairs identical passes" \
+  "Twins: canonical, deployed, and ops entry pairs all byte-identical" 0 \
+  "$TWINS_OPS_DIR" "$TWINS_CARD_DIR/CLAUDE.md" "$TWINS_CARD_DIR/AGENTS.md" "$TWINS_DEPLOYED_AGENTS"
+twins_mutant_check "all-identical" \
+  's/canonical, deployed, and ops entry pairs all byte-identical/MUTANT-VERDICT/' \
+  "$TWINS_OPS_DIR" "$TWINS_CARD_DIR/CLAUDE.md" "$TWINS_CARD_DIR/AGENTS.md" "$TWINS_DEPLOYED_AGENTS" \
+  "canonical, deployed, and ops entry pairs all byte-identical"
+
+# W4. Canonical AGENTS.md missing outright (not just diverged): non-zero exit.
+check_twins "canonical pair missing is reported" \
+  "Twins: canonical pair missing at workspace-card/{CLAUDE.md,AGENTS.md}" 1 \
+  "$TWINS_OPS_DIR" "$TWINS_CARD_DIR/CLAUDE.md" "$TMP/twins-nonexistent-canonical-AGENTS.md" "$TWINS_DEPLOYED_AGENTS"
+twins_mutant_check "canonical-missing" \
+  's/canonical pair missing at workspace-card/MUTANT-VERDICT/' \
+  "$TWINS_OPS_DIR" "$TWINS_CARD_DIR/CLAUDE.md" "$TMP/twins-nonexistent-canonical-AGENTS.md" "$TWINS_DEPLOYED_AGENTS" \
+  "canonical pair missing at workspace-card"
+
+# W5. Deployed AGENTS.md present but differs from canonical (not missing): non-zero exit.
+TWINS_DEPLOYED_DIFFERS="$TMP/twins-deployed-differs-AGENTS.md"
+echo "stale deployment" > "$TWINS_DEPLOYED_DIFFERS"
+check_twins "deployed AGENTS.md drift is reported" \
+  "Twins: deployed AGENTS.md differs from canonical" 1 \
+  "$TWINS_OPS_DIR" "$TWINS_CARD_DIR/CLAUDE.md" "$TWINS_CARD_DIR/AGENTS.md" "$TWINS_DEPLOYED_DIFFERS"
+twins_mutant_check "deployed-drift" \
+  's/deployed AGENTS.md differs from canonical/MUTANT-VERDICT/' \
+  "$TWINS_OPS_DIR" "$TWINS_CARD_DIR/CLAUDE.md" "$TWINS_CARD_DIR/AGENTS.md" "$TWINS_DEPLOYED_DIFFERS" \
+  "deployed AGENTS.md differs from canonical"
+
+# W6. This repository's own entry pair diverged: non-zero exit.
+TWINS_OPS_DIVERGED="$TMP/twins-ops-diverged"
+mkdir -p "$TWINS_OPS_DIVERGED"
+cp "$TWINS_CARD_DIR/CLAUDE.md" "$TWINS_OPS_DIVERGED/CLAUDE.md"
+echo "a different ops copy" > "$TWINS_OPS_DIVERGED/AGENTS.md"
+check_twins "ops repository's own pair diverged is reported" \
+  "Twins: this repository's own CLAUDE.md and AGENTS.md diverged" 1 \
+  "$TWINS_OPS_DIVERGED" "$TWINS_CARD_DIR/CLAUDE.md" "$TWINS_CARD_DIR/AGENTS.md" "$TWINS_DEPLOYED_AGENTS"
+twins_mutant_check "ops-pair-diverged" \
+  's/this repository.s own CLAUDE.md and AGENTS.md diverged/MUTANT-VERDICT/' \
+  "$TWINS_OPS_DIVERGED" "$TWINS_CARD_DIR/CLAUDE.md" "$TWINS_CARD_DIR/AGENTS.md" "$TWINS_DEPLOYED_AGENTS" \
+  "this repository's own CLAUDE.md and AGENTS.md diverged"
+
+# W7. This repository is missing one of its own entry files: non-zero exit.
+TWINS_OPS_INCOMPLETE="$TMP/twins-ops-incomplete"
+mkdir -p "$TWINS_OPS_INCOMPLETE"
+cp "$TWINS_CARD_DIR/CLAUDE.md" "$TWINS_OPS_INCOMPLETE/CLAUDE.md"
+check_twins "ops repository missing an entry file is reported" \
+  "Twins: this repository is missing one of its own entry files" 1 \
+  "$TWINS_OPS_INCOMPLETE" "$TWINS_CARD_DIR/CLAUDE.md" "$TWINS_CARD_DIR/AGENTS.md" "$TWINS_DEPLOYED_AGENTS"
+twins_mutant_check "ops-entry-missing" \
+  's/this repository is missing one of its own entry files/MUTANT-VERDICT/' \
+  "$TWINS_OPS_INCOMPLETE" "$TWINS_CARD_DIR/CLAUDE.md" "$TWINS_CARD_DIR/AGENTS.md" "$TWINS_DEPLOYED_AGENTS" \
+  "this repository is missing one of its own entry files"
+
 run_seat() {
   ROLE_STATE_PATH="$TMP/role-state.md" \
   ORCA_DATA_PATH="$TMP/orca-data.json" \

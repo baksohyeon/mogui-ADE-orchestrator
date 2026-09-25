@@ -360,6 +360,10 @@ expect_blocked heredoc-fed-interpreter-not-first-token-pipe run_bash "echo x | s
 rm -rf $product_real/file
 EOF" "$ops"
 expect_verdict block heredoc-fed-interpreter-not-first-token-pipe
+expect_allowed heredoc-fed-interpreter-not-first-token-benign-passes run_bash "true && bash <<'EOF'
+echo hello
+EOF" "$ops"
+expect_verdict pass heredoc-fed-interpreter-not-first-token-benign-passes
 
 # Shape 2: a plain argument beside an interpreter's -c body is a read (the
 # interpreter is only given the path to open); the -c body itself is still
@@ -412,6 +416,8 @@ expect_blocked awk-output-redirect-not-admitted run_bash "awk '{print > \"out\"}
 expect_verdict block awk-output-redirect-not-admitted
 expect_blocked awk-pipe-getline-not-admitted run_bash "awk 'BEGIN{\"id\" | getline}' $product/in" "$ops"
 expect_verdict block awk-pipe-getline-not-admitted
+expect_allowed awk-safe-program-passes run_bash "awk '{print \$1}' $product/in" "$ops"
+expect_verdict pass awk-safe-program-passes
 
 if [ ! -s "$TMP/logs/fire.jsonl" ]; then
   echo "FAIL: MOGUI_HOOK_FIRE_LOG was ignored" >&2

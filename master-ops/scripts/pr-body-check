@@ -72,7 +72,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-if ! printf '%s' "$PR_NUMBER" | rg '^[0-9]+$' >/dev/null; then
+if [[ ! "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
   echo "error: pull request number must be numeric: $PR_NUMBER" >&2
   exit 2
 fi

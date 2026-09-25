@@ -305,8 +305,8 @@ fi
 # instead of running the whole script.
 twins_probe() {
   local fail=0
-  if [ ! -f "$CARD_AGENTS_CANONICAL" ]; then
-    echo "Twins: canonical AGENTS.md missing at workspace-card/ — a codex master would boot with no card"
+  if [ ! -f "$CARD_CLAUDE_CANONICAL" ] || [ ! -f "$CARD_AGENTS_CANONICAL" ]; then
+    echo "Twins: canonical pair missing at workspace-card/{CLAUDE.md,AGENTS.md} — a codex master would boot with no card"
     fail=1
   elif ! cmp -s "$CARD_CLAUDE_CANONICAL" "$CARD_AGENTS_CANONICAL"; then
     echo "Twins: canonical pair DIVERGED — workspace-card/CLAUDE.md and workspace-card/AGENTS.md must be byte-identical"

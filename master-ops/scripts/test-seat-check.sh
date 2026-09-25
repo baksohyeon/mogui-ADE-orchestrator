@@ -252,6 +252,51 @@ twins_mutant_check "all-identical" \
   "$TWINS_OPS_DIR" "$TWINS_CARD_DIR/CLAUDE.md" "$TWINS_CARD_DIR/AGENTS.md" "$TWINS_DEPLOYED_AGENTS" \
   "canonical, deployed, and ops entry pairs all byte-identical"
 
+# W4. Canonical AGENTS.md missing outright (not just diverged): non-zero exit.
+check_twins "canonical pair missing is reported" \
+  "Twins: canonical pair missing at workspace-card/{CLAUDE.md,AGENTS.md}" 1 \
+  "$TWINS_OPS_DIR" "$TWINS_CARD_DIR/CLAUDE.md" "$TMP/twins-nonexistent-canonical-AGENTS.md" "$TWINS_DEPLOYED_AGENTS"
+twins_mutant_check "canonical-missing" \
+  's/canonical pair missing at workspace-card/MUTANT-VERDICT/' \
+  "$TWINS_OPS_DIR" "$TWINS_CARD_DIR/CLAUDE.md" "$TMP/twins-nonexistent-canonical-AGENTS.md" "$TWINS_DEPLOYED_AGENTS" \
+  "canonical pair missing at workspace-card"
+
+# W5. Deployed AGENTS.md present but differs from canonical (not missing): non-zero exit.
+TWINS_DEPLOYED_DIFFERS="$TMP/twins-deployed-differs-AGENTS.md"
+echo "stale deployment" > "$TWINS_DEPLOYED_DIFFERS"
+check_twins "deployed AGENTS.md drift is reported" \
+  "Twins: deployed AGENTS.md differs from canonical" 1 \
+  "$TWINS_OPS_DIR" "$TWINS_CARD_DIR/CLAUDE.md" "$TWINS_CARD_DIR/AGENTS.md" "$TWINS_DEPLOYED_DIFFERS"
+twins_mutant_check "deployed-drift" \
+  's/deployed AGENTS.md differs from canonical/MUTANT-VERDICT/' \
+  "$TWINS_OPS_DIR" "$TWINS_CARD_DIR/CLAUDE.md" "$TWINS_CARD_DIR/AGENTS.md" "$TWINS_DEPLOYED_DIFFERS" \
+  "deployed AGENTS.md differs from canonical"
+
+# W6. This repository's own entry pair diverged: non-zero exit.
+TWINS_OPS_DIVERGED="$TMP/twins-ops-diverged"
+mkdir -p "$TWINS_OPS_DIVERGED"
+cp "$TWINS_CARD_DIR/CLAUDE.md" "$TWINS_OPS_DIVERGED/CLAUDE.md"
+echo "a different ops copy" > "$TWINS_OPS_DIVERGED/AGENTS.md"
+check_twins "ops repository's own pair diverged is reported" \
+  "Twins: this repository's own CLAUDE.md and AGENTS.md diverged" 1 \
+  "$TWINS_OPS_DIVERGED" "$TWINS_CARD_DIR/CLAUDE.md" "$TWINS_CARD_DIR/AGENTS.md" "$TWINS_DEPLOYED_AGENTS"
+twins_mutant_check "ops-pair-diverged" \
+  's/this repository.s own CLAUDE.md and AGENTS.md diverged/MUTANT-VERDICT/' \
+  "$TWINS_OPS_DIVERGED" "$TWINS_CARD_DIR/CLAUDE.md" "$TWINS_CARD_DIR/AGENTS.md" "$TWINS_DEPLOYED_AGENTS" \
+  "this repository's own CLAUDE.md and AGENTS.md diverged"
+
+# W7. This repository is missing one of its own entry files: non-zero exit.
+TWINS_OPS_INCOMPLETE="$TMP/twins-ops-incomplete"
+mkdir -p "$TWINS_OPS_INCOMPLETE"
+cp "$TWINS_CARD_DIR/CLAUDE.md" "$TWINS_OPS_INCOMPLETE/CLAUDE.md"
+check_twins "ops repository missing an entry file is reported" \
+  "Twins: this repository is missing one of its own entry files" 1 \
+  "$TWINS_OPS_INCOMPLETE" "$TWINS_CARD_DIR/CLAUDE.md" "$TWINS_CARD_DIR/AGENTS.md" "$TWINS_DEPLOYED_AGENTS"
+twins_mutant_check "ops-entry-missing" \
+  's/this repository is missing one of its own entry files/MUTANT-VERDICT/' \
+  "$TWINS_OPS_INCOMPLETE" "$TWINS_CARD_DIR/CLAUDE.md" "$TWINS_CARD_DIR/AGENTS.md" "$TWINS_DEPLOYED_AGENTS" \
+  "this repository is missing one of its own entry files"
+
 run_seat() {
   ROLE_STATE_PATH="$TMP/role-state.md" \
   ORCA_DATA_PATH="$TMP/orca-data.json" \

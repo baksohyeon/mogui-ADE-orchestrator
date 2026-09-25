@@ -48,14 +48,21 @@ Twins probe and test-hook-verdict guard (2026-09-25):
   instruction 2026-08-06) as `twins_probe()`, added right after the `Card:` check. Confirms the
   canonical `workspace-card/{CLAUDE.md,AGENTS.md}` pair is byte-identical, the deployed `AGENTS.md`
   at the workspace root matches its canonical copy, and this repository's own `CLAUDE.md`/`AGENTS.md`
-  agree — the one pair `Card:` above never compares, since it only checks canonical against deployed.
-  Paths through the same `CARD_*` variables the `Card:` check already resolves, so no duplicate
-  `TWIN_CANONICAL`/`TWIN_DEPLOYED` variables were introduced. A codex-hosted master boots from
-  `AGENTS.md`; a diverged twin boots it with a different card than a claude-hosted master gets.
+  agree — the pair `Card:` above never compares, since it inspects only the canonical and deployed
+  copies; the other two `Twins:` confirmations mirror checks `Card:` already performs. Paths through
+  the same `CARD_*` variables the `Card:` check already resolves, so no duplicate
+  `TWIN_CANONICAL`/`TWIN_DEPLOYED` variables were introduced. Fixed a bug carried over from the
+  seat's own version along the way: a missing canonical file (one file present, the other absent) was
+  reported as "DIVERGED" instead of "missing" — `twins_probe` now checks existence of both canonical
+  files first, matching `Card:`'s own "canonical pair missing" phrasing for the same state. A
+  codex-hosted master boots from `AGENTS.md`; a diverged twin boots it with a different card than a
+  claude-hosted master gets.
 - `scripts/test-seat-check.sh`: added `Twins:` cases beside the existing `check_template` cases —
-  canonical pair diverged, deployed copy missing, all pairs identical — each exercising `twins_probe`
-  directly with `OPS_DIR`/`CARD_*` overridden (same isolation technique as `template_adoption_probe`),
-  paired with a generated-mutant failability guard per case.
+  canonical pair diverged, canonical pair missing, deployed copy missing, deployed copy drifted, the
+  ops repository's own pair diverged, the ops repository missing an entry file, and all pairs
+  identical — each exercising `twins_probe` directly with `OPS_DIR`/`CARD_*` overridden (same
+  isolation technique as `template_adoption_probe`), paired with a generated-mutant failability guard
+  per case.
 - `scripts/test-hook-verdict.sh`: the `bash-poll-warn` block now runs only when
   `hooks/bash-poll-warn.sh` exists, printing one `skip:` line otherwise instead of failing the whole
   test in a checkout that retired the hook (the seat did, 2026-08-05); the skip does not change the

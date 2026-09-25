@@ -2,7 +2,7 @@
 
 ## What this checks
 
-The harness self-check answers one question: is every component this workspace claims to have actually reachable by the host? This prevents silent failures where files exist on disk but are not wired to the host discovery paths.
+The harness self-check answers one question: is every component this workspace claims to have actually reachable by the host? This prevents silent failures where files exist on disk but are not wired to the host discovery paths. One layer, `Twins:`, goes further and checks entry-file content, not just reachability — see below.
 
 The check measures three harness layers:
 
@@ -33,14 +33,14 @@ bash scripts/harness-selfcheck.sh
 | Code | Meaning | Action |
 |------|---------|--------|
 | 0 | All components reachable; check names what was covered (counts) | All clear |
-| 1 | Gap detected: skill unreachable, hook missing, script unwired, or tracker misresolved | Fix the gap; see details in output |
+| 1 | Gap detected: skill unreachable, hook missing, script unwired, tracker misresolved, or an entry-file pair diverged/undeployed | Fix the gap; see details in output |
 | 2 | Check could not measure (settings file unreadable, etc.) | Investigate blocker; rerun after fixing |
 
 A passing line names the scope ("Skills: 3 reachable", "Hooks: 5 wired", "Tracker: resolves to..."). Exit 2 never prints a passing line.
 
 ## Important: reachability is not correctness
 
-This check reports **reachability only**. A reachable hook can still be wrong (bad path, wrong permissions, logic error). Proving a hook works requires feeding it a case it must reject.
+Skills, hooks, and the tracker are checked for **reachability only**. A reachable hook can still be wrong (bad path, wrong permissions, logic error). Proving a hook works requires feeding it a case it must reject. `Card:` and `Twins:` are the exception: they additionally validate entry-file content with a byte-for-byte comparison (`cmp -s`), because a reachable-but-stale or reachable-but-diverged card is exactly the silent failure those two checks exist to catch.
 
 For self-test discipline and examples, see [Master Operations](../MASTER-OPERATIONS.md) section 8 (charted failure modes) and the existing hooks under `scripts/hooks/`.
 

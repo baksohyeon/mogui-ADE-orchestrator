@@ -16,12 +16,15 @@ A heredoc body (`<<WORD`, `<<-WORD`, `<<'WORD'`, `<<"WORD"`, `<<\WORD`) is
 stripped, terminator line included, before the command is tokenized. Prose in
 the body — an apostrophe, unbalanced quotes, anything — can no longer break
 the tokenizer into a fail-closed "unparseable command" denial. Detecting the
-operator itself is quote-aware (`printf "%s" "use <<EOF"` is not a heredoc,
-since the `<<` sits inside a double-quoted string) and does not require
-whitespace before `<<` (`cat<<EOF` is recognized same as `cat << EOF`). A
-`<<<` here-string is not a heredoc and is untouched. If a heredoc's
-terminator is never found, the command is still treated as unparseable,
-exactly as before this change.
+operator itself is quote-and-comment-aware (`printf "%s" "use <<EOF"` is not
+a heredoc, since the `<<` sits inside a double-quoted string; `echo hi # see
+<<EOF below` is not one either, since it follows an unquoted `#` — this one
+matters: without it, a real command on the next line could be misread as the
+comment's "heredoc body" and silently dropped from the guard's view while
+Bash still executes it) and does not require whitespace before `<<`
+(`cat<<EOF` is recognized same as `cat << EOF`). A `<<<` here-string is not a
+heredoc and is untouched. If a heredoc's terminator is never found, the
+command is still treated as unparseable, exactly as before this change.
 
 The operator's own line keeps its tokens: a redirect into a product root on
 that line (`cat > <root>/file <<'EOF'`) still denies. When the operator line
@@ -61,16 +64,21 @@ admits that case without reaching this gate at all: `python3
 <root>/script.py` from a cwd outside the root is a read regardless of this
 section, since the argument alone is never counted as a touch).
 
-`legacy_readonly` gained `diff`, `cmp`, `comm`, `sed`, `awk`, `wc`, `sort`,
-`uniq`, `cut`, `tr`, `shasum`, `sha256sum`, `md5`, `xxd`, `od`, `less`,
-`more`, `jq`; `git blame`, `git cat-file`, `git ls-tree`, `git merge-base`,
-`git merge-tree`, `git rev-list`, `git branch --show-current`, `git
-worktree`, `git fetch` joined `legacy_git_readonly`. `git worktree` is
-listed as its raw command class, but `git worktree add`/`remove`/etc. are
-still independently caught and denied as write-capable before this gate is
-reached — in practice only `git worktree list` passes.
+`legacy_readonly` gained `diff`, `cmp`, `comm`, `wc`, `sort`, `uniq`, `cut`,
+`tr`, `shasum`, `sha256sum`, `md5`, `xxd`, `od`, `less`, `more`, `jq`; `git
+blame`, `git cat-file`, `git ls-tree`, `git merge-base`, `git merge-tree`,
+`git rev-list`, `git branch --show-current`, `git worktree`, `git fetch`
+joined `legacy_git_readonly`. `git worktree` is listed as its raw command
+class, but `git worktree add`/`remove`/etc. are still independently caught
+and denied as write-capable before this gate is reached — in practice only
+`git worktree list` passes. `diff`/`cmp`/`sort` lose the admission if an
+`-o`/`--output` flag resolves into the root (`sort -o <root>/out` writes
+there, unlike its other listed siblings); `uniq`/`xxd` lose it if their
+second positional operand — an optional output file, not an input file —
+resolves into the root.
 
-`sed` and `awk` admit only without `-i`, without `-f` (an external script
+`sed` and `awk` are admitted through a separate branch, not the
+`legacy_readonly` set: only without `-i`, without `-f` (an external script
 file this guard cannot read the contents of), and without an unsafe
 construct in the inspected program text: a `w`/`W` command for either, or a
 `system(` call for `awk` specifically (`awk 'BEGIN{system("rm ...")}'` would

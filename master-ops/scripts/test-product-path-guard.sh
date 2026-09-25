@@ -370,6 +370,19 @@ expect_blocked sed-dash-f-external-script-not-admitted run_bash "sed -f script.s
 expect_verdict block sed-dash-f-external-script-not-admitted
 expect_allowed sed-dash-n-print-range-passes run_bash "sed -n '1,5p' $product/in.txt" "$ops"
 expect_verdict pass sed-dash-n-print-range-passes
+expect_blocked heredoc-comment-not-misparsed-as-operator run_bash "echo hi # see <<EOF below
+rm -rf $product_real/file" "$ops"
+expect_verdict block heredoc-comment-not-misparsed-as-operator
+expect_blocked sort-dash-o-write-into-root run_bash "sort -o $product/out $product/in" "$ops"
+expect_verdict block sort-dash-o-write-into-root
+expect_allowed sort-no-output-flag-passes run_bash "sort $product/in" "$ops"
+expect_verdict pass sort-no-output-flag-passes
+expect_blocked uniq-second-positional-write-into-root run_bash "uniq $product/in $product/out" "$ops"
+expect_verdict block uniq-second-positional-write-into-root
+expect_allowed uniq-single-operand-passes run_bash "uniq $product/in" "$ops"
+expect_verdict pass uniq-single-operand-passes
+expect_blocked xxd-second-positional-write-into-root run_bash "xxd $product/in $product/out" "$ops"
+expect_verdict block xxd-second-positional-write-into-root
 
 if [ ! -s "$TMP/logs/fire.jsonl" ]; then
   echo "FAIL: MOGUI_HOOK_FIRE_LOG was ignored" >&2

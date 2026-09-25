@@ -190,9 +190,16 @@ def unquoted_mask(line):
     mask=[]
     in_single=False
     in_double=False
+    in_comment=False
     escaped=False
+    prev_char=""
     for ch in line:
-        mask.append(not in_single and not in_double)
+        if not in_single and not in_double and not in_comment and ch == "#" and prev_char in ("", " ", "\t"):
+            in_comment=True
+        mask.append(not in_single and not in_double and not in_comment)
+        prev_char=ch
+        if in_comment:
+            continue
         if escaped:
             escaped=False
             continue
@@ -609,6 +616,21 @@ for parts in segments:
             "git branch --show-current","git worktree","git fetch",
         }
         is_measured_readonly = command_class in legacy_readonly or command_class in legacy_git_readonly
+        if is_measured_readonly and name in ("diff", "cmp", "sort"):
+            output_flag_operand=None
+            for index, token in enumerate(parts[1:], 1):
+                if token in ("-o", "--output") and index + 1 < len(parts):
+                    output_flag_operand=parts[index + 1]
+                elif token.startswith("--output="):
+                    output_flag_operand=token.split("=", 1)[1]
+                elif token.startswith("-o") and token != "-o" and not token.startswith("--"):
+                    output_flag_operand=token[2:]
+            if output_flag_operand is not None and under(resolve(current_cwd, output_flag_operand)):
+                is_measured_readonly=False
+        if is_measured_readonly and name in ("uniq", "xxd"):
+            positional_operands=collect_non_option_operands(parts, 1, set())
+            if len(positional_operands) >= 2 and under(resolve(current_cwd, positional_operands[1])):
+                is_measured_readonly=False
         if not is_measured_readonly and name in ("sed", "awk"):
             has_inplace = any(token == "-i" or token.startswith("-i") for token in parts[1:])
             has_external_script_file = any(token == "-f" or token.startswith("-f") for token in parts[1:])

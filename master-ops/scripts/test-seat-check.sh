@@ -71,6 +71,95 @@ else
   fail=$((fail + 1))
 fi
 
+# Ported from the seat's check_template cases (owner direction 2026-09-23).
+# Exercise template_adoption_probe directly, like tracker_candidate_from_line
+# above, instead of running the whole self-check: the later Skills/Hooks/Card
+# checks abort this script early in a bare template checkout (no real
+# WORKSPACE_ROOT), which would make the aggregate exit code meaningless for
+# asserting this probe's own exit-code contribution.
+eval "$(sed -n '/^template_adoption_probe()/,/^}/p' "$SELFCHECK_BIN")"
+
+check_template() {
+  # $1 = case name, $2 = expected substring, $3 = expected exit code,
+  # $4 = TEMPLATE_MANIFEST_FILE, $5 = TEMPLATE_ADOPTION_LEDGER
+  local name="$1" expect="$2" expect_rc="$3" manifest="$4" ledger="$5" line rc
+  line=$(TEMPLATE_MANIFEST_FILE="$manifest" TEMPLATE_ADOPTION_LEDGER="$ledger" template_adoption_probe)
+  rc=$?
+  if printf '%s' "$line" | grep -qF "$expect" && [ "$rc" -eq "$expect_rc" ]; then
+    echo "ok   — $name"
+    pass=$((pass + 1))
+  else
+    echo "FAIL — $name"
+    echo "       expected substring: $expect (exit $expect_rc)"
+    echo "       actual line:        $line (exit $rc)"
+    fail=$((fail + 1))
+  fi
+}
+
+# Generated-mutant guard: a no-op sed must not pass this failability check silently.
+template_mutant_check() {
+  # $1 = case label, $2 = sed pattern to break the verdict, $3 = manifest fixture,
+  # $4 = ledger fixture, $5 = the untouched verdict substring the mutant must lose.
+  local label="$1" pattern="$2" manifest="$3" ledger="$4" original="$5"
+  local mut="$TMP/harness-selfcheck.mutant.$$.sh" mline
+  sed "$pattern" "$SELFCHECK_BIN" > "$mut"
+  if [ ! -f "$mut" ] || cmp -s "$SELFCHECK_BIN" "$mut"; then
+    echo "FAIL: mutant not generated" >&2
+    exit 1
+  fi
+  mline=$(
+    eval "$(sed -n '/^template_adoption_probe()/,/^}/p' "$mut")"
+    TEMPLATE_MANIFEST_FILE="$manifest" TEMPLATE_ADOPTION_LEDGER="$ledger" template_adoption_probe
+  )
+  rm -f "$mut"
+  case "$mline" in
+    *"$original"*)
+      echo "FAIL — failability: $label mutant still reported the original verdict"
+      fail=$((fail + 1))
+      ;;
+    *)
+      echo "ok   — failability: $label mutant verdict differs, so the case would fail"
+      pass=$((pass + 1))
+      ;;
+  esac
+}
+
+TEMPLATE_MANIFEST_ABSENT="$TMP/no-manifest.json"
+TEMPLATE_MANIFEST_STAMPED="$TMP/manifest-stamped.json"
+cat > "$TEMPLATE_MANIFEST_STAMPED" <<'EOF'
+{"template_version": "v0.4.1", "files": ["a"]}
+EOF
+TEMPLATE_LEDGER_MISSING="$TMP/no-ledger.md"
+TEMPLATE_LEDGER_PRESENT="$TMP/template-adoption-2026-08-08.md"
+echo "# Adoption ledger" > "$TEMPLATE_LEDGER_PRESENT"
+
+# T1. Manifest absent: non-zero exit.
+check_template "manifest absent is reported" \
+  "Template: absent (MANIFEST.json missing)" 1 \
+  "$TEMPLATE_MANIFEST_ABSENT" "$TEMPLATE_LEDGER_MISSING"
+template_mutant_check "manifest-absent" \
+  's/absent (MANIFEST.json missing)/MUTANT-VERDICT/' \
+  "$TEMPLATE_MANIFEST_ABSENT" "$TEMPLATE_LEDGER_MISSING" \
+  "absent (MANIFEST.json missing)"
+
+# T2. Stamped manifest, adoption ledger missing: non-zero exit.
+check_template "stamped manifest with missing ledger is reported" \
+  "Template: v0.4.1 stamped, adoption ledger missing" 1 \
+  "$TEMPLATE_MANIFEST_STAMPED" "$TEMPLATE_LEDGER_MISSING"
+template_mutant_check "ledger-missing" \
+  's/stamped, adoption ledger missing/MUTANT-VERDICT/' \
+  "$TEMPLATE_MANIFEST_STAMPED" "$TEMPLATE_LEDGER_MISSING" \
+  "stamped, adoption ledger missing"
+
+# T3. Stamped manifest, adoption ledger present: zero exit.
+check_template "stamped manifest with ledger present is reported" \
+  "Template: v0.4.1 stamped, adoption incomplete" 0 \
+  "$TEMPLATE_MANIFEST_STAMPED" "$TEMPLATE_LEDGER_PRESENT"
+template_mutant_check "ledger-present" \
+  's/stamped, adoption incomplete/MUTANT-VERDICT/' \
+  "$TEMPLATE_MANIFEST_STAMPED" "$TEMPLATE_LEDGER_PRESENT" \
+  "stamped, adoption incomplete"
+
 run_seat() {
   ROLE_STATE_PATH="$TMP/role-state.md" \
   ORCA_DATA_PATH="$TMP/orca-data.json" \

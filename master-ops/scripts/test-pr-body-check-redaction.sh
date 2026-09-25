@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Coverage for scripts/pr-body-check's redaction glob guard `(?<!\*)`: a glob
-# segment like codex-accounts/*/home/sessions must pass, a real leak must
-# still fail — including one that follows an unrelated asterisk elsewhere on
-# the line, which a naive "line contains *" guard would wrongly excuse.
+# Coverage for scripts/pr-body-check's redaction glob guard: a glob segment
+# like codex-accounts/*/home/sessions must pass, a real leak must still fail
+# — including one that follows an unrelated asterisk elsewhere on the line,
+# one that precedes a glob segment in the same token, and one that is joined
+# to a glob path by a comma inside one whitespace token. The guard judges
+# each pattern match on its own, never the whole token.
 set -u
 
 S="$(cd "$(dirname "$0")" && pwd)"
@@ -55,6 +57,8 @@ run_check() {
 GLOB_PATH="codex-accounts/*/home/sessions"
 USERS_LEAK="/Users/""realuser/notes"
 HOME_LEAK="/home/""realuser/leak-here"
+REAL_THEN_GLOB="/Users/""realuser4/*/notes"
+COMMA_JOINED="codex-accounts/*/home/sessions,/Users/""realuser5"
 
 # 1. A glob segment must not be flagged as a leak.
 body_with "Because $GLOB_PATH is a glob, not a leak." >"$T/glob.md"
@@ -85,16 +89,63 @@ else
   fail "real /home leak after an unrelated asterisk was excused (exit=$rc)"; echo "       got: $out"
 fi
 
-# Failability: a mutant that drops the per-token glob guard must flag the
-# glob fixture, proving case 1 above actually exercises the guard.
+# 4. A real leak immediately followed by a glob segment in the same token
+#    must still be flagged — the glob comes after the genuine leak, not
+#    before it.
+body_with "See $REAL_THEN_GLOB for details." >"$T/real-then-glob.md"
+out="$(run_check "$T/real-then-glob.md")"; rc=$?
+if [ "$rc" -eq 1 ] && printf '%s' "$out" | grep -q "\[home_path\]"; then
+  ok "real path before a glob segment in the same token is still flagged"
+else
+  fail "real path before a glob segment in the same token was excused (exit=$rc)"; echo "       got: $out"
+fi
+
+# 5. A glob path and a real leak joined by a comma inside one
+#    whitespace-delimited token must still flag the real leak, even though
+#    a naive per-token guard would excuse the whole token.
+body_with "Paths: $COMMA_JOINED are relevant." >"$T/comma-joined.md"
+out="$(run_check "$T/comma-joined.md")"; rc=$?
+if [ "$rc" -eq 1 ] && printf '%s' "$out" | grep -q "\[home_path\]"; then
+  ok "comma-joined real leak is still flagged"
+else
+  fail "comma-joined real leak was excused (exit=$rc)"; echo "       got: $out"
+fi
+
+# Failability: a mutant that disables the glob guard entirely must flag the
+# glob-only fixture, proving case 1 above actually exercises the guard.
 MUT="$T/pr-body-check.mutant"
-sed -E 's/tokens = \[t for t in line\.split\(\) if not glob_segment_re\.search\(t\)\]/tokens = line.split()/' "$CHECK" >"$MUT"
+sed -E 's/if glob_segment_re\.search\(candidate\[: match\.start\(\) \+ 1\]\):/if False:  # mutant: glob guard removed/' "$CHECK" >"$MUT"
 chmod +x "$MUT"
 mut_out="$(bash "$MUT" 999 --repo test/test --body-file "$T/glob.md" --template-file "$T/template.md" 2>&1)"
 if printf '%s' "$mut_out" | grep -q "Redaction violations detected"; then
   ok "failability: mutant without the guard flags the glob fixture"
 else
   fail "failability: mutant still passed the glob fixture clean"; echo "       got: $mut_out"
+fi
+
+# Failability: a mutant that judges the whole candidate instead of only the
+# text before the match must wrongly excuse fixture 4 (proves the fix judges
+# per match, not per token).
+MUT2="$T/pr-body-check.mutant2"
+sed -E 's/glob_segment_re\.search\(candidate\[: match\.start\(\) \+ 1\]\)/glob_segment_re.search(candidate)/' "$CHECK" >"$MUT2"
+chmod +x "$MUT2"
+mut_out2="$(bash "$MUT2" 999 --repo test/test --body-file "$T/real-then-glob.md" --template-file "$T/template.md" 2>&1)"
+if ! printf '%s' "$mut_out2" | grep -q "Redaction violations detected"; then
+  ok "failability: whole-candidate mutant excuses the real-then-glob fixture"
+else
+  fail "failability: whole-candidate mutant still flagged the real-then-glob fixture"; echo "       got: $mut_out2"
+fi
+
+# Failability: a mutant that drops the comma split must wrongly excuse
+# fixture 5 (proves the fix splits candidates on commas, not just whitespace).
+MUT3="$T/pr-body-check.mutant3"
+sed -E 's/candidates = \[c for piece in line\.split\(\) for c in piece\.split\(","\) if c\]/candidates = line.split()/' "$CHECK" >"$MUT3"
+chmod +x "$MUT3"
+mut_out3="$(bash "$MUT3" 999 --repo test/test --body-file "$T/comma-joined.md" --template-file "$T/template.md" 2>&1)"
+if ! printf '%s' "$mut_out3" | grep -q "Redaction violations detected"; then
+  ok "failability: no-comma-split mutant excuses the comma-joined fixture"
+else
+  fail "failability: no-comma-split mutant still flagged the comma-joined fixture"; echo "       got: $mut_out3"
 fi
 
 echo "----"

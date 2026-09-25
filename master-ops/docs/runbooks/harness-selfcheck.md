@@ -4,7 +4,7 @@
 
 The harness self-check answers one question: is every component this workspace claims to have actually reachable by the host? This prevents silent failures where files exist on disk but are not wired to the host discovery paths. One layer, `Twins:`, goes further and checks entry-file content, not just reachability — see below.
 
-The check measures three harness layers:
+The check measures four harness layers:
 
 ### Skills reachability
 Verifies each skill directory under `skills/` is reachable at the workspace discovery path (`<workspace>/.claude/skills/<name>`) and contains the entry file the host expects (`SKILL.md`). A skill on disk but unwired or missing its entry file fails the check.

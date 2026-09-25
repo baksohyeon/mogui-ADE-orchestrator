@@ -216,8 +216,8 @@ echo "PASS: failability restored exit code $restored_exit"
 
 expect_allowed legacy-bash-c-outside-root run_bash "bash -c 'echo ok'" "$ops"
 expect_verdict pass legacy-bash-c-outside-root
-expect_blocked legacy-python3-root-token-non-c-arg run_bash "python3 $product_real/probe.py" "$ops"
-expect_verdict block legacy-python3-root-token-non-c-arg
+expect_allowed legacy-python3-plain-arg-in-root-is-read run_bash "python3 $product_real/probe.py" "$ops"
+expect_verdict pass legacy-python3-plain-arg-in-root-is-read
 expect_blocked legacy-bash-c-relative-cd-into-root run_bash "bash -c 'cd ../product && cp /dev/null x.txt'" "$ops"
 expect_verdict block legacy-bash-c-relative-cd-into-root
 expect_blocked legacy-bash-c-relative-redirect-into-root run_bash "bash -c 'echo bad > ../product/x.txt'" "$ops"
@@ -266,6 +266,16 @@ expect_blocked sed-relative-product-target run_bash "sed -i $product/file.txt"
 expect_verdict block sed-relative-product-target
 expect_allowed git-remote-show-argument run_bash "git -C $product remote show add"
 expect_verdict pass git-remote-show-argument
+expect_allowed git-blame-is-measured-reader run_bash "git -C $product blame file.txt"
+expect_verdict pass git-blame-is-measured-reader
+expect_allowed git-worktree-list-is-measured-reader run_bash "git -C $product worktree list"
+expect_verdict pass git-worktree-list-is-measured-reader
+expect_allowed git-fetch-is-measured-reader run_bash "git -C $product fetch"
+expect_verdict pass git-fetch-is-measured-reader
+expect_allowed git-branch-show-current-is-measured-reader run_bash "git -C $product branch --show-current"
+expect_verdict pass git-branch-show-current-is-measured-reader
+expect_blocked git-branch-create-is-still-a-write run_bash "git -C $product branch newbranch"
+expect_verdict block git-branch-create-is-still-a-write
 expect_blocked find-exec-shell-wrapper run_bash "find . -exec sh -c 'touch $product/nested.txt' \\;" "$ops"
 expect_verdict block find-exec-shell-wrapper
 expect_blocked git-remote-verbose-update run_bash "git -C $product remote -v update"
@@ -312,6 +322,32 @@ expect_blocked legacy-string-config-file-path run_file_config "$TMP/runtime-lega
 expect_verdict block legacy-string-config-file-path
 expect_allowed legacy-string-config-outside run_file_config "$TMP/runtime-legacy.json" "$ops/file.txt"
 expect_verdict pass legacy-string-config-outside
+
+# Shape 1: heredoc bodies are stripped before tokenizing, so an apostrophe in
+# prose does not unbalance the tokenizer, while a redirect into a product root
+# on the operator's own line is still parsed and still denied.
+expect_allowed heredoc-apostrophe-body-passes run_bash "cat > $ops/out.txt <<'EOF'
+the PR's body
+EOF" "$ops"
+expect_verdict pass heredoc-apostrophe-body-passes
+expect_blocked heredoc-operator-line-redirect-into-root-still-blocks run_bash "cat > $product/out.txt <<'EOF'
+body text
+EOF" "$ops"
+expect_verdict block heredoc-operator-line-redirect-into-root-still-blocks
+
+# Shape 2: a plain argument beside an interpreter's -c body is a read (the
+# interpreter is only given the path to open); the -c body itself is still
+# fully parsed and a write inside it is still denied.
+expect_allowed python3-dash-c-with-product-path-sibling-arg run_bash "python3 -c 'print(1)' $product_real/dispatch-gate" "$ops"
+expect_verdict pass python3-dash-c-with-product-path-sibling-arg
+expect_blocked python3-dash-c-body-writes-into-root run_bash "python3 -c 'open(\"$product_real/x\", \"w\")'" "$ops"
+expect_verdict block python3-dash-c-body-writes-into-root
+
+# Shape 3: `diff` is a measured legacy reader and may touch a product root to
+# compare against it; `sed -i` on a product path (test sed-relative-product-target
+# above) still blocks since it is write-capable regardless of this addition.
+expect_allowed diff-reads-product-blob-passes run_bash "diff $ops/file.txt $product/file.txt" "$ops"
+expect_verdict pass diff-reads-product-blob-passes
 
 if [ ! -s "$TMP/logs/fire.jsonl" ]; then
   echo "FAIL: MOGUI_HOOK_FIRE_LOG was ignored" >&2

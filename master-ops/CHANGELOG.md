@@ -42,6 +42,36 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+Product-path guard admits three measured read-only shapes (2026-09-25):
+
+- `scripts/hooks/product-path-guard.sh`: a heredoc body (`<<WORD`, `<<-WORD`, `<<'WORD'`,
+  `<<"WORD"`, `<<\WORD`) is now stripped, terminator line included, before the command is
+  tokenized, so prose with an apostrophe in the body no longer unbalances the tokenizer into a
+  fail-closed "unparseable command" denial. The operator's own line keeps its tokens, so a
+  redirect into a product root on that line still denies; an unterminated heredoc is still
+  unparseable, as before.
+- `scripts/hooks/product-path-guard.sh`: an interpreter command (`bash`, `sh`, `dash`, `ksh`,
+  `zsh`, `python`, `python3`, `perl`, `ruby`, `node`) no longer denies merely because some plain
+  argument's text contains a product root. A plain argument now denies only when it is a write
+  shape — a product path following `-o`, `--output`, or a literal `>` inside that argument — and a
+  plain argument no longer counts as a touch on its own, matching that the interpreter is only
+  given a path to open. A `-c` body is unaffected: it still denies on a `cd`, a root substring
+  anywhere in the body, or a redirect into the root, and every existing fail-closed rule is
+  unchanged (`FAIL_CLOSED=1` keeps the old blanket substring check, so this widens legacy mode
+  only).
+- `scripts/hooks/product-path-guard.sh`: `legacy_readonly` gained `diff`, `cmp`, `comm`, `sed`,
+  `awk`, `wc`, `sort`, `uniq`, `cut`, `tr`, `shasum`, `sha256sum`, `md5`, `xxd`, `od`, `less`,
+  `more`, `jq`; `legacy_git_readonly` gained `git blame`, `git cat-file`, `git ls-tree`, `git
+  merge-base`, `git merge-tree`, `git rev-list`, `git branch --show-current`, `git worktree`, `git
+  fetch`. `sed`/`awk` admit only without `-i` and without a `w`/`W` command in the program text;
+  `python3` admits only with no `-c` and a first non-flag argument that is `-` or outside every
+  product root; `git branch` admits only the exact `--show-current` invocation, so creating,
+  deleting, or renaming a branch is still denied.
+- `scripts/test-product-path-guard.sh`: a pass/deny pair per shape above, plus `git blame`, `git
+  worktree list`, `git fetch`, `git branch --show-current`, and `git branch <name>` staying
+  denied.
+- `docs/runbooks/product-path-guard.md`: new runbook documenting the guard and all three shapes.
+
 Twins probe and test-hook-verdict guard (2026-09-25):
 
 - `scripts/harness-selfcheck.sh`: ported the seat's `Twins:` probe (seat lines 282-311, owner

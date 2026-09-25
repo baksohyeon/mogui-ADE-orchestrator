@@ -181,6 +181,47 @@ tool=payload.get("tool_input", {})
 command=tool.get("command", "")
 cwd=os.path.realpath(os.path.expanduser(tool.get("working_directory") or payload.get("cwd") or os.getcwd()))
 roots=[os.path.realpath(os.path.expanduser(line)) for line in os.environ["PRODUCT_ROOTS"].splitlines() if line.strip()]
+LEGACY_MODE = os.environ["FAIL_CLOSED"] != "1"
+INTERPRETER_NAMES = {"bash", "sh", "dash", "ksh", "zsh", "python", "python3", "perl", "ruby", "node"}
+PLAIN_PATH_TARGET_EXEMPT = {"cp", "install", "ln"} | (INTERPRETER_NAMES if LEGACY_MODE else set())
+SQ=chr(39)
+HEREDOC_OPERATOR_RE = re.compile(r"<<(?!<)(-)?\s*(?:" + SQ + r"([^" + SQ + r"]*)" + SQ + r"|\"([^\"]*)\"|\\(\S+)|([^\s<>|&;()]+))")
+def find_heredoc_operators(line):
+    operators=[]
+    for match in HEREDOC_OPERATOR_RE.finditer(line):
+        start=match.start()
+        if start > 0 and line[start - 1] == "<":
+            continue
+        if start > 0 and line[start - 1] not in " \t;&|()":
+            continue
+        word=next(g for g in match.groups()[1:] if g is not None)
+        operators.append((word, bool(match.group(1))))
+    return operators
+def strip_heredocs(text):
+    lines=text.split("\n")
+    out=[]
+    i=0
+    n=len(lines)
+    while i < n:
+        line=lines[i]
+        out.append(line)
+        operators=find_heredoc_operators(line)
+        if operators:
+            j=i + 1
+            for word, strip_tabs in operators:
+                terminated=False
+                while j < n:
+                    candidate=lines[j].lstrip("\t") if strip_tabs else lines[j]
+                    j += 1
+                    if candidate == word:
+                        terminated=True
+                        break
+                if not terminated:
+                    return None
+            i=j
+            continue
+        i += 1
+    return "\n".join(out)
 def resolve(base, value):
     value=os.path.expanduser(value)
     return os.path.realpath(value if os.path.isabs(value) else os.path.join(base, value))
@@ -256,8 +297,12 @@ def has_install_directory_mode(option_tokens):
                 pos += 1
         index += 1
     return False
+heredoc_stripped_command=strip_heredocs(command)
+if heredoc_stripped_command is None:
+    print("DENY\tunparseable\tunparseable command")
+    raise SystemExit
 try:
-    tokens=list(shlex.shlex(command, posix=True, punctuation_chars=";&|><"))
+    tokens=list(shlex.shlex(heredoc_stripped_command, posix=True, punctuation_chars=";&|><"))
 except Exception:
     print("DENY\tunparseable\tunparseable command")
     raise SystemExit
@@ -313,6 +358,10 @@ for parts in segments:
             if token.startswith("-"): i+=1; continue
             sub=token; sub_pos=i; break
         command_class="git" + (" " + sub if sub else "")
+        if sub == "branch" and sub_pos >= 0:
+            branch_args=[token for token in parts[sub_pos + 1 :] if token != "--"]
+            if branch_args == ["--show-current"]:
+                command_class="git branch --show-current"
         remote_action=""
         if sub == "remote" and sub_pos >= 0:
             remote_index=sub_pos + 1
@@ -332,23 +381,42 @@ for parts in segments:
     else:
         command_class=name
         target=current_cwd
-        if name in {"bash", "sh", "dash", "ksh", "zsh", "python", "python3", "perl", "ruby", "node"}:
+        if name in INTERPRETER_NAMES:
             bare_dash_c = "-c" in parts[1:]
-            root_token_in_args = any(any(root in token for root in roots) for token in parts[1:])
+            dash_c_index = parts.index("-c") if bare_dash_c else -1
             dash_c_body=""
-            if bare_dash_c:
-                dash_c_index=parts.index("-c")
-                if dash_c_index + 1 < len(parts):
-                    dash_c_body=parts[dash_c_index + 1]
+            if bare_dash_c and dash_c_index + 1 < len(parts):
+                dash_c_body=parts[dash_c_index + 1]
+            if LEGACY_MODE:
+                # A plain argument is a write shape only if it follows -o/--output, or
+                # holds a root path after a literal ">" within the same token; the -c
+                # body itself is excluded here and covered by legacy_dash_c_body_denied.
+                root_token_in_args=False
+                prev_token=None
+                for arg_index, token in enumerate(parts[1:], 1):
+                    if bare_dash_c and arg_index == dash_c_index + 1:
+                        prev_token=token
+                        continue
+                    is_write_shape = (
+                        (prev_token in ("-o", "--output") and any(root in token for root in roots))
+                        or (token.startswith("--output=") and any(root in token.split("=", 1)[1] for root in roots))
+                        or (">" in token and any(root in token.split(">", 1)[1] for root in roots))
+                    )
+                    if is_write_shape:
+                        root_token_in_args=True
+                        break
+                    prev_token=token
+            else:
+                root_token_in_args = any(any(root in token for root in roots) for token in parts[1:])
             legacy_dash_c_body_denied=False
-            if bare_dash_c and os.environ["FAIL_CLOSED"] != "1" and not under(current_cwd):
+            if bare_dash_c and LEGACY_MODE and not under(current_cwd):
                 legacy_dash_c_body_denied = (
                     contains_cd_token(dash_c_body)
                     or any(root in dash_c_body for root in roots)
                     or redirects_into_root(dash_c_body, current_cwd)
                 )
             if root_token_in_args or legacy_dash_c_body_denied or (
-                bare_dash_c and (os.environ["FAIL_CLOSED"] == "1" or under(current_cwd))
+                bare_dash_c and (not LEGACY_MODE or under(current_cwd))
             ):
                 print("DENY\t"+command_class+"\topaque interpreter command may contain an unparsed write")
                 raise SystemExit
@@ -358,7 +426,7 @@ for parts in segments:
         if token in {">",">>","2>","2>>","&>",">&",">|"}:
             if i+1 >= len(parts): print("DENY\t"+command_class+"\tredirection target is missing"); raise SystemExit
             target_hits.append(resolve(current_cwd, parts[i+1]))
-        elif (token.startswith("/") or token.startswith("~/")) and name not in {"cp", "install", "ln"}:
+        elif (token.startswith("/") or token.startswith("~/")) and name not in PLAIN_PATH_TARGET_EXEMPT:
             target_hits.append(resolve(current_cwd, token))
         elif token == "--output" and i + 1 < len(parts):
             target_hits.append(resolve(current_cwd, parts[i + 1]))
@@ -485,10 +553,30 @@ for parts in segments:
     if os.environ["FAIL_CLOSED"] == "1" and command_class not in allow:
         print("DENY\t"+command_class+"\tcommand is not in measured read-only allowlist")
         raise SystemExit
-    if os.environ["FAIL_CLOSED"] != "1":
-        legacy_readonly={"pwd","ls","ll","cat","head","tail","grep","rg","find","stat","file","whoami","env","true","false","test","printf"}
-        legacy_git_readonly={"git status","git log","git diff","git show","git rev-parse","git ls-files","git describe","git for-each-ref","git remote"}
-        if command_class not in legacy_readonly and command_class not in legacy_git_readonly:
+    if LEGACY_MODE:
+        legacy_readonly={
+            "pwd","ls","ll","cat","head","tail","grep","rg","find","stat","file","whoami","env","true","false","test","printf",
+            "diff","cmp","comm","wc","sort","uniq","cut","tr","shasum","sha256sum","md5","xxd","od","less","more","jq",
+        }
+        legacy_git_readonly={
+            "git status","git log","git diff","git show","git rev-parse","git ls-files","git describe","git for-each-ref","git remote",
+            "git blame","git cat-file","git ls-tree","git merge-base","git merge-tree","git rev-list",
+            "git branch --show-current","git worktree","git fetch",
+        }
+        is_measured_readonly = command_class in legacy_readonly or command_class in legacy_git_readonly
+        if not is_measured_readonly and name in ("sed", "awk"):
+            has_inplace = any(token == "-i" or token.startswith("-i") for token in parts[1:])
+            program_operands = collect_non_option_operands(parts, 1, {"-e"} if name == "sed" else {"-f", "-v"})
+            has_write_command = any(re.search(r"(^|[^A-Za-z])[wW](\s|$)", operand) for operand in program_operands)
+            if not has_inplace and not has_write_command:
+                is_measured_readonly=True
+        if not is_measured_readonly and name == "python3" and not bare_dash_c:
+            non_flag_args=[token for token in parts[1:] if not token.startswith("-")]
+            if non_flag_args:
+                first_arg=non_flag_args[0]
+                if first_arg == "-" or not under(resolve(current_cwd, first_arg)):
+                    is_measured_readonly=True
+        if not is_measured_readonly:
             print("DENY\t"+command_class+"\tcommand is not in legacy read-only policy")
             raise SystemExit
 print("ALLOW\t" + (last_command_class or "empty") + "\tread-only allowlist")

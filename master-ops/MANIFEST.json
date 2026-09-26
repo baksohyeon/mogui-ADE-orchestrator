@@ -101,6 +101,7 @@
     "scripts/test-product-path-guard.sh",
     "scripts/test-seat-check.sh",
     "scripts/test-spawn-test.sh",
+    "scripts/test-template-currency-line.sh",
     "scripts/test-tool-naming.sh",
     "scripts/test-tracker-check-banner.sh",
     "scripts/test-worker-block-warn.sh",

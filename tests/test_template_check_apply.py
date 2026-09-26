@@ -115,6 +115,114 @@ def test_template_check_malformed_manifest_exit_2(tmp_path: Path):
     assert report["manifest_status"] == "malformed"
 
 
+def _write_retirements(ops: Path, entries: list[dict]) -> None:
+    retirements = ops / "config" / "template-retirements.json"
+    retirements.parent.mkdir(parents=True, exist_ok=True)
+    retirements.write_text(json.dumps(entries), encoding="utf-8")
+
+
+def test_template_check_retired_path_is_not_reported_absent(tmp_path: Path):
+    # Failability mutant 1: a retired path is not absent.
+    ops = tmp_path / "ops"
+    ops.mkdir()
+    _seed_ops_from_manifest(ops, drop=["workspace-card/CLAUDE.md"])
+    _write_retirements(
+        ops,
+        [{"path": "workspace-card/CLAUDE.md", "since": "2026-08-05", "why": "retired by owner"}],
+    )
+    result = _run([sys.executable, str(TEMPLATE_CHECK), "--ops", str(ops), "--json"])
+    assert result.returncode == 0, result.stdout + result.stderr
+    report = json.loads(result.stdout)
+    assert report["absent_required"] == []
+    assert report["retired"] == ["workspace-card/CLAUDE.md"]
+    assert report["retirements_status"] == "ok"
+
+
+def test_template_check_retirement_not_in_manifest_reported_not_failing(tmp_path: Path):
+    # Failability mutant 2: a retirement not in the manifest is reported and
+    # does not fail.
+    ops = tmp_path / "ops"
+    ops.mkdir()
+    _seed_ops_from_manifest(ops)
+    _write_retirements(
+        ops,
+        [{"path": "scripts/retired-tool.sh", "since": "2026-08-05", "why": "removed on purpose"}],
+    )
+    result = _run([sys.executable, str(TEMPLATE_CHECK), "--ops", str(ops), "--json"])
+    assert result.returncode == 0, result.stdout + result.stderr
+    report = json.loads(result.stdout)
+    assert report["retirements_unknown"] == ["scripts/retired-tool.sh"]
+    assert report["retired"] == []
+
+
+def test_template_check_genuinely_absent_path_still_fails(tmp_path: Path):
+    # Failability mutant 4: a genuinely absent path (no retirement declared)
+    # still gives exit 1.
+    ops = tmp_path / "ops"
+    ops.mkdir()
+    _seed_ops_from_manifest(ops, drop=["workspace-card/CLAUDE.md"])
+    result = _run([sys.executable, str(TEMPLATE_CHECK), "--ops", str(ops), "--json"])
+    assert result.returncode == 1, result.stdout
+    report = json.loads(result.stdout)
+    assert report["absent_required"] == ["workspace-card/CLAUDE.md"]
+    assert report["retired"] == []
+
+
+def test_template_check_malformed_retirements_file(tmp_path: Path):
+    # Failability mutant 5: a malformed retirements file gives manifest=ok
+    # plus a retirements=malformed marker and exit 1.
+    ops = tmp_path / "ops"
+    ops.mkdir()
+    _seed_ops_from_manifest(ops)
+    retirements = ops / "config" / "template-retirements.json"
+    retirements.parent.mkdir(parents=True, exist_ok=True)
+    retirements.write_text("{not-a-list", encoding="utf-8")
+    result = _run([sys.executable, str(TEMPLATE_CHECK), "--ops", str(ops), "--json"])
+    assert result.returncode == 1, result.stdout
+    report = json.loads(result.stdout)
+    assert report["manifest_status"] == "ok"
+    assert report["retirements_status"] == "malformed"
+
+
+def test_template_check_retirements_file_itself_is_not_unknown(tmp_path: Path):
+    ops = tmp_path / "ops"
+    ops.mkdir()
+    _seed_ops_from_manifest(ops)
+    _write_retirements(ops, [])
+    result = _run([sys.executable, str(TEMPLATE_CHECK), "--ops", str(ops), "--json"])
+    assert result.returncode == 0, result.stdout + result.stderr
+    report = json.loads(result.stdout)
+    assert "config/template-retirements.json" not in report["unknown_present"]
+    assert report["retirements_status"] == "ok"
+
+
+def test_template_check_retirements_path_overridable(tmp_path: Path):
+    ops = tmp_path / "ops"
+    ops.mkdir()
+    _seed_ops_from_manifest(ops, drop=["workspace-card/CLAUDE.md"])
+    custom = tmp_path / "custom-retirements.json"
+    custom.write_text(
+        json.dumps(
+            [{"path": "workspace-card/CLAUDE.md", "since": "2026-08-05", "why": "retired"}]
+        ),
+        encoding="utf-8",
+    )
+    result = _run(
+        [
+            sys.executable,
+            str(TEMPLATE_CHECK),
+            "--ops",
+            str(ops),
+            "--retirements",
+            str(custom),
+            "--json",
+        ],
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    report = json.loads(result.stdout)
+    assert report["retired"] == ["workspace-card/CLAUDE.md"]
+
+
 def test_template_apply_refuses_instance_owned_and_unknown(tmp_path: Path):
     ops = tmp_path / "ops"
     ops.mkdir()
@@ -345,7 +453,10 @@ def test_template_apply_rejects_path_escape_and_missing_manifest_file(tmp_path: 
     assert not (ops / "ok.md").exists()
 
 
-def test_template_check_empty_manifest_still_reports_unknown_paths(tmp_path: Path):
+def test_template_check_empty_manifest_reports_unknown_paths_without_failing(tmp_path: Path):
+    # Failability mutant 3: unknown files alone give exit 0. Installs add files
+    # by design; drift the template cares about is a required file missing or
+    # changed, not a file the install wrote.
     ops = tmp_path / "ops"
     ops.mkdir()
     (ops / "MANIFEST.json").write_text(
@@ -355,8 +466,9 @@ def test_template_check_empty_manifest_still_reports_unknown_paths(tmp_path: Pat
     (ops / "unexpected.txt").write_text("x\n", encoding="utf-8")
     result = _run([sys.executable, str(TEMPLATE_CHECK), "--ops", str(ops), "--json"])
     report = json.loads(result.stdout)
-    assert result.returncode == 1
+    assert result.returncode == 0, result.stdout + result.stderr
     assert report["unknown_present"] == ["unexpected.txt"]
+    assert report["absent_required"] == []
 
 
 def test_template_check_rejects_symlink_and_bad_changelog(tmp_path: Path):

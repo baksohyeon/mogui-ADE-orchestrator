@@ -404,6 +404,47 @@ fi
 # onboarding/upgrade.md and scripts/template-apply. Nonzero from this block is
 # intentional boot gating (pre-manifest and shape-broken installs fail open
 # awareness), not a silent report line.
+
+# Turns a template-check JSON report + its exit code into the boot-time
+# "Template:" line. Isolated as a function (like template_adoption_probe and
+# twins_probe above) so a test can feed it a synthetic report instead of
+# standing up a real ops install. Uses env: TEMPLATE_JSON, TEMPLATE_RC.
+# unknown_present is reported but never turns this line into a failing one —
+# installs add files by design; drift the template cares about is a required
+# file missing, not a file the install wrote. A retired path (declared in the
+# install's own config/template-retirements.json) is likewise not absence.
+format_template_currency_line() {
+  python3 - <<'EOF'
+import json, os
+data = json.loads(os.environ["TEMPLATE_JSON"])
+rc = int(os.environ["TEMPLATE_RC"])
+ver = data.get("installed_version") or "undeterminable"
+absent = len(data.get("absent_required") or [])
+retired = len(data.get("retired") or [])
+unknown = len(data.get("unknown_present") or [])
+status = data.get("manifest_status") or "?"
+report_set = data.get("report_set") or "?"
+tver = data.get("template_version")
+retirements_status = data.get("retirements_status") or "ok"
+if status == "absent":
+    print("Template: no MANIFEST.json (run Upgrade mode; pre-manifest install)")
+    raise SystemExit(1)
+if retirements_status == "malformed":
+    print(f"Template: {ver} (manifest={status}, retirements=malformed) — run Upgrade mode")
+    raise SystemExit(1)
+if rc == 0 and status == "ok" and absent == 0:
+    if report_set == "template-compare" and tver:
+        suffix = f", {retired} retired" if retired else ""
+        print(f"Template: {ver} (matches template {tver}{suffix})")
+    else:
+        print(f"Template: {ver} (installed-manifest shape ok; no template path for currency compare)")
+    raise SystemExit(0)
+extra = f", template={tver}" if tver else ""
+print(f"Template: {ver} (manifest={status}, absent={absent}, retired={retired}, unknown={unknown}{extra}) — run Upgrade mode")
+raise SystemExit(1)
+EOF
+}
+
 if [ -x "$TEMPLATE_CHECK" ]; then
   template_args=(--ops "$OPS_DIR" --json)
   # Prefer template-compare when a live ADE skeleton is measurable.
@@ -418,29 +459,7 @@ if [ -x "$TEMPLATE_CHECK" ]; then
     echo "Template: undecided (template-check produced no report)"
     exit_code=1
   else
-    template_line=$(
-      TEMPLATE_JSON="$template_json" TEMPLATE_RC="$template_rc" python3 - <<'EOF'
-import json, os
-data = json.loads(os.environ["TEMPLATE_JSON"])
-rc = int(os.environ["TEMPLATE_RC"])
-ver = data.get("installed_version") or "undeterminable"
-absent = len(data.get("absent_required") or [])
-unknown = len(data.get("unknown_present") or [])
-status = data.get("manifest_status") or "?"
-report_set = data.get("report_set") or "?"
-tver = data.get("template_version")
-if rc == 0 and status == "ok" and absent == 0:
-    if report_set == "template-compare" and tver:
-        print(f"Template: {ver} (matches template {tver})")
-    else:
-        print(f"Template: {ver} (installed-manifest shape ok; no template path for currency compare)")
-elif status == "absent":
-    print(f"Template: no MANIFEST.json (run Upgrade mode; pre-manifest install)")
-else:
-    extra = f", template={tver}" if tver else ""
-    print(f"Template: {ver} (set={report_set}, manifest={status}, absent={absent}, unknown={unknown}{extra}) — run Upgrade mode")
-EOF
-    )
+    template_line=$(TEMPLATE_JSON="$template_json" TEMPLATE_RC="$template_rc" format_template_currency_line)
     echo "$template_line"
     if [ "$template_rc" -ne 0 ]; then
       exit_code=1

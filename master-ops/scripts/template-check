@@ -13,6 +13,15 @@ Two report sets exist. The report always states which set was produced:
 
 `--template` also lets this run from the template side against an arbitrary ops
 path, so an install too old to contain this script is still checkable.
+
+An install declares partial adoption in `config/template-retirements.json`
+(overridable with `--retirements`): a list of `{"path", "since", "why"}`. A
+manifest path listed there is reported under `retired` instead of
+`absent_required`; a listed path not in the manifest is reported under
+`retirements_unknown` and never fails the check. `unknown_present` (files the
+install added on its own) is always reported but never fails the check either
+— only a genuinely absent required path, a malformed manifest, or a malformed
+retirements file does.
 """
 
 from __future__ import annotations
@@ -75,6 +84,39 @@ def resolve_template_root(template: Path | None) -> Path | None:
     ):
         return nested
     return None
+
+
+def load_retirements(path: Path) -> tuple[list[dict], str]:
+    """Return (entries, status) where status is 'ok', 'absent', or 'malformed'.
+
+    An absent file is the normal state (no retirements declared yet) and is
+    not an error. A present-but-broken file is reported as malformed and does
+    not stop the rest of the check from running.
+    """
+    if not path.is_file():
+        return [], "absent"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return [], "malformed"
+    if not isinstance(data, list):
+        return [], "malformed"
+    since_pattern = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+    entries: list[dict] = []
+    for item in data:
+        if not isinstance(item, dict):
+            return [], "malformed"
+        rel = item.get("path")
+        since = item.get("since")
+        why = item.get("why")
+        if not isinstance(rel, str) or not rel.strip():
+            return [], "malformed"
+        if not isinstance(since, str) or not since_pattern.match(since):
+            return [], "malformed"
+        if not isinstance(why, str) or not why.strip():
+            return [], "malformed"
+        entries.append({"path": rel, "since": since, "why": why})
+    return entries, "ok"
 
 
 def load_manifest(path: Path) -> tuple[dict | None, str | None]:
@@ -189,6 +231,7 @@ def adoption_notes_newer_than(
 def build_report(
     ops_root: Path,
     template_root: Path | None,
+    retirements_path: Path,
 ) -> tuple[dict, int]:
     """Return (report, exit_code)."""
     report: dict = {
@@ -198,6 +241,9 @@ def build_report(
         "manifest_status": "ok",
         "absent_required": [],
         "unknown_present": [],
+        "retired": [],
+        "retirements_unknown": [],
+        "retirements_status": "absent",
         "template_version": None,
         "adoption_notes": [],
         "questions_unanswered": [],
@@ -208,6 +254,10 @@ def build_report(
     manifest, err = load_manifest(manifest_path)
     present, invalid_paths = list_present_paths(ops_root)
     report["invalid_paths"] = sorted(invalid_paths)
+
+    retirement_entries, retirements_status = load_retirements(retirements_path)
+    report["retirements_status"] = retirements_status
+    retirement_paths = {e["path"] for e in retirement_entries}
 
     if err == "manifest absent":
         report["manifest_status"] = "absent"
@@ -227,7 +277,8 @@ def build_report(
         installed_version = manifest.get("template_version")
         report["installed_version"] = installed_version
 
-    absent = sorted(p for p in required if p not in present)
+    required_set = set(required)
+    absent = sorted(p for p in required if p not in present and p not in retirement_paths)
     unknown = sorted(
         p
         for p in present
@@ -240,11 +291,18 @@ def build_report(
     # old generators, do not flag it as unknown.
     report["absent_required"] = absent
     report["unknown_present"] = unknown
+    report["retired"] = sorted(p for p in retirement_paths if p in required_set)
+    report["retirements_unknown"] = sorted(p for p in retirement_paths if p not in required_set)
 
     exit_code = 0
     if report["manifest_status"] == "absent":
         exit_code = 1  # checkable-but-undetermined shape still reports; not exit 2
-    if report["absent_required"] or report["unknown_present"] or invalid_paths:
+    # unknown_present never fails: installs add files by design, and drift the
+    # template cares about is a required file missing or changed, not a file
+    # the install wrote.
+    if report["absent_required"] or invalid_paths:
+        exit_code = 1
+    if retirements_status == "malformed":
         exit_code = 1
 
     if template_root is not None:
@@ -265,8 +323,11 @@ def build_report(
             return report, 2
         if t_manifest:
             t_required = [str(p) for p in t_manifest["files"]]
+            t_required_set = set(t_required)
             # Recompute absence against template manifest (authoritative current set).
-            report["absent_required"] = sorted(p for p in t_required if p not in present)
+            report["absent_required"] = sorted(
+                p for p in t_required if p not in present and p not in retirement_paths
+            )
             report["unknown_present"] = sorted(
                 p
                 for p in present
@@ -275,9 +336,15 @@ def build_report(
                 and not is_template_side(p)
                 and p != "MANIFEST.json"
             )
-            if report["absent_required"] or report["unknown_present"] or invalid_paths:
+            report["retired"] = sorted(p for p in retirement_paths if p in t_required_set)
+            report["retirements_unknown"] = sorted(
+                p for p in retirement_paths if p not in t_required_set
+            )
+            if report["absent_required"] or invalid_paths:
                 exit_code = 1
             elif report["manifest_status"] == "absent":
+                exit_code = 1
+            if retirements_status == "malformed":
                 exit_code = 1
         elif report["manifest_status"] == "absent":
             # Template has no manifest either: presence table only from walking
@@ -322,6 +389,15 @@ def format_human(report: dict) -> str:
     lines.append(f"unknown_present: {len(unknown)}")
     for p in unknown:
         lines.append(f"  - {p}")
+    retired = report.get("retired") or []
+    lines.append(f"retired: {len(retired)}")
+    for p in retired:
+        lines.append(f"  - {p}")
+    retirements_unknown = report.get("retirements_unknown") or []
+    lines.append(f"retirements_unknown: {len(retirements_unknown)}")
+    for p in retirements_unknown:
+        lines.append(f"  - {p}")
+    lines.append(f"retirements_status: {report.get('retirements_status', 'absent')}")
     invalid = report.get("invalid_paths") or []
     lines.append(f"invalid_paths: {len(invalid)}")
     for p in invalid:
@@ -359,6 +435,12 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Template master-ops path or ADE clone root for comparison",
     )
+    parser.add_argument(
+        "--retirements",
+        type=Path,
+        default=None,
+        help="Retirements file (default: <ops>/config/template-retirements.json)",
+    )
     parser.add_argument("--json", action="store_true", help="Emit JSON")
     args = parser.parse_args(argv)
 
@@ -371,8 +453,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.template is not None and template_root is None:
         return _die(f"template path unreadable: {args.template}", 2)
 
+    retirements_path = (
+        args.retirements.resolve()
+        if args.retirements is not None
+        else ops_root / "config" / "template-retirements.json"
+    )
+
     try:
-        report, code = build_report(ops_root, template_root)
+        report, code = build_report(ops_root, template_root, retirements_path)
     except (OSError, UnicodeDecodeError) as exc:
         return _die(f"could not read inputs: {exc}", 2)
     if args.json:

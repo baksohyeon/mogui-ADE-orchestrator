@@ -30,6 +30,7 @@ import argparse
 import json
 import re
 import sys
+from datetime import date
 from pathlib import Path
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
@@ -103,7 +104,6 @@ def load_retirements(path: Path) -> tuple[list[dict], str]:
         return [], "malformed"
     if not isinstance(data, list):
         return [], "malformed"
-    since_pattern = re.compile(r"^\d{4}-\d{2}-\d{2}$")
     entries: list[dict] = []
     for item in data:
         if not isinstance(item, dict):
@@ -113,11 +113,15 @@ def load_retirements(path: Path) -> tuple[list[dict], str]:
         why = item.get("why")
         if not isinstance(rel, str) or not rel.strip():
             return [], "malformed"
-        if not isinstance(since, str) or not since_pattern.match(since):
+        if not isinstance(since, str):
+            return [], "malformed"
+        try:
+            date.fromisoformat(since)
+        except ValueError:
             return [], "malformed"
         if not isinstance(why, str) or not why.strip():
             return [], "malformed"
-        entries.append({"path": rel, "since": since, "why": why})
+        entries.append({"path": rel.strip(), "since": since, "why": why})
     return entries, "ok"
 
 

@@ -13,6 +13,9 @@ cd "$(dirname "$0")/.."
 
 SELFCHECK_BIN="${SELFCHECK_BIN:-./scripts/harness-selfcheck.sh}"
 
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+
 pass=0
 fail=0
 
@@ -43,7 +46,7 @@ mutant_check() {
   # $1 = case label, $2 = sed pattern to break the verdict, $3 = TEMPLATE_JSON,
   # $4 = TEMPLATE_RC, $5 = the untouched verdict substring the mutant must lose.
   local label="$1" pattern="$2" json="$3" rc_in="$4" original="$5"
-  local mut="$SELFCHECK_BIN.mutant.$$" mline
+  local mut="$TMP/harness-selfcheck.mutant.$$.sh" mline
   sed "$pattern" "$SELFCHECK_BIN" > "$mut"
   if [ ! -f "$mut" ] || cmp -s "$SELFCHECK_BIN" "$mut"; then
     echo "FAIL: mutant not generated" >&2

@@ -184,6 +184,61 @@ def test_template_check_malformed_retirements_file(tmp_path: Path):
     assert report["retirements_status"] == "malformed"
 
 
+def test_template_check_retired_path_passes_in_template_compare_mode(tmp_path: Path):
+    # cubic finding on this contract's own PR: the install-manifest-mode
+    # retirement tests above do not exercise build_report's template-compare
+    # recompute (absent_required/retired/retirements_unknown against
+    # t_required_set), which is a separate code path from the install-only one.
+    ops = tmp_path / "ops"
+    ops.mkdir()
+    _seed_ops_from_manifest(ops, drop=["workspace-card/CLAUDE.md"])
+    _write_retirements(
+        ops,
+        [{"path": "workspace-card/CLAUDE.md", "since": "2026-08-05", "why": "retired by owner"}],
+    )
+    result = _run(
+        [
+            sys.executable,
+            str(TEMPLATE_CHECK),
+            "--ops",
+            str(ops),
+            "--template",
+            str(SKELETON),
+            "--json",
+        ],
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    report = json.loads(result.stdout)
+    assert report["report_set"] == "template-compare"
+    assert report["absent_required"] == []
+    assert report["retired"] == ["workspace-card/CLAUDE.md"]
+
+
+def test_template_check_malformed_retirements_fails_in_template_compare_mode(tmp_path: Path):
+    ops = tmp_path / "ops"
+    ops.mkdir()
+    _seed_ops_from_manifest(ops)
+    retirements = ops / "config" / "template-retirements.json"
+    retirements.parent.mkdir(parents=True, exist_ok=True)
+    retirements.write_text("{not-a-list", encoding="utf-8")
+    result = _run(
+        [
+            sys.executable,
+            str(TEMPLATE_CHECK),
+            "--ops",
+            str(ops),
+            "--template",
+            str(SKELETON),
+            "--json",
+        ],
+    )
+    assert result.returncode == 1, result.stdout
+    report = json.loads(result.stdout)
+    assert report["report_set"] == "template-compare"
+    assert report["manifest_status"] == "ok"
+    assert report["retirements_status"] == "malformed"
+
+
 def test_template_check_retirements_path_is_directory_is_malformed(tmp_path: Path):
     # CodeRabbit finding on this contract's own PR: a present non-file
     # retirements path (e.g. a directory) used to be treated the same as an

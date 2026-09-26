@@ -459,7 +459,14 @@ if [ -x "$TEMPLATE_CHECK" ]; then
     echo "Template: undecided (template-check produced no report)"
     exit_code=1
   else
-    template_line=$(TEMPLATE_JSON="$template_json" TEMPLATE_RC="$template_rc" format_template_currency_line)
+    # format_template_currency_line raises SystemExit(1) on most reporting
+    # branches to make its own return code testable (see the mutant tests in
+    # test-template-currency-line.sh). Under `set -e`, a bare assignment would
+    # abort this whole script before the line below ever prints — the
+    # existing template_rc (from the real template-check invocation above)
+    # stays the sole arbiter of exit_code, so the substitution's own status is
+    # deliberately discarded here.
+    template_line=$(TEMPLATE_JSON="$template_json" TEMPLATE_RC="$template_rc" format_template_currency_line) || true
     echo "$template_line"
     if [ "$template_rc" -ne 0 ]; then
       exit_code=1

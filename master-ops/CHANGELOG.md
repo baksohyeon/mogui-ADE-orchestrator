@@ -42,6 +42,31 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+The manifest learns retirements; unknown files stop failing the check (2026-09-26):
+
+- `scripts/template-check`: reads an optional `config/template-retirements.json` at the install
+  root (path overridable with `--retirements`), a JSON array of `{"path", "since", "why"}`. A
+  manifest path listed there is reported under a new `retired` key instead of `absent_required`.
+  A listed path not in the manifest is reported under `retirements_unknown` and does not fail. A
+  malformed retirements file is reported as `retirements_status: malformed` and does fail (exit
+  1), leaving `manifest_status` untouched.
+- `scripts/template-check`: `unknown_present` is still reported (count and list) but no longer
+  contributes to a failing exit code, on its own or in the `--template` comparison branch.
+  Installs add contracts, lineage, and runbooks by design; the drift the template cares about is
+  a required file missing or changed, not a file the install wrote. Root cause `mgm-o4g`: the
+  previous all-or-nothing manifest could not express partial adoption, so an install that
+  retired one file on purpose and accumulated its own contracts read "run Upgrade mode" forever.
+- `scripts/harness-selfcheck.sh`: the `Template:` currency line now reads
+  `Template: <ver> (manifest=ok, absent=N, retired=M, unknown=K) — run Upgrade mode` on a
+  failing install, or `Template: <ver> (matches template <tver>, M retired)` when the install is
+  current with `M` declared retirements. A malformed retirements file reads
+  `Template: <ver> (manifest=ok, retirements=malformed) — run Upgrade mode`. The formatting logic
+  moved into `format_template_currency_line()` so it is directly testable, the same way
+  `template_adoption_probe` and `twins_probe` already are.
+- `docs/runbooks/harness-selfcheck.md`: documents how an install declares a retirement and that
+  unknown files are reported, not failed.
+- Tracker: `mgm-xlen`; root cause `mgm-o4g`.
+
 Product-path guard admits three measured read-only shapes (2026-09-25):
 
 - `scripts/hooks/product-path-guard.sh`: a heredoc body (`<<WORD`, `<<-WORD`, `<<'WORD'`,

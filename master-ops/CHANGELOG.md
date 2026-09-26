@@ -42,6 +42,60 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+Product-path guard admits three measured read-only shapes (2026-09-25):
+
+- `scripts/hooks/product-path-guard.sh`: a heredoc body (`<<WORD`, `<<-WORD`, `<<'WORD'`,
+  `<<"WORD"`, `<<\WORD`) is now stripped, terminator line included, before the command is
+  tokenized, so prose with an apostrophe in the body no longer unbalances the tokenizer into a
+  fail-closed "unparseable command" denial. Recognizing the operator is quote-and-comment-aware
+  (`<<` inside a quoted string, or after an unquoted `#`, is not a heredoc — the latter closes a
+  gap where a `#` comment mentioning `<<WORD` made the guard strip and ignore real commands that
+  Bash would still execute) and does not require whitespace before it (`cat<<EOF` is recognized,
+  not just `cat << EOF`). The operator's own line keeps its tokens, so a redirect into
+  a product root on that line still denies. When the operator line is a bare interpreter
+  invocation with no `-c` (`bash <<'EOF'`), the heredoc body is the whole script and gets the same
+  scrutiny a `-c` body already gets — a `cd`, a root substring, or a redirect into the root denies
+  the command outright, in both modes, closing a gap the stripping would otherwise have opened (an
+  opaque interpreter script that used to leak into the general token scan and get caught by
+  accident would otherwise now be invisible). The interpreter need not be the operator line's
+  first token — `true && bash <<'EOF'`, `cd /tmp; python3 <<EOF`, `echo x | sh <<EOF` all get the
+  same scrutiny, by segmenting the operator line on `;`/`&&`/`||`/`|`/`&` the same way the main
+  parser does and checking every segment that itself carries the heredoc redirect. An unterminated
+  heredoc is still unparseable, as before.
+- `scripts/hooks/product-path-guard.sh`: an interpreter command (`bash`, `sh`, `dash`, `ksh`,
+  `zsh`, `python`, `python3`, `perl`, `ruby`, `node`) no longer denies merely because some plain
+  argument's text contains a product root. A plain argument now denies only when it is a write
+  shape — a product path following `-o`, `--output`, or a literal `>` inside that argument — and a
+  plain argument no longer counts as a touch on its own, matching that the interpreter is only
+  given a path to open (this means `python3 <root>/script.py` from a cwd outside the root is now a
+  read, regardless of the `legacy_readonly` entry below — that entry only matters when the command
+  touches the root some other way, e.g. a cwd already under it). A `-c` body is unaffected: it
+  still denies on a `cd`, a root substring anywhere in the body, or a redirect into the root, and
+  every existing fail-closed rule is unchanged (`FAIL_CLOSED=1` keeps the old blanket substring
+  check, so this widens legacy mode only).
+- `scripts/hooks/product-path-guard.sh`: `legacy_readonly` gained `diff`, `cmp`, `comm`, `wc`,
+  `sort`, `uniq`, `cut`, `tr`, `shasum`, `sha256sum`, `md5`, `xxd`, `od`, `less`, `more`, `jq`;
+  `legacy_git_readonly` gained `git blame`, `git cat-file`, `git ls-tree`, `git merge-base`, `git
+  merge-tree`, `git rev-list`, `git branch --show-current`, `git worktree` (`git worktree
+  add`/etc. are independently denied as write-capable before this gate, so in practice only `git
+  worktree list` passes), `git fetch`. `diff`/`cmp`/`sort` lose that admission if an `-o`/
+  `--output` flag points into the root (`sort -o <root>/out` writes there); `uniq`/`xxd` lose it
+  if their second positional operand — an optional output file, not an input — resolves into the
+  root, tracking each command's own value-taking options first so a flag's value is never
+  mistaken for that positional operand. `sed` and `awk` are admitted through a separate branch,
+  not this set: without `-i` (anywhere in a combined short-flag cluster, not just as its own
+  token), without `-f` (an external script file this guard cannot inspect), and without an unsafe
+  construct in the program text — a `w`, `W`, or `e` command for `sed` (`e` and `s///e` execute a
+  shell command), or a `system(` call, `>`, or `|` for `awk` (`print > file`, `print | "cmd"`, and
+  `"cmd" | getline` are program-level I/O this guard cannot otherwise see). `python3` admits, when
+  it reaches this gate at all (see above), only with no `-c` and a first non-flag argument that is
+  `-` or outside every product root. `git branch` admits only the exact `--show-current`
+  invocation, so creating, deleting, or renaming a branch is still denied.
+- `scripts/test-product-path-guard.sh`: a pass/deny pair per shape above, plus `git blame`, `git
+  worktree list`, `git fetch`, `git branch --show-current`, and `git branch <name>` staying
+  denied.
+- `docs/runbooks/product-path-guard.md`: new runbook documenting the guard and all three shapes.
+
 Twins probe and test-hook-verdict guard (2026-09-25):
 
 - `scripts/harness-selfcheck.sh`: ported the seat's `Twins:` probe (seat lines 282-311, owner

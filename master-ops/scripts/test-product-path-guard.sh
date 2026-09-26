@@ -216,8 +216,8 @@ echo "PASS: failability restored exit code $restored_exit"
 
 expect_allowed legacy-bash-c-outside-root run_bash "bash -c 'echo ok'" "$ops"
 expect_verdict pass legacy-bash-c-outside-root
-expect_blocked legacy-python3-root-token-non-c-arg run_bash "python3 $product_real/probe.py" "$ops"
-expect_verdict block legacy-python3-root-token-non-c-arg
+expect_allowed legacy-python3-plain-arg-in-root-is-read run_bash "python3 $product_real/probe.py" "$ops"
+expect_verdict pass legacy-python3-plain-arg-in-root-is-read
 expect_blocked legacy-bash-c-relative-cd-into-root run_bash "bash -c 'cd ../product && cp /dev/null x.txt'" "$ops"
 expect_verdict block legacy-bash-c-relative-cd-into-root
 expect_blocked legacy-bash-c-relative-redirect-into-root run_bash "bash -c 'echo bad > ../product/x.txt'" "$ops"
@@ -266,6 +266,16 @@ expect_blocked sed-relative-product-target run_bash "sed -i $product/file.txt"
 expect_verdict block sed-relative-product-target
 expect_allowed git-remote-show-argument run_bash "git -C $product remote show add"
 expect_verdict pass git-remote-show-argument
+expect_allowed git-blame-is-measured-reader run_bash "git -C $product blame file.txt"
+expect_verdict pass git-blame-is-measured-reader
+expect_allowed git-worktree-list-is-measured-reader run_bash "git -C $product worktree list"
+expect_verdict pass git-worktree-list-is-measured-reader
+expect_allowed git-fetch-is-measured-reader run_bash "git -C $product fetch"
+expect_verdict pass git-fetch-is-measured-reader
+expect_allowed git-branch-show-current-is-measured-reader run_bash "git -C $product branch --show-current"
+expect_verdict pass git-branch-show-current-is-measured-reader
+expect_blocked git-branch-create-is-still-a-write run_bash "git -C $product branch newbranch"
+expect_verdict block git-branch-create-is-still-a-write
 expect_blocked find-exec-shell-wrapper run_bash "find . -exec sh -c 'touch $product/nested.txt' \\;" "$ops"
 expect_verdict block find-exec-shell-wrapper
 expect_blocked git-remote-verbose-update run_bash "git -C $product remote -v update"
@@ -312,6 +322,102 @@ expect_blocked legacy-string-config-file-path run_file_config "$TMP/runtime-lega
 expect_verdict block legacy-string-config-file-path
 expect_allowed legacy-string-config-outside run_file_config "$TMP/runtime-legacy.json" "$ops/file.txt"
 expect_verdict pass legacy-string-config-outside
+
+# Shape 1: heredoc bodies are stripped before tokenizing, so an apostrophe in
+# prose does not unbalance the tokenizer, while a redirect into a product root
+# on the operator's own line is still parsed and still denied.
+expect_allowed heredoc-apostrophe-body-passes run_bash "cat > $ops/out.txt <<'EOF'
+the PR's body
+EOF" "$ops"
+expect_verdict pass heredoc-apostrophe-body-passes
+expect_blocked heredoc-operator-line-redirect-into-root-still-blocks run_bash "cat > $product/out.txt <<'EOF'
+body text
+EOF" "$ops"
+expect_verdict block heredoc-operator-line-redirect-into-root-still-blocks
+expect_allowed heredoc-quoted-angle-brackets-not-misparsed run_bash 'printf "%s\n" "use <<EOF"' "$ops"
+expect_verdict pass heredoc-quoted-angle-brackets-not-misparsed
+expect_allowed heredoc-operator-with-no-space-before-it run_bash "cat<<'EOF' > $ops/out.txt
+the PR's body
+EOF" "$ops"
+expect_verdict pass heredoc-operator-with-no-space-before-it
+expect_blocked heredoc-fed-interpreter-body-writes-into-root run_bash "bash <<'EOF'
+rm -rf $product_real/file
+EOF" "$ops"
+expect_verdict block heredoc-fed-interpreter-body-writes-into-root
+expect_allowed heredoc-fed-interpreter-body-outside-root run_bash "bash <<'EOF'
+echo hello
+EOF" "$ops"
+expect_verdict pass heredoc-fed-interpreter-body-outside-root
+expect_blocked heredoc-fed-interpreter-not-first-token-and run_bash "true && bash <<'EOF'
+rm -rf $product_real/file
+EOF" "$ops"
+expect_verdict block heredoc-fed-interpreter-not-first-token-and
+expect_blocked heredoc-fed-interpreter-not-first-token-semicolon run_bash "cd /tmp; python3 <<'EOF'
+open(\"$product_real/x\", \"w\")
+EOF" "$ops"
+expect_verdict block heredoc-fed-interpreter-not-first-token-semicolon
+expect_blocked heredoc-fed-interpreter-not-first-token-pipe run_bash "echo x | sh <<'EOF'
+rm -rf $product_real/file
+EOF" "$ops"
+expect_verdict block heredoc-fed-interpreter-not-first-token-pipe
+expect_allowed heredoc-fed-interpreter-not-first-token-benign-passes run_bash "true && bash <<'EOF'
+echo hello
+EOF" "$ops"
+expect_verdict pass heredoc-fed-interpreter-not-first-token-benign-passes
+
+# Shape 2: a plain argument beside an interpreter's -c body is a read (the
+# interpreter is only given the path to open); the -c body itself is still
+# fully parsed and a write inside it is still denied.
+expect_allowed python3-dash-c-with-product-path-sibling-arg run_bash "python3 -c 'print(1)' $product_real/dispatch-gate" "$ops"
+expect_verdict pass python3-dash-c-with-product-path-sibling-arg
+expect_blocked python3-dash-c-body-writes-into-root run_bash "python3 -c 'open(\"$product_real/x\", \"w\")'" "$ops"
+expect_verdict block python3-dash-c-body-writes-into-root
+
+# Shape 3: `diff` is a measured legacy reader and may touch a product root to
+# compare against it; `sed -i` on a product path (test sed-relative-product-target
+# above) still blocks since it is write-capable regardless of this addition.
+expect_allowed diff-reads-product-blob-passes run_bash "diff $ops/file.txt $product/file.txt" "$ops"
+expect_verdict pass diff-reads-product-blob-passes
+expect_blocked awk-system-call-not-admitted run_bash "awk 'BEGIN{system(\"touch out\")}' $product/in.txt" "$ops"
+expect_verdict block awk-system-call-not-admitted
+expect_blocked sed-dash-e-write-command-not-admitted run_bash "sed -e 'w $product/out' $product/in.txt" "$ops"
+expect_verdict block sed-dash-e-write-command-not-admitted
+expect_blocked sed-dash-f-external-script-not-admitted run_bash "sed -f script.sed $product/in.txt" "$ops"
+expect_verdict block sed-dash-f-external-script-not-admitted
+expect_allowed sed-dash-n-print-range-passes run_bash "sed -n '1,5p' $product/in.txt" "$ops"
+expect_verdict pass sed-dash-n-print-range-passes
+expect_blocked heredoc-comment-not-misparsed-as-operator run_bash "echo hi # see <<EOF below
+rm -rf $product_real/file
+EOF" "$ops"
+expect_verdict block heredoc-comment-not-misparsed-as-operator
+expect_blocked sort-dash-o-write-into-root run_bash "sort -o $product/out $product/in" "$ops"
+expect_verdict block sort-dash-o-write-into-root
+expect_allowed sort-no-output-flag-passes run_bash "sort $product/in" "$ops"
+expect_verdict pass sort-no-output-flag-passes
+expect_blocked uniq-second-positional-write-into-root run_bash "uniq $product/in $product/out" "$ops"
+expect_verdict block uniq-second-positional-write-into-root
+expect_allowed uniq-single-operand-passes run_bash "uniq $product/in" "$ops"
+expect_verdict pass uniq-single-operand-passes
+expect_blocked xxd-second-positional-write-into-root run_bash "xxd $product/in $product/out" "$ops"
+expect_verdict block xxd-second-positional-write-into-root
+expect_blocked xxd-value-option-shifts-positional-still-blocks run_bash "xxd -s 0x10 $product/in $product/out" "$ops"
+expect_verdict block xxd-value-option-shifts-positional-still-blocks
+expect_allowed xxd-value-option-single-file-passes run_bash "xxd -s 0x10 $product/in" "$ops"
+expect_verdict pass xxd-value-option-single-file-passes
+expect_blocked uniq-value-option-shifts-positional-still-blocks run_bash "uniq -s 2 $product/in $product/out" "$ops"
+expect_verdict block uniq-value-option-shifts-positional-still-blocks
+expect_blocked sed-write-flag-no-space-before-filename run_bash "sed -e 's/a/b/w$product/out' $product/in" "$ops"
+expect_verdict block sed-write-flag-no-space-before-filename
+expect_blocked sed-e-command-not-admitted run_bash "sed '1e whoami' $product/in" "$ops"
+expect_verdict block sed-e-command-not-admitted
+expect_blocked sed-combined-short-flags-with-inplace run_bash "sed -ni '1p' $product/in" "$ops"
+expect_verdict block sed-combined-short-flags-with-inplace
+expect_blocked awk-output-redirect-not-admitted run_bash "awk '{print > \"out\"}' $product/in" "$ops"
+expect_verdict block awk-output-redirect-not-admitted
+expect_blocked awk-pipe-getline-not-admitted run_bash "awk 'BEGIN{\"id\" | getline}' $product/in" "$ops"
+expect_verdict block awk-pipe-getline-not-admitted
+expect_allowed awk-safe-program-passes run_bash "awk '{print \$1}' $product/in" "$ops"
+expect_verdict pass awk-safe-program-passes
 
 if [ ! -s "$TMP/logs/fire.jsonl" ]; then
   echo "FAIL: MOGUI_HOOK_FIRE_LOG was ignored" >&2

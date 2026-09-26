@@ -433,11 +433,11 @@ if retirements_status == "malformed":
     print(f"Template: {ver} (manifest={status}, retirements=malformed) — run Upgrade mode")
     raise SystemExit(1)
 if rc == 0 and status == "ok" and absent == 0:
+    suffix = f", {retired} retired" if retired else ""
     if report_set == "template-compare" and tver:
-        suffix = f", {retired} retired" if retired else ""
         print(f"Template: {ver} (matches template {tver}{suffix})")
     else:
-        print(f"Template: {ver} (installed-manifest shape ok; no template path for currency compare)")
+        print(f"Template: {ver} (installed-manifest shape ok; no template path for currency compare{suffix})")
     raise SystemExit(0)
 extra = f", template={tver}" if tver else ""
 print(f"Template: {ver} (manifest={status}, absent={absent}, retired={retired}, unknown={unknown}{extra}) — run Upgrade mode")

@@ -93,8 +93,10 @@ def load_retirements(path: Path) -> tuple[list[dict], str]:
     not an error. A present-but-broken file is reported as malformed and does
     not stop the rest of the check from running.
     """
-    if not path.is_file():
+    if not path.exists():
         return [], "absent"
+    if not path.is_file():
+        return [], "malformed"
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):

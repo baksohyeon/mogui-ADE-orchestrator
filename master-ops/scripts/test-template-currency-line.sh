@@ -68,6 +68,7 @@ mutant_check() {
 }
 
 json_matches_with_retired='{"installed_version":"v1","manifest_status":"ok","absent_required":[],"retired":["a.md"],"unknown_present":[],"report_set":"template-compare","template_version":"v1","retirements_status":"ok"}'
+json_install_manifest_with_retired='{"installed_version":"v1","manifest_status":"ok","absent_required":[],"retired":["a.md"],"unknown_present":[],"report_set":"install-manifest","template_version":null,"retirements_status":"ok"}'
 json_matches_with_unknown_retirement='{"installed_version":"v1","manifest_status":"ok","absent_required":[],"retired":[],"retirements_unknown":["z.md"],"unknown_present":[],"report_set":"template-compare","template_version":"v1","retirements_status":"ok"}'
 json_unknown_alone='{"installed_version":"v1","manifest_status":"ok","absent_required":[],"retired":[],"unknown_present":["x.txt","y.txt"],"report_set":"install-manifest","template_version":null,"retirements_status":"ok"}'
 json_genuinely_absent='{"installed_version":"v1","manifest_status":"ok","absent_required":["missing.md"],"retired":[],"unknown_present":[],"report_set":"install-manifest","template_version":null,"retirements_status":"ok"}'
@@ -82,6 +83,17 @@ mutant_check "retired-count" \
   's/suffix = f", {retired} retired" if retired else ""/suffix = ""/' \
   "$json_matches_with_retired" 0 \
   "matches template v1, 1 retired"
+
+# 1b. A retired count is reported even without a template to compare against
+#     (CodeRabbit finding on this contract's own PR: the install-manifest
+#     success branch used to drop the retired count on the floor).
+check "retired count shows without a template comparison" \
+  "$json_install_manifest_with_retired" 0 \
+  "Template: v1 (installed-manifest shape ok; no template path for currency compare, 1 retired)" 0
+mutant_check "install-manifest-retired-count" \
+  's/suffix = f", {retired} retired" if retired else ""/suffix = ""/' \
+  "$json_install_manifest_with_retired" 0 \
+  "no template path for currency compare, 1 retired"
 
 # 2. A retirement not in the manifest is reported (retirements_unknown) and
 #    does not fail: the passing line is unaffected by it.

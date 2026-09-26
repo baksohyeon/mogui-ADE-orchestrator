@@ -184,6 +184,21 @@ def test_template_check_malformed_retirements_file(tmp_path: Path):
     assert report["retirements_status"] == "malformed"
 
 
+def test_template_check_retirements_path_is_directory_is_malformed(tmp_path: Path):
+    # CodeRabbit finding on this contract's own PR: a present non-file
+    # retirements path (e.g. a directory) used to be treated the same as an
+    # absent one. It must report malformed and fail instead.
+    ops = tmp_path / "ops"
+    ops.mkdir()
+    _seed_ops_from_manifest(ops)
+    (ops / "config" / "template-retirements.json").mkdir(parents=True)
+    result = _run([sys.executable, str(TEMPLATE_CHECK), "--ops", str(ops), "--json"])
+    assert result.returncode == 1, result.stdout
+    report = json.loads(result.stdout)
+    assert report["manifest_status"] == "ok"
+    assert report["retirements_status"] == "malformed"
+
+
 def test_template_check_retirements_file_itself_is_not_unknown(tmp_path: Path):
     ops = tmp_path / "ops"
     ops.mkdir()

@@ -44,6 +44,35 @@ Skills, hooks, and the tracker are checked for **reachability only**. A reachabl
 
 For self-test discipline and examples, see [Master Operations](../MASTER-OPERATIONS.md) section 8 (charted failure modes) and the existing hooks under `scripts/hooks/`.
 
+## Template currency: retirements and unknown files
+
+The `Template:` line's currency check (`scripts/template-check`, invoked at the
+bottom of this script) compares the install against `MANIFEST.json`'s
+required-files list. Two kinds of difference from that list do not count as
+drift:
+
+- **Files the install added.** `unknown_present` is still reported (count and
+  list) but never fails the check. Installs accumulate contracts, lineage, and
+  runbooks by design; the template only cares whether a required file is
+  missing, not whether the install wrote extra ones.
+- **Files the install retired on purpose.** List them in
+  `config/template-retirements.json` (install-owned, gitignored, path
+  overridable with `--retirements`): a JSON array of
+  `{"path": "<manifest path>", "since": "<YYYY-MM-DD>", "why": "<one
+  sentence>"}`. A listed path that is in the manifest is reported under
+  `retired` instead of `absent_required`. A listed path that is not in the
+  manifest is reported under `retirements_unknown` and does not fail either —
+  it just means the retirement note is stale or premature. A malformed
+  retirements file (bad JSON, wrong shape) is reported as
+  `retirements_status: malformed` and does fail the check, the same as a
+  genuinely missing required path.
+
+The passing line reads `Template: <ver> (matches template <tver>)`, or
+`Template: <ver> (matches template <tver>, M retired)` when `M` retirements
+apply. The failing line reads `Template: <ver> (manifest=<status>, absent=N,
+retired=M, unknown=K) — run Upgrade mode`, or `Template: <ver> (manifest=ok,
+retirements=malformed) — run Upgrade mode` for a broken retirements file.
+
 ## Common gaps
 
 ### Skill discovered but SKILL.md missing

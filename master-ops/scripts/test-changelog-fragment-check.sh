@@ -73,6 +73,40 @@ out=$(cd "$repo" && "$SCRIPT" "$base" 2>&1); rc=$?
 expect 0 "$rc" "CHANGELOG.md-only change passes" "$out"
 rm -rf "$repo"
 
+# Case 6: a fragment in a changelog.d/ subdirectory does not satisfy the
+# gate — the fold consumers only read the root, so this must still fail.
+repo="$(mk_repo)"; base="$(git -C "$repo" rev-parse HEAD)"
+printf 'changed\n' >"$repo/$TREE/other.md"
+mkdir -p "$repo/$TREE/changelog.d/sub"
+printf 'A thing (2026-01-01):\n\n- did it\n' >"$repo/$TREE/changelog.d/sub/2026-01-01-a-thing.md"
+commit_all "$repo"
+out=$(cd "$repo" && "$SCRIPT" "$base" 2>&1); rc=$?
+expect 1 "$rc" "subdirectory fragment does not satisfy the gate" "$out"
+rm -rf "$repo"
+
+# Case 7: an empty-body fragment fails, mirroring changelog-release's refusal.
+repo="$(mk_repo)"; base="$(git -C "$repo" rev-parse HEAD)"
+printf 'changed\n' >"$repo/$TREE/other.md"
+printf '   \n' >"$repo/$TREE/changelog.d/2026-01-01-empty.md"
+commit_all "$repo"
+out=$(cd "$repo" && "$SCRIPT" "$base" 2>&1); rc=$?
+expect 1 "$rc" "empty fragment body fails" "$out"
+rm -rf "$repo"
+
+# Case 8: git mv of an existing fragment (re-dating it) alongside a
+# master-ops/ change passes: --no-renames must see it as an add, not a rename
+# that --diff-filter=A silently drops.
+repo="$(mk_repo)"; base="$(git -C "$repo" rev-parse HEAD)"
+printf 'A thing (2026-01-01):\n\n- did it\n' >"$repo/$TREE/changelog.d/2026-01-01-a-thing.md"
+commit_all "$repo"
+base2="$(git -C "$repo" rev-parse HEAD)"
+printf 'changed\n' >"$repo/$TREE/other.md"
+git -C "$repo" mv "$TREE/changelog.d/2026-01-01-a-thing.md" "$TREE/changelog.d/2026-01-02-a-thing.md"
+commit_all "$repo"
+out=$(cd "$repo" && "$SCRIPT" "$base2" 2>&1); rc=$?
+expect 0 "$rc" "git mv of a fragment plus a master-ops/ change passes" "$out"
+rm -rf "$repo"
+
 # Failability: without the CHANGELOG.md exemption, case 5 must fail.
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 python3 - "$SCRIPT" >"$T/mut.py" <<'PY'

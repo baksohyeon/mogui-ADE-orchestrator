@@ -528,6 +528,7 @@ def test_template_check_adoption_notes_prepend_fragment_bodies(tmp_path: Path):
     assert len(notes) == 1
     assert notes[0]["version"] == "Unreleased"
     body = notes[0]["body"]
+    assert "fragments live here" not in body
     beta_at = body.find("Beta (2026-01-02)")
     alpha_at = body.find("Alpha (2026-01-01)")
     old_at = body.find("Old entry that predates fragments.")

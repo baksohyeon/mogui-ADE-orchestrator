@@ -11,9 +11,14 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from datetime import date
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+# Canonical copy: master-ops/scripts/template_common.py FRAGMENT_NAME_RE. This
+# script cannot import that module without a sys.path hack across the
+# master-ops/ template boundary, so this copy must stay string-identical to
+# it; tests/test_changelog_release.py asserts that.
 FRAGMENT_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})-[a-z0-9-]+\.md$")
 UNRELEASED_HEADING = "## Unreleased"
 # Anchored to a whole line: CHANGELOG.md's own prose mentions "## Unreleased"
@@ -30,6 +35,11 @@ def load_fragments(fragments_dir: Path) -> list[tuple[str, str, str]]:
             continue
         match = FRAGMENT_RE.match(path.name)
         if not match:
+            sys.stderr.write(f"changelog-release: bad fragment name: {path.name}\n")
+            raise SystemExit(2)
+        try:
+            date.fromisoformat(match.group(1))
+        except ValueError:
             sys.stderr.write(f"changelog-release: bad fragment name: {path.name}\n")
             raise SystemExit(2)
         body = path.read_text(encoding="utf-8").strip()
@@ -59,10 +69,32 @@ def fold(changelog_text: str, bodies: list[str]) -> str:
     return f"{changelog_text[:insert_at]}\n\n{block}"
 
 
+def _next_heading_index(text: str, after: int) -> int:
+    """Index of the newline before the next '## ' heading line after `after`.
+
+    A '## ' line inside a fenced (```) code block is content, not a section
+    boundary. Returns -1 if no unfenced heading line follows.
+    """
+    in_fence = False
+    pos = after
+    while True:
+        newline = text.find("\n", pos)
+        if newline == -1:
+            return -1
+        line_start = newline + 1
+        line_end = text.find("\n", line_start)
+        line = text[line_start:] if line_end == -1 else text[line_start:line_end]
+        if line.strip().startswith("```"):
+            in_fence = not in_fence
+        elif not in_fence and line.startswith("## "):
+            return newline
+        pos = line_start
+
+
 def unreleased_block(text: str) -> str:
     match = UNRELEASED_LINE_RE.search(text)
     start = match.start()
-    next_heading = text.find("\n## ", match.end())
+    next_heading = _next_heading_index(text, match.end())
     end = next_heading if next_heading != -1 else len(text)
     return text[start:end].rstrip("\n")
 
@@ -94,17 +126,38 @@ def main(argv: list[str] | None = None) -> int:
         print("0 fragments")
         return 0
 
-    changelog_text = changelog.read_text(encoding="utf-8")
-    updated = fold(changelog_text, [body for _, _, body in entries])
+    try:
+        changelog_text = changelog.read_text(encoding="utf-8")
+    except OSError as exc:
+        sys.stderr.write(f"changelog-release: cannot read {changelog}: {exc}\n")
+        return 2
+
+    if UNRELEASED_LINE_RE.search(changelog_text) is None:
+        sys.stderr.write(f"changelog-release: no '{UNRELEASED_HEADING}' heading found\n")
+        return 2
+
+    # Recoverable step: a fragment whose body is already present verbatim
+    # under the Unreleased heading survived from an interrupted prior run
+    # (changelog written, then this fragment's deletion failed). Delete it
+    # without folding its body again.
+    unreleased_now = unreleased_block(changelog_text)
+    to_fold = [e for e in entries if e[2] not in unreleased_now]
+    already_folded = [e[1] for e in entries if e[2] in unreleased_now]
+
+    updated = fold(changelog_text, [body for _, _, body in to_fold]) if to_fold else changelog_text
 
     if args.dry_run:
         print(unreleased_block(updated))
         return 0
 
-    changelog.write_text(updated, encoding="utf-8")
+    if to_fold:
+        changelog.write_text(updated, encoding="utf-8")
     for _, name, _ in entries:
         (fragments_dir / name).unlink()
-    print(f"{len(entries)} fragments")
+    for name in already_folded:
+        print(f"{name}: already folded")
+    if to_fold:
+        print(f"{len(to_fold)} fragments")
     return 0
 
 

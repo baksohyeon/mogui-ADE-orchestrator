@@ -21,11 +21,15 @@ from pathlib import Path
 
 FRAGMENT_DIR = "master-ops/changelog.d/"
 CHANGELOG_FILE = "master-ops/CHANGELOG.md"
-FRAGMENT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-[a-z0-9-]+\.md$")
+# Canonical copy: master-ops/scripts/template_common.py FRAGMENT_NAME_RE. This
+# script cannot import that module without a sys.path hack across the
+# master-ops/ template boundary, so this copy must stay string-identical to
+# it; tests/test_changelog_release.py asserts that.
+FRAGMENT_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})-[a-z0-9-]+\.md$")
 
 
 def _diff_names(base_sha: str, *, diff_filter: str | None = None) -> list[str]:
-    cmd = ["git", "diff", "--name-only"]
+    cmd = ["git", "diff", "--no-renames", "--name-only"]
     if diff_filter:
         cmd.append(f"--diff-filter={diff_filter}")
     cmd.append(f"{base_sha}...HEAD")
@@ -34,6 +38,13 @@ def _diff_names(base_sha: str, *, diff_filter: str | None = None) -> list[str]:
         sys.stderr.write(f"changelog-fragment-check: git diff failed: {result.stderr}\n")
         raise SystemExit(2)
     return [line for line in result.stdout.splitlines() if line]
+
+
+def _is_root_fragment(path: str) -> bool:
+    """True for a root-level changelog.d/*.md file: what the fold consumers read."""
+    if not path.startswith(FRAGMENT_DIR) or Path(path).name == "README.md":
+        return False
+    return "/" not in path[len(FRAGMENT_DIR) :]
 
 
 def main(argv: list[str]) -> int:
@@ -45,13 +56,17 @@ def main(argv: list[str]) -> int:
     changed = _diff_names(base_sha)
     added = _diff_names(base_sha, diff_filter="A")
 
-    fragments_added = [
-        p for p in added if p.startswith(FRAGMENT_DIR) and Path(p).name != "README.md"
-    ]
+    fragments_added = [p for p in added if _is_root_fragment(p)]
     bad_names = [p for p in fragments_added if not FRAGMENT_RE.match(Path(p).name)]
     if bad_names:
         for p in bad_names:
             sys.stderr.write(f"changelog-fragment-check: bad fragment name: {p}\n")
+        return 1
+
+    empty_bodies = [p for p in fragments_added if not Path(p).read_text(encoding="utf-8").strip()]
+    if empty_bodies:
+        for p in empty_bodies:
+            sys.stderr.write(f"changelog-fragment-check: empty fragment: {p}\n")
         return 1
 
     triggers = [

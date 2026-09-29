@@ -23,6 +23,11 @@ EXCLUDE_FILES = frozenset(
         "CHANGELOG.md",
         "ONBOARDING.md",
         ".coverage",
+        # Exercises scripts/changelog-fragment-check, which is deliberately
+        # not installed (not in this manifest): every other promoted
+        # test-*.sh has its subject installed, and a skip nobody reads is
+        # worse than a test that simply never ships to installs.
+        "scripts/test-changelog-fragment-check.sh",
     }
 )
 EXCLUDE_DIRS = frozenset(

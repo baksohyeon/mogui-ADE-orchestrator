@@ -21,7 +21,8 @@ against a live template with `--template <path-to-skeleton>`. This changelog
 file is not in the generated repository — Step 3 keeps it on the template side.
 
 When a change touches `master-ops/`, add a fragment under
-`master-ops/changelog.d/<YYYY-MM-DD>-<slug>.md` in the same change, holding what
+`master-ops/changelog.d/<YYYY-MM-DD>-<slug>.md` in the same change (a change touching only
+`changelog.d/` or only `CHANGELOG.md` is exempt), holding what
 would have been the `## Unreleased` entry: concurrent pull requests would
 otherwise all edit the same lines under that heading and re-conflict on every
 squash. `scripts/changelog-release` folds every fragment into `## Unreleased`,

@@ -1,9 +1,29 @@
 """Shared constants for template-check and template-apply.
 
 Import from sibling scripts so refusal names and placeholders cannot drift.
+
+The changelog fragment name grammar below is the canonical copy. The two
+repo-root changelog scripts outside this template tree cannot import this
+module without a sys.path hack across the template boundary, so they each
+keep a string-identical duplicate instead; tests/test_changelog_release.py
+asserts the duplicates match this pattern.
 """
 
 from __future__ import annotations
+
+import re
+from datetime import date
+
+FRAGMENT_NAME_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})-[a-z0-9-]+\.md$")
+
+
+def parse_fragment_date(name: str) -> date:
+    """Return a fragment file name's date, or raise ValueError if invalid."""
+    match = FRAGMENT_NAME_RE.match(name)
+    if not match:
+        raise ValueError(f"bad fragment name: {name}")
+    return date.fromisoformat(match.group(1))
+
 
 INSTANCE_OWNED_PREFIXES = (
     "docs/lineage/",

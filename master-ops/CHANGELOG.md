@@ -42,6 +42,35 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+The unknown tier stops capping models the policy has never heard of (2026-09-29):
+
+- `master-ops/model-tier-policy.json` and `config/model-tier-policy.example.json`: the
+  `fanout_caps.unknown` entry is removed, so both ship `fanout_caps: {}`. A dispatch denied only
+  because its model post-dates the tier table was a harness error, not a policy decision: the gate
+  already treats a missing `fanout_caps` key as uncapped for every tier
+  (`src/master_runtime/core/dispatch_gate.py` `cap_for`), and `TIER_UNKNOWN_MODEL` already stays a
+  warning rather than a denial. An unlisted model is recorded as `unknown` with that warning and no
+  longer blocked on fan-out.
+- Measured side effect, not changed: `strictness_of` ranks an uncapped tier as loosest. With
+  `unknown` now uncapped, a job with `declared=top` and a measured model that resolves to `unknown`
+  goes from a `MODEL_TIER_ESCALATION` denial to a `MODEL_MISMATCH` warning: previously the measured
+  `unknown` tier (cap 8) was stricter than declared `top` (uncapped), so the escalation branch in
+  `_model_verification` denied the job; now both sides are uncapped, so the disagreement is a
+  warning rather than a denial (measured: `gate._model_verification` returns
+  `(None, "declared=... measured=...")` before the fix, `(ReasonCode.MODEL_MISMATCH, None)` after).
+  The ranking itself is untouched.
+- `_notes` (template) and `_docs.fanout_caps` (example): each gained one sentence dated 2026-09-29
+  recording the directive.
+- `tests/test_dispatch_gate.py`: `test_instance_tier_policy_example_is_loadable_version_2` and
+  `test_template_policy_resolves_claude_sonnet_5_as_efficient` now assert `cap_for("unknown") is
+  None` against the shipped files instead of `== 8`; a new
+  `test_template_policy_unknown_model_is_allowed_uncapped` loads the shipped template and asserts
+  ten dispatches of an unlisted model all allow with the `TIER_UNKNOWN_MODEL` warning.
+- Onboarding already read as uncapped-by-default (`master-ops/onboarding/01-preflight.md` lines 44,
+  53, 56 already describe a missing key, including `unknown`, as uncapped); no step required the
+  `unknown` key, so no onboarding text changed.
+- Tracker: `mgm-lnd3`.
+
 The manifest learns retirements; unknown files stop failing the check (2026-09-26):
 
 - `scripts/template-check`: reads an optional `config/template-retirements.json` at the install

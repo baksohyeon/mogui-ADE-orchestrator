@@ -329,9 +329,11 @@ def test_instance_tier_policy_example_is_loadable_version_2() -> None:
     )
     policy = dispatch_gate._load_tier_policy(example)
     assert policy.version >= 2
-    # Example ships no top cap. Top-tier approval is asked by master-ops/scripts/dispatch,
+    # Example ships no top cap and no unknown cap. Top-tier approval is asked by
+    # master-ops/scripts/dispatch; an unlisted model is not blocked on fanout,
     # while the gate treats missing caps as uncapped for every tier.
-    assert policy.cap_for("unknown") == 8
+    assert policy.fanout_caps == {}
+    assert policy.cap_for("unknown") is None
     assert policy.cap_for("top") is None
 
 
@@ -2929,8 +2931,42 @@ def test_template_policy_resolves_claude_sonnet_5_as_efficient() -> None:
     assert policy.tier_of("grok-4.5-fast") == "efficient"
     assert policy.tier_of("never-listed-anywhere") == "unknown"
     assert policy.cap_for("top") is None
-    assert policy.cap_for("unknown") == 8
+    assert policy.cap_for("unknown") is None
     assert policy.cap_for("efficient") is None
+
+
+def test_template_policy_unknown_model_is_allowed_uncapped(tmp_path: Path) -> None:
+    """The shipped template no longer caps the unknown tier (owner directive 2026-09-29).
+
+    A dispatch denied only because its model post-dates the tier table is a
+    harness error, not a policy decision. Restoring the retired
+    fanout_caps.unknown: 8 line makes this case fail on the second dispatch
+    with TIER_FANOUT_CAP.
+    """
+
+    from master_runtime.core.dispatch_gate import _load_tier_policy
+
+    repo_root = Path(__file__).resolve().parents[1]
+    template = repo_root / "master-ops" / "model-tier-policy.json"
+    policy = _load_tier_policy(template)
+    assert policy.fanout_caps == {}
+    assert policy.cap_for("unknown") is None
+
+    gate = _gate(tmp_path, now=1_000, tier_policy_path=template)
+    for index in range(10):
+        decision = gate.check(
+            DispatchRequest(
+                runtime="codex",
+                model="a-model-newer-than-the-tier-table",
+                contract_path=_contract(tmp_path, f"unknown model dispatch {index}"),
+                est_input_chars=1_000,
+                n_agents=1,
+            )
+        )
+        assert decision.allow is True, decision
+        assert decision.reason == ReasonCode.OK
+        assert ReasonCode.TIER_UNKNOWN_MODEL in decision.warnings
+        assert _ledger_entries(tmp_path)[-1]["tier"] == "unknown"
 
 
 def _registered(

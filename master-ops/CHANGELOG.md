@@ -52,9 +52,13 @@ The unknown tier stops capping models the policy has never heard of (2026-09-29)
   warning rather than a denial. An unlisted model is recorded as `unknown` with that warning and no
   longer blocked on fan-out.
 - Measured side effect, not changed: `strictness_of` ranks an uncapped tier as loosest. With
-  `unknown` now uncapped, a registered job with `declared=top` and a measured model that resolves to
-  `unknown` moves from passing the measured-model check to `MODEL_MISMATCH`, because `unknown` is no
-  longer stricter than `top`. The ranking itself is untouched.
+  `unknown` now uncapped, a job with `declared=top` and a measured model that resolves to `unknown`
+  goes from a `MODEL_TIER_ESCALATION` denial to a `MODEL_MISMATCH` warning: previously the measured
+  `unknown` tier (cap 8) was stricter than declared `top` (uncapped), so the escalation branch in
+  `_model_verification` denied the job; now both sides are uncapped, so the disagreement is a
+  warning rather than a denial (measured: `gate._model_verification` returns
+  `(None, "declared=... measured=...")` before the fix, `(ReasonCode.MODEL_MISMATCH, None)` after).
+  The ranking itself is untouched.
 - `_notes` (template) and `_docs.fanout_caps` (example): each gained one sentence dated 2026-09-29
   recording the directive.
 - `tests/test_dispatch_gate.py`: `test_instance_tier_policy_example_is_loadable_version_2` and

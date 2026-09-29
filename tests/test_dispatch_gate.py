@@ -2940,7 +2940,7 @@ def test_template_policy_unknown_model_is_allowed_uncapped(tmp_path: Path) -> No
 
     A dispatch denied only because its model post-dates the tier table is a
     harness error, not a policy decision. Restoring the retired
-    fanout_caps.unknown: 8 line makes this case fail on the second dispatch
+    fanout_caps.unknown: 8 line makes this case fail on the ninth dispatch
     with TIER_FANOUT_CAP.
     """
 

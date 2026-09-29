@@ -486,6 +486,55 @@ def test_template_check_unreadable_template_version_exit_2(tmp_path: Path):
     assert any("VERSION" in q for q in report["questions_unanswered"])
 
 
+def test_template_check_adoption_notes_prepend_fragment_bodies(tmp_path: Path):
+    ops = tmp_path / "ops"
+    template = tmp_path / "template"
+    ops.mkdir()
+    template.mkdir()
+    (ops / "MANIFEST.json").write_text(
+        json.dumps({"template_version": "v0.0.0", "files": []}) + "\n",
+        encoding="utf-8",
+    )
+    (template / "TEMPLATE-VERSION").write_text("v0.1.0\n", encoding="utf-8")
+    (template / "MANIFEST.json").write_text(
+        json.dumps({"template_version": "v0.1.0", "files": []}) + "\n",
+        encoding="utf-8",
+    )
+    (template / "CHANGELOG.md").write_text(
+        "## Unreleased\n\nOld entry that predates fragments.\n", encoding="utf-8"
+    )
+    changelog_d = template / "changelog.d"
+    changelog_d.mkdir()
+    (changelog_d / "README.md").write_text("fragments live here\n", encoding="utf-8")
+    (changelog_d / "2026-01-01-alpha.md").write_text(
+        "Alpha (2026-01-01):\n\n- did alpha\n", encoding="utf-8"
+    )
+    (changelog_d / "2026-01-02-beta.md").write_text(
+        "Beta (2026-01-02):\n\n- did beta\n", encoding="utf-8"
+    )
+    result = _run(
+        [
+            sys.executable,
+            str(TEMPLATE_CHECK),
+            "--ops",
+            str(ops),
+            "--template",
+            str(template),
+            "--json",
+        ]
+    )
+    report = json.loads(result.stdout)
+    notes = report["adoption_notes"]
+    assert len(notes) == 1
+    assert notes[0]["version"] == "Unreleased"
+    body = notes[0]["body"]
+    assert "fragments live here" not in body
+    beta_at = body.find("Beta (2026-01-02)")
+    alpha_at = body.find("Alpha (2026-01-01)")
+    old_at = body.find("Old entry that predates fragments.")
+    assert 0 <= beta_at < alpha_at < old_at
+
+
 def test_template_apply_rejects_path_escape_and_missing_manifest_file(tmp_path: Path):
     ops = tmp_path / "ops"
     ops.mkdir()

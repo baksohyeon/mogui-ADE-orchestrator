@@ -1,0 +1,106 @@
+#!/usr/bin/env python3
+"""Gate: a master-ops/ change outside changelog.d/ needs a changelog fragment.
+
+Exit 0: no master-ops/ change outside changelog.d/, or one is present and
+every added fragment name matches the pattern.
+Exit 1: a master-ops/ change outside changelog.d/ has no added fragment, or
+an added fragment has a bad name.
+Exit 2: usage or git failure.
+
+master-ops/CHANGELOG.md itself is exempt from the "needs a fragment" trigger:
+it is what the release-fold commit touches, and that commit should not need
+a fragment of its own.
+"""
+
+from __future__ import annotations
+
+import re
+import subprocess
+import sys
+from datetime import date
+from pathlib import Path
+
+FRAGMENT_DIR = "master-ops/changelog.d/"
+CHANGELOG_FILE = "master-ops/CHANGELOG.md"
+# Canonical copy: master-ops/scripts/template_common.py FRAGMENT_NAME_RE. This
+# script cannot import that module without a sys.path hack across the
+# master-ops/ template boundary, so this copy must stay string-identical to
+# it; tests/test_changelog_release.py asserts that.
+FRAGMENT_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})-[a-z0-9-]+\.md$")
+
+
+def _diff_names(base_sha: str, *, diff_filter: str | None = None) -> list[str]:
+    cmd = ["git", "diff", "--no-renames", "--name-only"]
+    if diff_filter:
+        cmd.append(f"--diff-filter={diff_filter}")
+    cmd.append(f"{base_sha}...HEAD")
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        sys.stderr.write(f"changelog-fragment-check: git diff failed: {result.stderr}\n")
+        raise SystemExit(2)
+    return [line for line in result.stdout.splitlines() if line]
+
+
+def _is_root_fragment(path: str) -> bool:
+    """True for a root-level changelog.d/*.md file: what the fold consumers read."""
+    name = Path(path).name
+    if not path.startswith(FRAGMENT_DIR) or name == "README.md" or not name.endswith(".md"):
+        return False
+    return "/" not in path[len(FRAGMENT_DIR) :]
+
+
+def _is_bad_name(name: str) -> bool:
+    """True unless name matches the fragment grammar with a real calendar date.
+
+    Mirrors changelog-release's refusal: a name this gate accepts must be one
+    the release script can fold, or a merged fragment blocks the next release.
+    """
+    match = FRAGMENT_RE.match(name)
+    if not match:
+        return True
+    try:
+        date.fromisoformat(match.group(1))
+    except ValueError:
+        return True
+    return False
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) != 1:
+        sys.stderr.write("usage: changelog-fragment-check <base-sha>\n")
+        return 2
+    base_sha = argv[0]
+
+    changed = _diff_names(base_sha)
+    added = _diff_names(base_sha, diff_filter="A")
+
+    fragments_added = [p for p in added if _is_root_fragment(p)]
+    bad_names = [p for p in fragments_added if _is_bad_name(Path(p).name)]
+    if bad_names:
+        for p in bad_names:
+            sys.stderr.write(f"changelog-fragment-check: bad fragment name: {p}\n")
+        return 1
+
+    empty_bodies = [p for p in fragments_added if not Path(p).read_text(encoding="utf-8").strip()]
+    if empty_bodies:
+        for p in empty_bodies:
+            sys.stderr.write(f"changelog-fragment-check: empty fragment: {p}\n")
+        return 1
+
+    triggers = [
+        p
+        for p in changed
+        if p.startswith("master-ops/") and not p.startswith(FRAGMENT_DIR) and p != CHANGELOG_FILE
+    ]
+    if triggers and not fragments_added:
+        sys.stderr.write(
+            "changelog-fragment-check: master-ops/ changed outside changelog.d/ with no "
+            "added fragment; add master-ops/changelog.d/<YYYY-MM-DD>-<slug>.md\n"
+        )
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

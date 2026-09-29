@@ -20,9 +20,15 @@ That reads installed `MANIFEST.json` (version plus required paths). Compare
 against a live template with `--template <path-to-skeleton>`. This changelog
 file is not in the generated repository — Step 3 keeps it on the template side.
 
-When a change touches `master-ops/`, add an entry under `## Unreleased` in the
-same change. `TEMPLATE-VERSION` moves only when a release is cut, and it holds
-that release's tag string. The repository's existing scheme continues, so the
+When a change touches `master-ops/`, add a fragment under
+`master-ops/changelog.d/<YYYY-MM-DD>-<slug>.md` in the same change (a change touching only
+`changelog.d/` or only `CHANGELOG.md` is exempt), holding what
+would have been the `## Unreleased` entry: concurrent pull requests would
+otherwise all edit the same lines under that heading and re-conflict on every
+squash. `scripts/changelog-release` folds every fragment into `## Unreleased`,
+newest first, when the owner cuts a release; nothing folds them at merge time.
+`TEMPLATE-VERSION` moves only when a release is cut, and it holds that
+release's tag string. The repository's existing scheme continues, so the
 release after `v0.1.0` is `v0.2.0`. Merging a change is not releasing it, and
 between releases this file keeps whatever the last release left in it.
 

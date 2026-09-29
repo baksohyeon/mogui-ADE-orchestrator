@@ -107,6 +107,27 @@ out=$(cd "$repo" && "$SCRIPT" "$base2" 2>&1); rc=$?
 expect 0 "$rc" "git mv of a fragment plus a master-ops/ change passes" "$out"
 rm -rf "$repo"
 
+# Case 9: an impossible-date fragment name fails, mirroring changelog-release's
+# refusal, so it cannot pass the gate and then block the release-time fold.
+repo="$(mk_repo)"; base="$(git -C "$repo" rev-parse HEAD)"
+printf 'changed\n' >"$repo/$TREE/other.md"
+printf 'Alpha (2026-02-30):\n\n- did alpha\n' >"$repo/$TREE/changelog.d/2026-02-30-a-thing.md"
+commit_all "$repo"
+out=$(cd "$repo" && "$SCRIPT" "$base" 2>&1); rc=$?
+expect 1 "$rc" "impossible-date fragment name fails" "$out"
+rm -rf "$repo"
+
+# Case 10: a non-.md root-level file (e.g. a stray .DS_Store) is ignored, not
+# counted as a fragment and failed as a bad name.
+repo="$(mk_repo)"; base="$(git -C "$repo" rev-parse HEAD)"
+printf 'changed\n' >"$repo/$TREE/other.md"
+printf 'A thing (2026-01-01):\n\n- did it\n' >"$repo/$TREE/changelog.d/2026-01-01-a-thing.md"
+printf 'junk\n' >"$repo/$TREE/changelog.d/.DS_Store"
+commit_all "$repo"
+out=$(cd "$repo" && "$SCRIPT" "$base" 2>&1); rc=$?
+expect 0 "$rc" "non-.md changelog.d file is ignored" "$out"
+rm -rf "$repo"
+
 # Failability: without the CHANGELOG.md exemption, case 5 must fail.
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 python3 - "$SCRIPT" >"$T/mut.py" <<'PY'

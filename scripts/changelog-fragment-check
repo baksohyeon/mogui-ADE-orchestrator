@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+from datetime import date
 from pathlib import Path
 
 FRAGMENT_DIR = "master-ops/changelog.d/"
@@ -42,9 +43,26 @@ def _diff_names(base_sha: str, *, diff_filter: str | None = None) -> list[str]:
 
 def _is_root_fragment(path: str) -> bool:
     """True for a root-level changelog.d/*.md file: what the fold consumers read."""
-    if not path.startswith(FRAGMENT_DIR) or Path(path).name == "README.md":
+    name = Path(path).name
+    if not path.startswith(FRAGMENT_DIR) or name == "README.md" or not name.endswith(".md"):
         return False
     return "/" not in path[len(FRAGMENT_DIR) :]
+
+
+def _is_bad_name(name: str) -> bool:
+    """True unless name matches the fragment grammar with a real calendar date.
+
+    Mirrors changelog-release's refusal: a name this gate accepts must be one
+    the release script can fold, or a merged fragment blocks the next release.
+    """
+    match = FRAGMENT_RE.match(name)
+    if not match:
+        return True
+    try:
+        date.fromisoformat(match.group(1))
+    except ValueError:
+        return True
+    return False
 
 
 def main(argv: list[str]) -> int:
@@ -57,7 +75,7 @@ def main(argv: list[str]) -> int:
     added = _diff_names(base_sha, diff_filter="A")
 
     fragments_added = [p for p in added if _is_root_fragment(p)]
-    bad_names = [p for p in fragments_added if not FRAGMENT_RE.match(Path(p).name)]
+    bad_names = [p for p in fragments_added if _is_bad_name(Path(p).name)]
     if bad_names:
         for p in bad_names:
             sys.stderr.write(f"changelog-fragment-check: bad fragment name: {p}\n")

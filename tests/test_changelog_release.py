@@ -151,6 +151,32 @@ def test_rerun_after_failed_deletion_reports_already_folded(tmp_path: Path):
     assert list(changelog_d.glob("*.md")) == []
 
 
+def test_rerun_does_not_drop_new_fragment_overlapping_existing_text(tmp_path: Path):
+    # A new, distinct fragment whose body is a substring of unrelated existing
+    # Unreleased text must still fold: containment alone is not "already
+    # folded", only a whole matching paragraph block is.
+    changelog_body = (
+        "# fixture changelog\n\n## Unreleased\n\n"
+        "This entry mentions did alpha in passing.\n\n"
+        "Old entry that was already there.\n\n## v0.1.0\n\nFirst release.\n"
+    )
+    master_ops = tmp_path / "master-ops"
+    changelog_d = master_ops / "changelog.d"
+    changelog_d.mkdir(parents=True)
+    (master_ops / "CHANGELOG.md").write_text(changelog_body, encoding="utf-8")
+    (changelog_d / "2026-01-01-alpha.md").write_text("did alpha\n", encoding="utf-8")
+
+    result = _run(tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert "already folded" not in result.stdout
+    assert "1 fragments" in result.stdout
+
+    after = (master_ops / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert "did alpha" in after
+    assert "This entry mentions did alpha in passing." in after
+    assert list(changelog_d.glob("*.md")) == []
+
+
 def test_rerun_mixed_new_and_already_folded_fragments(tmp_path: Path):
     already_body = "Alpha (2026-01-01):\n\n- did alpha\n"
     new_body = "Beta (2026-01-02):\n\n- did beta\n"

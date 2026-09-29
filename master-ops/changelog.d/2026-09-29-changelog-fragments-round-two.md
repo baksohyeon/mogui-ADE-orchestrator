@@ -3,16 +3,20 @@ Changelog fragment tooling: thirteen review-thread fixes in one pass (2026-09-29
 - `scripts/changelog-release`: `--dry-run` no longer truncates the preview when a fragment or
   existing entry contains a `## ` line inside a fenced code block. The fold is now a recoverable
   step — a rerun after a partial failure (changelog written, a fragment's deletion failed) detects
-  that the fragment's body is already under `## Unreleased`, reports it `already folded`, and
-  deletes it without folding it again. A malformed date (e.g. `2026-02-30`) is refused the same way
-  a bad name is. A missing or unreadable `master-ops/CHANGELOG.md` prints one stderr line and exits
-  2 instead of a raw traceback.
+  that a fragment's body is already present as a whole paragraph block under `## Unreleased`
+  (boundary-padded match, not a bare substring test, so a new fragment whose body merely overlaps
+  unrelated existing text still folds instead of being silently dropped), reports it
+  `already folded`, and deletes it without folding it again. A malformed date (e.g. `2026-02-30`)
+  is refused the same way a bad name is. A missing or unreadable `master-ops/CHANGELOG.md` prints
+  one stderr line and exits 2 instead of a raw traceback.
 - `scripts/changelog-fragment-check`: only root-level `changelog.d/*.md` files count as fragments,
-  matching what both fold consumers actually read — a fragment left in a subdirectory no longer
-  satisfies the gate. Both diff scans now run with `--no-renames`, so `git mv` of a fragment (or of
-  a `master-ops/` file) is seen as an add/delete pair instead of a rename `--diff-filter=A` would
-  silently drop. An added fragment with an empty body now fails the gate, mirroring the release
-  script's refusal.
+  matching what both fold consumers actually read — a fragment left in a subdirectory, or a
+  non-`.md` file such as a stray `.DS_Store`, no longer satisfies or trips the gate. Both diff
+  scans now run with `--no-renames`, so `git mv` of a fragment (or of a `master-ops/` file) is seen
+  as an add/delete pair instead of a rename `--diff-filter=A` would silently drop. An added
+  fragment with an empty body, or an impossible calendar date, now fails the gate, mirroring the
+  release script's own refusals — an impossible date could otherwise merge and then block the
+  next release-time fold.
 - Fragment-name grammar (`FRAGMENT_RE`): the canonical definition, plus the impossible-date check,
   now lives in `master-ops/scripts/template_common.py`; `master-ops/scripts/template-check` imports
   it. `scripts/changelog-release` and `scripts/changelog-fragment-check` cannot import across the

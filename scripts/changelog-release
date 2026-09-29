@@ -139,10 +139,18 @@ def main(argv: list[str] | None = None) -> int:
     # Recoverable step: a fragment whose body is already present verbatim
     # under the Unreleased heading survived from an interrupted prior run
     # (changelog written, then this fragment's deletion failed). Delete it
-    # without folding its body again.
+    # without folding its body again. The body must match a whole paragraph
+    # block (padded on both sides), not merely overlap a larger one: a plain
+    # substring test would false-positive on a new fragment whose body is a
+    # substring of unrelated existing text and silently drop it.
     unreleased_now = unreleased_block(changelog_text)
-    to_fold = [e for e in entries if e[2] not in unreleased_now]
-    already_folded = [e[1] for e in entries if e[2] in unreleased_now]
+    padded_unreleased = f"\n\n{unreleased_now}\n\n"
+
+    def _already_present(body: str) -> bool:
+        return f"\n\n{body}\n\n" in padded_unreleased
+
+    to_fold = [e for e in entries if not _already_present(e[2])]
+    already_folded = [e[1] for e in entries if _already_present(e[2])]
 
     updated = fold(changelog_text, [body for _, _, body in to_fold]) if to_fold else changelog_text
 

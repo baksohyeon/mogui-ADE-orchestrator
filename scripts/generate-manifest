@@ -28,6 +28,7 @@ EXCLUDE_FILES = frozenset(
 EXCLUDE_DIRS = frozenset(
     {
         "onboarding",
+        "changelog.d",
         "docs/lineage",
         ".git",
         ".beads",

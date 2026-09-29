@@ -50,6 +50,7 @@ TEMPLATE_SIDE_FILES = frozenset(
 TEMPLATE_SIDE_DIRS = frozenset(
     {
         "onboarding",
+        "changelog.d",
     }
 )
 
@@ -207,6 +208,32 @@ def parse_changelog_sections(text: str) -> list[tuple[str, str]]:
     return sections
 
 
+FRAGMENT_NAME_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})-[a-z0-9-]+\.md$")
+
+
+def _fragment_bodies_newest_first(changelog_d: Path) -> list[str]:
+    """Unreleased fragment bodies, ordered newest first by date then by name.
+
+    Malformed fragments are skipped here: the release script is the one that
+    refuses them, this is only a preview of what a release would fold.
+    """
+    if not changelog_d.is_dir():
+        return []
+    entries: list[tuple[str, str, str]] = []
+    for path in sorted(changelog_d.glob("*.md")):
+        if path.name == "README.md":
+            continue
+        match = FRAGMENT_NAME_RE.match(path.name)
+        if not match:
+            continue
+        body = path.read_text(encoding="utf-8").strip()
+        if body:
+            entries.append((match.group(1), path.name, body))
+    entries.sort(key=lambda e: e[1])
+    entries.sort(key=lambda e: e[0], reverse=True)
+    return [body for _, _, body in entries]
+
+
 def adoption_notes_newer_than(
     changelog: Path, installed: str | None
 ) -> tuple[list[dict], str | None]:
@@ -217,9 +244,12 @@ def adoption_notes_newer_than(
     except (OSError, UnicodeDecodeError) as exc:
         return [], f"template CHANGELOG unreadable: {exc}"
     sections = parse_changelog_sections(text)
+    fragment_bodies = _fragment_bodies_newest_first(changelog.parent / "changelog.d")
     notes: list[dict] = []
     for heading, body in sections:
         if heading.lower() == "unreleased":
+            if fragment_bodies:
+                body = "\n\n".join([*fragment_bodies, body] if body else fragment_bodies)
             notes.append({"version": heading, "body": body})
             continue
         if installed is None:

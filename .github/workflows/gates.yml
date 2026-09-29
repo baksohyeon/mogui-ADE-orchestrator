@@ -123,6 +123,18 @@ jobs:
           echo "passed $passed failed $failed skip-lines $skip_lines"
           [ "$failed" -eq 0 ]
 
+  changelog-fragment:
+    # pull_request only: a fragment is a per-PR requirement, not something a
+    # direct push to main needs re-checked for.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Require a changelog fragment for master-ops/ changes
+        run: scripts/changelog-fragment-check ${{ github.event.pull_request.base.sha }}
+
   redaction:
     runs-on: ubuntu-latest
     steps:

@@ -1,0 +1,73 @@
+#!/usr/bin/env python3
+"""Gate: a master-ops/ change outside changelog.d/ needs a changelog fragment.
+
+Exit 0: no master-ops/ change outside changelog.d/, or one is present and
+every added fragment name matches the pattern.
+Exit 1: a master-ops/ change outside changelog.d/ has no added fragment, or
+an added fragment has a bad name.
+Exit 2: usage or git failure.
+
+master-ops/CHANGELOG.md itself is exempt from the "needs a fragment" trigger:
+it is what the release-fold commit touches, and that commit should not need
+a fragment of its own.
+"""
+
+from __future__ import annotations
+
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+FRAGMENT_DIR = "master-ops/changelog.d/"
+CHANGELOG_FILE = "master-ops/CHANGELOG.md"
+FRAGMENT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-[a-z0-9-]+\.md$")
+
+
+def _diff_names(base_sha: str, *, diff_filter: str | None = None) -> list[str]:
+    cmd = ["git", "diff", "--name-only"]
+    if diff_filter:
+        cmd.append(f"--diff-filter={diff_filter}")
+    cmd.append(f"{base_sha}...HEAD")
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        sys.stderr.write(f"changelog-fragment-check: git diff failed: {result.stderr}\n")
+        raise SystemExit(2)
+    return [line for line in result.stdout.splitlines() if line]
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) != 1:
+        sys.stderr.write("usage: changelog-fragment-check <base-sha>\n")
+        return 2
+    base_sha = argv[0]
+
+    changed = _diff_names(base_sha)
+    added = _diff_names(base_sha, diff_filter="A")
+
+    fragments_added = [
+        p for p in added if p.startswith(FRAGMENT_DIR) and Path(p).name != "README.md"
+    ]
+    bad_names = [p for p in fragments_added if not FRAGMENT_RE.match(Path(p).name)]
+    if bad_names:
+        for p in bad_names:
+            sys.stderr.write(f"changelog-fragment-check: bad fragment name: {p}\n")
+        return 1
+
+    triggers = [
+        p
+        for p in changed
+        if p.startswith("master-ops/") and not p.startswith(FRAGMENT_DIR) and p != CHANGELOG_FILE
+    ]
+    if triggers and not fragments_added:
+        sys.stderr.write(
+            "changelog-fragment-check: master-ops/ changed outside changelog.d/ with no "
+            "added fragment; add master-ops/changelog.d/<YYYY-MM-DD>-<slug>.md\n"
+        )
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

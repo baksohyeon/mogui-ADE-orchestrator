@@ -1,0 +1,112 @@
+#!/usr/bin/env python3
+"""Fold master-ops/changelog.d/ fragments into master-ops/CHANGELOG.md.
+
+Run this in the same step as scripts/next-version when the owner cuts a
+release. Nothing runs at merge time: a merged pull request's fragment sits in
+changelog.d/ until the next release folds it.
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+FRAGMENT_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})-[a-z0-9-]+\.md$")
+UNRELEASED_HEADING = "## Unreleased"
+# Anchored to a whole line: CHANGELOG.md's own prose mentions "## Unreleased"
+# in backticks above the real heading, which a bare substring search would
+# match instead.
+UNRELEASED_LINE_RE = re.compile(r"^## Unreleased[ \t]*$", re.MULTILINE)
+
+
+def load_fragments(fragments_dir: Path) -> list[tuple[str, str, str]]:
+    """Return (date, name, body) newest first, refusing a malformed fragment."""
+    entries: list[tuple[str, str, str]] = []
+    for path in sorted(fragments_dir.glob("*.md")):
+        if path.name == "README.md":
+            continue
+        match = FRAGMENT_RE.match(path.name)
+        if not match:
+            sys.stderr.write(f"changelog-release: bad fragment name: {path.name}\n")
+            raise SystemExit(2)
+        body = path.read_text(encoding="utf-8").strip()
+        if not body:
+            sys.stderr.write(f"changelog-release: empty fragment: {path.name}\n")
+            raise SystemExit(2)
+        entries.append((match.group(1), path.name, body))
+    # Newest first by date, then by name: sort by name first so the stable
+    # date-sort that follows keeps same-date fragments in name order.
+    entries.sort(key=lambda e: e[1])
+    entries.sort(key=lambda e: e[0], reverse=True)
+    return entries
+
+
+def fold(changelog_text: str, bodies: list[str]) -> str:
+    match = UNRELEASED_LINE_RE.search(changelog_text)
+    if match is None:
+        sys.stderr.write(f"changelog-release: no '{UNRELEASED_HEADING}' heading found\n")
+        raise SystemExit(2)
+    insert_at = match.end()
+    existing = changelog_text[insert_at:].lstrip("\n")
+    block = "\n\n".join(bodies)
+    if existing:
+        block = f"{block}\n\n{existing}"
+    else:
+        block = f"{block}\n"
+    return f"{changelog_text[:insert_at]}\n\n{block}"
+
+
+def unreleased_block(text: str) -> str:
+    match = UNRELEASED_LINE_RE.search(text)
+    start = match.start()
+    next_heading = text.find("\n## ", match.end())
+    end = next_heading if next_heading != -1 else len(text)
+    return text[start:end].rstrip("\n")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--root",
+        type=Path,
+        default=REPO_ROOT,
+        help="Repo root containing master-ops/ (default: this repo)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the resulting Unreleased block; change nothing",
+    )
+    args = parser.parse_args(argv)
+
+    fragments_dir = args.root / "master-ops" / "changelog.d"
+    changelog = args.root / "master-ops" / "CHANGELOG.md"
+
+    if not fragments_dir.is_dir():
+        print("0 fragments")
+        return 0
+
+    entries = load_fragments(fragments_dir)
+    if not entries:
+        print("0 fragments")
+        return 0
+
+    changelog_text = changelog.read_text(encoding="utf-8")
+    updated = fold(changelog_text, [body for _, _, body in entries])
+
+    if args.dry_run:
+        print(unreleased_block(updated))
+        return 0
+
+    changelog.write_text(updated, encoding="utf-8")
+    for _, name, _ in entries:
+        (fragments_dir / name).unlink()
+    print(f"{len(entries)} fragments")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

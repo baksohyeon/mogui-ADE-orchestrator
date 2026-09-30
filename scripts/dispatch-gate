@@ -96,6 +96,14 @@ def _build_parser() -> argparse.ArgumentParser:
     register_parser.add_argument("--tier-policy")
     register_parser.add_argument("--declared-model")
     register_parser.add_argument("--model-probe-cmd")
+    register_parser.add_argument(
+        "--worker-pid",
+        help="OS pid of the worker process, when the caller launched it directly",
+    )
+    register_parser.add_argument(
+        "--pane",
+        help="terminal handle the worker was dispatched to",
+    )
 
     watch_parser = subparsers.add_parser("watch")
     watch_parser.add_argument("--log", required=True)
@@ -180,6 +188,8 @@ def _register(args: argparse.Namespace) -> int:
         measured_model=measured_model,
         model_probe_failed=model_probe_failed,
         expected_completion_channel=completion_channel,
+        worker_pid=args.worker_pid,
+        pane=args.pane,
     )
     _print_decision(decision)
     if decision.allow:

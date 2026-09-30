@@ -24,6 +24,7 @@ DEFAULT_STALL_MINUTES = 10
 DEFAULT_CHECK_TIMEOUT_MS = 60_000
 MAX_ACK_FLUSH_ROUNDS = 10
 ACK_FLUSH_SUBPROCESS_TIMEOUT_SECONDS = 5
+CHECK_WAIT_SUBPROCESS_TIMEOUT_MARGIN_SECONDS = 30
 WAIT_TYPES = "worker_done,escalation,question"
 STALL_SWEEP_CLASSES = frozenset(
     {"idle", "shell", "limit", "start-screen", "update", "approval"}
@@ -159,8 +160,21 @@ def _wait_for_message(run_id: str, ack: str | None) -> tuple[dict | None, str | 
     ]
     if ack:
         argv += ["--ack", ack]
+    subprocess_timeout_seconds = (
+        DEFAULT_CHECK_TIMEOUT_MS / 1000
+    ) + CHECK_WAIT_SUBPROCESS_TIMEOUT_MARGIN_SECONDS
     try:
-        proc = subprocess.run(argv, capture_output=True, text=True)
+        proc = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=subprocess_timeout_seconds,
+        )
+    except subprocess.TimeoutExpired:
+        # An unresponsive `orca` past its own --timeout-ms plus margin is the
+        # same quiet pass as a server-side timeout: nothing was delivered, so
+        # there is nothing to ack and no batch to surface.
+        return None, ack
     except OSError as exc:
         print(f"worker-wait: orca check failed to run: {exc}", file=sys.stderr)
         time.sleep(1)  # avoid a hot busy-spin if orca is persistently missing

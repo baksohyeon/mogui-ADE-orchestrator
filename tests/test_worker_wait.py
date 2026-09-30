@@ -415,6 +415,58 @@ fi
 
 
 @skip_windows_exec_surface
+def test_wait_for_message_bounds_the_subprocess_and_treats_timeout_as_quiet(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A wedged `orca check --wait` must not block `_wait_for_message`
+    forever. Bound the subprocess with `timeout=` and treat
+    `subprocess.TimeoutExpired` as a quiet pass, the same path as a
+    server-side timeout.
+
+    The production bound is `DEFAULT_CHECK_TIMEOUT_MS` (60s) plus a 30s
+    margin — far too slow to wait out here. This patches both constants down
+    via the loaded function's own `__globals__`, not the `runpy.run_path`
+    return value: that return value is a snapshot dict distinct from the
+    live namespace the function actually reads from, so assigning into it
+    would silently fail to reach `_wait_for_message` at all — the exact
+    false-negative a first draft of this test had.
+
+    Asserts on real elapsed wall-clock time rather than on a `TimeoutError`
+    raised by the `signal.setitimer` guard the loop tests use: that guard's
+    `TimeoutError` is itself an `OSError` subclass, and `_wait_for_message`
+    already has its own `except OSError` right below `except
+    subprocess.TimeoutExpired` — a guard that actually fires here would be
+    silently swallowed by that clause and the test would pass against a
+    mutant that removes the bound entirely, the exact false-negative the
+    `_flush_ack` bound test below documents for this same file. The guard is
+    still carried as a backstop against a genuine unbounded hang, sized
+    comfortably above the fake orca's fixed 5s sleep so it never actually
+    fires in either the correct-code or the mutant run.
+    """
+
+    mod = _load()
+    wait_for_message = mod["_wait_for_message"]
+    wait_for_message.__globals__["DEFAULT_CHECK_TIMEOUT_MS"] = 100
+    wait_for_message.__globals__["CHECK_WAIT_SUBPROCESS_TIMEOUT_MARGIN_SECONDS"] = 0.2
+
+    orca = tmp_path / "orca"
+    _write_executable(orca, "#!/usr/bin/env bash\nsleep 5\n")
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+
+    with _wall_clock_guard(20):
+        started = time.monotonic()
+        batch, ack = wait_for_message("run_x", None)
+        elapsed = time.monotonic() - started
+
+    assert batch is None
+    assert ack is None
+    assert elapsed < 2.0
+    # Failability: a version with no `timeout=` on the subprocess call lets
+    # the fake orca's fixed 5s sleep run to completion instead of being cut
+    # off at the shrunk ~0.3s bound, pushing `elapsed` well past 2.0s.
+
+
+@skip_windows_exec_surface
 def test_worker_done_wakes_and_is_not_acked(tmp_path: Path, monkeypatch) -> None:
     mod = _load()
     script = tmp_path / "orca"

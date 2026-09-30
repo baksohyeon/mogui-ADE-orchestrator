@@ -87,6 +87,91 @@ class JoinOrderTests(unittest.TestCase):
             self.assertEqual(timeline.rows, ())
             self.assertIn(LEDGER_SOURCE, timeline.missing_sources)
 
+    def test_dispatch_id_lookup_resolves_task_id_before_dispatch_show(self) -> None:
+        """dispatch-show only reliably serves the live snapshot by --task;
+        a bare dispatch id must be resolved to its task id first, the same
+        way worker_reap.py does, rather than passed through as --dispatch."""
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Path(tmp) / "ledger.jsonl"
+            event_log = Path(tmp) / "event-log.jsonl"
+            ledger.write_text("", encoding="utf-8")
+            event_log.write_text("", encoding="utf-8")
+
+            commands: list[list[str]] = []
+
+            def fake_runner(cmd: list[str]) -> tuple[int, str, str]:
+                commands.append(cmd)
+                if "worker-list" in cmd:
+                    payload = {
+                        "result": {
+                            "workers": [
+                                {"dispatch_id": "ctx_target", "task_id": "task_target"}
+                            ]
+                        }
+                    }
+                    return 0, json.dumps(payload), ""
+                if "dispatch-show" in cmd:
+                    payload = {"result": {"dispatch": {"status": "COMPLETED"}}}
+                    return 0, json.dumps(payload), ""
+                return 1, "", ""
+
+            builder = DispatchTimelineBuilder(
+                orca_runner=fake_runner, ledger_path=ledger, event_log_path=event_log
+            )
+            timeline = builder.build(dispatch_id="ctx_target")
+
+            dispatch_show_cmds = [c for c in commands if "dispatch-show" in c]
+            self.assertEqual(len(dispatch_show_cmds), 1)
+            self.assertIn("--task", dispatch_show_cmds[0])
+            self.assertIn("task_target", dispatch_show_cmds[0])
+            self.assertNotIn("--dispatch", dispatch_show_cmds[0])
+            self.assertNotIn(DISPATCH_SHOW_SOURCE, timeline.missing_sources)
+            # Failability: a version that called dispatch-show with
+            # --dispatch ctx_target directly (never resolving a task id)
+            # would leave dispatch-show in missing_sources whenever the
+            # backing RPC only serves --task lookups reliably.
+
+    def test_event_log_row_with_only_dispatch_id_joins_via_ledger_link(self) -> None:
+        """An event that carries a dispatch id but no task id (e.g. a
+        wait_verdict for an OPEN_PANE row with no task id available at emit
+        time) still belongs to this task's timeline once the ledger has
+        linked that dispatch to the task."""
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Path(tmp) / "ledger.jsonl"
+            event_log = Path(tmp) / "event-log.jsonl"
+            ledger.write_text(
+                json.dumps(
+                    {"ts": 1, "job_id": "ctx_linked", "orchestration_task": "task_x"}
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            event_log.write_text(
+                json.dumps(
+                    {
+                        "ts": 2,
+                        "dispatch_id": "ctx_linked",
+                        "event": "wait_verdict",
+                        "outcome": "OPEN_PANE",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            builder = DispatchTimelineBuilder(
+                orca_runner=lambda cmd: (1, "", ""),
+                ledger_path=ledger,
+                event_log_path=event_log,
+            )
+            timeline = builder.build(task_id="task_x")
+
+            events = [row.event for row in timeline.rows if row.source == EVENT_LOG_SOURCE]
+            self.assertIn("wait_verdict", events)
+            # Failability: a version that only matched event-log rows by their
+            # own task_id field would drop this row, since it carries no
+            # task_id at all.
+
 
 class MissingSourceTests(unittest.TestCase):
     def test_absent_sources_are_named_not_silently_dropped(self) -> None:
@@ -135,6 +220,41 @@ class MissingSourceTests(unittest.TestCase):
 
             self.assertEqual(timeline.missing_sources, (DISPATCH_SHOW_SOURCE,))
             self.assertEqual(len(timeline.rows), 2)
+
+
+class DispatchShowTimestampTests(unittest.TestCase):
+    def test_epoch_zero_last_heartbeat_is_kept_not_discarded(self) -> None:
+        """`_to_epoch` returns 0.0 for an epoch-0 timestamp, which is falsy;
+        an `or` chain would discard it and fall through to "now" instead."""
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Path(tmp) / "ledger.jsonl"
+            event_log = Path(tmp) / "event-log.jsonl"
+            ledger.write_text("", encoding="utf-8")
+            event_log.write_text("", encoding="utf-8")
+
+            def fake_runner(cmd: list[str]) -> tuple[int, str, str]:
+                if "dispatch-show" in cmd:
+                    payload = {
+                        "result": {
+                            "dispatch": {
+                                "status": "COMPLETED",
+                                "last_heartbeat_at": "1970-01-01T00:00:00+00:00",
+                            }
+                        }
+                    }
+                    return 0, json.dumps(payload), ""
+                return 1, "", ""
+
+            builder = DispatchTimelineBuilder(
+                orca_runner=fake_runner, ledger_path=ledger, event_log_path=event_log
+            )
+            timeline = builder.build(task_id="task_x")
+
+            show_rows = [r for r in timeline.rows if r.source == DISPATCH_SHOW_SOURCE]
+            self.assertEqual(len(show_rows), 1)
+            self.assertEqual(show_rows[0].timestamp, 0.0)
+            # Failability: a version using `A or B or C or time.time()` would
+            # report this row's timestamp as roughly "now" instead of 0.0.
 
 
 class SinceListingTests(unittest.TestCase):

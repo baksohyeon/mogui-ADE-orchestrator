@@ -32,16 +32,17 @@ EOF
 chmod +x "$work/orca"
 
 run() {
-  PYTHONPATH="$ROOT/src" PATH="$work:$PATH" \
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$ROOT/src" PATH="$work:$PATH" \
     python3 "$SCRIPT" task_demo --ledger "$work/ledger.jsonl" --event-log "$work/event-log.jsonl" --json
 }
 
 # --- Case 1: three sources join in time order, none missing -----------------
 out=$(run 2>&1); rc=$?
 if [ "$rc" -eq 0 ] \
-  && printf '%s' "$out" | grep -q '"source":"event-log".*"event":"dispatch_launched"' \
+  && printf '%s' "$out" | grep -q '"rows":\[{"timestamp":50.0,"source":"event-log","event":"dispatch_launched"' \
+  && printf '%s' "$out" | grep -q '"source":"dispatch-show"' \
   && printf '%s' "$out" | grep -q '"missing_sources":\[\]'; then
-  ok "json: exit 0, all three sources joined, none missing"
+  ok "json: exit 0, all three sources joined in time order, none missing"
 else
   fail "json: expected a joined timeline with no missing sources, got exit $rc: $out"
 fi
@@ -91,7 +92,7 @@ cat > "$empty_orca/orca" <<'EOF'
 exit 1
 EOF
 chmod +x "$empty_orca/orca"
-empty_out=$(PYTHONPATH="$ROOT/src" PATH="$empty_orca:$PATH" python3 "$SCRIPT" task_nothing \
+empty_out=$(PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$ROOT/src" PATH="$empty_orca:$PATH" python3 "$SCRIPT" task_nothing \
   --ledger "$empty_ledger" --event-log "$empty_log" --json 2>&1)
 empty_rc=$?
 if [ "$empty_rc" -eq 0 ] \
@@ -103,6 +104,30 @@ if [ "$empty_rc" -eq 0 ] \
 else
   fail "json: expected empty rows with all three sources named missing, got exit $empty_rc: $empty_out"
 fi
+
+# --- Case 3: --since combined with a positional id is a usage error --------
+since_and_id_out=$(PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$ROOT/src" PATH="$work:$PATH" \
+  python3 "$SCRIPT" task_demo --since 1 --ledger "$work/ledger.jsonl" \
+  --event-log "$work/event-log.jsonl" --json 2>&1)
+since_and_id_rc=$?
+if [ "$since_and_id_rc" -eq 2 ]; then
+  ok "usage: --since with a positional id exits 2"
+else
+  fail "usage: expected exit 2 for --since with an id, got exit $since_and_id_rc: $since_and_id_out"
+fi
+
+# --- Case 4: --since rejects non-finite and negative hours at parse time ----
+for bad_since in nan inf -1; do
+  bad_since_out=$(PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$ROOT/src" PATH="$work:$PATH" \
+    python3 "$SCRIPT" --since "$bad_since" --ledger "$work/ledger.jsonl" \
+    --event-log "$work/event-log.jsonl" --json 2>&1)
+  bad_since_rc=$?
+  if [ "$bad_since_rc" -eq 2 ]; then
+    ok "usage: --since $bad_since exits 2"
+  else
+    fail "usage: expected exit 2 for --since $bad_since, got exit $bad_since_rc: $bad_since_out"
+  fi
+done
 
 [ "$FAILED" -eq 0 ] && { echo "dispatch-timeline: all checks passed"; exit 0; }
 echo "dispatch-timeline: FAILED"

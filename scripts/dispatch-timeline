@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,6 +29,12 @@ def main(argv: list[str] | None = None) -> int:
     builder = DispatchTimelineBuilder(ledger_path=ledger_path, event_log_path=event_log_path)
 
     if args.since is not None:
+        if args.id:
+            print(
+                "dispatch-timeline: --since cannot be combined with an id",
+                file=sys.stderr,
+            )
+            return 2
         rows = builder.list_since(args.since)
         if args.json:
             print(json.dumps(rows, ensure_ascii=False, separators=(",", ":")))
@@ -47,6 +54,20 @@ def main(argv: list[str] | None = None) -> int:
     else:
         _print_timeline_table(timeline)
     return 0
+
+
+def _since_hours(raw: str) -> float:
+    """argparse `type=` for `--since`: reject non-finite and negative hours
+    at parse time rather than let them silently produce an invalid window."""
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid float value: {raw!r}") from exc
+    if not math.isfinite(value) or value < 0:
+        raise argparse.ArgumentTypeError(
+            f"--since must be a finite, non-negative number of hours (got {raw!r})"
+        )
+    return value
 
 
 def _classify_id(raw_id: str) -> tuple[str | None, str | None]:
@@ -90,7 +111,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("id", nargs="?", help="task_id (task_*) or dispatch_id")
     parser.add_argument(
         "--since",
-        type=float,
+        type=_since_hours,
         help="list every dispatch seen in the last N hours, with its last event",
     )
     parser.add_argument("--ledger", help="path to the dispatch ledger")

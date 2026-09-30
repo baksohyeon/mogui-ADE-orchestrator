@@ -24,6 +24,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from master_runtime.core.worker_reap import resolve_task_id_from_dispatch_id
+
 
 LEDGER_SOURCE = "ledger"
 EVENT_LOG_SOURCE = "event-log"
@@ -194,19 +196,42 @@ class DispatchTimelineBuilder:
             )
         return rows
 
+    def _dispatch_ids_for_task(self, task_id: str) -> set[str]:
+        """Every dispatch id the ledger has linked to this task id."""
+        ids: set[str] = set()
+        for entry in _read_jsonl(self.ledger_path):
+            entry_task = str(entry.get("orchestration_task") or entry.get("task_id") or "")
+            if entry_task != task_id:
+                continue
+            entry_dispatch = str(entry.get("job_id") or entry.get("dispatch_id") or "")
+            if entry_dispatch:
+                ids.add(entry_dispatch)
+        return ids
+
     # --- event log ----------------------------------------------------------
 
     def _event_log_rows_for(
         self, task_id: Optional[str], dispatch_id: Optional[str]
     ) -> list[TimelineRow]:
         rows: list[TimelineRow] = []
+        # An event carrying only a dispatch id (no task id) still belongs to
+        # this task's timeline when the ledger has already linked that
+        # dispatch to the requested task.
+        linked_dispatch_ids: set[str] = set()
+        if not dispatch_id and task_id:
+            linked_dispatch_ids = self._dispatch_ids_for_task(task_id)
         for entry in _read_jsonl(self.event_log_path):
             entry_dispatch = str(entry.get("dispatch_id") or "")
             entry_task = str(entry.get("task_id") or "")
             if dispatch_id and entry_dispatch != dispatch_id:
                 continue
-            if not dispatch_id and task_id and entry_task != task_id:
-                continue
+            if not dispatch_id and task_id:
+                matches_task = entry_task == task_id
+                matches_linked_dispatch = bool(entry_dispatch) and (
+                    entry_dispatch in linked_dispatch_ids
+                )
+                if not (matches_task or matches_linked_dispatch):
+                    continue
             if not entry_dispatch and not entry_task:
                 continue
             ts = _to_epoch(entry.get("ts"))
@@ -228,6 +253,11 @@ class DispatchTimelineBuilder:
     def _dispatch_show_row(
         self, task_id: Optional[str], dispatch_id: Optional[str]
     ) -> Optional[TimelineRow]:
+        # dispatch-show only reliably serves the live snapshot by --task;
+        # resolve a bare dispatch id to its task id first, the same way
+        # worker_reap.py does, rather than passing --dispatch straight through.
+        if not task_id and dispatch_id:
+            task_id = resolve_task_id_from_dispatch_id(self.orca_runner, dispatch_id)
         cmd = ["orca", "orchestration", "dispatch-show", "--json"]
         if task_id:
             cmd.extend(["--task", task_id])
@@ -245,11 +275,20 @@ class DispatchTimelineBuilder:
         if not isinstance(dispatch, dict):
             return None
         status = str(dispatch.get("status", ""))
-        ts = (
-            _to_epoch(dispatch.get("last_heartbeat_at"))
-            or _to_epoch(dispatch.get("completed_at"))
-            or _to_epoch(dispatch.get("dispatched_at"))
-            or time.time()
+        # An `or` chain would discard a real epoch-0 timestamp (falsy 0.0)
+        # and fall through to the next field, or to "now" — explicit `None`
+        # checks so only unparseable values are skipped.
+        ts = next(
+            (
+                candidate
+                for candidate in (
+                    _to_epoch(dispatch.get("last_heartbeat_at")),
+                    _to_epoch(dispatch.get("completed_at")),
+                    _to_epoch(dispatch.get("dispatched_at")),
+                )
+                if candidate is not None
+            ),
+            time.time(),
         )
         return TimelineRow(
             timestamp=ts,

@@ -54,7 +54,7 @@ paths (`~/.mogui/dispatch-ledger.jsonl` and `~/.mogui/event-log.jsonl`).
 
 ## Related docs
 
-- `docs/runbooks/worker-wait.md` — `wait_verdict`/`wait_wake` and the
+- `worker-wait.md` — `wait_verdict`/`wait_wake` and the
   `--reap` flag that folds `worker-reap`'s own record into an `OPEN_PANE` row.
-- `docs/charter/05-dispatch-gate.md` — the register step `dispatch_registered`
+- `../charter/05-dispatch-gate.md` — the register step `dispatch_registered`
   reports on.

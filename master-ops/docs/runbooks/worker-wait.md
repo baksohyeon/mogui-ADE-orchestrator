@@ -19,7 +19,8 @@ was for a bare `check --wait`; what this loop removes is the re-arming a
 dispatches still open. `--once` runs a single accounting pass with no wait at
 all: a safe, read-only snapshot that never touches the message queue, so it
 is the mode to reach for when inspecting a Run you are not the coordinator
-of.
+of — unless combined with `--reap` (see below), which performs real closes
+and removals regardless of `--once`.
 
 Only one `worker-wait` may hold a given Run: a second one refuses with exit 2
 rather than corrupting the first's wait state (measured 2026-09-29: two
@@ -94,26 +95,33 @@ delivery, for the coordinator to act and then re-run `worker-wait`.
 - **`UNKNOWN`** or a bare sweep-class row — read the pane; this is the
   contract's own answer for a case it cannot resolve from measured state.
 
-`worker-wait` never closes a pane, never abandons a dispatch, and never sends
-to a pane. It reports; the coordinator decides — the same rule
-`worker-pane-sweep` states at its own line 19.
+Without `--reap`, `worker-wait` never closes a pane, never abandons a
+dispatch, and never sends to a pane. It reports; the coordinator decides —
+the same rule `worker-pane-sweep` states at its own line 19. With `--reap`,
+this no longer holds for `OPEN_PANE` rows: see below.
 
 ## `--reap`
 
-Default is off: an `OPEN_PANE` row is printed exactly as described above,
-with no side effect. With `--reap`, every `OPEN_PANE` row additionally calls
-`scripts/worker-reap --task-id <id> --json` for that row's dispatch (the task
-id comes from whichever worker-list row last claimed that pane) and folds the
-reaper's own record into the row under a `reap` key. The reaper measures,
-before closing anything: the pane is still present in `orca terminal list`;
-no currently-`dispatched` worker-list row claims that same pane (a newer
-dispatch may have reused it); and no agent CLI process (`claude`, `codex`,
-`cursor`, `agy`, `grok`) has its current working directory inside the
-dispatch's worktree. Any one of those failing — including a measurement that
-could not be taken at all — refuses the close and names the reason; the
-reaper never guesses. A worktree is removed only when it is clean (untracked
-`__pycache__/` litter does not count as dirty) and its branch is contained in
-`origin/main`, including a squash-merged branch.
+Default is off (owner decision): an `OPEN_PANE` row is printed exactly as
+described above, with no side effect, regardless of `--once`. With `--reap`,
+every `OPEN_PANE` row additionally calls `scripts/worker-reap --task-id <id>
+--json` — with no `--dry-run` — for that row's dispatch (the task id comes
+from whichever worker-list row last claimed that pane), and folds the
+reaper's own record into the row under a `reap` key. This is a real close:
+`WorkerReaper.reap(execute=True)` runs `orca terminal close` and `git
+worktree remove` for real when its own measurements clear, so `worker-wait
+--once --reap` on a Run you do not coordinate can close its settled panes and
+delete its worktrees — it is not a read-only inspection in that mode. The
+reaper measures, before closing anything: the pane is still present in `orca
+terminal list`; no currently-`dispatched` worker-list row claims that same
+pane (a newer dispatch may have reused it); and no agent CLI process
+(`claude`, `codex`, `cursor`, `cursor-agent`, `agy`, `grok`) has its current
+working directory inside the dispatch's worktree. Any one of those failing —
+including a measurement that could not be taken at all — refuses the close
+and names the reason; the reaper never guesses. A worktree is removed only
+when it is clean (untracked `__pycache__/` litter does not count as dirty,
+but a tracked change under a `__pycache__/` path still does) and its branch
+is contained in `origin/main`, including a squash-merged branch.
 
 A missing `scripts/worker-reap` (a template-applied tree with no sibling
 orchestrator checkout) reports `worker_reap_not_found` on the row rather than

@@ -507,6 +507,14 @@ def _deny_unverified_orchestration(
     probe_failure: ProbeFailure,
 ) -> int:
     decision = GateDecision(False, ReasonCode.ORCHESTRATION_UNVERIFIED)
+    mogui_emit(
+        "info",
+        "dispatch_registered",
+        "finding",
+        dispatch_id=args.job_id,
+        task_id=args.orchestration_task or "",
+        reason=decision.reason.value,
+    )
     entry: dict[str, object] = {
         "ts": time.time(),
         "decision": "DENY",

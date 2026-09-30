@@ -1141,6 +1141,75 @@ def test_cli_register_requires_orchestration_task(
     assert ledger_entry["probe_failure"] == "task_omitted"
 
 
+def test_cli_register_emits_finding_event_for_unverified_orchestration_denial(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """_deny_unverified_orchestration returns before gate.register_job ever
+    runs, so the dispatch_registered event previously only emitted on that
+    later path never fired for this denial. It must fire here too, with
+    outcome "finding"."""
+    contract = _contract(tmp_path, "orchestration denial emits a finding")
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
+    ledger = tmp_path / "ledger.jsonl"
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+    emitted: list[dict] = []
+
+    def fake_mogui_emit(level, event, outcome, **fields):
+        emitted.append({"level": level, "event": event, "outcome": outcome, **fields})
+        return {}
+
+    script["main"].__globals__["mogui_emit"] = fake_mogui_emit
+
+    assert (
+        script["main"](
+            [
+                "--ledger",
+                str(ledger),
+                "check",
+                "--runtime",
+                "codex",
+                "--model",
+                "gpt-5.6-luna",
+                "--contract",
+                str(contract),
+                "--agents",
+                "1",
+                "--est-chars",
+                "1000",
+                "--completion-channel",
+                "orchestration",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    rc = script["main"](
+        [
+            "--ledger",
+            str(ledger),
+            "register",
+            "--job-id",
+            "job-orch-denied",
+            "--probe-cmd",
+            "printf job-orch-denied",
+        ]
+    )
+    assert rc == 2
+
+    findings = [e for e in emitted if e["event"] == "dispatch_registered"]
+    assert len(findings) == 1
+    assert findings[0]["outcome"] == "finding"
+    assert findings[0]["dispatch_id"] == "job-orch-denied"
+    assert findings[0]["reason"] == "ORCHESTRATION_UNVERIFIED"
+    # Failability: a version that only emitted dispatch_registered after a
+    # successful gate.register_job call would leave `emitted` empty here,
+    # since this denial path returns long before that call.
+
+
 @skip_windows_exec_surface
 def test_cli_register_allows_sentinel_log_without_orchestration_task(
     tmp_path: Path,

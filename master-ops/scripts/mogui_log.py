@@ -54,7 +54,7 @@ def _session_kind() -> str:
     seat_root = os.environ.get("MOGUI_SEAT_ROOT") or _descriptor_workspace_root(cwd)
     if seat_root and os.path.realpath(cwd) == os.path.realpath(os.path.expanduser(seat_root)):
         return "master"
-    if os.environ.get("ORCA_TASK_ID") or ".orca/worktrees" in cwd:
+    if os.environ.get("ORCA_TASK_ID") or ".orca/worktrees" in cwd.replace(os.sep, "/"):
         return "worker"
     return "unknown"
 

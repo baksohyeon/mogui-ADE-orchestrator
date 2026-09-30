@@ -1,0 +1,447 @@
+#!/usr/bin/env python3
+"""One wait loop over a Run's live dispatches, with dead/stall verdicts from measured state.
+
+Exit codes: 0 loop exited cleanly (woke, timed out, or nothing left dispatched);
+2 usage error, no resolvable Run, or another waiter already holds this Run's lock.
+
+Self-contained on purpose: this tree is template-applied into repositories that have
+no src/ tree, so this cannot import master_runtime like the ops repo's own scripts/dispatch-gate.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+DEFAULT_STALL_MINUTES = 10
+DEFAULT_CHECK_TIMEOUT_MS = 60_000
+WAIT_TYPES = "worker_done,escalation,question"
+STALL_SWEEP_CLASSES = frozenset(
+    {"idle", "shell", "limit", "start-screen", "update", "approval"}
+)
+ACTIONABLE_VERDICTS = frozenset({"DEAD", "STALL", "OPEN_PANE"})
+MAX_WORKER_LIST_PAGES = 20
+WORKER_LIST_PAGE_LIMIT = 100
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _build_parser().parse_args(argv)
+
+    run_id = args.run or _resolve_bound_run()
+    if not run_id:
+        print("worker-wait: no --run given and no Run bound to this terminal", file=sys.stderr)
+        return 2
+
+    ledger_path = Path(args.ledger) if args.ledger else _default_ledger_path()
+    stall_seconds = max(1, args.stall_minutes) * 60
+
+    if args.once:
+        rows, dispatched_count = _accounting_pass(run_id, ledger_path, stall_seconds)
+        _print_table(rows, as_json=args.json)
+        return 0
+
+    lock_path = _acquire_lock(run_id)
+    if lock_path is None:
+        print(f"worker-wait: another waiter holds the lock for {run_id}", file=sys.stderr)
+        return 2
+    try:
+        return _run_loop(run_id, ledger_path, stall_seconds, args.json)
+    finally:
+        _release_lock(lock_path)
+
+
+def _run_loop(run_id: str, ledger_path: Path, stall_seconds: int, as_json: bool) -> int:
+    ack = None
+    while True:
+        batch, ack = _wait_for_message(run_id, ack)
+        rows, dispatched_count = _accounting_pass(run_id, ledger_path, stall_seconds)
+        _print_table(rows, as_json=as_json)
+        if batch is not None:
+            _print_batch(batch, as_json=as_json)
+        if dispatched_count == 0:
+            return 0
+
+
+# --- messaging -----------------------------------------------------------
+
+
+def _wait_for_message(run_id: str, ack: str | None) -> tuple[dict | None, str | None]:
+    """Block for one non-heartbeat delivery or a timeout.
+
+    A pure-heartbeat batch is acked and the wait re-armed silently: this loops
+    internally rather than returning, so the caller never treats a heartbeat as
+    a wake. Anything else (including a timeout) returns to the caller; a real
+    delivery is left unacknowledged for the coordinator to ack after acting.
+    """
+
+    while True:
+        argv = [
+            "orca",
+            "orchestration",
+            "check",
+            "--run",
+            run_id,
+            "--wait",
+            "--timeout-ms",
+            str(DEFAULT_CHECK_TIMEOUT_MS),
+            "--types",
+            WAIT_TYPES,
+            "--json",
+        ]
+        if ack:
+            argv += ["--ack", ack]
+        proc = subprocess.run(argv, capture_output=True, text=True)
+        result = _last_non_keepalive(proc.stdout + proc.stderr)
+        if not isinstance(result, dict):
+            return None, ack
+        payload = result.get("result") if isinstance(result.get("result"), dict) else {}
+        if payload.get("timedOut"):
+            return None, ack
+        messages = payload.get("messages") or []
+        delivery_id = payload.get("deliveryId")
+        if messages and all(
+            isinstance(m, dict) and m.get("type") == "heartbeat" for m in messages
+        ):
+            ack = delivery_id
+            continue
+        return payload, ack
+
+
+def _last_non_keepalive(text: str) -> dict | None:
+    """Decode every JSON document in text and return the last non-keepalive one.
+
+    `check --wait` interleaves `_keepalive` documents (one every 15s while it
+    blocks) with the eventual result; they are not newline-delimited so
+    `json.loads` on the whole string fails as soon as more than one document is
+    present. `raw_decode` walks the string one document at a time instead.
+    """
+
+    decoder = json.JSONDecoder()
+    idx, n = 0, len(text)
+    last: dict | None = None
+    while idx < n:
+        while idx < n and text[idx] in " \t\r\n":
+            idx += 1
+        if idx >= n:
+            break
+        try:
+            obj, end = decoder.raw_decode(text, idx)
+        except json.JSONDecodeError:
+            break
+        idx = end
+        if isinstance(obj, dict) and not obj.get("_keepalive"):
+            last = obj
+    return last
+
+
+def _print_batch(batch: dict, as_json: bool) -> None:
+    if as_json:
+        print(json.dumps({"delivery": batch}, sort_keys=True))
+        return
+    for message in batch.get("messages") or []:
+        print(
+            f"delivery  type={message.get('type')} from={message.get('from')} "
+            f"subject={message.get('subject')}"
+        )
+
+
+# --- accounting ------------------------------------------------------------
+
+
+def _accounting_pass(
+    run_id: str, ledger_path: Path, stall_seconds: int
+) -> tuple[list[dict], int]:
+    dispatched, handle_status = _worker_list(run_id)
+    ledger_index = _ledger_index(ledger_path)
+    terminals = _terminal_list()
+    sweep = _pane_sweep()
+    now_ms = time.time() * 1000
+
+    rows: list[dict] = []
+    seen_panes: set[str] = set()
+    for entry in dispatched:
+        dispatch_id = entry["dispatchId"]
+        recorded = ledger_index.get(dispatch_id, {})
+        pane = recorded.get("pane") or entry.get("agentTerminalHandle")
+        pid = recorded.get("pid")
+        if pane:
+            seen_panes.add(pane)
+        last_output_at = terminals.get(pane) if pane else None
+        age_seconds = (
+            (now_ms - last_output_at) / 1000.0 if last_output_at is not None else None
+        )
+        pid_alive = _pid_alive(pid) if pid else None
+        sweep_class = _sweep_lookup(sweep, pane) if pane else None
+        verdict = _compute_verdict(pid, pid_alive, age_seconds, stall_seconds, sweep_class)
+        rows.append(
+            {
+                "dispatch_id": dispatch_id,
+                "pane": pane,
+                "age_seconds": age_seconds,
+                "pid": pid,
+                "pid_alive": pid_alive,
+                "sweep_class": sweep_class,
+                "verdict": verdict,
+            }
+        )
+
+    for handle in terminals:
+        if handle in seen_panes:
+            continue
+        status = handle_status.get(handle)
+        if status and status != "dispatched":
+            rows.append(
+                {
+                    "dispatch_id": None,
+                    "pane": handle,
+                    "age_seconds": None,
+                    "pid": None,
+                    "pid_alive": None,
+                    "sweep_class": None,
+                    "verdict": "OPEN_PANE",
+                }
+            )
+
+    return rows, len(dispatched)
+
+
+def _compute_verdict(
+    pid: str | None,
+    pid_alive: bool | None,
+    age_seconds: float | None,
+    stall_seconds: int,
+    sweep_class: str | None,
+) -> str:
+    if sweep_class == "unknown":
+        sweep_class = None
+
+    if pid is not None:
+        if not pid_alive:
+            return "DEAD"
+        if sweep_class == "working":
+            return "working"
+        if age_seconds is not None and age_seconds < stall_seconds:
+            return "working"
+        if sweep_class in STALL_SWEEP_CLASSES:
+            return "STALL"
+        return "UNKNOWN"
+
+    # No pid recorded: DEAD and STALL both require a measured pid, per contract.
+    if sweep_class == "working":
+        return "working"
+    if sweep_class in STALL_SWEEP_CLASSES:
+        # Not one of the contract's named verdicts: no pid to call it STALL, but
+        # the sweep did classify it, so it is not UNKNOWN either. Reported
+        # verbatim and does not wake the caller (see runbook).
+        return sweep_class
+    return "UNKNOWN"
+
+
+# --- data sources ------------------------------------------------------------
+
+
+def _worker_list(run_id: str) -> tuple[list[dict], dict[str, str]]:
+    """Dispatched entries for the Run, and a handle -> latest dispatchStatus map."""
+
+    dispatched: list[dict] = []
+    handle_status: dict[str, str] = {}
+    cursor = None
+    for _ in range(MAX_WORKER_LIST_PAGES):
+        argv = [
+            "orca",
+            "orchestration",
+            "worker-list",
+            "--run",
+            run_id,
+            "--limit",
+            str(WORKER_LIST_PAGE_LIMIT),
+            "--json",
+        ]
+        if cursor:
+            argv += ["--cursor", cursor]
+        payload = _orca_json(argv)
+        result = payload.get("result", {}) if payload else {}
+        workers = result.get("workers") or []
+        for worker in workers:
+            handle = worker.get("agentTerminalHandle")
+            status = worker.get("dispatchStatus")
+            if handle and handle not in handle_status:
+                handle_status[handle] = status
+            if status == "dispatched":
+                dispatched.append(worker)
+        page = result.get("page") or {}
+        cursor = page.get("nextCursor")
+        if not page.get("hasMore") or not cursor:
+            break
+    return dispatched, handle_status
+
+
+def _terminal_list() -> dict[str, float | None]:
+    payload = _orca_json(["orca", "terminal", "list", "--json"])
+    result = payload.get("result", {}) if payload else {}
+    terminals = result.get("terminals") or []
+    return {t["handle"]: t.get("lastOutputAt") for t in terminals if t.get("handle")}
+
+
+def _pane_sweep() -> dict[str, str]:
+    sweep_path = Path(__file__).resolve().parent / "worker-pane-sweep"
+    try:
+        proc = subprocess.run([str(sweep_path)], capture_output=True, text=True)
+    except OSError:
+        return {}
+    verdicts: dict[str, str] = {}
+    for line in proc.stdout.splitlines():
+        if not line or line.startswith("sweep:"):
+            continue
+        parts = line.split(None, 3)
+        if len(parts) < 3:
+            continue
+        _mark, verdict, handle_prefix = parts[0], parts[1], parts[2]
+        if verdict == "coordinator":
+            continue
+        verdicts[handle_prefix] = verdict
+    return verdicts
+
+
+def _sweep_lookup(sweep: dict[str, str], pane: str) -> str | None:
+    for prefix, verdict in sweep.items():
+        if pane.startswith(prefix):
+            return verdict
+    return None
+
+
+def _ledger_index(ledger_path: Path) -> dict[str, dict]:
+    index: dict[str, dict] = {}
+    try:
+        lines = ledger_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return index
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        job_id = entry.get("job_id")
+        if not job_id or ("worker_pid" not in entry and "pane" not in entry):
+            continue
+        record = index.setdefault(job_id, {})
+        if "worker_pid" in entry:
+            record["pid"] = entry["worker_pid"]
+        if "pane" in entry:
+            record["pane"] = entry["pane"]
+    return index
+
+
+def _pid_alive(pid: object) -> bool:
+    try:
+        pid_int = int(pid)
+    except (TypeError, ValueError):
+        return False
+    try:
+        proc = subprocess.run(["ps", "-p", str(pid_int)], capture_output=True)
+    except OSError:
+        return False
+    return proc.returncode == 0
+
+
+def _orca_json(argv: list[str]) -> dict | None:
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True)
+    except OSError:
+        return None
+    try:
+        return json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return None
+
+
+def _resolve_bound_run() -> str | None:
+    payload = _orca_json(["orca", "orchestration", "run-current", "--json"])
+    result = payload.get("result", {}) if payload else {}
+    run = result.get("run")
+    return run.get("id") if isinstance(run, dict) else None
+
+
+def _default_ledger_path() -> Path:
+    return Path.home() / ".mogui" / "dispatch-ledger.jsonl"
+
+
+# --- lock --------------------------------------------------------------------
+
+
+def _lock_dir() -> Path:
+    return Path.home() / ".mogui" / "worker-wait"
+
+
+def _acquire_lock(run_id: str) -> Path | None:
+    lock_dir = _lock_dir()
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = lock_dir / f"{run_id}.lock"
+    if lock_path.exists():
+        existing = lock_path.read_text(encoding="utf-8").strip()
+        if existing and _pid_alive(existing):
+            return None
+    lock_path.write_text(str(os.getpid()), encoding="utf-8")
+    return lock_path
+
+
+def _release_lock(lock_path: Path) -> None:
+    try:
+        if lock_path.read_text(encoding="utf-8").strip() == str(os.getpid()):
+            lock_path.unlink()
+    except OSError:
+        pass
+
+
+# --- output ------------------------------------------------------------------
+
+
+def _print_table(rows: list[dict], as_json: bool) -> None:
+    if as_json:
+        print(json.dumps(rows, sort_keys=True))
+        return
+    if not rows:
+        print("worker-wait: no dispatched or open-pane rows")
+        return
+    header = f"{'VERDICT':<10} {'PANE':<40} {'AGE_S':>8} {'PID':>8} {'ALIVE':<6} {'SWEEP':<12} DISPATCH"
+    print(header)
+    for row in rows:
+        age = "-" if row["age_seconds"] is None else f"{row['age_seconds']:.0f}"
+        pid = "-" if row["pid"] is None else str(row["pid"])
+        alive = "-" if row["pid_alive"] is None else str(row["pid_alive"])
+        sweep = row["sweep_class"] or "-"
+        pane = row["pane"] or "-"
+        dispatch_id = row["dispatch_id"] or "-"
+        print(
+            f"{row['verdict']:<10} {pane:<40} {age:>8} {pid:>8} {alive:<6} "
+            f"{sweep:<12} {dispatch_id}"
+        )
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="worker-wait")
+    parser.add_argument("--run", help="Run id; default: the Run bound to this terminal")
+    parser.add_argument(
+        "--stall-minutes",
+        type=int,
+        default=DEFAULT_STALL_MINUTES,
+        help=f"minutes of stale output before STALL is eligible (default {DEFAULT_STALL_MINUTES})",
+    )
+    parser.add_argument("--once", action="store_true", help="one accounting pass, no wait")
+    parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    parser.add_argument("--ledger", help="dispatch ledger path (default ~/.mogui/dispatch-ledger.jsonl)")
+    return parser
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -889,6 +889,101 @@ def test_r4_registers_verified_job_id(tmp_path: Path) -> None:
     assert _ledger_entries(tmp_path)[-1]["attempt"] == 2
 
 
+def test_register_job_round_trips_worker_pid_and_pane_through_the_ledger(
+    tmp_path: Path,
+) -> None:
+    """worker-wait maps a dispatch id to a pid and a pane through this ledger row."""
+
+    contract = _contract(tmp_path, "worker pid and pane")
+    gate = _gate(tmp_path, now=1_000)
+    gate.check(DispatchRequest("codex", contract, est_input_chars=10_000, n_agents=1))
+
+    decision = gate.register_job(
+        "job-456",
+        lambda job_id: job_id == "job-456",
+        worker_pid="4242",
+        pane="term_abc123",
+    )
+
+    assert decision.allow is True
+    entry = _ledger_entries(tmp_path)[-1]
+    assert entry["worker_pid"] == "4242"
+    assert entry["pane"] == "term_abc123"
+
+
+def test_register_job_omits_worker_pid_and_pane_keys_when_not_given(
+    tmp_path: Path,
+) -> None:
+    """A stray `"worker_pid": null` would read as a recorded pid to worker-wait
+    (and therefore DEAD-eligible) rather than the UNKNOWN a real absence is."""
+
+    contract = _contract(tmp_path, "no pid no pane")
+    gate = _gate(tmp_path, now=1_000)
+    gate.check(DispatchRequest("codex", contract, est_input_chars=10_000, n_agents=1))
+
+    decision = gate.register_job("job-789", lambda job_id: job_id == "job-789")
+
+    assert decision.allow is True
+    entry = _ledger_entries(tmp_path)[-1]
+    assert "worker_pid" not in entry
+    assert "pane" not in entry
+
+
+def test_cli_register_accepts_worker_pid_and_pane_flags(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    contract = _contract(tmp_path, "cli worker pid and pane")
+    ledger = tmp_path / "ledger.jsonl"
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
+
+    assert (
+        script["main"](
+            [
+                "--ledger",
+                str(ledger),
+                "check",
+                "--runtime",
+                "codex",
+                "--model",
+                "gpt-5.6-luna",
+                "--contract",
+                str(contract),
+                "--agents",
+                "1",
+                "--est-chars",
+                "1000",
+                "--completion-channel",
+                "sentinel-log",
+            ]
+        )
+        == 0
+    )
+
+    assert (
+        script["main"](
+            [
+                "--ledger",
+                str(ledger),
+                "register",
+                "--job-id",
+                "job-cli",
+                "--probe-cmd",
+                "printf job-cli",
+                "--worker-pid",
+                "4242",
+                "--pane",
+                "term_abc123",
+            ]
+        )
+        == 0
+    )
+    entry = _ledger_entries(tmp_path)[-1]
+    assert entry["worker_pid"] == "4242"
+    assert entry["pane"] == "term_abc123"
+
+
 def test_cli_register_with_verified_orchestration_task_records_task(
     tmp_path: Path,
     monkeypatch,

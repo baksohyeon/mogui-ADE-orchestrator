@@ -430,6 +430,8 @@ class DispatchGate:
         measured_model: str | None = None,
         model_probe_failed: bool = False,
         expected_completion_channel: str | None = None,
+        worker_pid: str | None = None,
+        pane: str | None = None,
     ) -> GateDecision:
         """Register a job only after independent probe verification succeeds."""
 
@@ -524,6 +526,10 @@ class DispatchGate:
             }
             if orchestration_task is not None:
                 entry["orchestration_task"] = orchestration_task
+            if worker_pid is not None:
+                entry["worker_pid"] = worker_pid
+            if pane is not None:
+                entry["pane"] = pane
             # Say what was verified and how, so a later reader can tell an
             # unverified registration from a verified one instead of assuming.
             entry["model_declared"] = declared_model

@@ -897,8 +897,10 @@ def test_worker_list_pane_to_task_map_keeps_the_latest_claim(
     tmp_path: Path, monkeypatch
 ) -> None:
     """Two worker-list rows can name the same pane: an older dispatch that
-    once held it, and the dispatch that claimed it since. `--reap` must
-    target the latter, not whichever row `orca` happened to list first."""
+    once held it, and the dispatch that claimed it since. An `OPEN_PANE`
+    verdict and its `--reap` target both come from this handle's row, so
+    `handle_status` and `handle_task_id` must agree on which row that is —
+    the latter claim, not whichever row `orca` happened to list first."""
 
     mod = _load()
     handle = "term_a0000000-0000-0000-0000-0000000000d1"
@@ -907,7 +909,7 @@ def test_worker_list_pane_to_task_map_keeps_the_latest_claim(
         orca,
         f"""#!/usr/bin/env bash
 echo '{{"ok": true, "result": {{"workers": [
-  {{"dispatchId": "ctx_old", "taskId": "task_old", "dispatchStatus": "completed", "agentTerminalHandle": "{handle}"}},
+  {{"dispatchId": "ctx_old", "taskId": "task_old", "dispatchStatus": "dispatched", "agentTerminalHandle": "{handle}"}},
   {{"dispatchId": "ctx_new", "taskId": "task_new", "dispatchStatus": "completed", "agentTerminalHandle": "{handle}"}}
 ], "page": {{"hasMore": false}}}}}}'
 """,
@@ -917,9 +919,12 @@ echo '{{"ok": true, "result": {{"workers": [
     _dispatched, handle_status, handle_task_id = mod["_worker_list"]("run_x")
 
     assert handle_task_id[handle] == "task_new"
-    # Failability: a version that kept the first row seen per pane would
-    # leave this "task_old", pointing --reap at the wrong (already-settled)
-    # task's worktree/terminal instead of the dispatch that reused the pane.
+    assert handle_status[handle] == "completed"
+    # Failability: a version that kept the first row seen per pane for
+    # either map would leave handle_task_id "task_old" or handle_status
+    # "dispatched", pointing an OPEN_PANE verdict and its --reap target at
+    # the wrong (already-settled) dispatch instead of the one that reused
+    # the pane.
 
 
 @skip_windows_exec_surface

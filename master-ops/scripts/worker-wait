@@ -593,9 +593,8 @@ def _worker_list(
         for worker in workers:
             handle = worker.get("agentTerminalHandle")
             status = worker.get("dispatchStatus")
-            if handle and handle not in handle_status:
-                handle_status[handle] = status
             if handle:
+                handle_status[handle] = status
                 task_id = worker.get("taskId") or worker.get("task_id")
                 handle_task_id[handle] = str(task_id) if task_id else ""
             if status == "dispatched":

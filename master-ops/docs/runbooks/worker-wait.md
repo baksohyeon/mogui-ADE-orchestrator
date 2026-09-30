@@ -68,8 +68,9 @@ extension beyond the contract's literal verdict enum, not a sixth verdict —
 the contract's four verdicts plus `OPEN_PANE` are the only verdict values the
 loop reports; only `DEAD`, `STALL`, and `OPEN_PANE` wake the caller.
 
-Only `DEAD`, `STALL`, and `OPEN_PANE` wake the caller (print the row and
-continue the loop, same as a `worker_done`/`escalation`/`question` delivery).
+Only `DEAD`, `STALL`, and `OPEN_PANE` wake the caller — the loop returns
+control on that row, same as a `worker_done`/`escalation`/`question`
+delivery, for the coordinator to act and then re-run `worker-wait`.
 `working` and `UNKNOWN` are visible in the table but never wake anything.
 
 ## What the coordinator does per verdict

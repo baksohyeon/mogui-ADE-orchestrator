@@ -7,9 +7,11 @@ loads scripts/dispatch-gate, rather than imported as a package.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import runpy
+import signal
 import stat
 import time
 from pathlib import Path
@@ -146,8 +148,20 @@ def test_pid_liveness_could_not_be_measured_is_unknown_not_dead() -> None:
 def test_pid_alive_returns_none_for_unparseable_pid() -> None:
     mod = _load()
     assert mod["_pid_alive"]("not-a-number") is None
-    # Failability: a real integer pid must not also read as unmeasurable.
+    # Failability: an empty pid must be unmeasurable just like a non-numeric one.
     assert mod["_pid_alive"]("") is None
+
+
+@skip_windows_exec_surface
+def test_pid_alive_returns_true_for_a_real_pid(tmp_path: Path, monkeypatch) -> None:
+    mod = _load()
+    ps = tmp_path / "ps"
+    _write_executable(ps, "#!/usr/bin/env bash\n[ \"$2\" = 4242 ] && exit 0 || exit 1\n")
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+
+    assert mod["_pid_alive"]("4242") is True
+    # Failability: an unparseable pid must never reach `ps` and read alive.
+    assert mod["_pid_alive"]("not-a-number") is None
 
 
 @skip_windows_exec_surface
@@ -305,6 +319,99 @@ def test_heartbeat_batch_is_acked_and_rearmed_without_waking(tmp_path: Path, mon
     # Failability: a version that still looped internally on the heartbeat
     # would return the worker_done batch from the FIRST call, making batch1
     # non-None above.
+
+
+@skip_windows_exec_surface
+def test_check_wait_ok_false_envelope_is_reported_as_failure_not_a_wake(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A parseable `{"ok": false, ...}` response from `orca check --wait` must
+    be treated as a check failure — never as a real delivery, even when the
+    failed envelope happens to carry a populated `result` body (a retried or
+    stale response, a proxy error page with an echoed-back payload)."""
+
+    mod = _load()
+    orca = tmp_path / "orca"
+    _write_executable(
+        orca,
+        """#!/usr/bin/env bash
+if [ "$1 $2" = "orchestration check" ]; then
+  printf '{"ok": false, "error": "auth expired", "result": {"deliveryId": "evil", "messages": [{"type": "worker_done"}]}}'
+else
+  echo "{}"
+fi
+""",
+    )
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+
+    batch, ack = mod["_wait_for_message"]("run_x", None)
+
+    assert batch is None
+    assert ack is None
+    # Failability: the pre-fix behavior ignored the top-level `ok` field
+    # entirely and returned the embedded `result` as a real, non-None batch
+    # (`deliveryId` "evil", a worker_done message) — a wake manufactured from
+    # a call that never actually succeeded.
+
+
+@skip_windows_exec_surface
+def test_empty_result_with_no_messages_and_no_delivery_id_is_a_quiet_pass(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A successful check call whose `result` has no messages and no
+    `deliveryId` — timedOut or not — must never read as a wake."""
+
+    mod = _load()
+    orca = tmp_path / "orca"
+    _write_executable(
+        orca,
+        """#!/usr/bin/env bash
+if [ "$1 $2" = "orchestration check" ]; then
+  printf '{"result": {}}'
+else
+  echo "{}"
+fi
+""",
+    )
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+
+    batch, ack = mod["_wait_for_message"]("run_x", None)
+
+    assert batch is None
+    assert ack is None
+    # Failability: the pre-fix behavior returned `({}, None)` — a non-None
+    # batch — for this exact envelope, since it lacks `timedOut` too.
+
+
+@skip_windows_exec_surface
+def test_heartbeat_without_delivery_id_is_quiet_and_keeps_the_prior_ack(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A heartbeat batch with a missing/falsy `deliveryId` cannot be acked —
+    there is nothing to send. It must not zero out an already-valid ack
+    either, which would silence `--ack` on every future call and let orca
+    replay the same heartbeat forever instead of blocking."""
+
+    mod = _load()
+    orca = tmp_path / "orca"
+    _write_executable(
+        orca,
+        """#!/usr/bin/env bash
+if [ "$1 $2" = "orchestration check" ]; then
+  printf '{"result": {"messages": [{"type": "heartbeat"}]}}'
+else
+  echo "{}"
+fi
+""",
+    )
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+
+    batch, ack = mod["_wait_for_message"]("run_x", "already-acked")
+
+    assert batch is None
+    assert ack == "already-acked"
+    # Failability: the pre-fix behavior returned `(None, None)` here (the
+    # falsy `deliveryId` itself), discarding a still-valid prior ack.
 
 
 @skip_windows_exec_surface
@@ -502,6 +609,30 @@ def test_once_mode_reports_failure_instead_of_false_success(tmp_path: Path, monk
 
 # --- _run_loop: return on wake, never re-enter with a stale ack -------------
 
+LOOP_TEST_WALL_CLOCK_GUARD_SECONDS = 5
+
+
+@contextlib.contextmanager
+def _wall_clock_guard(seconds: float = LOOP_TEST_WALL_CLOCK_GUARD_SECONDS):
+    """A regression that makes `_run_loop` re-enter `check --wait` forever
+    hangs the whole suite instead of failing this one test — the fake
+    `orca` above answers a second call with `exit 3`, which only fails the
+    test if something actually reads that exit code; an infinite loop never
+    gets that far. POSIX-only (`SIGALRM`); every caller is already marked
+    `@skip_windows_exec_surface`.
+    """
+
+    def _on_alarm(signum, frame):
+        raise TimeoutError(f"test exceeded its {seconds}s wall-clock guard — main() never returned")
+
+    previous = signal.signal(signal.SIGALRM, _on_alarm)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+
 
 @skip_windows_exec_surface
 def test_run_loop_returns_immediately_after_a_real_delivery(tmp_path: Path, monkeypatch) -> None:
@@ -576,7 +707,8 @@ esac
     _write_executable(ps, "#!/usr/bin/env bash\n[ \"$2\" = 4242 ] && exit 0 || exit 1\n")
     monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
 
-    rc = mod["main"](["--run", "run_x", "--ledger", str(ledger)])
+    with _wall_clock_guard():
+        rc = mod["main"](["--run", "run_x", "--ledger", str(ledger)])
 
     assert rc == 0
     assert calls.read_text().strip() == "1"
@@ -610,7 +742,107 @@ esac
     )
     monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
 
-    rc = mod["main"](["--run", "run_empty", "--ledger", str(tmp_path / "ledger.jsonl")])
+    with _wall_clock_guard():
+        rc = mod["main"](["--run", "run_empty", "--ledger", str(tmp_path / "ledger.jsonl")])
 
     assert rc == 0
     assert calls.read_text().strip() == "0"
+
+
+@skip_windows_exec_surface
+def test_run_loop_flushes_a_heartbeats_ack_when_the_next_pass_wakes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The heartbeat's own ack is only ever chained forward into the *next*
+    `_wait_for_message` call. When the pass right after a heartbeat is the
+    one that returns control — here, the dispatch's pid dies between the
+    pre-wait accounting pass and the post-heartbeat one, producing an
+    actionable DEAD verdict — there is no next call left to carry that ack,
+    so `_run_loop` must flush it directly instead of dropping it."""
+
+    mod = _load()
+    monkeypatch.delenv("ORCA_TERMINAL_HANDLE", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+    handle = "term_a0000000-0000-0000-0000-00000000000a"
+    worker_list_path = tmp_path / "worker_list.json"
+    worker_list_path.write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "result": {
+                    "workers": [
+                        {
+                            "dispatchId": "ctx_x",
+                            "dispatchStatus": "dispatched",
+                            "agentTerminalHandle": handle,
+                        }
+                    ],
+                    "page": {"hasMore": False},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    terminal_list_path = tmp_path / "terminal_list.json"
+    terminal_list_path.write_text(
+        json.dumps(
+            {"ok": True, "result": {"terminals": [{"handle": handle, "lastOutputAt": time.time() * 1000}]}}
+        ),
+        encoding="utf-8",
+    )
+    ledger = tmp_path / "ledger.jsonl"
+    ledger.write_text(
+        json.dumps({"job_id": "ctx_x", "worker_pid": "4242", "pane": handle}),
+        encoding="utf-8",
+    )
+
+    ps_calls = tmp_path / "ps_calls"
+    ps_calls.write_text("0", encoding="utf-8")
+    ps = tmp_path / "ps"
+    _write_executable(
+        ps,
+        f"""#!/usr/bin/env bash
+n=$(cat "{ps_calls}"); n=$((n + 1)); echo "$n" > "{ps_calls}"
+[ "$n" = "1" ] && exit 0 || exit 1
+""",
+    )
+
+    check_calls = tmp_path / "check_calls"
+    check_calls.write_text("0", encoding="utf-8")
+    ack_flush_seen = tmp_path / "ack_flush_seen"
+    orca = tmp_path / "orca"
+    _write_executable(
+        orca,
+        f"""#!/usr/bin/env bash
+case "$1 $2" in
+  "orchestration worker-list") cat "{worker_list_path}" ;;
+  "terminal list")
+    if printf '%s\\n' "$@" | grep -q -- '--json'; then cat "{terminal_list_path}"
+    else echo "{handle} pane"; fi
+    ;;
+  "terminal read") echo "esc to interrupt" ;;
+  "orchestration check")
+    for a in "$@"; do [ "$a" = "d1" ] && echo yes > "{ack_flush_seen}"; done
+    n=$(cat "{check_calls}"); n=$((n + 1)); echo "$n" > "{check_calls}"
+    if [ "$n" = "1" ]; then
+      printf '{{"result": {{"deliveryId": "d1", "messages": [{{"type": "heartbeat"}}]}}}}'
+    else
+      printf '{{"result": {{"timedOut": true}}}}'
+    fi
+    ;;
+  *) echo "{{}}" ;;
+esac
+""",
+    )
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+
+    with _wall_clock_guard():
+        rc = mod["main"](["--run", "run_x", "--ledger", str(ledger)])
+
+    assert rc == 0
+    assert ack_flush_seen.exists()
+    # Failability: a version that only chains a heartbeat's ack into a next
+    # `_wait_for_message` call — which never happens here, since this exact
+    # pass is the one that wakes on the newly-DEAD row — would leave "d1"
+    # unacked and this file would never be written.

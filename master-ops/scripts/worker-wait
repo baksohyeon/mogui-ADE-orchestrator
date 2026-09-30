@@ -22,6 +22,7 @@ from pathlib import Path
 
 DEFAULT_STALL_MINUTES = 10
 DEFAULT_CHECK_TIMEOUT_MS = 60_000
+ACK_FLUSH_TIMEOUT_MS = 200
 WAIT_TYPES = "worker_done,escalation,question"
 STALL_SWEEP_CLASSES = frozenset(
     {"idle", "shell", "limit", "start-screen", "update", "approval"}
@@ -101,9 +102,15 @@ def _run_loop(run_id: str, ledger_path: Path, stall_seconds: int, as_json: bool)
 
     ack = None
     while True:
+        prior_ack = ack
         batch, ack = _wait_for_message(run_id, ack)
         verdict = pass_once(batch)
         if verdict is not None:
+            if batch is None and ack and ack != prior_ack:
+                # This pass consumed a heartbeat and is the one returning
+                # control: there is no next `_wait_for_message` call left to
+                # chain its ack into, so flush it now instead of dropping it.
+                _flush_ack(run_id, ack)
             return verdict
 
 
@@ -115,12 +122,15 @@ def _wait_for_message(run_id: str, ack: str | None) -> tuple[dict | None, str | 
 
     Returns `(None, ack_to_chain)` for a timeout or a heartbeat-only batch (the
     heartbeat's own delivery id becomes the next call's `--ack`, silently
-    clearing it without ever surfacing it as a wake) and `(batch, delivery_id)`
-    for anything else. A real batch's `delivery_id` is returned, not the old
-    `ack`, so a caller that chains it forward acks the batch it just saw rather
-    than replaying an unrelated stale one — this caller does not chain it
-    forward at all, leaving the batch unacknowledged for the coordinator to ack
-    after acting, exactly as `_run_loop` does by returning immediately on it.
+    clearing it without ever surfacing it as a wake — or, if this pass is the
+    one that returns control, `_run_loop` flushes it directly via
+    `_flush_ack` instead, since there is no next call left to carry it) and
+    `(batch, delivery_id)` for anything else. A real batch's `delivery_id` is
+    returned, not the old `ack`, so a caller that chains it forward acks the
+    batch it just saw rather than replaying an unrelated stale one — this
+    caller does not chain it forward at all, leaving the batch unacknowledged
+    for the coordinator to ack after acting, exactly as `_run_loop` does by
+    returning immediately on it.
 
     Never loops internally on repeated heartbeats: a caller-side loop that
     calls this once per pass is what lets `_accounting_pass` run between
@@ -150,11 +160,19 @@ def _wait_for_message(run_id: str, ack: str | None) -> tuple[dict | None, str | 
         time.sleep(1)  # avoid a hot busy-spin if orca is persistently missing
         return None, ack
     result = _last_non_keepalive(proc.stdout + proc.stderr)
-    if proc.returncode != 0 or not isinstance(result, dict):
-        if proc.returncode != 0:
-            time.sleep(1)  # same guard for a persistently failing orca
+    if (
+        proc.returncode != 0
+        or not isinstance(result, dict)
+        or result.get("ok") is False
+        or not isinstance(result.get("result"), dict)
+    ):
+        print(
+            f"worker-wait: orca check failed or returned a malformed envelope (exit={proc.returncode})",
+            file=sys.stderr,
+        )
+        time.sleep(1)  # avoid a hot busy-spin on a persistently failing check
         return None, ack
-    payload = result.get("result") if isinstance(result.get("result"), dict) else {}
+    payload = result["result"]
     if payload.get("timedOut"):
         return None, ack
     messages = payload.get("messages") or []
@@ -162,8 +180,50 @@ def _wait_for_message(run_id: str, ack: str | None) -> tuple[dict | None, str | 
     if messages and all(
         isinstance(m, dict) and m.get("type") == "heartbeat" for m in messages
     ):
+        if not delivery_id:
+            # Nothing to ack, and zeroing out an already-valid `ack` here
+            # would silence `--ack` on every future call, letting orca
+            # replay this same heartbeat forever instead of blocking.
+            print(
+                "worker-wait: heartbeat batch had no deliveryId to ack; treating as quiet",
+                file=sys.stderr,
+            )
+            return None, ack
         return None, delivery_id
+    if not messages and not delivery_id:
+        return None, ack
     return payload, delivery_id
+
+
+def _flush_ack(run_id: str, delivery_id: str) -> None:
+    """Send `delivery_id`'s ack right now, for a pass that is about to return
+    control rather than loop again: the normal chain-forward path (pass it as
+    `--ack` on the *next* `check --wait` call) never happens for that pass,
+    which is how a heartbeat got left unacked and replayed to this Run's next
+    `worker-wait` invocation instead of being cleared by the one that saw it.
+    Best-effort: a failure here just means the batch is replayed later, the
+    same as any other unacked heartbeat, not a new failure mode.
+    """
+
+    argv = [
+        "orca",
+        "orchestration",
+        "check",
+        "--run",
+        run_id,
+        "--wait",
+        "--timeout-ms",
+        str(ACK_FLUSH_TIMEOUT_MS),
+        "--types",
+        WAIT_TYPES,
+        "--ack",
+        delivery_id,
+        "--json",
+    ]
+    try:
+        subprocess.run(argv, capture_output=True, text=True)
+    except OSError:
+        pass
 
 
 def _last_non_keepalive(text: str) -> dict | None:

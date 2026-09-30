@@ -117,8 +117,16 @@ class JoinOrderTests(unittest.TestCase):
                     }
                     return 0, json.dumps(payload), ""
                 if "dispatch-show" in cmd:
-                    payload = {"result": {"dispatch": {"status": "COMPLETED"}}}
-                    return 0, json.dumps(payload), ""
+                    # Only --task is served; --dispatch is refused, the same
+                    # way the real RPC only reliably serves --task lookups.
+                    # A buggy version that passes --dispatch straight through
+                    # gets refused here, landing dispatch-show in
+                    # missing_sources — the assertion below then actually
+                    # discriminates instead of passing either way.
+                    if "--task" in cmd:
+                        payload = {"result": {"dispatch": {"status": "COMPLETED"}}}
+                        return 0, json.dumps(payload), ""
+                    return 1, "", ""
                 return 1, "", ""
 
             builder = DispatchTimelineBuilder(
@@ -134,8 +142,8 @@ class JoinOrderTests(unittest.TestCase):
             self.assertNotIn(DISPATCH_SHOW_SOURCE, timeline.missing_sources)
             # Failability: a version that called dispatch-show with
             # --dispatch ctx_target directly (never resolving a task id)
-            # would leave dispatch-show in missing_sources whenever the
-            # backing RPC only serves --task lookups reliably.
+            # would get refused by the fake RPC above and leave dispatch-show
+            # in missing_sources, whereas the correct --task form succeeds.
 
     def test_event_log_row_with_only_dispatch_id_joins_via_ledger_link(self) -> None:
         """An event that carries a dispatch id but no task id (e.g. a

@@ -129,6 +129,40 @@ for bad_since in nan inf -1; do
   fi
 done
 
+# --- Case 5b: a positive --since lists the existing fixtures' dispatch id --
+since_out=$(PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$ROOT/src" PATH="$work:$PATH" \
+  python3 "$SCRIPT" --since 999999999 --ledger "$work/ledger.jsonl" \
+  --event-log "$work/event-log.jsonl" --json 2>&1)
+since_rc=$?
+if [ "$since_rc" -eq 0 ] \
+  && printf '%s' "$since_out" | grep -q '"dispatch_id":"ctx_demo"' \
+  && printf '%s' "$since_out" | grep -q '"task_id":"task_demo"'; then
+  ok "since: a positive window lists ctx_demo/task_demo from the existing fixtures"
+else
+  fail "since: expected ctx_demo/task_demo listed for a positive window, got exit $since_rc: $since_out"
+fi
+
+# Same mirrored-repo mutant technique as Case 1: mutate only the copy, never
+# the committed core module, with __pycache__ stripped.
+since_mutant_repo="$work/mutant-repo-since"
+mkdir -p "$since_mutant_repo/scripts"
+cp "$SCRIPT" "$since_mutant_repo/scripts/dispatch-timeline"
+cp -r "$ROOT/src" "$since_mutant_repo/src"
+find "$since_mutant_repo/src" -name '__pycache__' -exec rm -rf {} + 2>/dev/null
+since_mutant_core="$since_mutant_repo/src/master_runtime/core/dispatch_timeline.py"
+sed 's/return sorted(last_seen.values(), key=lambda row: row\["last_ts"\], reverse=True)/return []/' \
+  "$core_module" > "$since_mutant_core"
+if cmp -s "$core_module" "$since_mutant_core"; then
+  fail "failability: list_since-emptying sed pattern did not match the script"
+fi
+since_mutant_out=$(PYTHONDONTWRITEBYTECODE=1 PATH="$work:$PATH" python3 "$since_mutant_repo/scripts/dispatch-timeline" \
+  --since 999999999 --ledger "$work/ledger.jsonl" --event-log "$work/event-log.jsonl" --json 2>&1)
+if printf '%s' "$since_mutant_out" | grep -q '"dispatch_id":"ctx_demo"'; then
+  fail "failability: list_since-emptying mutant should not list ctx_demo"
+else
+  ok "failability: emptying list_since drops the previously-listed dispatch id"
+fi
+
 # --- Case 5: human-readable mode survives an out-of-range timestamp --------
 huge_ledger="$work/huge-ts-ledger.jsonl"
 cat > "$huge_ledger" <<'EOF'

@@ -401,7 +401,6 @@ def _accounting_pass(
             task_id = handle_task_id.get(handle)
             row = {
                 "dispatch_id": None,
-                "task_id": task_id,
                 "pane": handle,
                 "age_seconds": None,
                 "pid": None,
@@ -410,6 +409,7 @@ def _accounting_pass(
                 "verdict": "OPEN_PANE",
             }
             if reap:
+                row["task_id"] = task_id
                 row["reap"] = _reap_open_pane(task_id)
             rows.append(row)
 
@@ -417,13 +417,16 @@ def _accounting_pass(
         if row["verdict"] in ACTIONABLE_VERDICTS:
             # OPEN_PANE rows have no dispatch id (that's what makes them
             # open), so dispatch-timeline can only join their verdict event
-            # to a task's timeline via the task id.
+            # to a task's timeline via the task id. That join key stays out
+            # of the JSON row unless --reap asked for it (PR #151's
+            # byte-compatible --once --json shape), so look it up from
+            # handle_task_id instead of the row itself.
             mogui_emit(
                 "info",
                 "wait_verdict",
                 "pass",
                 dispatch_id=row["dispatch_id"] or "",
-                task_id=row.get("task_id") or "",
+                task_id=row.get("task_id") or handle_task_id.get(row["pane"]) or "",
                 pane=row["pane"] or "",
                 verdict=row["verdict"],
             )

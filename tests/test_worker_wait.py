@@ -783,7 +783,11 @@ exit 1
     open_rows = [r for r in rows if r["verdict"] == "OPEN_PANE"]
     assert len(open_rows) == 1
     assert "reap" not in open_rows[0]
+    assert "task_id" not in open_rows[0]
     assert not (tmp_path / "reap_calls.txt").exists()
+    # Failability: a version that always added task_id to OPEN_PANE rows
+    # (regardless of --reap) would change the --once --json projection PR
+    # #151 shipped without --reap, breaking byte-compatibility with it.
 
 
 # --- _reap_open_pane: every refusal branch, not just the happy path --------

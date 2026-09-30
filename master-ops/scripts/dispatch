@@ -433,6 +433,35 @@ with open(ledger, "a", encoding="utf-8") as fh:
 EOF
 }
 
+record_dispatch_launched() {
+  [ "$CHECK_ONLY" = 1 ] && return 0
+  # Called with the delivery check's own verdict, not a hardcoded "pass": a
+  # dispatch whose inject landed on a hook/trust menu or provider-limit
+  # screen never reached the agent, and this event is the only place that
+  # measured non-delivery is recorded — the timeline must show it as a
+  # finding, not a green launch.
+  local outcome="$1" reason="$2"
+  python3 - "$SCRIPTS_DIR" "$DISP" "$TASK" "$TERMINAL" "$MODEL" "$outcome" "$reason" <<'EOF'
+import sys
+
+scripts_dir, dispatch_id, task_id, pane, model, outcome, reason = sys.argv[1:]
+sys.path.insert(0, scripts_dir)
+from mogui_log import emit
+
+emit(
+    "info",
+    "dispatch_launched",
+    outcome,
+    dispatch_id=dispatch_id,
+    task_id=task_id,
+    pane=pane,
+    pid="",
+    model=model,
+    reason=reason,
+)
+EOF
+}
+
 if [ -z "$RUNTIME" ]; then
   RUNTIME=$(choose_default_runtime)
 fi
@@ -786,6 +815,11 @@ for _ in 1 2 3 4 5 6; do
 done
 DELIVERY_CLASS=$(delivery_result "$PRE_INJECT_CLASS" "$POST_INJECT_CLASS")
 echo "delivery pre=$PRE_INJECT_CLASS post=$POST_INJECT_CLASS class=$DELIVERY_CLASS"
+case "$DELIVERY_CLASS" in
+  agent-started) record_dispatch_launched pass "";;
+  hook-trust|limit) record_dispatch_launched finding "$DELIVERY_CLASS";;
+  *) record_dispatch_launched undetermined "$DELIVERY_CLASS";;
+esac
 case "$DELIVERY_CLASS" in
   hook-trust)
     echo "✗ delivery FAILED · hook/trust gate is still present; the spec was NOT consumed"

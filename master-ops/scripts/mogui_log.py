@@ -7,6 +7,12 @@ import time
 
 
 LOG_DIR = os.path.expanduser("~/.mogui")
+
+# Two directories up from scripts/mogui_log.py: the ops/runtime repo root,
+# wherever this file has been template-applied to. The descriptor lives here
+# regardless of the caller's cwd (the master commonly runs from the
+# workspace root, a different directory entirely).
+_RUNTIME_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _SECRET = re.compile(
     r"(?:"
     r"sk-[A-Za-z0-9]{8,}|"
@@ -37,10 +43,40 @@ def _scrub(value):
     return value
 
 
+def _descriptor_workspace_root():
+    """Read workspace_root from <runtime-root>/config/workspace-descriptor.json,
+    if any, where runtime-root is this script's own location (_RUNTIME_ROOT),
+    not the caller's cwd."""
+    path = os.path.join(_RUNTIME_ROOT, "config", "workspace-descriptor.json")
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    root = data.get("workspace_root") if isinstance(data, dict) else None
+    return root.strip() if isinstance(root, str) and root.strip() else None
+
+
+_SESSION_KIND_CACHE = None
+
+
 def _session_kind() -> str:
-    if os.environ.get("ORCA_TASK_ID") or ".orca/worktrees" in os.getcwd():
-        return "worker"
-    return "unknown"
+    """Resolved once per process and cached: cwd, env, and the descriptor file
+    are all fixed for a process's lifetime, so re-deriving this on every
+    `emit()` call would pay a stat/open/json-parse per event for no reason.
+    """
+    global _SESSION_KIND_CACHE
+    if _SESSION_KIND_CACHE is not None:
+        return _SESSION_KIND_CACHE
+    cwd = os.getcwd()
+    seat_root = os.environ.get("MOGUI_SEAT_ROOT") or _descriptor_workspace_root()
+    if seat_root and os.path.realpath(cwd) == os.path.realpath(os.path.expanduser(seat_root)):
+        _SESSION_KIND_CACHE = "master"
+    elif os.environ.get("ORCA_TASK_ID") or ".orca/worktrees" in cwd.replace(os.sep, "/"):
+        _SESSION_KIND_CACHE = "worker"
+    else:
+        _SESSION_KIND_CACHE = "unknown"
+    return _SESSION_KIND_CACHE
 
 
 def emit(level, event, outcome, *, component="tool-impl", evidence="observed",

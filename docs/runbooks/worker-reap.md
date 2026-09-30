@@ -34,21 +34,48 @@ scripts/worker-reap --dispatch-id <dispatch-id> --dry-run
 
 If the status is `RUNNING` or `REGISTERED`, the reap is **refused** with exit code 3.
 
-### 2. Close the Terminal
+### 2. Close the Pane — Three Measurements, All Required
 
-If the dispatch is settled, the reaper will:
-- Call `orca terminal close <terminal-id>` to shut down the worker session
-- Append `terminal_closed:<terminal-id>` to the actions log
+A settled dispatch does not close its pane on its own: the reaper measures
+three conditions first, and closes only when all three hold.
+
+1. **Present** — the terminal handle is still listed in `orca terminal list`.
+   Absent (closed hours ago, or never existed) refuses with
+   `terminal_left:<id>:pane_absent`.
+2. **Not reused** — no row in `orca orchestration worker-list` (across every
+   Run) has `dispatchStatus: dispatched` naming this same handle *for a
+   different dispatch* (a `dispatched` row for the dispatch being reaped
+   itself does not count — that is the dispatch this reap call is for). A
+   newer dispatch may have reused the pane before this one was reaped;
+   closing it here would kill that live worker. Refuses with
+   `terminal_left:<id>:reused_by:<dispatch-id>`.
+3. **No agent process** — no process whose command is `claude`, `codex`,
+   `cursor`, `cursor-agent`, `agy`, or `grok` has its current working directory inside the
+   dispatch's worktree (`lsof -a -p <pid> -d cwd -Fn`, falling back to
+   `/proc/<pid>/cwd`). A worker's own CLI session commonly stays open at an
+   idle prompt after `worker_done` — this measurement refuses the close for
+   as long as that session is alive, by design; the reaper never assumes an
+   idle pane is a safe one. Refuses with `terminal_left:<id>:agent_process:<pid>:<comm>`.
+
+Any measurement that could not be taken at all (an `orca` call failing, `ps`
+missing) is a refusal too — `..._unmeasured` — never treated as a pass. Only
+when all three clear does the reaper call `orca terminal close <terminal-id>`
+and log `terminal_closed:<terminal-id>` (or, on `--dry-run`,
+`would_close_terminal:<terminal-id>` — a dry run never prints
+`terminal_closed`).
 
 ### 3. Check Worktree Safety
 
-The reaper checks three conditions before removing the worktree:
+The reaper checks two conditions before removing the worktree:
 
-1. **Git status is clean** — no uncommitted changes (`git status --porcelain` is empty)
+1. **Git status is clean** — no uncommitted changes (`git status --porcelain`
+   is empty; untracked `__pycache__/` litter does not by itself count as dirty)
 2. **Current branch is included in `origin/main`** — either the checked-out branch appears in `git branch -a --merged origin/main`, or a virtual merge of `HEAD` into `origin/main` produces the same tree as `origin/main`
-3. **Worktree exists** — the path on disk is accessible
 
-If all three are true, the worktree is removed and `worktree_removed:<path>` is logged.
+The worktree must also exist on disk to be a removal candidate at all.
+
+If both are true, the worktree is removed and `worktree_removed:<path>` is
+logged (`would_remove_worktree:<path>` on `--dry-run`).
 
 If **any** condition fails, the worktree is left in place and the reason is logged:
 - `worktree_left:<path>` + reason
@@ -94,7 +121,7 @@ Every reap action is recorded in the dispatch ledger. This creates an audit trai
 scripts/worker-reap --task-id task_abc123 --dry-run
 ```
 
-Output:
+Output (a dry run never prints `terminal_closed` or `worktree_removed`):
 ```json
 {
   "record": {
@@ -102,8 +129,15 @@ Output:
     "dispatch_id": "dispatch_xyz",
     "terminal_id": "term_123",
     "worktree_path": "/path/to/worktree",
-    "actions_taken": "terminal_closed:term_123;worktree_removed:/path/to/worktree",
-    "timestamp": 1722787200.0
+    "actions_taken": "would_close_terminal:term_123;would_remove_worktree:/path/to/worktree",
+    "timestamp": 1722787200.0,
+    "measurements": {
+      "terminal_present": true,
+      "terminal_reused_by": "",
+      "agent_process": "",
+      "worktree_clean": true,
+      "worktree_merged": true
+    }
   },
   "dry_run": true
 }
@@ -125,17 +159,30 @@ Output:
     "dispatch_id": "dispatch_xyz",
     "terminal_id": "term_123",
     "worktree_path": "/path/to/worktree",
-    "actions_taken": "terminal_closed:term_123;worktree_left:/path/to/worktree",
-    "timestamp": 1722787200.0
+    "actions_taken": "terminal_closed:term_123;worktree_left:/path/to/worktree:Worktree has uncommitted changes",
+    "timestamp": 1722787200.0,
+    "measurements": {
+      "terminal_present": true,
+      "terminal_reused_by": "",
+      "agent_process": "",
+      "worktree_clean": false,
+      "worktree_merged": false
+    }
   },
   "dry_run": false
 }
 ```
 
-The reap record is appended to the ledger (fields alphabetical per `sort_keys=True`, includes both `ts` and `timestamp`):
+The reap record is appended to the ledger (fields alphabetical per `sort_keys=True`, includes both `ts` and `timestamp`, and the `measurements` object):
 ```jsonl
-{"actions_taken":"terminal_closed:term_123;worktree_left:/path/to/worktree","dispatch_id":"dispatch_xyz","event":"reap","task_id":"task_abc123","terminal_id":"term_123","timestamp":1722787200.0,"ts":1722787200.0,"worktree_path":"/path/to/worktree"}
+{"actions_taken":"terminal_closed:term_123;worktree_left:/path/to/worktree:Worktree has uncommitted changes","dispatch_id":"dispatch_xyz","event":"reap","measurements":{"agent_process":"","terminal_present":true,"terminal_reused_by":"","worktree_clean":false,"worktree_merged":false},"task_id":"task_abc123","terminal_id":"term_123","timestamp":1722787200.0,"ts":1722787200.0,"worktree_path":"/path/to/worktree"}
 ```
+
+Also emitted through `mogui_log.emit()` into `~/.mogui/event-log.jsonl` as a
+`reaped` event carrying `dispatch_id`, `task_id`, and `actions_taken` — but
+only for a real reap, never a `--dry-run` (which produces no event) — see
+`master-ops/docs/runbooks/dispatch-timeline.md` for reading these back joined
+with the ledger and the live dispatch state.
 
 ### Detect Unreaped Settled Leases
 
@@ -208,7 +255,20 @@ The feature branch exists but is not yet merged and the reaper could not prove t
 2. Manually verify and clean the worktree
 3. Leave the worktree and reap only the terminal
 
-The reaper will always leave the terminal closed (no open handles leak) and record the partial reap.
+### Partial reap: a refused pane stays open
+
+The pane and the worktree are each judged independently, so a reap can close
+one and leave the other. A refused measurement — pane absent, reused by a
+newer dispatch, an agent process (or an unresolved cwd for one) still in the
+worktree, or the measurement itself failing — leaves the terminal open and
+logs `terminal_left:<id>:<reason>`; it is not closed just because the
+worktree side happened to be clean and removed, and the reverse holds too:
+the terminal can close while the worktree is left in place. Both outcomes are
+recorded in the same `actions_taken` list, so a settled dispatch's record can
+read `terminal_left:...;worktree_removed:...` or
+`terminal_closed:...;worktree_left:...` — either is a valid partial reap, not
+a bug. Re-run `scripts/worker-reap --dry-run` after resolving the blocking
+condition to finish the other half.
 
 ## See Also
 

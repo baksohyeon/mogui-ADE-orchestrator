@@ -12,10 +12,21 @@ from pathlib import Path
 SCRIPT_PATH = Path(__file__).resolve()
 REPO_ROOT = SCRIPT_PATH.parent.parent
 SRC_ROOT = REPO_ROOT / "src"
+MOGUI_LOG_ROOT = REPO_ROOT / "master-ops" / "scripts"
 sys.path.insert(0, str(SRC_ROOT))
+sys.path.insert(0, str(MOGUI_LOG_ROOT))
 
 
 from master_runtime.core.worker_reap import ReapError, WorkerReaper  # noqa: E402
+
+try:
+    from mogui_log import emit as mogui_emit  # noqa: E402
+except ImportError:
+    # Fail-open, same as mogui_log's own emit(): a deployed layout missing
+    # master-ops/scripts (the template-apply scenario) must not block reaping
+    # over a logging dependency.
+    def mogui_emit(*args, **kwargs):  # noqa: D401
+        return None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -37,6 +48,16 @@ def main(argv: list[str] | None = None) -> int:
     except ReapError as exc:
         print(str(exc), file=sys.stderr)
         return exc.exit_code
+
+    if not args.dry_run:
+        mogui_emit(
+            "info",
+            "reaped",
+            "pass",
+            dispatch_id=record.dispatch_id,
+            task_id=record.task_id,
+            actions_taken=record.actions_taken,
+        )
 
     result = {
         "record": record.to_dict(),

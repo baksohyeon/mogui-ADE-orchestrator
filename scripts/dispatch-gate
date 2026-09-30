@@ -19,7 +19,9 @@ from pathlib import Path
 SCRIPT_PATH = Path(__file__).resolve()
 REPO_ROOT = SCRIPT_PATH.parent.parent
 SRC_ROOT = REPO_ROOT / "src"
+MOGUI_LOG_ROOT = REPO_ROOT / "master-ops" / "scripts"
 sys.path.insert(0, str(SRC_ROOT))
+sys.path.insert(0, str(MOGUI_LOG_ROOT))
 
 from master_runtime.core.dispatch_gate import (  # noqa: E402
     DispatchGate,
@@ -29,6 +31,15 @@ from master_runtime.core.dispatch_gate import (  # noqa: E402
     ReasonCode,
 )
 from master_runtime.core.watchdog import StallStatus, check_stall  # noqa: E402
+
+try:
+    from mogui_log import emit as mogui_emit  # noqa: E402
+except ImportError:
+    # Fail-open, same as mogui_log's own emit(): a deployed layout missing
+    # master-ops/scripts (the template-apply scenario) must not turn this
+    # purely observational logging dependency into a gate outage.
+    def mogui_emit(*args, **kwargs):  # noqa: D401
+        return None
 
 
 ORCHESTRATION_PROBE_TIMEOUT_SECONDS = 30
@@ -190,6 +201,14 @@ def _register(args: argparse.Namespace) -> int:
         expected_completion_channel=completion_channel,
         worker_pid=args.worker_pid,
         pane=args.pane,
+    )
+    mogui_emit(
+        "info",
+        "dispatch_registered",
+        "pass" if decision.allow else "finding",
+        dispatch_id=args.job_id,
+        task_id=args.orchestration_task or "",
+        reason=decision.reason.value if decision.reason else "",
     )
     _print_decision(decision)
     if decision.allow:
@@ -496,6 +515,14 @@ def _deny_unverified_orchestration(
     probe_failure: ProbeFailure,
 ) -> int:
     decision = GateDecision(False, ReasonCode.ORCHESTRATION_UNVERIFIED)
+    mogui_emit(
+        "info",
+        "dispatch_registered",
+        "finding",
+        dispatch_id=args.job_id,
+        task_id=args.orchestration_task or "",
+        reason=decision.reason.value,
+    )
     entry: dict[str, object] = {
         "ts": time.time(),
         "decision": "DENY",

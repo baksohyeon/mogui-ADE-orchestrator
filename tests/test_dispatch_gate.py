@@ -929,6 +929,33 @@ def test_register_job_omits_worker_pid_and_pane_keys_when_not_given(
     assert "pane" not in entry
 
 
+def test_register_job_treats_an_empty_or_whitespace_worker_pid_as_absent(
+    tmp_path: Path,
+) -> None:
+    """A shell caller expanding an unset variable can pass `--worker-pid ""`;
+    that must not write a `worker_pid` key, or worker-wait would read a live
+    worker as DEAD (empty pid recorded, `ps -p` on it never confirms alive)."""
+
+    contract = _contract(tmp_path, "empty pid and pane")
+    gate = _gate(tmp_path, now=1_000)
+    gate.check(DispatchRequest("codex", contract, est_input_chars=10_000, n_agents=1))
+
+    decision = gate.register_job(
+        "job-empty",
+        lambda job_id: job_id == "job-empty",
+        worker_pid="   ",
+        pane="",
+    )
+
+    assert decision.allow is True
+    entry = _ledger_entries(tmp_path)[-1]
+    assert "worker_pid" not in entry
+    assert "pane" not in entry
+    # Failability: a guard that only checked `is not None` would let this
+    # whitespace-only pid through.
+    assert entry.get("worker_pid") != "   "
+
+
 def test_cli_register_accepts_worker_pid_and_pane_flags(
     tmp_path: Path,
     monkeypatch,

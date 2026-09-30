@@ -526,10 +526,14 @@ class DispatchGate:
             }
             if orchestration_task is not None:
                 entry["orchestration_task"] = orchestration_task
-            if worker_pid is not None:
-                entry["worker_pid"] = worker_pid
-            if pane is not None:
-                entry["pane"] = pane
+            # A caller expanding an unset shell variable can pass an empty or
+            # whitespace-only value; worker-wait treats any present worker_pid
+            # as measured, and an empty one would read as a live-but-not-alive
+            # pid, i.e. DEAD, for a worker that was never actually recorded.
+            if worker_pid and worker_pid.strip():
+                entry["worker_pid"] = worker_pid.strip()
+            if pane and pane.strip():
+                entry["pane"] = pane.strip()
             # Say what was verified and how, so a later reader can tell an
             # unverified registration from a verified one instead of assuming.
             entry["model_declared"] = declared_model

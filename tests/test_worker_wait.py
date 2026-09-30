@@ -103,6 +103,60 @@ def test_no_pid_but_sweep_says_working_is_working() -> None:
     )
 
 
+def test_pid_alive_but_age_unmeasured_is_unknown_not_stall() -> None:
+    """STALL means measured-stale, not "the sweep said something other than
+    working while we happened to have no age." An unreadable lastOutputAt
+    (pane not found in terminal list) must not be silently read as stale."""
+
+    mod = _load()
+    verdict = mod["_compute_verdict"](
+        pid="123", pid_alive=True, age_seconds=None, stall_seconds=600, sweep_class="idle"
+    )
+    assert verdict == "UNKNOWN"
+    # Failability: the same sweep class with a measured, stale age IS STALL —
+    # proving age_seconds, not just the sweep class, gates this verdict.
+    assert (
+        mod["_compute_verdict"](
+            pid="123", pid_alive=True, age_seconds=9999.0, stall_seconds=600, sweep_class="idle"
+        )
+        == "STALL"
+    )
+
+
+def test_pid_liveness_could_not_be_measured_is_unknown_not_dead() -> None:
+    """`pid_alive=None` means the measurement itself failed (bad pid data, `ps`
+    missing or erroring) — not evidence the process is gone. Only a positive
+    `ps` answer (`pid_alive=False`) may report DEAD, which the runbook tells
+    the coordinator to act on with worker-abandon."""
+
+    mod = _load()
+    verdict = mod["_compute_verdict"](
+        pid="123", pid_alive=None, age_seconds=1.0, stall_seconds=600, sweep_class="working"
+    )
+    assert verdict == "UNKNOWN"
+    # Failability: the same inputs with liveness actually measured false IS DEAD.
+    assert (
+        mod["_compute_verdict"](
+            pid="123", pid_alive=False, age_seconds=1.0, stall_seconds=600, sweep_class="working"
+        )
+        == "DEAD"
+    )
+
+
+def test_pid_alive_returns_none_for_unparseable_pid() -> None:
+    mod = _load()
+    assert mod["_pid_alive"]("not-a-number") is None
+    # Failability: a real integer pid must not also read as unmeasurable.
+    assert mod["_pid_alive"]("") is None
+
+
+@skip_windows_exec_surface
+def test_pid_alive_returns_none_when_ps_cannot_run(tmp_path: Path, monkeypatch) -> None:
+    mod = _load()
+    monkeypatch.setenv("PATH", str(tmp_path))  # empty dir: no `ps` on PATH at all
+    assert mod["_pid_alive"]("123") is None
+
+
 # --- ledger indexing ---------------------------------------------------------
 
 
@@ -230,17 +284,27 @@ fi
 
 @skip_windows_exec_surface
 def test_heartbeat_batch_is_acked_and_rearmed_without_waking(tmp_path: Path, monkeypatch) -> None:
+    """`_wait_for_message` makes exactly one `check` attempt per call — it never
+    loops internally on a heartbeat, or `_accounting_pass` could be starved
+    for as long as heartbeats keep arriving. The caller (`_run_loop`) is what
+    re-arms by calling this again, once per pass, with the chained ack."""
+
     mod = _load()
     fake_orca_dir = tmp_path
     _write_fake_orca_for_check(fake_orca_dir)
     monkeypatch.setenv("PATH", f"{fake_orca_dir}:{os.environ['PATH']}")
 
-    payload, ack = mod["_wait_for_message"]("run_x", None)
+    batch1, ack1 = mod["_wait_for_message"]("run_x", None)
+    assert batch1 is None
+    assert ack1 == "d1"
 
-    assert ack == "d1"
-    assert payload is not None
-    assert payload["messages"][0]["type"] == "worker_done"
-    assert payload["deliveryId"] == "d2"
+    batch2, ack2 = mod["_wait_for_message"]("run_x", ack1)
+    assert batch2 is not None
+    assert batch2["messages"][0]["type"] == "worker_done"
+    assert batch2["deliveryId"] == "d2"
+    # Failability: a version that still looped internally on the heartbeat
+    # would return the worker_done batch from the FIRST call, making batch1
+    # non-None above.
 
 
 @skip_windows_exec_surface
@@ -263,9 +327,13 @@ fi
     payload, ack = mod["_wait_for_message"]("run_x", None)
 
     assert payload["messages"][0]["type"] == "worker_done"
-    # Not acked: no --ack flag was ever sent for this delivery, which the fake
-    # orca itself would have refused with exit 3 above had it seen one.
-    assert ack is None
+    # Not acked *by this call*: no --ack flag was ever sent for this delivery,
+    # which the fake orca itself would have refused with exit 3 above had it
+    # seen one. The returned ack is this batch's own deliveryId — correct to
+    # return (a caller that chains it forward acks the batch it just saw, not
+    # a stale one) but this caller does not chain it forward at all; it wakes
+    # instead, leaving the batch itself unacknowledged for the coordinator.
+    assert ack == "d9"
 
 
 # --- accounting end to end: DEAD, STALL, working, OPEN_PANE in one pass ----
@@ -284,6 +352,7 @@ def test_accounting_pass_end_to_end(tmp_path: Path, monkeypatch) -> None:
 
     now_ms = time.time() * 1000
     worker_list = {
+        "ok": True,
         "result": {
             "workers": [
                 {"dispatchId": "ctx_dead0001", "dispatchStatus": "dispatched", "agentTerminalHandle": dead_handle},
@@ -296,6 +365,7 @@ def test_accounting_pass_end_to_end(tmp_path: Path, monkeypatch) -> None:
         }
     }
     terminal_list = {
+        "ok": True,
         "result": {
             "terminals": [
                 {"handle": dead_handle, "lastOutputAt": now_ms},
@@ -379,3 +449,168 @@ esac
     by_dispatch_tight = {r["dispatch_id"]: r for r in tight_rows if r["dispatch_id"]}
     assert by_dispatch_tight["ctx_fresh0005"]["verdict"] == "UNKNOWN"
     assert by_dispatch_tight["ctx_work0003"]["verdict"] == "working"
+
+
+# --- worker-list failure must never read as an empty, settled Run ----------
+
+
+@skip_windows_exec_surface
+def test_worker_list_failure_raises_instead_of_reporting_empty(tmp_path: Path, monkeypatch) -> None:
+    mod = _load()
+    orca = tmp_path / "orca"
+    _write_executable(orca, "#!/usr/bin/env bash\nexit 1\n")
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+
+    with pytest.raises(mod["WorkerListError"]):
+        mod["_worker_list"]("run_x")
+
+
+@skip_windows_exec_surface
+def test_orca_json_rejects_a_well_formed_but_failed_envelope(tmp_path: Path, monkeypatch) -> None:
+    """Exit 0 with parseable JSON is not success unless the envelope's own
+    `"ok"` field says so — an `{"ok": false, ...}` error response must not be
+    read as a valid (if empty) worker-list result."""
+
+    mod = _load()
+    orca = tmp_path / "orca"
+    _write_executable(
+        orca,
+        """#!/usr/bin/env bash
+echo '{"ok": false, "error": "auth expired"}'
+""",
+    )
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+
+    assert mod["_orca_json"](["orca", "orchestration", "worker-list"]) is None
+    with pytest.raises(mod["WorkerListError"]):
+        mod["_worker_list"]("run_x")
+
+
+@skip_windows_exec_surface
+def test_once_mode_reports_failure_instead_of_false_success(tmp_path: Path, monkeypatch) -> None:
+    mod = _load()
+    orca = tmp_path / "orca"
+    _write_executable(orca, "#!/usr/bin/env bash\nexit 1\n")
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+    ledger = tmp_path / "ledger.jsonl"
+    ledger.write_text("", encoding="utf-8")
+
+    rc = mod["main"](["--once", "--run", "run_x", "--ledger", str(ledger)])
+    assert rc == 2
+    # Failability: the pre-fix behavior returned 0 here (empty list == success).
+
+
+# --- _run_loop: return on wake, never re-enter with a stale ack -------------
+
+
+@skip_windows_exec_surface
+def test_run_loop_returns_immediately_after_a_real_delivery(tmp_path: Path, monkeypatch) -> None:
+    """The historical bug: after printing a real (non-heartbeat) delivery, the
+    loop re-entered `check --wait` with the same already-seen ack, which would
+    just replay the same unacknowledged batch forever instead of returning
+    control to the coordinator who is supposed to act and ack it."""
+
+    mod = _load()
+    monkeypatch.delenv("ORCA_TERMINAL_HANDLE", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+    handle = "term_a0000000-0000-0000-0000-000000000009"
+    worker_list_path = tmp_path / "worker_list.json"
+    worker_list_path.write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "result": {
+                    "workers": [
+                        {
+                            "dispatchId": "ctx_x",
+                            "dispatchStatus": "dispatched",
+                            "agentTerminalHandle": handle,
+                        }
+                    ],
+                    "page": {"hasMore": False},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    terminal_list_path = tmp_path / "terminal_list.json"
+    terminal_list_path.write_text(
+        json.dumps(
+            {"ok": True, "result": {"terminals": [{"handle": handle, "lastOutputAt": time.time() * 1000}]}}
+        ),
+        encoding="utf-8",
+    )
+    ledger = tmp_path / "ledger.jsonl"
+    ledger.write_text(
+        json.dumps({"job_id": "ctx_x", "worker_pid": "4242", "pane": handle}),
+        encoding="utf-8",
+    )
+
+    calls = tmp_path / "check_calls"
+    calls.write_text("0", encoding="utf-8")
+    orca = tmp_path / "orca"
+    _write_executable(
+        orca,
+        f"""#!/usr/bin/env bash
+case "$1 $2" in
+  "orchestration worker-list") cat "{worker_list_path}" ;;
+  "terminal list")
+    if printf '%s\\n' "$@" | grep -q -- '--json'; then cat "{terminal_list_path}"
+    else echo "{handle} pane"; fi
+    ;;
+  "terminal read") echo "esc to interrupt" ;;
+  "orchestration check")
+    n=$(cat "{calls}"); n=$((n + 1)); echo "$n" > "{calls}"
+    if [ "$n" -gt 1 ]; then
+      echo "FAIL: check --wait was called again after a real delivery" >&2
+      exit 3
+    fi
+    printf '{{"result": {{"deliveryId": "d1", "messages": [{{"type": "worker_done"}}]}}}}'
+    ;;
+  *) echo "{{}}" ;;
+esac
+""",
+    )
+    ps = tmp_path / "ps"
+    _write_executable(ps, "#!/usr/bin/env bash\n[ \"$2\" = 4242 ] && exit 0 || exit 1\n")
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+
+    rc = mod["main"](["--run", "run_x", "--ledger", str(ledger)])
+
+    assert rc == 0
+    assert calls.read_text().strip() == "1"
+
+
+@skip_windows_exec_surface
+def test_run_loop_exits_without_waiting_when_already_settled(tmp_path: Path, monkeypatch) -> None:
+    """An already-settled Run must not incur a full `check --wait` timeout
+    before the first accounting pass even runs."""
+
+    mod = _load()
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    calls = tmp_path / "check_calls"
+    calls.write_text("0", encoding="utf-8")
+    orca = tmp_path / "orca"
+    _write_executable(
+        orca,
+        f"""#!/usr/bin/env bash
+case "$1 $2" in
+  "orchestration worker-list") echo '{{"ok": true, "result": {{"workers": [], "page": {{"hasMore": false}}}}}}' ;;
+  "terminal list")
+    if printf '%s\\n' "$@" | grep -q -- '--json'; then echo '{{"ok": true, "result": {{"terminals": []}}}}'; fi ;;
+  "orchestration check")
+    n=$(cat "{calls}"); n=$((n + 1)); echo "$n" > "{calls}"
+    echo "FAIL: check --wait must not run when nothing is dispatched" >&2
+    exit 3
+    ;;
+  *) echo "{{}}" ;;
+esac
+""",
+    )
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+
+    rc = mod["main"](["--run", "run_empty", "--ledger", str(tmp_path / "ledger.jsonl")])
+
+    assert rc == 0
+    assert calls.read_text().strip() == "0"

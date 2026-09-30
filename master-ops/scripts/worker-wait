@@ -2,7 +2,9 @@
 """One wait loop over a Run's live dispatches, with dead/stall verdicts from measured state.
 
 Exit codes: 0 loop exited cleanly (woke, timed out, or nothing left dispatched);
-2 usage error, no resolvable Run, or another waiter already holds this Run's lock.
+2 usage error, no resolvable Run, another waiter already holds this Run's lock,
+or `orca` could not produce an authoritative dispatch listing (never treated
+as an empty, all-settled Run — that would report success on a listing failure).
 
 Self-contained on purpose: this tree is template-applied into repositories that have
 no src/ tree, so this cannot import master_runtime like the ops repo's own scripts/dispatch-gate.
@@ -29,6 +31,16 @@ MAX_WORKER_LIST_PAGES = 20
 WORKER_LIST_PAGE_LIMIT = 100
 
 
+class WorkerListError(RuntimeError):
+    """`orca orchestration worker-list` could not be read.
+
+    Never caught and turned into an empty dispatch list: an empty list means
+    zero dispatches, which means the loop reports success. Confusing "orca
+    failed" with "the Run has settled" is exactly the false-success bug this
+    type exists to prevent.
+    """
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
 
@@ -41,7 +53,11 @@ def main(argv: list[str] | None = None) -> int:
     stall_seconds = max(1, args.stall_minutes) * 60
 
     if args.once:
-        rows, dispatched_count = _accounting_pass(run_id, ledger_path, stall_seconds)
+        try:
+            rows, _ = _accounting_pass(run_id, ledger_path, stall_seconds)
+        except WorkerListError as exc:
+            print(f"worker-wait: {exc}", file=sys.stderr)
+            return 2
         _print_table(rows, as_json=args.json)
         return 0
 
@@ -56,60 +72,98 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run_loop(run_id: str, ledger_path: Path, stall_seconds: int, as_json: bool) -> int:
-    ack = None
-    while True:
-        batch, ack = _wait_for_message(run_id, ack)
-        rows, dispatched_count = _accounting_pass(run_id, ledger_path, stall_seconds)
+    """Account first (an already-settled Run should never wait), then wake on
+    a real delivery or an actionable verdict rather than looping past it: the
+    caller (the coordinator, watching this process's own stdout) is the one
+    who acts and acks, and doing that requires control back, not another pass
+    hidden behind it. A boring pass — a timeout with nothing actionable and
+    dispatches still open — is the only case that re-arms on its own.
+    """
+
+    def pass_once(batch: dict | None) -> int | None:
+        try:
+            rows, dispatched_count = _accounting_pass(run_id, ledger_path, stall_seconds)
+        except WorkerListError as exc:
+            print(f"worker-wait: {exc}", file=sys.stderr)
+            return 2
         _print_table(rows, as_json=as_json)
         if batch is not None:
             _print_batch(batch, as_json=as_json)
         if dispatched_count == 0:
             return 0
+        if batch is not None or any(r["verdict"] in ACTIONABLE_VERDICTS for r in rows):
+            return 0
+        return None
+
+    verdict = pass_once(None)
+    if verdict is not None:
+        return verdict
+
+    ack = None
+    while True:
+        batch, ack = _wait_for_message(run_id, ack)
+        verdict = pass_once(batch)
+        if verdict is not None:
+            return verdict
 
 
 # --- messaging -----------------------------------------------------------
 
 
 def _wait_for_message(run_id: str, ack: str | None) -> tuple[dict | None, str | None]:
-    """Block for one non-heartbeat delivery or a timeout.
+    """One `check --wait` attempt: a timeout, an acked heartbeat, or a real batch.
 
-    A pure-heartbeat batch is acked and the wait re-armed silently: this loops
-    internally rather than returning, so the caller never treats a heartbeat as
-    a wake. Anything else (including a timeout) returns to the caller; a real
-    delivery is left unacknowledged for the coordinator to ack after acting.
+    Returns `(None, ack_to_chain)` for a timeout or a heartbeat-only batch (the
+    heartbeat's own delivery id becomes the next call's `--ack`, silently
+    clearing it without ever surfacing it as a wake) and `(batch, delivery_id)`
+    for anything else. A real batch's `delivery_id` is returned, not the old
+    `ack`, so a caller that chains it forward acks the batch it just saw rather
+    than replaying an unrelated stale one — this caller does not chain it
+    forward at all, leaving the batch unacknowledged for the coordinator to ack
+    after acting, exactly as `_run_loop` does by returning immediately on it.
+
+    Never loops internally on repeated heartbeats: a caller-side loop that
+    calls this once per pass is what lets `_accounting_pass` run between
+    heartbeats, which is the whole point of not being a heartbeat-only stall
+    check.
     """
 
-    while True:
-        argv = [
-            "orca",
-            "orchestration",
-            "check",
-            "--run",
-            run_id,
-            "--wait",
-            "--timeout-ms",
-            str(DEFAULT_CHECK_TIMEOUT_MS),
-            "--types",
-            WAIT_TYPES,
-            "--json",
-        ]
-        if ack:
-            argv += ["--ack", ack]
+    argv = [
+        "orca",
+        "orchestration",
+        "check",
+        "--run",
+        run_id,
+        "--wait",
+        "--timeout-ms",
+        str(DEFAULT_CHECK_TIMEOUT_MS),
+        "--types",
+        WAIT_TYPES,
+        "--json",
+    ]
+    if ack:
+        argv += ["--ack", ack]
+    try:
         proc = subprocess.run(argv, capture_output=True, text=True)
-        result = _last_non_keepalive(proc.stdout + proc.stderr)
-        if not isinstance(result, dict):
-            return None, ack
-        payload = result.get("result") if isinstance(result.get("result"), dict) else {}
-        if payload.get("timedOut"):
-            return None, ack
-        messages = payload.get("messages") or []
-        delivery_id = payload.get("deliveryId")
-        if messages and all(
-            isinstance(m, dict) and m.get("type") == "heartbeat" for m in messages
-        ):
-            ack = delivery_id
-            continue
-        return payload, ack
+    except OSError as exc:
+        print(f"worker-wait: orca check failed to run: {exc}", file=sys.stderr)
+        time.sleep(1)  # avoid a hot busy-spin if orca is persistently missing
+        return None, ack
+    result = _last_non_keepalive(proc.stdout + proc.stderr)
+    if proc.returncode != 0 or not isinstance(result, dict):
+        if proc.returncode != 0:
+            time.sleep(1)  # same guard for a persistently failing orca
+        return None, ack
+    payload = result.get("result") if isinstance(result.get("result"), dict) else {}
+    if payload.get("timedOut"):
+        return None, ack
+    messages = payload.get("messages") or []
+    delivery_id = payload.get("deliveryId")
+    if messages and all(
+        isinstance(m, dict) and m.get("type") == "heartbeat" for m in messages
+    ):
+        return None, delivery_id
+    return payload, delivery_id
 
 
 def _last_non_keepalive(text: str) -> dict | None:
@@ -217,15 +271,28 @@ def _compute_verdict(
     stall_seconds: int,
     sweep_class: str | None,
 ) -> str:
+    """`pid_alive` is `None`, not `False`, when liveness could not be measured
+    (bad pid data, `ps` missing or erroring) — that must read `UNKNOWN`, never
+    `DEAD`: a measurement failure is not evidence of death, and `DEAD` is what
+    the runbook tells the coordinator to act on. Likewise `age_seconds` is
+    `None` when the pane's `lastOutputAt` could not be read, which must never
+    read `STALL` on a sweep class alone — `STALL` is specifically "measured
+    stale," not "sweep says something other than working."
+    """
+
     if sweep_class == "unknown":
         sweep_class = None
 
     if pid is not None:
-        if not pid_alive:
+        if pid_alive is False:
             return "DEAD"
+        if pid_alive is None:
+            return "UNKNOWN"
         if sweep_class == "working":
             return "working"
-        if age_seconds is not None and age_seconds < stall_seconds:
+        if age_seconds is None:
+            return "UNKNOWN"
+        if age_seconds < stall_seconds:
             return "working"
         if sweep_class in STALL_SWEEP_CLASSES:
             return "STALL"
@@ -265,7 +332,11 @@ def _worker_list(run_id: str) -> tuple[list[dict], dict[str, str]]:
         if cursor:
             argv += ["--cursor", cursor]
         payload = _orca_json(argv)
-        result = payload.get("result", {}) if payload else {}
+        if payload is None:
+            raise WorkerListError(
+                "orca orchestration worker-list failed or returned malformed JSON"
+            )
+        result = payload.get("result", {})
         workers = result.get("workers") or []
         for worker in workers:
             handle = worker.get("agentTerminalHandle")
@@ -342,27 +413,44 @@ def _ledger_index(ledger_path: Path) -> dict[str, dict]:
     return index
 
 
-def _pid_alive(pid: object) -> bool:
+def _pid_alive(pid: object) -> bool | None:
+    """`None` when liveness could not be measured at all — a bad pid string or
+    a missing/erroring `ps` — as distinct from `False`, which means `ps`
+    positively answered "no such process." Only `False` is a measurement;
+    a caller that treats `None` as `False` manufactures a `DEAD` verdict (or
+    a stolen lock) from the absence of information rather than from evidence.
+    """
+
     try:
-        pid_int = int(pid)
+        pid_int = int(str(pid).strip())
     except (TypeError, ValueError):
-        return False
+        return None
     try:
         proc = subprocess.run(["ps", "-p", str(pid_int)], capture_output=True)
     except OSError:
-        return False
+        return None
     return proc.returncode == 0
 
 
 def _orca_json(argv: list[str]) -> dict | None:
+    """`None` on any failure: a nonzero exit, unparseable stdout, or a
+    well-formed envelope whose own `"ok"` field says the call did not
+    succeed. Every real orca JSON response carries `"ok": true` on success;
+    accepting a parseable-but-failed envelope here is how a `worker-list`
+    error response was silently read as zero workers rather than a failure.
+    """
+
     try:
         proc = subprocess.run(argv, capture_output=True, text=True)
     except OSError:
         return None
     try:
-        return json.loads(proc.stdout)
+        payload = json.loads(proc.stdout)
     except json.JSONDecodeError:
         return None
+    if proc.returncode != 0 or not isinstance(payload, dict) or payload.get("ok") is not True:
+        return None
+    return payload
 
 
 def _resolve_bound_run() -> str | None:
@@ -384,15 +472,44 @@ def _lock_dir() -> Path:
 
 
 def _acquire_lock(run_id: str) -> Path | None:
+    """`O_CREAT|O_EXCL` makes the create atomic: an `exists()`-then-`write_text()`
+    check has a window where two waiters both see no live owner and both then
+    write their pid, which is the exact corruption this lock exists to
+    prevent. A stale lock is removed and the create retried exactly once; a
+    second waiter racing that same retry loses it and correctly refuses
+    rather than also winning.
+    """
+
     lock_dir = _lock_dir()
     lock_dir.mkdir(parents=True, exist_ok=True)
     lock_path = lock_dir / f"{run_id}.lock"
-    if lock_path.exists():
-        existing = lock_path.read_text(encoding="utf-8").strip()
-        if existing and _pid_alive(existing):
-            return None
-    lock_path.write_text(str(os.getpid()), encoding="utf-8")
-    return lock_path
+    pid_bytes = str(os.getpid()).encode("utf-8")
+
+    for attempt in range(2):
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            if attempt == 1:
+                return None
+            try:
+                existing = lock_path.read_text(encoding="utf-8").strip()
+            except OSError:
+                existing = ""
+            # Only a *confirmed* dead pid is stale. An unreadable/empty lock
+            # or a liveness check that could not be measured is left alone —
+            # taking it over on a guess is the same corruption in a hat.
+            if not existing or _pid_alive(existing) is not False:
+                return None
+            try:
+                lock_path.unlink()
+            except OSError:
+                pass
+            continue
+        else:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(pid_bytes)
+            return lock_path
+    return None
 
 
 def _release_lock(lock_path: Path) -> None:

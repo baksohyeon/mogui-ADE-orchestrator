@@ -2,19 +2,32 @@
 
 ## What it does
 
-**`scripts/worker-wait`** — one wait loop over a Run's live dispatches. Each
-pass blocks on `orca orchestration check --wait --types worker_done,escalation,question`,
-acks and silently re-arms a pure-heartbeat batch (a headless `claude -p`
-worker never heartbeats at all, so this cannot be the only signal — see
-below), then accounts for every `dispatched` dispatch of the Run from the
-registered pid, `lastOutputAt`, and `scripts/worker-pane-sweep`. `--once`
-runs one accounting pass with no wait at all: a safe, read-only snapshot that
-never touches the message queue, so it is the mode to reach for when
-inspecting a Run you are not the coordinator of.
+**`scripts/worker-wait`** — one wait loop over a Run's live dispatches. It
+accounts for every `dispatched` dispatch of the Run first, from the
+registered pid, `lastOutputAt`, and `scripts/worker-pane-sweep`, before ever
+waiting — an already-settled Run exits immediately rather than sitting
+through a wait timeout it did not need. Each further pass blocks on `orca
+orchestration check --wait --types worker_done,escalation,question`, acks and
+silently re-arms a pure-heartbeat batch (a headless `claude -p` worker never
+heartbeats at all, so this cannot be the only signal — see below), then
+accounts again. The loop returns control — it does not keep running — the
+moment a pass has something to act on: a real (non-heartbeat) delivery, or an
+accounting row with an actionable verdict. Re-arming after that is the
+coordinator's job (run `worker-wait` again after acting), same as it always
+was for a bare `check --wait`; what this loop removes is the re-arming a
+*boring* pass needs — a heartbeat, or a timeout with nothing actionable and
+dispatches still open. `--once` runs a single accounting pass with no wait at
+all: a safe, read-only snapshot that never touches the message queue, so it
+is the mode to reach for when inspecting a Run you are not the coordinator
+of.
 
 Only one `worker-wait` may hold a given Run: a second one refuses with exit 2
 rather than corrupting the first's wait state (measured 2026-09-29: two
-waiters on one Run corrupted each other's signal file).
+waiters on one Run corrupted each other's signal file). `worker-wait` also
+exits 2, never 0, when `orca orchestration worker-list` itself fails or
+returns malformed JSON — a listing failure is not evidence the Run has
+settled, and reporting it as one would be the exact false-success bug the
+tool exists to avoid.
 
 ## Why this exists
 
@@ -52,8 +65,8 @@ table has no name for (e.g. `idle` with no pid), `worker-wait` reports the
 sweep class verbatim (lowercase, e.g. `idle`) rather than forcing it into
 `UNKNOWN` or `STALL`; this row does not wake the caller. This is a documented
 extension beyond the contract's literal verdict enum, not a sixth verdict —
-the contract's four verdicts plus `OPEN_PANE` are the only ones that can wake
-the loop.
+the contract's four verdicts plus `OPEN_PANE` are the only verdict values the
+loop reports; only `DEAD`, `STALL`, and `OPEN_PANE` wake the caller.
 
 Only `DEAD`, `STALL`, and `OPEN_PANE` wake the caller (print the row and
 continue the loop, same as a `worker_done`/`escalation`/`question` delivery).

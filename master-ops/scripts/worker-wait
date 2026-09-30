@@ -15,10 +15,23 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+try:
+    from mogui_log import emit as mogui_emit  # noqa: E402
+except ImportError:
+    # Fail-open, same as mogui_log's own emit(): a copy of this file made
+    # without its sibling (or a template-apply that has not landed it yet)
+    # must not block the wait loop over a logging dependency.
+    def mogui_emit(*args, **kwargs):  # noqa: D401
+        return None
 
 DEFAULT_STALL_MINUTES = 10
 DEFAULT_CHECK_TIMEOUT_MS = 60_000
@@ -57,7 +70,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.once:
         try:
-            rows, _ = _accounting_pass(run_id, ledger_path, stall_seconds)
+            rows, _ = _accounting_pass(run_id, ledger_path, stall_seconds, reap=args.reap)
         except WorkerListError as exc:
             print(f"worker-wait: {exc}", file=sys.stderr)
             return 2
@@ -69,12 +82,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"worker-wait: another waiter holds the lock for {run_id}", file=sys.stderr)
         return 2
     try:
-        return _run_loop(run_id, ledger_path, stall_seconds, args.json)
+        return _run_loop(run_id, ledger_path, stall_seconds, args.json, args.reap)
     finally:
         _release_lock(lock_path)
 
 
-def _run_loop(run_id: str, ledger_path: Path, stall_seconds: int, as_json: bool) -> int:
+def _run_loop(
+    run_id: str, ledger_path: Path, stall_seconds: int, as_json: bool, reap: bool = False
+) -> int:
     """Account first (an already-settled Run should never wait), then wake on
     a real delivery or an actionable verdict rather than looping past it: the
     caller (the coordinator, watching this process's own stdout) is the one
@@ -85,13 +100,16 @@ def _run_loop(run_id: str, ledger_path: Path, stall_seconds: int, as_json: bool)
 
     def pass_once(batch: dict | None) -> int | None:
         try:
-            rows, dispatched_count = _accounting_pass(run_id, ledger_path, stall_seconds)
+            rows, dispatched_count = _accounting_pass(
+                run_id, ledger_path, stall_seconds, reap=reap
+            )
         except WorkerListError as exc:
             print(f"worker-wait: {exc}", file=sys.stderr)
             return 2
         _print_table(rows, as_json=as_json)
         if batch is not None:
             _print_batch(batch, as_json=as_json)
+            _emit_wait_wake(batch)
         if dispatched_count == 0:
             return 0
         if batch is not None or any(r["verdict"] in ACTIONABLE_VERDICTS for r in rows):
@@ -339,9 +357,9 @@ def _print_batch(batch: dict, as_json: bool) -> None:
 
 
 def _accounting_pass(
-    run_id: str, ledger_path: Path, stall_seconds: int
+    run_id: str, ledger_path: Path, stall_seconds: int, reap: bool = False
 ) -> tuple[list[dict], int]:
-    dispatched, handle_status = _worker_list(run_id)
+    dispatched, handle_status, handle_task_id = _worker_list(run_id)
     ledger_index = _ledger_index(ledger_path)
     terminals = _terminal_list()
     sweep = _pane_sweep()
@@ -380,19 +398,90 @@ def _accounting_pass(
             continue
         status = handle_status.get(handle)
         if status and status != "dispatched":
-            rows.append(
-                {
-                    "dispatch_id": None,
-                    "pane": handle,
-                    "age_seconds": None,
-                    "pid": None,
-                    "pid_alive": None,
-                    "sweep_class": None,
-                    "verdict": "OPEN_PANE",
-                }
+            row = {
+                "dispatch_id": None,
+                "pane": handle,
+                "age_seconds": None,
+                "pid": None,
+                "pid_alive": None,
+                "sweep_class": None,
+                "verdict": "OPEN_PANE",
+            }
+            if reap:
+                row["reap"] = _reap_open_pane(handle_task_id.get(handle))
+            rows.append(row)
+
+    for row in rows:
+        if row["verdict"] in ACTIONABLE_VERDICTS:
+            mogui_emit(
+                "info",
+                "wait_verdict",
+                "pass",
+                dispatch_id=row["dispatch_id"] or "",
+                pane=row["pane"] or "",
+                verdict=row["verdict"],
             )
 
     return rows, len(dispatched)
+
+
+def _reaper_script_path() -> Path | None:
+    """`scripts/worker-reap` two levels up from this file, matching the
+    sibling layout this file and that one share in the orchestrator's own
+    checkout, or whatever `worker-reap` resolves to on PATH when that layout
+    is not present (a template-applied repo with no such sibling)."""
+
+    candidate = Path(__file__).resolve().parents[2] / "scripts" / "worker-reap"
+    if candidate.exists():
+        return candidate
+    found = shutil.which("worker-reap")
+    return Path(found) if found else None
+
+
+def _reap_open_pane(task_id: str | None) -> dict:
+    """Call `scripts/worker-reap --task-id <id> --json` for one OPEN_PANE row.
+
+    Never raises: a missing task id, a missing reaper script, a timeout, or
+    an unparseable reply are all reported as a refusal in the row rather than
+    aborting the accounting pass.
+    """
+
+    if not task_id:
+        return {"reaped": False, "reason": "no_task_id"}
+    script = _reaper_script_path()
+    if script is None:
+        return {"reaped": False, "reason": "worker_reap_not_found"}
+    argv = [str(script), "--task-id", task_id, "--json"]
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=30)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        return {"reaped": False, "reason": f"reap_failed:{exc}"}
+    try:
+        payload = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return {
+            "reaped": False,
+            "reason": f"reap_unparseable(exit={proc.returncode}):{proc.stderr.strip()}",
+        }
+    if proc.returncode != 0:
+        return {"reaped": False, "reason": f"reap_exit_{proc.returncode}", "record": payload}
+    return {"reaped": True, "record": payload.get("record", payload)}
+
+
+def _emit_wait_wake(batch: dict) -> None:
+    """One `wait_wake` per non-heartbeat delivery — `_wait_for_message` never
+    returns a heartbeat-only batch (it acks and re-arms those internally), so
+    any non-`None` batch reaching here is by construction a real wake."""
+
+    messages = batch.get("messages") or []
+    types = ",".join(str(m.get("type")) for m in messages if isinstance(m, dict))
+    mogui_emit(
+        "info",
+        "wait_wake",
+        "pass",
+        message_type=types,
+        message_id=str(batch.get("deliveryId") or ""),
+    )
 
 
 def _compute_verdict(
@@ -443,11 +532,18 @@ def _compute_verdict(
 # --- data sources ------------------------------------------------------------
 
 
-def _worker_list(run_id: str) -> tuple[list[dict], dict[str, str]]:
-    """Dispatched entries for the Run, and a handle -> latest dispatchStatus map."""
+def _worker_list(
+    run_id: str,
+) -> tuple[list[dict], dict[str, str], dict[str, str]]:
+    """Dispatched entries for the Run, a handle -> latest dispatchStatus map,
+    and a handle -> taskId map (every row seen, not just dispatched ones —
+    an OPEN_PANE row's `--reap` call needs the task id of whichever dispatch
+    last claimed that pane, which is exactly the row this handle's status
+    came from)."""
 
     dispatched: list[dict] = []
     handle_status: dict[str, str] = {}
+    handle_task_id: dict[str, str] = {}
     cursor = None
     for _ in range(MAX_WORKER_LIST_PAGES):
         argv = [
@@ -474,13 +570,17 @@ def _worker_list(run_id: str) -> tuple[list[dict], dict[str, str]]:
             status = worker.get("dispatchStatus")
             if handle and handle not in handle_status:
                 handle_status[handle] = status
+            if handle and handle not in handle_task_id:
+                task_id = worker.get("taskId") or worker.get("task_id")
+                if task_id:
+                    handle_task_id[handle] = task_id
             if status == "dispatched":
                 dispatched.append(worker)
         page = result.get("page") or {}
         cursor = page.get("nextCursor")
         if not page.get("hasMore") or not cursor:
             break
-    return dispatched, handle_status
+    return dispatched, handle_status, handle_task_id
 
 
 def _terminal_list() -> dict[str, float | None]:
@@ -688,6 +788,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--once", action="store_true", help="one accounting pass, no wait")
     parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     parser.add_argument("--ledger", help="dispatch ledger path (default ~/.mogui/dispatch-ledger.jsonl)")
+    parser.add_argument(
+        "--reap",
+        action="store_true",
+        help="call scripts/worker-reap for each OPEN_PANE row (default: off, row only)",
+    )
     return parser
 
 

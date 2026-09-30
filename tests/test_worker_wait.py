@@ -13,12 +13,27 @@ import os
 import runpy
 import signal
 import stat
+import sys
 import time
 from pathlib import Path
 
 import pytest
 
 from windows_exec_surface import skip_windows_exec_surface
+
+_SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "master-ops" / "scripts"
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+import mogui_log  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _mogui_log_writes_to_tmp(tmp_path, monkeypatch):
+    """worker-wait now emits `wait_verdict`/`wait_wake` through the shared,
+    process-cached `mogui_log` module — without this, an actionable-verdict
+    test would append real lines to the developer's own ~/.mogui/event-log.jsonl."""
+
+    monkeypatch.setattr(mogui_log, "LOG_DIR", str(tmp_path / "mogui-log"))
 
 
 def _script() -> Path:
@@ -608,6 +623,143 @@ esac
     by_dispatch_tight = {r["dispatch_id"]: r for r in tight_rows if r["dispatch_id"]}
     assert by_dispatch_tight["ctx_fresh0005"]["verdict"] == "UNKNOWN"
     assert by_dispatch_tight["ctx_work0003"]["verdict"] == "working"
+
+
+# --- --reap: one worker-reap call per OPEN_PANE row, and none without it --
+
+
+def _open_pane_fixture(tmp_path: Path):
+    """One dispatched worker (never reaped) and one OPEN_PANE candidate with a
+    resolvable task id (the row `--reap` should act on)."""
+
+    dispatched_handle = "term_a0000000-0000-0000-0000-0000000000d1"
+    open_handle = "term_b0000000-0000-0000-0000-0000000000d2"
+    now_ms = time.time() * 1000
+    worker_list_path = tmp_path / "worker_list.json"
+    worker_list_path.write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "result": {
+                    "workers": [
+                        {
+                            "dispatchId": "ctx_live",
+                            "taskId": "task_live",
+                            "dispatchStatus": "dispatched",
+                            "agentTerminalHandle": dispatched_handle,
+                        },
+                        {
+                            "dispatchId": "ctx_settled",
+                            "taskId": "task_settled",
+                            "dispatchStatus": "completed",
+                            "agentTerminalHandle": open_handle,
+                        },
+                    ],
+                    "page": {"hasMore": False},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    terminal_list_path = tmp_path / "terminal_list.json"
+    terminal_list_path.write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "result": {
+                    "terminals": [
+                        {"handle": dispatched_handle, "lastOutputAt": now_ms},
+                        {"handle": open_handle, "lastOutputAt": now_ms},
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    orca = tmp_path / "orca"
+    _write_executable(
+        orca,
+        f"""#!/usr/bin/env bash
+case "$1 $2" in
+  "orchestration worker-list") cat "{worker_list_path}" ;;
+  "terminal list")
+    if printf '%s\\n' "$@" | grep -q -- '--json'; then cat "{terminal_list_path}"
+    else printf '%s pane\\n%s pane\\n' "{dispatched_handle}" "{open_handle}"; fi
+    ;;
+  "terminal read") echo "" ;;
+  *) echo "{{}}" ;;
+esac
+""",
+    )
+    ledger = tmp_path / "ledger.jsonl"
+    ledger.write_text(
+        json.dumps({"job_id": "ctx_live", "worker_pid": "4242", "pane": dispatched_handle}) + "\n",
+        encoding="utf-8",
+    )
+    ps = tmp_path / "ps"
+    _write_executable(ps, "#!/usr/bin/env bash\n[ \"$2\" = 4242 ] && exit 0 || exit 1\n")
+    return open_handle, ledger
+
+
+@skip_windows_exec_surface
+def test_reap_flag_invokes_reaper_once_per_open_pane_row(tmp_path: Path, monkeypatch) -> None:
+    mod = _load()
+    open_handle, ledger = _open_pane_fixture(tmp_path)
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+
+    fake_worker_reap = tmp_path / "worker-reap"
+    _write_executable(
+        fake_worker_reap,
+        """#!/usr/bin/env bash
+echo "$@" >> "$(dirname "$0")/reap_calls.txt"
+echo '{"record": {"actions_taken": "terminal_closed:'"$3"'"}, "dry_run": false}'
+""",
+    )
+    # Same live-namespace patch technique used elsewhere in this file: runpy's
+    # returned dict is a snapshot, so patching `_accounting_pass`'s own
+    # __globals__ (shared with every function this module defines) is what
+    # actually reaches `_reap_open_pane`'s call to `_reaper_script_path()`.
+    mod["_accounting_pass"].__globals__["_reaper_script_path"] = lambda: fake_worker_reap
+
+    rows, _ = mod["_accounting_pass"]("run_x", ledger, stall_seconds=600, reap=True)
+
+    open_rows = [r for r in rows if r["verdict"] == "OPEN_PANE"]
+    assert len(open_rows) == 1
+    assert open_rows[0]["pane"] == open_handle
+    assert open_rows[0]["reap"]["reaped"] is True
+
+    calls_file = tmp_path / "reap_calls.txt"
+    assert calls_file.exists()
+    calls = calls_file.read_text().strip().splitlines()
+    assert len(calls) == 1
+    assert "--task-id task_settled" in calls[0]
+    # Failability: a version that called the reaper for every row (not just
+    # OPEN_PANE) would write more than one line here, since a dispatched row
+    # is present in this fixture too.
+
+
+@skip_windows_exec_surface
+def test_without_reap_flag_no_reaper_call_and_no_reap_key(tmp_path: Path, monkeypatch) -> None:
+    mod = _load()
+    open_handle, ledger = _open_pane_fixture(tmp_path)
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+
+    fake_worker_reap = tmp_path / "worker-reap"
+    _write_executable(
+        fake_worker_reap,
+        """#!/usr/bin/env bash
+echo "FAIL: worker-reap must not be called without --reap" >> "$(dirname "$0")/reap_calls.txt"
+exit 1
+""",
+    )
+    mod["_accounting_pass"].__globals__["_reaper_script_path"] = lambda: fake_worker_reap
+
+    rows, _ = mod["_accounting_pass"]("run_x", ledger, stall_seconds=600, reap=False)
+
+    open_rows = [r for r in rows if r["verdict"] == "OPEN_PANE"]
+    assert len(open_rows) == 1
+    assert "reap" not in open_rows[0]
+    assert not (tmp_path / "reap_calls.txt").exists()
 
 
 # --- worker-list failure must never read as an empty, settled Run ----------

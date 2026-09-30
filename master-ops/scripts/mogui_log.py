@@ -37,8 +37,24 @@ def _scrub(value):
     return value
 
 
+def _descriptor_workspace_root(cwd: str):
+    """Read workspace_root from <cwd>/config/workspace-descriptor.json, if any."""
+    path = os.path.join(cwd, "config", "workspace-descriptor.json")
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    root = data.get("workspace_root") if isinstance(data, dict) else None
+    return root if isinstance(root, str) and root.strip() else None
+
+
 def _session_kind() -> str:
-    if os.environ.get("ORCA_TASK_ID") or ".orca/worktrees" in os.getcwd():
+    cwd = os.getcwd()
+    seat_root = os.environ.get("MOGUI_SEAT_ROOT") or _descriptor_workspace_root(cwd)
+    if seat_root and os.path.realpath(cwd) == os.path.realpath(os.path.expanduser(seat_root)):
+        return "master"
+    if os.environ.get("ORCA_TASK_ID") or ".orca/worktrees" in cwd:
         return "worker"
     return "unknown"
 

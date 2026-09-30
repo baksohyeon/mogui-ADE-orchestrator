@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+"""Command line entry point for joining a dispatch's ledger, event-log, and
+dispatch-show records into one time-ordered table."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+SCRIPT_PATH = Path(__file__).resolve()
+REPO_ROOT = SCRIPT_PATH.parent.parent
+SRC_ROOT = REPO_ROOT / "src"
+sys.path.insert(0, str(SRC_ROOT))
+
+
+from master_runtime.core.dispatch_timeline import DispatchTimelineBuilder  # noqa: E402
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _build_parser().parse_args(argv)
+
+    ledger_path = Path(args.ledger) if args.ledger else None
+    event_log_path = Path(args.event_log) if args.event_log else None
+    builder = DispatchTimelineBuilder(ledger_path=ledger_path, event_log_path=event_log_path)
+
+    if args.since is not None:
+        rows = builder.list_since(args.since)
+        if args.json:
+            print(json.dumps(rows, ensure_ascii=False, separators=(",", ":")))
+        else:
+            _print_since_table(rows)
+        return 0
+
+    if not args.id:
+        print("dispatch-timeline: an id is required unless --since is given", file=sys.stderr)
+        return 2
+
+    task_id, dispatch_id = _classify_id(args.id)
+    timeline = builder.build(task_id=task_id, dispatch_id=dispatch_id)
+
+    if args.json:
+        print(json.dumps(timeline.to_dict(), ensure_ascii=False, separators=(",", ":")))
+    else:
+        _print_timeline_table(timeline)
+    return 0
+
+
+def _classify_id(raw_id: str) -> tuple[str | None, str | None]:
+    """`task_*` ids are task ids; everything else is treated as a dispatch id."""
+
+    if raw_id.startswith("task_"):
+        return raw_id, None
+    return None, raw_id
+
+
+def _print_timeline_table(timeline) -> None:
+    header = f"{'TIMESTAMP':<26} {'SOURCE':<12} {'EVENT':<24} {'OUTCOME':<12} DETAIL"
+    print(header)
+    for row in timeline.rows:
+        stamp = datetime.fromtimestamp(row.timestamp, tz=timezone.utc).isoformat()
+        detail = row.detail if len(row.detail) <= 80 else row.detail[:77] + "..."
+        print(f"{stamp:<26} {row.source:<12} {row.event:<24} {row.outcome:<12} {detail}")
+    if timeline.missing_sources:
+        print(f"missing sources: {', '.join(timeline.missing_sources)}")
+
+
+def _print_since_table(rows: list[dict]) -> None:
+    if not rows:
+        print("dispatch-timeline: no dispatches seen in window")
+        return
+    header = f"{'LAST_SEEN':<26} {'DISPATCH':<16} {'TASK':<16} {'LAST_EVENT':<24} LAST_OUTCOME"
+    print(header)
+    for row in rows:
+        stamp = datetime.fromtimestamp(row["last_ts"], tz=timezone.utc).isoformat()
+        print(
+            f"{stamp:<26} {row['dispatch_id']:<16} {row['task_id']:<16} "
+            f"{row['last_event']:<24} {row['last_outcome']}"
+        )
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="dispatch-timeline",
+        description="Join the ledger, event log, and dispatch-show record for one dispatch",
+    )
+    parser.add_argument("id", nargs="?", help="task_id (task_*) or dispatch_id")
+    parser.add_argument(
+        "--since",
+        type=float,
+        help="list every dispatch seen in the last N hours, with its last event",
+    )
+    parser.add_argument("--ledger", help="path to the dispatch ledger")
+    parser.add_argument("--event-log", help="path to the event log")
+    parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    return parser
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

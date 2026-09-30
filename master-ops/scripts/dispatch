@@ -433,6 +433,28 @@ with open(ledger, "a", encoding="utf-8") as fh:
 EOF
 }
 
+record_dispatch_launched() {
+  [ "$CHECK_ONLY" = 1 ] && return 0
+  python3 - "$SCRIPTS_DIR" "$DISP" "$TASK" "$TERMINAL" "$MODEL" <<'EOF'
+import sys
+
+scripts_dir, dispatch_id, task_id, pane, model = sys.argv[1:]
+sys.path.insert(0, scripts_dir)
+from mogui_log import emit
+
+emit(
+    "info",
+    "dispatch_launched",
+    "pass",
+    dispatch_id=dispatch_id,
+    task_id=task_id,
+    pane=pane,
+    pid="",
+    model=model,
+)
+EOF
+}
+
 if [ -z "$RUNTIME" ]; then
   RUNTIME=$(choose_default_runtime)
 fi
@@ -751,6 +773,7 @@ if [ "$(echo "$REG" | jqf "d['allow']")" != "True" ]; then
   exit 4
 fi
 record_host_diversity_audit
+record_dispatch_launched
 WARN=$(echo "$REG" | jqf "','.join(d.get('warnings',[]))")
 case "$PROBE_STATE" in
   unavailable)

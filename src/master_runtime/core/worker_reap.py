@@ -10,12 +10,25 @@ Exit codes:
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Optional
+
+
+# Agent CLI comm names worth refusing a reap over — a live process here means
+# a worker (or someone) is still actively sitting in this worktree, settled
+# dispatch or not. Matched by basename, case-insensitively.
+# ponytail: exact-name set, not a "looks like an agent" heuristic — a comm
+# reported as a wrapper (e.g. `node` fronting a JS-packaged CLI) is not
+# chased. Add a name here once it is measured on a real seat, not guessed.
+AGENT_CLI_COMMANDS = frozenset({"claude", "codex", "cursor", "agy", "grok"})
+
+MAX_WORKER_LIST_PAGES = 20
+WORKER_LIST_PAGE_LIMIT = 100
 
 
 @dataclass(frozen=True)
@@ -28,6 +41,7 @@ class ReapRecord:
     worktree_path: Optional[str]
     actions_taken: str
     timestamp: float
+    measurements: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -37,6 +51,7 @@ class ReapRecord:
             "worktree_path": self.worktree_path,
             "actions_taken": self.actions_taken,
             "timestamp": self.timestamp,
+            "measurements": self.measurements,
         }
 
 
@@ -163,14 +178,16 @@ class WorkerReaper:
                 3,
             )
 
-        # Plan reap actions
         actions = []
+        measurements: dict[str, object] = {}
 
-        # Close terminal
+        # Close the pane only when all three measurements clear it.
         if dispatch_state.terminal_id:
-            if execute:
-                self._close_terminal(dispatch_state.terminal_id)
-            actions.append(f"terminal_closed:{dispatch_state.terminal_id}")
+            action, terminal_measurements = self._plan_terminal_action(
+                dispatch_state, execute
+            )
+            actions.append(action)
+            measurements.update(terminal_measurements)
 
         # Check and possibly remove worktree
         if dispatch_state.worktree_path:
@@ -179,13 +196,19 @@ class WorkerReaper:
                 wt_clean, wt_merged, reason = self._check_worktree_safe_to_remove(
                     worktree_path
                 )
+                measurements["worktree_clean"] = wt_clean
+                measurements["worktree_merged"] = wt_merged
                 if wt_clean and wt_merged:
                     if execute:
                         self._remove_worktree(worktree_path)
-                    actions.append(f"worktree_removed:{worktree_path}")
+                        actions.append(f"worktree_removed:{worktree_path}")
+                    else:
+                        actions.append(f"would_remove_worktree:{worktree_path}")
                 else:
                     actions.append(f"worktree_left:{worktree_path}:{reason}")
             except Exception as e:
+                measurements["worktree_clean"] = None
+                measurements["worktree_merged"] = None
                 actions.append(f"worktree_left:{worktree_path}:Check failed: {e}")
 
         # Build record
@@ -196,6 +219,7 @@ class WorkerReaper:
             worktree_path=dispatch_state.worktree_path,
             actions_taken=";".join(actions),
             timestamp=time.time(),
+            measurements=measurements,
         )
 
         # Append to ledger
@@ -203,6 +227,169 @@ class WorkerReaper:
             self._append_reap_record(record)
 
         return record
+
+    def _plan_terminal_action(
+        self, dispatch_state: DispatchState, execute: bool
+    ) -> tuple[str, dict[str, object]]:
+        """Measure the three pane preconditions and decide the terminal action.
+
+        A pane is closed only when all three hold: present in `orca terminal
+        list`, not claimed by any currently-`dispatched` worker-list row, and
+        no agent CLI process's cwd is inside the dispatch's worktree. A
+        measurement that could not be taken (`None`) refuses, the same as a
+        measurement that failed — a refusal is cheap, a wrong close is not.
+        """
+
+        terminal_id = dispatch_state.terminal_id
+        measurements: dict[str, object] = {}
+
+        present = self._terminal_present(terminal_id)
+        measurements["terminal_present"] = present
+        if present is None:
+            return f"terminal_left:{terminal_id}:presence_unmeasured", measurements
+        if not present:
+            return f"terminal_left:{terminal_id}:pane_absent", measurements
+
+        reused_by = self._reused_by_dispatched(terminal_id, dispatch_state.dispatch_id)
+        measurements["terminal_reused_by"] = reused_by
+        if reused_by is None:
+            return f"terminal_left:{terminal_id}:reuse_unmeasured", measurements
+        if reused_by:
+            return f"terminal_left:{terminal_id}:reused_by:{reused_by}", measurements
+
+        if not dispatch_state.worktree_path:
+            measurements["agent_process"] = None
+            return f"terminal_left:{terminal_id}:worktree_unknown_for_agent_check", measurements
+
+        agent_process = self._agent_process_in_worktree(Path(dispatch_state.worktree_path))
+        measurements["agent_process"] = agent_process
+        if agent_process is None:
+            return f"terminal_left:{terminal_id}:agent_process_unmeasured", measurements
+        if agent_process:
+            return f"terminal_left:{terminal_id}:agent_process:{agent_process}", measurements
+
+        if execute:
+            self._close_terminal(terminal_id)
+            return f"terminal_closed:{terminal_id}", measurements
+        return f"would_close_terminal:{terminal_id}", measurements
+
+    def _terminal_present(self, terminal_id: str) -> Optional[bool]:
+        """`None` when presence could not be measured — never read as absent."""
+
+        code, stdout, _stderr = self.orca_runner(["orca", "terminal", "list", "--json"])
+        if code != 0:
+            return None
+        try:
+            payload = json.loads(stdout)
+        except json.JSONDecodeError:
+            return None
+        result = payload.get("result") if isinstance(payload, dict) else None
+        terminals = result.get("terminals") if isinstance(result, dict) else None
+        if not isinstance(terminals, list):
+            return None
+        handles = {t.get("handle") for t in terminals if isinstance(t, dict)}
+        return terminal_id in handles
+
+    def _reused_by_dispatched(
+        self, terminal_id: str, own_dispatch_id: str
+    ) -> Optional[str]:
+        """The reusing dispatch id, `""` when not reused, `None` when unmeasured."""
+
+        rows = self._all_worker_list_rows()
+        if rows is None:
+            return None
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            handle = (
+                row.get("agentTerminalHandle")
+                or row.get("assignee_handle")
+                or row.get("terminal_id")
+            )
+            if handle != terminal_id:
+                continue
+            status = str(row.get("dispatchStatus") or row.get("status") or "").lower()
+            if status != "dispatched":
+                continue
+            row_dispatch_id = row.get("dispatchId") or row.get("dispatch_id")
+            if row_dispatch_id == own_dispatch_id:
+                continue
+            return str(row_dispatch_id) if row_dispatch_id else "unknown"
+        return ""
+
+    def _all_worker_list_rows(self) -> Optional[list[dict]]:
+        """Every worker-list row across every Run, paginated. `None` on failure."""
+
+        rows: list[dict] = []
+        cursor: Optional[str] = None
+        for _ in range(MAX_WORKER_LIST_PAGES):
+            cmd = [
+                "orca",
+                "orchestration",
+                "worker-list",
+                "--limit",
+                str(WORKER_LIST_PAGE_LIMIT),
+                "--json",
+            ]
+            if cursor:
+                cmd.extend(["--cursor", cursor])
+            code, stdout, _stderr = self.orca_runner(cmd)
+            if code != 0:
+                return None
+            try:
+                payload = json.loads(stdout)
+            except json.JSONDecodeError:
+                return None
+            result = payload.get("result") if isinstance(payload, dict) else {}
+            workers = result.get("workers") if isinstance(result, dict) else None
+            if isinstance(workers, list):
+                rows.extend(workers)
+            page = result.get("page") if isinstance(result, dict) else {}
+            cursor = page.get("nextCursor") if isinstance(page, dict) else None
+            if not (isinstance(page, dict) and page.get("hasMore")) or not cursor:
+                break
+        return rows
+
+    def _agent_process_in_worktree(self, worktree_path: Path) -> Optional[str]:
+        """`"<pid>:<comm>"` for the first agent CLI found, `""` when none, `None` when unmeasured."""
+
+        code, stdout, _stderr = self.orca_runner(["ps", "-axo", "pid=,comm="])
+        if code != 0:
+            return None
+        target = os.path.realpath(str(worktree_path))
+        for line in stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split(None, 1)
+            if len(parts) != 2:
+                continue
+            pid_str, comm = parts
+            comm_name = os.path.basename(comm.strip()).lower()
+            if comm_name not in AGENT_CLI_COMMANDS:
+                continue
+            cwd = self._process_cwd(pid_str)
+            if not cwd:
+                continue
+            resolved_cwd = os.path.realpath(cwd)
+            if resolved_cwd == target or resolved_cwd.startswith(target + os.sep):
+                return f"{pid_str}:{comm_name}"
+        return ""
+
+    def _process_cwd(self, pid: str) -> Optional[str]:
+        """`lsof` first (the contract's primary tool), `/proc/<pid>/cwd` as fallback."""
+
+        code, stdout, _stderr = self.orca_runner(
+            ["lsof", "-a", "-p", pid, "-d", "cwd", "-Fn"]
+        )
+        if code == 0:
+            for line in stdout.splitlines():
+                if line.startswith("n"):
+                    return line[1:]
+        code, stdout, _stderr = self.orca_runner(["readlink", f"/proc/{pid}/cwd"])
+        if code == 0 and stdout.strip():
+            return stdout.strip()
+        return None
 
     def _fetch_dispatch(
         self, task_id: Optional[str], dispatch_id: Optional[str]
@@ -308,7 +495,16 @@ class WorkerReaper:
         if code != 0:
             return False, False, f"Not a git repo or git error: {stderr}"
 
-        if stdout.strip():
+        # __pycache__ litter does not count as dirty: .gitignore already
+        # covers it everywhere this runs, but a stray untracked copy (a
+        # worktree created before .gitignore existed, or copied by hand)
+        # should not by itself block an otherwise-clean removal.
+        dirty_lines = [
+            line
+            for line in stdout.splitlines()
+            if line.strip() and "__pycache__/" not in line
+        ]
+        if dirty_lines:
             return False, False, f"Worktree has uncommitted changes"
 
         # Get current branch

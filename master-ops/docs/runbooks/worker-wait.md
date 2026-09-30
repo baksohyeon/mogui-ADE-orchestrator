@@ -88,13 +88,36 @@ delivery, for the coordinator to act and then re-run `worker-wait`.
 - **`STALL`** with sweep class `start-screen` or `update` — dismiss/restart
   per `worker-pane-sweep`'s own notes; never inject text into a start screen.
 - **`OPEN_PANE`** — `scripts/worker-reap` for the settled dispatch once its
-  worktree is confirmed safe to remove.
+  worktree is confirmed safe to remove, or pass `--reap` to `worker-wait`
+  itself so every `OPEN_PANE` row carries the reaper's own measured verdict
+  (see below) instead of a follow-up step.
 - **`UNKNOWN`** or a bare sweep-class row — read the pane; this is the
   contract's own answer for a case it cannot resolve from measured state.
 
 `worker-wait` never closes a pane, never abandons a dispatch, and never sends
 to a pane. It reports; the coordinator decides — the same rule
 `worker-pane-sweep` states at its own line 19.
+
+## `--reap`
+
+Default is off: an `OPEN_PANE` row is printed exactly as described above,
+with no side effect. With `--reap`, every `OPEN_PANE` row additionally calls
+`scripts/worker-reap --task-id <id> --json` for that row's dispatch (the task
+id comes from whichever worker-list row last claimed that pane) and folds the
+reaper's own record into the row under a `reap` key. The reaper measures,
+before closing anything: the pane is still present in `orca terminal list`;
+no currently-`dispatched` worker-list row claims that same pane (a newer
+dispatch may have reused it); and no agent CLI process (`claude`, `codex`,
+`cursor`, `agy`, `grok`) has its current working directory inside the
+dispatch's worktree. Any one of those failing — including a measurement that
+could not be taken at all — refuses the close and names the reason; the
+reaper never guesses. A worktree is removed only when it is clean (untracked
+`__pycache__/` litter does not count as dirty) and its branch is contained in
+`origin/main`, including a squash-merged branch.
+
+A missing `scripts/worker-reap` (a template-applied tree with no sibling
+orchestrator checkout) reports `worker_reap_not_found` on the row rather than
+raising; `--reap` never aborts the accounting pass over one row's reap call.
 
 ## Usage
 
@@ -126,3 +149,6 @@ pid; a lock whose pid is no longer alive is taken over rather than honored.
   pass.
 - `docs/charter/05-dispatch-gate.md` — the register step that can now record
   a worker's pid and pane.
+- `docs/runbooks/dispatch-timeline.md` — reading back the lifecycle events
+  `dispatch`, `dispatch-gate register`, `worker-wait`, and `worker-reap` each
+  emit, joined with the ledger and the live `dispatch-show` record.

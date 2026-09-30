@@ -702,6 +702,30 @@ esac
 
 
 @skip_windows_exec_surface
+def test_wait_verdict_for_open_pane_carries_task_id(tmp_path: Path, monkeypatch) -> None:
+    """dispatch-timeline can only join an OPEN_PANE row's verdict event to a
+    task's timeline via the task id — OPEN_PANE rows have no dispatch id."""
+    mod = _load()
+    _open_handle, ledger = _open_pane_fixture(tmp_path)
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+    log_path = tmp_path / "mogui-log" / "event-log.jsonl"
+
+    mod["_accounting_pass"]("run_x", ledger, stall_seconds=600, reap=False)
+
+    lines = [json.loads(line) for line in log_path.read_text().splitlines() if line.strip()]
+    verdict_lines = [
+        line
+        for line in lines
+        if line.get("event") == "wait_verdict" and line.get("verdict") == "OPEN_PANE"
+    ]
+    assert len(verdict_lines) == 1
+    assert verdict_lines[0]["task_id"] == "task_settled"
+    # Failability: a version that dropped the task id for OPEN_PANE rows
+    # (they have no dispatch id) would leave this field empty, and
+    # dispatch-timeline would have no way to join the event to task_settled.
+
+
+@skip_windows_exec_surface
 def test_reap_flag_invokes_reaper_once_per_open_pane_row(tmp_path: Path, monkeypatch) -> None:
     mod = _load()
     open_handle, ledger = _open_pane_fixture(tmp_path)
@@ -712,7 +736,7 @@ def test_reap_flag_invokes_reaper_once_per_open_pane_row(tmp_path: Path, monkeyp
         fake_worker_reap,
         """#!/usr/bin/env bash
 echo "$@" >> "$(dirname "$0")/reap_calls.txt"
-echo '{"record": {"actions_taken": "terminal_closed:'"$3"'"}, "dry_run": false}'
+echo '{"record": {"actions_taken": "terminal_closed:'"$2"'"}, "dry_run": false}'
 """,
     )
     # Same live-namespace patch technique used elsewhere in this file: runpy's
@@ -760,6 +784,94 @@ exit 1
     assert len(open_rows) == 1
     assert "reap" not in open_rows[0]
     assert not (tmp_path / "reap_calls.txt").exists()
+
+
+# --- _reap_open_pane: every refusal branch, not just the happy path --------
+
+
+def test_reap_open_pane_refuses_with_no_task_id() -> None:
+    mod = _load()
+    assert mod["_reap_open_pane"](None) == {"reaped": False, "reason": "no_task_id"}
+
+
+def test_reap_open_pane_refuses_when_reaper_script_not_found() -> None:
+    mod = _load()
+    mod["_reap_open_pane"].__globals__["_reaper_script_path"] = lambda: None
+    assert mod["_reap_open_pane"]("task_x") == {
+        "reaped": False,
+        "reason": "worker_reap_not_found",
+    }
+
+
+@skip_windows_exec_surface
+def test_reap_open_pane_refuses_when_reaper_exits_nonzero(tmp_path: Path) -> None:
+    mod = _load()
+    fake_worker_reap = tmp_path / "worker-reap"
+    _write_executable(
+        fake_worker_reap,
+        """#!/usr/bin/env bash
+echo '{"record": {"actions_taken": "terminal_left:t1:pane_absent"}}'
+exit 3
+""",
+    )
+    mod["_reap_open_pane"].__globals__["_reaper_script_path"] = lambda: fake_worker_reap
+    row = mod["_reap_open_pane"]("task_x")
+    assert row["reaped"] is False
+    assert row["reason"] == "reap_exit_3"
+
+
+@skip_windows_exec_surface
+def test_reap_open_pane_refuses_on_unparseable_output(tmp_path: Path) -> None:
+    mod = _load()
+    fake_worker_reap = tmp_path / "worker-reap"
+    _write_executable(fake_worker_reap, "#!/usr/bin/env bash\necho 'not json'\n")
+    mod["_reap_open_pane"].__globals__["_reaper_script_path"] = lambda: fake_worker_reap
+    row = mod["_reap_open_pane"]("task_x")
+    assert row["reaped"] is False
+    assert row["reason"].startswith("reap_unparseable")
+
+
+@skip_windows_exec_surface
+def test_reap_open_pane_refuses_on_non_object_json(tmp_path: Path) -> None:
+    """A parseable non-object response (`[]`, `null`, ...) must not reach
+    `payload.get()` and raise — it is a refusal like any other malformed
+    reply."""
+    mod = _load()
+    fake_worker_reap = tmp_path / "worker-reap"
+    _write_executable(fake_worker_reap, "#!/usr/bin/env bash\necho 'null'\n")
+    mod["_reap_open_pane"].__globals__["_reaper_script_path"] = lambda: fake_worker_reap
+    row = mod["_reap_open_pane"]("task_x")
+    assert row["reaped"] is False
+    assert row["reason"].startswith("reap_unparseable")
+
+
+@skip_windows_exec_surface
+def test_reap_open_pane_refuses_when_reaper_exec_fails(tmp_path: Path) -> None:
+    mod = _load()
+    missing_script = tmp_path / "does-not-exist"
+    mod["_reap_open_pane"].__globals__["_reaper_script_path"] = lambda: missing_script
+    row = mod["_reap_open_pane"]("task_x")
+    assert row["reaped"] is False
+    assert row["reason"].startswith("reap_failed:")
+
+
+@skip_windows_exec_surface
+def test_reap_open_pane_reports_reaped_false_for_a_safety_refusal(tmp_path: Path) -> None:
+    """`worker-reap` exits 0 even for a safety refusal (a `terminal_left:*`
+    record) — `reaped` must come from the record's actions, not exit code."""
+    mod = _load()
+    fake_worker_reap = tmp_path / "worker-reap"
+    _write_executable(
+        fake_worker_reap,
+        """#!/usr/bin/env bash
+echo '{"record": {"actions_taken": "terminal_left:t1:agent_process_unmeasured"}, "dry_run": false}'
+""",
+    )
+    mod["_reap_open_pane"].__globals__["_reaper_script_path"] = lambda: fake_worker_reap
+    row = mod["_reap_open_pane"]("task_x")
+    assert row["reaped"] is False
+    # Failability: a version that read `reaped` off the process exit code
+    # (0 here) would call this a successful reap.
 
 
 # --- worker-list failure must never read as an empty, settled Run ----------

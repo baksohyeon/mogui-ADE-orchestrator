@@ -398,8 +398,10 @@ def _accounting_pass(
             continue
         status = handle_status.get(handle)
         if status and status != "dispatched":
+            task_id = handle_task_id.get(handle)
             row = {
                 "dispatch_id": None,
+                "task_id": task_id,
                 "pane": handle,
                 "age_seconds": None,
                 "pid": None,
@@ -408,16 +410,20 @@ def _accounting_pass(
                 "verdict": "OPEN_PANE",
             }
             if reap:
-                row["reap"] = _reap_open_pane(handle_task_id.get(handle))
+                row["reap"] = _reap_open_pane(task_id)
             rows.append(row)
 
     for row in rows:
         if row["verdict"] in ACTIONABLE_VERDICTS:
+            # OPEN_PANE rows have no dispatch id (that's what makes them
+            # open), so dispatch-timeline can only join their verdict event
+            # to a task's timeline via the task id.
             mogui_emit(
                 "info",
                 "wait_verdict",
                 "pass",
                 dispatch_id=row["dispatch_id"] or "",
+                task_id=row.get("task_id") or "",
                 pane=row["pane"] or "",
                 verdict=row["verdict"],
             )
@@ -463,9 +469,25 @@ def _reap_open_pane(task_id: str | None) -> dict:
             "reaped": False,
             "reason": f"reap_unparseable(exit={proc.returncode}):{proc.stderr.strip()}",
         }
+    if not isinstance(payload, dict):
+        return {
+            "reaped": False,
+            "reason": f"reap_unparseable(exit={proc.returncode}):not an object",
+        }
     if proc.returncode != 0:
         return {"reaped": False, "reason": f"reap_exit_{proc.returncode}", "record": payload}
-    return {"reaped": True, "record": payload.get("record", payload)}
+    # `worker-reap` exits 0 even for a safety refusal (a `terminal_left:*`
+    # record) — reaped means an action was actually taken, not that the
+    # command merely succeeded.
+    record = payload.get("record", payload)
+    actions = str(record.get("actions_taken", "")) if isinstance(record, dict) else ""
+    return {
+        "reaped": any(
+            action.startswith(("terminal_closed:", "worktree_removed:"))
+            for action in actions.split(";")
+        ),
+        "record": record,
+    }
 
 
 def _emit_wait_wake(batch: dict) -> None:

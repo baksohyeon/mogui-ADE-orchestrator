@@ -130,8 +130,12 @@ for bad_since in nan inf -1; do
 done
 
 # --- Case 5b: a positive --since lists the existing fixtures' dispatch id --
+# --since is hours-ago; the fixtures carry 1970 epoch timestamps, so the
+# window must reach before the epoch. Derive enough hours from the current
+# time rather than picking an arbitrary magic number.
+since_hours=$(( $(date +%s) / 3600 + 1 ))
 since_out=$(PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$ROOT/src" PATH="$work:$PATH" \
-  python3 "$SCRIPT" --since 999999999 --ledger "$work/ledger.jsonl" \
+  python3 "$SCRIPT" --since "$since_hours" --ledger "$work/ledger.jsonl" \
   --event-log "$work/event-log.jsonl" --json 2>&1)
 since_rc=$?
 if [ "$since_rc" -eq 0 ] \
@@ -156,7 +160,7 @@ if cmp -s "$core_module" "$since_mutant_core"; then
   fail "failability: list_since-emptying sed pattern did not match the script"
 fi
 since_mutant_out=$(PYTHONDONTWRITEBYTECODE=1 PATH="$work:$PATH" python3 "$since_mutant_repo/scripts/dispatch-timeline" \
-  --since 999999999 --ledger "$work/ledger.jsonl" --event-log "$work/event-log.jsonl" --json 2>&1)
+  --since "$since_hours" --ledger "$work/ledger.jsonl" --event-log "$work/event-log.jsonl" --json 2>&1)
 if printf '%s' "$since_mutant_out" | grep -q '"dispatch_id":"ctx_demo"'; then
   fail "failability: list_since-emptying mutant should not list ctx_demo"
 else
@@ -168,8 +172,10 @@ huge_ledger="$work/huge-ts-ledger.jsonl"
 cat > "$huge_ledger" <<'EOF'
 {"ts": 999999999999999, "job_id": "ctx_huge", "orchestration_task": "task_huge", "decision": "ALLOW"}
 EOF
+huge_event_log="$work/huge-event-log.jsonl"
+: > "$huge_event_log"
 huge_out=$(PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$ROOT/src" PATH="$work:$PATH" \
-  python3 "$SCRIPT" task_huge --ledger "$huge_ledger" --event-log "$empty_log" 2>&1)
+  python3 "$SCRIPT" task_huge --ledger "$huge_ledger" --event-log "$huge_event_log" 2>&1)
 huge_rc=$?
 if [ "$huge_rc" -eq 0 ] && printf '%s' "$huge_out" | grep -q 'unparseable'; then
   ok "human-readable: an out-of-range timestamp prints 'unparseable' instead of crashing"

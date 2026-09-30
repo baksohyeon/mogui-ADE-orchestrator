@@ -264,7 +264,11 @@ def _flush_ack(run_id: str, delivery_id: str) -> dict | None:
                 file=sys.stderr,
             )
             return None
-        except OSError:
+        except OSError as exc:
+            print(
+                f"worker-wait: ack flush for delivery {ack} failed to run: {exc}",
+                file=sys.stderr,
+            )
             return None
         result = _last_non_keepalive(proc.stdout + proc.stderr)
         if (
@@ -273,6 +277,11 @@ def _flush_ack(run_id: str, delivery_id: str) -> dict | None:
             or result.get("ok") is False
             or not isinstance(result.get("result"), dict)
         ):
+            print(
+                f"worker-wait: ack flush for delivery {ack} failed or returned a "
+                f"malformed envelope (exit={proc.returncode})",
+                file=sys.stderr,
+            )
             return None
         payload = result["result"]
         messages = payload.get("messages") or []

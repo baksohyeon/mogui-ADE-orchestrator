@@ -1028,3 +1028,60 @@ fi
     assert "d1" in capsys.readouterr().err
     # Failability: a version with no `timeout=` on the subprocess call blocks
     # for the fake orca's full 10s sleep instead of returning within ~5s.
+
+
+@skip_windows_exec_surface
+def test_flush_ack_reports_the_delivery_id_when_orca_fails_to_run(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """`orca` missing entirely raises `FileNotFoundError`, an `OSError`
+    subclass — `_flush_ack` must name the delivery id and the failure on
+    stderr instead of returning `None` with no trace, the same wording
+    family as `_wait_for_message`'s own `except OSError` line.
+
+    Failability: a version with a bare `except OSError: return None` (the
+    pre-fix code) returns `None` here too but leaves stderr empty.
+    """
+
+    mod = _load()
+    monkeypatch.setenv("PATH", str(tmp_path))  # empty dir: no `orca` on PATH at all
+
+    batch = mod["_flush_ack"]("run_x", "d1")
+
+    assert batch is None
+    err = capsys.readouterr().err
+    assert "d1" in err
+    assert "failed to run" in err
+
+
+@skip_windows_exec_surface
+def test_flush_ack_reports_the_delivery_id_on_a_malformed_envelope(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """A non-zero exit or unparseable JSON from the ack-flush `check` call
+    must not vanish silently either: `_flush_ack` names the delivery id on
+    stderr, the same wording family as `_wait_for_message`'s malformed-
+    envelope line.
+
+    Failability: a version that falls straight through to `return None`
+    without a `print` (the pre-fix code) returns `None` here too but leaves
+    stderr empty.
+    """
+
+    mod = _load()
+    orca = tmp_path / "orca"
+    _write_executable(
+        orca,
+        """#!/usr/bin/env bash
+echo "not json"
+exit 1
+""",
+    )
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+
+    batch = mod["_flush_ack"]("run_x", "d1")
+
+    assert batch is None
+    err = capsys.readouterr().err
+    assert "d1" in err
+    assert "malformed envelope" in err

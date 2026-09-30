@@ -25,7 +25,9 @@ from typing import Optional
 # ponytail: exact-name set, not a "looks like an agent" heuristic — a comm
 # reported as a wrapper (e.g. `node` fronting a JS-packaged CLI) is not
 # chased. Add a name here once it is measured on a real seat, not guessed.
-AGENT_CLI_COMMANDS = frozenset({"claude", "codex", "cursor", "agy", "grok"})
+AGENT_CLI_COMMANDS = frozenset(
+    {"claude", "codex", "cursor", "cursor-agent", "agy", "grok"}
+)
 
 MAX_WORKER_LIST_PAGES = 20
 WORKER_LIST_PAGE_LIMIT = 100
@@ -131,6 +133,45 @@ class DispatchState:
     def _is_absolute_path(self, path: str) -> bool:
         """True when path is absolute in either posix or windows form."""
         return PurePosixPath(path).is_absolute() or PureWindowsPath(path).is_absolute()
+
+
+def find_worker_row_for_dispatch(workers: list, dispatch_id: str) -> Optional[dict]:
+    """The worker-list row naming this dispatch id (snake_case or camelCase),
+    `None` when no row matches. Shared by `WorkerReaper` and
+    `dispatch_timeline` so both resolve a dispatch id to a task id the same
+    way."""
+    for worker in workers:
+        if not isinstance(worker, dict):
+            continue
+        row_dispatch_id = worker.get("dispatch_id") or worker.get("dispatchId")
+        if row_dispatch_id == dispatch_id:
+            return worker
+    return None
+
+
+def resolve_task_id_from_dispatch_id(
+    orca_runner: callable, dispatch_id: str
+) -> Optional[str]:
+    """Resolve a dispatch id to its task id via `orca orchestration
+    worker-list`, the same lookup `WorkerReaper` uses. `None` on any failure
+    — RPC error, malformed JSON, no matching row, or a matching row with no
+    task_id — never raises."""
+    code, stdout, _stderr = orca_runner(["orca", "orchestration", "worker-list", "--json"])
+    if code != 0:
+        return None
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError:
+        return None
+    result = payload.get("result") if isinstance(payload, dict) else None
+    workers = result.get("workers") if isinstance(result, dict) else None
+    if not isinstance(workers, list):
+        return None
+    row = find_worker_row_for_dispatch(workers, dispatch_id)
+    if row is None:
+        return None
+    task_id = row.get("task_id") or row.get("taskId")
+    return str(task_id) if task_id else None
 
 
 class WorkerReaper:
@@ -318,11 +359,14 @@ class WorkerReaper:
         return ""
 
     def _all_worker_list_rows(self) -> Optional[list[dict]]:
-        """Every worker-list row across every Run, paginated. `None` on failure."""
+        """Every worker-list row across every Run, paginated. `None` on a
+        malformed shape or when pagination cannot finish (`hasMore` with no
+        cursor, or the page limit exhausted) — a partial list is unmeasurable,
+        never "no reuse"."""
 
         rows: list[dict] = []
         cursor: Optional[str] = None
-        for _ in range(MAX_WORKER_LIST_PAGES):
+        for page_index in range(MAX_WORKER_LIST_PAGES):
             cmd = [
                 "orca",
                 "orchestration",
@@ -340,23 +384,36 @@ class WorkerReaper:
                 payload = json.loads(stdout)
             except json.JSONDecodeError:
                 return None
-            result = payload.get("result") if isinstance(payload, dict) else {}
-            workers = result.get("workers") if isinstance(result, dict) else None
-            if isinstance(workers, list):
-                rows.extend(workers)
-            page = result.get("page") if isinstance(result, dict) else {}
-            cursor = page.get("nextCursor") if isinstance(page, dict) else None
-            if not (isinstance(page, dict) and page.get("hasMore")) or not cursor:
+            result = payload.get("result") if isinstance(payload, dict) else None
+            if not isinstance(result, dict):
+                return None
+            workers = result.get("workers")
+            if not isinstance(workers, list) or not all(
+                isinstance(row, dict) for row in workers
+            ):
+                return None
+            rows.extend(workers)
+            page = result.get("page")
+            if not isinstance(page, dict):
+                return None
+            cursor = page.get("nextCursor")
+            if page.get("hasMore"):
+                if not cursor or page_index == MAX_WORKER_LIST_PAGES - 1:
+                    return None
+            else:
                 break
         return rows
 
     def _agent_process_in_worktree(self, worktree_path: Path) -> Optional[str]:
-        """`"<pid>:<comm>"` for the first agent CLI found, `""` when none, `None` when unmeasured."""
+        """`"<pid>:<comm>"` for the first agent CLI found, `""` when none,
+        `None` when unmeasured — including when an agent-matching process's
+        cwd could not be resolved at all, not just when the scan itself fails."""
 
         code, stdout, _stderr = self.orca_runner(["ps", "-axo", "pid=,comm="])
         if code != 0:
             return None
         target = os.path.realpath(str(worktree_path))
+        unmeasured = False
         for line in stdout.splitlines():
             line = line.strip()
             if not line:
@@ -370,11 +427,12 @@ class WorkerReaper:
                 continue
             cwd = self._process_cwd(pid_str)
             if not cwd:
+                unmeasured = True
                 continue
             resolved_cwd = os.path.realpath(cwd)
             if resolved_cwd == target or resolved_cwd.startswith(target + os.sep):
                 return f"{pid_str}:{comm_name}"
-        return ""
+        return None if unmeasured else ""
 
     def _process_cwd(self, pid: str) -> Optional[str]:
         """`lsof` first (the contract's primary tool), `/proc/<pid>/cwd` as fallback."""
@@ -452,21 +510,17 @@ class WorkerReaper:
         if not isinstance(workers, list):
             workers = []
 
-        for worker in workers:
-            if not isinstance(worker, dict):
-                continue
-            row_dispatch_id = worker.get("dispatch_id") or worker.get("dispatchId")
-            if row_dispatch_id == dispatch_id:
-                task_id = worker.get("task_id") or worker.get("taskId")
-                if task_id:
-                    return str(task_id)
-                raise ReapError(
-                    f"worker-list row for dispatch {dispatch_id} has no task_id",
-                    2,
-                )
-
+        row = find_worker_row_for_dispatch(workers, dispatch_id)
+        if row is None:
+            raise ReapError(
+                f"Could not resolve dispatch {dispatch_id}: worker-list had no row for it",
+                2,
+            )
+        task_id = row.get("task_id") or row.get("taskId")
+        if task_id:
+            return str(task_id)
         raise ReapError(
-            f"Could not resolve dispatch {dispatch_id}: worker-list had no row for it",
+            f"worker-list row for dispatch {dispatch_id} has no task_id",
             2,
         )
 
@@ -502,7 +556,8 @@ class WorkerReaper:
         dirty_lines = [
             line
             for line in stdout.splitlines()
-            if line.strip() and "__pycache__/" not in line
+            if line.strip()
+            and not (line.startswith("?? ") and "__pycache__/" in line[3:])
         ]
         if dirty_lines:
             return False, False, f"Worktree has uncommitted changes"

@@ -48,7 +48,7 @@ three conditions first, and closes only when all three hold.
    here would kill that live worker. Refuses with
    `terminal_left:<id>:reused_by:<dispatch-id>`.
 3. **No agent process** — no process whose command is `claude`, `codex`,
-   `cursor`, `agy`, or `grok` has its current working directory inside the
+   `cursor`, `cursor-agent`, `agy`, or `grok` has its current working directory inside the
    dispatch's worktree (`lsof -a -p <pid> -d cwd -Fn`, falling back to
    `/proc/<pid>/cwd`). A worker's own CLI session commonly stays open at an
    idle prompt after `worker_done` — this measurement refuses the close for
@@ -252,7 +252,20 @@ The feature branch exists but is not yet merged and the reaper could not prove t
 2. Manually verify and clean the worktree
 3. Leave the worktree and reap only the terminal
 
-The reaper will always leave the terminal closed (no open handles leak) and record the partial reap.
+### Partial reap: a refused pane stays open
+
+The pane and the worktree are each judged independently, so a reap can close
+one and leave the other. A refused measurement — pane absent, reused by a
+newer dispatch, an agent process (or an unresolved cwd for one) still in the
+worktree, or the measurement itself failing — leaves the terminal open and
+logs `terminal_left:<id>:<reason>`; it is not closed just because the
+worktree side happened to be clean and removed, and the reverse holds too:
+the terminal can close while the worktree is left in place. Both outcomes are
+recorded in the same `actions_taken` list, so a settled dispatch's record can
+read `terminal_left:...;worktree_removed:...` or
+`terminal_closed:...;worktree_left:...` — either is a valid partial reap, not
+a bug. Re-run `scripts/worker-reap --dry-run` after resolving the blocking
+condition to finish the other half.
 
 ## See Also
 

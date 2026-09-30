@@ -8,6 +8,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from master_runtime.core.worker_reap import (
+    AGENT_CLI_COMMANDS,
     DispatchState,
     ReapError,
     ReapRecord,
@@ -268,16 +269,19 @@ class WorkerReaperTests(unittest.TestCase):
             reaper.reap(task_id="t1", execute=False)
 
     def test_reap_closes_terminal_when_all_three_measurements_clear(self) -> None:
-        env = _MeasuredEnvironment(worktree_path="/tmp/wt-happy-path")
-        reaper = WorkerReaper(orca_runner=env)
-        record = reaper.reap(task_id="t1", execute=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _MeasuredEnvironment(worktree_path=tmp)
+            reaper = WorkerReaper(orca_runner=env)
+            record = reaper.reap(task_id="t1", execute=True)
 
-        self.assertIn("term1", env.closed_terminals)
-        self.assertIn(["orca", "terminal", "close", "--terminal", "term1"], env.commands)
-        self.assertIn("terminal_closed:term1", record.actions_taken)
-        self.assertEqual(record.measurements["terminal_present"], True)
-        self.assertEqual(record.measurements["terminal_reused_by"], "")
-        self.assertEqual(record.measurements["agent_process"], "")
+            self.assertIn("term1", env.closed_terminals)
+            self.assertIn(
+                ["orca", "terminal", "close", "--terminal", "term1"], env.commands
+            )
+            self.assertIn("terminal_closed:term1", record.actions_taken)
+            self.assertEqual(record.measurements["terminal_present"], True)
+            self.assertEqual(record.measurements["terminal_reused_by"], "")
+            self.assertEqual(record.measurements["agent_process"], "")
 
     def test_reap_leaves_pane_absent_from_terminal_list(self) -> None:
         env = _MeasuredEnvironment(terminal_present=False)
@@ -322,29 +326,142 @@ class WorkerReaperTests(unittest.TestCase):
         self.assertIn("terminal_left:term1:reuse_unmeasured", record.actions_taken)
         self.assertIsNone(record.measurements["terminal_reused_by"])
 
-    def test_reap_leaves_pane_with_an_agent_process_in_the_worktree(self) -> None:
-        env = _MeasuredEnvironment(
-            worktree_path="/tmp/wt-agent",
-            agent_pid="4242",
-            agent_comm="claude",
-        )
-        reaper = WorkerReaper(orca_runner=env)
+    def test_reap_leaves_pane_when_worker_list_pagination_cannot_finish(self) -> None:
+        """`hasMore: true` with no `nextCursor` is a stuck page: the pagination
+        loop must refuse (None), not stop and treat what it has as complete."""
+
+        def fake_runner(cmd: list[str]) -> tuple[int, str, str]:
+            if cmd[:3] == ["orca", "orchestration", "worker-list"]:
+                payload = {"result": {"workers": [], "page": {"hasMore": True}}}
+                return 0, json.dumps(payload), ""
+            return _MeasuredEnvironment()(cmd)
+
+        reaper = WorkerReaper(orca_runner=fake_runner)
         record = reaper.reap(task_id="t1", execute=True)
 
-        self.assertEqual(env.closed_terminals, [])
-        self.assertIn("terminal_left:term1:agent_process:4242:claude", record.actions_taken)
-        self.assertEqual(record.measurements["agent_process"], "4242:claude")
-        # Failability: a version that ignored the process scan would close a
-        # pane that still has a live agent CLI sitting in its worktree.
+        self.assertIn("terminal_left:term1:reuse_unmeasured", record.actions_taken)
+        self.assertIsNone(record.measurements["terminal_reused_by"])
+        # Failability: a version that broke out of the loop whenever
+        # `nextCursor` was missing would treat this stuck page as the last
+        # page and return the (incomplete) rows collected so far.
+
+    def test_reap_leaves_pane_when_worker_list_shape_is_malformed(self) -> None:
+        """A worker row that isn't an object is unmeasurable, not "no reuse"."""
+
+        def fake_runner(cmd: list[str]) -> tuple[int, str, str]:
+            if cmd[:3] == ["orca", "orchestration", "worker-list"]:
+                payload = {"result": {"workers": ["not-a-dict"]}}
+                return 0, json.dumps(payload), ""
+            return _MeasuredEnvironment()(cmd)
+
+        reaper = WorkerReaper(orca_runner=fake_runner)
+        record = reaper.reap(task_id="t1", execute=True)
+
+        self.assertIn("terminal_left:term1:reuse_unmeasured", record.actions_taken)
+        self.assertIsNone(record.measurements["terminal_reused_by"])
+
+    def test_all_worker_list_rows_joins_every_page(self) -> None:
+        pages = {
+            None: {
+                "result": {
+                    "workers": [{"dispatch_id": "a"}],
+                    "page": {"hasMore": True, "nextCursor": "c2"},
+                }
+            },
+            "c2": {
+                "result": {
+                    "workers": [{"dispatch_id": "b"}],
+                    "page": {"hasMore": False},
+                }
+            },
+        }
+
+        def fake_runner(cmd: list[str]) -> tuple[int, str, str]:
+            cursor = cmd[cmd.index("--cursor") + 1] if "--cursor" in cmd else None
+            return 0, json.dumps(pages[cursor]), ""
+
+        rows = WorkerReaper(orca_runner=fake_runner)._all_worker_list_rows()
+        self.assertEqual(rows, [{"dispatch_id": "a"}, {"dispatch_id": "b"}])
+
+    def test_reap_leaves_pane_with_an_agent_process_in_the_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _MeasuredEnvironment(
+                worktree_path=tmp,
+                agent_pid="4242",
+                agent_comm="claude",
+            )
+            reaper = WorkerReaper(orca_runner=env)
+            record = reaper.reap(task_id="t1", execute=True)
+
+            self.assertEqual(env.closed_terminals, [])
+            self.assertIn(
+                "terminal_left:term1:agent_process:4242:claude", record.actions_taken
+            )
+            self.assertEqual(record.measurements["agent_process"], "4242:claude")
+            # Failability: a version that ignored the process scan would close
+            # a pane that still has a live agent CLI sitting in its worktree.
+
+    def test_reap_leaves_pane_with_every_agent_cli_command_in_the_worktree(
+        self,
+    ) -> None:
+        """Every name in AGENT_CLI_COMMANDS is actually matched by the scan,
+        not just the ones exercised elsewhere (e.g. `cursor-agent`)."""
+        for comm in sorted(AGENT_CLI_COMMANDS):
+            with self.subTest(comm=comm):
+                with tempfile.TemporaryDirectory() as tmp:
+                    env = _MeasuredEnvironment(
+                        worktree_path=tmp,
+                        agent_pid="4242",
+                        agent_comm=comm,
+                    )
+                    reaper = WorkerReaper(orca_runner=env)
+                    record = reaper.reap(task_id="t1", execute=True)
+
+                    self.assertEqual(env.closed_terminals, [])
+                    self.assertEqual(
+                        record.measurements["agent_process"], f"4242:{comm}"
+                    )
 
     def test_reap_leaves_pane_whose_agent_process_scan_is_unmeasured(self) -> None:
-        env = _MeasuredEnvironment(worktree_path="/tmp/wt-x", ps_fails=True)
-        reaper = WorkerReaper(orca_runner=env)
-        record = reaper.reap(task_id="t1", execute=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _MeasuredEnvironment(worktree_path=tmp, ps_fails=True)
+            reaper = WorkerReaper(orca_runner=env)
+            record = reaper.reap(task_id="t1", execute=True)
 
-        self.assertEqual(env.closed_terminals, [])
-        self.assertIn("terminal_left:term1:agent_process_unmeasured", record.actions_taken)
-        self.assertIsNone(record.measurements["agent_process"])
+            self.assertEqual(env.closed_terminals, [])
+            self.assertIn(
+                "terminal_left:term1:agent_process_unmeasured", record.actions_taken
+            )
+            self.assertIsNone(record.measurements["agent_process"])
+
+    def test_reap_leaves_pane_when_matching_process_cwd_cannot_be_resolved(
+        self,
+    ) -> None:
+        """A process whose comm matches an agent CLI but whose cwd cannot be
+        read (both `lsof` and `/proc/<pid>/cwd` fail) must refuse, not clear —
+        the scan must not silently skip it and return "" as if no agent were
+        present."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _MeasuredEnvironment(worktree_path=tmp, agent_pid="4242", agent_comm="claude")
+
+            def fake_runner(cmd: list[str]) -> tuple[int, str, str]:
+                if cmd[:2] == ["lsof", "-a"]:
+                    return 1, "", "lsof: permission denied"
+                if cmd[:1] == ["readlink"]:
+                    return 1, "", "readlink: No such file or directory"
+                return env(cmd)
+
+            reaper = WorkerReaper(orca_runner=fake_runner)
+            record = reaper.reap(task_id="t1", execute=True)
+
+            self.assertEqual(env.closed_terminals, [])
+            self.assertIn(
+                "terminal_left:term1:agent_process_unmeasured", record.actions_taken
+            )
+            self.assertIsNone(record.measurements["agent_process"])
+            # Failability: a version that `continue`s past an unresolved cwd
+            # and falls through to `return ""` would close this pane while an
+            # agent CLI process may still be sitting in the worktree.
 
     def test_reap_dry_run_never_prints_terminal_closed(self) -> None:
         env = _MeasuredEnvironment(worktree_path="/tmp/wt-happy-path")
@@ -682,6 +799,36 @@ class WorkerReaperTests(unittest.TestCase):
             self.assertEqual(reason, "")
             # Failability: a version that dropped the __pycache__/ filter would
             # read this porcelain line as an uncommitted change and refuse.
+
+    def test_tracked_pycache_change_still_counts_as_dirty(self) -> None:
+        """The pycache exemption is for untracked litter only — a tracked
+        change under a __pycache__ path (however that happened) must still
+        block removal, never be waved through as litter."""
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_runner, _removed_paths = _clean_worktree_runner(
+                tmp,
+                current_branch="main",
+                merged_branches="* main\n",
+            )
+            original_runner = fake_runner
+
+            def runner_with_tracked_pycache_change(
+                cmd: list[str],
+            ) -> tuple[int, str, str]:
+                if "git" in cmd and "status" in cmd:
+                    return 0, " M __pycache__/tracked.pyc\n", ""
+                return original_runner(cmd)
+
+            clean, merged, reason = WorkerReaper(
+                orca_runner=runner_with_tracked_pycache_change
+            )._check_worktree_safe_to_remove(Path(tmp))
+
+            self.assertFalse(clean)
+            self.assertFalse(merged)
+            self.assertEqual(reason, "Worktree has uncommitted changes")
+            # Failability: a version that exempted any line mentioning
+            # __pycache__/ (tracked or not) would call this clean and let the
+            # reaper remove a worktree with a real uncommitted change in it.
 
     def test_real_pycache_only_worktree_is_still_clean(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

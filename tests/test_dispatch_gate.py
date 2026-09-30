@@ -935,7 +935,12 @@ def test_cli_register_accepts_worker_pid_and_pane_flags(
 ) -> None:
     contract = _contract(tmp_path, "cli worker pid and pane")
     ledger = tmp_path / "ledger.jsonl"
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    # Patch Path.home() itself, not $HOME: the default ticket_dir the CLI falls
+    # back to (no --ticket-dir flag exists) is Path.home()/".mogui"/..., and
+    # $HOME alone does not redirect Path.home() on every platform — a stray
+    # ticket left in the real shared home directory would leak into whichever
+    # test runs next.
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
 
     assert (

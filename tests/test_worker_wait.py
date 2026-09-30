@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+from windows_exec_surface import skip_windows_exec_surface
+
 
 def _script() -> Path:
     return Path(__file__).resolve().parents[1] / "master-ops" / "scripts" / "worker-wait"
@@ -126,6 +128,7 @@ def test_ledger_index_maps_job_id_to_pid_and_pane(tmp_path: Path) -> None:
 # --- lock ---------------------------------------------------------------------
 
 
+@skip_windows_exec_surface
 def test_second_waiter_refuses_while_first_holds_a_live_lock(tmp_path: Path, monkeypatch) -> None:
     mod = _load()
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -144,6 +147,7 @@ def test_second_waiter_refuses_while_first_holds_a_live_lock(tmp_path: Path, mon
     assert mod["_acquire_lock"]("run_x") is None
 
 
+@skip_windows_exec_surface
 def test_stale_lock_with_dead_pid_is_taken_over(tmp_path: Path, monkeypatch) -> None:
     mod = _load()
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -165,6 +169,7 @@ def test_stale_lock_with_dead_pid_is_taken_over(tmp_path: Path, monkeypatch) -> 
     assert lock_path.read_text(encoding="utf-8").strip() == str(os.getpid())
 
 
+@skip_windows_exec_surface
 def test_main_exits_2_when_lock_is_held(tmp_path: Path, monkeypatch) -> None:
     mod = _load()
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -223,6 +228,7 @@ fi
     return script
 
 
+@skip_windows_exec_surface
 def test_heartbeat_batch_is_acked_and_rearmed_without_waking(tmp_path: Path, monkeypatch) -> None:
     mod = _load()
     fake_orca_dir = tmp_path
@@ -237,6 +243,7 @@ def test_heartbeat_batch_is_acked_and_rearmed_without_waking(tmp_path: Path, mon
     assert payload["deliveryId"] == "d2"
 
 
+@skip_windows_exec_surface
 def test_worker_done_wakes_and_is_not_acked(tmp_path: Path, monkeypatch) -> None:
     mod = _load()
     script = tmp_path / "orca"
@@ -264,6 +271,7 @@ fi
 # --- accounting end to end: DEAD, STALL, working, OPEN_PANE in one pass ----
 
 
+@skip_windows_exec_surface
 def test_accounting_pass_end_to_end(tmp_path: Path, monkeypatch) -> None:
     mod = _load()
     monkeypatch.delenv("ORCA_TERMINAL_HANDLE", raising=False)

@@ -7,6 +7,12 @@ import time
 
 
 LOG_DIR = os.path.expanduser("~/.mogui")
+
+# Two directories up from scripts/mogui_log.py: the ops/runtime repo root,
+# wherever this file has been template-applied to. The descriptor lives here
+# regardless of the caller's cwd (the master commonly runs from the
+# workspace root, a different directory entirely).
+_RUNTIME_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _SECRET = re.compile(
     r"(?:"
     r"sk-[A-Za-z0-9]{8,}|"
@@ -37,9 +43,11 @@ def _scrub(value):
     return value
 
 
-def _descriptor_workspace_root(cwd: str):
-    """Read workspace_root from <cwd>/config/workspace-descriptor.json, if any."""
-    path = os.path.join(cwd, "config", "workspace-descriptor.json")
+def _descriptor_workspace_root():
+    """Read workspace_root from <runtime-root>/config/workspace-descriptor.json,
+    if any, where runtime-root is this script's own location (_RUNTIME_ROOT),
+    not the caller's cwd."""
+    path = os.path.join(_RUNTIME_ROOT, "config", "workspace-descriptor.json")
     try:
         with open(path, "r", encoding="utf-8") as handle:
             data = json.load(handle)
@@ -51,7 +59,7 @@ def _descriptor_workspace_root(cwd: str):
 
 def _session_kind() -> str:
     cwd = os.getcwd()
-    seat_root = os.environ.get("MOGUI_SEAT_ROOT") or _descriptor_workspace_root(cwd)
+    seat_root = os.environ.get("MOGUI_SEAT_ROOT") or _descriptor_workspace_root()
     if seat_root and os.path.realpath(cwd) == os.path.realpath(os.path.expanduser(seat_root)):
         return "master"
     if os.environ.get("ORCA_TASK_ID") or ".orca/worktrees" in cwd.replace(os.sep, "/"):

@@ -43,6 +43,7 @@ def test_descriptor_workspace_root_match_is_master(tmp_path: Path, monkeypatch) 
     (tmp_path / "config" / "workspace-descriptor.json").write_text(
         json.dumps({"workspace_root": str(tmp_path)}), encoding="utf-8"
     )
+    monkeypatch.setattr(mogui_log, "_RUNTIME_ROOT", str(tmp_path))
     monkeypatch.chdir(tmp_path)
     assert mogui_log._session_kind() == "master"
     # Failability: a descriptor naming a different root must not read master here.
@@ -50,6 +51,26 @@ def test_descriptor_workspace_root_match_is_master(tmp_path: Path, monkeypatch) 
         json.dumps({"workspace_root": str(tmp_path / "not-here")}), encoding="utf-8"
     )
     assert mogui_log._session_kind() != "master"
+
+
+def test_descriptor_is_found_via_runtime_root_not_cwd(tmp_path: Path, monkeypatch) -> None:
+    """The descriptor lives next to the script (its runtime root), not in
+    the caller's cwd — a master running from a different directory than the
+    ops/runtime repo must still be classified correctly."""
+    runtime_root = tmp_path / "ops-repo"
+    (runtime_root / "config").mkdir(parents=True)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    (runtime_root / "config" / "workspace-descriptor.json").write_text(
+        json.dumps({"workspace_root": str(workspace_root)}), encoding="utf-8"
+    )
+    monkeypatch.setattr(mogui_log, "_RUNTIME_ROOT", str(runtime_root))
+    monkeypatch.chdir(workspace_root)
+
+    assert mogui_log._session_kind() == "master"
+    # Failability: a version that read <cwd>/config/... instead of the
+    # runtime root would find nothing under workspace_root and fall through
+    # to "unknown" here.
 
 
 def test_worker_cwd_without_seat_match_is_worker(tmp_path: Path, monkeypatch) -> None:
@@ -75,6 +96,7 @@ def test_malformed_descriptor_is_swallowed_not_raised(tmp_path: Path, monkeypatc
     (tmp_path / "config" / "workspace-descriptor.json").write_text(
         "not json", encoding="utf-8"
     )
+    monkeypatch.setattr(mogui_log, "_RUNTIME_ROOT", str(tmp_path))
     monkeypatch.chdir(tmp_path)
     assert mogui_log._session_kind() == "unknown"
 

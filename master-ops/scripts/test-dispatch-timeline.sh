@@ -129,6 +129,20 @@ for bad_since in nan inf -1; do
   fi
 done
 
+# --- Case 5: human-readable mode survives an out-of-range timestamp --------
+huge_ledger="$work/huge-ts-ledger.jsonl"
+cat > "$huge_ledger" <<'EOF'
+{"ts": 999999999999999, "job_id": "ctx_huge", "orchestration_task": "task_huge", "decision": "ALLOW"}
+EOF
+huge_out=$(PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$ROOT/src" PATH="$work:$PATH" \
+  python3 "$SCRIPT" task_huge --ledger "$huge_ledger" --event-log "$empty_log" 2>&1)
+huge_rc=$?
+if [ "$huge_rc" -eq 0 ] && printf '%s' "$huge_out" | grep -q 'unparseable'; then
+  ok "human-readable: an out-of-range timestamp prints 'unparseable' instead of crashing"
+else
+  fail "human-readable: expected exit 0 with 'unparseable', got exit $huge_rc: $huge_out"
+fi
+
 [ "$FAILED" -eq 0 ] && { echo "dispatch-timeline: all checks passed"; exit 0; }
 echo "dispatch-timeline: FAILED"
 exit 1

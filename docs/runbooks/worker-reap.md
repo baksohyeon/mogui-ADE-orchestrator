@@ -43,9 +43,11 @@ three conditions first, and closes only when all three hold.
    Absent (closed hours ago, or never existed) refuses with
    `terminal_left:<id>:pane_absent`.
 2. **Not reused** — no row in `orca orchestration worker-list` (across every
-   Run) has `dispatchStatus: dispatched` naming this same handle. A newer
-   dispatch may have reused the pane before this one was reaped; closing it
-   here would kill that live worker. Refuses with
+   Run) has `dispatchStatus: dispatched` naming this same handle *for a
+   different dispatch* (a `dispatched` row for the dispatch being reaped
+   itself does not count — that is the dispatch this reap call is for). A
+   newer dispatch may have reused the pane before this one was reaped;
+   closing it here would kill that live worker. Refuses with
    `terminal_left:<id>:reused_by:<dispatch-id>`.
 3. **No agent process** — no process whose command is `claude`, `codex`,
    `cursor`, `cursor-agent`, `agy`, or `grok` has its current working directory inside the
@@ -177,7 +179,8 @@ The reap record is appended to the ledger (fields alphabetical per `sort_keys=Tr
 ```
 
 Also emitted through `mogui_log.emit()` into `~/.mogui/event-log.jsonl` as a
-`reaped` event carrying `dispatch_id`, `task_id`, and `actions_taken` — see
+`reaped` event carrying `dispatch_id`, `task_id`, and `actions_taken` — but
+only for a real reap, never a `--dry-run` (which produces no event) — see
 `master-ops/docs/runbooks/dispatch-timeline.md` for reading these back joined
 with the ledger and the live dispatch state.
 

@@ -25,6 +25,9 @@ import mogui_log  # noqa: E402
 def _clean_env(monkeypatch):
     monkeypatch.delenv("MOGUI_SEAT_ROOT", raising=False)
     monkeypatch.delenv("ORCA_TASK_ID", raising=False)
+    # _session_kind() caches its result at module level for the life of a
+    # process; each test is its own "process" here, so start uncached.
+    monkeypatch.setattr(mogui_log, "_SESSION_KIND_CACHE", None)
 
 
 def test_seat_root_env_var_match_is_master(tmp_path: Path, monkeypatch) -> None:
@@ -32,10 +35,13 @@ def test_seat_root_env_var_match_is_master(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     assert mogui_log._session_kind() == "master"
     # Failability: a cwd that does not match the seat root must not be master.
+    # (Reset the per-process cache: a real process never changes cwd mid-run,
+    # but this test does, across what the cache treats as one process.)
     other = tmp_path / "elsewhere"
     other.mkdir()
     monkeypatch.chdir(other)
-    assert mogui_log._session_kind() != "master"
+    monkeypatch.setattr(mogui_log, "_SESSION_KIND_CACHE", None)
+    assert mogui_log._session_kind() == "unknown"
 
 
 def test_descriptor_workspace_root_match_is_master(tmp_path: Path, monkeypatch) -> None:
@@ -50,7 +56,8 @@ def test_descriptor_workspace_root_match_is_master(tmp_path: Path, monkeypatch) 
     (tmp_path / "config" / "workspace-descriptor.json").write_text(
         json.dumps({"workspace_root": str(tmp_path / "not-here")}), encoding="utf-8"
     )
-    assert mogui_log._session_kind() != "master"
+    monkeypatch.setattr(mogui_log, "_SESSION_KIND_CACHE", None)
+    assert mogui_log._session_kind() == "unknown"
 
 
 def test_descriptor_is_found_via_runtime_root_not_cwd(tmp_path: Path, monkeypatch) -> None:

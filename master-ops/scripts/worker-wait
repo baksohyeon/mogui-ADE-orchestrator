@@ -592,10 +592,9 @@ def _worker_list(
             status = worker.get("dispatchStatus")
             if handle and handle not in handle_status:
                 handle_status[handle] = status
-            if handle and handle not in handle_task_id:
+            if handle:
                 task_id = worker.get("taskId") or worker.get("task_id")
-                if task_id:
-                    handle_task_id[handle] = task_id
+                handle_task_id[handle] = str(task_id) if task_id else ""
             if status == "dispatched":
                 dispatched.append(worker)
         page = result.get("page") or {}

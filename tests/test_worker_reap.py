@@ -156,10 +156,6 @@ class _MeasuredEnvironment:
         agent_pid: str | None = None,
         agent_comm: str | None = None,
         ps_fails: bool = False,
-        worktree_dirty: bool = False,
-        worktree_dirty_extra_lines: str = "",
-        current_branch: str = "main",
-        merged_branches: str = "* main\n",
     ) -> None:
         self.dispatch_id = dispatch_id
         self.task_id = task_id
@@ -173,10 +169,6 @@ class _MeasuredEnvironment:
         self.agent_pid = agent_pid
         self.agent_comm = agent_comm
         self.ps_fails = ps_fails
-        self.worktree_dirty = worktree_dirty
-        self.worktree_dirty_extra_lines = worktree_dirty_extra_lines
-        self.current_branch = current_branch
-        self.merged_branches = merged_branches
         self.closed_terminals: list[str] = []
         self.removed_worktrees: list[str] = []
         self.commands: list[list[str]] = []
@@ -231,14 +223,17 @@ class _MeasuredEnvironment:
             self.closed_terminals.append(cmd[-1])
             return 0, '{"ok":true}', ""
 
+        # Worktree cleanliness/merge scenarios (dirty, non-main branch, not
+        # yet merged) are covered by the dedicated _clean_worktree_runner
+        # fake below, not by this one: every _MeasuredEnvironment call site
+        # only needs the worktree checks to clear, never to flip, so this
+        # always reports a clean, merged main branch.
         if "git" in cmd and "status" in cmd:
-            if self.worktree_dirty:
-                return 0, f"M file.txt\n{self.worktree_dirty_extra_lines}", ""
-            return 0, self.worktree_dirty_extra_lines, ""
+            return 0, "", ""
         if "git" in cmd and "branch" in cmd and "--show-current" in cmd:
-            return 0, f"{self.current_branch}\n", ""
+            return 0, "main\n", ""
         if "git" in cmd and "branch" in cmd and "--merged" in cmd:
-            return 0, self.merged_branches, ""
+            return 0, "* main\n", ""
         if "git" in cmd and "worktree" in cmd and "remove" in cmd:
             self.removed_worktrees.append(cmd[-1])
             return 0, "", ""

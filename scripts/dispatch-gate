@@ -31,7 +31,15 @@ from master_runtime.core.dispatch_gate import (  # noqa: E402
     ReasonCode,
 )
 from master_runtime.core.watchdog import StallStatus, check_stall  # noqa: E402
-from mogui_log import emit as mogui_emit  # noqa: E402
+
+try:
+    from mogui_log import emit as mogui_emit  # noqa: E402
+except ImportError:
+    # Fail-open, same as mogui_log's own emit(): a deployed layout missing
+    # master-ops/scripts (the template-apply scenario) must not turn this
+    # purely observational logging dependency into a gate outage.
+    def mogui_emit(*args, **kwargs):  # noqa: D401
+        return None
 
 
 ORCHESTRATION_PROBE_TIMEOUT_SECONDS = 30

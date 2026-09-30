@@ -22,7 +22,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from master_runtime.core.worker_reap import resolve_task_id_from_dispatch_id
 
@@ -80,7 +80,7 @@ class DispatchTimelineBuilder:
 
     def __init__(
         self,
-        orca_runner: Optional[callable] = None,
+        orca_runner: Optional[Callable] = None,
         ledger_path: Optional[Path] = None,
         event_log_path: Optional[Path] = None,
     ) -> None:
@@ -148,7 +148,7 @@ class DispatchTimelineBuilder:
             if ts is None:
                 continue
             event = str(entry.get("kind") or entry.get("event") or entry.get("decision") or "ledger")
-            outcome = str(entry.get("decision") or entry.get("event") or "")
+            outcome = str(entry.get("decision") or entry.get("actions_taken") or entry.get("event") or "")
             _note(dispatch_id, task_id, ts, event, outcome)
 
         for entry in _read_jsonl(self.event_log_path):
@@ -278,18 +278,24 @@ class DispatchTimelineBuilder:
         # An `or` chain would discard a real epoch-0 timestamp (falsy 0.0)
         # and fall through to the next field, or to "now" — explicit `None`
         # checks so only unparseable values are skipped.
-        ts = next(
-            (
-                candidate
-                for candidate in (
-                    _to_epoch(dispatch.get("last_heartbeat_at")),
-                    _to_epoch(dispatch.get("completed_at")),
-                    _to_epoch(dispatch.get("dispatched_at")),
-                )
-                if candidate is not None
-            ),
-            time.time(),
+        completed_ts = _to_epoch(dispatch.get("completed_at"))
+        candidates = (
+            _to_epoch(dispatch.get("last_heartbeat_at")),
+            completed_ts,
+            _to_epoch(dispatch.get("dispatched_at")),
         )
+        present = [candidate for candidate in candidates if candidate is not None]
+        # A completed dispatch is placed at its completion time, not at
+        # whichever timestamp happened to be listed first — a heartbeat that
+        # preceded completion must not put `status:COMPLETED` before events
+        # that occurred while the worker was still running. Any other status
+        # takes the latest available timestamp for the same reason.
+        if status.upper() == "COMPLETED" and completed_ts is not None:
+            ts = completed_ts
+        elif present:
+            ts = max(present)
+        else:
+            ts = time.time()
         return TimelineRow(
             timestamp=ts,
             source=DISPATCH_SHOW_SOURCE,

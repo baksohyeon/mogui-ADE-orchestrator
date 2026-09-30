@@ -19,8 +19,9 @@ accounting view across dispatches rather than a single dispatch's history.
 ## Event kinds
 
 Emitted through `mogui_log.emit()` into the shared event log
-(`~/.mogui/event-log.jsonl`), each carrying `dispatch_id`/`task_id` where
-known:
+(`~/.mogui/event-log.jsonl`). These events carry `dispatch_id`/`task_id` when
+the emitter supplies them; `wait_wake` records a delivery ID, and an
+`OPEN_PANE` `wait_verdict` may have no dispatch or task ID.
 
 | Event | Emitted by | When |
 |---|---|---|

@@ -54,17 +54,29 @@ def _descriptor_workspace_root():
     except (OSError, ValueError):
         return None
     root = data.get("workspace_root") if isinstance(data, dict) else None
-    return root if isinstance(root, str) and root.strip() else None
+    return root.strip() if isinstance(root, str) and root.strip() else None
+
+
+_SESSION_KIND_CACHE = None
 
 
 def _session_kind() -> str:
+    """Resolved once per process and cached: cwd, env, and the descriptor file
+    are all fixed for a process's lifetime, so re-deriving this on every
+    `emit()` call would pay a stat/open/json-parse per event for no reason.
+    """
+    global _SESSION_KIND_CACHE
+    if _SESSION_KIND_CACHE is not None:
+        return _SESSION_KIND_CACHE
     cwd = os.getcwd()
     seat_root = os.environ.get("MOGUI_SEAT_ROOT") or _descriptor_workspace_root()
     if seat_root and os.path.realpath(cwd) == os.path.realpath(os.path.expanduser(seat_root)):
-        return "master"
-    if os.environ.get("ORCA_TASK_ID") or ".orca/worktrees" in cwd.replace(os.sep, "/"):
-        return "worker"
-    return "unknown"
+        _SESSION_KIND_CACHE = "master"
+    elif os.environ.get("ORCA_TASK_ID") or ".orca/worktrees" in cwd.replace(os.sep, "/"):
+        _SESSION_KIND_CACHE = "worker"
+    else:
+        _SESSION_KIND_CACHE = "unknown"
+    return _SESSION_KIND_CACHE
 
 
 def emit(level, event, outcome, *, component="tool-impl", evidence="observed",

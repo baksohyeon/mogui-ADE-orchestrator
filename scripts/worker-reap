@@ -18,7 +18,15 @@ sys.path.insert(0, str(MOGUI_LOG_ROOT))
 
 
 from master_runtime.core.worker_reap import ReapError, WorkerReaper  # noqa: E402
-from mogui_log import emit as mogui_emit  # noqa: E402
+
+try:
+    from mogui_log import emit as mogui_emit  # noqa: E402
+except ImportError:
+    # Fail-open, same as mogui_log's own emit(): a deployed layout missing
+    # master-ops/scripts (the template-apply scenario) must not block reaping
+    # over a logging dependency.
+    def mogui_emit(*args, **kwargs):  # noqa: D401
+        return None
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -78,11 +78,21 @@ def _classify_id(raw_id: str) -> tuple[str | None, str | None]:
     return None, raw_id
 
 
+def _format_timestamp(ts: float) -> str:
+    """A malformed row's numeric timestamp can be out of `datetime`'s
+    representable range; one such row must not stop the rest of the
+    timeline from printing."""
+    try:
+        return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+    except (OverflowError, OSError, ValueError):
+        return "unparseable"
+
+
 def _print_timeline_table(timeline) -> None:
     header = f"{'TIMESTAMP':<26} {'SOURCE':<12} {'EVENT':<24} {'OUTCOME':<12} DETAIL"
     print(header)
     for row in timeline.rows:
-        stamp = datetime.fromtimestamp(row.timestamp, tz=timezone.utc).isoformat()
+        stamp = _format_timestamp(row.timestamp)
         detail = row.detail if len(row.detail) <= 80 else row.detail[:77] + "..."
         print(f"{stamp:<26} {row.source:<12} {row.event:<24} {row.outcome:<12} {detail}")
     if timeline.missing_sources:
@@ -96,7 +106,7 @@ def _print_since_table(rows: list[dict]) -> None:
     header = f"{'LAST_SEEN':<26} {'DISPATCH':<16} {'TASK':<16} {'LAST_EVENT':<24} LAST_OUTCOME"
     print(header)
     for row in rows:
-        stamp = datetime.fromtimestamp(row["last_ts"], tz=timezone.utc).isoformat()
+        stamp = _format_timestamp(row["last_ts"])
         print(
             f"{stamp:<26} {row['dispatch_id']:<16} {row['task_id']:<16} "
             f"{row['last_event']:<24} {row['last_outcome']}"

@@ -82,10 +82,16 @@ class JoinOrderTests(unittest.TestCase):
             builder = DispatchTimelineBuilder(
                 orca_runner=fake_runner, ledger_path=ledger, event_log_path=event_log
             )
-            timeline = builder.build(dispatch_id="ctx_target")
+            # task_id="task_x" matches the ledger row's task — only the
+            # dispatch_id filter (not a task_id fallback) can explain the
+            # row still being excluded below.
+            timeline = builder.build(dispatch_id="ctx_target", task_id="task_x")
 
             self.assertEqual(timeline.rows, ())
             self.assertIn(LEDGER_SOURCE, timeline.missing_sources)
+            # Failability: a version that matched on task_id instead of (or in
+            # addition to) dispatch_id would include the ctx_other row here,
+            # since its orchestration_task is task_x.
 
     def test_dispatch_id_lookup_resolves_task_id_before_dispatch_show(self) -> None:
         """dispatch-show only reliably serves the live snapshot by --task;
@@ -256,6 +262,44 @@ class DispatchShowTimestampTests(unittest.TestCase):
             # Failability: a version using `A or B or C or time.time()` would
             # report this row's timestamp as roughly "now" instead of 0.0.
 
+    def test_completed_dispatch_uses_completion_time_not_an_earlier_heartbeat(
+        self,
+    ) -> None:
+        """A heartbeat recorded while the worker was still running must not
+        outrank the later completion timestamp for a COMPLETED dispatch —
+        otherwise `status:COMPLETED` sorts before events that happened while
+        the worker was still alive."""
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Path(tmp) / "ledger.jsonl"
+            event_log = Path(tmp) / "event-log.jsonl"
+            ledger.write_text("", encoding="utf-8")
+            event_log.write_text("", encoding="utf-8")
+
+            def fake_runner(cmd: list[str]) -> tuple[int, str, str]:
+                if "dispatch-show" in cmd:
+                    payload = {
+                        "result": {
+                            "dispatch": {
+                                "status": "COMPLETED",
+                                "last_heartbeat_at": "1970-01-01T00:00:00+00:00",
+                                "completed_at": "1970-01-01T00:05:00+00:00",
+                            }
+                        }
+                    }
+                    return 0, json.dumps(payload), ""
+                return 1, "", ""
+
+            builder = DispatchTimelineBuilder(
+                orca_runner=fake_runner, ledger_path=ledger, event_log_path=event_log
+            )
+            timeline = builder.build(task_id="task_x")
+
+            show_rows = [r for r in timeline.rows if r.source == DISPATCH_SHOW_SOURCE]
+            self.assertEqual(len(show_rows), 1)
+            self.assertEqual(show_rows[0].timestamp, 300.0)
+            # Failability: a version that took the first nonempty timestamp
+            # (heartbeat before completed_at) would report 0.0 here instead.
+
 
 class SinceListingTests(unittest.TestCase):
     def test_since_lists_each_dispatch_with_its_last_event(self) -> None:
@@ -321,6 +365,37 @@ class SinceListingTests(unittest.TestCase):
             rows = builder.list_since(hours=1)
 
             self.assertEqual(rows, [])
+
+    def test_since_prefers_actions_taken_for_a_ledger_reap_row(self) -> None:
+        """A ledger `reap` row has no `decision` and its outcome is the
+        action summary in `actions_taken`, not the bare event name `reap`."""
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Path(tmp) / "ledger.jsonl"
+            event_log = Path(tmp) / "event-log.jsonl"
+            ledger.write_text(
+                json.dumps(
+                    {
+                        "ts": time.time(),
+                        "dispatch_id": "ctx_reaped",
+                        "task_id": "task_reaped",
+                        "event": "reap",
+                        "actions_taken": "terminal_closed:term_1",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            event_log.write_text("", encoding="utf-8")
+
+            builder = DispatchTimelineBuilder(
+                orca_runner=lambda cmd: (1, "", ""), ledger_path=ledger, event_log_path=event_log
+            )
+            rows = builder.list_since(hours=1)
+
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["last_outcome"], "terminal_closed:term_1")
+            # Failability: a version that fell back to `entry.get("event")`
+            # before `actions_taken` would report "reap" here instead.
 
 
 if __name__ == "__main__":

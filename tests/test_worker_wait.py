@@ -846,3 +846,133 @@ esac
     # `_wait_for_message` call — which never happens here, since this exact
     # pass is the one that wakes on the newly-DEAD row — would leave "d1"
     # unacked and this file would never be written.
+
+
+# --- _flush_ack: ack without --wait must not eat a queued delivery ----------
+
+
+@skip_windows_exec_surface
+def test_flush_ack_emits_a_queued_worker_done_instead_of_dropping_it(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A delivery may already be queued behind the heartbeat being flushed —
+    `_flush_ack` must surface it rather than silently discarding the check
+    output, which is exactly how a `check --ack --wait` call whose result is
+    thrown away drops a queued `worker_done`."""
+
+    mod = _load()
+    orca = tmp_path / "orca"
+    _write_executable(
+        orca,
+        """#!/usr/bin/env bash
+if [ "$1 $2" = "orchestration check" ]; then
+  for a in "$@"; do [ "$a" = "--wait" ] && { echo "FAIL: ack flush must not --wait" >&2; exit 3; }; done
+  ack_seen=0
+  for a in "$@"; do [ "$a" = "d1" ] && ack_seen=1; done
+  if [ "$ack_seen" != 1 ]; then
+    echo "FAIL: ack flush did not ack d1" >&2
+    exit 3
+  fi
+  printf '{"result": {"deliveryId": "d9", "messages": [{"type": "worker_done", "from": "term_x", "subject": "done"}]}}'
+else
+  echo "{}"
+fi
+""",
+    )
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+
+    batch = mod["_flush_ack"]("run_x", "d1")
+
+    assert batch is not None
+    assert batch["messages"][0]["type"] == "worker_done"
+    assert batch["deliveryId"] == "d9"
+    # Failability: a version that discards the check subprocess's output (the
+    # pre-fix pattern) returns None unconditionally instead of this batch.
+
+
+@skip_windows_exec_surface
+def test_flush_ack_chains_through_a_queued_heartbeat_to_a_real_delivery(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The queued item behind a flushed heartbeat can itself be another
+    heartbeat — `_flush_ack` must ack that one too and keep looking, bounded
+    to `MAX_ACK_FLUSH_ROUNDS`, rather than stopping at the first heartbeat."""
+
+    mod = _load()
+    counter = tmp_path / "calls"
+    counter.write_text("0", encoding="utf-8")
+    orca = tmp_path / "orca"
+    _write_executable(
+        orca,
+        f"""#!/usr/bin/env bash
+if [ "$1 $2" = "orchestration check" ]; then
+  n=$(cat "{counter}"); n=$((n + 1)); echo "$n" > "{counter}"
+  if [ "$n" = "1" ]; then
+    ack_seen=0
+    for a in "$@"; do [ "$a" = "d1" ] && ack_seen=1; done
+    [ "$ack_seen" = "1" ] || {{ echo "FAIL: round 1 did not ack d1" >&2; exit 3; }}
+    printf '{{"result": {{"deliveryId": "d2", "messages": [{{"type": "heartbeat"}}]}}}}'
+  else
+    ack_seen=0
+    for a in "$@"; do [ "$a" = "d2" ] && ack_seen=1; done
+    [ "$ack_seen" = "1" ] || {{ echo "FAIL: round 2 did not ack d2" >&2; exit 3; }}
+    printf '{{"result": {{"deliveryId": "d3", "messages": [{{"type": "worker_done"}}]}}}}'
+  fi
+else
+  echo "{{}}"
+fi
+""",
+    )
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+
+    batch = mod["_flush_ack"]("run_x", "d1")
+
+    assert batch is not None
+    assert batch["deliveryId"] == "d3"
+    assert batch["messages"][0]["type"] == "worker_done"
+    assert counter.read_text().strip() == "2"
+
+
+@skip_windows_exec_surface
+def test_flush_ack_bounds_the_subprocess_and_reports_the_unacked_id(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """A wedged `orca` must not hang `_flush_ack` — and the per-Run lock held
+    behind it — forever. Bound each round with `timeout=` and name the
+    delivery id that never got acked so the coordinator can ack it by hand.
+
+    Measures wall-clock time directly against the production 5s bound rather
+    than via the SIGALRM-based `_wall_clock_guard`: that guard's
+    `TimeoutError` is itself an `OSError` subclass, so it would be silently
+    swallowed by `_flush_ack`'s own `except OSError` and this test would pass
+    even against an unbounded `subprocess.run` — the exact false-negative a
+    first draft of this test had. `runpy.run_path`'s returned namespace is
+    also a snapshot, not the running module's live `__globals__`, so
+    monkeypatching the module's timeout constant here would not reach the
+    already-defined `_flush_ack` closure either — the fake orca's sleep must
+    outlast the real bound instead.
+    """
+
+    mod = _load()
+    orca = tmp_path / "orca"
+    _write_executable(
+        orca,
+        """#!/usr/bin/env bash
+if [ "$1 $2" = "orchestration check" ]; then
+  sleep 10
+else
+  echo "{}"
+fi
+""",
+    )
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+
+    started = time.monotonic()
+    batch = mod["_flush_ack"]("run_x", "d1")
+    elapsed = time.monotonic() - started
+
+    assert batch is None
+    assert elapsed < 8.0
+    assert "d1" in capsys.readouterr().err
+    # Failability: a version with no `timeout=` on the subprocess call blocks
+    # for the fake orca's full 10s sleep instead of returning within ~5s.

@@ -22,7 +22,8 @@ from pathlib import Path
 
 DEFAULT_STALL_MINUTES = 10
 DEFAULT_CHECK_TIMEOUT_MS = 60_000
-ACK_FLUSH_TIMEOUT_MS = 200
+MAX_ACK_FLUSH_ROUNDS = 10
+ACK_FLUSH_SUBPROCESS_TIMEOUT_SECONDS = 5
 WAIT_TYPES = "worker_done,escalation,question"
 STALL_SWEEP_CLASSES = frozenset(
     {"idle", "shell", "limit", "start-screen", "update", "approval"}
@@ -110,7 +111,12 @@ def _run_loop(run_id: str, ledger_path: Path, stall_seconds: int, as_json: bool)
                 # This pass consumed a heartbeat and is the one returning
                 # control: there is no next `_wait_for_message` call left to
                 # chain its ack into, so flush it now instead of dropping it.
-                _flush_ack(run_id, ack)
+                # A delivery may already be queued behind that heartbeat —
+                # surface it as this pass's wake, exactly as a real wake
+                # from `_wait_for_message` would, rather than discarding it.
+                flushed = _flush_ack(run_id, ack)
+                if flushed is not None:
+                    verdict = pass_once(flushed)
             return verdict
 
 
@@ -195,35 +201,77 @@ def _wait_for_message(run_id: str, ack: str | None) -> tuple[dict | None, str | 
     return payload, delivery_id
 
 
-def _flush_ack(run_id: str, delivery_id: str) -> None:
-    """Send `delivery_id`'s ack right now, for a pass that is about to return
-    control rather than loop again: the normal chain-forward path (pass it as
-    `--ack` on the *next* `check --wait` call) never happens for that pass,
-    which is how a heartbeat got left unacked and replayed to this Run's next
+def _flush_ack(run_id: str, delivery_id: str) -> dict | None:
+    """Ack `delivery_id` right now, for a pass that is about to return control
+    rather than loop again: the normal chain-forward path (pass it as `--ack`
+    on the *next* `check --wait` call) never happens for that pass, which is
+    how a heartbeat got left unacked and replayed to this Run's next
     `worker-wait` invocation instead of being cleared by the one that saw it.
-    Best-effort: a failure here just means the batch is replayed later, the
-    same as any other unacked heartbeat, not a new failure mode.
+
+    Uses a plain (non-`--wait`) `check --ack`: it acknowledges immediately
+    and, if a delivery is already queued behind the one being flushed,
+    returns it right away rather than blocking for one. A queued heartbeat is
+    acked the same way and the round repeats, bounded to
+    `MAX_ACK_FLUSH_ROUNDS` so a run of heartbeats cannot loop here forever.
+    Returns the first queued non-heartbeat batch found, or `None` if nothing
+    is queued (or the check fails) — never silently discarding a real
+    delivery the way ignoring the subprocess output used to.
+
+    Each round is bounded with `timeout=`: an unresponsive `orca` must not
+    block this return path forever, which would keep the per-Run lock held
+    past the verdict already printed. On timeout the delivery id is reported
+    so the coordinator can ack it by hand.
     """
 
-    argv = [
-        "orca",
-        "orchestration",
-        "check",
-        "--run",
-        run_id,
-        "--wait",
-        "--timeout-ms",
-        str(ACK_FLUSH_TIMEOUT_MS),
-        "--types",
-        WAIT_TYPES,
-        "--ack",
-        delivery_id,
-        "--json",
-    ]
-    try:
-        subprocess.run(argv, capture_output=True, text=True)
-    except OSError:
-        pass
+    ack = delivery_id
+    for _ in range(MAX_ACK_FLUSH_ROUNDS):
+        argv = [
+            "orca",
+            "orchestration",
+            "check",
+            "--run",
+            run_id,
+            "--types",
+            WAIT_TYPES,
+            "--ack",
+            ack,
+            "--json",
+        ]
+        try:
+            proc = subprocess.run(
+                argv,
+                capture_output=True,
+                text=True,
+                timeout=ACK_FLUSH_SUBPROCESS_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            print(
+                f"worker-wait: ack flush for delivery {ack} timed out; ack it by hand",
+                file=sys.stderr,
+            )
+            return None
+        except OSError:
+            return None
+        result = _last_non_keepalive(proc.stdout + proc.stderr)
+        if (
+            proc.returncode != 0
+            or not isinstance(result, dict)
+            or result.get("ok") is False
+            or not isinstance(result.get("result"), dict)
+        ):
+            return None
+        payload = result["result"]
+        messages = payload.get("messages") or []
+        next_delivery_id = payload.get("deliveryId")
+        if not messages:
+            return None
+        if all(isinstance(m, dict) and m.get("type") == "heartbeat" for m in messages):
+            if not next_delivery_id:
+                return None
+            ack = next_delivery_id
+            continue
+        return payload
+    return None
 
 
 def _last_non_keepalive(text: str) -> dict | None:

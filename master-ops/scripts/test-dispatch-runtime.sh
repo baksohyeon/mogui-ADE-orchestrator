@@ -717,4 +717,281 @@ BIN
 )
 codex_start_screen_wiring_test "$dispatch" || exit 1
 
-echo "dispatch multi-vendor / check-only / contract-delivery / cursor-pretrust / codex-launch / codex-start-screen / codex-start-screen-wiring regression tests passed"
+# --- Feature: codex_hooks_vet -------------------------------------------------
+#
+# 2026-10-01: codex's "Hooks need review" modal is answerable under dispatch
+# authority only once the hooks it would trust are read, not just trusted on
+# faith. Extracts codex_hooks_vet and runs it against fixture hooks.json
+# files shaped like the real file measured on this host (top-level "hooks",
+# per-event arrays of {matcher, hooks:[{command}]}): one with only
+# already-resolvable commands, one with a missing absolute path, one with a
+# first word not on PATH, and one home with no hooks.json at all.
+codex_hooks_vet_test() (
+  set +e
+  set -u
+  local dispatch="$1" work fn
+
+  fn=$(awk '$0=="codex_hooks_vet() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  [ -n "$fn" ] || { echo "FAIL: could not extract codex_hooks_vet" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-hooks-vet-test.$$"
+  mkdir -p "$work/pass" "$work/badpath" "$work/badword" "$work/missing"
+  trap 'rm -rf "$work"' EXIT
+
+  cat > "$work/pass/hooks.json" <<'EOF'
+{"hooks": {"PreToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "echo hi"}]}]}}
+EOF
+  cat > "$work/badpath/hooks.json" <<'EOF'
+{"hooks": {"PreToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "/no/such/binary --flag"}]}]}}
+EOF
+  cat > "$work/badword/hooks.json" <<'EOF'
+{"hooks": {"PreToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "zz-mogui-never-on-path --flag"}]}]}}
+EOF
+
+  run_case() {  # fn-body  home-dir
+    local body="$1" home="$2" script_file="$work/case.sh"
+    {
+      echo 'set -u'
+      printf '%s\n' "$body"
+      printf 'codex_hooks_vet "$1"\n'
+    } > "$script_file"
+    bash "$script_file" "$home"
+  }
+
+  assert_case() {  # label  want-rc  want-substring  home
+    local label="$1" want_rc="$2" want_sub="$3" home="$4" out rc
+    out=$(run_case "$fn" "$home")
+    rc=$?
+    if [ "$rc" != "$want_rc" ]; then
+      echo "FAIL: case $label expected rc $want_rc, got $rc (out: $out)" >&2
+      return 1
+    fi
+    case "$out" in
+      *"$want_sub"*) ;;
+      *) echo "FAIL: case $label output '$out' lacks '$want_sub'" >&2; return 1;;
+    esac
+    echo "ok   : case $label · rc=$rc"
+  }
+
+  assert_case all-local "0" "command(s) checked" "$work/pass" || return 1
+  assert_case bad-abs-path "1" "/no/such/binary: no such file" "$work/badpath" || return 1
+  assert_case bad-path-word "1" "zz-mogui-never-on-path: not found on PATH" "$work/badword" || return 1
+  assert_case missing-hooks-json "2" "not found" "$work/missing" || return 1
+
+  mutate_line() {  # unique-substring-of-target-line  replacement-line
+    local needle="$1" repl="$2" line out="" replaced=0
+    while IFS= read -r line; do
+      case "$line" in
+        *"$needle"*) line="$repl"; replaced=1;;
+      esac
+      out="$out$line
+"
+    done <<EOF
+$fn
+EOF
+    [ "$replaced" -eq 1 ] || return 1
+    printf '%s' "$out"
+  }
+
+  failability_case() {  # label  needle  replacement-line  home  blocked-rc
+    local label="$1" needle="$2" repl="$3" home="$4" blocked_rc="$5" mutant out rc
+    mutant=$(mutate_line "$needle" "$repl") || { echo "FAIL: $label needle not found in function body" >&2; return 1; }
+    if [ "$mutant" = "$fn" ]; then
+      echo "FAIL: $label mutant did not change the source" >&2
+      return 1
+    fi
+    out=$(run_case "$mutant" "$home")
+    rc=$?
+    if [ "$rc" = "$blocked_rc" ]; then
+      echo "FAIL: failability: $label mutant still returns $blocked_rc" >&2
+      return 1
+    fi
+    echo "ok   : failability: $label mutant changes rc $blocked_rc -> $rc"
+  }
+
+  failability_case abs-path-check \
+    '                if token.startswith("/") and not os.path.exists(token):' \
+    '                if False:' \
+    "$work/badpath" "1" || return 1
+  failability_case path-word-check \
+    '                if shutil.which(first) is None:' \
+    '                if False:' \
+    "$work/badword" "1" || return 1
+  failability_case missing-file-check \
+    '    print(f"hooks-vet: {path}: not found")' \
+    '    sys.exit(0)' \
+    "$work/missing" "2" || return 1
+)
+codex_hooks_vet_test "$dispatch" || exit 1
+
+# --- Feature: hooks-review modal answered only after a vetted pass ---------
+#
+# 2026-10-01: PR #156 made codex_start_screen_problem read the "Hooks need
+# review" modal as a selection menu and take the exit-3 path, same as any
+# other menu it cannot act on — closing the door codex-hooks-review-answer
+# (shipped in PR #133) was meant to open. Extracts the 3b wiring block plus
+# codex_hooks_vet_homes/codex_hooks_homes/codex_accounts_dir/codex_hooks_vet
+# and HOOKS_ANSWER_BIN, and runs it against a fake orca (terminal read
+# returns the hooks-review pane once, then a ready pane), a fake answer
+# tool, and a fake $HOME whose .codex/hooks.json either passes or fails the
+# vet.
+codex_hooks_vet_wiring_test() (
+  set +e
+  set -u
+  local dispatch="$1" work jqf_fn pane_classification_fn start_fn markers wiring_block
+  local vet_fn homes_fn accounts_fn vet_homes_fn hooks_answer_var
+  local menu ready script_file out status mutant_wiring
+
+  jqf_fn=$(grep -m1 -F 'jqf() {' "$dispatch")
+  pane_classification_fn=$(awk '$0=="pane_classification() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  start_fn=$(awk '$0=="codex_start_screen_problem() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  markers=$(grep -E '^(LIMIT_MARKERS|HOOK_TRUST_MARKERS|PREPARED_PROMPT_MARKERS|PREPARED_UNICODE_PROMPT_MARKERS)=' "$dispatch")
+  accounts_fn=$(awk '$0=="codex_accounts_dir() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  homes_fn=$(awk '$0=="codex_hooks_homes() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  vet_fn=$(awk '$0=="codex_hooks_vet() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  vet_homes_fn=$(awk '$0=="codex_hooks_vet_homes() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  hooks_answer_var=$(grep -E '^HOOKS_ANSWER_BIN=' "$dispatch")
+  wiring_block=$(awk '
+    $0=="if [ \"$RUNTIME\" = codex ]; then"{f=1}
+    f{print}
+    f && /dispatch failed/{exit}
+  ' "$dispatch")
+
+  [ -n "$jqf_fn" ] || { echo "FAIL: could not extract jqf" >&2; return 1; }
+  [ -n "$pane_classification_fn" ] || { echo "FAIL: could not extract pane_classification" >&2; return 1; }
+  [ -n "$start_fn" ] || { echo "FAIL: could not extract codex_start_screen_problem" >&2; return 1; }
+  [ -n "$accounts_fn" ] || { echo "FAIL: could not extract codex_accounts_dir" >&2; return 1; }
+  [ -n "$homes_fn" ] || { echo "FAIL: could not extract codex_hooks_homes" >&2; return 1; }
+  [ -n "$vet_fn" ] || { echo "FAIL: could not extract codex_hooks_vet" >&2; return 1; }
+  [ -n "$vet_homes_fn" ] || { echo "FAIL: could not extract codex_hooks_vet_homes" >&2; return 1; }
+  [ -n "$hooks_answer_var" ] || { echo "FAIL: could not extract HOOKS_ANSWER_BIN" >&2; return 1; }
+  [ -n "$wiring_block" ] || { echo "FAIL: could not extract the codex start-screen wiring block" >&2; return 1; }
+  printf '%s\n' "$wiring_block" | grep -Fq 'codex_hooks_vet_homes' || { echo "FAIL: extracted block does not call codex_hooks_vet_homes" >&2; return 1; }
+  printf '%s\n' "$wiring_block" | grep -Fq '"$HOOKS_ANSWER_BIN"' || { echo "FAIL: extracted block does not call HOOKS_ANSWER_BIN" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-hooks-wiring-test.$$"
+  mkdir -p "$work/fakehome-pass/.codex" "$work/fakehome-fail/.codex"
+  trap 'rm -rf "$work"' EXIT
+
+  cat > "$work/fakehome-pass/.codex/hooks.json" <<'EOF'
+{"hooks": {"PreToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "echo hi"}]}]}}
+EOF
+  cat > "$work/fakehome-fail/.codex/hooks.json" <<'EOF'
+{"hooks": {"PreToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "/no/such/binary"}]}]}}
+EOF
+
+  cat > "$work/orca" <<'BIN'
+#!/bin/bash
+if [ "$1 $2" = "terminal read" ]; then
+  n=$(( $(cat "$FAKE_READ_COUNT" 2>/dev/null || echo 0) + 1 ))
+  echo "$n" > "$FAKE_READ_COUNT"
+  if [ "$n" -eq 1 ]; then cat "$FAKE_PANE_FILE"; else cat "$FAKE_READY_PANE_FILE"; fi
+  exit 0
+fi
+if [ "$1 $2" = "orchestration dispatch" ]; then
+  echo INJECTED >> "$FAKE_MARKER"
+  printf '{"result":{"dispatch":{"id":"disp_fake"}}}\n'
+  exit 0
+fi
+exit 1
+BIN
+  chmod +x "$work/orca"
+
+  cat > "$work/fake-hooks-answer" <<'BIN'
+#!/bin/bash
+echo ANSWERED >> "$FAKE_ANSWER_MARKER"
+echo "hooks-review ✓ codex · trusted 1 new/changed hook(s) by dispatch authority (charter §4)"
+exit 0
+BIN
+  chmod +x "$work/fake-hooks-answer"
+
+  menu='Hooks need review
+4 hooks are new or changed
+› 1. Review hooks
+  2. Trust all and continue
+  3. Continue without trusting'
+  ready='› Ask Codex to do anything
+  GPT-5.5 xhigh · ~/worktree
+  ? for shortcuts                                   ⚠ 1 warning · f2 to view'
+  printf '%s\n' "$menu" > "$work/pane.txt"
+  printf '%s\n' "$ready" > "$work/ready.txt"
+
+  write_script() {  # outfile  home  wiring-text
+    local outfile="$1" home="$2" wiring_text="$3"
+    {
+      echo 'set -u'
+      printf 'export FAKE_MARKER=%s\n' "$work/injected"
+      printf 'export FAKE_ANSWER_MARKER=%s\n' "$work/answered"
+      printf 'export FAKE_READ_COUNT=%s\n' "$work/read-count"
+      printf 'export FAKE_PANE_FILE=%s\n' "$work/pane.txt"
+      printf 'export FAKE_READY_PANE_FILE=%s\n' "$work/ready.txt"
+      printf '%s\n' "$jqf_fn"
+      printf '%s\n' "$markers"
+      printf '%s\n' "$pane_classification_fn"
+      printf '%s\n' "$start_fn"
+      printf '%s\n' "$accounts_fn"
+      printf '%s\n' "$homes_fn"
+      printf '%s\n' "$vet_fn"
+      printf '%s\n' "$vet_homes_fn"
+      echo 'RUNTIME=codex'
+      echo 'MODEL=gpt-5.5'
+      echo 'CODEX_REASONING_EFFORT=xhigh'
+      echo 'TERMINAL=term_fake'
+      echo 'TASK=task_fake'
+      printf 'HOME=%s\n' "$home"
+      printf 'CODEX_ACCOUNTS_DIR=%s\n' "$work/no-accounts-dir"
+      printf 'HOOKS_ANSWER_BIN=%s\n' "$work/fake-hooks-answer"
+      printf '%s\n' "$wiring_text"
+      echo 'echo WIRING_SURVIVED'
+    } > "$outfile"
+  }
+
+  script_file="$work/run.sh"
+
+  # Vet passes: the modal is answered, dispatch --inject is reached.
+  rm -f "$work/injected" "$work/answered" "$work/read-count"
+  write_script "$script_file" "$work/fakehome-pass" "$wiring_block"
+  out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] || [ ! -f "$work/answered" ] || [ ! -f "$work/injected" ] \
+      || ! printf '%s\n' "$out" | grep -q '^WIRING_SURVIVED$'; then
+    echo "FAIL: a vetted-pass hooks-review pane should answer the modal and reach --inject" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : a vetted-pass hooks-review pane answers the modal and reaches orca orchestration dispatch --inject"
+
+  # Vet fails: the modal is never answered, --inject is never reached.
+  rm -f "$work/injected" "$work/answered" "$work/read-count"
+  write_script "$script_file" "$work/fakehome-fail" "$wiring_block"
+  out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ] || [ -f "$work/answered" ] || [ -f "$work/injected" ]; then
+    echo "FAIL: a vet-failed hooks-review pane should not answer the modal or reach --inject (status=$status)" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  printf '%s\n' "$out" | grep -q 'hooks-vet:' || { echo "FAIL: vet-failed case did not print the vet's own line" >&2; return 1; }
+  echo "ok   : a vet-failed hooks-review pane prints the vet's line and never answers the modal"
+
+  # Failability: a copy of the wiring block whose vet gate is disabled would
+  # answer the modal even on a vet-failed home.
+  mutant_wiring=${wiring_block/'if codex_hooks_vet_homes; then'/'if true; then'}
+  if [ "$mutant_wiring" = "$wiring_block" ]; then
+    echo "FAIL: vet-gate mutant did not change the source" >&2
+    return 1
+  fi
+  rm -f "$work/injected" "$work/answered" "$work/read-count"
+  write_script "$script_file" "$work/fakehome-fail" "$mutant_wiring"
+  out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
+  status=$?
+  if [ ! -f "$work/answered" ]; then
+    echo "FAIL: failability: disabling the vet gate should have answered the modal on a vet-failed home, but didn't (status=$status)" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : failability: disabling the vet gate answers the modal on a vet-failed home (status=$status)"
+)
+codex_hooks_vet_wiring_test "$dispatch" || exit 1
+
+echo "dispatch multi-vendor / check-only / contract-delivery / cursor-pretrust / codex-launch / codex-start-screen / codex-start-screen-wiring / codex-hooks-vet / codex-hooks-vet-wiring regression tests passed"

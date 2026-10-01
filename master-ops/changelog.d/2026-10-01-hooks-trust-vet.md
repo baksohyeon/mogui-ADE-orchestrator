@@ -1,0 +1,1 @@
+`dispatch` now answers codex's "Hooks need review" start-screen modal itself, under dispatch authority, once `codex_hooks_vet` confirms every hook command on the host's codex homes resolves to something already on disk or PATH; a vet failure or any other selection menu still takes the existing exit-3 path instead of answering.

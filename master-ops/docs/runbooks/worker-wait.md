@@ -83,7 +83,15 @@ delivery, for the coordinator to act and then re-run `worker-wait`.
   process stopped — see its own `--help`). Never abandon from the table alone.
 - **`STALL`** with sweep class `approval` — clear the in-scope approval per
   the review-and-routing charter section; anything else in scope is the
-  owner's call.
+  owner's call. A codex "Hooks need review" modal clears by hand the same
+  way: `orca terminal send --terminal <pane> --text <option-number>`, then an
+  empty `orca terminal send --terminal <pane> --text '' --enter` to confirm,
+  because a bare number only moves the selection. Redispatch after with both
+  `--terminal <pane>` and `--worktree path:<absolute-worktree-path>`, since
+  `--terminal` alone has no pre-trust path and exits 2. `scripts/dispatch`
+  now does this itself, under dispatch authority, whenever `codex_hooks_vet`
+  passes every hook command on the host's codex homes; the manual path above
+  is for the vet failing or a home outside scope.
 - **`STALL`** with sweep class `limit` or `shell` — redispatch elsewhere; the
   worktree and terminal are not reusable as-is.
 - **`STALL`** with sweep class `start-screen` or `update` — dismiss/restart

@@ -873,10 +873,37 @@ hooks_answer_bin_path_test() (
   out=$(SCRIPTS_DIR="$real_dir" bash "$script_file")
   rc=$?
   if [ "$rc" != 0 ] || [ "$out" != "$real_dir/codex-hooks-review-answer" ]; then
-    echo "FAIL: HOOKS_ANSWER_BIN did not resolve to $real_dir/codex-hooks-review-answer under the wrapper's real SCRIPTS_DIR" >&2
+    echo "FAIL: HOOKS_ANSWER_BIN did not resolve by name to codex-hooks-review-answer under the wrapper's real SCRIPTS_DIR" >&2
     return 1
   fi
-  echo "ok   : HOOKS_ANSWER_BIN resolves to $real_dir/codex-hooks-review-answer under the real SCRIPTS_DIR"
+  echo "ok   : HOOKS_ANSWER_BIN resolves to an existing executable (${out##*/}) under the real SCRIPTS_DIR"
+
+  # Failability: an assignment pointed at dispatch itself, not
+  # codex-hooks-review-answer, is still an existing executable beside the
+  # wrapper. The old -x-only check waved this through; the name compare
+  # above must fail it instead.
+  mutant_assign=${assign/codex-hooks-review-answer/dispatch}
+  if [ "$mutant_assign" = "$assign" ]; then
+    echo "FAIL: dispatch-target mutant did not change the source" >&2
+    return 1
+  fi
+  {
+    echo 'set -u'
+    printf '%s\n' "$mutant_assign"
+    echo '[ -x "$HOOKS_ANSWER_BIN" ] && printf "%s\n" "$HOOKS_ANSWER_BIN"'
+  } > "$script_file"
+  out=$(SCRIPTS_DIR="$real_dir" bash "$script_file")
+  if [ "$out" = "$real_dir/codex-hooks-review-answer" ]; then
+    echo "FAIL: failability: an assignment pointed at dispatch should fail the name compare" >&2
+    return 1
+  fi
+  echo "ok   : failability: an assignment pointed at dispatch resolves to an executable (${out##*/}) and fails the name compare"
+
+  {
+    echo 'set -u'
+    printf '%s\n' "$assign"
+    echo '[ -x "$HOOKS_ANSWER_BIN" ] && printf "%s\n" "$HOOKS_ANSWER_BIN"'
+  } > "$script_file"
 
   empty_dir="${TMPDIR:-/tmp}/mogui-dispatch-hooks-answer-bin-empty.$$"
   mkdir -p "$empty_dir"

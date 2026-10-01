@@ -548,10 +548,10 @@ except json.JSONDecodeError as error:
     print(f"hooks-vet: {path}: cannot parse hooks.json: {error}")
     sys.exit(2)
 
-hooks = document.get("hooks", {}) if isinstance(document, dict) else {}
-if not isinstance(hooks, dict):
-    print(f"hooks-vet: {path}: 'hooks' is not an object")
-    sys.exit(2)
+if not isinstance(document, dict) or not isinstance(document.get("hooks"), dict):
+    print(f"hooks-vet: {path}: top level: wrong shape")
+    sys.exit(1)
+hooks = document["hooks"]
 
 checked = 0
 for event, entries in hooks.items():

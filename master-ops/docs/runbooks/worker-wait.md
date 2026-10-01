@@ -83,8 +83,13 @@ delivery, for the coordinator to act and then re-run `worker-wait`.
   process stopped — see its own `--help`). Never abandon from the table alone.
 - **`STALL`** with sweep class `approval` — clear the in-scope approval per
   the review-and-routing charter section; anything else in scope is the
-  owner's call. A codex "Hooks need review" modal clears by hand the same
-  way: `orca terminal send --terminal <pane> --text <option-number>`, then an
+  owner's call. A codex "Hooks need review" modal is read before it is
+  answered: read the hook commands it names and pick a trusting option only
+  when each one is a path on this machine or a tool on `PATH`, the same rule
+  the wrapper applies; when the commands cannot be read (a plugin hook
+  source), choose option 3, continue without trusting, and file what was
+  seen. It clears by hand the same way: `orca terminal send --terminal
+  <pane> --text <option-number>`, then an
   empty `orca terminal send --terminal <pane> --text '' --enter` to confirm,
   because a bare number only moves the selection. While the modal blocks the
   pane, orca refuses that send with `agent_prompt_blocked` and an

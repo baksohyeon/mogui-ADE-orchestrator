@@ -783,8 +783,8 @@ EOF
     echo "ok   : case $label · rc=$rc"
   }
 
-  assert_case all-local "0" "command(s) checked" "$work/pass" || return 1
-  assert_case builtin-first-word "0" "command(s) checked" "$work/builtin" || return 1
+  assert_case all-local "0" "1 command(s) checked" "$work/pass" || return 1
+  assert_case builtin-first-word "0" "1 command(s) checked" "$work/builtin" || return 1
   assert_case bad-abs-path "1" "/no/such/binary: no such file" "$work/badpath" || return 1
   assert_case bad-path-word "1" "zz-mogui-never-on-path: not found on PATH" "$work/badword" || return 1
   assert_case bad-event-shape "1" "wrong shape" "$work/badshape" || return 1

@@ -11,6 +11,7 @@ import threading
 from pathlib import Path
 
 import master_runtime.core.dispatch_gate as dispatch_gate
+import master_runtime.core.dispatch_timeline as dispatch_timeline
 from master_runtime.core.dispatch_gate import (
     DispatchGate,
     DispatchGateConfig,
@@ -3454,3 +3455,22 @@ def test_public_probe_docs_state_exit_and_stdout_requirements() -> None:
         # fail, even if unrelated prose still contains "stdout" or "job id".
         requirement_removed = requirement.sub("", text, count=1)
         assert not requirement.search(requirement_removed)
+
+
+def test_default_ledger_path_matches_timeline_and_worker_wait_doc(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Without DISPATCH_GATE_LEDGER, the gate's default must be the same file
+    worker-wait.md documents (~/.mogui/dispatch-ledger.jsonl) and the same
+    file dispatch_timeline reads, or a direct `dispatch-gate register` run
+    silently writes a dispatch that worker-wait never sees."""
+    monkeypatch.delenv("DISPATCH_GATE_LEDGER", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert dispatch_gate._default_ledger_path() == dispatch_timeline.default_ledger_path()
+    assert dispatch_gate._default_ledger_path() == tmp_path / ".mogui" / "dispatch-ledger.jsonl"
+
+
+def test_default_ledger_path_env_override_wins(tmp_path: Path, monkeypatch) -> None:
+    override = tmp_path / "custom-ledger.jsonl"
+    monkeypatch.setenv("DISPATCH_GATE_LEDGER", str(override))
+    assert dispatch_gate._default_ledger_path() == override

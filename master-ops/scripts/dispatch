@@ -985,8 +985,8 @@ if [ "$RUNTIME" = codex ]; then
         && printf '%s\n' "$CODEX_PANE" | grep -q 'Hooks need review'; then
       HOOKS_ANSWERED=1
       if codex_hooks_vet_homes; then
-        if [ ! -x "$HOOKS_ANSWER_BIN" ]; then
-          echo "✗ codex start screen · hooks-review answer tool missing at $HOOKS_ANSWER_BIN · spec NOT injected" >&2
+        if [ ! -f "$HOOKS_ANSWER_BIN" ] || [ ! -x "$HOOKS_ANSWER_BIN" ]; then
+          echo "✗ codex start screen · hooks-review answer tool missing or not executable at $HOOKS_ANSWER_BIN · spec NOT injected" >&2
           exit 3
         fi
         HOOKS_ANSWER_OUT=$("$HOOKS_ANSWER_BIN" "$TERMINAL" 2>&1)

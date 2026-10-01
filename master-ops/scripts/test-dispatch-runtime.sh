@@ -872,11 +872,11 @@ hooks_answer_bin_path_test() (
   real_dir=$(cd "$(dirname "$dispatch")" && pwd)
   out=$(SCRIPTS_DIR="$real_dir" bash "$script_file")
   rc=$?
-  if [ "$rc" != 0 ] || [ -z "$out" ]; then
-    echo "FAIL: HOOKS_ANSWER_BIN did not resolve to an existing executable under the wrapper's real SCRIPTS_DIR" >&2
+  if [ "$rc" != 0 ] || [ "$out" != "$real_dir/codex-hooks-review-answer" ]; then
+    echo "FAIL: HOOKS_ANSWER_BIN did not resolve to $real_dir/codex-hooks-review-answer under the wrapper's real SCRIPTS_DIR" >&2
     return 1
   fi
-  echo "ok   : HOOKS_ANSWER_BIN resolves to an existing executable (${out##*/}) under the real SCRIPTS_DIR"
+  echo "ok   : HOOKS_ANSWER_BIN resolves to $real_dir/codex-hooks-review-answer under the real SCRIPTS_DIR"
 
   empty_dir="${TMPDIR:-/tmp}/mogui-dispatch-hooks-answer-bin-empty.$$"
   mkdir -p "$empty_dir"
@@ -1042,14 +1042,14 @@ BIN
     printf '%s\n' "$out" >&2
     return 1
   fi
-  printf '%s\n' "$out" | grep -q 'hooks-review answer tool missing' || { echo "FAIL: missing-answer-tool case did not print the missing-tool message" >&2; return 1; }
+  printf '%s\n' "$out" | grep -q 'hooks-review answer tool missing or not executable' || { echo "FAIL: missing-answer-tool case did not print the missing-or-not-executable message" >&2; return 1; }
   echo "ok   : a missing HOOKS_ANSWER_BIN takes the exit-3 path without answering the modal or reaching --inject"
 
   # Failability: a copy of the wiring block whose existence check is disabled
   # still exits 3 on a missing HOOKS_ANSWER_BIN, since the shell can't exec a
   # file that isn't there. It drops the exit-3 path's own message, the call
   # was attempted instead of refused.
-  mutant_wiring=${wiring_block/'if [ ! -x "$HOOKS_ANSWER_BIN" ]; then'/'if false; then'}
+  mutant_wiring=${wiring_block/'if [ ! -f "$HOOKS_ANSWER_BIN" ] || [ ! -x "$HOOKS_ANSWER_BIN" ]; then'/'if false; then'}
   if [ "$mutant_wiring" = "$wiring_block" ]; then
     echo "FAIL: existence-check mutant did not change the source" >&2
     return 1
@@ -1058,12 +1058,46 @@ BIN
   write_script "$script_file" "$work/fakehome-pass" "$mutant_wiring" "$work/no-such-hooks-answer"
   out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
   status=$?
-  if printf '%s\n' "$out" | grep -q 'hooks-review answer tool missing'; then
+  if printf '%s\n' "$out" | grep -q 'hooks-review answer tool missing or not executable'; then
     echo "FAIL: failability: disabling the existence check should drop the missing-tool message, but it is still printed" >&2
     printf '%s\n' "$out" >&2
     return 1
   fi
   echo "ok   : failability: disabling the existence check attempts the call instead of refusing it (status=$status, message dropped)"
+
+  # Vet passes, but HOOKS_ANSWER_BIN names an executable directory: -x alone
+  # would pass for a directory, so the guard also checks -f and takes the
+  # exit-3 path before trying to run anything.
+  rm -f "$work/injected" "$work/answered" "$work/read-count"
+  mkdir -p "$work/dir-hooks-answer"
+  write_script "$script_file" "$work/fakehome-pass" "$wiring_block" "$work/dir-hooks-answer"
+  out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 3 ] || [ -f "$work/answered" ] || [ -f "$work/injected" ]; then
+    echo "FAIL: a directory at HOOKS_ANSWER_BIN should take the exit-3 path without answering or injecting (status=$status)" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  printf '%s\n' "$out" | grep -q 'hooks-review answer tool missing or not executable' || { echo "FAIL: directory case did not print the missing-or-not-executable message" >&2; return 1; }
+  echo "ok   : a directory at HOOKS_ANSWER_BIN takes the exit-3 path without answering the modal or reaching --inject"
+
+  # Failability: a copy of the wiring block whose guard drops back to -x
+  # alone lets an executable directory through instead of refusing it.
+  mutant_wiring=${wiring_block/'if [ ! -f "$HOOKS_ANSWER_BIN" ] || [ ! -x "$HOOKS_ANSWER_BIN" ]; then'/'if [ ! -x "$HOOKS_ANSWER_BIN" ]; then'}
+  if [ "$mutant_wiring" = "$wiring_block" ]; then
+    echo "FAIL: directory-check mutant did not change the source" >&2
+    return 1
+  fi
+  rm -f "$work/injected" "$work/answered" "$work/read-count"
+  write_script "$script_file" "$work/fakehome-pass" "$mutant_wiring" "$work/dir-hooks-answer"
+  out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
+  status=$?
+  if printf '%s\n' "$out" | grep -q 'hooks-review answer tool missing or not executable'; then
+    echo "FAIL: failability: dropping the -f check should let an executable directory through, but the guard still refused it" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : failability: dropping the -f check lets an executable directory through instead of refusing it (status=$status)"
 
   # Vet passes and the answer tool runs, but it exits 1 (did not clear the
   # modal): the fail-closed answer-error path, not the always-exits-0 fake

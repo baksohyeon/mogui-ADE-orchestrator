@@ -266,6 +266,55 @@ pane_classification() {
   pane_classify_text "$pane"
 }
 
+# Codex has its own ready state and its own gates, neither of which the markers
+# above were written for. Measured 2026-10-01 on a peer install (codex-cli
+# 0.159.2 to 0.159.3): a bare `codex --model <id>` launch opened a model-
+# retirement migration menu with "Try new model" preselected; `terminal wait
+# --for tui-idle` called that pane ready the same as a real prompt, the
+# injected spec's first keystroke confirmed the preselected option, and the
+# pane footer silently turned from the requested model to the replacement
+# while every dispatch step still printed success. Codex's own ready state is
+# a footer line, "<model> <effort> · <path>", which a trust prompt or a menu
+# does not have — so the footer decides, not a menu/prompt pattern list that a
+# future, unseen gate would just fall through. Returns 1 with a one-line
+# reason for a provider-limit phrase, an update notice, or a numbered
+# selection menu (all three read from screens seen that day); returns 2 when
+# no footer has rendered yet, so the caller can read the pane again; returns 0
+# silently once the footer's model and effort match the request.
+codex_start_screen_problem() {
+  local pane="$1" model="$2" effort="$3" state footer shown want
+  state=$(printf '%s\n' "$pane" | sed '/^[[:space:]]*$/d' | tail -n 12)
+  if printf '%s\n' "$state" | grep -Eiq "$LIMIT_MARKERS"; then
+    echo "provider limit notice"; return 1
+  fi
+  if printf '%s\n' "$state" | grep -Eiq 'update available'; then
+    echo "update notice"; return 1
+  fi
+  if printf '%s\n' "$state" | grep -Eq '^[[:space:]]*›[[:space:]]*[0-9]+\.'; then
+    echo "selection menu: $(printf '%s\n' "$state" | grep -Em1 '^[[:space:]]*›[[:space:]]*[0-9]+\.' | sed 's/^[[:space:]]*//')"
+    return 1
+  fi
+  # The model token must carry a digit (every measured model id does, e.g.
+  # "gpt-5.5"), or the keyboard-shortcut hint line codex prints below its own
+  # footer ("enter/esc confirm · ctrl+c quit") matches this same shape and is
+  # read as a footer that disagrees with the request.
+  footer=$(printf '%s\n' "$state" | grep -Eio '^[[:space:]]*[^[:space:]]*[0-9][^[:space:]]*[[:space:]]+[a-z]+[[:space:]]*·' | tail -n 1)
+  if [ -z "$footer" ]; then
+    echo "no model footer yet"; return 2
+  fi
+  shown=$(printf '%s\n' "$footer" | awk '{print tolower($1) " " tolower($2)}')
+  want=$(printf '%s %s\n' "$model" "$effort" | tr '[:upper:]' '[:lower:]')
+  if [ "$shown" != "$want" ]; then
+    echo "footer shows '$shown', requested '$want'"; return 1
+  fi
+}
+
+# Measured 2026-10-01, same install: the reasoning effort and the model-
+# migration pair codex surfaced that day. Carried as variables, not inlined,
+# because the launch flags below and the footer check above must agree on both.
+CODEX_REASONING_EFFORT=xhigh
+CODEX_MIGRATION_ACK='notice.model_migrations={"gpt-5.5"="gpt-6.1-sol"}'
+
 shell_quote() {
   python3 - "$1" <<'EOF'
 import shlex
@@ -315,7 +364,18 @@ runtime_command() {
     # entry was a claim, not a fact. `-m, --model <MODEL>` measured from
     # `codex --help` on 2026-08-05, per the registry rule: use the installed
     # CLI's own flags, measured, never guessed.
-    codex) echo "codex --model $model_arg";;
+    #
+    # Three more flags added 2026-10-01, all three in codex's own config
+    # reference: `model_reasoning_effort` pins the effort the start-screen
+    # check above compares the footer against, `check_for_update_on_startup
+    # =false` removes one more screen that can absorb an injection the same
+    # way the migration menu did, and `notice.model_migrations` acknowledges
+    # the one old-to-new pair measured that day — it covers that pair alone,
+    # not a future migration, which is what the footer check is for. Each is
+    # an inline table rather than the dotted form: the dotted form reads the
+    # dot inside the model id as a nesting separator and fails with "invalid
+    # type: map, expected a string".
+    codex) echo "codex --model $model_arg -c $(shell_quote "model_reasoning_effort=\"$CODEX_REASONING_EFFORT\"") -c check_for_update_on_startup=false -c $(shell_quote "$CODEX_MIGRATION_ACK")";;
     gemini) echo "gemini";;
     opencode) echo "opencode";;
     # agy is the Gemini host; `agy models` reports gemini-* ids. Its approval flag
@@ -745,6 +805,30 @@ if [ -z "$TERMINAL" ]; then
   orca terminal wait --terminal "$TERMINAL" --for tui-idle --timeout-ms 60000 --json >/dev/null 2>&1
 fi
 echo "→ $TASK → $TERMINAL ($KIND)"
+
+# 3b. codex start screen, on a created pane and a reused one alike — a reused
+# pane can be sitting on a gate from a previous launch just as easily as a
+# fresh one. `terminal wait --for tui-idle` above cannot tell a ready prompt
+# from a start screen waiting on a menu; both read idle. Left as it is on
+# failure, exits 3 without injecting or registering, the same as the
+# terminal-create failure path just above.
+if [ "$RUNTIME" = codex ]; then
+  CODEX_START_RC=2
+  for attempt in 1 2 3; do
+    CODEX_START_PROBLEM=$(codex_start_screen_problem \
+      "$(orca terminal read --terminal "$TERMINAL" --limit 40 2>/dev/null || true)" \
+      "$MODEL" "$CODEX_REASONING_EFFORT")
+    CODEX_START_RC=$?
+    [ "$CODEX_START_RC" = 2 ] && [ "$attempt" -lt 3 ] && { sleep 3; continue; }
+    break
+  done
+  if [ "$CODEX_START_RC" != 0 ]; then
+    echo "✗ codex start screen · $CODEX_START_PROBLEM · spec NOT injected" >&2
+    echo "  orca terminal read --terminal $TERMINAL --limit 40" >&2
+    exit 3
+  fi
+  echo "start screen ✓ codex · $MODEL $CODEX_REASONING_EFFORT"
+fi
 
 # 4. dispatch --inject
 PRE_INJECT_CLASS=$(pane_classification "$TERMINAL")

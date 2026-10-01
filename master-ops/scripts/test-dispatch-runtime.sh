@@ -406,4 +406,192 @@ BIN
 )
 cursor_pretrust_test "$dispatch" || exit 1
 
-echo "dispatch multi-vendor / check-only / contract-delivery / cursor-pretrust regression tests passed"
+# --- Feature: codex launch flags ---------------------------------------------
+#
+# 2026-10-01: a bare `codex --model <id>` opened a model-retirement migration
+# menu with "Try new model" preselected, and the injected spec's first
+# keystroke confirmed it. Extracts shell_quote, runtime_command, and the two
+# launch-flag variables, then compares the codex case's output against the
+# exact string the three added -c flags must produce.
+codex_launch_flags_test() (
+  set +e
+  set -u
+  local dispatch="$1" work shell_quote_fn runtime_command_fn vars want got mutant_fn out status
+
+  shell_quote_fn=$(awk '$0=="shell_quote() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  runtime_command_fn=$(awk '$0=="runtime_command() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  vars=$(grep -E '^CODEX_(REASONING_EFFORT|MIGRATION_ACK)=' "$dispatch")
+
+  [ -n "$shell_quote_fn" ] || { echo "FAIL: could not extract shell_quote" >&2; return 1; }
+  [ -n "$runtime_command_fn" ] || { echo "FAIL: could not extract runtime_command" >&2; return 1; }
+  [ "$(printf '%s\n' "$vars" | grep -c .)" = 2 ] || { echo "FAIL: could not extract both CODEX_ launch variables" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-codex-launch-test.$$"
+  mkdir -p "$work"
+  trap 'rm -rf "$work"' EXIT
+
+  write_script() {
+    local outfile="$1" fn="$2"
+    {
+      echo 'set -u'
+      printf '%s\n' "$vars"
+      printf '%s\n' "$shell_quote_fn"
+      printf '%s\n' "$fn"
+      echo 'MODEL=gpt-5.5'
+      echo 'runtime_command codex'
+    } > "$outfile"
+  }
+
+  want='codex --model gpt-5.5 -c '"'"'model_reasoning_effort="xhigh"'"'"' -c check_for_update_on_startup=false -c '"'"'notice.model_migrations={"gpt-5.5"="gpt-6.1-sol"}'"'"''
+
+  script_file="$work/run.sh"
+  write_script "$script_file" "$runtime_command_fn"
+  got=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] || [ "$got" != "$want" ]; then
+    echo "FAIL: codex launch command is '$got' (status=$status)" >&2
+    echo "  want '$want'" >&2
+    return 1
+  fi
+  echo "ok   — codex launch carries --model, reasoning effort, update-check off, and the migration ack · rc=0"
+
+  # Failability: dropping check_for_update_on_startup=false must break the exact-string match.
+  mutant_fn=${runtime_command_fn/' -c check_for_update_on_startup=false'/}
+  if [ "$mutant_fn" = "$runtime_command_fn" ]; then
+    echo "FAIL: launch-flag mutant did not change the source" >&2
+    return 1
+  fi
+  write_script "$script_file" "$mutant_fn"
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ] && [ "$out" = "$want" ]; then
+    echo "FAIL: failability — mutant dropping check_for_update_on_startup=false still produced the exact wanted string" >&2
+    return 1
+  fi
+  echo "ok   — failability: dropping check_for_update_on_startup=false breaks the exact-string match (mutant rc=$status)"
+)
+codex_launch_flags_test "$dispatch" || exit 1
+
+# --- Feature: codex start-screen check before inject -------------------------
+#
+# 2026-10-01: a codex pane sitting on that migration menu, a folder-trust
+# prompt, or a provider-limit notice reports idle exactly like a ready prompt
+# — `terminal wait --for tui-idle` cannot tell them apart, only the footer
+# line "<model> <effort> · <path>" can. Extracts codex_start_screen_problem
+# and the LIMIT_MARKERS it reuses, then runs it against the pane tails read
+# that day (ready, mismatched footer, update notice, provider limit, the
+# migration menu) plus an empty pane, checking both the returned exit code
+# and the printed reason. One mutant per check inside the function, each
+# breaking only the case it guards.
+codex_start_screen_test() (
+  set +e
+  set -u
+  local dispatch="$1" work fn markers ready mismatched update limit menu
+
+  fn=$(awk '$0=="codex_start_screen_problem() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  markers=$(grep -E '^LIMIT_MARKERS=' "$dispatch")
+  [ -n "$fn" ] || { echo "FAIL: could not extract codex_start_screen_problem" >&2; return 1; }
+  [ -n "$markers" ] || { echo "FAIL: could not extract LIMIT_MARKERS" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-codex-start-test.$$"
+  mkdir -p "$work"
+  trap 'rm -rf "$work"' EXIT
+
+  run_case() {  # fn-body  pane-text
+    local body="$1" pane="$2" script_file="$work/case.sh"
+    {
+      echo 'set -u'
+      printf '%s\n' "$markers"
+      printf '%s\n' "$body"
+      printf 'codex_start_screen_problem "$1" gpt-5.5 xhigh\n'
+    } > "$script_file"
+    bash "$script_file" "$pane"
+  }
+
+  ready='› Ask Codex to do anything
+  GPT-5.5 xhigh · ~/worktree
+  ? for shortcuts                                   ⚠ 1 warning · f2 to view'
+  mismatched='Model changed to gpt-6.1-sol medium
+› Ask Codex to do anything
+  GPT-6.1-Sol medium · ~/worktree'
+  update='Update available!'
+  limit="out of credits
+$ready"
+  menu='  GPT-5.5 retires on October 14, 2026. Switch to GPT-6.1 Sol to continue working in Codex.
+› 1. Try new model
+  2. Use existing model
+  enter/esc confirm · ctrl+c quit'
+
+  assert_case() {  # label  want-rc  want-substring  pane
+    local label="$1" want_rc="$2" want_sub="$3" pane="$4" out rc
+    out=$(run_case "$fn" "$pane")
+    rc=$?
+    if [ "$rc" != "$want_rc" ]; then
+      echo "FAIL: case $label expected rc $want_rc, got $rc (out: $out)" >&2
+      return 1
+    fi
+    case "$out" in
+      *"$want_sub"*) ;;
+      *) echo "FAIL: case $label output '$out' lacks '$want_sub'" >&2; return 1;;
+    esac
+    echo "ok   — case $label · rc=$rc"
+  }
+
+  assert_case ready "0" "" "  >_ OpenAI Codex (v0.159.3)
+$ready" || return 1
+  assert_case footer-mismatch "1" "requested 'gpt-5.5 xhigh'" "$mismatched" || return 1
+  assert_case update "1" "update notice" "$update" || return 1
+  assert_case limit "1" "provider limit notice" "$limit" || return 1
+  assert_case menu "1" "Try new model" "$menu" || return 1
+  assert_case no-footer "2" "no model footer yet" "" || return 1
+
+  mutate_line() {  # unique-substring-of-target-line  replacement-line
+    local needle="$1" repl="$2" line out="" replaced=0
+    while IFS= read -r line; do
+      case "$line" in
+        *"$needle"*) line="$repl"; replaced=1;;
+      esac
+      out="$out$line
+"
+    done <<EOF
+$fn
+EOF
+    [ "$replaced" -eq 1 ] || return 1
+    printf '%s' "$out"
+  }
+
+  failability_case() {  # label  needle  replacement-line  pane  blocked-rc
+    local label="$1" needle="$2" repl="$3" pane="$4" blocked_rc="$5" mutant out rc
+    mutant=$(mutate_line "$needle" "$repl") || { echo "FAIL: $label needle not found in function body" >&2; return 1; }
+    if [ "$mutant" = "$fn" ]; then
+      echo "FAIL: $label mutant did not change the source" >&2
+      return 1
+    fi
+    out=$(run_case "$mutant" "$pane")
+    rc=$?
+    if [ "$rc" = "$blocked_rc" ]; then
+      echo "FAIL: failability — $label mutant still returns $blocked_rc" >&2
+      return 1
+    fi
+    echo "ok   — failability: $label mutant changes rc $blocked_rc -> $rc"
+  }
+
+  failability_case limit-marker 'grep -Eiq "$LIMIT_MARKERS"' \
+    '  if printf "%s\n" "$state" | grep -Eiq "zz-never-matches-zz"; then' \
+    "$limit" "1" || return 1
+  failability_case update-phrase "grep -Eiq 'update available'" \
+    '  if printf "%s\n" "$state" | grep -Eiq "zz-never-matches-zz"; then' \
+    "$update" "1" || return 1
+  failability_case menu-pattern "grep -Eq '^[[:space:]]*›[[:space:]]*[0-9]+\\.'; then" \
+    '  if printf "%s\n" "$state" | grep -Eq "zz-never-matches-zz"; then' \
+    "$menu" "1" || return 1
+  failability_case no-footer-yet '[ -z "$footer" ]' \
+    '  if [ -z "zz-never-empty-zz" ]; then' \
+    "" "2" || return 1
+  failability_case footer-mismatch-compare '[ "$shown" != "$want" ]' \
+    '  if [ "$shown" = "$want" ]; then' \
+    "$mismatched" "1" || return 1
+)
+codex_start_screen_test "$dispatch" || exit 1
+
+echo "dispatch multi-vendor / check-only / contract-delivery / cursor-pretrust / codex-launch / codex-start-screen regression tests passed"

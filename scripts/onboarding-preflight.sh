@@ -584,7 +584,7 @@ fi
 
 # The gate writes its ledger outside the repository. Check writability without
 # creating anything: this script must not change state before --fix.
-gate_ledger="${DISPATCH_GATE_LEDGER:-.mogui/dispatch-ledger.jsonl}"
+gate_ledger="${DISPATCH_GATE_LEDGER:-${HOME}/.mogui/dispatch-ledger.jsonl}"
 gate_ledger_dir=$(dirname "$gate_ledger")
 if [[ -d "$gate_ledger_dir" ]]; then
   if [[ -w "$gate_ledger_dir" ]]; then

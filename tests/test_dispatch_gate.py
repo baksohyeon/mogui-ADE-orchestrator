@@ -3465,7 +3465,7 @@ def test_default_ledger_path_matches_timeline_and_worker_wait_doc(
     file dispatch_timeline reads, or a direct `dispatch-gate register` run
     silently writes a dispatch that worker-wait never sees."""
     monkeypatch.delenv("DISPATCH_GATE_LEDGER", raising=False)
-    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
     assert dispatch_gate._default_ledger_path() == dispatch_timeline.default_ledger_path()
     assert dispatch_gate._default_ledger_path() == tmp_path / ".mogui" / "dispatch-ledger.jsonl"
 

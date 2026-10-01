@@ -48,6 +48,218 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+## v0.5.230
+
+Release verification (2026-10-01):
+
+- `PYTHONPATH=src python -m pytest tests -q` reported 735 passed and 19 subtests.
+- `./scripts/generate-manifest --check` exited 0.
+- `./scripts/redaction-scan.sh` exited 0: 0 findings (mode=tracked, files=318), with organization
+  rules unmeasured (`REDACTION_EXTRA_PATTERNS` unset), same follow-up as v0.5.187 (mgm-e7e).
+- Every `master-ops/scripts/test-*.sh` exited 0 except `test-bash-output-size-warn.sh`, which fails
+  in this execution environment because the test resets `$HOME` to a scratch directory and the
+  sandbox's `python3` is a `mise` shim: with no cache under the scratch `$HOME`, `mise` downloads
+  `python@3.12.14` on every invocation, and that download's progress text leaks into the hook's
+  captured stdout, breaking the test's "small result is silent" assertion. The failure reproduces
+  identically on an unmodified checkout and is independent of this release's changes (changelog,
+  version file, manifest).
+
+Reclamation that measures before it closes, and a dispatch lifecycle you can read back (2026-09-30):
+
+- `src/master_runtime/core/worker_reap.py`: `WorkerReaper.reap()` no longer closes a settled
+  dispatch's pane unconditionally. Three measurements now gate the close, all required: the
+  terminal handle is still present in `orca terminal list`; no `dispatched` row in `orca
+  orchestration worker-list` (paginated, every Run) names the same handle — a newer dispatch may
+  have reused the pane before this one was reaped; and no agent CLI process (`claude`, `codex`,
+  `cursor`, `agy`, `grok`, matched by comm basename) has its cwd inside the dispatch's worktree
+  (`lsof -a -p <pid> -d cwd -Fn`, falling back to `/proc/<pid>/cwd`). A measurement that could not
+  be taken at all is a refusal, the same as a measurement that failed — never a pass. Each refusal
+  is a named reason in `actions_taken` (`pane_absent`, `reused_by:<dispatch-id>`,
+  `agent_process:<pid>:<comm>`, or an `_unmeasured` suffix). `--dry-run` now prints
+  `would_close_terminal:`/`would_remove_worktree:` instead of the executed-action strings, and
+  never prints `terminal_closed` — the bug this scope item exists for: a dry run on a pane closed
+  hours earlier, and on a pane a newer, still-`dispatched` dispatch was using, both reported
+  `terminal_closed:<handle>` with no check against measured state. Untracked `__pycache__/` litter
+  no longer counts as dirty when deciding whether a worktree is safe to remove. `ReapRecord` gained
+  a `measurements` field (`terminal_present`, `terminal_reused_by`, `agent_process`,
+  `worktree_clean`, `worktree_merged`) carried through to the ledger and the CLI's JSON output.
+- `master-ops/scripts/worker-wait` gains `--reap` (default off): an `OPEN_PANE` row additionally
+  calls `scripts/worker-reap --task-id <id> --json` for that row's dispatch and folds the reaper's
+  record into the row under a `reap` key, instead of the coordinator running it as a manual
+  follow-up. `_worker_list` now also tracks a handle-to-taskId map (every worker-list row seen, not
+  just `dispatched` ones) so an `OPEN_PANE` row can resolve the task id of whichever dispatch last
+  claimed that pane. Without `--reap`, `--once --json` output is byte-identical to before. A
+  missing `scripts/worker-reap` (a template-applied tree with no sibling orchestrator checkout)
+  reports `worker_reap_not_found` on the row rather than raising.
+- Dispatch lifecycle events, through the existing `master-ops/scripts/mogui_log.py` `emit()`, no
+  new file: `master-ops/scripts/dispatch` emits `dispatch_launched` after its register step, with
+  dispatch id, task id, pane, pid (usually empty — `dispatch` creates the worker's terminal through
+  an RPC, not a local process), and model. `scripts/dispatch-gate register` emits
+  `dispatch_registered`. `worker-wait` emits `wait_verdict` once per actionable row (`DEAD`,
+  `STALL`, `OPEN_PANE`) per accounting pass, and `wait_wake` once per non-heartbeat delivery, with
+  the message type(s) and delivery id. `scripts/worker-reap` emits `reaped` with `actions_taken`
+  after a real (non-dry-run) reap. Every event carries `dispatch_id`/`task_id` where known.
+  `mogui_log._session_kind()` now returns `master` when the process's cwd is the workspace root
+  (`config/workspace-descriptor.json`'s `workspace_root`, checked at `<cwd>/config/`, or the new
+  `MOGUI_SEAT_ROOT` environment variable when set — checked first, ahead of the descriptor file),
+  `worker` as today (unchanged: `ORCA_TASK_ID` set, or `.orca/worktrees` in the cwd), `unknown`
+  otherwise. `worker-wait`'s `mogui_log` import is fail-open (a copy of the script made without its
+  sibling, or a template-apply that has not landed `mogui_log.py` yet, logs nothing instead of
+  crashing the wait loop) — this file is template-applied together with its sibling in normal
+  deployment, so the fallback is a defensive floor, not the expected path.
+- `scripts/dispatch-timeline <task_id|dispatch_id>`, new, read-only
+  (`src/master_runtime/core/dispatch_timeline.py` plus a thin CLI, mirroring `worker-reap`'s own
+  split): joins the ledger row(s), every event-log line, and the current `dispatch-show` record for
+  one dispatch into a time-ordered table (timestamp, source, event, outcome, detail) and `--json`.
+  A source with nothing matching is named in `missing_sources`, never silently absent. `--since
+  <hours>` with no id lists every dispatch seen in that window with its last event — the seat's
+  daily accounting view.
+- Tests, each with a failability case: `tests/test_worker_reap.py` gained pane-absent,
+  pane-reused-by-a-dispatched-dispatch, agent-process-in-the-worktree, each measurement's
+  unmeasured case, `__pycache__`-litter-is-not-dirty (mocked and real-git), and dry-run-shape
+  cases, alongside the existing dirty/clean/squash-merge coverage (now routed through one
+  `_MeasuredEnvironment` fake covering all five external measurements, defaulted to the happy
+  path). `tests/test_worker_wait.py` gained `--reap` invoking the reaper exactly once per
+  `OPEN_PANE` row and not otherwise, plus an autouse fixture pointing `mogui_log.LOG_DIR` at a
+  scratch path so the suite never appends to a developer's real `~/.mogui/event-log.jsonl`.
+  `tests/test_mogui_log.py` (new): `session_kind` `master` via `MOGUI_SEAT_ROOT` and via the
+  descriptor file, `worker`, `unknown`, and a malformed descriptor swallowed rather than raised.
+  `tests/test_dispatch_timeline.py` (new): join order across all three sources, each source named
+  missing independently (not just an all-or-nothing check), and `--since` windowing.
+  `master-ops/scripts/test-dispatch-timeline.sh` (new, promoted shell test): `--json` against
+  fixture ledger/event-log files and a fake `orca`, with a sort-removal mutant against a mirrored
+  scripts+src tree (`__pycache__` stripped from the copy, since a stale compiled copy of the
+  mutated module silently shadowed the edit during development of this test).
+- Docs: `master-ops/docs/runbooks/worker-wait.md` gained the `--reap` section and the reaper's
+  three pane measurements; new `master-ops/docs/runbooks/dispatch-timeline.md` names the event
+  kinds and the accounting view. `docs/runbooks/worker-reap.md` (repo root) corrected — it
+  described the pre-existing unconditional close and a two-measurement-only worktree check; now
+  describes all three pane measurements, `--dry-run`'s `would_*` action shape, and the
+  `measurements` field on the record and ledger row. `docs/public/reference.md` gained a row for
+  `scripts/dispatch-timeline`. `MANIFEST.json` regenerated for the new files.
+- Tracker: `mgm-cxj2`.
+
+Changelog fragment tooling: thirteen review-thread fixes in one pass (2026-09-29):
+
+- `scripts/changelog-release`: `--dry-run` no longer truncates the preview when a fragment or
+  existing entry contains a `## ` line inside a fenced code block. The fold is now a recoverable
+  step — a rerun after a partial failure (changelog written, a fragment's deletion failed) detects
+  that a fragment's body is already present as a whole paragraph block under `## Unreleased`
+  (boundary-padded match, not a bare substring test, so a new fragment whose body merely overlaps
+  unrelated existing text still folds instead of being silently dropped), reports it
+  `already folded`, and deletes it without folding it again. A malformed date (e.g. `2026-02-30`)
+  is refused the same way a bad name is. A missing or unreadable `master-ops/CHANGELOG.md` prints
+  one stderr line and exits 2 instead of a raw traceback.
+- `scripts/changelog-fragment-check`: only root-level `changelog.d/*.md` files count as fragments,
+  matching what both fold consumers actually read — a fragment left in a subdirectory, or a
+  non-`.md` file such as a stray `.DS_Store`, no longer satisfies or trips the gate. Both diff
+  scans now run with `--no-renames`, so `git mv` of a fragment (or of a `master-ops/` file) is seen
+  as an add/delete pair instead of a rename `--diff-filter=A` would silently drop. An added
+  fragment with an empty body, or an impossible calendar date, now fails the gate, mirroring the
+  release script's own refusals — an impossible date could otherwise merge and then block the
+  next release-time fold.
+- Fragment-name grammar (`FRAGMENT_RE`): the canonical definition, plus the impossible-date check,
+  now lives in `master-ops/scripts/template_common.py`; `master-ops/scripts/template-check` imports
+  it. `scripts/changelog-release` and `scripts/changelog-fragment-check` cannot import across the
+  template boundary without a `sys.path` hack, so they keep string-identical duplicates instead,
+  checked by a test that compares the compiled regex patterns.
+- `master-ops/scripts/template-check`: an unreadable fragment (bad encoding, etc.) is now skipped
+  and recorded under `questions_unanswered`, matching its own docstring, instead of aborting the
+  whole check with exit 2.
+- `master-ops/CHANGELOG.md`: the fragment instruction now states the two gate exemptions
+  (`changelog.d/`-only and `CHANGELOG.md`-only changes) so the guidance agrees with the gate.
+- `master-ops/MANIFEST.json`: `scripts/test-changelog-fragment-check.sh` is now excluded from the
+  install manifest (`scripts/generate-manifest` `EXCLUDE_FILES`) since the script it exercises,
+  `scripts/changelog-fragment-check`, is deliberately not installed; a skipping test is a line
+  nobody reads, so exclusion was chosen over a subject-absent skip.
+- Tests: `tests/test_changelog_release.py` gained coverage for the fenced-heading preview, the
+  impossible-date refusal, the missing-changelog error, both idempotent-rerun halves, and the
+  shared-grammar equality check. `tests/test_template_check_apply.py` now asserts the `README.md`
+  fixture body never leaks into an adoption note. `master-ops/scripts/test-changelog-fragment-check.sh`
+  gained cases for the subdirectory fragment, the empty-body fragment, and the `git mv` rename.
+- Tracker: `mgm-q5am`; round one `task_04bfdb95c7d6`.
+
+One wait loop over live dispatches, with dead and stall verdicts from measured state (2026-09-29):
+
+- `master-ops/scripts/worker-wait`: new, self-contained script — one loop per Run over
+  `check --wait --types worker_done,escalation,question`. A pure-heartbeat batch is acked and the
+  wait re-armed silently (parsed with `raw_decode`, since keepalive documents precede the result
+  in the same stream); anything else wakes the caller and is left unacknowledged for the
+  coordinator to ack after acting. `--once` runs a single accounting pass with no wait at all — a
+  read-only snapshot safe to run from any seat. Before arming the wait, a second `worker-wait` on
+  the same Run refuses with exit 2 via a lock file at `~/.mogui/worker-wait/<run_id>.lock` holding
+  the waiter's pid; a lock whose pid is no longer alive is taken over rather than honored.
+- Accounting per pass, from `orca orchestration worker-list --run <id>`, `orca terminal list`
+  (`lastOutputAt`), the registered pid (via `scripts/dispatch-gate register`'s new fields, read
+  from the dispatch ledger), and one `scripts/worker-pane-sweep` call: `working`, `DEAD` (pid
+  recorded, not alive), `STALL` (pid alive, output stale, sweep class idle/shell/limit/
+  start-screen/update/approval), `UNKNOWN` (no pid, sweep cannot classify), and `OPEN_PANE` for a
+  settled dispatch whose pane is still listed. A no-pid row can never read `DEAD` or `STALL` — both
+  require a measured pid — and, when the sweep does classify a no-pid row as something other than
+  `working`, the sweep class is reported verbatim rather than forced into `UNKNOWN`, since every
+  real row on this seat is a no-pid row (`dispatch` creates a worker's terminal through `orca
+  terminal create`, an RPC, so it never has a local pid to record). Only `DEAD`, `STALL`, and
+  `OPEN_PANE` wake the caller; the loop never closes a pane, never abandons a dispatch, and never
+  sends to a pane.
+- `scripts/dispatch-gate register` gains `--worker-pid` and `--pane` (both optional), stored on
+  the ledger row only when given. `master-ops/scripts/dispatch` now passes `--pane "$TERMINAL"`;
+  it never passes `--worker-pid`, since it always creates the worker's terminal through the Orca
+  RPC rather than launching the process itself.
+- Tests: `tests/test_worker_wait.py` (fake `orca` and `ps` on `PATH`) covers the heartbeat
+  ack-and-rearm, an unacked `worker_done` wake, `DEAD`/`STALL`/`working`/`UNKNOWN` verdicts (pure
+  and end-to-end through the real `worker-pane-sweep`), `OPEN_PANE`, the ledger-to-pid/pane index,
+  a held lock refusing a second waiter, and a stale lock being taken over.
+  `tests/test_dispatch_gate.py` gained the `--worker-pid`/`--pane` round-trip through the ledger,
+  both via the API and the CLI, and confirms omitted fields write no placeholder keys.
+  `master-ops/scripts/test-worker-wait.sh`: `--once --json` against a scratch ledger and fake
+  `orca` prints the table and exits 0, and a held lock exits 2 — each case also run against a
+  sed-mutated copy of the script to prove it can fail, then against the original to confirm it
+  passes again.
+- Runbook: `master-ops/docs/runbooks/worker-wait.md` — the verdict table, what the coordinator
+  does on each verdict, and the single-waiter rule. Cross-linked from
+  `master-ops/docs/charter/05-dispatch-gate.md`.
+- Review hardening (cubic and CodeRabbit, same PR): the loop accounts once before ever waiting
+  (an already-settled Run no longer sits through a wait timeout) and returns immediately on a real
+  delivery or an actionable verdict instead of looping past it — the prior shape re-entered
+  `check --wait` with the same already-seen ack after printing a delivery, which the orchestration
+  contract replays forever until acked, and a heartbeat-only batch was re-armed inside an internal
+  loop that could starve accounting for as long as heartbeats kept arriving. `_pid_alive` and the
+  ledger's `worker_pid` now distinguish "confirmed not running" from "could not be measured" (bad
+  pid data, empty/whitespace pid, `ps` missing or erroring) — only a confirmed answer may read
+  `DEAD`; an unmeasurable one reads `UNKNOWN`. The `STALL` verdict now requires a measured age, not
+  just a stall-shaped sweep class, so a pid alive with no readable `lastOutputAt` no longer reads
+  `STALL` from the sweep class alone. `orca orchestration worker-list` failing or returning a
+  well-formed `{"ok": false, ...}` envelope now raises rather than being read as zero dispatches
+  (which would exit 0, claiming the Run had settled). The lock is now acquired with
+  `os.open(O_CREAT|O_EXCL)` instead of an `exists()`-then-`write_text()` check, closing the
+  race the single-waiter rule exists to close. `master-ops/scripts/test-worker-wait.sh`'s lock
+  mutant now asserts the bypassed-lock exit code exactly (`-eq 0`) instead of merely `-ne 2`, and
+  no longer depends on GNU `timeout` (not present on macOS by default) since the fixed initial
+  accounting pass makes the bypassed case exit before any wait call.
+- Tracker: `mgm-pstc`.
+
+Per-change changelog fragments replace shared `## Unreleased` edits (2026-09-28):
+
+- `master-ops/changelog.d/`: a change touching `master-ops/` now adds a dated fragment file here
+  instead of editing `## Unreleased` directly, so concurrent pull requests stop conflicting on the
+  same shared lines. `README.md` documents the name pattern and the fold script; the directory
+  ships with no fragment in it once a release folds the ones that came before.
+- `scripts/changelog-release` (template side, not installed): folds every `changelog.d/*.md`
+  fragment into `## Unreleased`, newest first by date then name, when the owner cuts a release.
+  `--dry-run` previews the fold without changing anything. It refuses a malformed fragment name or
+  an empty body instead of folding it silently.
+- `scripts/generate-manifest` and `master-ops/scripts/template-check` both exclude `changelog.d`
+  from the install manifest, so fragments never install and are never reported as unknown files.
+- `master-ops/scripts/template-check`: `adoption_notes` for the `Unreleased` section now prepends
+  the template's fragment bodies (same newest-first order) ahead of whatever `CHANGELOG.md` itself
+  already holds under that heading, so an install compared against a live template still sees
+  notes added since the last release.
+- `.github/workflows/gates.yml`: a new `changelog-fragment` job, `pull_request` only, requires at
+  least one added, well-named fragment whenever a pull request changes `master-ops/` outside
+  `changelog.d/`. Its logic lives in `scripts/changelog-fragment-check <base-sha>` so it can also
+  run locally. A pull request touching only `changelog.d/` or only `CHANGELOG.md` passes without one.
+- Tracker: `mgm-q5am`.
+
 The unknown tier stops capping models the policy has never heard of (2026-09-29):
 
 - `master-ops/model-tier-policy.json` and `config/model-tier-policy.example.json`: the

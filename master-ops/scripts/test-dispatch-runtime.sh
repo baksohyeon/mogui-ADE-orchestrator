@@ -724,8 +724,12 @@ codex_start_screen_wiring_test "$dispatch" || exit 1
 # faith. Extracts codex_hooks_vet and runs it against fixture hooks.json
 # files shaped like the real file measured on this host (top-level "hooks",
 # per-event arrays of {matcher, hooks:[{command}]}): one with only
-# already-resolvable commands, one with a missing absolute path, one with a
-# first word not on PATH, and one home with no hooks.json at all.
+# already-resolvable commands, one with a builtin first word, one with a
+# missing absolute path, one with a first word not on PATH, one with a
+# malformed event shape, and one home with no hooks.json at all. The
+# badpath/badword fixtures carry a valid hook in an earlier event before the
+# invalid one, so a vet that stops checking after the first event or the
+# first command would still pass them.
 codex_hooks_vet_test() (
   set +e
   set -u
@@ -735,17 +739,23 @@ codex_hooks_vet_test() (
   [ -n "$fn" ] || { echo "FAIL: could not extract codex_hooks_vet" >&2; return 1; }
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-hooks-vet-test.$$"
-  mkdir -p "$work/pass" "$work/badpath" "$work/badword" "$work/missing"
+  mkdir -p "$work/pass" "$work/builtin" "$work/badpath" "$work/badword" "$work/badshape" "$work/missing"
   trap 'rm -rf "$work"' EXIT
 
   cat > "$work/pass/hooks.json" <<'EOF'
 {"hooks": {"PreToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "echo hi"}]}]}}
 EOF
+  cat > "$work/builtin/hooks.json" <<'EOF'
+{"hooks": {"PreToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "cd /tmp && echo hi"}]}]}}
+EOF
   cat > "$work/badpath/hooks.json" <<'EOF'
-{"hooks": {"PreToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "/no/such/binary --flag"}]}]}}
+{"hooks": {"SessionStart": [{"matcher": "", "hooks": [{"type": "command", "command": "echo hi"}]}], "PreToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "/no/such/binary --flag"}]}]}}
 EOF
   cat > "$work/badword/hooks.json" <<'EOF'
-{"hooks": {"PreToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "zz-mogui-never-on-path --flag"}]}]}}
+{"hooks": {"SessionStart": [{"matcher": "", "hooks": [{"type": "command", "command": "echo hi"}]}], "PreToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "zz-mogui-never-on-path --flag"}]}]}}
+EOF
+  cat > "$work/badshape/hooks.json" <<'EOF'
+{"hooks": {"PreToolUse": {}}}
 EOF
 
   run_case() {  # fn-body  home-dir
@@ -774,8 +784,10 @@ EOF
   }
 
   assert_case all-local "0" "command(s) checked" "$work/pass" || return 1
+  assert_case builtin-first-word "0" "command(s) checked" "$work/builtin" || return 1
   assert_case bad-abs-path "1" "/no/such/binary: no such file" "$work/badpath" || return 1
   assert_case bad-path-word "1" "zz-mogui-never-on-path: not found on PATH" "$work/badword" || return 1
+  assert_case bad-event-shape "1" "wrong shape" "$work/badshape" || return 1
   assert_case missing-hooks-json "2" "not found" "$work/missing" || return 1
 
   mutate_line() {  # unique-substring-of-target-line  replacement-line
@@ -821,6 +833,15 @@ EOF
     '    print(f"hooks-vet: {path}: not found")' \
     '    sys.exit(0)' \
     "$work/missing" "2" || return 1
+  failability_case entries-shape-check \
+    '    if not isinstance(entries, list):' \
+    '    if False:' \
+    "$work/badshape" "1" || return 1
+  failability_case early-stop \
+    '            checked += 1' \
+    '            checked += 1
+            sys.exit(0)' \
+    "$work/badpath" "1" || return 1
 )
 codex_hooks_vet_test "$dispatch" || exit 1
 
@@ -887,6 +908,7 @@ codex_hooks_vet_wiring_test() (
   local dispatch="$1" work jqf_fn pane_classification_fn start_fn markers wiring_block
   local vet_fn homes_fn accounts_fn vet_homes_fn hooks_answer_var
   local menu ready script_file out status mutant_wiring
+  local mutant_homes homes_fn_saved
 
   jqf_fn=$(grep -m1 -F 'jqf() {' "$dispatch")
   pane_classification_fn=$(awk '$0=="pane_classification() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
@@ -962,8 +984,9 @@ BIN
   printf '%s\n' "$menu" > "$work/pane.txt"
   printf '%s\n' "$ready" > "$work/ready.txt"
 
-  write_script() {  # outfile  home  wiring-text  [hooks-answer-bin]
+  write_script() {  # outfile  home  wiring-text  [hooks-answer-bin]  [accounts-dir]  [worktree]
     local outfile="$1" home="$2" wiring_text="$3" hooks_answer_bin="${4:-$work/fake-hooks-answer}"
+    local accounts_dir="${5:-$work/no-accounts-dir}" worktree="${6:-}"
     {
       echo 'set -u'
       printf 'export FAKE_MARKER=%s\n' "$work/injected"
@@ -985,7 +1008,8 @@ BIN
       echo 'TERMINAL=term_fake'
       echo 'TASK=task_fake'
       printf 'HOME=%s\n' "$home"
-      printf 'CODEX_ACCOUNTS_DIR=%s\n' "$work/no-accounts-dir"
+      printf 'CODEX_ACCOUNTS_DIR=%s\n' "$accounts_dir"
+      printf 'WORKTREE=%s\n' "$worktree"
       printf 'HOOKS_ANSWER_BIN=%s\n' "$hooks_answer_bin"
       printf '%s\n' "$wiring_text"
       echo 'echo WIRING_SURVIVED'
@@ -1041,6 +1065,46 @@ BIN
   fi
   echo "ok   : failability: disabling the existence check attempts the call instead of refusing it (status=$status, message dropped)"
 
+  # Vet passes and the answer tool runs, but it exits 1 (did not clear the
+  # modal): the fail-closed answer-error path, not the always-exits-0 fake
+  # tool every other case above uses.
+  cat > "$work/fake-hooks-answer-fail" <<'BIN'
+#!/bin/bash
+echo ANSWERED >> "$FAKE_ANSWER_MARKER"
+echo "hooks-review: still blocked after answering (some-reason)" >&2
+exit 1
+BIN
+  chmod +x "$work/fake-hooks-answer-fail"
+  rm -f "$work/injected" "$work/answered" "$work/read-count"
+  write_script "$script_file" "$work/fakehome-pass" "$wiring_block" "$work/fake-hooks-answer-fail"
+  out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 3 ] || [ ! -f "$work/answered" ] || [ -f "$work/injected" ]; then
+    echo "FAIL: an answer tool that exits 1 should take the exit-3 path without injecting (status=$status)" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  printf '%s\n' "$out" | grep -q 'hooks-review answer did not clear the modal' || { echo "FAIL: answer-failure case did not print the modal-not-cleared message" >&2; return 1; }
+  echo "ok   : an answer tool exit 1 takes the exit-3 path without injecting (status=$status)"
+
+  # Failability: a copy of the wiring block that ignores the answer tool's
+  # own exit code would inject even though the modal was never cleared.
+  mutant_wiring=${wiring_block/'if [ "$HOOKS_ANSWER_RC" != 0 ]; then'/'if false; then'}
+  if [ "$mutant_wiring" = "$wiring_block" ]; then
+    echo "FAIL: answer-rc-check mutant did not change the source" >&2
+    return 1
+  fi
+  rm -f "$work/injected" "$work/answered" "$work/read-count"
+  write_script "$script_file" "$work/fakehome-pass" "$mutant_wiring" "$work/fake-hooks-answer-fail"
+  out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
+  status=$?
+  if [ ! -f "$work/injected" ]; then
+    echo "FAIL: failability: ignoring the answer tool's exit code should still inject (status=$status)" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : failability: ignoring the answer tool's exit code injects despite the modal never clearing (status=$status)"
+
   # Vet fails: the modal is never answered, --inject is never reached.
   rm -f "$work/injected" "$work/answered" "$work/read-count"
   write_script "$script_file" "$work/fakehome-fail" "$wiring_block"
@@ -1071,6 +1135,80 @@ BIN
     return 1
   fi
   echo "ok   : failability: disabling the vet gate answers the modal on a vet-failed home (status=$status)"
+
+  # Account-seat home: $HOME's own hooks.json passes, but codex_accounts_dir
+  # enumerates a seat whose hooks.json fails. "every codex home" means every
+  # home, not just $HOME.
+  mkdir -p "$work/accounts/seat1/home"
+  cat > "$work/accounts/seat1/home/hooks.json" <<'EOF'
+{"hooks": {"PreToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "/no/such/binary"}]}]}}
+EOF
+  rm -f "$work/injected" "$work/answered" "$work/read-count"
+  write_script "$script_file" "$work/fakehome-pass" "$wiring_block" "$work/fake-hooks-answer" "$work/accounts"
+  out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ] || [ -f "$work/answered" ] || [ -f "$work/injected" ]; then
+    echo "FAIL: a failing account-seat home should block the modal even though \$HOME's own hooks.json passes (status=$status)" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : a failing account-seat home blocks the modal despite a passing \$HOME hooks.json (status=$status)"
+
+  # Project sources: a worktree under a repository's .orca/worktrees/ carries
+  # its own `.codex/hooks.json`, and so can the repository root. Both are in
+  # scope even when $HOME's own hooks.json passes.
+  mkdir -p "$work/repo/.orca/worktrees/wt/.codex"
+  cat > "$work/repo/.orca/worktrees/wt/.codex/hooks.json" <<'EOF'
+{"hooks": {"PreToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "/no/such/binary"}]}]}}
+EOF
+  rm -f "$work/injected" "$work/answered" "$work/read-count"
+  write_script "$script_file" "$work/fakehome-pass" "$wiring_block" "$work/fake-hooks-answer" "$work/no-accounts-dir" "path:$work/repo/.orca/worktrees/wt"
+  out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ] || [ -f "$work/answered" ] || [ -f "$work/injected" ]; then
+    echo "FAIL: a failing worktree .codex/hooks.json should block the modal (status=$status)" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : a failing worktree .codex/hooks.json blocks the modal (status=$status)"
+
+  rm -rf "$work/repo/.orca/worktrees/wt/.codex"
+  mkdir -p "$work/repo/.codex"
+  cat > "$work/repo/.codex/hooks.json" <<'EOF'
+{"hooks": {"PreToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "/no/such/binary"}]}]}}
+EOF
+  rm -f "$work/injected" "$work/answered" "$work/read-count"
+  write_script "$script_file" "$work/fakehome-pass" "$wiring_block" "$work/fake-hooks-answer" "$work/no-accounts-dir" "path:$work/repo/.orca/worktrees/wt"
+  out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ] || [ -f "$work/answered" ] || [ -f "$work/injected" ]; then
+    echo "FAIL: a failing repository-root .codex/hooks.json should block the modal (status=$status)" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : a failing repository-root .codex/hooks.json blocks the modal via the .orca/worktrees derivation (status=$status)"
+
+  # Failability: a copy of codex_hooks_homes that never resolves WORKTREE
+  # reads neither project source, so the repo-root failure above would go
+  # unseen and the modal would be answered.
+  mutant_homes=${homes_fn/'  wt="${WORKTREE#path:}"'/'  wt=""'}
+  if [ "$mutant_homes" = "$homes_fn" ]; then
+    echo "FAIL: worktree-resolution mutant did not change the source" >&2
+    return 1
+  fi
+  homes_fn_saved="$homes_fn"
+  homes_fn="$mutant_homes"
+  rm -f "$work/injected" "$work/answered" "$work/read-count"
+  write_script "$script_file" "$work/fakehome-pass" "$wiring_block" "$work/fake-hooks-answer" "$work/no-accounts-dir" "path:$work/repo/.orca/worktrees/wt"
+  out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
+  status=$?
+  homes_fn="$homes_fn_saved"
+  if [ "$status" -ne 0 ] || [ ! -f "$work/answered" ]; then
+    echo "FAIL: failability: a codex_hooks_homes that never resolves WORKTREE should answer the modal despite the failing repo-root hooks.json (status=$status)" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : failability: a codex_hooks_homes that never resolves WORKTREE answers the modal despite the failing repo-root hooks.json (status=$status)"
 )
 codex_hooks_vet_wiring_test "$dispatch" || exit 1
 

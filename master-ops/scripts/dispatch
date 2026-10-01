@@ -485,23 +485,41 @@ codex_accounts_dir() {
 }
 
 # The homes codex can start from on this host: the operator's own home, plus
-# every account seat pre-trust already enumerates. One per line; a missing
-# accounts directory just yields none from the glob.
+# every account seat pre-trust already enumerates, plus the dispatched
+# worktree's own `.codex/hooks.json` and, when that worktree sits under a
+# repository's `.orca/worktrees/`, that repository root's `.codex/hooks.json`
+# too. One per line; a missing accounts directory, worktree, or project
+# `.codex` directory just yields none from the glob or case match.
 codex_hooks_homes() {
-  local accounts_dir home
+  local accounts_dir home wt repo_root
   printf '%s\n' "$HOME/.codex"
   accounts_dir=$(codex_accounts_dir)
   for home in "$accounts_dir"/*/home; do
     [ -d "$home" ] && printf '%s\n' "$home"
   done
+  wt="${WORKTREE#path:}"
+  case "$wt" in
+    /*)
+      printf '%s\n' "$wt/.codex"
+      case "$wt" in
+        */.orca/worktrees/*)
+          repo_root="${wt%%/.orca/worktrees/*}"
+          printf '%s\n' "$repo_root/.codex";;
+      esac;;
+  esac
 }
 
 # codex_hooks_vet <home>: <home> is a directory that may hold hooks.json.
 # Reads every hooks.<Event>[].hooks[].command string and passes only when
 # each command's absolute-path tokens exist on disk and its first word (when
-# not an absolute path and not a shell keyword) resolves on PATH. Prints one
-# line and returns 1 on the first failing command; prints one line and
-# returns 2 when hooks.json is missing or cannot be parsed. Silent on pass.
+# not an absolute path and not a shell keyword or builtin) resolves on PATH.
+# Prints one line and returns 1 on the first failing command, including a
+# malformed shape at any level (event value not a list, entry not an object,
+# inner hooks not a list, hook not an object, command not a string): a file
+# this parses but cannot trust the shape of fails closed the same as a bad
+# command. A top-level hooks object that is genuinely empty passes with 0
+# command(s) checked. Prints one line and returns 2 when hooks.json is
+# missing or cannot be parsed. Silent on pass.
 codex_hooks_vet() {
   local home="$1"
   python3 - "$home/hooks.json" <<'PY'
@@ -512,7 +530,7 @@ import shutil
 import sys
 
 path = sys.argv[1]
-SHELL_KEYWORDS = {"if", "[", "test", "sh", "bash"}
+BUILTINS = {"if", "then", "else", "elif", "fi", "case", "esac", "for", "while", "until", "do", "done", "[", "[[", "test", "cd", "source", ".", "exec", "eval", "export", "set", "local", "unset", "read", "echo", "printf"}
 
 try:
     with open(path, "r", encoding="utf-8") as handle:
@@ -538,19 +556,24 @@ if not isinstance(hooks, dict):
 checked = 0
 for event, entries in hooks.items():
     if not isinstance(entries, list):
-        continue
-    for entry in entries:
+        print(f"hooks-vet: {path}: {event}: wrong shape")
+        sys.exit(1)
+    for i, entry in enumerate(entries):
         if not isinstance(entry, dict):
-            continue
+            print(f"hooks-vet: {path}: {event}[{i}]: wrong shape")
+            sys.exit(1)
         inner = entry.get("hooks", [])
         if not isinstance(inner, list):
-            continue
-        for hook in inner:
+            print(f"hooks-vet: {path}: {event}[{i}].hooks: wrong shape")
+            sys.exit(1)
+        for j, hook in enumerate(inner):
             if not isinstance(hook, dict):
-                continue
+                print(f"hooks-vet: {path}: {event}[{i}].hooks[{j}]: wrong shape")
+                sys.exit(1)
             command = hook.get("command")
             if not isinstance(command, str):
-                continue
+                print(f"hooks-vet: {path}: {event}[{i}].hooks[{j}].command: wrong shape")
+                sys.exit(1)
             try:
                 tokens = shlex.split(command)
             except ValueError as error:
@@ -563,7 +586,7 @@ for event, entries in hooks.items():
                     print(f"hooks-vet: {command}: {token}: no such file")
                     sys.exit(1)
             first = tokens[0]
-            if not first.startswith("/") and first not in SHELL_KEYWORDS:
+            if not first.startswith("/") and first not in BUILTINS:
                 if shutil.which(first) is None:
                     print(f"hooks-vet: {command}: {first}: not found on PATH")
                     sys.exit(1)

@@ -726,10 +726,15 @@ codex_start_screen_wiring_test "$dispatch" || exit 1
 # per-event arrays of {matcher, hooks:[{command}]}): one with only
 # already-resolvable commands, one with a builtin first word, one with a
 # missing absolute path, one with a first word not on PATH, one with a
-# malformed event shape, and one home with no hooks.json at all. The
-# badpath/badword fixtures carry a valid hook in an earlier event before the
-# invalid one, so a vet that stops checking after the first event or the
-# first command would still pass them.
+# malformed event shape, one whose document is `{}`, one whose document is a
+# JSON list, and one home with no hooks.json at all. The badpath/badword
+# fixtures carry a valid hook in an earlier event before the invalid one, so
+# a vet that stops checking after the first event or the first command would
+# still pass them. A mutant turns the top-level guard into a no-op: both the
+# `{}` and the list document then fall through to the dict-only `hooks =
+# document["hooks"]` lookup and crash with an uncaught exception, which also
+# exits 1, so the mutant is caught on the dropped "top level: wrong shape"
+# message, not on the exit code.
 codex_hooks_vet_test() (
   set +e
   set -u
@@ -739,7 +744,7 @@ codex_hooks_vet_test() (
   [ -n "$fn" ] || { echo "FAIL: could not extract codex_hooks_vet" >&2; return 1; }
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-hooks-vet-test.$$"
-  mkdir -p "$work/pass" "$work/builtin" "$work/badpath" "$work/badword" "$work/badshape" "$work/missing"
+  mkdir -p "$work/pass" "$work/builtin" "$work/badpath" "$work/badword" "$work/badshape" "$work/missing" "$work/topempty" "$work/toplist"
   trap 'rm -rf "$work"' EXIT
 
   cat > "$work/pass/hooks.json" <<'EOF'
@@ -756,6 +761,12 @@ EOF
 EOF
   cat > "$work/badshape/hooks.json" <<'EOF'
 {"hooks": {"PreToolUse": {}}}
+EOF
+  cat > "$work/topempty/hooks.json" <<'EOF'
+{}
+EOF
+  cat > "$work/toplist/hooks.json" <<'EOF'
+[]
 EOF
 
   run_case() {  # fn-body  home-dir
@@ -788,6 +799,8 @@ EOF
   assert_case bad-abs-path "1" "/no/such/binary: no such file" "$work/badpath" || return 1
   assert_case bad-path-word "1" "zz-mogui-never-on-path: not found on PATH" "$work/badword" || return 1
   assert_case bad-event-shape "1" "wrong shape" "$work/badshape" || return 1
+  assert_case top-level-empty-dict "1" "top level: wrong shape" "$work/topempty" || return 1
+  assert_case top-level-json-list "1" "top level: wrong shape" "$work/toplist" || return 1
   assert_case missing-hooks-json "2" "not found" "$work/missing" || return 1
 
   mutate_line() {  # unique-substring-of-target-line  replacement-line
@@ -842,6 +855,40 @@ EOF
     '            checked += 1
             sys.exit(0)' \
     "$work/badpath" "1" || return 1
+
+  # The top-level guard's own crash-path coincidence: disabling it doesn't
+  # flip the exit code away from 1, because the dict-only `document["hooks"]`
+  # lookup that follows raises an uncaught exception on both a `{}` document
+  # (KeyError) and a list document (TypeError), and an uncaught exception
+  # also exits 1. So this mutant is caught on the dropped message, not rc.
+  top_level_noop_case() {
+    local mutant out1 out2 rc1 rc2
+    mutant=$(mutate_line \
+      'if not isinstance(document, dict) or not isinstance(document.get("hooks"), dict):' \
+      'if False:') || { echo "FAIL: top-level-noop needle not found in function body" >&2; return 1; }
+    if [ "$mutant" = "$fn" ]; then
+      echo "FAIL: top-level-noop mutant did not change the source" >&2
+      return 1
+    fi
+    out1=$(run_case "$mutant" "$work/topempty"); rc1=$?
+    out2=$(run_case "$mutant" "$work/toplist"); rc2=$?
+    if [ "$rc1" != "1" ] || [ "$rc2" != "1" ]; then
+      echo "FAIL: top-level-noop mutant expected an uncaught exception (rc 1) on both fixtures, got $rc1 and $rc2" >&2
+      return 1
+    fi
+    case "$out1" in
+      *"top level: wrong shape"*)
+        echo "FAIL: failability: top-level-noop mutant still prints the controlled message for {}" >&2
+        return 1;;
+    esac
+    case "$out2" in
+      *"top level: wrong shape"*)
+        echo "FAIL: failability: top-level-noop mutant still prints the controlled message for []" >&2
+        return 1;;
+    esac
+    echo "ok   : failability: top-level-noop mutant drops to an uncaught exception on both fixtures (rc stays $rc1/$rc2, controlled message gone)"
+  }
+  top_level_noop_case || return 1
 )
 codex_hooks_vet_test "$dispatch" || exit 1
 

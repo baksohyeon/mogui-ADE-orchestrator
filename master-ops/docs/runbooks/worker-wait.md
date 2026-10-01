@@ -85,8 +85,9 @@ delivery, for the coordinator to act and then re-run `worker-wait`.
   the review-and-routing charter section; anything else in scope is the
   owner's call. A codex "Hooks need review" modal is read before it is
   answered: read the hook commands it names and pick a trusting option only
-  when each one is a path on this machine or a tool on `PATH`, the same rule
-  the wrapper applies; when the commands cannot be read (a plugin hook
+  when each one is a path on this machine, a shell keyword or builtin, or a
+  tool on `PATH`, exactly the rule the wrapper's vet applies; when the
+  commands cannot be read (a plugin hook
   source), choose option 3, continue without trusting, and file what was
   seen. It clears by hand the same way: `orca terminal send --terminal
   <pane> --text <option-number>`, then an

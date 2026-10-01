@@ -13,6 +13,10 @@ from enum import Enum
 from pathlib import Path
 from typing import Callable, Iterator, Mapping, Sequence
 
+from master_runtime.core.dispatch_timeline import (
+    default_ledger_path as _dispatch_timeline_default_ledger_path,
+)
+
 try:
     import fcntl
 except ImportError:  # pragma: no cover - non-Unix fallback keeps tests importable.
@@ -23,7 +27,6 @@ DEFAULT_SINGLE_DISPATCH_CHAR_LIMIT = 500_000
 DEFAULT_BATCH_DISPATCH_CHAR_LIMIT = 1_000_000
 DEFAULT_DUPLICATE_WINDOW_SECONDS = 30 * 60
 DEFAULT_HIGH_COST_RUNTIMES = frozenset({"fable"})
-DEFAULT_LEDGER_PATH = Path(".dispatch-gate-ledger.jsonl")
 DEFAULT_TICKET_DIR = Path(".mogui") / "dispatch-tickets"
 DEFAULT_KNOWN_ROOTS_PATH = Path(".mogui") / "known-roots.json"
 DEFAULT_TIER_POLICY_RELATIVE_PATH = Path("master-ops") / "model-tier-policy.json"
@@ -46,7 +49,7 @@ def _default_ledger_path() -> Path:
     value = os.environ.get("DISPATCH_GATE_LEDGER")
     if value:
         return Path(value)
-    return DEFAULT_LEDGER_PATH
+    return _dispatch_timeline_default_ledger_path()
 
 
 def _default_ticket_dir() -> Path:

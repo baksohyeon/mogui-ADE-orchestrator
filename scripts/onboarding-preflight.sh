@@ -584,20 +584,24 @@ fi
 
 # The gate writes its ledger outside the repository. Check writability without
 # creating anything: this script must not change state before --fix.
-gate_ledger="${DISPATCH_GATE_LEDGER:-.mogui/dispatch-ledger.jsonl}"
-gate_ledger_dir=$(dirname "$gate_ledger")
-if [[ -d "$gate_ledger_dir" ]]; then
-  if [[ -w "$gate_ledger_dir" ]]; then
-    pass "gate-ledger" "dispatch ledger directory is writable: $gate_ledger_dir"
-  else
-    fail "gate-ledger" "dispatch ledger directory is not writable: $gate_ledger_dir; set DISPATCH_GATE_LEDGER to a writable path"
-  fi
+if [[ -z "${DISPATCH_GATE_LEDGER:-}" && -z "${HOME:-}" ]]; then
+  fail "gate-ledger" "HOME is unset, the gate's default ledger cannot be resolved; set DISPATCH_GATE_LEDGER or HOME"
 else
-  gate_ledger_parent=$(dirname "$gate_ledger_dir")
-  if [[ -d "$gate_ledger_parent" && -w "$gate_ledger_parent" ]]; then
-    pass "gate-ledger" "dispatch ledger directory will be created under $(cd "$gate_ledger_parent" && pwd -P)"
+  gate_ledger="${DISPATCH_GATE_LEDGER:-${HOME}/.mogui/dispatch-ledger.jsonl}"
+  gate_ledger_dir=$(dirname "$gate_ledger")
+  if [[ -d "$gate_ledger_dir" ]]; then
+    if [[ -w "$gate_ledger_dir" ]]; then
+      pass "gate-ledger" "dispatch ledger directory is writable: $gate_ledger_dir"
+    else
+      fail "gate-ledger" "dispatch ledger directory is not writable: $gate_ledger_dir; set DISPATCH_GATE_LEDGER to a writable path"
+    fi
   else
-    fail "gate-ledger" "cannot create the dispatch ledger directory under $gate_ledger_parent; set DISPATCH_GATE_LEDGER to a writable path"
+    gate_ledger_parent=$(dirname "$gate_ledger_dir")
+    if [[ -d "$gate_ledger_parent" && -w "$gate_ledger_parent" ]]; then
+      pass "gate-ledger" "dispatch ledger directory will be created under $(cd "$gate_ledger_parent" && pwd -P)"
+    else
+      fail "gate-ledger" "cannot create the dispatch ledger directory under $gate_ledger_parent; set DISPATCH_GATE_LEDGER to a writable path"
+    fi
   fi
 fi
 

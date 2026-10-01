@@ -828,7 +828,7 @@ codex_hooks_vet_test "$dispatch" || exit 1
 #
 # 2026-10-01: PR #156 made codex_start_screen_problem read the "Hooks need
 # review" modal as a selection menu and take the exit-3 path, same as any
-# other menu it cannot act on — closing the door codex-hooks-review-answer
+# other menu it cannot act on, closing the door codex-hooks-review-answer
 # (shipped in PR #133) was meant to open. Extracts the 3b wiring block plus
 # codex_hooks_vet_homes/codex_hooks_homes/codex_accounts_dir/codex_hooks_vet
 # and HOOKS_ANSWER_BIN, and runs it against a fake orca (terminal read

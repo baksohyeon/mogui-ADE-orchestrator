@@ -577,7 +577,7 @@ PY
 # Runs codex_hooks_vet over every home from codex_hooks_homes. A home with no
 # hooks.json is skipped with one printed line rather than counted as a
 # failure. A home whose hooks.json exists but fails the vet (a bad command,
-# or hooks.json itself unparsable) fails the whole pass closed — that is the
+# or hooks.json itself unparsable) fails the whole pass closed, which is the
 # only outcome the 3b wiring below answers the hooks-review modal on.
 codex_hooks_vet_homes() {
   local home hooks_json rc overall=0

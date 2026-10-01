@@ -824,6 +824,52 @@ EOF
 )
 codex_hooks_vet_test "$dispatch" || exit 1
 
+# --- Feature: HOOKS_ANSWER_BIN resolves beside the wrapper -----------------
+#
+# Round two of PR #157: the wrapper pointed HOOKS_ANSWER_BIN at
+# {{RUNTIME_ROOT}}/scripts/codex-hooks-review-answer, a path no install has;
+# the tool ships in the same directory as the wrapper itself. Extracts the
+# HOOKS_ANSWER_BIN assignment and evaluates it with SCRIPTS_DIR set to the
+# wrapper's real directory, then to an empty temp directory, to prove the
+# assignment tracks SCRIPTS_DIR.
+hooks_answer_bin_path_test() (
+  set +e
+  set -u
+  local dispatch="$1" assign real_dir empty_dir script_file out rc
+
+  assign=$(grep -E '^HOOKS_ANSWER_BIN=' "$dispatch")
+  [ -n "$assign" ] || { echo "FAIL: could not extract HOOKS_ANSWER_BIN assignment" >&2; return 1; }
+
+  script_file="${TMPDIR:-/tmp}/mogui-dispatch-hooks-answer-bin-test.$$.sh"
+  trap 'rm -f "$script_file"' EXIT
+  {
+    echo 'set -u'
+    printf '%s\n' "$assign"
+    echo '[ -x "$HOOKS_ANSWER_BIN" ] && printf "%s\n" "$HOOKS_ANSWER_BIN"'
+  } > "$script_file"
+
+  real_dir=$(cd "$(dirname "$dispatch")" && pwd)
+  out=$(SCRIPTS_DIR="$real_dir" bash "$script_file")
+  rc=$?
+  if [ "$rc" != 0 ] || [ -z "$out" ]; then
+    echo "FAIL: HOOKS_ANSWER_BIN did not resolve to an existing executable under the wrapper's real SCRIPTS_DIR" >&2
+    return 1
+  fi
+  echo "ok   : HOOKS_ANSWER_BIN resolves to an existing executable (${out##*/}) under the real SCRIPTS_DIR"
+
+  empty_dir="${TMPDIR:-/tmp}/mogui-dispatch-hooks-answer-bin-empty.$$"
+  mkdir -p "$empty_dir"
+  out=$(SCRIPTS_DIR="$empty_dir" bash "$script_file")
+  rc=$?
+  rm -rf "$empty_dir"
+  if [ "$rc" -eq 0 ]; then
+    echo "FAIL: failability: an empty SCRIPTS_DIR should not resolve HOOKS_ANSWER_BIN to an executable, but the check passed" >&2
+    return 1
+  fi
+  echo "ok   : failability: an empty SCRIPTS_DIR fails the existence check (rc=$rc)"
+)
+hooks_answer_bin_path_test "$dispatch" || exit 1
+
 # --- Feature: hooks-review modal answered only after a vetted pass ---------
 #
 # 2026-10-01: PR #156 made codex_start_screen_problem read the "Hooks need
@@ -916,8 +962,8 @@ BIN
   printf '%s\n' "$menu" > "$work/pane.txt"
   printf '%s\n' "$ready" > "$work/ready.txt"
 
-  write_script() {  # outfile  home  wiring-text
-    local outfile="$1" home="$2" wiring_text="$3"
+  write_script() {  # outfile  home  wiring-text  [hooks-answer-bin]
+    local outfile="$1" home="$2" wiring_text="$3" hooks_answer_bin="${4:-$work/fake-hooks-answer}"
     {
       echo 'set -u'
       printf 'export FAKE_MARKER=%s\n' "$work/injected"
@@ -940,7 +986,7 @@ BIN
       echo 'TASK=task_fake'
       printf 'HOME=%s\n' "$home"
       printf 'CODEX_ACCOUNTS_DIR=%s\n' "$work/no-accounts-dir"
-      printf 'HOOKS_ANSWER_BIN=%s\n' "$work/fake-hooks-answer"
+      printf 'HOOKS_ANSWER_BIN=%s\n' "$hooks_answer_bin"
       printf '%s\n' "$wiring_text"
       echo 'echo WIRING_SURVIVED'
     } > "$outfile"
@@ -960,6 +1006,40 @@ BIN
     return 1
   fi
   echo "ok   : a vetted-pass hooks-review pane answers the modal and reaches orca orchestration dispatch --inject"
+
+  # Vet passes, but HOOKS_ANSWER_BIN names no file: the wiring block takes
+  # the exit-3 path before trying to run anything.
+  rm -f "$work/injected" "$work/answered" "$work/read-count"
+  write_script "$script_file" "$work/fakehome-pass" "$wiring_block" "$work/no-such-hooks-answer"
+  out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 3 ] || [ -f "$work/answered" ] || [ -f "$work/injected" ]; then
+    echo "FAIL: a missing HOOKS_ANSWER_BIN should take the exit-3 path without answering or injecting (status=$status)" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  printf '%s\n' "$out" | grep -q 'hooks-review answer tool missing' || { echo "FAIL: missing-answer-tool case did not print the missing-tool message" >&2; return 1; }
+  echo "ok   : a missing HOOKS_ANSWER_BIN takes the exit-3 path without answering the modal or reaching --inject"
+
+  # Failability: a copy of the wiring block whose existence check is disabled
+  # still exits 3 on a missing HOOKS_ANSWER_BIN, since the shell can't exec a
+  # file that isn't there. It drops the exit-3 path's own message, the call
+  # was attempted instead of refused.
+  mutant_wiring=${wiring_block/'if [ ! -x "$HOOKS_ANSWER_BIN" ]; then'/'if false; then'}
+  if [ "$mutant_wiring" = "$wiring_block" ]; then
+    echo "FAIL: existence-check mutant did not change the source" >&2
+    return 1
+  fi
+  rm -f "$work/injected" "$work/answered" "$work/read-count"
+  write_script "$script_file" "$work/fakehome-pass" "$mutant_wiring" "$work/no-such-hooks-answer"
+  out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
+  status=$?
+  if printf '%s\n' "$out" | grep -q 'hooks-review answer tool missing'; then
+    echo "FAIL: failability: disabling the existence check should drop the missing-tool message, but it is still printed" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : failability: disabling the existence check attempts the call instead of refusing it (status=$status, message dropped)"
 
   # Vet fails: the modal is never answered, --inject is never reached.
   rm -f "$work/injected" "$work/answered" "$work/read-count"

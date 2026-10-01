@@ -453,7 +453,7 @@ codex_launch_flags_test() (
     echo "  want '$want'" >&2
     return 1
   fi
-  echo "ok   — codex launch carries --model, reasoning effort, update-check off, and the migration ack · rc=0"
+  echo "ok   : codex launch carries --model, reasoning effort, update-check off, and the migration ack · rc=0"
 
   # Failability: dropping check_for_update_on_startup=false must break the exact-string match.
   mutant_fn=${runtime_command_fn/' -c check_for_update_on_startup=false'/}
@@ -465,18 +465,18 @@ codex_launch_flags_test() (
   out=$(bash "$script_file" 2>&1)
   status=$?
   if [ "$status" -eq 0 ] && [ "$out" = "$want" ]; then
-    echo "FAIL: failability — mutant dropping check_for_update_on_startup=false still produced the exact wanted string" >&2
+    echo "FAIL: failability: mutant dropping check_for_update_on_startup=false still produced the exact wanted string" >&2
     return 1
   fi
-  echo "ok   — failability: dropping check_for_update_on_startup=false breaks the exact-string match (mutant rc=$status)"
+  echo "ok   : failability: dropping check_for_update_on_startup=false breaks the exact-string match (mutant rc=$status)"
 )
 codex_launch_flags_test "$dispatch" || exit 1
 
 # --- Feature: codex start-screen check before inject -------------------------
 #
 # 2026-10-01: a codex pane sitting on that migration menu, a folder-trust
-# prompt, or a provider-limit notice reports idle exactly like a ready prompt
-# — `terminal wait --for tui-idle` cannot tell them apart, only the footer
+# prompt, or a provider-limit notice reports idle exactly like a ready prompt.
+# `terminal wait --for tui-idle` cannot tell them apart, only the footer
 # line "<model> <effort> · <path>" can. Extracts codex_start_screen_problem
 # and the LIMIT_MARKERS it reuses, then runs it against the pane tails read
 # that day (ready, mismatched footer, update notice, provider limit, the
@@ -534,7 +534,7 @@ $ready"
       *"$want_sub"*) ;;
       *) echo "FAIL: case $label output '$out' lacks '$want_sub'" >&2; return 1;;
     esac
-    echo "ok   — case $label · rc=$rc"
+    echo "ok   : case $label · rc=$rc"
   }
 
   assert_case ready "0" "" "  >_ OpenAI Codex (v0.159.3)
@@ -570,10 +570,10 @@ EOF
     out=$(run_case "$mutant" "$pane")
     rc=$?
     if [ "$rc" = "$blocked_rc" ]; then
-      echo "FAIL: failability — $label mutant still returns $blocked_rc" >&2
+      echo "FAIL: failability: $label mutant still returns $blocked_rc" >&2
       return 1
     fi
-    echo "ok   — failability: $label mutant changes rc $blocked_rc -> $rc"
+    echo "ok   : failability: $label mutant changes rc $blocked_rc -> $rc"
   }
 
   failability_case limit-marker 'grep -Eiq "$LIMIT_MARKERS"' \
@@ -598,8 +598,8 @@ codex_start_screen_test "$dispatch" || exit 1
 #
 # The case-level test above proves codex_start_screen_problem classifies a
 # pane correctly; it does not prove the wrapper acts on that classification.
-# Extracts the call site itself — from the `if [ "$RUNTIME" = codex ]` guard
-# through the `--inject` call and its own failure check — and runs it against
+# Extracts the call site itself (from the `if [ "$RUNTIME" = codex ]` guard
+# through the `--inject` call and its own failure check) and runs it against
 # a fake `orca` that records whether `orchestration dispatch --inject` was
 # ever reached. A migration-menu pane must never reach it; a ready pane must.
 codex_start_screen_wiring_test() (
@@ -683,7 +683,7 @@ BIN
     printf '%s\n' "$out" >&2
     return 1
   fi
-  echo "ok   — a migration-menu codex pane never reaches orca orchestration dispatch --inject"
+  echo "ok   : a migration-menu codex pane never reaches orca orchestration dispatch --inject"
 
   rm -f "$work/injected"
   write_script "$script_file" "$wiring_block" "$ready"
@@ -694,10 +694,10 @@ BIN
     printf '%s\n' "$out" >&2
     return 1
   fi
-  echo "ok   — a ready codex pane reaches orca orchestration dispatch --inject"
+  echo "ok   : a ready codex pane reaches orca orchestration dispatch --inject"
 
   # Failability: a copy of the wiring block whose gate conditional is disabled
-  # — the shape of a guard caller silently dropped from the wrapper — must
+  # (the shape of a guard caller silently dropped from the wrapper) must
   # still inject even on a migration-menu pane.
   mutant_wiring=${wiring_block/'if [ "$CODEX_START_RC" != 0 ]; then'/'if false; then'}
   if [ "$mutant_wiring" = "$wiring_block" ]; then
@@ -709,11 +709,11 @@ BIN
   out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
   status=$?
   if [ "$status" -ne 0 ] && [ ! -f "$work/injected" ]; then
-    echo "FAIL: failability — gate-disabled mutant should have injected on a migration-menu pane, but still didn't" >&2
+    echo "FAIL: failability: gate-disabled mutant should have injected on a migration-menu pane, but still didn't" >&2
     printf '%s\n' "$out" >&2
     return 1
   fi
-  echo "ok   — failability: disabling the gate conditional injects on a migration-menu pane (status=$status, injected=$([ -f "$work/injected" ] && echo yes || echo no))"
+  echo "ok   : failability: disabling the gate conditional injects on a migration-menu pane (status=$status, injected=$([ -f "$work/injected" ] && echo yes || echo no))"
 )
 codex_start_screen_wiring_test "$dispatch" || exit 1
 

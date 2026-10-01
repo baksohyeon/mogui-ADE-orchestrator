@@ -275,7 +275,7 @@ pane_classification() {
 # pane footer silently turned from the requested model to the replacement
 # while every dispatch step still printed success. Codex's own ready state is
 # a footer line, "<model> <effort> · <path>", which a trust prompt or a menu
-# does not have — so the footer decides, not a menu/prompt pattern list that a
+# does not have: the footer decides, not a menu/prompt pattern list that a
 # future, unseen gate would just fall through. Returns 1 with a one-line
 # reason for a provider-limit phrase, an update notice, or a numbered
 # selection menu (all three read from screens seen that day); returns 2 when
@@ -370,11 +370,11 @@ runtime_command() {
     # check above compares the footer against, `check_for_update_on_startup
     # =false` removes one more screen that can absorb an injection the same
     # way the migration menu did, and `notice.model_migrations` acknowledges
-    # the one old-to-new pair measured that day — it covers that pair alone,
+    # the one old-to-new pair measured that day. It covers that pair alone,
     # not a future migration, which is what the footer check is for. Each is
-    # an inline table rather than the dotted form: the dotted form reads the
-    # dot inside the model id as a nesting separator and fails with "invalid
-    # type: map, expected a string".
+    # written as an inline table: the dotted form reads the dot inside the
+    # model id as a nesting separator and fails with "invalid type: map,
+    # expected a string".
     codex) echo "codex --model $model_arg -c $(shell_quote "model_reasoning_effort=\"$CODEX_REASONING_EFFORT\"") -c check_for_update_on_startup=false -c $(shell_quote "$CODEX_MIGRATION_ACK")";;
     gemini) echo "gemini";;
     opencode) echo "opencode";;
@@ -806,7 +806,7 @@ if [ -z "$TERMINAL" ]; then
 fi
 echo "→ $TASK → $TERMINAL ($KIND)"
 
-# 3b. codex start screen, on a created pane and a reused one alike — a reused
+# 3b. codex start screen, on a created pane and a reused one alike: a reused
 # pane can be sitting on a gate from a previous launch just as easily as a
 # fresh one. `terminal wait --for tui-idle` above cannot tell a ready prompt
 # from a start screen waiting on a menu; both read idle. Left as it is on

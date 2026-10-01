@@ -594,4 +594,127 @@ EOF
 )
 codex_start_screen_test "$dispatch" || exit 1
 
-echo "dispatch multi-vendor / check-only / contract-delivery / cursor-pretrust / codex-launch / codex-start-screen regression tests passed"
+# --- Feature: codex start-screen check actually gates --inject -------------
+#
+# The case-level test above proves codex_start_screen_problem classifies a
+# pane correctly; it does not prove the wrapper acts on that classification.
+# Extracts the call site itself — from the `if [ "$RUNTIME" = codex ]` guard
+# through the `--inject` call and its own failure check — and runs it against
+# a fake `orca` that records whether `orchestration dispatch --inject` was
+# ever reached. A migration-menu pane must never reach it; a ready pane must.
+codex_start_screen_wiring_test() (
+  set +e
+  set -u
+  local dispatch="$1" work jqf_fn pane_classification_fn start_fn markers wiring_block
+  local menu ready script_file out status
+
+  jqf_fn=$(grep -m1 -F 'jqf() {' "$dispatch")
+  pane_classification_fn=$(awk '$0=="pane_classification() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  start_fn=$(awk '$0=="codex_start_screen_problem() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  markers=$(grep -E '^(LIMIT_MARKERS|HOOK_TRUST_MARKERS|PREPARED_PROMPT_MARKERS|PREPARED_UNICODE_PROMPT_MARKERS)=' "$dispatch")
+  wiring_block=$(awk '
+    $0=="if [ \"$RUNTIME\" = codex ]; then"{f=1}
+    f{print}
+    f && /dispatch failed/{exit}
+  ' "$dispatch")
+
+  [ -n "$jqf_fn" ] || { echo "FAIL: could not extract jqf" >&2; return 1; }
+  [ -n "$pane_classification_fn" ] || { echo "FAIL: could not extract pane_classification" >&2; return 1; }
+  [ -n "$start_fn" ] || { echo "FAIL: could not extract codex_start_screen_problem" >&2; return 1; }
+  [ -n "$wiring_block" ] || { echo "FAIL: could not extract the codex start-screen wiring block" >&2; return 1; }
+  printf '%s\n' "$wiring_block" | grep -Fq 'codex_start_screen_problem' || { echo "FAIL: extracted block does not call codex_start_screen_problem" >&2; return 1; }
+  printf '%s\n' "$wiring_block" | grep -Fq 'orca orchestration dispatch' || { echo "FAIL: extracted block does not reach the inject call" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-codex-wiring-test.$$"
+  mkdir -p "$work"
+  trap 'rm -rf "$work"' EXIT
+
+  cat > "$work/orca" <<'BIN'
+#!/bin/bash
+if [ "$1 $2" = "terminal read" ]; then
+  cat "$FAKE_PANE_FILE"
+  exit 0
+fi
+if [ "$1 $2" = "orchestration dispatch" ]; then
+  echo INJECTED >> "$FAKE_MARKER"
+  printf '{"result":{"dispatch":{"id":"disp_fake"}}}\n'
+  exit 0
+fi
+exit 1
+BIN
+  chmod +x "$work/orca"
+
+  write_script() {
+    local outfile="$1" body="$2" pane="$3"
+    printf '%s\n' "$pane" > "$work/pane.txt"
+    {
+      echo 'set -u'
+      printf 'export FAKE_MARKER=%s\n' "$work/injected"
+      printf 'export FAKE_PANE_FILE=%s\n' "$work/pane.txt"
+      printf '%s\n' "$jqf_fn"
+      printf '%s\n' "$markers"
+      printf '%s\n' "$pane_classification_fn"
+      printf '%s\n' "$start_fn"
+      echo 'RUNTIME=codex'
+      echo 'MODEL=gpt-5.5'
+      echo 'CODEX_REASONING_EFFORT=xhigh'
+      echo 'TERMINAL=term_fake'
+      echo 'TASK=task_fake'
+      printf '%s\n' "$body"
+      echo 'echo WIRING_SURVIVED'
+    } > "$outfile"
+  }
+
+  menu='  GPT-5.5 retires on October 14, 2026. Switch to GPT-6.1 Sol to continue working in Codex.
+› 1. Try new model
+  2. Use existing model
+  enter/esc confirm · ctrl+c quit'
+  ready='› Ask Codex to do anything
+  GPT-5.5 xhigh · ~/worktree
+  ? for shortcuts                                   ⚠ 1 warning · f2 to view'
+
+  script_file="$work/run.sh"
+  rm -f "$work/injected"
+  write_script "$script_file" "$wiring_block" "$menu"
+  out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ] || [ -f "$work/injected" ]; then
+    echo "FAIL: a migration-menu codex pane should exit nonzero and never reach --inject (status=$status)" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   — a migration-menu codex pane never reaches orca orchestration dispatch --inject"
+
+  rm -f "$work/injected"
+  write_script "$script_file" "$wiring_block" "$ready"
+  out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] || [ ! -f "$work/injected" ] || ! printf '%s\n' "$out" | grep -q '^WIRING_SURVIVED$'; then
+    echo "FAIL: a ready codex pane should reach --inject and fall through the wiring block" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   — a ready codex pane reaches orca orchestration dispatch --inject"
+
+  # Failability: a copy of the wiring block whose gate conditional is disabled
+  # — the shape of a guard caller silently dropped from the wrapper — must
+  # still inject even on a migration-menu pane.
+  mutant_wiring=${wiring_block/'if [ "$CODEX_START_RC" != 0 ]; then'/'if false; then'}
+  if [ "$mutant_wiring" = "$wiring_block" ]; then
+    echo "FAIL: gate-disabled mutant did not change the source" >&2
+    return 1
+  fi
+  rm -f "$work/injected"
+  write_script "$script_file" "$mutant_wiring" "$menu"
+  out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] && [ ! -f "$work/injected" ]; then
+    echo "FAIL: failability — gate-disabled mutant should have injected on a migration-menu pane, but still didn't" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   — failability: disabling the gate conditional injects on a migration-menu pane (status=$status, injected=$([ -f "$work/injected" ] && echo yes || echo no))"
+)
+codex_start_screen_wiring_test "$dispatch" || exit 1
+
+echo "dispatch multi-vendor / check-only / contract-delivery / cursor-pretrust / codex-launch / codex-start-screen / codex-start-screen-wiring regression tests passed"

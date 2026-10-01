@@ -176,6 +176,27 @@ def test_provisioned_host_reports_no_failure_it_can_act_on(tmp_path: Path) -> No
 
 
 @skip_windows_exec_surface
+def test_empty_home_without_override_fails_gate_ledger_instead_of_guessing(
+    tmp_path: Path,
+) -> None:
+    """Neither side has a sensible default ledger path when HOME is empty.
+
+    `${HOME}/.mogui/...` would silently compose a relative path, so the check
+    must say HOME is the problem rather than guess a location.
+    """
+
+    env = _host(tmp_path)
+    env["HOME"] = ""
+    del env["DISPATCH_GATE_LEDGER"]
+    result = _run(env, tmp_path)
+    assert "gate-ledger" in _labels(result.stdout, "FAIL"), result.stdout
+    assert (
+        "HOME is unset, the gate's default ledger cannot be resolved; "
+        "set DISPATCH_GATE_LEDGER or HOME" in result.stdout
+    ), result.stdout
+
+
+@skip_windows_exec_surface
 def test_skills_pass_without_the_installer_cli(tmp_path: Path) -> None:
     """The artifact is the subject; the installer listing is only a fallback."""
 

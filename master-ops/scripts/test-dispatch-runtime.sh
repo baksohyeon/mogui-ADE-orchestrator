@@ -744,7 +744,7 @@ codex_hooks_vet_test() (
   [ -n "$fn" ] || { echo "FAIL: could not extract codex_hooks_vet" >&2; return 1; }
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-hooks-vet-test.$$"
-  mkdir -p "$work/pass" "$work/builtin" "$work/badpath" "$work/badword" "$work/badshape" "$work/missing" "$work/topempty" "$work/toplist"
+  mkdir -p "$work/pass" "$work/builtin" "$work/badpath" "$work/badword" "$work/badshape" "$work/missing" "$work/topempty" "$work/toplist" "$work/orcahook"
   trap 'rm -rf "$work"' EXIT
 
   cat > "$work/pass/hooks.json" <<'EOF'
@@ -768,6 +768,23 @@ EOF
   cat > "$work/toplist/hooks.json" <<'EOF'
 []
 EOF
+
+  # Orca's own managed codex-hook.sh wrapper (the command every codex home
+  # on an Orca host carries): quoted paths followed directly by `;`, which
+  # is exactly what shlex.split used to fuse onto the path. The fixture
+  # points the quoted paths at a script it creates so the vet's existence
+  # check can pass.
+  orcahook_script="$work/orcahook-home/.orca/agent-hooks/codex-hook.sh"
+  mkdir -p "$(dirname "$orcahook_script")"
+  printf '#!/bin/sh\n' > "$orcahook_script"
+  chmod +x "$orcahook_script"
+  orcahook_command="if [ -f '$orcahook_script' ] && [ -r '$orcahook_script' ]; then /bin/sh '$orcahook_script'; else { command -p cat 2>/dev/null || cat; } >/dev/null 2>&1 || :; fi"
+  python3 -c '
+import json, sys
+command = sys.argv[1]
+doc = {"hooks": {"PreToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": command}]}]}}
+print(json.dumps(doc))
+' "$orcahook_command" > "$work/orcahook/hooks.json"
 
   run_case() {  # fn-body  home-dir
     local body="$1" home="$2" script_file="$work/case.sh"
@@ -802,6 +819,7 @@ EOF
   assert_case top-level-empty-dict "1" "top level: wrong shape" "$work/topempty" || return 1
   assert_case top-level-json-list "1" "top level: wrong shape" "$work/toplist" || return 1
   assert_case missing-hooks-json "2" "not found" "$work/missing" || return 1
+  assert_case orca-managed-hook-shape "0" "1 command(s) checked" "$work/orcahook" || return 1
 
   mutate_line() {  # unique-substring-of-target-line  replacement-line
     local needle="$1" repl="$2" line out="" replaced=0
@@ -855,6 +873,39 @@ EOF
     '            checked += 1
             sys.exit(0)' \
     "$work/badpath" "1" || return 1
+
+  # Failability for the fix itself: reverting the three-line shlex.shlex
+  # tokenizer back to the one-line shlex.split it replaced must make the
+  # orca-managed-hook-shape fixture fail again, fused semicolon and all,
+  # the exact regression this contract closes.
+  tokenizer_regression_case() {
+    local mutant out rc
+    mutant=$(printf '%s\n' "$fn" | awk '
+      !found && index($0, "lexer = shlex.shlex(command, posix=True, punctuation_chars=True)") {
+        print "                tokens = shlex.split(command)"
+        found = 1
+        skip = 2
+        next
+      }
+      skip > 0 { skip--; next }
+      { print }
+    ')
+    if [ "$mutant" = "$fn" ]; then
+      echo "FAIL: tokenizer-regression mutant did not change the source" >&2
+      return 1
+    fi
+    out=$(run_case "$mutant" "$work/orcahook"); rc=$?
+    if [ "$rc" != "1" ]; then
+      echo "FAIL: tokenizer-regression mutant expected rc 1 on the orca-managed-hook-shape fixture, got $rc (out: $out)" >&2
+      return 1
+    fi
+    case "$out" in
+      *"$orcahook_script;"*) ;;
+      *) echo "FAIL: tokenizer-regression mutant output '$out' does not name the fused-semicolon token" >&2; return 1;;
+    esac
+    echo "ok   : failability: tokenizer-regression mutant (shlex.split restored) rc 0 -> $rc, naming '$orcahook_script;'"
+  }
+  tokenizer_regression_case || return 1
 
   # The top-level guard's own crash-path coincidence: disabling it doesn't
   # flip the exit code away from 1, because the dict-only `document["hooks"]`

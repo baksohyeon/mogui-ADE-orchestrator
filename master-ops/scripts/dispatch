@@ -575,7 +575,9 @@ for event, entries in hooks.items():
                 print(f"hooks-vet: {path}: {event}[{i}].hooks[{j}].command: wrong shape")
                 sys.exit(1)
             try:
-                tokens = shlex.split(command)
+                lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+                lexer.whitespace_split = True
+                tokens = list(lexer)
             except ValueError as error:
                 print(f"hooks-vet: {command}: unparsable: {error}")
                 sys.exit(1)

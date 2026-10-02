@@ -12,6 +12,7 @@ TEMPLATE_POLICY=$OPS/model-tier-policy.json
 PROBE_BIN={{RUNTIME_ROOT}}/scripts/model-identity-probe
 SCRIPTS_DIR=$(cd "$(dirname "$0")" && pwd)
 COLLISION_CHECK="$SCRIPTS_DIR/dispatch-collision-check"
+HOOKS_ANSWER_BIN="$SCRIPTS_DIR/codex-hooks-review-answer"
 # Master host runtime. Resolution order, most authoritative first:
 #   1. MOGUI_MASTER_HOST_RUNTIME from the launching environment
 #   2. master_host_runtime in the instance runtime config that onboarding writes
@@ -467,6 +468,155 @@ ensure_cursor_pretrust() {
   esac
 }
 
+# Mirrors scripts/codex-worker-pretrust's own accounts-directory rule (its
+# lines 20 to 34) exactly: that script is the one place this resolution is
+# allowed to live, and it has no callable surface for just the directory
+# name, so the three lines are duplicated here. This contract leaves that
+# script unchanged.
+codex_accounts_dir() {
+  if [ -n "${CODEX_ACCOUNTS_DIR:-}" ]; then
+    printf '%s\n' "$CODEX_ACCOUNTS_DIR"
+    return
+  fi
+  case "$(uname -s 2>/dev/null || printf unknown)" in
+    Darwin) printf '%s\n' "$HOME/Library/Application Support/orca/codex-accounts";;
+    *) printf '%s\n' "$HOME/.local/share/orca/codex-accounts";;
+  esac
+}
+
+# The homes codex can start from on this host: the operator's own home, plus
+# every account seat pre-trust already enumerates, plus the dispatched
+# worktree's own `.codex/hooks.json` and, when that worktree sits under a
+# repository's `.orca/worktrees/`, that repository root's `.codex/hooks.json`
+# too. One per line; a missing accounts directory, worktree, or project
+# `.codex` directory just yields none from the glob or case match.
+codex_hooks_homes() {
+  local accounts_dir home wt repo_root
+  printf '%s\n' "$HOME/.codex"
+  accounts_dir=$(codex_accounts_dir)
+  for home in "$accounts_dir"/*/home; do
+    [ -d "$home" ] && printf '%s\n' "$home"
+  done
+  wt="${WORKTREE#path:}"
+  case "$wt" in
+    /*)
+      printf '%s\n' "$wt/.codex"
+      case "$wt" in
+        */.orca/worktrees/*)
+          repo_root="${wt%%/.orca/worktrees/*}"
+          printf '%s\n' "$repo_root/.codex";;
+      esac;;
+  esac
+}
+
+# codex_hooks_vet <home>: <home> is a directory that may hold hooks.json.
+# Reads every hooks.<Event>[].hooks[].command string and passes only when
+# each command's absolute-path tokens exist on disk and its first word (when
+# not an absolute path and not a shell keyword or builtin) resolves on PATH.
+# Prints one line and returns 1 on the first failing command, including a
+# malformed shape at any level (event value not a list, entry not an object,
+# inner hooks not a list, hook not an object, command not a string): a file
+# this parses but cannot trust the shape of fails closed the same as a bad
+# command. A top-level hooks object that is genuinely empty passes with 0
+# command(s) checked. Prints one line and returns 2 when hooks.json is
+# missing or cannot be parsed. Silent on pass.
+codex_hooks_vet() {
+  local home="$1"
+  python3 - "$home/hooks.json" <<'PY'
+import json
+import os
+import shlex
+import shutil
+import sys
+
+path = sys.argv[1]
+BUILTINS = {"if", "then", "else", "elif", "fi", "case", "esac", "for", "while", "until", "do", "done", "[", "[[", "test", "cd", "source", ".", "exec", "eval", "export", "set", "local", "unset", "read", "echo", "printf"}
+
+try:
+    with open(path, "r", encoding="utf-8") as handle:
+        raw = handle.read()
+except FileNotFoundError:
+    print(f"hooks-vet: {path}: not found")
+    sys.exit(2)
+except OSError as error:
+    print(f"hooks-vet: {path}: {error}")
+    sys.exit(2)
+
+try:
+    document = json.loads(raw)
+except json.JSONDecodeError as error:
+    print(f"hooks-vet: {path}: cannot parse hooks.json: {error}")
+    sys.exit(2)
+
+if not isinstance(document, dict) or not isinstance(document.get("hooks"), dict):
+    print(f"hooks-vet: {path}: top level: wrong shape")
+    sys.exit(1)
+hooks = document["hooks"]
+
+checked = 0
+for event, entries in hooks.items():
+    if not isinstance(entries, list):
+        print(f"hooks-vet: {path}: {event}: wrong shape")
+        sys.exit(1)
+    for i, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            print(f"hooks-vet: {path}: {event}[{i}]: wrong shape")
+            sys.exit(1)
+        inner = entry.get("hooks", [])
+        if not isinstance(inner, list):
+            print(f"hooks-vet: {path}: {event}[{i}].hooks: wrong shape")
+            sys.exit(1)
+        for j, hook in enumerate(inner):
+            if not isinstance(hook, dict):
+                print(f"hooks-vet: {path}: {event}[{i}].hooks[{j}]: wrong shape")
+                sys.exit(1)
+            command = hook.get("command")
+            if not isinstance(command, str):
+                print(f"hooks-vet: {path}: {event}[{i}].hooks[{j}].command: wrong shape")
+                sys.exit(1)
+            try:
+                tokens = shlex.split(command)
+            except ValueError as error:
+                print(f"hooks-vet: {command}: unparsable: {error}")
+                sys.exit(1)
+            if not tokens:
+                continue
+            for token in tokens:
+                if token.startswith("/") and not os.path.exists(token):
+                    print(f"hooks-vet: {command}: {token}: no such file")
+                    sys.exit(1)
+            first = tokens[0]
+            if not first.startswith("/") and first not in BUILTINS:
+                if shutil.which(first) is None:
+                    print(f"hooks-vet: {command}: {first}: not found on PATH")
+                    sys.exit(1)
+            checked += 1
+
+print(f"hooks-vet: {path}: {checked} command(s) checked")
+sys.exit(0)
+PY
+}
+
+# Runs codex_hooks_vet over every home from codex_hooks_homes. A home with no
+# hooks.json is skipped with one printed line. A home whose hooks.json exists
+# but fails the vet (a bad command, or hooks.json itself unparsable) fails the
+# whole pass closed, which is the only outcome the 3b wiring below answers the
+# hooks-review modal on.
+codex_hooks_vet_homes() {
+  local home hooks_json rc overall=0
+  while IFS= read -r home; do
+    hooks_json="$home/hooks.json"
+    if [ ! -f "$hooks_json" ]; then
+      echo "hooks-vet: $hooks_json: not found, skipping"
+      continue
+    fi
+    codex_hooks_vet "$home"
+    rc=$?
+    [ "$rc" -eq 0 ] || overall=1
+  done < <(codex_hooks_homes)
+  return "$overall"
+}
+
 record_host_diversity_audit() {
   [ "$CHECK_ONLY" = 1 ] && return 0
   python3 - "$LEDGER" "$RUNTIME" "$MASTER_HOST_RUNTIME" "$INSTALLED_RUNTIMES" "$ALTERNATIVE_RUNTIMES" "$SAME_HOST_REASON" "$TASK" "$DISP" "$SHA" <<'EOF'
@@ -812,14 +962,53 @@ echo "→ $TASK → $TERMINAL ($KIND)"
 # from a start screen waiting on a menu; both read idle. Left as it is on
 # failure, exits 3 without injecting or registering, the same as the
 # terminal-create failure path just above.
+#
+# A "Hooks need review" menu is a start-screen gate codex can sit on like any
+# other, but it has an answer this workspace is allowed to give under
+# dispatch authority (charter §4) once the hooks it would trust are vetted:
+# codex_hooks_vet_homes reads every hook command on this host's codex homes
+# and only passes when each one resolves to something already on disk or
+# PATH. Answered at most once per dispatch, so an answer that does not
+# actually clear the menu cannot loop forever; after a real answer the loop
+# gets a fresh budget of up to three more reads. Any other selection menu, a
+# vet failure, or the answer tool's own exit 1 all fall through to the
+# existing exit-3 path.
 if [ "$RUNTIME" = codex ]; then
   CODEX_START_RC=2
-  for attempt in 1 2 3; do
-    CODEX_START_PROBLEM=$(codex_start_screen_problem \
-      "$(orca terminal read --terminal "$TERMINAL" --limit 40 2>/dev/null || true)" \
-      "$MODEL" "$CODEX_REASONING_EFFORT")
+  HOOKS_ANSWERED=0
+  attempt=1
+  while [ "$attempt" -le 3 ]; do
+    CODEX_PANE=$(orca terminal read --terminal "$TERMINAL" --limit 40 2>/dev/null || true)
+    CODEX_START_PROBLEM=$(codex_start_screen_problem "$CODEX_PANE" "$MODEL" "$CODEX_REASONING_EFFORT")
     CODEX_START_RC=$?
-    [ "$CODEX_START_RC" = 2 ] && [ "$attempt" -lt 3 ] && { sleep 3; continue; }
+    if [ "$CODEX_START_RC" = 1 ] && [ "$HOOKS_ANSWERED" = 0 ] \
+        && printf '%s\n' "$CODEX_PANE" | grep -q 'Hooks need review'; then
+      HOOKS_ANSWERED=1
+      if codex_hooks_vet_homes; then
+        if [ ! -f "$HOOKS_ANSWER_BIN" ] || [ ! -x "$HOOKS_ANSWER_BIN" ]; then
+          echo "✗ codex start screen · hooks-review answer tool missing or not executable at $HOOKS_ANSWER_BIN · spec NOT injected" >&2
+          exit 3
+        fi
+        HOOKS_ANSWER_OUT=$("$HOOKS_ANSWER_BIN" "$TERMINAL" 2>&1)
+        HOOKS_ANSWER_RC=$?
+        printf '%s\n' "$HOOKS_ANSWER_OUT" | head -1
+        if [ "$HOOKS_ANSWER_RC" != 0 ]; then
+          echo "✗ codex start screen · hooks-review answer did not clear the modal · spec NOT injected" >&2
+          printf '%s\n' "$HOOKS_ANSWER_OUT" >&2
+          exit 3
+        fi
+        attempt=1
+        continue
+      else
+        echo "✗ codex start screen · hooks vet failed, hooks-review modal not answered · spec NOT injected" >&2
+        exit 3
+      fi
+    fi
+    if [ "$CODEX_START_RC" = 2 ] && [ "$attempt" -lt 3 ]; then
+      sleep 3
+      attempt=$((attempt + 1))
+      continue
+    fi
     break
   done
   if [ "$CODEX_START_RC" != 0 ]; then

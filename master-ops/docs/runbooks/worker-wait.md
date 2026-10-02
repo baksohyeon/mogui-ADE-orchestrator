@@ -83,7 +83,26 @@ delivery, for the coordinator to act and then re-run `worker-wait`.
   process stopped — see its own `--help`). Never abandon from the table alone.
 - **`STALL`** with sweep class `approval` — clear the in-scope approval per
   the review-and-routing charter section; anything else in scope is the
-  owner's call.
+  owner's call. A codex "Hooks need review" modal is read before it is
+  answered: read the hook commands it names and pick a trusting option only
+  when each one is a path on this machine, a shell keyword or builtin, or a
+  tool on `PATH`, exactly the rule the wrapper's vet applies; when the
+  commands cannot be read (a plugin hook
+  source), choose option 3, continue without trusting, and file what was
+  seen. It clears by hand the same way: `orca terminal send --terminal
+  <pane> --text <option-number>`, then an
+  empty `orca terminal send --terminal <pane> --text '' --enter` to confirm,
+  because a bare number only moves the selection. While the modal blocks the
+  pane, orca refuses that send with `agent_prompt_blocked` and an
+  `orchestrationRequestId`; re-issue it with `--retry-request <id>`, the same
+  sequence `scripts/codex-hooks-review-answer <pane>` runs. Redispatch after
+  with both `--terminal <pane>` and `--worktree
+  path:<absolute-worktree-path>`, since `--terminal` alone has no pre-trust
+  path and exits 2. `scripts/dispatch` now does this itself, under dispatch
+  authority, whenever `codex_hooks_vet_homes` passes every hook command on
+  the host's codex homes; it has no file to read for a plugin hook source,
+  so the manual path above is for the vet failing, an answer that did not
+  clear the modal, or a home outside scope, a plugin included.
 - **`STALL`** with sweep class `limit` or `shell` — redispatch elsewhere; the
   worktree and terminal are not reusable as-is.
 - **`STALL`** with sweep class `start-screen` or `update` — dismiss/restart

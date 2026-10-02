@@ -744,7 +744,7 @@ codex_hooks_vet_test() (
   [ -n "$fn" ] || { echo "FAIL: could not extract codex_hooks_vet" >&2; return 1; }
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-hooks-vet-test.$$"
-  mkdir -p "$work/pass" "$work/builtin" "$work/badpath" "$work/badword" "$work/badshape" "$work/missing" "$work/topempty" "$work/toplist" "$work/orcahook"
+  mkdir -p "$work/pass" "$work/builtin" "$work/badpath" "$work/badword" "$work/badshape" "$work/missing" "$work/topempty" "$work/toplist" "$work/orcahook" "$work/commenthash" "$work/redirect"
   trap 'rm -rf "$work"' EXIT
 
   cat > "$work/pass/hooks.json" <<'EOF'
@@ -767,6 +767,12 @@ EOF
 EOF
   cat > "$work/toplist/hooks.json" <<'EOF'
 []
+EOF
+  cat > "$work/commenthash/hooks.json" <<'EOF'
+{"hooks": {"PreToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "echo ok#; /no/such/binary"}]}]}}
+EOF
+  cat > "$work/redirect/hooks.json" <<'EOF'
+{"hooks": {"PreToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "echo hi >/no/such/dir/created-later.log"}]}]}}
 EOF
 
   # Orca's own managed codex-hook.sh wrapper (the command every codex home
@@ -820,6 +826,8 @@ print(json.dumps(doc))
   assert_case top-level-json-list "1" "top level: wrong shape" "$work/toplist" || return 1
   assert_case missing-hooks-json "2" "not found" "$work/missing" || return 1
   assert_case orca-managed-hook-shape "0" "1 command(s) checked" "$work/orcahook" || return 1
+  assert_case comment-hash-not-dropped "1" "/no/such/binary: no such file" "$work/commenthash" || return 1
+  assert_case redirect-target-not-checked "0" "1 command(s) checked" "$work/redirect" || return 1
 
   mutate_line() {  # unique-substring-of-target-line  replacement-line
     local needle="$1" repl="$2" line out="" replaced=0
@@ -853,7 +861,7 @@ EOF
   }
 
   failability_case abs-path-check \
-    '                if token.startswith("/") and not os.path.exists(token):' \
+    '                if not is_redirect_target and token.startswith("/") and not os.path.exists(token):' \
     '                if False:' \
     "$work/badpath" "1" || return 1
   failability_case path-word-check \
@@ -884,7 +892,7 @@ EOF
       !found && index($0, "lexer = shlex.shlex(command, posix=True, punctuation_chars=True)") {
         print "                tokens = shlex.split(command)"
         found = 1
-        skip = 2
+        skip = 3
         next
       }
       skip > 0 { skip--; next }
@@ -906,6 +914,15 @@ EOF
     echo "ok   : failability: tokenizer-regression mutant (shlex.split restored) rc 0 -> $rc, naming '$orcahook_script;'"
   }
   tokenizer_regression_case || return 1
+
+  failability_case comment-hash-check \
+    '                lexer.commenters = ""' \
+    '                lexer.commenters = "#"' \
+    "$work/commenthash" "1" || return 1
+  failability_case redirect-target-check \
+    '                if not is_redirect_target and token.startswith("/") and not os.path.exists(token):' \
+    '                if token.startswith("/") and not os.path.exists(token):' \
+    "$work/redirect" "0" || return 1
 
   # The top-level guard's own crash-path coincidence: disabling it doesn't
   # flip the exit code away from 1, because the dict-only `document["hooks"]`

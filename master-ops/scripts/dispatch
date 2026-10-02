@@ -577,16 +577,28 @@ for event, entries in hooks.items():
             try:
                 lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
                 lexer.whitespace_split = True
+                lexer.commenters = ""
                 tokens = list(lexer)
             except ValueError as error:
                 print(f"hooks-vet: {command}: unparsable: {error}")
                 sys.exit(1)
             if not tokens:
                 continue
+            # A redirection target (">/log", "2>&1") is not a command this vet
+            # runs; punctuation_chars splits the operator from its target, so
+            # skip the existence check for a token right after one.
+            REDIRECT_OPERATOR_CHARS = set("<>&")
+            prev_token = None
             for token in tokens:
-                if token.startswith("/") and not os.path.exists(token):
+                is_redirect_target = (
+                    prev_token is not None
+                    and prev_token != ""
+                    and set(prev_token) <= REDIRECT_OPERATOR_CHARS
+                )
+                if not is_redirect_target and token.startswith("/") and not os.path.exists(token):
                     print(f"hooks-vet: {command}: {token}: no such file")
                     sys.exit(1)
+                prev_token = token
             first = tokens[0]
             if not first.startswith("/") and first not in BUILTINS:
                 if shutil.which(first) is None:

@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  printf 'Usage: %s <worktree-path>\n' "${0##*/}" >&2
+}
+
+if [[ $# -ne 1 ]]; then
+  usage
+  exit 2
+fi
+
+worktree_path=$1
+if [[ "$worktree_path" != /* ]]; then
+  printf 'ERROR worktree path must be absolute: %s\n' "$worktree_path" >&2
+  usage
+  exit 2
+fi
+
+config_path=${CLAUDE_CONFIG_PATH:-$HOME/.claude.json}
+
+# Measured 2026-10-06 in a scratch $HOME: accepting Claude Code's folder-trust
+# dialog ("Quick safety check...") adds projects["<absolute folder>"] with
+# hasTrustDialogAccepted: true to this single global file, alongside the rest
+# of the account's startup state. Unlike codex's per-account config.toml
+# files, there is exactly one file and one trust record to write here.
+status=$(
+  python3 - "$config_path" "$worktree_path" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+config_path = Path(sys.argv[1])
+worktree_path = sys.argv[2]
+
+
+def abort(message: str) -> None:
+    print(f"ERROR {config_path}: {message}", file=sys.stderr)
+    raise SystemExit(2)
+
+
+def detect_indent(raw: str) -> int:
+    for line in raw.splitlines()[1:]:
+        stripped = line.lstrip(" ")
+        if stripped != line:
+            return len(line) - len(stripped)
+    return 2
+
+
+if config_path.exists():
+    raw = config_path.read_text(encoding="utf-8")
+    try:
+        document = json.loads(raw)
+    except json.JSONDecodeError as error:
+        abort(f"cannot parse JSON: {error}")
+    if not isinstance(document, dict):
+        abort("top-level value is not an object")
+else:
+    raw = ""
+    document = {}
+
+projects = document.get("projects")
+if projects is None:
+    projects = {}
+    document["projects"] = projects
+elif not isinstance(projects, dict):
+    abort("top-level projects value is not an object")
+
+project = projects.get(worktree_path)
+if isinstance(project, dict) and project.get("hasTrustDialogAccepted") is True:
+    print("already")
+    raise SystemExit(0)
+
+if isinstance(project, dict):
+    status = "updated"
+else:
+    if project is not None:
+        abort(f"projects[{worktree_path!r}] is not an object")
+    project = {}
+    projects[worktree_path] = project
+    status = "added"
+
+project["hasTrustDialogAccepted"] = True
+
+indent = detect_indent(raw) if raw else 2
+rendered = json.dumps(document, indent=indent)
+if raw.endswith("\n"):
+    rendered += "\n"
+config_path.write_text(rendered, encoding="utf-8")
+print(status)
+PY
+)
+
+case "$status" in
+  already)
+    printf '%s: already trusted\n' "$config_path"
+    printf 'Summary: already trusted\n';;
+  updated)
+    printf '%s: trusted (updated)\n' "$config_path"
+    printf 'Summary: updated\n';;
+  added)
+    printf '%s: trusted (added)\n' "$config_path"
+    printf 'Summary: added\n';;
+  *)
+    printf 'ERROR unexpected pre-trust status: %s\n' "$status" >&2
+    exit 2;;
+esac

@@ -2,9 +2,30 @@
 # Promoted shape: `scripts/dispatch-timeline --json` against a scratch ledger,
 # event log, and a fake orca on PATH joins all three sources in time order and
 # exits 0. An id whose sources are all empty still exits 0 and names every
-# missing source rather than printing an empty table silently.
+# missing source rather than printing an empty table silently. The runtime
+# root resolves from MOGUI_RUNTIME_ROOT first, then the two-up layout, then
+# SKIPs the whole file with exit 0 rather than failing an install's suite for
+# a runtime checkout this test cannot see.
 set -u
-ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+
+resolve_runtime_root() {
+  # $1 = MOGUI_RUNTIME_ROOT (may be empty), $2 = two-up candidate.
+  # Prints the resolved root on success (exit 0), or the SKIP line (exit 1).
+  if [ -n "$1" ] && [ -d "$1" ]; then
+    printf '%s\n' "$1"
+  elif [ -e "$2/scripts/dispatch-timeline" ]; then
+    printf '%s\n' "$2"
+  else
+    echo "SKIP: runtime root not found (set MOGUI_RUNTIME_ROOT)"
+    return 1
+  fi
+}
+
+two_up="$(cd "$(dirname "$0")/../.." && pwd)"
+if ! ROOT="$(resolve_runtime_root "${MOGUI_RUNTIME_ROOT:-}" "$two_up")"; then
+  echo "$ROOT"
+  exit 0
+fi
 SCRIPT="$ROOT/scripts/dispatch-timeline"
 FAILED=0
 fail() { echo "  FAIL: $*"; FAILED=1; }
@@ -12,6 +33,37 @@ ok() { echo "  ok:   $*"; }
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
+
+# --- Case 0: root resolution picks MOGUI_RUNTIME_ROOT, then two-up, then SKIPs
+root_fixture="$work/root-fixture"
+mkdir -p "$root_fixture/scripts" "$root_fixture/src/master_runtime/core"
+: > "$root_fixture/scripts/dispatch-timeline"
+: > "$root_fixture/src/master_runtime/core/dispatch_timeline.py"
+
+override_out=$(resolve_runtime_root "$root_fixture" "$ROOT"); override_rc=$?
+if [ "$override_rc" -eq 0 ] && [ "$override_out" = "$root_fixture" ]; then
+  ok "root: MOGUI_RUNTIME_ROOT wins over a valid two-up layout (exit $override_rc)"
+else
+  fail "root: expected $root_fixture, got exit $override_rc: $override_out"
+fi
+
+empty_root="$work/empty-root"
+mkdir -p "$empty_root"
+skip_out=$(resolve_runtime_root "" "$empty_root"); skip_rc=$?
+if [ "$skip_rc" -eq 1 ] && [ "$skip_out" = "SKIP: runtime root not found (set MOGUI_RUNTIME_ROOT)" ]; then
+  ok "root: no override and no two-up layout prints SKIP and signals not-found (exit $skip_rc)"
+else
+  fail "root: expected the SKIP line and exit 1, got exit $skip_rc: $skip_out"
+fi
+
+# Mutant: the deleted line `ROOT="$(cd "$(dirname "$0")/../.." && pwd)"` always
+# took the two-up path, with no existence check and no MOGUI_RUNTIME_ROOT override.
+mutant_out="$ROOT"; mutant_rc=0
+if [ "$mutant_rc" -eq 0 ] && [ "$mutant_out" = "$root_fixture" ]; then
+  fail "failability: the old ROOT line should not have honored MOGUI_RUNTIME_ROOT"
+else
+  ok "failability: the old ROOT line ignores MOGUI_RUNTIME_ROOT (exit $mutant_rc, got $mutant_out instead of $root_fixture)"
+fi
 
 cat > "$work/ledger.jsonl" <<'EOF'
 {"ts": 100, "job_id": "ctx_demo", "orchestration_task": "task_demo", "decision": "ALLOW"}

@@ -53,6 +53,10 @@ An argument starting with `task_` is treated as a task id; anything else is
 treated as a dispatch id. `--ledger` and `--event-log` override the default
 paths (`~/.mogui/dispatch-ledger.jsonl` and `~/.mogui/event-log.jsonl`).
 
+On an install, where this repository is deployed as a sibling operations
+repository, run `scripts/test-dispatch-timeline.sh` with `MOGUI_RUNTIME_ROOT`
+set to the runtime checkout so it can find `scripts/dispatch-timeline`.
+
 ## Related docs
 
 - `worker-wait.md` — `wait_verdict`/`wait_wake` and the

@@ -33,6 +33,11 @@ from pathlib import Path
 
 config_path = Path(sys.argv[1])
 worktree_path = sys.argv[2]
+# os.replace() below does not follow a symlink at its destination; it would
+# unlink the symlink itself and leave whatever it pointed at untouched.
+# Resolving once up front means every read and the final atomic write all
+# target the same real file CLAUDE_CONFIG_PATH (or ~/.claude.json) points to.
+target_path = config_path.resolve()
 
 
 def abort(message: str) -> None:
@@ -52,9 +57,9 @@ def reject_constant(token: str) -> None:
     abort(f"cannot parse JSON: invalid constant {token!r}")
 
 
-if config_path.exists():
+if target_path.exists():
     try:
-        raw = config_path.read_text(encoding="utf-8")
+        raw = target_path.read_text(encoding="utf-8")
     except UnicodeDecodeError as error:
         abort(f"cannot parse JSON: {error}")
     try:
@@ -101,9 +106,14 @@ if raw.endswith("\n"):
 # temp file first and renaming over the original makes the replacement
 # atomic, so a concurrent reader never observes a half-written file and a
 # process killed mid-write cannot leave a truncated config behind.
-tmp_path = config_path.with_name(f".{config_path.name}.{os.getpid()}.tmp")
+tmp_path = target_path.with_name(f".{target_path.name}.{os.getpid()}.tmp")
 tmp_path.write_text(rendered, encoding="utf-8")
-os.replace(tmp_path, config_path)
+if target_path.exists():
+    # A fresh temp file is created with the umask's default mode, which
+    # would silently widen an existing, more restrictive mode (this file
+    # carries oauth/account state, so that mode is meant to stay private).
+    os.chmod(tmp_path, target_path.stat().st_mode)
+os.replace(tmp_path, target_path)
 print(status)
 PY
 )

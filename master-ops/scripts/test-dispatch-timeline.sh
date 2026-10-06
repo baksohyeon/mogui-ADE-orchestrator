@@ -11,7 +11,7 @@ set -u
 resolve_runtime_root() {
   # $1 = MOGUI_RUNTIME_ROOT (may be empty), $2 = two-up candidate.
   # Prints the resolved root on success (exit 0), or the SKIP line (exit 1).
-  if [ -n "$1" ] && [ -d "$1" ]; then
+  if [ -n "$1" ] && [ -e "$1/scripts/dispatch-timeline" ]; then
     printf '%s\n' "$1"
   elif [ -e "$2/scripts/dispatch-timeline" ]; then
     printf '%s\n' "$2"
@@ -56,9 +56,22 @@ else
   fail "root: expected the SKIP line and exit 1, got exit $skip_rc: $skip_out"
 fi
 
-# Mutant: the deleted line `ROOT="$(cd "$(dirname "$0")/../.." && pwd)"` always
-# took the two-up path, with no existence check and no MOGUI_RUNTIME_ROOT override.
-mutant_out="$ROOT"; mutant_rc=0
+# A stale or mistyped MOGUI_RUNTIME_ROOT (an existing directory without the
+# runtime) must not win over a valid two-up layout.
+stale_root="$work/stale-root"
+mkdir -p "$stale_root"
+stale_out=$(resolve_runtime_root "$stale_root" "$root_fixture"); stale_rc=$?
+if [ "$stale_rc" -eq 0 ] && [ "$stale_out" = "$root_fixture" ]; then
+  ok "root: a stale MOGUI_RUNTIME_ROOT without the marker falls back to the valid two-up layout"
+else
+  fail "root: expected the stale override to fall back to $root_fixture, got exit $stale_rc: $stale_out"
+fi
+
+# Mutant: re-run the deleted `ROOT="$(cd "$(dirname "$0")/../.." && pwd)"`
+# expression itself, which always took the two-up path with no existence
+# check and no MOGUI_RUNTIME_ROOT override, and confirm it cannot land on
+# root_fixture the way the fixed resolver does.
+mutant_out="$(cd "$(dirname "$0")/../.." && pwd)"; mutant_rc=$?
 if [ "$mutant_rc" -eq 0 ] && [ "$mutant_out" = "$root_fixture" ]; then
   fail "failability: the old ROOT line should not have honored MOGUI_RUNTIME_ROOT"
 else

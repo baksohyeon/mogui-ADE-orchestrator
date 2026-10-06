@@ -20,7 +20,7 @@ This is a maintainer question rather than an operator one. An installation does 
 
 ```console
 $ PYTHONPATH=src python3 -m pytest tests -q
-$ for t in master-ops/scripts/test-*.sh; do bash "$t"; done
+$ failed=0; for t in master-ops/scripts/test-*.sh; do bash "$t" || failed=1; done; [ "$failed" -eq 0 ]
 ```
 
 The runtime is standard library only. The test run needs pytest (`python3 -m pip install pytest`).
@@ -45,10 +45,10 @@ code gets a shell test, `master-ops/scripts/test-<subject>.sh`. A subject that i
 goes to pytest.
 
 **What a case carries.** Every new case names the behaviour it pins and the one edit to the source that
-makes it fail. In a shell test that edit runs inline, in a subshell, and prints an `ok: failability:`
-line, the shape `test-dispatch-runtime.sh` already uses throughout. In pytest the pull request body
-names the one-line edit; the audit's shared-mutant method (one mutant per source function with more
-than three cases) is the reference.
+makes it fail. In a shell test that edit runs inline, in a subshell, and prints an `ok` line that names
+`failability:`, the convention `test-dispatch-runtime.sh` already uses throughout. In pytest the pull
+request body names the one-line edit; the audit's shared-mutant method (one mutant per source function
+with more than three cases) is the reference.
 
 **Taking a review request for a new case.** Accept only when no existing case pins the same behaviour.
 Check by grouping the file's cases by the source function each one calls and comparing assertions, the

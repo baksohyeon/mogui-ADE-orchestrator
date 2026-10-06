@@ -2,10 +2,11 @@
 # Promoted shape: `scripts/dispatch-timeline --json` against a scratch ledger,
 # event log, and a fake orca on PATH joins all three sources in time order and
 # exits 0. An id whose sources are all empty still exits 0 and names every
-# missing source rather than printing an empty table silently. The runtime
-# root resolves from MOGUI_RUNTIME_ROOT first, then the two-up layout, then
-# SKIPs the whole file with exit 0 rather than failing an install's suite for
-# a runtime checkout this test cannot see.
+# missing source rather than printing an empty table silently.
+#
+# The runtime root resolves from MOGUI_RUNTIME_ROOT first, then the two-up
+# layout. A test that cannot see the module under test has nothing to
+# measure, so with neither resolved this file prints a SKIP line and exits 0.
 set -u
 
 resolve_runtime_root() {

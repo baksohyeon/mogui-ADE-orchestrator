@@ -6,6 +6,8 @@ report is discovery and evidence only.
 
 ## Method
 
+- Counts verified 2026-10-06: every count below was checked against both its table and a foreground
+  run of the file it describes.
 - `test-dispatch-runtime.sh` already pairs almost every positive assertion with its own inline mutant
   (a shell or Python source edit run in a subshell, printing an `ok : failability: ...` line). Re-deriving
   round one's result meant running the file itself in the foreground and reading its own mutant evidence,
@@ -21,17 +23,16 @@ report is discovery and evidence only.
 ## scripts/test-dispatch-runtime.sh
 
 Full run: `timeout 120 bash scripts/test-dispatch-runtime.sh`: exit 0, 68 `ok` lines plus the
-top-of-file agy regression line, for 50 distinguishable behaviors (4 top-level checks + 46 feature
-assertions; several feature assertions share one function-level `failability` mutant, so 30 of the 46 have
-their own dedicated mutant line and the remaining 16 are covered by a sibling case's mutant in the same
-function, noted below).
+top-of-file agy regression line, for 72 cases (4 top-level checks + 68 feature assertions; 30 of the
+68 are the dedicated `failability` mutant lines and the remaining 38 are the fixture assertions those
+mutants protect, noted below).
 
 Round one reported 35 cases (34 keep, 1 duplicate, 0 cannot-fail, 0 low-value) for this file. No round-one
 artifact survived the termination at 600 s to check the duplicate against, so this round re-derives the
 count from the file as it stands now. The file grew by 211 lines between round one and this round (PR
 #160, merged as `eb7e326`, added `claude_pretrust_test`, `claude_pretrust_call_site_test`, and
 `claude_hook_trust_marker_test`, accounting for 7 of the 68 `ok` lines). The remaining gap between round one's 35 and
-this round's 50 could not be reconciled without round one's own case list; this round's count is the
+this round's 72 could not be reconciled without round one's own case list; this round's count is the
 measured one.
 
 ### Top of file: agy capability regression (4 cases)
@@ -158,7 +159,7 @@ measured one.
 | failability: pointed at `dispatch` instead | an `-x`-only check would wrongly accept any executable beside the wrapper | keep | `ok : failability: an assignment pointed at dispatch resolves to an executable (dispatch) and fails the name compare` |
 | failability: empty `SCRIPTS_DIR` | a `SCRIPTS_DIR` with nothing in it fails the existence check | keep | `ok : failability: an empty SCRIPTS_DIR fails the existence check (rc=1)` |
 
-### `codex_hooks_vet_wiring_test` (12 cases: 6 fixture + 6 failability/enumeration)
+### `codex_hooks_vet_wiring_test` (13 cases: 8 fixture + 5 failability/enumeration)
 
 | case | pinned behavior | verdict | evidence |
 |---|---|---|---|
@@ -176,7 +177,7 @@ measured one.
 | a failing repository-root `.codex/hooks.json` blocks the modal | the repo root itself is in scope via the `.orca/worktrees` derivation | keep | `ok : a failing repository-root .codex/hooks.json blocks the modal via the .orca/worktrees derivation (status=3)`; failability below |
 | failability: a `codex_hooks_homes` that never resolves `WORKTREE` | the repo-root-blocks assertion is not a tautology | keep | `ok : failability: a codex_hooks_homes that never resolves WORKTREE answers the modal despite the failing repo-root hooks.json (status=0)` |
 
-**Runtime.sh totals: 50 cases, 50 keep, 0 duplicate, 0 cannot-fail, 0 low-value.**
+**Runtime.sh totals: 72 cases, 72 keep, 0 duplicate, 0 cannot-fail, 0 low-value.**
 
 The three account/worktree/repo-root "blocks the modal" cases (account-seat, worktree, repo-root) look
 parallel on the case table above; they are not duplicates. Each names a different hooks.json source that
@@ -187,7 +188,7 @@ the one added most recently (the `.orca/worktrees` derivation).
 
 `PYTHONPATH=src python -m pytest tests/test_dispatch_gate.py -q`: **116 passed in 1.14s**.
 
-Cases group into 15 source-function buckets (by reading each test body and naming the function or CLI
+Cases group into 14 source-function buckets (by reading each test body and naming the function or CLI
 subcommand it calls; a test that calls `gate.check()` only to set up a ticket before the real assertion is
 grouped under the function the assertion targets, not under `check`):
 
@@ -288,7 +289,7 @@ branch, precondition, or side effect of its source function.
 
 ## scripts/test-dispatch-timeline.sh
 
-Full run: `timeout 90 bash scripts/test-dispatch-timeline.sh`: exit 0, 14 `ok` lines.
+Full run: `timeout 90 bash scripts/test-dispatch-timeline.sh`: exit 0, 15 `ok` lines.
 
 | case | pinned behavior | verdict | evidence |
 |---|---|---|---|
@@ -331,11 +332,11 @@ mutant, 0 duplicate, 0 cannot-fail, 0 low-value.** No additional mutant was need
 
 | file | cases | keep | duplicate | cannot-fail | low-value |
 |---|---:|---:|---:|---:|---:|
-| `scripts/test-dispatch-runtime.sh` | 50 | 50 | 0 | 0 | 0 |
+| `scripts/test-dispatch-runtime.sh` | 72 | 72 | 0 | 0 | 0 |
 | `tests/test_dispatch_gate.py` | 116 | 116 | 0 | 0 | 0 |
 | `scripts/test-dispatch-timeline.sh` | 13 | 13 | 0 | 0 | 0 |
 | `scripts/test-worker-wait.sh` | 2 | 2 | 0 | 0 | 0 |
-| **total** | **181** | **181** | **0** | **0** | **0** |
+| **total** | **203** | **203** | **0** | **0** | **0** |
 
 ## Candidate deletions
 

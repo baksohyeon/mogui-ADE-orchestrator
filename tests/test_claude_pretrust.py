@@ -209,6 +209,15 @@ def test_existing_file_mode_is_preserved(tmp_path: Path) -> None:
     assert (config_path.stat().st_mode & 0o777) == 0o600
 
 
+def test_fresh_file_is_created_with_a_restrictive_mode(tmp_path: Path) -> None:
+    config_path = tmp_path / ".claude.json"
+
+    result = run_pretrust("/tmp/worktree", config_path)
+
+    assert result.returncode == 0
+    assert (config_path.stat().st_mode & 0o777) == 0o600
+
+
 def test_symlinked_config_path_updates_the_real_target(tmp_path: Path) -> None:
     real_target = tmp_path / "real-home" / ".claude.json"
     real_target.parent.mkdir()

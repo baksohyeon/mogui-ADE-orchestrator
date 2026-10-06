@@ -113,6 +113,10 @@ if target_path.exists():
     # would silently widen an existing, more restrictive mode (this file
     # carries oauth/account state, so that mode is meant to stay private).
     os.chmod(tmp_path, target_path.stat().st_mode)
+else:
+    # Claude Code itself writes this file 0600. The umask default (typically
+    # 0644) would make a brand-new config world-readable on a multi-user host.
+    os.chmod(tmp_path, 0o600)
 os.replace(tmp_path, target_path)
 print(status)
 PY

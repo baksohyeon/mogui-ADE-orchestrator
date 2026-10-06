@@ -2,7 +2,7 @@
 # Promoted shape: `scripts/dispatch-timeline --json` against a scratch ledger,
 # event log, and a fake orca on PATH joins all three sources in time order and
 # exits 0. An id whose sources are all empty still exits 0 and names every
-# missing source rather than printing an empty table silently.
+# missing source.
 #
 # The runtime root resolves from MOGUI_RUNTIME_ROOT first, then the two-up
 # layout. A test that cannot see the module under test has nothing to
@@ -198,7 +198,7 @@ done
 # --- Case 5b: a positive --since lists the existing fixtures' dispatch id --
 # --since is hours-ago; the fixtures carry 1970 epoch timestamps, so the
 # window must reach before the epoch. Derive enough hours from the current
-# time rather than picking an arbitrary magic number.
+# time, so the window always reaches far enough back.
 since_hours=$(( $(date +%s) / 3600 + 1 ))
 since_out=$(PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$ROOT/src" PATH="$work:$PATH" \
   python3 "$SCRIPT" --since "$since_hours" --ledger "$work/ledger.jsonl" \

@@ -48,7 +48,32 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+## v0.5.239
+
+`dispatch` now runs `scripts/claude-worker-pretrust` before a claude launch, the same way it already does for codex and cursor: the script writes `hasTrustDialogAccepted: true` into the `projects["<absolute worktree>"]` entry of `CLAUDE_CONFIG_PATH` (defaulting to `~/.claude.json`), measured against a scratch install of Claude Code accepting its own folder-trust dialog, and `HOOK_TRUST_MARKERS` now recognizes that dialog's wording ("Quick safety check...", "pre-approves ... tool permissions...") so a pane still carrying it classifies as hook-trust instead of reporting a false delivery success.
+
+Adds `docs/reports/test-audit-2026-10-06.md`: a case-by-case audit of the dispatch template's test
+suites (`scripts/test-dispatch-runtime.sh`, `scripts/test-dispatch-timeline.sh`,
+`scripts/test-worker-wait.sh`, and the orchestrator's `tests/test_dispatch_gate.py`), re-deriving round
+one's result for the runtime suite and adding an assertion-based pass for `test_dispatch_gate.py` after
+round one's exhaustive-mutation approach to it was terminated unfinished at 600 seconds. No deletion; the
+report finds every measured case earns its keep.
+
+`test-dispatch-timeline.sh` resolves its runtime root from `MOGUI_RUNTIME_ROOT` when set, then the two-up layout when `scripts/dispatch-timeline` exists there, then prints `SKIP: runtime root not found (set MOGUI_RUNTIME_ROOT)` and exits 0 instead of failing an install's suite for a runtime checkout it cannot see.
+
+`codex_hooks_vet` tokenizes each hook command with `shlex.shlex(command, posix=True, punctuation_chars=True)` instead of `shlex.split`, so a quoted path immediately followed by `;`, `&&`, `||`, `|`, `(`, `)`, `<`, or `>` tokenizes as a clean path plus a separate punctuation token instead of fusing the punctuation onto the path and failing the existence check; this restores the hooks-review modal answer on every host whose Codex hooks carry an Orca-managed hook command shaped that way.
+
+`dispatch` now launches codex with its reasoning effort pinned, update checks on startup disabled, and the one measured model-migration pair acknowledged, then reads the pane's own model/effort footer up to three times before injecting. A start screen it cannot recognize (a migration menu, a limit notice, an update prompt, or a footer that does not match the request) fails the dispatch closed instead of swallowing the spec.
+
+`dispatch_gate`'s default ledger path now matches `dispatch_timeline` and the `worker-wait` docs (`~/.mogui/dispatch-ledger.jsonl`), so a direct `dispatch-gate register` without `--ledger` is no longer invisible to `worker-wait`.
+
+`dispatch` now answers codex's "Hooks need review" start-screen modal itself, under dispatch authority, once `codex_hooks_vet_homes` accepts every hook command on the host's Codex homes: the listed shell keywords and builtins as first words, every other first word on PATH, and every absolute path on disk; a vet failure or any other selection menu still takes the existing exit-3 path instead of answering.
+
+Succession boot card step 4 now tells the owner the predecessor stays alive before any measurement, then runs the retirement handshake to CLOSED before the test and drift sweep rather than after, so the owner no longer reads the sweep's duration as a stall.
+
 ## v0.5.230
+
+Release v0.5.230 (2026-10-01): `master-ops/TEMPLATE-VERSION` and `master-ops/MANIFEST.json` move to `v0.5.230` alongside the changelog fold, satisfying the `changelog-fragment-check` gate for a release commit that touches `master-ops/` outside `changelog.d/` and `CHANGELOG.md`.
 
 Release verification (2026-10-01):
 

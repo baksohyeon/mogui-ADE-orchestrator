@@ -1,1 +1,0 @@
-`test-dispatch-timeline.sh` resolves its runtime root from `MOGUI_RUNTIME_ROOT` when set, then the two-up layout when `scripts/dispatch-timeline` exists there, then prints `SKIP: runtime root not found (set MOGUI_RUNTIME_ROOT)` and exits 0 instead of failing an install's suite for a runtime checkout it cannot see.

@@ -406,6 +406,215 @@ BIN
 )
 cursor_pretrust_test "$dispatch" || exit 1
 
+# --- Feature: claude pre-trust before launch --------------------------------
+#
+# Claude Code's own folder-trust dialog is not covered by
+# --dangerously-skip-permissions, so dispatch must run
+# scripts/claude-worker-pretrust before a claude launch and fail closed when
+# the pre-trust binary produces no Summary line, the same way
+# ensure_cursor_pretrust fails closed on a skipped summary. Extracts
+# ensure_claude_pretrust and runs it against a fake claude-worker-pretrust.
+claude_pretrust_test() (
+  set +e
+  set -u
+  local dispatch="$1" work fn script_file out status mutant_fn
+
+  fn=$(awk '$0=="ensure_claude_pretrust() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  [ -n "$fn" ] || { echo "FAIL: could not extract ensure_claude_pretrust" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-claude-pretrust-test.$$"
+  mkdir -p "$work"
+  trap 'rm -rf "$work"' EXIT
+  cat > "$work/claude-worker-pretrust" <<'BIN'
+#!/bin/bash
+printf '%s/.claude.json: already trusted\n' "$1"
+printf 'Summary: already trusted\n'
+BIN
+  chmod +x "$work/claude-worker-pretrust"
+
+  write_script() {
+    local outfile="$1" body="$2"
+    {
+      echo 'set -u'
+      printf 'CLAUDE_PRETRUST_BIN=%q\n' "$work/claude-worker-pretrust"
+      printf '%s\n' "$body"
+      printf 'ensure_claude_pretrust claude %q && echo TRUSTED\n' "$work"
+    } > "$outfile"
+  }
+
+  script_file="$work/run.sh"
+  write_script "$script_file" "$fn"
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^TRUSTED$' \
+      || ! printf '%s\n' "$out" | grep -q 'pre-trust ✓ claude'; then
+    echo "FAIL: ensure_claude_pretrust should succeed against a fake pre-trust binary reporting a trusted summary" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : ensure_claude_pretrust succeeds against a fake claude-worker-pretrust reporting a trusted summary"
+
+  # No Summary line at all (an unmeasured or broken pre-trust binary) must
+  # fail closed: it leaves the trust dialog in place.
+  cat > "$work/claude-worker-pretrust" <<'BIN'
+#!/bin/bash
+printf 'nothing useful here\n'
+BIN
+  chmod +x "$work/claude-worker-pretrust"
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ]; then
+    echo "FAIL: ensure_claude_pretrust should fail closed when the pre-trust binary produces no Summary line" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : ensure_claude_pretrust fails closed on a missing pre-trust summary"
+
+  # Failability: if the empty-summary case stopped matching, a worktree the
+  # pretrust binary could not actually trust would still be launched into.
+  mutant_fn=${fn/'"")'/'"nevermatches")'}
+  if [ "$mutant_fn" = "$fn" ]; then
+    echo "FAIL: empty-summary-case mutant did not change the source" >&2
+    return 1
+  fi
+  write_script "$script_file" "$mutant_fn"
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^TRUSTED$'; then
+    echo "FAIL: failability: mutant dropping the empty-summary case should have wrongly succeeded, but still didn't" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : failability: dropping the empty-summary case makes the fail-closed assertion above fail"
+)
+claude_pretrust_test "$dispatch" || exit 1
+
+# --- Feature: dispatch actually calls ensure_claude_pretrust before launch -
+#
+# claude_pretrust_test above proves ensure_claude_pretrust itself behaves
+# correctly in isolation; it does not prove dispatch's real call site still
+# invokes it before the claude terminal is created. Extracts the block
+# between the pre-trust calls and terminal creation as plain text and checks
+# both that the call is present and that it comes before
+# `orca terminal create`, so a dropped or reordered line fails here even
+# though the function body extracted above is untouched.
+claude_pretrust_call_site_test() (
+  set +e
+  set -u
+  local dispatch="$1" block mutant_block
+
+  block=$(awk '
+    /^ensure_codex_pretrust "\$RUNTIME" "\$WORKTREE" \|\| exit 2$/{f=1}
+    f{print}
+    f && /orca terminal create --worktree "\$WORKTREE"/{exit}
+  ' "$dispatch")
+
+  [ -n "$block" ] || { echo "FAIL: could not extract the pre-trust-to-terminal-creation block" >&2; return 1; }
+
+  check_ordering() {
+    local text="$1" call_line term_line
+    call_line=$(printf '%s\n' "$text" | grep -n '^ensure_claude_pretrust "\$RUNTIME" "\$WORKTREE" || exit 2$' | cut -d: -f1 | head -1)
+    term_line=$(printf '%s\n' "$text" | grep -n 'orca terminal create --worktree "\$WORKTREE"' | cut -d: -f1 | head -1)
+    [ -n "$call_line" ] || return 1
+    [ -n "$term_line" ] || return 1
+    [ "$call_line" -lt "$term_line" ]
+  }
+
+  if ! check_ordering "$block"; then
+    echo "FAIL: dispatch does not call ensure_claude_pretrust before creating the claude terminal" >&2
+    printf '%s\n' "$block" >&2
+    return 1
+  fi
+  echo "ok   : dispatch calls ensure_claude_pretrust before orca terminal create"
+
+  # Failability: a copy of the block with the claude pre-trust line dropped
+  # (the shape of the call being silently removed from the wrapper) must
+  # fail the ordering check above.
+  mutant_block=$(printf '%s\n' "$block" | grep -v '^ensure_claude_pretrust "\$RUNTIME" "\$WORKTREE" || exit 2$')
+  if [ "$mutant_block" = "$block" ]; then
+    echo "FAIL: dropped-call mutant did not change the source" >&2
+    return 1
+  fi
+  if check_ordering "$mutant_block"; then
+    echo "FAIL: failability: mutant dropping ensure_claude_pretrust should have failed the ordering check, but still passed" >&2
+    return 1
+  fi
+  echo "ok   : failability: dropping the ensure_claude_pretrust call makes the ordering check fail"
+)
+claude_pretrust_call_site_test "$dispatch" || exit 1
+
+# --- Feature: claude folder-trust dialog classifies as hook-trust ----------
+#
+# 2026-10-02: claude's "Quick safety check..." folder-trust dialog had no
+# marker, so an untrusted worktree's dialog read as an unrecognized pane
+# instead of the hook-trust class that stops a dispatch before it reports a
+# false success. Extracts pane_classify_text and the four marker variables,
+# then runs the function against a captured dialog pane.
+claude_hook_trust_marker_test() (
+  set +e
+  set -u
+  local dispatch="$1" markers classify_fn script_file pane out status mutant_markers work
+
+  markers=$(grep -E '^(LIMIT_MARKERS|HOOK_TRUST_MARKERS|PREPARED_PROMPT_MARKERS|PREPARED_UNICODE_PROMPT_MARKERS)=' "$dispatch")
+  classify_fn=$(awk '$0=="pane_classify_text() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+
+  [ "$(printf '%s\n' "$markers" | grep -c .)" = 4 ] || { echo "FAIL: could not extract all four marker variables" >&2; return 1; }
+  [ -n "$classify_fn" ] || { echo "FAIL: could not extract pane_classify_text" >&2; return 1; }
+  printf '%s\n' "$markers" | grep -Fq 'Quick safety check' || { echo "FAIL: HOOK_TRUST_MARKERS does not carry the claude folder-trust wording" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-claude-hook-trust-test.$$"
+  mkdir -p "$work"
+  trap 'rm -rf "$work"' EXIT
+
+  pane=' Accessing workspace:
+
+ /private/tmp/claude-pretrust-scratch-project
+
+ Quick safety check: Is this a project you created or one you trust? (Like your
+ own code, a well-known open source project, or work from your team). If not,
+ take a moment to review what'"'"'s in this folder first.
+
+ ❯ No, exit
+   Yes, I trust this folder'
+
+  write_script() {
+    local outfile="$1" markers_body="$2"
+    {
+      echo 'set -u'
+      printf '%s\n' "$markers_body"
+      printf '%s\n' "$classify_fn"
+      printf 'pane_classify_text %s\n' "$(printf '%q' "$pane")"
+    } > "$outfile"
+  }
+
+  script_file="$work/run.sh"
+  write_script "$script_file" "$markers"
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] || [ "$out" != "hook-trust" ]; then
+    echo "FAIL: a pane carrying claude's folder-trust dialog should classify as hook-trust, got '$out' (status=$status)" >&2
+    return 1
+  fi
+  echo "ok   : a pane carrying claude's folder-trust dialog classifies as hook-trust"
+
+  # Failability: dropping the claude-specific marker must misclassify the
+  # same pane.
+  mutant_markers=${markers/'|Quick safety check.*|pre-approves .* tool permissions.*'/}
+  if [ "$mutant_markers" = "$markers" ]; then
+    echo "FAIL: claude-marker mutant did not change the source" >&2
+    return 1
+  fi
+  write_script "$script_file" "$mutant_markers"
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ] && [ "$out" = "hook-trust" ]; then
+    echo "FAIL: failability: mutant dropping the claude folder-trust marker should have misclassified the pane" >&2
+    return 1
+  fi
+  echo "ok   : failability: dropping the claude folder-trust marker misclassifies the dialog pane (got '$out')"
+)
+claude_hook_trust_marker_test "$dispatch" || exit 1
+
 # --- Feature: codex launch flags ---------------------------------------------
 #
 # 2026-10-01: a bare `codex --model <id>` opened a model-retirement migration
@@ -1388,4 +1597,4 @@ EOF
 )
 codex_hooks_vet_wiring_test "$dispatch" || exit 1
 
-echo "dispatch multi-vendor / check-only / contract-delivery / cursor-pretrust / codex-launch / codex-start-screen / codex-start-screen-wiring / codex-hooks-vet / codex-hooks-vet-wiring regression tests passed"
+echo "dispatch multi-vendor / check-only / contract-delivery / cursor-pretrust / claude-pretrust / claude-pretrust-call-site / claude-hook-trust-marker / codex-launch / codex-start-screen / codex-start-screen-wiring / codex-hooks-vet / codex-hooks-vet-wiring regression tests passed"

@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  printf 'Usage: %s <worktree-path>\n' "${0##*/}" >&2
+}
+
+if [[ $# -ne 1 ]]; then
+  usage
+  exit 2
+fi
+
+worktree_path=$1
+if [[ "$worktree_path" != /* ]]; then
+  printf 'ERROR worktree path must be absolute: %s\n' "$worktree_path" >&2
+  usage
+  exit 2
+fi
+
+config_path=${CLAUDE_CONFIG_PATH:-$HOME/.claude.json}
+
+# Measured 2026-10-06 in a scratch $HOME: accepting Claude Code's folder-trust
+# dialog ("Quick safety check...") adds projects["<absolute folder>"] with
+# hasTrustDialogAccepted: true to this single global file, alongside the rest
+# of the account's startup state. Unlike codex's per-account config.toml
+# files, there is exactly one file and one trust record to write here.
+status=$(
+  python3 - "$config_path" "$worktree_path" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+config_path = Path(sys.argv[1])
+worktree_path = sys.argv[2]
+# os.replace() below does not follow a symlink at its destination; it would
+# unlink the symlink itself and leave whatever it pointed at untouched.
+# Resolving once up front means every read and the final atomic write all
+# target the same real file CLAUDE_CONFIG_PATH (or ~/.claude.json) points to.
+target_path = config_path.resolve()
+
+
+def abort(message: str) -> None:
+    print(f"ERROR {config_path}: {message}", file=sys.stderr)
+    raise SystemExit(2)
+
+
+def detect_indent(raw: str) -> int:
+    for line in raw.splitlines()[1:]:
+        stripped = line.lstrip(" ")
+        if stripped != line:
+            return len(line) - len(stripped)
+    return 2
+
+
+def reject_constant(token: str) -> None:
+    abort(f"cannot parse JSON: invalid constant {token!r}")
+
+
+if target_path.exists():
+    try:
+        raw = target_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as error:
+        abort(f"cannot parse JSON: {error}")
+    try:
+        document = json.loads(raw, parse_constant=reject_constant)
+    except json.JSONDecodeError as error:
+        abort(f"cannot parse JSON: {error}")
+    if not isinstance(document, dict):
+        abort("top-level value is not an object")
+else:
+    raw = ""
+    document = {}
+
+projects = document.get("projects")
+if projects is None:
+    projects = {}
+    document["projects"] = projects
+elif not isinstance(projects, dict):
+    abort("top-level projects value is not an object")
+
+project = projects.get(worktree_path)
+if isinstance(project, dict) and project.get("hasTrustDialogAccepted") is True:
+    print("already")
+    raise SystemExit(0)
+
+if isinstance(project, dict):
+    status = "updated"
+else:
+    if project is not None:
+        abort(f"projects[{worktree_path!r}] is not an object")
+    project = {}
+    projects[worktree_path] = project
+    status = "added"
+
+project["hasTrustDialogAccepted"] = True
+
+indent = detect_indent(raw) if raw else 2
+rendered = json.dumps(document, indent=indent, ensure_ascii=False)
+if raw.endswith("\n"):
+    rendered += "\n"
+
+# ~/.claude.json is live state a running Claude Code session writes to on its
+# own (project trust, oauth/account caches, session stats). A plain
+# write_text truncates it in place; writing the new content to a sibling
+# temp file first and renaming over the original makes the replacement
+# atomic, so a concurrent reader never observes a half-written file and a
+# process killed mid-write cannot leave a truncated config behind.
+tmp_path = target_path.with_name(f".{target_path.name}.{os.getpid()}.tmp")
+tmp_path.write_text(rendered, encoding="utf-8")
+if target_path.exists():
+    # A fresh temp file is created with the umask's default mode, which
+    # would silently widen an existing, more restrictive mode (this file
+    # carries oauth/account state, so that mode is meant to stay private).
+    os.chmod(tmp_path, target_path.stat().st_mode)
+else:
+    # Claude Code itself writes this file 0600. The umask default (typically
+    # 0644) would make a brand-new config world-readable on a multi-user host.
+    os.chmod(tmp_path, 0o600)
+os.replace(tmp_path, target_path)
+print(status)
+PY
+)
+
+case "$status" in
+  already)
+    printf '%s: already trusted\n' "$config_path"
+    printf 'Summary: already trusted\n';;
+  updated)
+    printf '%s: trusted (updated)\n' "$config_path"
+    printf 'Summary: updated\n';;
+  added)
+    printf '%s: trusted (added)\n' "$config_path"
+    printf 'Summary: added\n';;
+  *)
+    printf 'ERROR unexpected pre-trust status: %s\n' "$status" >&2
+    exit 2;;
+esac

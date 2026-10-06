@@ -225,7 +225,7 @@ choose_default_runtime() {
 # lost with every step still printing success. Extend this list the first time a
 # host shows a gate that is not here yet; a missing marker is a silent delivery
 # failure, which is the whole defect this guards (measured delivery incidents).
-HOOK_TRUST_MARKERS='^[[:space:]]*(Resume session.*|New worktree.*|Coming from Claude Code.*|Changelog.*|Select a model.*|Welcome to Claude.*|Do you trust the files.*|Sign in.*|press enter to continue.*|/login.*|Antigravity CLI requires permission.*|I trust this folder.*|trust this workspace.*|workspace trust.*|permission to access.*)[[:space:][:punct:]]*$'
+HOOK_TRUST_MARKERS='^[[:space:]]*(Resume session.*|New worktree.*|Coming from Claude Code.*|Changelog.*|Select a model.*|Welcome to Claude.*|Do you trust the files.*|Sign in.*|press enter to continue.*|/login.*|Antigravity CLI requires permission.*|I trust this folder.*|trust this workspace.*|workspace trust.*|permission to access.*|Quick safety check.*|pre-approves .* tool permissions.*)[[:space:][:punct:]]*$'
 LIMIT_MARKERS='^[[:space:]]*(rate limit|rate-limit|too many requests|quota exceeded|out of credits|credits are exhausted|usage limit reached|you.?ve hit your limit|you have reached your limit|try again after)[[:space:][:punct:]]*.*$'
 PREPARED_PROMPT_MARKERS='^[[:space:]]*(claude|codex|grok|gemini)[[:space:]]*>[[:space:]]*$'
 PREPARED_UNICODE_PROMPT_MARKERS='^[[:space:]]*(❯|›|➜)[[:space:]]*$'
@@ -389,6 +389,7 @@ runtime_command() {
 
 PRETRUST_BIN={{RUNTIME_ROOT}}/scripts/codex-worker-pretrust
 CURSOR_PRETRUST_BIN={{RUNTIME_ROOT}}/scripts/cursor-worker-pretrust
+CLAUDE_PRETRUST_BIN={{RUNTIME_ROOT}}/scripts/claude-worker-pretrust
 
 # The registry prescribes pre-trust for codex instead of a launch flag. RUN it
 # here rather than telling the operator to. A manual step in front of a dispatch
@@ -465,6 +466,41 @@ ensure_cursor_pretrust() {
       printf '%s\n' "$out" >&2; return 1;;
     *)
       echo "pre-trust ✓ cursor · $summary";;
+  esac
+}
+
+# Claude Code's own folder-trust dialog ("Quick safety check...") is not
+# covered by --dangerously-skip-permissions (measured 2026-10-02 on a fresh
+# worktree: the dialog opened, swallowed the injected spec, and the wrapper
+# printed delivery UNVERIFIED because HOOK_TRUST_MARKERS did not know the
+# wording yet). Run pre-trust here for the same reason the other two run it:
+# a manual step in front of a dispatch is a step that gets skipped, and an
+# unresolved trust prompt reads as idle, so the injected spec is lost while
+# every step reports success.
+ensure_claude_pretrust() {
+  [ "$1" = "claude" ] || return 0
+  local wt_path="${2#path:}" out summary
+  if [ -z "$wt_path" ] || [ "${wt_path#/}" = "$wt_path" ]; then
+    echo "✗ claude needs an absolute worktree path to pre-trust; got '${2:-<none>}'" >&2
+    echo "  claude's folder-trust dialog is not covered by --dangerously-skip-permissions," >&2
+    echo "  so an untrusted worktree will stop the worker on that dialog, which reads as idle." >&2
+    echo "  Dispatch with --worktree path:<absolute-path>, or choose a runtime whose approval" >&2
+    echo "  posture is measured to cover it." >&2
+    return 1
+  fi
+  if [ ! -x "$CLAUDE_PRETRUST_BIN" ]; then
+    echo "✗ claude pre-trust script not executable: $CLAUDE_PRETRUST_BIN" >&2
+    return 1
+  fi
+  out=$("$CLAUDE_PRETRUST_BIN" "$wt_path" 2>&1) || {
+    echo "✗ claude pre-trust failed (exit $?)" >&2; printf '%s\n' "$out" >&2; return 1; }
+  summary=$(printf '%s\n' "$out" | grep -m1 '^Summary:' || true)
+  case "$summary" in
+    "")
+      echo "✗ claude pre-trust produced no Summary line; unmeasured, treating as not trusted" >&2
+      printf '%s\n' "$out" >&2; return 1;;
+    *)
+      echo "pre-trust ✓ claude · $summary";;
   esac
 }
 
@@ -889,6 +925,7 @@ fi
 # from spending budget.
 ensure_codex_pretrust "$RUNTIME" "$WORKTREE" || exit 2
 ensure_cursor_pretrust "$RUNTIME" "$WORKTREE" || exit 2
+ensure_claude_pretrust "$RUNTIME" "$WORKTREE" || exit 2
 
 CHK=$("$GATE" "${GATE_ARGS[@]}" 2>/dev/null)
 ALLOW=$(echo "$CHK" | jqf "d['allow']")
@@ -1109,8 +1146,13 @@ case "$DELIVERY_CLASS" in
 esac
 case "$DELIVERY_CLASS" in
   hook-trust)
-    echo "✗ delivery FAILED · hook/trust gate is still present; the spec was NOT consumed"
-    echo "  Dismiss or pre-trust the gate before dispatching another task."
+    if [ "$RUNTIME" = claude ]; then
+      echo "✗ delivery FAILED · claude's folder-trust dialog is still present; the spec was NOT consumed"
+      echo "  scripts/claude-worker-pretrust should have cleared this before launch; check its Summary line."
+    else
+      echo "✗ delivery FAILED · hook/trust gate is still present; the spec was NOT consumed"
+      echo "  Dismiss or pre-trust the gate before dispatching another task."
+    fi
     exit 5;;
   limit)
     echo "✗ delivery FAILED · provider limit is present; the spec was NOT consumed"

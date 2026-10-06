@@ -27,6 +27,7 @@ config_path=${CLAUDE_CONFIG_PATH:-$HOME/.claude.json}
 status=$(
   python3 - "$config_path" "$worktree_path" <<'PY'
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -47,10 +48,17 @@ def detect_indent(raw: str) -> int:
     return 2
 
 
+def reject_constant(token: str) -> None:
+    abort(f"cannot parse JSON: invalid constant {token!r}")
+
+
 if config_path.exists():
-    raw = config_path.read_text(encoding="utf-8")
     try:
-        document = json.loads(raw)
+        raw = config_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as error:
+        abort(f"cannot parse JSON: {error}")
+    try:
+        document = json.loads(raw, parse_constant=reject_constant)
     except json.JSONDecodeError as error:
         abort(f"cannot parse JSON: {error}")
     if not isinstance(document, dict):
@@ -83,10 +91,19 @@ else:
 project["hasTrustDialogAccepted"] = True
 
 indent = detect_indent(raw) if raw else 2
-rendered = json.dumps(document, indent=indent)
+rendered = json.dumps(document, indent=indent, ensure_ascii=False)
 if raw.endswith("\n"):
     rendered += "\n"
-config_path.write_text(rendered, encoding="utf-8")
+
+# ~/.claude.json is live state a running Claude Code session writes to on its
+# own (project trust, oauth/account caches, session stats). A plain
+# write_text truncates it in place; writing the new content to a sibling
+# temp file first and renaming over the original makes the replacement
+# atomic, so a concurrent reader never observes a half-written file and a
+# process killed mid-write cannot leave a truncated config behind.
+tmp_path = config_path.with_name(f".{config_path.name}.{os.getpid()}.tmp")
+tmp_path.write_text(rendered, encoding="utf-8")
+os.replace(tmp_path, config_path)
 print(status)
 PY
 )

@@ -436,9 +436,9 @@ BIN
     local outfile="$1" body="$2"
     {
       echo 'set -u'
-      printf 'CLAUDE_PRETRUST_BIN=%s\n' "$work/claude-worker-pretrust"
+      printf 'CLAUDE_PRETRUST_BIN=%q\n' "$work/claude-worker-pretrust"
       printf '%s\n' "$body"
-      printf 'ensure_claude_pretrust claude %s && echo TRUSTED\n' "$work"
+      printf 'ensure_claude_pretrust claude %q && echo TRUSTED\n' "$work"
     } > "$outfile"
   }
 
@@ -488,6 +488,60 @@ BIN
   echo "ok   : failability: dropping the empty-summary case makes the fail-closed assertion above fail"
 )
 claude_pretrust_test "$dispatch" || exit 1
+
+# --- Feature: dispatch actually calls ensure_claude_pretrust before launch -
+#
+# claude_pretrust_test above proves ensure_claude_pretrust itself behaves
+# correctly in isolation; it does not prove dispatch's real call site still
+# invokes it before the claude terminal is created. Extracts the block
+# between the pre-trust calls and terminal creation as plain text and checks
+# both that the call is present and that it comes before
+# `orca terminal create`, so a dropped or reordered line fails here even
+# though the function body extracted above is untouched.
+claude_pretrust_call_site_test() (
+  set +e
+  set -u
+  local dispatch="$1" block mutant_block
+
+  block=$(awk '
+    /^ensure_codex_pretrust "\$RUNTIME" "\$WORKTREE" \|\| exit 2$/{f=1}
+    f{print}
+    f && /orca terminal create --worktree "\$WORKTREE"/{exit}
+  ' "$dispatch")
+
+  [ -n "$block" ] || { echo "FAIL: could not extract the pre-trust-to-terminal-creation block" >&2; return 1; }
+
+  check_ordering() {
+    local text="$1" call_line term_line
+    call_line=$(printf '%s\n' "$text" | grep -n '^ensure_claude_pretrust "\$RUNTIME" "\$WORKTREE" || exit 2$' | cut -d: -f1 | head -1)
+    term_line=$(printf '%s\n' "$text" | grep -n 'orca terminal create --worktree "\$WORKTREE"' | cut -d: -f1 | head -1)
+    [ -n "$call_line" ] || return 1
+    [ -n "$term_line" ] || return 1
+    [ "$call_line" -lt "$term_line" ]
+  }
+
+  if ! check_ordering "$block"; then
+    echo "FAIL: dispatch does not call ensure_claude_pretrust before creating the claude terminal" >&2
+    printf '%s\n' "$block" >&2
+    return 1
+  fi
+  echo "ok   : dispatch calls ensure_claude_pretrust before orca terminal create"
+
+  # Failability: a copy of the block with the claude pre-trust line dropped
+  # (the shape of the call being silently removed from the wrapper) must
+  # fail the ordering check above.
+  mutant_block=$(printf '%s\n' "$block" | grep -v '^ensure_claude_pretrust "\$RUNTIME" "\$WORKTREE" || exit 2$')
+  if [ "$mutant_block" = "$block" ]; then
+    echo "FAIL: dropped-call mutant did not change the source" >&2
+    return 1
+  fi
+  if check_ordering "$mutant_block"; then
+    echo "FAIL: failability: mutant dropping ensure_claude_pretrust should have failed the ordering check, but still passed" >&2
+    return 1
+  fi
+  echo "ok   : failability: dropping the ensure_claude_pretrust call makes the ordering check fail"
+)
+claude_pretrust_call_site_test "$dispatch" || exit 1
 
 # --- Feature: claude folder-trust dialog classifies as hook-trust ----------
 #
@@ -1543,4 +1597,4 @@ EOF
 )
 codex_hooks_vet_wiring_test "$dispatch" || exit 1
 
-echo "dispatch multi-vendor / check-only / contract-delivery / cursor-pretrust / claude-pretrust / claude-hook-trust-marker / codex-launch / codex-start-screen / codex-start-screen-wiring / codex-hooks-vet / codex-hooks-vet-wiring regression tests passed"
+echo "dispatch multi-vendor / check-only / contract-delivery / cursor-pretrust / claude-pretrust / claude-pretrust-call-site / claude-hook-trust-marker / codex-launch / codex-start-screen / codex-start-screen-wiring / codex-hooks-vet / codex-hooks-vet-wiring regression tests passed"

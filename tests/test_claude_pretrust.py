@@ -144,3 +144,55 @@ def test_malformed_top_level_is_refused_without_writing(tmp_path: Path) -> None:
     assert result.returncode == 2
     assert "top-level value is not an object" in result.stderr
     assert config_path.read_text(encoding="utf-8") == original
+
+
+def test_invalid_utf8_is_refused_without_writing(tmp_path: Path) -> None:
+    config_path = tmp_path / ".claude.json"
+    original = b"\x80\x81invalid"
+    config_path.write_bytes(original)
+
+    result = run_pretrust("/tmp/worktree", config_path)
+
+    assert result.returncode == 2
+    assert "cannot parse JSON" in result.stderr
+    assert config_path.read_bytes() == original
+
+
+def test_nan_constant_is_refused_without_writing(tmp_path: Path) -> None:
+    config_path = tmp_path / ".claude.json"
+    original = '{"x": NaN}'
+    config_path.write_text(original, encoding="utf-8")
+
+    result = run_pretrust("/tmp/worktree", config_path)
+
+    assert result.returncode == 2
+    assert "cannot parse JSON" in result.stderr
+    assert config_path.read_text(encoding="utf-8") == original
+
+
+def test_non_ascii_content_is_preserved_byte_for_byte(tmp_path: Path) -> None:
+    config_path = tmp_path / ".claude.json"
+    original = {"fullName": "José Müller \U0001F600", "projects": {}}
+    config_path.write_text(
+        json.dumps(original, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+
+    result = run_pretrust("/tmp/worktree", config_path)
+
+    assert result.returncode == 0
+    raw = config_path.read_text(encoding="utf-8")
+    assert original["fullName"] in raw
+    assert "\\u00e9" not in raw
+    data = json.loads(raw)
+    assert data["fullName"] == original["fullName"]
+    assert data["projects"]["/tmp/worktree"]["hasTrustDialogAccepted"] is True
+
+
+def test_write_does_not_leave_a_temp_file_behind(tmp_path: Path) -> None:
+    config_path = tmp_path / ".claude.json"
+    config_path.write_text("{}", encoding="utf-8")
+
+    result = run_pretrust("/tmp/worktree", config_path)
+
+    assert result.returncode == 0
+    assert sorted(p.name for p in tmp_path.iterdir()) == [".claude.json"]

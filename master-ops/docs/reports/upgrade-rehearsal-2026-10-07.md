@@ -47,7 +47,7 @@ Of the five named instance-owned paths, only `docs/runbooks/role-state.md` is re
 plan. `docs/lineage/`, `.beads/`, `config/`, and `contracts/` never appear in the plan at all, neither
 as `planned` nor as any refusal outcome: `template-apply` builds its plan from the template's own
 manifest entries and writes each to its matching ops path; a destination path with no template-side
-counterpart is never visited, so it is invisible to the tool rather than refused. The same holds for
+counterpart is never visited; it stays invisible to the tool, never reaching a refusal check. The same holds for
 the 48 `unknown_present` paths from step 1: none of them appear in the dry-run plan by name.
 
 Confirmed by code: forcing the tool to evaluate a specific path's refusal requires `--attempt`, a flag
@@ -93,7 +93,7 @@ than faked.
 ## 7. Gates
 
 `redaction-scan.sh` from the clone root: printed
-`WARNING — organization-specific rules not loaded (REDACTION_EXTRA_PATTERNS unset or empty)`,
+`WARNING - organization-specific rules not loaded (REDACTION_EXTRA_PATTERNS unset or empty)`,
 73 findings, exit 1 (fail-closed). Every finding is a `home_path` match in content the clone already
 carried from GitHub (historical contracts and `.beads/interactions.jsonl`); none sit in a file this
 rehearsal's write pass touched.
@@ -111,7 +111,7 @@ Every `scripts/test-*.sh` in the clone: 21 scripts, 19 pass, 2 fail
 | 4 | Refusal-by-name covers only `docs/runbooks/role-state.md`. `docs/lineage/`, `.beads/`, `config/`, `contracts/`, and the 48 `unknown_present` paths are never evaluated for refusal; reaching that code path at all requires the undocumented, help-suppressed `--attempt` flag. | n/a | template defect |
 | 7 | `test-tracker-check-banner.sh` asserts `~/.mogui/hook-fire-log.jsonl`'s line count is unchanged across its run. The assertion failed (`before=52453 after=52454`) because this rehearsal ran inside a live, hook-instrumented session whose own tool calls append to that same file. | `FAIL: real hook fire log changed before=52453 after=52454` | expected (environmental; not isolated from the host session's own hook activity) |
 | 6 | P01, P04, P05, P06 fail because the scratch workspace root was never onboarded; no router run, no `config/workspace-descriptor.json`, no `config/instance-runtime.json` exist there. | see table above | expected |
-| 7 | Redaction scan's 73 findings are pre-existing `home_path` matches in content the clone already carried from GitHub history, and the organization-rules warning means only generic patterns ran. | `WARNING — organization-specific rules not loaded` | expected |
+| 7 | Redaction scan's 73 findings are pre-existing `home_path` matches in content the clone already carried from GitHub history, and the organization-rules warning means only generic patterns ran. | `WARNING - organization-specific rules not loaded` | expected |
 
 ## What the real re-stamp does by hand
 

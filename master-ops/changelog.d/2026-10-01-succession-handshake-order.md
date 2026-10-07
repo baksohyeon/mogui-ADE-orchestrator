@@ -1,1 +1,0 @@
-Succession boot card step 4 now tells the owner the predecessor stays alive before any measurement, then runs the retirement handshake to CLOSED before the test and drift sweep rather than after, so the owner no longer reads the sweep's duration as a stall.

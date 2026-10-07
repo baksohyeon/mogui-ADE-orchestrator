@@ -1,1 +1,0 @@
-`dispatch_gate`'s default ledger path now matches `dispatch_timeline` and the `worker-wait` docs (`~/.mogui/dispatch-ledger.jsonl`), so a direct `dispatch-gate register` without `--ledger` is no longer invisible to `worker-wait`.

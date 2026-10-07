@@ -20,11 +20,15 @@ This is a maintainer question rather than an operator one. An installation does 
 
 ```console
 $ PYTHONPATH=src python3 -m pytest tests -q
+$ failed=0; for t in master-ops/scripts/test-*.sh; do bash "$t" || failed=1; done; [ "$failed" -eq 0 ]
 ```
 
 The runtime is standard library only. The test run needs pytest (`python3 -m pip install pytest`).
 
-There is no CI yet, so run this before opening a pull request. Name the test that fails without your change, or say why none was needed. A passing count on its own says nothing: it is the same number on every branch that adds no test.
+CI (`.github/workflows/gates.yml`) runs both the pytest suite and every `master-ops/scripts/test-*.sh` on
+every pull request. Run them locally before opening one anyway: CI reports a result, the local run is what
+lets you read it before a reviewer does. Name the test that fails without your change, or say why none was
+needed. A passing count on its own says nothing: it is the same number on every branch that adds no test.
 
 ## What gets merged
 
@@ -32,6 +36,29 @@ A change with a test that fails without it. If a test does not make sense for
 the change, say so in the pull request and why.
 
 Documentation changes need no test. Say what was wrong with the old wording.
+
+## Adding a test
+
+**Where it goes.** A subject observed through its command line, its hook stdin and stdout, or its exit
+code gets a shell test, `master-ops/scripts/test-<subject>.sh`. A subject that is a function under
+`src/` gets a pytest case in `tests/test_<module>.py`. One subject, one file. A case that needs both
+goes to pytest.
+
+**What a case carries.** Every new case names the behaviour it pins and the one edit to the source that
+makes it fail. In a shell test that edit runs inline, in a subshell, and prints an `ok` line that names
+`failability:`, the convention `test-dispatch-runtime.sh` already uses throughout. In pytest the pull
+request body names the one-line edit; the audit's shared-mutant method (one mutant per source function
+with more than three cases) is the reference.
+
+**Taking a review request for a new case.** Accept only when no existing case pins the same behaviour.
+Check by grouping the file's cases by the source function each one calls and comparing assertions, the
+method `master-ops/docs/reports/test-audit-2026-10-06.md` records. When an existing case does, the reply
+names it and resolves the thread; no new case lands.
+
+**When a file is full.** A test file that already holds 1,000 lines takes no new section. A new section
+(a new `_test` function in a shell file, a new class or module-level group in pytest) goes in its own
+file named after it. One file is past that line today, `test-dispatch-runtime.sh` at 1,600; its existing
+sections stay where they are until a change touches one.
 
 ## Things worth knowing before you start
 

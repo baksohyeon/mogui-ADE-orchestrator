@@ -50,6 +50,8 @@ installation was taken from alongside the tag.
 
 ## v0.5.239
 
+Release v0.5.239 (2026-10-07): `master-ops/TEMPLATE-VERSION` and `master-ops/MANIFEST.json` move to `v0.5.239` alongside the changelog fold, satisfying the `changelog-fragment-check` gate for a release commit that touches `master-ops/` outside `changelog.d/`.
+
 `dispatch` now runs `scripts/claude-worker-pretrust` before a claude launch, the same way it already does for codex and cursor: the script writes `hasTrustDialogAccepted: true` into the `projects["<absolute worktree>"]` entry of `CLAUDE_CONFIG_PATH` (defaulting to `~/.claude.json`), measured against a scratch install of Claude Code accepting its own folder-trust dialog, and `HOOK_TRUST_MARKERS` now recognizes that dialog's wording ("Quick safety check...", "pre-approves ... tool permissions...") so a pane still carrying it classifies as hook-trust instead of reporting a false delivery success.
 
 Adds `docs/reports/test-audit-2026-10-06.md`: a case-by-case audit of the dispatch template's test
@@ -69,7 +71,7 @@ report finds every measured case earns its keep.
 
 `dispatch` now answers codex's "Hooks need review" start-screen modal itself, under dispatch authority, once `codex_hooks_vet_homes` accepts every hook command on the host's Codex homes: the listed shell keywords and builtins as first words, every other first word on PATH, and every absolute path on disk; a vet failure or any other selection menu still takes the existing exit-3 path instead of answering.
 
-Succession boot card step 4 now tells the owner the predecessor stays alive before any measurement, then runs the retirement handshake to CLOSED before the test and drift sweep rather than after, so the owner no longer reads the sweep's duration as a stall.
+Succession boot card step 4 now tells the owner the predecessor stays alive before any measurement, then runs the retirement handshake to CLOSED before the test and drift sweep and not after, so the owner no longer reads the sweep's duration as a stall.
 
 ## v0.5.230
 

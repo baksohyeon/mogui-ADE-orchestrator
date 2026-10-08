@@ -542,7 +542,7 @@ whitespace_key_refusal_and_alternatives_test || exit 1
 # --- the same as a normal successful dispatch.                            ---
 expired_entry_dispatches_test() (
   set +e
-  local work contract out status marker gate_dir
+  local work contract out_stdout out_stderr status marker gate_dir
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-unavail-expired.$$"
   mkdir -p "$work/bin"
@@ -572,25 +572,34 @@ printf '{"allow": true, "contract_sha": "abcdef0123456789"}\n'
 BIN
   chmod +x "$gate_dir/dispatch-gate"
 
-  out=$(cd "$work" && PATH="$work/bin:/usr/bin:/bin" HOME="$work/home" \
+  out_stdout="$work/stdout"
+  out_stderr="$work/stderr"
+  (cd "$work" && PATH="$work/bin:/usr/bin:/bin" HOME="$work/home" \
         MOGUI_INSTANCE_RUNTIME_CONFIG="$work/instance-runtime.json" \
-        bash "$dispatch" --contract "$contract" --runtime grok --model grok-test-1 --check-only 2>&1)
+        bash "$dispatch" --contract "$contract" --runtime grok --model grok-test-1 --check-only \
+        >"$out_stdout" 2>"$out_stderr")
   status=$?
 
   if [ "$status" -ne 0 ]; then
     echo "FAIL: --check-only on an expired unavailable entry should dispatch, exit zero" >&2
-    printf '%s\n' "$out" >&2
+    cat "$out_stdout" "$out_stderr" >&2
     return 1
   fi
-  case "$out" in
-    *"unavailable_runtimes entry for grok expired 2020-01-02; dispatching, re-date the entry if it fails"*) ;;
-    *) echo "FAIL: missing the expiry notice" >&2; printf '%s\n' "$out" >&2; return 1;;
-  esac
+  if ! grep -qF "unavailable_runtimes entry for grok expired 2020-01-02; dispatching, re-date the entry if it fails" "$out_stderr"; then
+    echo "FAIL: expiry notice missing from stderr" >&2
+    cat "$out_stdout" "$out_stderr" >&2
+    return 1
+  fi
+  if grep -qF "unavailable_runtimes entry for grok expired" "$out_stdout"; then
+    echo "FAIL: expiry notice leaked onto stdout; it is promised on stderr only" >&2
+    cat "$out_stdout" >&2
+    return 1
+  fi
   if [ ! -e "$marker" ]; then
     echo "FAIL: dispatch-gate marker is absent; an expired entry should reach the gate like any other dispatch" >&2
     return 1
   fi
-  echo "ok   : an expired unavailable entry dispatches with the expiry notice, reaching the gate same as an ordinary dispatch · rc=$status"
+  echo "ok   : an expired unavailable entry dispatches with the expiry notice on stderr (not stdout), reaching the gate same as an ordinary dispatch · rc=$status"
 )
 expired_entry_dispatches_test || exit 1
 
@@ -685,5 +694,122 @@ alternatives=codex, grok' ]; then
   echo "ok   : failability: dropping the expiry check in unavailable_runtimes_payload() keeps an expired entry excluded forever ($out)"
 )
 expired_entry_alternatives_test || exit 1
+
+# --- Case: a compact-date until (date.fromisoformat accepts "20261008" but ---
+# --- it is not the documented YYYY-MM-DD shape) refuses the default pick,  ---
+# --- before the gate, as a malformed entry.                                 ---
+compact_date_until_malformed_test() (
+  set +e
+  local work contract out status marker gate_dir
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-unavail-compact-date.$$"
+  mkdir -p "$work/bin"
+  trap 'rm -rf "$work"' EXIT
+  cat > "$work/bin/codex" <<'BIN'
+#!/bin/bash
+exit 0
+BIN
+  chmod +x "$work/bin/codex"
+  cat > "$work/instance-runtime.json" <<'JSON'
+{"master_host_runtime": "claude", "unavailable_runtimes": {"grok": {"since": "2026-08-07", "why": "x", "until": "20261008"}}}
+JSON
+  contract="$work/contract.md"
+  echo "scratch contract" > "$contract"
+
+  marker="$work/gate-invoked"
+  gate_dir="$work/{{RUNTIME_ROOT}}/scripts"
+  mkdir -p "$gate_dir"
+  cat > "$gate_dir/dispatch-gate" <<BIN
+#!/bin/bash
+touch "$marker"
+printf '{"allow": true, "contract_sha": "abcdef0123456789"}\n'
+BIN
+  chmod +x "$gate_dir/dispatch-gate"
+
+  out=$(cd "$work" && PATH="$work/bin:/usr/bin:/bin" HOME="$work/home" \
+        MOGUI_INSTANCE_RUNTIME_CONFIG="$work/instance-runtime.json" \
+        bash "$dispatch" --contract "$contract" --check-only 2>&1)
+  status=$?
+
+  if [ "$status" -eq 0 ]; then
+    echo "FAIL: --check-only with a compact-date until (20261008) should exit non-zero" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  # The exact tail of the message depends on the Python running dispatch:
+  # 3.11+'s date.fromisoformat accepts "20261008" and the round-trip check
+  # added here rejects it ("...must be a YYYY-MM-DD date, got '20261008'");
+  # pre-3.11 rejects it inside fromisoformat itself ("...must be a
+  # YYYY-MM-DD date: Invalid isoformat string: '20261008'"). Both still fail
+  # closed on the same shared prefix, which is what this case verifies.
+  case "$out" in
+    *"✗ invalid unavailable_runtimes in "*"instance-runtime.json: unavailable_runtimes['grok'].until must be a YYYY-MM-DD date"*) ;;
+    *) echo "FAIL: refusal line missing the compact-date message" >&2; printf '%s\n' "$out" >&2; return 1;;
+  esac
+  if [ -e "$marker" ]; then
+    echo "FAIL: dispatch-gate marker is present; the compact-date refusal did not happen before the gate" >&2
+    return 1
+  fi
+  echo "ok   : a compact-date until (20261008) refuses the default pick as malformed, before the gate is ever invoked · rc=$status"
+)
+compact_date_until_malformed_test || exit 1
+
+# --- Case: an entry whose until date is today still refuses; expired means ---
+# --- strictly after, so the runtime stays unavailable through its own last  ---
+# --- day.                                                                   ---
+same_day_until_refusal_test() (
+  set +e
+  local work contract out status marker gate_dir today
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-unavail-sameday.$$"
+  mkdir -p "$work/bin"
+  trap 'rm -rf "$work"' EXIT
+  cat > "$work/bin/grok" <<'BIN'
+#!/bin/bash
+exit 0
+BIN
+  cat > "$work/bin/codex" <<'BIN'
+#!/bin/bash
+exit 0
+BIN
+  chmod +x "$work/bin/grok" "$work/bin/codex"
+  today=$(date +%Y-%m-%d)
+  cat > "$work/instance-runtime.json" <<JSON
+{"master_host_runtime": "claude", "unavailable_runtimes": {"grok": {"since": "2026-08-07", "why": "free usage limit hit; no paid plan on this account", "until": "$today"}}}
+JSON
+  contract="$work/contract.md"
+  echo "scratch contract" > "$contract"
+
+  marker="$work/gate-invoked"
+  gate_dir="$work/{{RUNTIME_ROOT}}/scripts"
+  mkdir -p "$gate_dir"
+  cat > "$gate_dir/dispatch-gate" <<BIN
+#!/bin/bash
+touch "$marker"
+printf '{"allow": true, "contract_sha": "abcdef0123456789"}\n'
+BIN
+  chmod +x "$gate_dir/dispatch-gate"
+
+  out=$(cd "$work" && PATH="$work/bin:/usr/bin:/bin" HOME="$work/home" \
+        MOGUI_INSTANCE_RUNTIME_CONFIG="$work/instance-runtime.json" \
+        bash "$dispatch" --contract "$contract" --runtime grok --check-only 2>&1)
+  status=$?
+
+  if [ "$status" -eq 0 ]; then
+    echo "FAIL: --check-only on an unavailable runtime whose until is today should exit non-zero" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  case "$out" in
+    *"✗ runtime grok unavailable on this install since 2026-08-07 until $today: free usage limit hit; no paid plan on this account · alternatives: codex"*) ;;
+    *) echo "FAIL: refusal line missing for an until date of today" >&2; printf '%s\n' "$out" >&2; return 1;;
+  esac
+  if [ -e "$marker" ]; then
+    echo "FAIL: dispatch-gate marker is present; the same-day refusal did not happen before the gate" >&2
+    return 1
+  fi
+  echo "ok   : an unavailable runtime with until equal to today still refuses, before the gate is ever invoked · rc=$status"
+)
+same_day_until_refusal_test || exit 1
 
 echo "dispatch unavailable-runtime regression tests passed"

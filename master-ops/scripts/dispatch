@@ -296,6 +296,13 @@ def until_field(entry, name):
     except ValueError as exc:
         print(f"unavailable_runtimes[{name!r}].until must be a YYYY-MM-DD date: {exc}")
         sys.exit(1)
+    # date.fromisoformat also accepts compact (20261008) and week-date
+    # (2026-W41-4) forms; the round trip through isoformat() is what narrows
+    # acceptance down to the documented YYYY-MM-DD shape, mirroring
+    # instance_runtime_config.py's _parse_unavailable_runtimes.
+    if parsed.isoformat() != value:
+        print(f"unavailable_runtimes[{name!r}].until must be a YYYY-MM-DD date, got {value!r}")
+        sys.exit(1)
     return value, parsed
 
 

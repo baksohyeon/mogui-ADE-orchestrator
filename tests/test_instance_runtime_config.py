@@ -6,10 +6,12 @@ import json
 import os
 import subprocess
 import sys
+from datetime import date
 from pathlib import Path
 
 import pytest
 
+from master_runtime.core import instance_runtime_config
 from master_runtime.core.instance_runtime_config import (
     CONFIG_PATH_ENV,
     MASTER_HOST_RUNTIME_ENV,
@@ -325,6 +327,42 @@ def test_unavailable_runtimes_until_past_is_expired_not_an_error(tmp_path: Path)
     )
     loaded = load_instance_runtime_config(config_path, environ={})
     assert loaded.unavailable_runtimes["grok"].expired is True
+
+
+def test_unavailable_runtimes_compact_until_raises(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "instance-runtime.json",
+        {
+            "unavailable_runtimes": {
+                "grok": {"since": "2026-08-07", "why": "x", "until": "20261008"}
+            }
+        },
+    )
+    with pytest.raises(InstanceRuntimeConfigError, match="until must be a YYYY-MM-DD date"):
+        load_instance_runtime_config(config_path, environ={})
+
+
+def test_unavailable_runtimes_until_same_day_is_not_expired(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixed_today = date(2026, 10, 8)
+
+    class FixedDate(date):
+        @classmethod
+        def today(cls) -> "FixedDate":
+            return fixed_today
+
+    monkeypatch.setattr(instance_runtime_config, "date", FixedDate)
+    config_path = _write_config(
+        tmp_path / "instance-runtime.json",
+        {
+            "unavailable_runtimes": {
+                "grok": {"since": "2026-08-07", "why": "x", "until": fixed_today.isoformat()}
+            }
+        },
+    )
+    loaded = load_instance_runtime_config(config_path, environ={})
+    assert loaded.unavailable_runtimes["grok"].expired is False
 
 
 def test_unavailable_runtimes_since_with_lf_raises(tmp_path: Path) -> None:

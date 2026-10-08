@@ -306,11 +306,19 @@ def _parse_unavailable_runtimes(value: object) -> dict[str, UnavailableRuntime]:
             )
         until = until.strip()
         try:
-            date.fromisoformat(until)
+            parsed_until = date.fromisoformat(until)
         except ValueError as exc:
             raise InstanceRuntimeConfigError(
                 f"unavailable_runtimes[{name!r}].until must be a YYYY-MM-DD date: {exc}"
             ) from exc
+        # date.fromisoformat also accepts compact (20261008) and week-date
+        # (2026-W41-4) forms; the round trip through isoformat() is what
+        # narrows acceptance down to the documented YYYY-MM-DD shape.
+        if parsed_until.isoformat() != until:
+            raise InstanceRuntimeConfigError(
+                f"unavailable_runtimes[{name!r}].until must be a YYYY-MM-DD date, "
+                f"got {until!r}"
+            )
         # Consumers print since/why/until as one line each and read them back
         # by line number (master-ops/scripts/dispatch refuse_unavailable_runtime);
         # a CR or LF embedded in any of them would shift that readback.

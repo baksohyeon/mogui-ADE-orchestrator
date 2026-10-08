@@ -136,8 +136,8 @@ BIN
     return 1
   fi
   case "$out" in
-    *"✗ invalid unavailable_runtimes entry for grok"*) ;;
-    *) echo "FAIL: refusal line missing the invalid-entry message" >&2; printf '%s\n' "$out" >&2; return 1;;
+    *"✗ invalid unavailable_runtimes in "*"instance-runtime.json: unavailable_runtimes['grok'].why must be a non-empty single-line string"*) ;;
+    *) echo "FAIL: refusal line missing the invalid-config message" >&2; printf '%s\n' "$out" >&2; return 1;;
   esac
   if [ -e "$marker" ]; then
     echo "FAIL: dispatch-gate marker is present; the malformed-entry refusal did not happen before the gate" >&2
@@ -147,21 +147,138 @@ BIN
 )
 malformed_entry_refusal_test || exit 1
 
+# --- Case: a crafted --runtime value carrying a quote and a Python expression ---
+# --- is refused as not installed or not listed, never executed.                ---
+injection_refusal_test() (
+  set +e
+  local work contract out status marker gate_dir payload_marker runtime_payload
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-unavail-injection.$$"
+  mkdir -p "$work/bin"
+  trap 'rm -rf "$work"' EXIT
+  cat > "$work/bin/codex" <<'BIN'
+#!/bin/bash
+exit 0
+BIN
+  chmod +x "$work/bin/codex"
+  # unavailable_runtimes present (as an object) and non-empty so the malformed-
+  # config short circuit in dispatch's own `if not isinstance(unavail, dict) or
+  # ...` line (the vulnerable shape before this round) does not exit before
+  # reaching the vulnerable interpolation; this is what makes the case
+  # failable against that shape instead of passing by accident.
+  cat > "$work/instance-runtime.json" <<'JSON'
+{"master_host_runtime": "claude", "unavailable_runtimes": {}}
+JSON
+  contract="$work/contract.md"
+  echo "scratch contract" > "$contract"
+
+  marker="$work/gate-invoked"
+  gate_dir="$work/{{RUNTIME_ROOT}}/scripts"
+  mkdir -p "$gate_dir"
+  cat > "$gate_dir/dispatch-gate" <<BIN
+#!/bin/bash
+touch "$marker"
+printf '{"allow": true, "contract_sha": "abcdef0123456789"}\n'
+BIN
+  chmod +x "$gate_dir/dispatch-gate"
+
+  # A quote closes the Python string literal the old code embedded this value
+  # into; the rest is a Python expression that, left unguarded, calls out to
+  # the shell. Passed through sys.argv it is never anything but a string.
+  payload_marker="$work/injected"
+  runtime_payload="' or __import__('os').system('touch $payload_marker') or '"
+
+  out=$(cd "$work" && PATH="$work/bin:/usr/bin:/bin" HOME="$work/home" \
+        MOGUI_INSTANCE_RUNTIME_CONFIG="$work/instance-runtime.json" \
+        bash "$dispatch" --contract "$contract" --runtime "$runtime_payload" --check-only 2>&1)
+  status=$?
+
+  if [ "$status" -eq 0 ]; then
+    echo "FAIL: --check-only with a crafted --runtime should exit non-zero" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if [ -e "$payload_marker" ]; then
+    echo "FAIL: the injected expression ran; its marker file exists" >&2
+    return 1
+  fi
+  if [ -e "$marker" ]; then
+    echo "FAIL: dispatch-gate marker is present; the crafted runtime reached the gate" >&2
+    return 1
+  fi
+  echo "ok   : a crafted --runtime value is refused as not installed or not listed, never executed · rc=$status"
+)
+injection_refusal_test || exit 1
+
+# --- Case: an unreadable (malformed JSON) config refuses the default pick, ---
+# --- with no --runtime given at all.                                       ---
+unreadable_config_default_pick_test() (
+  set +e
+  local work contract out status marker gate_dir
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-unavail-unreadable.$$"
+  mkdir -p "$work/bin"
+  trap 'rm -rf "$work"' EXIT
+  cat > "$work/bin/codex" <<'BIN'
+#!/bin/bash
+exit 0
+BIN
+  chmod +x "$work/bin/codex"
+  printf 'not valid json at all' > "$work/instance-runtime.json"
+  contract="$work/contract.md"
+  echo "scratch contract" > "$contract"
+
+  marker="$work/gate-invoked"
+  gate_dir="$work/{{RUNTIME_ROOT}}/scripts"
+  mkdir -p "$gate_dir"
+  cat > "$gate_dir/dispatch-gate" <<BIN
+#!/bin/bash
+touch "$marker"
+printf '{"allow": true, "contract_sha": "abcdef0123456789"}\n'
+BIN
+  chmod +x "$gate_dir/dispatch-gate"
+
+  out=$(cd "$work" && PATH="$work/bin:/usr/bin:/bin" HOME="$work/home" \
+        MOGUI_INSTANCE_RUNTIME_CONFIG="$work/instance-runtime.json" \
+        bash "$dispatch" --contract "$contract" --check-only 2>&1)
+  status=$?
+
+  if [ "$status" -eq 0 ]; then
+    echo "FAIL: --check-only with an unreadable config should exit non-zero" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  case "$out" in
+    *"✗ invalid unavailable_runtimes in "*"instance-runtime.json: not valid JSON"*) ;;
+    *) echo "FAIL: refusal line missing the invalid-config message" >&2; printf '%s\n' "$out" >&2; return 1;;
+  esac
+  if [ -e "$marker" ]; then
+    echo "FAIL: dispatch-gate marker is present; the unreadable-config refusal did not happen before the gate" >&2
+    return 1
+  fi
+  echo "ok   : an unreadable config refuses the default pick, before the gate is ever invoked · rc=$status"
+)
+unreadable_config_default_pick_test || exit 1
+
 # --- Case: default runtime and alternatives omit an unavailable runtime; ---
 # --- removing the key changes neither.                                   ---
 default_and_alternatives_test() (
   set +e
   set -u
-  local installed_fn names_fn dispatchable_fn choose_fn join_fn work script_file
+  local installed_fn names_fn dispatchable_fn choose_fn join_fn payload_fn guard_fn work script_file
   local with_key without_key out_with out_without status
 
   installed_fn=$(extract_fn installed_runtimes)
+  payload_fn=$(extract_fn unavailable_runtimes_payload)
+  guard_fn=$(extract_fn unavailable_runtimes_guard)
   names_fn=$(extract_fn unavailable_runtime_names)
   dispatchable_fn=$(extract_fn dispatchable_runtimes)
   choose_fn=$(extract_fn choose_default_runtime)
   join_fn=$(extract_fn join_csv)
 
   [ -n "$installed_fn" ] || { echo "FAIL: could not extract installed_runtimes" >&2; return 1; }
+  [ -n "$payload_fn" ] || { echo "FAIL: could not extract unavailable_runtimes_payload" >&2; return 1; }
+  [ -n "$guard_fn" ] || { echo "FAIL: could not extract unavailable_runtimes_guard" >&2; return 1; }
   [ -n "$names_fn" ] || { echo "FAIL: could not extract unavailable_runtime_names" >&2; return 1; }
   [ -n "$dispatchable_fn" ] || { echo "FAIL: could not extract dispatchable_runtimes" >&2; return 1; }
   [ -n "$choose_fn" ] || { echo "FAIL: could not extract choose_default_runtime" >&2; return 1; }
@@ -196,11 +313,15 @@ JSON
       echo "RUNTIME_CANDIDATES=\"claude codex cursor grok gemini opencode\""
       echo "INSTANCE_RUNTIME_CONFIG=\"$config\""
       echo 'MASTER_HOST_RUNTIME=claude'
+      echo 'UNAVAILABLE_RUNTIMES_JSON=""'
       printf '%s\n' "$installed_fn"
+      printf '%s\n' "$payload_fn"
+      printf '%s\n' "$guard_fn"
       printf '%s\n' "$names_fn"
       printf '%s\n' "$dispatchable_fn"
       printf '%s\n' "$choose_fn"
       printf '%s\n' "$join_fn"
+      echo 'unavailable_runtimes_guard'
       echo 'echo "default=$(choose_default_runtime)"'
       echo 'echo "alternatives=$(dispatchable_runtimes | grep -vx "$MASTER_HOST_RUNTIME" | join_csv)"'
     } > "$outfile"
@@ -243,11 +364,15 @@ alternatives=codex, grok' ]; then
     echo "RUNTIME_CANDIDATES=\"claude codex cursor grok gemini opencode\""
     echo "INSTANCE_RUNTIME_CONFIG=\"$with_key\""
     echo 'MASTER_HOST_RUNTIME=claude'
+    echo 'UNAVAILABLE_RUNTIMES_JSON=""'
     printf '%s\n' "$installed_fn"
+    printf '%s\n' "$payload_fn"
+    printf '%s\n' "$guard_fn"
     printf '%s\n' "$names_fn"
     printf '%s\n' "$mutant_dispatchable"
     printf '%s\n' "$choose_fn"
     printf '%s\n' "$join_fn"
+    echo 'unavailable_runtimes_guard'
     echo 'echo "alternatives=$(dispatchable_runtimes | grep -vx "$MASTER_HOST_RUNTIME" | join_csv)"'
   } > "$script_file"
   out_with=$(PATH="$work/bin:/usr/bin:/bin" bash "$script_file" 2>&1)

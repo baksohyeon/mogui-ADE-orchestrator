@@ -208,22 +208,95 @@ installed_runtimes() {
   done
 }
 
-# Names declared unavailable in the instance runtime config: operator-declared,
-# not probed. Read the same ad hoc way measured_master_host_runtime already
-# reads this file, so no new dependency is introduced for a second field.
-unavailable_runtime_names() {
-  [ -f "$INSTANCE_RUNTIME_CONFIG" ] || return 0
-  python3 -c "
+# Validates the whole unavailable_runtimes map in one pass, argv-safe (the
+# config path travels as sys.argv[1], never interpolated into the source).
+# Mirrors src/master_runtime/core/instance_runtime_config.py's
+# _parse_unavailable_runtimes rule for rule, so a config the loader accepts is
+# the same one this accepts.
+#   exit 2: no file, or no `unavailable_runtimes` key, "no entries", stdout empty.
+#   exit 1: key present but malformed, one-line reason on stdout.
+#   exit 0: every entry validates, JSON {name: [since, why]} on stdout.
+unavailable_runtimes_payload() {
+  [ -f "$INSTANCE_RUNTIME_CONFIG" ] || return 2
+  python3 - "$INSTANCE_RUNTIME_CONFIG" <<'EOF'
 import json
+import sys
+
+path = sys.argv[1]
 try:
-    data = json.load(open('$INSTANCE_RUNTIME_CONFIG'))
-except Exception:
-    data = {}
-unavail = data.get('unavailable_runtimes')
-if isinstance(unavail, dict):
-    for name in unavail:
-        print(name)
-" 2>/dev/null
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+except OSError as exc:
+    print(f"cannot read {path}: {exc}")
+    sys.exit(1)
+try:
+    data = json.loads(text)
+except Exception as exc:
+    print(f"not valid JSON: {exc}")
+    sys.exit(1)
+if not isinstance(data, dict):
+    print("root is not a JSON object")
+    sys.exit(1)
+unavail = data.get("unavailable_runtimes")
+if unavail is None:
+    sys.exit(2)
+if not isinstance(unavail, dict):
+    print("unavailable_runtimes is not an object")
+    sys.exit(1)
+
+
+def field(entry, name, key):
+    value = entry.get(key)
+    if not isinstance(value, str) or not value.strip() or "\r" in value or "\n" in value:
+        print(f"unavailable_runtimes[{name!r}].{key} must be a non-empty single-line string")
+        sys.exit(1)
+    return value.strip()
+
+
+result = {}
+for name, entry in unavail.items():
+    if not isinstance(entry, dict):
+        print(f"unavailable_runtimes[{name!r}] must be an object with since and why")
+        sys.exit(1)
+    result[name] = [field(entry, name, "since"), field(entry, name, "why")]
+
+print(json.dumps(result))
+EOF
+}
+
+# Runs unavailable_runtimes_payload once and fails the whole process closed on
+# a malformed config, for both the explicit --runtime path and the
+# default-pick path. Must be called bare (never through $(...)): dispatchable_
+# runtimes, choose_default_runtime, and unavailable_runtime_names/_entry below
+# all read through a pipe or command substitution, where `exit` only ends
+# that subshell, so the one call that can actually stop dispatch happens here,
+# before either path runs.
+UNAVAILABLE_RUNTIMES_JSON=""
+unavailable_runtimes_guard() {
+  local reason status
+  reason=$(unavailable_runtimes_payload)
+  status=$?
+  if [ "$status" -eq 1 ]; then
+    echo "✗ invalid unavailable_runtimes in $INSTANCE_RUNTIME_CONFIG: $reason" >&2
+    exit 2
+  fi
+  [ "$status" -eq 0 ] && UNAVAILABLE_RUNTIMES_JSON=$reason
+}
+
+# Names declared unavailable in the instance runtime config: operator-declared,
+# not probed. Reads the map unavailable_runtimes_guard already validated,
+# passed as argv (not piped: `python3 -` already reads the script itself from
+# stdin, so a pipe into it here would feed the JSON to the script reader
+# instead of to the program).
+unavailable_runtime_names() {
+  [ -n "$UNAVAILABLE_RUNTIMES_JSON" ] || return 0
+  python3 - "$UNAVAILABLE_RUNTIMES_JSON" <<'EOF'
+import json
+import sys
+
+for name in json.loads(sys.argv[1]):
+    print(name)
+EOF
 }
 
 # installed_runtimes() minus the operator-declared unavailable set. The
@@ -240,47 +313,35 @@ dispatchable_runtimes() {
   done
 }
 
-# since/why for one unavailable runtime, one per line. Exit 2 means the
-# runtime has no entry (nothing declared, proceed); exit 1 means the key is
-# present but the entry is malformed (fail closed, this is not "no entry").
+# since/why for one unavailable runtime, one per line, argv-safe (the runtime
+# name travels as sys.argv[1], never interpolated into the source). Exit 2
+# means the runtime has no entry (nothing declared, proceed). The map is
+# already known-valid by the time this runs (unavailable_runtimes_guard
+# refuses the whole process first), so there is no malformed-entry case left
+# to signal here.
 unavailable_runtime_entry() {
   local runtime="$1"
-  [ -f "$INSTANCE_RUNTIME_CONFIG" ] || return 2
-  python3 -c "
-import json, sys
-try:
-    data = json.load(open('$INSTANCE_RUNTIME_CONFIG'))
-except Exception:
+  [ -n "$UNAVAILABLE_RUNTIMES_JSON" ] || return 2
+  python3 - "$runtime" "$UNAVAILABLE_RUNTIMES_JSON" <<'EOF'
+import json
+import sys
+
+runtime, payload = sys.argv[1], sys.argv[2]
+data = json.loads(payload)
+if runtime not in data:
     sys.exit(2)
-unavail = data.get('unavailable_runtimes')
-if not isinstance(unavail, dict) or '$runtime' not in unavail:
-    sys.exit(2)
-entry = unavail['$runtime']
-if not isinstance(entry, dict):
-    sys.exit(1)
-since = entry.get('since')
-why = entry.get('why')
-if not since or not why:
-    sys.exit(1)
+since, why = data[runtime]
 print(since)
 print(why)
-" 2>/dev/null
+EOF
 }
 
 # Refuses a runtime the operator declared unavailable, with the reason and the
 # alternatives still on offer. No override flag: delete the config entry to
-# use the runtime again. A malformed entry fails closed instead of letting the
-# runtime through: the key names an outage the operator recorded, so a broken
-# entry must not read as "nothing declared".
+# use the runtime again.
 refuse_unavailable_runtime() {
-  local runtime="$1" alternatives="$2" entry status since why
-  entry=$(unavailable_runtime_entry "$runtime")
-  status=$?
-  [ "$status" -eq 2 ] && return 0
-  if [ "$status" -ne 0 ]; then
-    echo "✗ invalid unavailable_runtimes entry for $runtime" >&2
-    return 1
-  fi
+  local runtime="$1" alternatives="$2" entry since why
+  entry=$(unavailable_runtime_entry "$runtime") || return 0
   since=$(printf '%s\n' "$entry" | sed -n 1p)
   why=$(printf '%s\n' "$entry" | sed -n 2p)
   echo "✗ runtime $runtime unavailable on this install since $since: $why · alternatives: ${alternatives:-none}" >&2
@@ -802,6 +863,10 @@ emit(
 EOF
 }
 
+# Called bare, not through $(...): see unavailable_runtimes_guard's own
+# comment for why that is the only way its exit can reach this process.
+unavailable_runtimes_guard
+
 if [ -z "$RUNTIME" ]; then
   RUNTIME=$(choose_default_runtime)
 fi
@@ -868,28 +933,43 @@ host_model_ids() {
 # mapping is invented: the policy already lists the allowed ids, and the vendor
 # prefix already tells us which host can run each one. Prefer the efficient tier,
 # per the charter's lowest-sufficient-tier rule.
+# argv-safe: runtime and the policy path travel as sys.argv, never
+# interpolated into the source (a crafted --runtime value otherwise runs
+# Python here, the same injection class as unavailable_runtime_entry).
 default_model_for_runtime() {
-  python3 -c "
-import json,sys
-runtime='$1'
+  python3 - "$1" "$POLICY" <<'EOF' 2>/dev/null
+import json
+import sys
+
+runtime, policy_path = sys.argv[1:3]
 # Measured: agy is a Gemini host (`agy models` lists gemini-* ids).
 if runtime == 'agy': runtime = 'gemini'
+
+
 def vendor(m):
-    m=m.lower()
-    if m.startswith('claude-'): return 'claude'
-    if m.startswith(('gpt-','o3','o4','codex-')): return 'codex'
-    if m.startswith('grok-'): return 'grok'
-    if m.startswith('gemini-'): return 'gemini'
+    m = m.lower()
+    if m.startswith('claude-'):
+        return 'claude'
+    if m.startswith(('gpt-', 'o3', 'o4', 'codex-')):
+        return 'codex'
+    if m.startswith('grok-'):
+        return 'grok'
+    if m.startswith('gemini-'):
+        return 'gemini'
     return 'unknown'
+
+
 try:
-    tiers=json.load(open('$POLICY'))['tiers']
+    tiers = json.load(open(policy_path))['tiers']
 except Exception:
     sys.exit(1)
-for tier in ('efficient','top'):
-    for m in tiers.get(tier,[]):
-        if vendor(m)==runtime:
-            print(m); sys.exit(0)
-sys.exit(1)" 2>/dev/null
+for tier in ('efficient', 'top'):
+    for m in tiers.get(tier, []):
+        if vendor(m) == runtime:
+            print(m)
+            sys.exit(0)
+sys.exit(1)
+EOF
 }
 
 tier_for_model() {

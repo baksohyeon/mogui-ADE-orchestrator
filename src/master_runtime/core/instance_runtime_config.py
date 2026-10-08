@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -44,10 +45,22 @@ class InstanceRuntimeConfigError(ValueError):
 
 @dataclass(frozen=True)
 class UnavailableRuntime:
-    """An operator-declared runtime this install cannot dispatch to."""
+    """An operator-declared runtime this install cannot dispatch to.
+
+    ``until`` is required: a recurrence guard (reprobing the runtime at every
+    boot) was rejected in review for being fixed-cost and blind between boots;
+    a required expiry date is what replaces it. ``expired`` is a property, not
+    a stored field, so two entries with the same since/why/until still
+    compare equal regardless of when the comparison runs.
+    """
 
     since: str
     why: str
+    until: str
+
+    @property
+    def expired(self) -> bool:
+        return date.today() > date.fromisoformat(self.until)
 
 
 @dataclass(frozen=True)
@@ -250,7 +263,7 @@ def _parse_unavailable_runtimes(value: object) -> dict[str, UnavailableRuntime]:
     if not isinstance(value, dict):
         raise InstanceRuntimeConfigError(
             "unavailable_runtimes must be a JSON object mapping runtime name to "
-            "{since, why}"
+            "{since, why, until}"
         )
     result: dict[str, UnavailableRuntime] = {}
     for key, raw in value.items():
@@ -273,10 +286,12 @@ def _parse_unavailable_runtimes(value: object) -> dict[str, UnavailableRuntime]:
             )
         if not isinstance(raw, dict):
             raise InstanceRuntimeConfigError(
-                f"unavailable_runtimes[{name!r}] must be an object with since and why"
+                f"unavailable_runtimes[{name!r}] must be an object with since, why, "
+                "and until"
             )
         since = raw.get("since")
         why = raw.get("why")
+        until = raw.get("until")
         if not isinstance(since, str) or not since.strip():
             raise InstanceRuntimeConfigError(
                 f"unavailable_runtimes[{name!r}].since must be a non-empty string"
@@ -285,9 +300,28 @@ def _parse_unavailable_runtimes(value: object) -> dict[str, UnavailableRuntime]:
             raise InstanceRuntimeConfigError(
                 f"unavailable_runtimes[{name!r}].why must be a non-empty string"
             )
-        # Consumers print since/why as one line each and read them back by line
-        # number (master-ops/scripts/dispatch refuse_unavailable_runtime); a CR
-        # or LF embedded in either field would shift that readback.
+        if not isinstance(until, str) or not until.strip():
+            raise InstanceRuntimeConfigError(
+                f"unavailable_runtimes[{name!r}].until must be a non-empty string"
+            )
+        until = until.strip()
+        try:
+            parsed_until = date.fromisoformat(until)
+        except ValueError as exc:
+            raise InstanceRuntimeConfigError(
+                f"unavailable_runtimes[{name!r}].until must be a YYYY-MM-DD date: {exc}"
+            ) from exc
+        # date.fromisoformat also accepts compact (20261008) and week-date
+        # (2026-W41-4) forms; the round trip through isoformat() is what
+        # narrows acceptance down to the documented YYYY-MM-DD shape.
+        if parsed_until.isoformat() != until:
+            raise InstanceRuntimeConfigError(
+                f"unavailable_runtimes[{name!r}].until must be a YYYY-MM-DD date, "
+                f"got {until!r}"
+            )
+        # Consumers print since/why/until as one line each and read them back
+        # by line number (master-ops/scripts/dispatch refuse_unavailable_runtime);
+        # a CR or LF embedded in any of them would shift that readback.
         if "\r" in since or "\n" in since:
             raise InstanceRuntimeConfigError(
                 f"unavailable_runtimes[{name!r}].since must not contain CR or LF"
@@ -296,7 +330,7 @@ def _parse_unavailable_runtimes(value: object) -> dict[str, UnavailableRuntime]:
             raise InstanceRuntimeConfigError(
                 f"unavailable_runtimes[{name!r}].why must not contain CR or LF"
             )
-        result[name] = UnavailableRuntime(since=since.strip(), why=why.strip())
+        result[name] = UnavailableRuntime(since=since.strip(), why=why.strip(), until=until)
     return result
 
 

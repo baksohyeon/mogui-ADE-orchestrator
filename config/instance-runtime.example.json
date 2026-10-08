@@ -3,7 +3,7 @@
     "master_host_runtime": "Agent CLI name the master session runs on (for example claude, codex, or grok).",
     "transcript_globs": "Map of runtime name to a filesystem glob that locates that runtime's session JSONL transcripts for model-identity probes.",
     "product_repositories": "Non-empty array of absolute paths of the product repositories this master serves; the canonical key. The one-entry string form product_repo is still accepted; when both are present, product_repositories wins. Omit both when the workspace has no product repository.",
-    "unavailable_runtimes": "Optional map of runtime name to {since, why}, both non-empty strings; operator-declared runtimes this machine or account cannot dispatch to. Absent key means no change."
+    "unavailable_runtimes": "Optional map of runtime name to {since, why, until}, all non-empty strings, until a YYYY-MM-DD date; operator-declared runtimes this machine or account cannot dispatch to, expiring after until. Absent key means no change."
   },
   "master_host_runtime": "claude",
   "transcript_globs": {

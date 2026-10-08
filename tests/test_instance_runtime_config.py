@@ -17,6 +17,7 @@ from master_runtime.core.instance_runtime_config import (
     PRODUCT_REPO_ENV,
     TRANSCRIPT_GLOB_ENV,
     InstanceRuntimeConfigError,
+    UnavailableRuntime,
     load_instance_runtime_config,
 )
 
@@ -235,6 +236,91 @@ def test_underscore_doc_keys_are_ignored(tmp_path: Path) -> None:
     loaded = load_instance_runtime_config(config_path, environ={})
     assert loaded.require_master_host_runtime() == "cursor-agent"
     assert loaded.transcript_globs == {"cursor-agent": "/tmp/cursor/*.jsonl"}
+
+
+def test_absent_unavailable_runtimes_key_gives_empty_mapping(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "instance-runtime.json",
+        {"master_host_runtime": "claude"},
+    )
+    loaded = load_instance_runtime_config(config_path, environ={})
+    assert loaded.unavailable_runtimes == {}
+
+
+def test_valid_unavailable_runtimes_entry_parses(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "instance-runtime.json",
+        {
+            "unavailable_runtimes": {
+                "grok": {
+                    "since": "2026-08-07",
+                    "why": "free usage limit hit; no paid plan on this account",
+                }
+            }
+        },
+    )
+    loaded = load_instance_runtime_config(config_path, environ={})
+    assert loaded.unavailable_runtimes == {
+        "grok": UnavailableRuntime(
+            since="2026-08-07",
+            why="free usage limit hit; no paid plan on this account",
+        )
+    }
+
+
+def test_malformed_unavailable_runtimes_entry_raises(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "instance-runtime.json",
+        {"unavailable_runtimes": {"grok": {"why": "missing since"}}},
+    )
+    with pytest.raises(InstanceRuntimeConfigError, match="since"):
+        load_instance_runtime_config(config_path, environ={})
+
+
+def test_unavailable_runtimes_since_with_lf_raises(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "instance-runtime.json",
+        {"unavailable_runtimes": {"grok": {"since": "2026-08-07\nfake", "why": "x"}}},
+    )
+    with pytest.raises(InstanceRuntimeConfigError, match="since must not contain CR or LF"):
+        load_instance_runtime_config(config_path, environ={})
+
+
+def test_unavailable_runtimes_why_with_cr_raises(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "instance-runtime.json",
+        {"unavailable_runtimes": {"grok": {"since": "2026-08-07", "why": "x\ry"}}},
+    )
+    with pytest.raises(InstanceRuntimeConfigError, match="why must not contain CR or LF"):
+        load_instance_runtime_config(config_path, environ={})
+
+
+def test_duplicate_unavailable_runtimes_key_after_normalization_raises(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "instance-runtime.json",
+        {
+            "unavailable_runtimes": {
+                "grok": {"since": "2026-08-07", "why": "free usage limit hit"},
+                " grok ": {"since": "2026-08-07", "why": "duplicate entry"},
+            }
+        },
+    )
+    with pytest.raises(InstanceRuntimeConfigError, match="duplicates another key"):
+        load_instance_runtime_config(config_path, environ={})
+
+
+def test_duplicate_json_member_name_raises(tmp_path: Path) -> None:
+    # json.loads keeps only the last of two identical member names, so this
+    # must be written as raw text: a Python dict literal cannot carry a
+    # duplicate key for _write_config to serialize.
+    path = tmp_path / "instance-runtime.json"
+    path.write_text(
+        """{"unavailable_runtimes": {"claude": {"since": "2026-08-07", "why": "a"},"""
+        """ "claude": {"since": "2026-08-08", "why": "b"}}}""",
+        encoding="utf-8",
+    )
+    with pytest.raises(InstanceRuntimeConfigError, match="duplicate JSON member name"):
+        load_instance_runtime_config(path, environ={})
 
 
 def test_invalid_json_raises(tmp_path: Path) -> None:

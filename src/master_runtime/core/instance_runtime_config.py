@@ -187,11 +187,28 @@ def load_instance_runtime_config(
     )
 
 
+def _reject_duplicate_members(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """object_pairs_hook: json.loads keeps only the last of two identical
+    member names and silently drops the first, so a duplicate (e.g. two
+    "claude" entries in unavailable_runtimes) never reaches the checks below.
+    Catch it here, for any object anywhere in the document."""
+    seen: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in seen:
+            raise InstanceRuntimeConfigError(
+                f"instance runtime config has a duplicate JSON member name: {key!r}"
+            )
+        seen[key] = value
+    return seen
+
+
 def _read_payload(path: Path) -> dict[str, Any]:
     if not path.is_file():
         return {}
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw = json.loads(
+            path.read_text(encoding="utf-8"), object_pairs_hook=_reject_duplicate_members
+        )
     except json.JSONDecodeError as exc:
         raise InstanceRuntimeConfigError(
             f"instance runtime config is not valid JSON: {path}: {exc}"

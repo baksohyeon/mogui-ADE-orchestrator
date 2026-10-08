@@ -309,6 +309,20 @@ def test_duplicate_unavailable_runtimes_key_after_normalization_raises(tmp_path:
         load_instance_runtime_config(config_path, environ={})
 
 
+def test_duplicate_json_member_name_raises(tmp_path: Path) -> None:
+    # json.loads keeps only the last of two identical member names, so this
+    # must be written as raw text: a Python dict literal cannot carry a
+    # duplicate key for _write_config to serialize.
+    path = tmp_path / "instance-runtime.json"
+    path.write_text(
+        """{"unavailable_runtimes": {"claude": {"since": "2026-08-07", "why": "a"},"""
+        """ "claude": {"since": "2026-08-08", "why": "b"}}}""",
+        encoding="utf-8",
+    )
+    with pytest.raises(InstanceRuntimeConfigError, match="duplicate JSON member name"):
+        load_instance_runtime_config(path, environ={})
+
+
 def test_invalid_json_raises(tmp_path: Path) -> None:
     path = tmp_path / "bad.json"
     path.write_text("{not-json", encoding="utf-8")

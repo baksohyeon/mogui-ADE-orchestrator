@@ -260,6 +260,61 @@ BIN
 )
 unreadable_config_default_pick_test || exit 1
 
+# --- Case: two identical member names in unavailable_runtimes refuse the  ---
+# --- default pick, before the gate.                                      ---
+duplicate_member_default_pick_test() (
+  set +e
+  local work contract out status marker gate_dir
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-unavail-dup-member.$$"
+  mkdir -p "$work/bin"
+  trap 'rm -rf "$work"' EXIT
+  cat > "$work/bin/codex" <<'BIN'
+#!/bin/bash
+exit 0
+BIN
+  chmod +x "$work/bin/codex"
+  # json.loads keeps only the last of two identical "claude" members, so
+  # without decode-time duplicate detection this never reaches the
+  # duplicate-key-after-normalization check; written as raw text because a
+  # JSON object literal cannot otherwise carry a repeated member name.
+  printf '%s' '{"unavailable_runtimes": {"claude": {"since": "2026-08-07", "why": "a"}, "claude": {"since": "2026-08-08", "why": "b"}}}' \
+    > "$work/instance-runtime.json"
+  contract="$work/contract.md"
+  echo "scratch contract" > "$contract"
+
+  marker="$work/gate-invoked"
+  gate_dir="$work/{{RUNTIME_ROOT}}/scripts"
+  mkdir -p "$gate_dir"
+  cat > "$gate_dir/dispatch-gate" <<BIN
+#!/bin/bash
+touch "$marker"
+printf '{"allow": true, "contract_sha": "abcdef0123456789"}\n'
+BIN
+  chmod +x "$gate_dir/dispatch-gate"
+
+  out=$(cd "$work" && PATH="$work/bin:/usr/bin:/bin" HOME="$work/home" \
+        MOGUI_INSTANCE_RUNTIME_CONFIG="$work/instance-runtime.json" \
+        bash "$dispatch" --contract "$contract" --check-only 2>&1)
+  status=$?
+
+  if [ "$status" -eq 0 ]; then
+    echo "FAIL: --check-only with a duplicate JSON member name should exit non-zero" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  case "$out" in
+    *"✗ invalid unavailable_runtimes in "*"instance-runtime.json: not valid JSON: duplicate JSON member name"*) ;;
+    *) echo "FAIL: refusal line missing the duplicate-member message" >&2; printf '%s\n' "$out" >&2; return 1;;
+  esac
+  if [ -e "$marker" ]; then
+    echo "FAIL: dispatch-gate marker is present; the duplicate-member refusal did not happen before the gate" >&2
+    return 1
+  fi
+  echo "ok   : two identical claude members in unavailable_runtimes refuse the default pick, before the gate is ever invoked · rc=$status"
+)
+duplicate_member_default_pick_test || exit 1
+
 # --- Case: default runtime and alternatives omit an unavailable runtime; ---
 # --- removing the key changes neither.                                   ---
 default_and_alternatives_test() (

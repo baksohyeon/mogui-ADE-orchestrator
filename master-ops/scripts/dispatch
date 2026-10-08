@@ -233,8 +233,23 @@ try:
 except OSError as exc:
     print(f"cannot read {path}: {exc}")
     sys.exit(1)
+
+
+def reject_duplicate_members(pairs):
+    # json.loads keeps only the last of two identical member names and
+    # silently drops the first, so a duplicate (e.g. two "claude" entries)
+    # never reaches the checks below. Catch it here, for any object anywhere
+    # in the document, mirroring instance_runtime_config.py's loader.
+    seen = {}
+    for key, value in pairs:
+        if key in seen:
+            raise ValueError(f"duplicate JSON member name: {key!r}")
+        seen[key] = value
+    return seen
+
+
 try:
-    data = json.loads(text)
+    data = json.loads(text, object_pairs_hook=reject_duplicate_members)
 except Exception as exc:
     print(f"not valid JSON: {exc}")
     sys.exit(1)

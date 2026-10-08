@@ -240,18 +240,22 @@ dispatchable_runtimes() {
   done
 }
 
-# since/why for one unavailable runtime, one per line; returns 1 when the
-# runtime has no entry or the entry is malformed.
+# since/why for one unavailable runtime, one per line. Exit 2 means the
+# runtime has no entry (nothing declared, proceed); exit 1 means the key is
+# present but the entry is malformed (fail closed, this is not "no entry").
 unavailable_runtime_entry() {
   local runtime="$1"
-  [ -f "$INSTANCE_RUNTIME_CONFIG" ] || return 1
+  [ -f "$INSTANCE_RUNTIME_CONFIG" ] || return 2
   python3 -c "
 import json, sys
 try:
     data = json.load(open('$INSTANCE_RUNTIME_CONFIG'))
 except Exception:
-    sys.exit(1)
-entry = (data.get('unavailable_runtimes') or {}).get('$runtime')
+    sys.exit(2)
+unavail = data.get('unavailable_runtimes')
+if not isinstance(unavail, dict) or '$runtime' not in unavail:
+    sys.exit(2)
+entry = unavail['$runtime']
 if not isinstance(entry, dict):
     sys.exit(1)
 since = entry.get('since')
@@ -265,10 +269,18 @@ print(why)
 
 # Refuses a runtime the operator declared unavailable, with the reason and the
 # alternatives still on offer. No override flag: delete the config entry to
-# use the runtime again.
+# use the runtime again. A malformed entry fails closed instead of letting the
+# runtime through: the key names an outage the operator recorded, so a broken
+# entry must not read as "nothing declared".
 refuse_unavailable_runtime() {
-  local runtime="$1" alternatives="$2" entry since why
-  entry=$(unavailable_runtime_entry "$runtime") || return 0
+  local runtime="$1" alternatives="$2" entry status since why
+  entry=$(unavailable_runtime_entry "$runtime")
+  status=$?
+  [ "$status" -eq 2 ] && return 0
+  if [ "$status" -ne 0 ]; then
+    echo "✗ invalid unavailable_runtimes entry for $runtime" >&2
+    return 1
+  fi
   since=$(printf '%s\n' "$entry" | sed -n 1p)
   why=$(printf '%s\n' "$entry" | sed -n 2p)
   echo "✗ runtime $runtime unavailable on this install since $since: $why · alternatives: ${alternatives:-none}" >&2

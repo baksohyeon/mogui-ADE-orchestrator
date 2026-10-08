@@ -35,7 +35,7 @@ $ test -f config/instance-runtime.json || cp config/instance-runtime.example.jso
 # set master_host_runtime to the confirmed agent CLI (JSON); leave other keys for later steps
 ```
 
-Schema (one sentence each): `master_host_runtime` is the agent CLI the master runs on; `transcript_globs` maps each runtime name to a glob for that runtime's session transcripts used by the model probe; `product_repositories` is the optional non-empty array of absolute paths of the product repositories this master serves (the one-entry string form `product_repo` is still accepted; when both are set, `product_repositories` wins); `unavailable_runtimes` is optional and names runtimes this machine or account cannot dispatch to, each with `since` and `why`. Resolution order for consumers: environment override → this file → honest unconfigured (never a baked guess).
+Schema (one sentence each): `master_host_runtime` is the agent CLI the master runs on; `transcript_globs` maps each runtime name to a glob for that runtime's session transcripts used by the model probe; `product_repositories` is the optional non-empty array of absolute paths of the product repositories this master serves (the one-entry string form `product_repo` is still accepted; when both are set, `product_repositories` wins); `unavailable_runtimes` is optional and names runtimes this machine or account cannot dispatch to, each with `since` and `why`; the accepted runtime names are `claude`, `codex`, `cursor`, `grok`, `gemini`, and `opencode`, and any other name is a refused entry. Resolution order for consumers: environment override → this file → honest unconfigured (never a baked guess).
 
 ## Agent-inventory consent and instance tier policy
 

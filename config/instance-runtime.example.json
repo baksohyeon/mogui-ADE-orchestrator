@@ -12,7 +12,5 @@
     "grok": "~/.grok/sessions/**/*.jsonl"
   },
   "product_repositories": ["/absolute/path/to/primary-product-repo"],
-  "unavailable_runtimes": {
-    "grok": { "since": "2026-08-07", "why": "free usage limit hit; no paid plan on this account" }
-  }
+  "unavailable_runtimes": {}
 }

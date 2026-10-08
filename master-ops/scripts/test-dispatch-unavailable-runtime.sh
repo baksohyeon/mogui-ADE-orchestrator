@@ -9,7 +9,10 @@
 # dispatch carries {{RUNTIME_ROOT}} and {{OPS_REPO}} template placeholders,
 # which bash leaves as literal strings it never dereferences before the gate
 # call this suite stops short of, so the refusal case below runs the whole
-# script under a scratch PATH and HOME. The default/alternatives cases
+# script under a scratch PATH and HOME, with a fake dispatch-gate planted at
+# the literal GATE path so a marker it writes on invocation proves the gate
+# was never reached, instead of inferring that from a non-zero exit alone.
+# The default/alternatives cases
 # extract installed_runtimes, unavailable_runtime_names, dispatchable_runtimes,
 # and choose_default_runtime by exact-line awk range and run them in an
 # isolated subshell, the extraction convention test-dispatch-runtime.sh
@@ -26,7 +29,7 @@ extract_fn() {  # fn-name
 # --- Case: --check-only refuses an unavailable runtime, with reason and alternatives ---
 check_only_refusal_test() (
   set +e
-  local work contract out status
+  local work contract out status marker gate_dir
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-unavail-refusal.$$"
   mkdir -p "$work/bin"
@@ -46,7 +49,24 @@ JSON
   contract="$work/contract.md"
   echo "scratch contract" > "$contract"
 
-  out=$(PATH="$work/bin:/usr/bin:/bin" HOME="$work/home" \
+  # dispatch's GATE is the unexpanded template literal {{RUNTIME_ROOT}}/scripts/dispatch-gate
+  # (a relative path, since the placeholder is never filled in this template
+  # clone), so planting a fake gate there and running with $work as cwd puts a
+  # real executable where dispatch would invoke it, if it got that far. The
+  # fake gate touches a marker on invocation; its absence after the refusal is
+  # the proof the gate was never reached. A non-zero exit alone would not
+  # distinguish "refused before the gate" from "the gate ran and refused."
+  marker="$work/gate-invoked"
+  gate_dir="$work/{{RUNTIME_ROOT}}/scripts"
+  mkdir -p "$gate_dir"
+  cat > "$gate_dir/dispatch-gate" <<BIN
+#!/bin/bash
+touch "$marker"
+printf '{"allow": true, "contract_sha": "abcdef0123456789"}\n'
+BIN
+  chmod +x "$gate_dir/dispatch-gate"
+
+  out=$(cd "$work" && PATH="$work/bin:/usr/bin:/bin" HOME="$work/home" \
         MOGUI_INSTANCE_RUNTIME_CONFIG="$work/instance-runtime.json" \
         bash "$dispatch" --contract "$contract" --runtime grok --check-only 2>&1)
   status=$?
@@ -60,9 +80,72 @@ JSON
     *"✗ runtime grok unavailable on this install since 2026-08-07: free usage limit hit; no paid plan on this account · alternatives: codex"*) ;;
     *) echo "FAIL: refusal line missing reason or alternatives" >&2; printf '%s\n' "$out" >&2; return 1;;
   esac
-  echo "ok   : --check-only refuses an unavailable runtime, naming the reason and the remaining alternatives · rc=$status"
+  if [ -e "$marker" ]; then
+    echo "FAIL: dispatch-gate marker is present; the refusal did not happen before the gate" >&2
+    return 1
+  fi
+  echo "ok   : --check-only refuses an unavailable runtime, naming the reason and the remaining alternatives, before the gate is ever invoked · rc=$status"
 )
 check_only_refusal_test || exit 1
+
+# --- Case: a malformed unavailable_runtimes entry fails closed, even with an ---
+# --- explicit --runtime, instead of reading as "nothing declared".          ---
+malformed_entry_refusal_test() (
+  set +e
+  local work contract out status marker gate_dir
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-unavail-malformed.$$"
+  mkdir -p "$work/bin"
+  trap 'rm -rf "$work"' EXIT
+  cat > "$work/bin/grok" <<'BIN'
+#!/bin/bash
+exit 0
+BIN
+  cat > "$work/bin/codex" <<'BIN'
+#!/bin/bash
+exit 0
+BIN
+  chmod +x "$work/bin/grok" "$work/bin/codex"
+  # grok is named under unavailable_runtimes, but the entry has no "why":
+  # malformed, not absent. The old behaviour read this the same as no entry
+  # at all and let an explicit --runtime grok through.
+  cat > "$work/instance-runtime.json" <<'JSON'
+{"master_host_runtime": "claude", "unavailable_runtimes": {"grok": {"since": "2026-08-07"}}}
+JSON
+  contract="$work/contract.md"
+  echo "scratch contract" > "$contract"
+
+  marker="$work/gate-invoked"
+  gate_dir="$work/{{RUNTIME_ROOT}}/scripts"
+  mkdir -p "$gate_dir"
+  cat > "$gate_dir/dispatch-gate" <<BIN
+#!/bin/bash
+touch "$marker"
+printf '{"allow": true, "contract_sha": "abcdef0123456789"}\n'
+BIN
+  chmod +x "$gate_dir/dispatch-gate"
+
+  out=$(cd "$work" && PATH="$work/bin:/usr/bin:/bin" HOME="$work/home" \
+        MOGUI_INSTANCE_RUNTIME_CONFIG="$work/instance-runtime.json" \
+        bash "$dispatch" --contract "$contract" --runtime grok --check-only 2>&1)
+  status=$?
+
+  if [ "$status" -eq 0 ]; then
+    echo "FAIL: --check-only with an explicit --runtime naming a malformed entry should exit non-zero" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  case "$out" in
+    *"✗ invalid unavailable_runtimes entry for grok"*) ;;
+    *) echo "FAIL: refusal line missing the invalid-entry message" >&2; printf '%s\n' "$out" >&2; return 1;;
+  esac
+  if [ -e "$marker" ]; then
+    echo "FAIL: dispatch-gate marker is present; the malformed-entry refusal did not happen before the gate" >&2
+    return 1
+  fi
+  echo "ok   : a malformed unavailable_runtimes entry refuses an explicit --runtime, before the gate is ever invoked · rc=$status"
+)
+malformed_entry_refusal_test || exit 1
 
 # --- Case: default runtime and alternatives omit an unavailable runtime; ---
 # --- removing the key changes neither.                                   ---

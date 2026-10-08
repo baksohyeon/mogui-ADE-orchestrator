@@ -263,6 +263,17 @@ def _parse_unavailable_runtimes(value: object) -> dict[str, UnavailableRuntime]:
             raise InstanceRuntimeConfigError(
                 f"unavailable_runtimes[{name!r}].why must be a non-empty string"
             )
+        # Consumers print since/why as one line each and read them back by line
+        # number (master-ops/scripts/dispatch refuse_unavailable_runtime); a CR
+        # or LF embedded in either field would shift that readback.
+        if "\r" in since or "\n" in since:
+            raise InstanceRuntimeConfigError(
+                f"unavailable_runtimes[{name!r}].since must not contain CR or LF"
+            )
+        if "\r" in why or "\n" in why:
+            raise InstanceRuntimeConfigError(
+                f"unavailable_runtimes[{name!r}].why must not contain CR or LF"
+            )
         result[name] = UnavailableRuntime(since=since.strip(), why=why.strip())
     return result
 

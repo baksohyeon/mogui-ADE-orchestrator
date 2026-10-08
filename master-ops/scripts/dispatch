@@ -209,20 +209,24 @@ installed_runtimes() {
 }
 
 # Validates the whole unavailable_runtimes map in one pass, argv-safe (the
-# config path travels as sys.argv[1], never interpolated into the source).
-# Mirrors src/master_runtime/core/instance_runtime_config.py's
-# _parse_unavailable_runtimes rule for rule, so a config the loader accepts is
-# the same one this accepts.
+# config path and the candidate list travel as sys.argv[1]/[2], never
+# interpolated into the source). Mirrors src/master_runtime/core/
+# instance_runtime_config.py's _parse_unavailable_runtimes rule for rule,
+# including key normalization, so a config the loader accepts is the same
+# one this accepts: a key strips before it is stored or compared, an unknown
+# name after stripping is refused, a key empty after stripping is refused,
+# and two keys normalizing to the same runtime are refused.
 #   exit 2: no file, or no `unavailable_runtimes` key, "no entries", stdout empty.
 #   exit 1: key present but malformed, one-line reason on stdout.
 #   exit 0: every entry validates, JSON {name: [since, why]} on stdout.
 unavailable_runtimes_payload() {
   [ -f "$INSTANCE_RUNTIME_CONFIG" ] || return 2
-  python3 - "$INSTANCE_RUNTIME_CONFIG" <<'EOF'
+  python3 - "$INSTANCE_RUNTIME_CONFIG" "$RUNTIME_CANDIDATES" <<'EOF'
 import json
 import sys
 
-path = sys.argv[1]
+path, candidates_arg = sys.argv[1], sys.argv[2]
+candidates = set(candidates_arg.split())
 try:
     with open(path, encoding="utf-8") as fh:
         text = fh.read()
@@ -254,9 +258,19 @@ def field(entry, name, key):
 
 
 result = {}
-for name, entry in unavail.items():
+for raw_name, entry in unavail.items():
+    name = raw_name.strip() if isinstance(raw_name, str) else raw_name
+    if not isinstance(name, str) or not name:
+        print(f"unavailable_runtimes[{raw_name!r}] key must be a non-empty runtime name")
+        sys.exit(1)
+    if name not in candidates:
+        print(f"unavailable_runtimes[{raw_name!r}] names a runtime outside the known candidate list: {sorted(candidates)}")
+        sys.exit(1)
+    if name in result:
+        print(f"unavailable_runtimes[{raw_name!r}] duplicates another key that also normalizes to {name!r}")
+        sys.exit(1)
     if not isinstance(entry, dict):
-        print(f"unavailable_runtimes[{name!r}] must be an object with since and why")
+        print(f"unavailable_runtimes[{raw_name!r}] must be an object with since and why")
         sys.exit(1)
     result[name] = [field(entry, name, "since"), field(entry, name, "why")]
 

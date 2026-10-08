@@ -386,4 +386,100 @@ alternatives=codex, grok' ]; then
 )
 default_and_alternatives_test || exit 1
 
+# --- Case: a key with surrounding whitespace (" grok ") still refuses ---
+# --- --runtime grok before the gate, and still drops grok from the      ---
+# --- alternatives list. The payload helper used to store the raw,       ---
+# --- unstripped key, so "--runtime grok" never matched it and grok      ---
+# --- stayed dispatchable even with the key present.                     ---
+whitespace_key_refusal_and_alternatives_test() (
+  set +e
+  local work contract out status marker gate_dir
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-unavail-wskey.$$"
+  mkdir -p "$work/bin"
+  trap 'rm -rf "$work"' EXIT
+  cat > "$work/bin/grok" <<'BIN'
+#!/bin/bash
+exit 0
+BIN
+  cat > "$work/bin/codex" <<'BIN'
+#!/bin/bash
+exit 0
+BIN
+  chmod +x "$work/bin/grok" "$work/bin/codex"
+  cat > "$work/instance-runtime.json" <<'JSON'
+{"master_host_runtime": "claude", "unavailable_runtimes": {" grok ": {"since": "2026-08-07", "why": "free usage limit hit; no paid plan on this account"}}}
+JSON
+  contract="$work/contract.md"
+  echo "scratch contract" > "$contract"
+
+  marker="$work/gate-invoked"
+  gate_dir="$work/{{RUNTIME_ROOT}}/scripts"
+  mkdir -p "$gate_dir"
+  cat > "$gate_dir/dispatch-gate" <<BIN
+#!/bin/bash
+touch "$marker"
+printf '{"allow": true, "contract_sha": "abcdef0123456789"}\n'
+BIN
+  chmod +x "$gate_dir/dispatch-gate"
+
+  out=$(cd "$work" && PATH="$work/bin:/usr/bin:/bin" HOME="$work/home" \
+        MOGUI_INSTANCE_RUNTIME_CONFIG="$work/instance-runtime.json" \
+        bash "$dispatch" --contract "$contract" --runtime grok --check-only 2>&1)
+  status=$?
+
+  if [ "$status" -eq 0 ]; then
+    echo "FAIL: --check-only on a whitespace-padded unavailable key should exit non-zero" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  case "$out" in
+    *"✗ runtime grok unavailable on this install since 2026-08-07: free usage limit hit; no paid plan on this account · alternatives: codex"*) ;;
+    *) echo "FAIL: refusal line missing reason or alternatives for the whitespace key" >&2; printf '%s\n' "$out" >&2; return 1;;
+  esac
+  if [ -e "$marker" ]; then
+    echo "FAIL: dispatch-gate marker is present; the whitespace-key refusal did not happen before the gate" >&2
+    return 1
+  fi
+  echo "ok   : a key with surrounding whitespace (\" grok \") still refuses --runtime grok, before the gate is ever invoked · rc=$status"
+
+  local installed_fn payload_fn guard_fn names_fn dispatchable_fn choose_fn join_fn script_file out_alts
+  installed_fn=$(extract_fn installed_runtimes)
+  payload_fn=$(extract_fn unavailable_runtimes_payload)
+  guard_fn=$(extract_fn unavailable_runtimes_guard)
+  names_fn=$(extract_fn unavailable_runtime_names)
+  dispatchable_fn=$(extract_fn dispatchable_runtimes)
+  choose_fn=$(extract_fn choose_default_runtime)
+  join_fn=$(extract_fn join_csv)
+
+  script_file="$work/run.sh"
+  {
+    echo 'set -u'
+    echo "RUNTIME_CANDIDATES=\"claude codex cursor grok gemini opencode\""
+    echo "INSTANCE_RUNTIME_CONFIG=\"$work/instance-runtime.json\""
+    echo 'MASTER_HOST_RUNTIME=claude'
+    echo 'UNAVAILABLE_RUNTIMES_JSON=""'
+    printf '%s\n' "$installed_fn"
+    printf '%s\n' "$payload_fn"
+    printf '%s\n' "$guard_fn"
+    printf '%s\n' "$names_fn"
+    printf '%s\n' "$dispatchable_fn"
+    printf '%s\n' "$choose_fn"
+    printf '%s\n' "$join_fn"
+    echo 'unavailable_runtimes_guard'
+    echo 'echo "default=$(choose_default_runtime)"'
+    echo 'echo "alternatives=$(dispatchable_runtimes | grep -vx "$MASTER_HOST_RUNTIME" | join_csv)"'
+  } > "$script_file"
+  out_alts=$(PATH="$work/bin:/usr/bin:/bin" bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] || [ "$out_alts" != 'default=codex
+alternatives=codex' ]; then
+    echo "FAIL: with \" grok \" unavailable, default and alternatives should be codex only" >&2
+    printf '%s\n' "$out_alts" >&2
+    return 1
+  fi
+  echo "ok   : a key with surrounding whitespace still drops grok from both the default pick and the alternatives list"
+)
+whitespace_key_refusal_and_alternatives_test || exit 1
+
 echo "dispatch unavailable-runtime regression tests passed"

@@ -295,6 +295,20 @@ def test_unavailable_runtimes_why_with_cr_raises(tmp_path: Path) -> None:
         load_instance_runtime_config(config_path, environ={})
 
 
+def test_duplicate_unavailable_runtimes_key_after_normalization_raises(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "instance-runtime.json",
+        {
+            "unavailable_runtimes": {
+                "grok": {"since": "2026-08-07", "why": "free usage limit hit"},
+                " grok ": {"since": "2026-08-07", "why": "duplicate entry"},
+            }
+        },
+    )
+    with pytest.raises(InstanceRuntimeConfigError, match="duplicates another key"):
+        load_instance_runtime_config(config_path, environ={})
+
+
 def test_invalid_json_raises(tmp_path: Path) -> None:
     path = tmp_path / "bad.json"
     path.write_text("{not-json", encoding="utf-8")

@@ -249,6 +249,11 @@ def _parse_unavailable_runtimes(value: object) -> dict[str, UnavailableRuntime]:
                 f"unavailable_runtimes[{name!r}] names a runtime outside the known "
                 f"candidate list: {sorted(KNOWN_RUNTIME_CANDIDATES)}"
             )
+        if name in result:
+            raise InstanceRuntimeConfigError(
+                f"unavailable_runtimes[{key!r}] duplicates another key that also "
+                f"normalizes to {name!r}"
+            )
         if not isinstance(raw, dict):
             raise InstanceRuntimeConfigError(
                 f"unavailable_runtimes[{name!r}] must be an object with since and why"

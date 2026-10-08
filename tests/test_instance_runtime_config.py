@@ -17,6 +17,7 @@ from master_runtime.core.instance_runtime_config import (
     PRODUCT_REPO_ENV,
     TRANSCRIPT_GLOB_ENV,
     InstanceRuntimeConfigError,
+    UnavailableRuntime,
     load_instance_runtime_config,
 )
 
@@ -235,6 +236,45 @@ def test_underscore_doc_keys_are_ignored(tmp_path: Path) -> None:
     loaded = load_instance_runtime_config(config_path, environ={})
     assert loaded.require_master_host_runtime() == "cursor-agent"
     assert loaded.transcript_globs == {"cursor-agent": "/tmp/cursor/*.jsonl"}
+
+
+def test_absent_unavailable_runtimes_key_gives_empty_mapping(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "instance-runtime.json",
+        {"master_host_runtime": "claude"},
+    )
+    loaded = load_instance_runtime_config(config_path, environ={})
+    assert loaded.unavailable_runtimes == {}
+
+
+def test_valid_unavailable_runtimes_entry_parses(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "instance-runtime.json",
+        {
+            "unavailable_runtimes": {
+                "grok": {
+                    "since": "2026-08-07",
+                    "why": "free usage limit hit; no paid plan on this account",
+                }
+            }
+        },
+    )
+    loaded = load_instance_runtime_config(config_path, environ={})
+    assert loaded.unavailable_runtimes == {
+        "grok": UnavailableRuntime(
+            since="2026-08-07",
+            why="free usage limit hit; no paid plan on this account",
+        )
+    }
+
+
+def test_malformed_unavailable_runtimes_entry_raises(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "instance-runtime.json",
+        {"unavailable_runtimes": {"grok": {"why": "missing since"}}},
+    )
+    with pytest.raises(InstanceRuntimeConfigError, match="since"):
+        load_instance_runtime_config(config_path, environ={})
 
 
 def test_invalid_json_raises(tmp_path: Path) -> None:

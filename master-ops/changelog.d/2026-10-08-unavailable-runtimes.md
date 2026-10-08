@@ -1,0 +1,1 @@
+Adds an optional `unavailable_runtimes` key to `config/instance-runtime.json`: dispatch refuses a listed runtime with its reason and the remaining alternatives, and drops it from the default pick and the alternatives list; the host-diversity audit row in the ledger now carries the names.

@@ -208,12 +208,79 @@ installed_runtimes() {
   done
 }
 
+# Names declared unavailable in the instance runtime config: operator-declared,
+# not probed. Read the same ad hoc way measured_master_host_runtime already
+# reads this file, so no new dependency is introduced for a second field.
+unavailable_runtime_names() {
+  [ -f "$INSTANCE_RUNTIME_CONFIG" ] || return 0
+  python3 -c "
+import json
+try:
+    data = json.load(open('$INSTANCE_RUNTIME_CONFIG'))
+except Exception:
+    data = {}
+unavail = data.get('unavailable_runtimes')
+if isinstance(unavail, dict):
+    for name in unavail:
+        print(name)
+" 2>/dev/null
+}
+
+# installed_runtimes() minus the operator-declared unavailable set. The
+# default runtime and the alternatives list are both drawn from here, so an
+# unavailable runtime is never offered as either.
+dispatchable_runtimes() {
+  local unavailable
+  unavailable=$(unavailable_runtime_names)
+  installed_runtimes | while IFS= read -r runtime; do
+    if [ -n "$unavailable" ] && printf '%s\n' "$unavailable" | grep -Fxq "$runtime"; then
+      continue
+    fi
+    printf '%s\n' "$runtime"
+  done
+}
+
+# since/why for one unavailable runtime, one per line; returns 1 when the
+# runtime has no entry or the entry is malformed.
+unavailable_runtime_entry() {
+  local runtime="$1"
+  [ -f "$INSTANCE_RUNTIME_CONFIG" ] || return 1
+  python3 -c "
+import json, sys
+try:
+    data = json.load(open('$INSTANCE_RUNTIME_CONFIG'))
+except Exception:
+    sys.exit(1)
+entry = (data.get('unavailable_runtimes') or {}).get('$runtime')
+if not isinstance(entry, dict):
+    sys.exit(1)
+since = entry.get('since')
+why = entry.get('why')
+if not since or not why:
+    sys.exit(1)
+print(since)
+print(why)
+" 2>/dev/null
+}
+
+# Refuses a runtime the operator declared unavailable, with the reason and the
+# alternatives still on offer. No override flag: delete the config entry to
+# use the runtime again.
+refuse_unavailable_runtime() {
+  local runtime="$1" alternatives="$2" entry since why
+  entry=$(unavailable_runtime_entry "$runtime") || return 0
+  since=$(printf '%s\n' "$entry" | sed -n 1p)
+  why=$(printf '%s\n' "$entry" | sed -n 2p)
+  echo "✗ runtime $runtime unavailable on this install since $since: $why · alternatives: ${alternatives:-none}" >&2
+  return 1
+}
+
 join_csv() {
   python3 -c "import sys; print(', '.join([x.strip() for x in sys.stdin if x.strip()]))"
 }
 
 choose_default_runtime() {
-  installed_runtimes | while IFS= read -r runtime; do
+  dispatchable_runtimes | while IFS= read -r runtime; do
     [ "$runtime" = "$MASTER_HOST_RUNTIME" ] && continue
     echo "$runtime"
     break
@@ -669,12 +736,12 @@ codex_hooks_vet_homes() {
 
 record_host_diversity_audit() {
   [ "$CHECK_ONLY" = 1 ] && return 0
-  python3 - "$LEDGER" "$RUNTIME" "$MASTER_HOST_RUNTIME" "$INSTALLED_RUNTIMES" "$ALTERNATIVE_RUNTIMES" "$SAME_HOST_REASON" "$TASK" "$DISP" "$SHA" <<'EOF'
+  python3 - "$LEDGER" "$RUNTIME" "$MASTER_HOST_RUNTIME" "$INSTALLED_RUNTIMES" "$ALTERNATIVE_RUNTIMES" "$UNAVAILABLE_RUNTIMES" "$SAME_HOST_REASON" "$TASK" "$DISP" "$SHA" <<'EOF'
 import json
 import sys
 import time
 
-ledger, runtime, master, installed, alternatives, reason, task, dispatch, sha = sys.argv[1:]
+ledger, runtime, master, installed, alternatives, unavailable, reason, task, dispatch, sha = sys.argv[1:]
 entry = {
     "ts": time.time(),
     "kind": "host_diversity_audit",
@@ -684,6 +751,7 @@ entry = {
     "same_host_reason": reason or None,
     "installed_runtimes": [x.strip() for x in installed.split(",") if x.strip()],
     "alternative_runtimes": [x.strip() for x in alternatives.split(",") if x.strip()],
+    "unavailable_runtimes": [x.strip() for x in unavailable.split(",") if x.strip()],
     "orchestration_task": task,
     "job_id": dispatch,
     "contract_sha": sha,
@@ -736,7 +804,13 @@ if [ "$MASTER_HOST_SOURCE" = fallback ]; then
 fi
 
 INSTALLED_RUNTIMES=$(installed_runtimes | join_csv)
-ALTERNATIVE_RUNTIMES=$(installed_runtimes | grep -vx "$MASTER_HOST_RUNTIME" | join_csv)
+ALTERNATIVE_RUNTIMES=$(dispatchable_runtimes | grep -vx "$MASTER_HOST_RUNTIME" | join_csv)
+UNAVAILABLE_RUNTIMES=$(unavailable_runtime_names | join_csv)
+
+# RUNTIME is final as of the block above; refuse here, before any model
+# resolution or gate check spends effort on a runtime the operator already
+# declared unusable on this install.
+refuse_unavailable_runtime "$RUNTIME" "$ALTERNATIVE_RUNTIMES" || exit 2
 
 # The model id and the runtime are chosen independently, so nothing stopped a
 # claude model id from being declared for a codex or grok worker. That is not a

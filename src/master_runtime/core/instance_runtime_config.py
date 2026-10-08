@@ -32,9 +32,22 @@ MASTER_HOST_RUNTIME_ENV_ALT = "MASTER_HOST_RUNTIME"
 TRANSCRIPT_GLOB_ENV = "MOGUI_TRANSCRIPT_GLOB"
 PRODUCT_REPO_ENV = "MOGUI_PRODUCT_REPO"
 
+# Mirrors RUNTIME_CANDIDATES in master-ops/scripts/dispatch, the only consumer
+# of unavailable_runtimes; the two lists cannot share source across the
+# bash/Python boundary, so a new runtime candidate updates both.
+KNOWN_RUNTIME_CANDIDATES = frozenset({"claude", "codex", "cursor", "grok", "gemini", "opencode"})
+
 
 class InstanceRuntimeConfigError(ValueError):
     """Raised when a required instance runtime fact is unconfigured or invalid."""
+
+
+@dataclass(frozen=True)
+class UnavailableRuntime:
+    """An operator-declared runtime this install cannot dispatch to."""
+
+    since: str
+    why: str
 
 
 @dataclass(frozen=True)
@@ -44,6 +57,7 @@ class InstanceRuntimeConfig:
     master_host_runtime: str | None
     transcript_globs: Mapping[str, str]
     product_repositories: tuple[str, ...]
+    unavailable_runtimes: Mapping[str, UnavailableRuntime]
     source_path: Path | None
     transcript_glob_env_override: str | None = None
     warnings: tuple[str, ...] = ()
@@ -142,6 +156,7 @@ def load_instance_runtime_config(
 
     file_master = _config_optional_str(payload.get("master_host_runtime"), "master_host_runtime")
     file_globs = _parse_transcript_globs(payload.get("transcript_globs"))
+    file_unavailable = _parse_unavailable_runtimes(payload.get("unavailable_runtimes"))
 
     master = (
         _optional_str(env.get(MASTER_HOST_RUNTIME_ENV))
@@ -165,6 +180,7 @@ def load_instance_runtime_config(
         master_host_runtime=master,
         transcript_globs=file_globs,
         product_repositories=product_repositories,
+        unavailable_runtimes=file_unavailable,
         source_path=config_path if config_path.is_file() else None,
         transcript_glob_env_override=transcript_env,
         warnings=warnings,
@@ -209,6 +225,46 @@ def _parse_transcript_globs(value: object) -> dict[str, str]:
             )
         globs[key.strip()] = raw.strip()
     return globs
+
+
+def _parse_unavailable_runtimes(value: object) -> dict[str, UnavailableRuntime]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise InstanceRuntimeConfigError(
+            "unavailable_runtimes must be a JSON object mapping runtime name to "
+            "{since, why}"
+        )
+    result: dict[str, UnavailableRuntime] = {}
+    for key, raw in value.items():
+        if str(key).startswith("_"):
+            continue
+        if not isinstance(key, str) or not key.strip():
+            raise InstanceRuntimeConfigError(
+                "unavailable_runtimes keys must be non-empty runtime names"
+            )
+        name = key.strip()
+        if name not in KNOWN_RUNTIME_CANDIDATES:
+            raise InstanceRuntimeConfigError(
+                f"unavailable_runtimes[{name!r}] names a runtime outside the known "
+                f"candidate list: {sorted(KNOWN_RUNTIME_CANDIDATES)}"
+            )
+        if not isinstance(raw, dict):
+            raise InstanceRuntimeConfigError(
+                f"unavailable_runtimes[{name!r}] must be an object with since and why"
+            )
+        since = raw.get("since")
+        why = raw.get("why")
+        if not isinstance(since, str) or not since.strip():
+            raise InstanceRuntimeConfigError(
+                f"unavailable_runtimes[{name!r}].since must be a non-empty string"
+            )
+        if not isinstance(why, str) or not why.strip():
+            raise InstanceRuntimeConfigError(
+                f"unavailable_runtimes[{name!r}].why must be a non-empty string"
+            )
+        result[name] = UnavailableRuntime(since=since.strip(), why=why.strip())
+    return result
 
 
 def _parse_product_repositories(payload: Mapping[str, Any]) -> tuple[tuple[str, ...], tuple[str, ...]]:

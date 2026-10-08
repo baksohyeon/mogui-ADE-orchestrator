@@ -99,6 +99,7 @@
     "scripts/test-conversation-redaction-scan-glob-guard.sh",
     "scripts/test-dispatch-runtime.sh",
     "scripts/test-dispatch-timeline.sh",
+    "scripts/test-dispatch-unavailable-runtime.sh",
     "scripts/test-hook-verdict.sh",
     "scripts/test-measure.sh",
     "scripts/test-mogui-logging.sh",

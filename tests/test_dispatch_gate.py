@@ -10,6 +10,8 @@ import subprocess
 import threading
 from pathlib import Path
 
+import pytest
+
 import master_runtime.core.dispatch_gate as dispatch_gate
 import master_runtime.core.dispatch_timeline as dispatch_timeline
 from master_runtime.core.dispatch_gate import (
@@ -1713,6 +1715,52 @@ def test_cli_check_missing_contract_without_estimate_returns_gate_denial(
     assert '"reason":"CONTRACT_UNREADABLE"' in output.out
     assert "Traceback" not in output.err
     assert json.loads(ledger.read_text(encoding="utf-8"))["est_chars"] is None
+
+
+def test_cli_ledger_after_subcommand_is_rejected_and_writes_nothing(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """--ledger is declared only on the top-level parser, never on a
+    subparser (scripts/dispatch-gate). Giving it after the subcommand must
+    keep exiting 2 on argparse's own unrecognized-arguments refusal and
+    write no file in the cwd; a future change that moves --ledger onto the
+    subparsers, or that switches to parse_known_args, would instead accept
+    it and write a cwd-relative ledger that worker-wait never reads.
+    """
+
+    contract = _contract(tmp_path, "ledger after subcommand")
+    ledger = tmp_path / "ledger.jsonl"
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
+
+    with pytest.raises(SystemExit) as excinfo:
+        script["main"](
+            [
+                "check",
+                "--runtime",
+                "codex",
+                "--model",
+                "gpt-5.6-luna",
+                "--contract",
+                str(contract),
+                "--agents",
+                "1",
+                "--est-chars",
+                "1000",
+                "--completion-channel",
+                "sentinel-log",
+                "--ledger",
+                str(ledger),
+            ]
+        )
+
+    assert excinfo.value.code == 2
+    assert "unrecognized arguments" in capsys.readouterr().err
+    assert list(cwd.iterdir()) == []
 
 
 def test_register_consumes_matching_pending_dispatch_by_contract_sha(

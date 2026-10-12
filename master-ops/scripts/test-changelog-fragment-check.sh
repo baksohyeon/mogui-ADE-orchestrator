@@ -155,6 +155,23 @@ out=$(cd "$repo" && "$SCRIPT" "$base" 2>&1); rc=$?
 expect 1 "$rc" "TEMPLATE-VERSION and MANIFEST.json bump with no deleted fragment fails" "$out"
 rm -rf "$repo"
 
+# Case 13: a release-shaped diff plus an unrelated master-ops/ file still
+# fails; the unrelated file is a trigger that is not in RELEASE_FILES, so the
+# diff is not release-shaped even with a fragment deleted.
+repo="$(mk_repo)"
+printf 'A thing (2026-01-01):\n\n- did it\n' >"$repo/$TREE/changelog.d/2026-01-01-a-thing.md"
+commit_all "$repo"
+base="$(git -C "$repo" rev-parse HEAD)"
+printf 'placeholder updated\n' >"$repo/$TREE/CHANGELOG.md"
+printf 'v0.1.0\n' >"$repo/$TREE/TEMPLATE-VERSION"
+printf '{}\n' >"$repo/$TREE/MANIFEST.json"
+printf 'changed\n' >"$repo/$TREE/other.md"
+rm "$repo/$TREE/changelog.d/2026-01-01-a-thing.md"
+commit_all "$repo"
+out=$(cd "$repo" && "$SCRIPT" "$base" 2>&1); rc=$?
+expect 1 "$rc" "release-shaped diff plus an unrelated master-ops/ file still fails" "$out"
+rm -rf "$repo"
+
 # Failability: without the CHANGELOG.md exemption, case 5 must fail.
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 python3 - "$SCRIPT" >"$T/mut.py" <<'PY'

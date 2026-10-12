@@ -48,7 +48,50 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+## v0.5.249
+
+Release v0.5.249 (2026-10-12): `master-ops/TEMPLATE-VERSION` and `master-ops/MANIFEST.json` move to v0.5.249 alongside the changelog fold.
+
+`scripts/changelog-fragment-check` now exempts a release-shaped diff from the added-fragment requirement: when every `master-ops/` path changed outside `changelog.d/` is `CHANGELOG.md`, `TEMPLATE-VERSION`, or `MANIFEST.json`, and at least one root fragment is deleted, the gate exits 0 with no fragment of its own; a `TEMPLATE-VERSION` or `MANIFEST.json` bump with no fragment deleted still needs one, and `master-ops/scripts/test-changelog-fragment-check.sh` carries two new cases plus a failability line for the deleted-fragment condition.
+
+Lands the seven round-three rows from `docs/reports/test-gaps-2026-10-07.md`. Row 6 adds a
+`tests/test_dispatch_gate.py` case pinning that `--ledger` given after the subcommand already exits 2
+on argparse's own unrecognized-arguments refusal and writes no file in the cwd. Row 7 fixes a live
+`IndexError` in `dispatch_gate.py`'s `_registration_candidate`: registering once without
+`--contract-sha` leaves that ticket's file on disk, and registering again with its contract sha hit an
+unguarded `matching_pending` lookup; the guard now matches its two sibling branches. Row 9 adds a
+`tests/test_changelog_release.py` case pinning that a fragment added after a release's own fold still
+carries over whole into the next fold. Row 8 adds `scripts/test-contributing-shell-loop.sh`, extracting
+`CONTRIBUTING.md`'s documented shell-test loop at runtime and replaying it against a failing and a
+passing fixture script. Row 10 fixes `scripts/worker-pane-sweep` to classify from the lines at and
+after a pane's last prompt line, so an approval marker left in scrollback above a now-idle prompt no
+longer reports a false `ACTION approval`. Row 11 hardens `scripts/test-product-path-guard.sh`'s
+`sed-dash-n-print-range-passes` case against the guard's unsafe-command check reading a bare `w`, `W`,
+or `e` in the scratch temp path's random name. Row 12 makes `scripts/test-bash-output-size-warn.sh`
+resolve the real `python3` before swapping `$HOME`, so a mise-managed shim no longer installs a Python
+mid-test and leaks its banner into the captured output.
+
+`template-apply` collects, at plan time, which documented placeholder tokens the planned write set's substituted text still carries, and refuses the write while any of them remains. `plan_actions` marks instance-owned and refused paths as skipped or refused, leaving only template-layer paths as planned and write-eligible; `scripts/template_common.py` stays planned among them and is written byte-for-byte, and `missing_placeholders` skips reading it only for token-scanning because it is never substituted. A `--write` run without `--placeholder OPS_REPO=...` against a founded install used to exit 0, write every file, and leave `OPS={{OPS_REPO}}` in `scripts/dispatch` for `test-dispatch-multi-vendor-host.sh` to trip over later as a `FileNotFoundError`. The write pass now prints the missing set and exits 2 before the confirmation prompt and writes nothing, the same could-not-decide status `template-check` already uses for an unreadable input; a dry run with the same gap prints the same report and exits 2. A supplied key that no planned file uses stays unreported, and a token in a skipped or refused file is never counted toward the gap.
+
+Upgrade apply will not overwrite living records that an existing installation customizes in place: operating cards (`AGENTS.md`, `CLAUDE.md`), `docs/MASTER-OPERATIONS.md`, the closed-decisions ledger, the succession boot card, the boot comparison set, and the local self-check and compaction scripts. They stay in the manifest so presence is still required; apply refuses them by name the same way it refuses role-state. `scripts/template_common.py` is copied without placeholder substitution so the token registry cannot be rewritten into installation values.
+
+Makes `until` a required `YYYY-MM-DD` field of every `unavailable_runtimes` entry: an entry past its `until` date is expired, and dispatch stops refusing the runtime it names, printing one line on stderr naming the expired entry and dispatching anyway; `config/instance-runtime.example.json`, `01-preflight.md`, and `reverify.md` document the field, and an expired entry is removed or re-dated by the owner on reverify.
+
+Adds an optional `unavailable_runtimes` key to `config/instance-runtime.json`: dispatch refuses a listed runtime with its reason and the remaining alternatives, and drops it from the default pick and the alternatives list; the host-diversity audit row in the ledger now carries the names. The unavailable-runtime helpers and `default_model_for_runtime` pass the runtime name and the config contents into Python through `sys.argv`, never interpolated into the source: a crafted `--runtime` value is data, never code. A config file that is missing, or missing the key, is "no entries" and dispatch proceeds; unreadable JSON, a non-object `unavailable_runtimes` value, a non-object entry, or a non-string, empty, or CR/LF-carrying `since` or `why` is malformed, and dispatch refuses closed with `✗ invalid unavailable_runtimes in <path>: <reason>`, on the explicit `--runtime` path and the default-pick path alike, under `--check-only` too. Empties `config/instance-runtime.example.json`'s `unavailable_runtimes` map so copying the example declares no outage; the entry shape stays documented in `_docs`. Fixes `reverify.md`'s instance config path to match `01-preflight.md`'s spelling, and names the six accepted runtime names in `01-preflight.md`'s schema sentence.
+
+Adds `docs/reports/test-gaps-2026-10-07.md`: maps the twelve behaviours that broke in the last two weeks
+to what pins each one now, classifying each row (`covered`, `pytest`, `shell-inline`, `out-of-harness`,
+`fix-flaky`) and placing the gaps under `CONTRIBUTING.md`'s "Adding a test" rules for round three. Finds
+two live bugs (`dispatch-gate register`'s `IndexError` on a stale ticket, `worker-pane-sweep`'s false
+`approval` verdict from a resolved dialog's scrollback) and one live flake: the `small result` case in
+`test-bash-output-size-warn.sh` already exercises the hook under a scratch `HOME` and fails on this
+install, so it guards nothing until the fix lands (`fix-flaky`).
+
+Adds `docs/reports/upgrade-rehearsal-2026-10-07.md`: a full dry-run-then-write rehearsal of Upgrade mode against a scratch clone of the ops repository at v0.5.230, finding that `template-apply` silently ships unsubstituted `{{...}}` placeholders with no `--placeholder` supplied (one of them load-bearing in `scripts/dispatch`'s executable source), that it has no awareness of `config/template-retirements.json` and recreates a file the ops install deliberately retired, and that in this run refusal-by-name only matched `docs/runbooks/role-state.md` among the five named instance-owned paths, because the template's manifest ships no entry under the other four prefixes today.
+
 ## v0.5.239
+
+Release v0.5.239 (2026-10-07): `master-ops/TEMPLATE-VERSION` and `master-ops/MANIFEST.json` move to `v0.5.239` alongside the changelog fold, satisfying the `changelog-fragment-check` gate for a release commit that touches `master-ops/` outside `changelog.d/` and `CHANGELOG.md`.
 
 Release v0.5.239 (2026-10-07): `master-ops/TEMPLATE-VERSION` and `master-ops/MANIFEST.json` move to `v0.5.239` alongside the changelog fold, satisfying the `changelog-fragment-check` gate for a release commit that touches `master-ops/` outside `changelog.d/`.
 

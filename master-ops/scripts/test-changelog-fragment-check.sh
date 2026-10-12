@@ -128,6 +128,33 @@ out=$(cd "$repo" && "$SCRIPT" "$base" 2>&1); rc=$?
 expect 0 "$rc" "non-.md changelog.d file is ignored" "$out"
 rm -rf "$repo"
 
+# Case 11: a release-shaped diff (CHANGELOG.md edited, TEMPLATE-VERSION and
+# MANIFEST.json bumped, one fragment deleted, none added) passes with no
+# fragment of its own.
+repo="$(mk_repo)"
+printf 'A thing (2026-01-01):\n\n- did it\n' >"$repo/$TREE/changelog.d/2026-01-01-a-thing.md"
+commit_all "$repo"
+base="$(git -C "$repo" rev-parse HEAD)"
+printf 'placeholder updated\n' >"$repo/$TREE/CHANGELOG.md"
+printf 'v0.1.0\n' >"$repo/$TREE/TEMPLATE-VERSION"
+printf '{}\n' >"$repo/$TREE/MANIFEST.json"
+rm "$repo/$TREE/changelog.d/2026-01-01-a-thing.md"
+commit_all "$repo"
+out=$(cd "$repo" && "$SCRIPT" "$base" 2>&1); rc=$?
+expect 0 "$rc" "release-shaped diff with a deleted fragment passes" "$out"
+rm -rf "$repo"
+
+# Case 12: TEMPLATE-VERSION and MANIFEST.json bumped with no fragment
+# deleted and none added still fails; a release cut without a fold is not
+# release-shaped.
+repo="$(mk_repo)"; base="$(git -C "$repo" rev-parse HEAD)"
+printf 'v0.1.0\n' >"$repo/$TREE/TEMPLATE-VERSION"
+printf '{}\n' >"$repo/$TREE/MANIFEST.json"
+commit_all "$repo"
+out=$(cd "$repo" && "$SCRIPT" "$base" 2>&1); rc=$?
+expect 1 "$rc" "TEMPLATE-VERSION and MANIFEST.json bump with no deleted fragment fails" "$out"
+rm -rf "$repo"
+
 # Failability: without the CHANGELOG.md exemption, case 5 must fail.
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 python3 - "$SCRIPT" >"$T/mut.py" <<'PY'
@@ -143,6 +170,24 @@ printf 'placeholder updated\n' >"$repo/$TREE/CHANGELOG.md"
 commit_all "$repo"
 out=$(cd "$repo" && python3 "$T/mut.py" "$base" 2>&1); rc=$?
 expect 1 "$rc" "failability: dropping the CHANGELOG.md exemption fails case 5" "$out"
+rm -rf "$repo"
+
+# Failability: dropping the deleted-fragment condition from release-shaped
+# flips case 12 to 0.
+python3 - "$SCRIPT" >"$T/mut2.py" <<'PY'
+import sys
+s = open(sys.argv[1]).read()
+mutant = s.replace(" and fragments_deleted", "")
+if mutant == s:
+    sys.exit("mutant text not found")
+sys.stdout.write(mutant)
+PY
+repo="$(mk_repo)"; base="$(git -C "$repo" rev-parse HEAD)"
+printf 'v0.1.0\n' >"$repo/$TREE/TEMPLATE-VERSION"
+printf '{}\n' >"$repo/$TREE/MANIFEST.json"
+commit_all "$repo"
+out=$(cd "$repo" && python3 "$T/mut2.py" "$base" 2>&1); rc=$?
+expect 0 "$rc" "failability: dropping the deleted-fragment condition flips case 12 to 0" "$out"
 rm -rf "$repo"
 
 [ "$F" -eq 0 ] && exit 0 || exit 1

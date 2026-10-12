@@ -2,14 +2,19 @@
 """Gate: a master-ops/ change outside changelog.d/ needs a changelog fragment.
 
 Exit 0: no master-ops/ change outside changelog.d/, or one is present and
-every added fragment name matches the pattern.
-Exit 1: a master-ops/ change outside changelog.d/ has no added fragment, or
-an added fragment has a bad name.
+every added fragment name matches the pattern, or the diff is release-shaped.
+Exit 1: a master-ops/ change outside changelog.d/ has no added fragment and
+the diff is not release-shaped, or an added fragment has a bad name.
 Exit 2: usage or git failure.
 
 master-ops/CHANGELOG.md itself is exempt from the "needs a fragment" trigger:
 it is what the release-fold commit touches, and that commit should not need
 a fragment of its own.
+
+A diff is release-shaped when every other master-ops/ path changed outside
+changelog.d/ is TEMPLATE-VERSION or MANIFEST.json, and at least one root
+fragment is deleted: that is the release-fold commit's own fold, and it
+needs no fragment of its own either.
 """
 
 from __future__ import annotations
@@ -22,6 +27,7 @@ from pathlib import Path
 
 FRAGMENT_DIR = "master-ops/changelog.d/"
 CHANGELOG_FILE = "master-ops/CHANGELOG.md"
+RELEASE_FILES = {"master-ops/TEMPLATE-VERSION", "master-ops/MANIFEST.json"}
 # Canonical copy: master-ops/scripts/template_common.py FRAGMENT_NAME_RE. This
 # script cannot import that module without a sys.path hack across the
 # master-ops/ template boundary, so this copy must stay string-identical to
@@ -92,7 +98,10 @@ def main(argv: list[str]) -> int:
         for p in changed
         if p.startswith("master-ops/") and not p.startswith(FRAGMENT_DIR) and p != CHANGELOG_FILE
     ]
-    if triggers and not fragments_added:
+    deleted = _diff_names(base_sha, diff_filter="D")
+    fragments_deleted = [p for p in deleted if _is_root_fragment(p)]
+    release_shaped = triggers and all(p in RELEASE_FILES for p in triggers) and fragments_deleted
+    if triggers and not fragments_added and not release_shaped:
         sys.stderr.write(
             "changelog-fragment-check: master-ops/ changed outside changelog.d/ with no "
             "added fragment; add master-ops/changelog.d/<YYYY-MM-DD>-<slug>.md\n"

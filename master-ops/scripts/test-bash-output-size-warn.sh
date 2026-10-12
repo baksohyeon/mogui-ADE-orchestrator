@@ -37,7 +37,7 @@ expect_verdict skip "invalid threshold"
 o=$(printf '{"tool_response":{"stdout":"%s"}}' "$big" | MOGUI_BASH_OUTPUT_WARN_CHARS=-1 "$H" 2>&1); rc=$?; [ $rc -eq 0 ] && [ -z "$o" ] && echo "  ok:   negative threshold stays silent, exit 0" || { echo "  FAIL: negative threshold: rc=$rc '$o'"; F=1; }
 expect_verdict skip "negative threshold"
 # Failability: a copy of the hook whose size comparison is disabled must fail the large-result check.
-T=$(mktemp -d); trap 'rm -rf "$T"' EXIT; sed 's/if n > thresh:/if False:/' "$H" > "$T/hook.sh"; chmod +x "$T/hook.sh"
+T=$(mktemp -d); trap 'rm -rf "$T" "$SCRATCH_HOME" "$PYTHON_SHIM_DIR"' EXIT; sed 's/if n > thresh:/if False:/' "$H" > "$T/hook.sh"; chmod +x "$T/hook.sh"
 if [ ! -f "$T/hook.sh" ] || cmp -s "$H" "$T/hook.sh"; then
   echo "FAIL: mutant not generated" >&2
   exit 1

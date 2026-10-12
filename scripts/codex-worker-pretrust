@@ -36,12 +36,6 @@ else
   esac
 fi
 
-if [[ ! -d "$accounts_dir" ]]; then
-  printf 'INFO accounts directory not found: %s; nothing to pre-trust\n' "$accounts_dir"
-  printf 'Summary: 0 added, 0 updated, 0 already trusted\n'
-  exit 0
-fi
-
 # TOML basic strings escape backslashes and double quotes. Worktree paths with
 # line breaks cannot be represented safely as a single-line table name.
 if [[ "$worktree_path" == *$'\n'* || "$worktree_path" == *$'\r'* ]]; then
@@ -53,10 +47,29 @@ escaped_path=${escaped_path//\"/\\\"}
 project_header="[projects.\"$escaped_path\"]"
 
 shopt -s nullglob
-config_files=("$accounts_dir"/*/home/config.toml)
+config_files=()
+if [[ -d "$accounts_dir" ]]; then
+  config_files=("$accounts_dir"/*/home/config.toml)
+else
+  printf 'INFO accounts directory not found: %s\n' "$accounts_dir"
+fi
+
+host_config="${CODEX_HOME:-$HOME/.codex}/config.toml"
+if [[ -f "$host_config" ]]; then
+  config_files+=("$host_config")
+else
+  printf 'INFO Codex host config not found: %s; not creating it\n' "$host_config"
+fi
+
 added=0
 updated=0
 already_trusted=0
+
+if [[ ${#config_files[@]} -eq 0 ]]; then
+  printf 'INFO no existing Codex config files found; nothing to pre-trust\n'
+  printf 'Summary: 0 added, 0 updated, 0 already trusted\n'
+  exit 0
+fi
 
 # Find an interpreter that can verify the edit, rather than demanding one by
 # version. The probe is the capability itself (tomllib import), so an unsuitable

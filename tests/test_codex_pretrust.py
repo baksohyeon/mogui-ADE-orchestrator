@@ -16,12 +16,14 @@ def run_pretrust(
     *,
     env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    child_env = os.environ.copy() if env is None else env.copy()
+    child_env.setdefault("CODEX_HOME", str(accounts_dir.parent / "absent-codex-home"))
     return subprocess.run(
         [str(SCRIPT), worktree_path, "--accounts-dir", str(accounts_dir)],
         capture_output=True,
         text=True,
         check=False,
-        env=env,
+        env=child_env,
     )
 
 
@@ -112,14 +114,88 @@ def test_existing_untrusted_project_is_updated_without_touching_other_lines(
     )
 
 
-def test_absent_accounts_directory_is_informational(tmp_path: Path) -> None:
+def test_host_config_is_trusted_when_accounts_directory_is_absent(
+    tmp_path: Path,
+) -> None:
     missing = tmp_path / "missing"
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    config = codex_home / "config.toml"
+    config.write_text('model = "gpt"\n', encoding="utf-8")
+    env = os.environ.copy()
+    env["CODEX_HOME"] = str(codex_home)
 
-    result = run_pretrust("/tmp/worktree", missing)
+    result = run_pretrust("/tmp/worktree", missing, env=env)
+
+    assert result.returncode == 0
+    assert "accounts directory not found" in result.stdout
+    assert "trusted (added)" in result.stdout
+    assert "Summary: 1 added, 0 updated, 0 already trusted" in result.stdout
+    assert tomllib.loads(config.read_text(encoding="utf-8"))["projects"][
+        "/tmp/worktree"
+    ]["trust_level"] == "trusted"
+
+
+def test_host_config_second_run_is_idempotent_without_accounts(
+    tmp_path: Path,
+) -> None:
+    missing = tmp_path / "missing"
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    config = codex_home / "config.toml"
+    config.write_text('model = "gpt"\n', encoding="utf-8")
+    env = os.environ.copy()
+    env["CODEX_HOME"] = str(codex_home)
+
+    first = run_pretrust("/tmp/worktree", missing, env=env)
+    after_first = config.read_bytes()
+    second = run_pretrust("/tmp/worktree", missing, env=env)
+
+    assert first.returncode == 0
+    assert second.returncode == 0
+    assert config.read_bytes() == after_first
+    assert "already trusted" in second.stdout
+    assert "Summary: 0 added, 0 updated, 1 already trusted" in second.stdout
+
+
+def test_account_and_host_configs_are_both_trusted(tmp_path: Path) -> None:
+    accounts_dir = tmp_path / "accounts"
+    account_config = make_config(accounts_dir, "primary", b'model = "account"\n')
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    host_config = codex_home / "config.toml"
+    host_config.write_text('model = "host"\n', encoding="utf-8")
+    env = os.environ.copy()
+    env["CODEX_HOME"] = str(codex_home)
+
+    result = run_pretrust("/tmp/worktree", accounts_dir, env=env)
+
+    assert result.returncode == 0
+    assert result.stdout.count("trusted (added)") == 2
+    assert "Summary: 2 added, 0 updated, 0 already trusted" in result.stdout
+    for config in (account_config, host_config):
+        assert tomllib.loads(config.read_text(encoding="utf-8"))["projects"][
+            "/tmp/worktree"
+        ]["trust_level"] == "trusted"
+
+
+def test_absent_accounts_and_host_config_are_informational_without_creation(
+    tmp_path: Path,
+) -> None:
+    missing = tmp_path / "missing"
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    config = codex_home / "config.toml"
+    env = os.environ.copy()
+    env["CODEX_HOME"] = str(codex_home)
+
+    result = run_pretrust("/tmp/worktree", missing, env=env)
 
     assert result.returncode == 0
     assert "nothing to pre-trust" in result.stdout
+    assert "host config not found" in result.stdout
     assert "Summary: 0 added, 0 updated, 0 already trusted" in result.stdout
+    assert not config.exists()
 
 
 def test_relative_worktree_path_is_rejected(tmp_path: Path) -> None:

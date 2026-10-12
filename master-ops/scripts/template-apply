@@ -124,6 +124,39 @@ def substitute(text: str, values: dict[str, str]) -> str:
     return out
 
 
+def missing_placeholders(
+    template_root: Path,
+    actions: list[dict],
+    values: dict[str, str],
+) -> dict[str, list[str]]:
+    """Per documented key, the relative paths of planned files that need it
+    but have no supplied value. Skipped, refused, and error entries are not
+    read; a skip-substitute path is never read for tokens either."""
+    found: dict[str, list[str]] = {}
+    for item in actions:
+        if item["action"] != "planned":
+            continue
+        rel = item["path"]
+        if rel in SKIP_SUBSTITUTE_PATHS:
+            continue
+        src = resolved_under(template_root, rel)
+        if src is None or not src.is_file():
+            continue
+        text = src.read_text(encoding="utf-8")
+        for key in PLACEHOLDERS:
+            name = key[2:-2]
+            if key in text and name not in values:
+                found.setdefault(name, []).append(rel)
+    return {key[2:-2]: found[key[2:-2]] for key in PLACEHOLDERS if key[2:-2] in found}
+
+
+def format_missing(missing: dict[str, list[str]]) -> str:
+    lines = ["missing placeholders (write refused):"]
+    for name, paths in missing.items():
+        lines.append(f"  {name}: {', '.join(paths)}")
+    return "\n".join(lines) + "\n"
+
+
 def plan_actions(
     template_root: Path,
     ops_root: Path,
@@ -455,18 +488,33 @@ def main(argv: list[str] | None = None) -> int:
 
     actions = plan_actions(template_root, ops_root, manifest, args.attempt)
 
+    try:
+        missing = missing_placeholders(template_root, actions, values)
+    except (OSError, UnicodeDecodeError) as exc:
+        sys.stderr.write(f"template-apply: cannot read template source: {exc}\n")
+        return 2
+    missing_text = format_missing(missing) if missing else ""
+
     # Always surface the plan before any write. Human mode prints it on stdout;
     # JSON mode keeps stdout machine-readable and puts the plan on stderr when
     # a write pass will follow.
     plan_text = format_plan(actions)
     if args.json:
         if not args.write:
-            json.dump({"phase": "dry-run", "actions": actions}, sys.stdout, indent=2)
+            payload = {"phase": "dry-run", "actions": actions, "missing_placeholders": missing}
+            json.dump(payload, sys.stdout, indent=2)
             sys.stdout.write("\n")
         else:
             sys.stderr.write(plan_text)
+            if missing:
+                sys.stderr.write(missing_text)
     else:
         sys.stdout.write(plan_text)
+        if missing:
+            if args.write:
+                sys.stderr.write(missing_text)
+            else:
+                sys.stdout.write(missing_text)
 
     if plan_has_errors(actions):
         # Missing or invalid manifest entries are apply errors, not a clean plan.
@@ -486,6 +534,12 @@ def main(argv: list[str] | None = None) -> int:
         # Attempt-only dry-run that includes a refused path: exit 1 so tests
         # can assert the refusal status as a number.
         return 1
+
+    if missing:
+        # A write that would ship unsubstituted placeholders is the same
+        # could-not-decide status template-check already uses: exit 2, and no
+        # write happens, not even the confirmation prompt.
+        return 2
 
     if not args.write:
         return 0

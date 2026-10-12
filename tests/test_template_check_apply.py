@@ -61,6 +61,24 @@ def _seed_ops_from_manifest(ops: Path, *, drop: list[str] | None = None) -> None
         shutil.copy2(MANIFEST, ops / "MANIFEST.json")
 
 
+def _full_placeholders(ops: Path) -> list[str]:
+    """--placeholder args for every documented key except TEMPLATE_VERSION,
+    which template-apply defaults from the template's own TEMPLATE-VERSION."""
+    pairs = {
+        "WORKSPACE_NAME": "fixture",
+        "WORKSPACE_ROOT": "/tmp/ws",
+        "OPS_REPO": str(ops),
+        "MONITOR_NS": "fixture",
+        "MODEL_ID": "test-model",
+        "REPO_LIST": "none",
+        "RUNTIME_ROOT": str(REPO_ROOT),
+    }
+    args: list[str] = []
+    for key, value in pairs.items():
+        args.extend(["--placeholder", f"{key}={value}"])
+    return args
+
+
 def test_template_check_install_manifest_set_on_current_shape(tmp_path: Path):
     ops = tmp_path / "ops"
     ops.mkdir()
@@ -378,6 +396,7 @@ def test_template_apply_skips_living_records_even_when_claimed(tmp_path: Path):
             "--template",
             str(SKELETON),
             "--json",
+            *_full_placeholders(ops),
         ],
     )
     assert result.returncode == 0, result.stderr + result.stdout
@@ -398,21 +417,8 @@ def test_template_apply_skips_living_records_even_when_claimed(tmp_path: Path):
             "--write",
             "--confirm-input",
             "apply",
-            "--placeholder",
-            "WORKSPACE_NAME=fixture",
-            "--placeholder",
-            "WORKSPACE_ROOT=/tmp/ws",
-            "--placeholder",
-            f"OPS_REPO={ops}",
-            "--placeholder",
-            "MONITOR_NS=fixture",
-            "--placeholder",
-            "MODEL_ID=test-model",
-            "--placeholder",
-            "REPO_LIST=none",
-            "--placeholder",
-            f"RUNTIME_ROOT={REPO_ROOT}",
             "--json",
+            *_full_placeholders(ops),
         ],
     )
     assert write.returncode == 0, write.stderr + write.stdout
@@ -444,11 +450,13 @@ def test_template_apply_clean_write_after_confirm(tmp_path: Path):
             "--template",
             str(SKELETON),
             "--json",
+            *_full_placeholders(ops),
         ],
     )
     assert dry.returncode == 0, dry.stderr
     dry_payload = json.loads(dry.stdout)
     assert dry_payload["phase"] == "dry-run"
+    assert dry_payload["missing_placeholders"] == {}
     planned = [a for a in dry_payload["actions"] if a["action"] == "planned"]
     assert planned, "expected at least one planned template-layer write"
 
@@ -463,21 +471,8 @@ def test_template_apply_clean_write_after_confirm(tmp_path: Path):
             "--write",
             "--confirm-input",
             "apply",
-            "--placeholder",
-            f"WORKSPACE_ROOT={tmp_path / 'ws'}",
-            "--placeholder",
-            f"OPS_REPO={ops}",
-            "--placeholder",
-            "WORKSPACE_NAME=fixture",
-            "--placeholder",
-            "MONITOR_NS=fixture",
-            "--placeholder",
-            "MODEL_ID=test-model",
-            "--placeholder",
-            "REPO_LIST=none",
-            "--placeholder",
-            f"RUNTIME_ROOT={REPO_ROOT}",
             "--json",
+            *_full_placeholders(ops),
         ],
     )
     assert write.returncode == 0, write.stderr + write.stdout
@@ -528,9 +523,11 @@ def test_template_apply_declined_confirmation_writes_nothing(tmp_path: Path):
             "--write",
             "--confirm-input",
             "nope",
+            *_full_placeholders(ops),
         ],
     )
     assert result.returncode == 2
+    assert "confirmation declined" in result.stderr
     assert list(ops.iterdir()) == []
 
 
@@ -832,6 +829,125 @@ def test_frame_hygiene_guards_use_explicit_template_and_shared_skeleton_name():
     assert "basename" not in harness[harness.index("# --- Tracker check ---") : harness.index("# --- Template currency check ---")]
     assert 'SKELETON_DIR="master"$\'-\'"ops"' in spawn
     assert 'local ade_clone_path="$sandbox_dir/$ADE_REPO_NAME"' in spawn
+
+
+def test_template_apply_missing_placeholder_blocks_dry_run_and_write(tmp_path: Path):
+    template = tmp_path / "template"
+    ops = tmp_path / "ops"
+    template.mkdir()
+    ops.mkdir()
+    (template / "TEMPLATE-VERSION").write_text("v0.0.0\n", encoding="utf-8")
+    (template / "scripts").mkdir()
+    (template / "scripts" / "dispatch").write_text("OPS={{OPS_REPO}}\n", encoding="utf-8")
+    (template / "MANIFEST.json").write_text(
+        json.dumps({"template_version": "v0.0.0", "files": ["scripts/dispatch"]}) + "\n",
+        encoding="utf-8",
+    )
+
+    dry = _run(
+        [
+            sys.executable,
+            str(TEMPLATE_APPLY),
+            "--ops",
+            str(ops),
+            "--template",
+            str(template),
+            "--json",
+        ],
+    )
+    assert dry.returncode == 2, dry.stdout + dry.stderr
+    payload = json.loads(dry.stdout)
+    assert payload["missing_placeholders"] == {"OPS_REPO": ["scripts/dispatch"]}
+
+    write = _run(
+        [
+            sys.executable,
+            str(TEMPLATE_APPLY),
+            "--ops",
+            str(ops),
+            "--template",
+            str(template),
+            "--write",
+            "--confirm-input",
+            "apply",
+        ],
+    )
+    assert write.returncode == 2, write.stdout + write.stderr
+    assert "OPS_REPO" in write.stderr
+    assert "scripts/dispatch" in write.stderr
+    assert not (ops / "scripts" / "dispatch").exists()
+
+
+def test_template_apply_missing_placeholder_reports_only_unsupplied_keys(tmp_path: Path):
+    template = tmp_path / "template"
+    ops = tmp_path / "ops"
+    template.mkdir()
+    ops.mkdir()
+    (template / "TEMPLATE-VERSION").write_text("v0.0.0\n", encoding="utf-8")
+    (template / "card.md").write_text(
+        "name={{WORKSPACE_NAME}} ops={{OPS_REPO}}\n", encoding="utf-8"
+    )
+    (template / "MANIFEST.json").write_text(
+        json.dumps({"template_version": "v0.0.0", "files": ["card.md"]}) + "\n",
+        encoding="utf-8",
+    )
+
+    dry = _run(
+        [
+            sys.executable,
+            str(TEMPLATE_APPLY),
+            "--ops",
+            str(ops),
+            "--template",
+            str(template),
+            "--placeholder",
+            "WORKSPACE_NAME=fixture",
+            "--json",
+        ],
+    )
+    assert dry.returncode == 2, dry.stdout + dry.stderr
+    payload = json.loads(dry.stdout)
+    assert payload["missing_placeholders"] == {"OPS_REPO": ["card.md"]}
+
+
+def test_template_apply_full_placeholder_set_writes_clean(tmp_path: Path):
+    template = tmp_path / "template"
+    ops = tmp_path / "ops"
+    template.mkdir()
+    ops.mkdir()
+    (template / "TEMPLATE-VERSION").write_text("v0.0.0\n", encoding="utf-8")
+    (template / "card.md").write_text(
+        "name={{WORKSPACE_NAME}} ops={{OPS_REPO}}\n", encoding="utf-8"
+    )
+    (template / "MANIFEST.json").write_text(
+        json.dumps({"template_version": "v0.0.0", "files": ["card.md"]}) + "\n",
+        encoding="utf-8",
+    )
+
+    write = _run(
+        [
+            sys.executable,
+            str(TEMPLATE_APPLY),
+            "--ops",
+            str(ops),
+            "--template",
+            str(template),
+            "--write",
+            "--confirm-input",
+            "apply",
+            "--placeholder",
+            "WORKSPACE_NAME=fixture",
+            "--placeholder",
+            f"OPS_REPO={ops}",
+            "--json",
+        ],
+    )
+    assert write.returncode == 0, write.stdout + write.stderr
+    payload = json.loads(write.stdout)
+    assert payload["phase"] == "write"
+    written_text = (ops / "card.md").read_text(encoding="utf-8")
+    assert "{{" not in written_text
+    assert written_text == f"name=fixture ops={ops}\n"
 
 
 def test_onboarding_docs_name_template_root_and_placeholder_flags():

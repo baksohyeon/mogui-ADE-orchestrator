@@ -16,6 +16,8 @@ Where we are: the ops repository skeleton exists, and the earlier steps recorded
 
 2. **Placeholder rule:** every `{{...}}` token in the ops repository must receive a confirmed or measured value in this step. The workspace session card is ordinary filled content — do not leave tokens in `workspace-card/`, do not special-case the assertion to ignore it, and **do not record a deferral** for any remaining token. An undecided value stops this step; ask, then fill. Never delete a placeholder to silence a check.
 
+`scripts/template-apply` enforces the rule itself: a write refuses, before the confirmation prompt, while any of `{{WORKSPACE_NAME}}`, `{{WORKSPACE_ROOT}}`, `{{OPS_REPO}}`, `{{MONITOR_NS}}`, `{{MODEL_ID}}`, `{{REPO_LIST}}`, `{{RUNTIME_ROOT}}`, or `{{TEMPLATE_VERSION}}` is still unsupplied and a planned file carries it.
+
 3. Deploy the filled session card to the workspace root under both host-recognized names (overwrite both root copies; the ops repository files remain canonical). This is a Run action that happens after fill and before Verify — Verify's session-card `cmp` expects both root files to already exist:
 
 ```console

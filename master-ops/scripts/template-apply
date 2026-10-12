@@ -5,7 +5,11 @@ Always dry-runs first: prints the exact file list and the reason for each entry.
 A write pass requires an interactive confirmation phrase. There is no --yes.
 
 Instance-owned paths are refused by name:
-  docs/lineage/, docs/runbooks/role-state.md, .beads/, config/, contracts/,
+  docs/lineage/, AGENTS.md, CLAUDE.md, docs/MASTER-OPERATIONS.md,
+  docs/decisions/closed-decisions-and-facts.md,
+  docs/runbooks/boot-comparison-set.md, docs/runbooks/role-state.md,
+  docs/runbooks/succession-boot-card.md, scripts/compaction-probe.sh,
+  scripts/harness-selfcheck.sh, .beads/, config/, contracts/,
   and anything the manifest does not claim.
 
 Per-file outcomes:
@@ -33,6 +37,7 @@ if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 from template_common import (  # noqa: E402
     PLACEHOLDERS,
+    SKIP_SUBSTITUTE_PATHS,
     is_instance_owned,
 )
 
@@ -311,7 +316,8 @@ def apply_planned(
                 f"destination became instance-owned or escaped before write: {rel}"
             )
         text = src.read_text(encoding="utf-8")
-        text = substitute(text, values)
+        if rel not in SKIP_SUBSTITUTE_PATHS:
+            text = substitute(text, values)
         dest.parent.mkdir(parents=True, exist_ok=True)
         # Atomic replace within the destination directory so a crash mid-write
         # does not leave a truncated target. Preserve destination mode when the

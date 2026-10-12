@@ -33,19 +33,40 @@ INSTANCE_OWNED_PREFIXES = (
 )
 INSTANCE_OWNED_EXACT = frozenset(
     {
+        "AGENTS.md",
+        "CLAUDE.md",
+        "docs/MASTER-OPERATIONS.md",
+        "docs/decisions/closed-decisions-and-facts.md",
+        "docs/runbooks/boot-comparison-set.md",
         "docs/runbooks/role-state.md",
+        "docs/runbooks/succession-boot-card.md",
+        "scripts/compaction-probe.sh",
+        "scripts/harness-selfcheck.sh",
     }
 )
 
+# Built without a literal "{{NAME}}" substring so template-apply substitution
+# cannot rewrite this registry when the file itself is copied.
+def _token(name: str) -> str:
+    return "{{" + name + "}}"
+
+
 PLACEHOLDERS = (
-    "{{WORKSPACE_NAME}}",
-    "{{WORKSPACE_ROOT}}",
-    "{{OPS_REPO}}",
-    "{{MONITOR_NS}}",
-    "{{MODEL_ID}}",
-    "{{REPO_LIST}}",
-    "{{RUNTIME_ROOT}}",
-    "{{TEMPLATE_VERSION}}",
+    _token("WORKSPACE_NAME"),
+    _token("WORKSPACE_ROOT"),
+    _token("OPS_REPO"),
+    _token("MONITOR_NS"),
+    _token("MODEL_ID"),
+    _token("REPO_LIST"),
+    _token("RUNTIME_ROOT"),
+    _token("TEMPLATE_VERSION"),
+)
+
+# Copied byte-identical. Substitution would destroy PLACEHOLDERS.
+SKIP_SUBSTITUTE_PATHS = frozenset(
+    {
+        "scripts/template_common.py",
+    }
 )
 
 

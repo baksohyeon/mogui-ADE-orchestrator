@@ -19,6 +19,24 @@ SKELETON = REPO_ROOT / "master-ops"
 TEMPLATE_CHECK = SKELETON / "scripts" / "template-check"
 TEMPLATE_APPLY = SKELETON / "scripts" / "template-apply"
 MANIFEST = SKELETON / "MANIFEST.json"
+LIVING_RECORDS = (
+    "AGENTS.md",
+    "CLAUDE.md",
+    "docs/MASTER-OPERATIONS.md",
+    "docs/decisions/closed-decisions-and-facts.md",
+    "docs/runbooks/boot-comparison-set.md",
+    "docs/runbooks/role-state.md",
+    "docs/runbooks/succession-boot-card.md",
+    "scripts/compaction-probe.sh",
+    "scripts/harness-selfcheck.sh",
+)
+
+
+def _seed_living_records(ops: Path, marker: str = "keep") -> None:
+    for rel in LIVING_RECORDS:
+        dest = ops / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(f"{marker}:{rel}\n", encoding="utf-8")
 
 
 def _run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
@@ -347,6 +365,61 @@ def test_template_apply_refuses_instance_owned_and_unknown(tmp_path: Path):
     assert (ops / "docs" / "runbooks" / "role-state.md").read_text() == "mine\n"
 
 
+def test_template_apply_skips_living_records_even_when_claimed(tmp_path: Path):
+    ops = tmp_path / "ops"
+    ops.mkdir()
+    _seed_living_records(ops, marker="mine")
+    result = _run(
+        [
+            sys.executable,
+            str(TEMPLATE_APPLY),
+            "--ops",
+            str(ops),
+            "--template",
+            str(SKELETON),
+            "--json",
+        ],
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    payload = json.loads(result.stdout)
+    actions = {a["path"]: a["action"] for a in payload["actions"]}
+    for rel in LIVING_RECORDS:
+        assert actions[rel] == "skipped-as-instance-owned", rel
+        assert (ops / rel).read_text(encoding="utf-8") == f"mine:{rel}\n"
+
+    write = _run(
+        [
+            sys.executable,
+            str(TEMPLATE_APPLY),
+            "--ops",
+            str(ops),
+            "--template",
+            str(SKELETON),
+            "--write",
+            "--confirm-input",
+            "apply",
+            "--placeholder",
+            "WORKSPACE_NAME=fixture",
+            "--placeholder",
+            "WORKSPACE_ROOT=/tmp/ws",
+            "--placeholder",
+            f"OPS_REPO={ops}",
+            "--placeholder",
+            "MONITOR_NS=fixture",
+            "--placeholder",
+            "MODEL_ID=test-model",
+            "--placeholder",
+            "REPO_LIST=none",
+            "--placeholder",
+            f"RUNTIME_ROOT={REPO_ROOT}",
+            "--json",
+        ],
+    )
+    assert write.returncode == 0, write.stderr + write.stdout
+    for rel in LIVING_RECORDS:
+        assert (ops / rel).read_text(encoding="utf-8") == f"mine:{rel}\n"
+
+
 def test_template_apply_clean_write_after_confirm(tmp_path: Path):
     ops = tmp_path / "ops"
     ops.mkdir()
@@ -360,6 +433,7 @@ def test_template_apply_clean_write_after_confirm(tmp_path: Path):
     (ops / "docs" / "lineage" / "README.md").write_text("lineage-readme\n", encoding="utf-8")
     (ops / "docs" / "runbooks").mkdir(parents=True)
     (ops / "docs" / "runbooks" / "role-state.md").write_text("role-keep\n", encoding="utf-8")
+    _seed_living_records(ops, marker="founded")
 
     dry = _run(
         [
@@ -415,7 +489,13 @@ def test_template_apply_clean_write_after_confirm(tmp_path: Path):
     assert (ops / "scripts" / "template-check").is_file()
     # Instance-owned records preserved.
     assert (ops / "docs" / "lineage" / "MASTER-LINEAGE.md").read_text() == "keep-me\n"
-    assert (ops / "docs" / "runbooks" / "role-state.md").read_text() == "role-keep\n"
+    assert (ops / "docs" / "runbooks" / "role-state.md").read_text() == "founded:docs/runbooks/role-state.md\n"
+    for rel in LIVING_RECORDS:
+        assert (ops / rel).read_text(encoding="utf-8") == f"founded:{rel}\n"
+    token_registry = (ops / "scripts" / "template_common.py").read_text(encoding="utf-8")
+    assert "_token(" + '"WORKSPACE_NAME")' in token_registry
+    assert "{{WORKSPACE_NAME}}" not in token_registry
+    assert "WORKSPACE_NAME=fixture" not in token_registry
 
     # Re-check is clean against template for claimed paths that were written.
     check = _run(

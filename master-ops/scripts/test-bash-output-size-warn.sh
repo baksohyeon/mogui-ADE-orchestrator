@@ -2,7 +2,13 @@
 # Small result: silent. Large stdout: one line naming the size. Malformed input: silent, exit 0.
 set -u
 H="$(cd "$(dirname "$0")" && pwd)/hooks/bash-output-size-warn.sh"; F=0
-SCRATCH_HOME="$(mktemp -d)"; export HOME="$SCRATCH_HOME"; trap 'rm -rf "$SCRATCH_HOME"' EXIT  # the hook appends a fire-log line under ~/.mogui; keep that out of the real home and remove it after
+# Resolve the real python3 before swapping HOME: a mise-managed python3 shim reads mise's own
+# config and install cache from $HOME, and a scratch HOME with neither makes mise install a
+# Python the first time the hook calls python3, landing the install banner in captured output.
+REAL_PYTHON3="$(python3 -c 'import sys; print(sys.executable)')"
+PYTHON_SHIM_DIR="$(mktemp -d)"; mkdir -p "$PYTHON_SHIM_DIR/bin"; ln -s "$REAL_PYTHON3" "$PYTHON_SHIM_DIR/bin/python3"
+export PATH="$PYTHON_SHIM_DIR/bin:$PATH"
+SCRATCH_HOME="$(mktemp -d)"; export HOME="$SCRATCH_HOME"; trap 'rm -rf "$SCRATCH_HOME" "$PYTHON_SHIM_DIR"' EXIT  # the hook appends a fire-log line under ~/.mogui; keep that out of the real home and remove it after
 SCRATCH_FIRE_LOG="$SCRATCH_HOME/scratch-hook-fire.jsonl"
 export MOGUI_HOOK_FIRE_LOG="$SCRATCH_FIRE_LOG"
 last_verdict() {

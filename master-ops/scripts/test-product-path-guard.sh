@@ -384,7 +384,12 @@ expect_blocked sed-dash-e-write-command-not-admitted run_bash "sed -e 'w $produc
 expect_verdict block sed-dash-e-write-command-not-admitted
 expect_blocked sed-dash-f-external-script-not-admitted run_bash "sed -f script.sed $product/in.txt" "$ops"
 expect_verdict block sed-dash-f-external-script-not-admitted
-expect_allowed sed-dash-n-print-range-passes run_bash "sed -n '1,5p' $product/in.txt" "$ops"
+# A relative target with a matching working directory, not an absolute path under $product: the
+# scratch $product directory name is a random mktemp suffix, and the guard's sed/awk unsafe-command
+# check scans every non-flag operand (including a file path) for a bare w, W, or e letter between
+# non-letters. That suffix occasionally contains one, which once flipped this case to BLOCKED on a
+# CI runner (rc 2) though it passed locally and on rerun.
+expect_allowed sed-dash-n-print-range-passes run_bash "sed -n '1,5p' in.txt" "$product"
 expect_verdict pass sed-dash-n-print-range-passes
 expect_blocked heredoc-comment-not-misparsed-as-operator run_bash "echo hi # see <<EOF below
 rm -rf $product_real/file

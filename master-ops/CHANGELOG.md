@@ -91,8 +91,6 @@ Adds `docs/reports/upgrade-rehearsal-2026-10-07.md`: a full dry-run-then-write r
 
 ## v0.5.239
 
-Release v0.5.239 (2026-10-07): `master-ops/TEMPLATE-VERSION` and `master-ops/MANIFEST.json` move to `v0.5.239` alongside the changelog fold, satisfying the `changelog-fragment-check` gate for a release commit that touches `master-ops/` outside `changelog.d/` and `CHANGELOG.md`.
-
 Release v0.5.239 (2026-10-07): `master-ops/TEMPLATE-VERSION` and `master-ops/MANIFEST.json` move to `v0.5.239` alongside the changelog fold, satisfying the `changelog-fragment-check` gate for a release commit that touches `master-ops/` outside `changelog.d/`.
 
 `dispatch` now runs `scripts/claude-worker-pretrust` before a claude launch, the same way it already does for codex and cursor: the script writes `hasTrustDialogAccepted: true` into the `projects["<absolute worktree>"]` entry of `CLAUDE_CONFIG_PATH` (defaulting to `~/.claude.json`), measured against a scratch install of Claude Code accepting its own folder-trust dialog, and `HOOK_TRUST_MARKERS` now recognizes that dialog's wording ("Quick safety check...", "pre-approves ... tool permissions...") so a pane still carrying it classifies as hook-trust instead of reporting a false delivery success.

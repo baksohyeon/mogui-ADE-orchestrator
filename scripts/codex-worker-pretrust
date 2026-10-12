@@ -54,9 +54,17 @@ else
   printf 'INFO accounts directory not found: %s\n' "$accounts_dir"
 fi
 
-host_config="${CODEX_HOME:-$HOME/.codex}/config.toml"
-if [[ -f "$host_config" ]]; then
+host_config=""
+if [[ -n "${CODEX_HOME:-}" ]]; then
+  host_config="$CODEX_HOME/config.toml"
+elif [[ -n "${HOME:-}" ]]; then
+  host_config="${HOME:-}/.codex/config.toml"
+fi
+
+if [[ -n "$host_config" && -f "$host_config" ]]; then
   config_files+=("$host_config")
+elif [[ -z "$host_config" ]]; then
+  printf 'INFO Codex host config not found: CODEX_HOME and HOME are unset; not creating it\n'
 else
   printf 'INFO Codex host config not found: %s; not creating it\n' "$host_config"
 fi

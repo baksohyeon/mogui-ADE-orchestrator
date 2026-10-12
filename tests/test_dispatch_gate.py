@@ -890,6 +890,35 @@ def test_r4_registers_verified_job_id(tmp_path: Path) -> None:
     assert _ledger_entries(tmp_path)[-1]["attempt"] == 2
 
 
+def test_register_job_with_contract_sha_refuses_when_ticket_consumed(
+    tmp_path: Path,
+) -> None:
+    """The ticket for this contract was already consumed by the first,
+    sha-less register_job call; its unlink only runs when a contract sha was
+    given (dispatch_gate.py), so the ticket file itself stays on disk. A
+    second call naming that ticket's contract sha must refuse, not crash:
+    the contract-sha-and-ticket branch of _registration_candidate built
+    `matching_pending` with no emptiness guard, unlike its two sibling
+    branches, and indexing it raised IndexError.
+    """
+
+    contract = _contract(tmp_path, "second registration with ticket consumed")
+    gate = _gate(tmp_path, now=1_000)
+    gate.check(DispatchRequest("codex", contract, est_input_chars=10_000, n_agents=1))
+
+    first = gate.register_job("job-first", lambda job_id: job_id == "job-first")
+    assert first.allow is True
+
+    second = gate.register_job(
+        "job-second",
+        lambda job_id: job_id == "job-second",
+        contract_sha=_sha256(contract),
+    )
+
+    assert second.allow is False
+    assert second.reason == ReasonCode.NO_MATCHING_TICKET
+
+
 def test_register_job_round_trips_worker_pid_and_pane_through_the_ledger(
     tmp_path: Path,
 ) -> None:

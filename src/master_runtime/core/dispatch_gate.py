@@ -617,6 +617,12 @@ class DispatchGate:
                     if entry.get("contract_sha") == selected_ticket.contract_sha
                     and entry.get("runtime") == selected_ticket.runtime
                 )
+                if not matching_pending:
+                    return None, GateDecision(
+                        False,
+                        ReasonCode.NO_MATCHING_TICKET,
+                        message=_candidate_sha_message(matching_tickets),
+                    )
             else:
                 if all_tickets:
                     return None, GateDecision(

@@ -28,10 +28,10 @@ When the ops repository already has the script:
 
 2. **Read the report**: the report states which set it produced (`install-manifest` alone, or `template-compare` when `--template` was given). Record installed version (or "undeterminable" when `MANIFEST.json` is absent), template version, absent required paths, and unknown present paths. A missing manifest is the expected shape for pre-manifest installs — continue by content presence, do not invent a version.
 
-3. **Dry-run apply (always first)**: print the exact file list and the reason for each path. No write yet.
+3. **Dry-run apply (always first)**: print the exact file list and the reason for each path. No write yet. Pass the same eight measured `--placeholder` values as step 5; a dry run that omits them prints the missing-placeholder report and exits 2 by design, since a planned file still carries each unsupplied token.
 
 ```console
-"{{RUNTIME_ROOT}}/master-ops/scripts/template-apply" --ops "{{OPS_REPO}}" --template "{{RUNTIME_ROOT}}/master-ops"
+"{{RUNTIME_ROOT}}/master-ops/scripts/template-apply" --ops "{{OPS_REPO}}" --template "{{RUNTIME_ROOT}}/master-ops" --placeholder WORKSPACE_NAME="{{WORKSPACE_NAME}}" --placeholder WORKSPACE_ROOT="{{WORKSPACE_ROOT}}" --placeholder OPS_REPO="{{OPS_REPO}}" --placeholder MONITOR_NS="{{MONITOR_NS}}" --placeholder MODEL_ID="{{MODEL_ID}}" --placeholder REPO_LIST="{{REPO_LIST}}" --placeholder RUNTIME_ROOT="{{RUNTIME_ROOT}}" --placeholder TEMPLATE_VERSION="{{TEMPLATE_VERSION}}"
 ```
 
 4. **Owner confirmation**: show the dry-run plan in the owner's language. Require an explicit confirmation before any write. There is no silent apply and no flag that skips confirmation on any run. If the owner declines, stop and leave the report.

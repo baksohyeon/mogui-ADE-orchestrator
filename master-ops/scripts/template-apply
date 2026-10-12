@@ -129,9 +129,13 @@ def missing_placeholders(
     actions: list[dict],
     values: dict[str, str],
 ) -> dict[str, list[str]]:
-    """Per documented key, the relative paths of planned files that need it
-    but have no supplied value. Skipped, refused, and error entries are not
-    read; a skip-substitute path is never read for tokens either."""
+    """Per documented key, the relative paths of planned files whose
+    substituted text still carries that token: the gap is read from the
+    rendered text, since a supplied value can itself hold an unsubstituted
+    key's placeholder and `substitute()` leaves that in place. Skipped,
+    refused, and error entries are not read; a skip-substitute path is never
+    read for tokens either, since it is copied byte-for-byte and never
+    substituted."""
     found: dict[str, list[str]] = {}
     for item in actions:
         if item["action"] != "planned":
@@ -142,11 +146,10 @@ def missing_placeholders(
         src = resolved_under(template_root, rel)
         if src is None or not src.is_file():
             continue
-        text = src.read_text(encoding="utf-8")
+        rendered = substitute(src.read_text(encoding="utf-8"), values)
         for key in PLACEHOLDERS:
-            name = key[2:-2]
-            if key in text and name not in values:
-                found.setdefault(name, []).append(rel)
+            if key in rendered:
+                found.setdefault(key[2:-2], []).append(rel)
     return {key[2:-2]: found[key[2:-2]] for key in PLACEHOLDERS if key[2:-2] in found}
 
 

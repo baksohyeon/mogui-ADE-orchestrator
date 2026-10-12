@@ -877,6 +877,62 @@ def test_template_apply_missing_placeholder_blocks_dry_run_and_write(tmp_path: P
     assert "scripts/dispatch" in write.stderr
     assert not (ops / "scripts" / "dispatch").exists()
 
+    # Empty stdin, no --confirm-input: proves the missing-key refusal fires
+    # before confirmation is read at all.
+    unconfirmed = _run(
+        [
+            sys.executable,
+            str(TEMPLATE_APPLY),
+            "--ops",
+            str(ops),
+            "--template",
+            str(template),
+            "--write",
+        ],
+        input="",
+    )
+    assert unconfirmed.returncode == 2, unconfirmed.stdout + unconfirmed.stderr
+    assert "OPS_REPO" in unconfirmed.stderr
+    assert "scripts/dispatch" in unconfirmed.stderr
+    assert "Type " not in unconfirmed.stderr
+    assert "no confirmation (EOF)" not in unconfirmed.stderr
+    assert not (ops / "scripts" / "dispatch").exists()
+
+
+def test_template_apply_missing_placeholder_catches_token_reintroduced_by_a_value(
+    tmp_path: Path,
+):
+    # A supplied value can itself carry a documented token. substitute()
+    # replaces placeholders in a fixed key order, so a value equal to a
+    # not-yet-supplied key's token survives into the rendered text.
+    template = tmp_path / "template"
+    ops = tmp_path / "ops"
+    template.mkdir()
+    ops.mkdir()
+    (template / "TEMPLATE-VERSION").write_text("v0.0.0\n", encoding="utf-8")
+    (template / "card.md").write_text("name={{WORKSPACE_NAME}}\n", encoding="utf-8")
+    (template / "MANIFEST.json").write_text(
+        json.dumps({"template_version": "v0.0.0", "files": ["card.md"]}) + "\n",
+        encoding="utf-8",
+    )
+
+    dry = _run(
+        [
+            sys.executable,
+            str(TEMPLATE_APPLY),
+            "--ops",
+            str(ops),
+            "--template",
+            str(template),
+            "--placeholder",
+            "WORKSPACE_NAME={{OPS_REPO}}",
+            "--json",
+        ],
+    )
+    assert dry.returncode == 2, dry.stdout + dry.stderr
+    payload = json.loads(dry.stdout)
+    assert payload["missing_placeholders"] == {"OPS_REPO": ["card.md"]}
+
 
 def test_template_apply_missing_placeholder_reports_only_unsupplied_keys(tmp_path: Path):
     template = tmp_path / "template"

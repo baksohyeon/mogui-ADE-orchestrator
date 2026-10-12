@@ -30,27 +30,45 @@ if [ -z "$glob" ] || [ "$glob" = "$loop_line" ]; then
   echo "FAIL: could not extract the test glob from the documented loop" >&2
   exit 1
 fi
+if ! bash -n -c "$loop_line" 2>/dev/null; then
+  echo "FAIL: the extracted loop line does not parse as valid shell: $loop_line" >&2
+  exit 1
+fi
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 glob_dir=$(dirname "$glob")
 mkdir -p "$work/$glob_dir"
-cat > "$work/$glob_dir/test-a-fails.sh" <<'FIXTURE'
-#!/usr/bin/env bash
-exit 1
-FIXTURE
 cat > "$work/$glob_dir/test-z-passes.sh" <<'FIXTURE'
 #!/usr/bin/env bash
 exit 0
 FIXTURE
 chmod +x "$work/$glob_dir"/test-*.sh
 
+# Positive control: two passing fixtures (the failing one is added only below) must report exactly
+# 0, so a loop sabotaged to always fail (an unconditional failed=1, say) has somewhere to show it.
+cp "$work/$glob_dir/test-z-passes.sh" "$work/$glob_dir/test-y-also-passes.sh"
 (cd "$work" && eval "$loop_line")
 rc=$?
-if [ "$rc" -ne 0 ]; then
+if [ "$rc" -eq 0 ]; then
+  ok "documented loop reports success with two passing fixtures (exit $rc)"
+else
+  fail "documented loop reported failure with no failing fixture present (exit $rc)"
+fi
+rm -f "$work/$glob_dir/test-y-also-passes.sh"
+
+cat > "$work/$glob_dir/test-a-fails.sh" <<'FIXTURE'
+#!/usr/bin/env bash
+exit 1
+FIXTURE
+chmod +x "$work/$glob_dir/test-a-fails.sh"
+
+(cd "$work" && eval "$loop_line")
+rc=$?
+if [ "$rc" -eq 1 ]; then
   ok "documented loop reports failure with one failing fixture among two (exit $rc)"
 else
-  fail "documented loop reported success with a failing fixture present (exit $rc)"
+  fail "documented loop reported exit $rc, expected exactly 1, with a failing fixture present"
 fi
 
 # failability: the pre-fix form only ever reported the last file's own exit status; reverting to

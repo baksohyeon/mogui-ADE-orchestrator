@@ -492,10 +492,9 @@ def test_template_apply_clean_write_after_confirm(tmp_path: Path):
     assert (ops / "docs" / "runbooks" / "role-state.md").read_text() == "founded:docs/runbooks/role-state.md\n"
     for rel in LIVING_RECORDS:
         assert (ops / rel).read_text(encoding="utf-8") == f"founded:{rel}\n"
-    token_registry = (ops / "scripts" / "template_common.py").read_text(encoding="utf-8")
-    assert "_token(" + '"WORKSPACE_NAME")' in token_registry
-    assert "{{WORKSPACE_NAME}}" not in token_registry
-    assert "WORKSPACE_NAME=fixture" not in token_registry
+    assert (ops / "scripts" / "template_common.py").read_bytes() == (
+        SKELETON / "scripts" / "template_common.py"
+    ).read_bytes()
 
     # Re-check is clean against template for claimed paths that were written.
     check = _run(

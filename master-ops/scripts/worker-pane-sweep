@@ -42,9 +42,14 @@ while IFS= read -r h; do
   [ -n "$SELF_HANDLE" ] && [ "$h" = "$SELF_HANDLE" ] && { printf '%-6s %-13s %s  %s\n' "self" "coordinator" "${h:0:18}" "this session"; continue; }
   frame=$(orca terminal read --terminal "$h" 2>/dev/null | tail -25)
   title=$(orca terminal list 2>/dev/null | grep -F "$h" | head -1 | sed "s|^$h *||" | cut -c1-38)
+  # The foreground is everything from the pane's last prompt line onward; a marker above that
+  # line is scrollback, already resolved. Measured 2026-09-30: a stale codex hook-trust modal
+  # sitting above an idle shell prompt still read as a live approval prompt.
+  last_prompt_line=$(printf '%s\n' "$frame" | grep -nE '❯[[:space:]]*$|^[[:space:]]*➜|\$ $' | tail -1 | cut -d: -f1)
+  foreground=$(printf '%s\n' "$frame" | tail -n "+${last_prompt_line:-1}")
   # Strip the runtime status line before matching. It carries "always-approve", which is the
   # opposite of a prompt, and the first draft flagged every pane that could not prompt at all.
-  lower=$(printf '%s' "$frame" | tr '[:upper:]' '[:lower:]' | sed 's/always-approve//g; s/bypass permissions//g')
+  lower=$(printf '%s' "$foreground" | tr '[:upper:]' '[:lower:]' | sed 's/always-approve//g; s/bypass permissions//g')
 
   verdict=unknown
   if printf '%s' "$lower" | grep -qE "quota reached|resets in [0-9]|rate limit|usage limit|upgrade your subscription"; then

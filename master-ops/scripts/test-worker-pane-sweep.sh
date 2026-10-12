@@ -47,8 +47,30 @@ cp "$MARKERS" "$T/markers.bak"
 printf 'Capitalised Test Marker\n' >> "$MARKERS"
 expect "capitalised marker in the file" 'capitalised test marker' approval 1
 cp "$T/markers.bak" "$MARKERS"
+# Stale scrollback: the modal text is still visible above the fold, but the pane has already
+# moved on to a bare shell prompt. The foreground is the prompt, not the resolved modal above it.
+expect "stale modal above an idle prompt" "$MODAL
+❯ " idle 0
 expect "idle prompt" '❯ ' idle 0
 expect "idle prompt under a status line that says always-approve bypass permissions" 'always-approve bypass permissions
 ❯ ' idle 0
+
+# Failability: a copy that classifies from the whole captured chunk again, instead of the
+# foreground past the last prompt line, must flip the stale-scrollback case back to approval.
+MUTANT="$T/worker-pane-sweep-mutant"
+python3 - "$SWEEP" > "$MUTANT" <<'PY'
+import sys
+s = open(sys.argv[1]).read()
+s = s.replace('printf \'%s\' "$foreground" | tr', 'printf \'%s\' "$frame" | tr', 1)
+sys.stdout.write(s)
+PY
+chmod +x "$MUTANT"
+cp "$MARKERS" "$T/approval-prompt-markers.txt"
+if [ ! -f "$MUTANT" ] || cmp -s "$SWEEP" "$MUTANT"; then
+  fail "failability: mutant not generated"
+else
+  SWEEP="$MUTANT" expect "failability: whole-chunk grep on stale scrollback" "$MODAL
+❯ " approval 1
+fi
 
 [ "$FAILED" -eq 0 ] && echo "worker-pane-sweep: all checks passed" || { echo "worker-pane-sweep: FAILED"; exit 1; }

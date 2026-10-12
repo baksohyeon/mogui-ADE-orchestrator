@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from datetime import date
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -59,6 +60,42 @@ def test_fold_order_three_fragments_two_dates(tmp_path: Path):
     second_result = _run(tmp_path)
     assert second_result.returncode == 0
     assert second_result.stdout.strip() == "0 fragments"
+
+
+def test_release_day_fragment_added_after_fold_rolls_into_next_cut(tmp_path: Path):
+    """A release commit's fold runs, then that same commit also bumps
+    TEMPLATE-VERSION and MANIFEST.json, both outside changelog.d/ and
+    CHANGELOG.md, so changelog-fragment-check requires it to add its own
+    fragment too. That fragment is added after this cut's fold already ran,
+    so it cannot be in this cut by construction, and must come out whole
+    next time: a fold that deletes every fragment it finds, including one
+    dated the release day, would drop it instead of carrying it over.
+    """
+    _seed(tmp_path, {"2026-01-01-alpha.md": "Alpha (2026-01-01):\n\n- did alpha\n"})
+    first = _run(tmp_path)
+    assert first.returncode == 0, first.stderr
+    assert first.stdout.strip() == "1 fragments"
+
+    changelog_d = tmp_path / "master-ops" / "changelog.d"
+    assert list(changelog_d.glob("*.md")) == []
+
+    release_day = date.today().isoformat()
+    release_fragment = changelog_d / f"{release_day}-release-v0-1-0.md"
+    release_fragment.write_text(
+        f"Release v0.1.0 ({release_day}):\n\n- bump TEMPLATE-VERSION and MANIFEST.json\n",
+        encoding="utf-8",
+    )
+
+    after_first_fold = (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert "Release v0.1.0" not in after_first_fold
+
+    second = _run(tmp_path)
+    assert second.returncode == 0, second.stderr
+    assert second.stdout.strip() == "1 fragments"
+    assert not release_fragment.exists()
+
+    after_second_fold = (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert "Release v0.1.0" in after_second_fold
 
 
 def test_empty_directory_prints_zero_and_touches_nothing(tmp_path: Path):

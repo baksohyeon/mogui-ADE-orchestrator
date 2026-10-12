@@ -222,19 +222,20 @@ def test_absent_accounts_and_host_config_are_informational_without_creation(
 
 
 def test_accounts_only_without_home_or_codex_home_is_informational(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path,
 ) -> None:
     accounts_dir = tmp_path / "accounts"
     config = make_config(accounts_dir, "primary", b'model = "account"\n')
-    monkeypatch.delenv("HOME", raising=False)
-    monkeypatch.delenv("CODEX_HOME", raising=False)
+    env = {"PATH": os.environ["PATH"], "CODEX_HOME": ""}
 
-    result = run_pretrust("/tmp/worktree", accounts_dir)
+    result = run_pretrust("/tmp/worktree", accounts_dir, env=env)
 
     assert result.returncode == 0
     assert len(result.stdout.splitlines()) == 3
-    assert "INFO Codex host config not found" in result.stdout
-    assert "/.codex/config.toml" not in result.stdout
+    assert (
+        "INFO Codex host config not found: CODEX_HOME and HOME are unset; "
+        "not creating it"
+    ) in result.stdout
     assert "trusted (added)" in result.stdout
     assert tomllib.loads(config.read_text(encoding="utf-8"))["projects"][
         "/tmp/worktree"

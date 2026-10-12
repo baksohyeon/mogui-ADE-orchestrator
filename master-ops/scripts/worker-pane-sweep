@@ -65,8 +65,8 @@ while IFS= read -r h; do
   fi
 
   if [ "$verdict" = unknown ]; then
-    if printf '%s' "$frame" | grep -qE '^[[:space:]]*➜|\$ $'; then verdict=shell
-    elif printf '%s' "$frame" | grep -qE '❯[[:space:]]*$'; then verdict=idle
+    if printf '%s' "$foreground" | grep -qE '^[[:space:]]*➜|\$ $'; then verdict=shell
+    elif printf '%s' "$foreground" | grep -qE '❯[[:space:]]*$'; then verdict=idle
     fi
   fi
 

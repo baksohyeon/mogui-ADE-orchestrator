@@ -51,6 +51,12 @@ cp "$T/markers.bak" "$MARKERS"
 # moved on to a bare shell prompt. The foreground is the prompt, not the resolved modal above it.
 expect "stale modal above an idle prompt" "$MODAL
 ❯ " idle 0
+# The shell/idle fallback must also classify from the foreground, not the whole chunk: a
+# shell-prompt-shaped line in scrollback (here, between the resolved modal and the live prompt)
+# must not make an idle pane read as a shell pane that lost its agent.
+expect "stale modal, then a shell-prompt-shaped scrollback line, then an idle prompt" "$MODAL
+➜ old-worktree (main)
+❯ " idle 0
 expect "idle prompt" '❯ ' idle 0
 expect "idle prompt under a status line that says always-approve bypass permissions" 'always-approve bypass permissions
 ❯ ' idle 0
@@ -71,6 +77,33 @@ if [ ! -f "$MUTANT" ] || cmp -s "$SWEEP" "$MUTANT"; then
 else
   SWEEP="$MUTANT" expect "failability: whole-chunk grep on stale scrollback" "$MODAL
 ❯ " approval 1
+fi
+
+# Failability: the shell/idle fallback must also read from the foreground. A copy that reverts
+# only the fallback back to the whole chunk must misread the scrollback shell-prompt-shaped line
+# as the pane's own state and report shell instead of idle.
+FALLBACK_MUTANT="$T/worker-pane-sweep-fallback-mutant"
+python3 - "$SWEEP" > "$FALLBACK_MUTANT" <<'PY'
+import sys
+s = open(sys.argv[1]).read()
+old = '''  if [ "$verdict" = unknown ]; then
+    if printf '%s' "$foreground" | grep -qE '^[[:space:]]*➜|\\$ $'; then verdict=shell
+    elif printf '%s' "$foreground" | grep -qE '❯[[:space:]]*$'; then verdict=idle
+    fi
+  fi'''
+new = old.replace('"$foreground"', '"$frame"')
+assert old in s, "fallback block not found"
+assert new != old
+s = s.replace(old, new, 1)
+sys.stdout.write(s)
+PY
+chmod +x "$FALLBACK_MUTANT"
+if [ ! -f "$FALLBACK_MUTANT" ] || cmp -s "$SWEEP" "$FALLBACK_MUTANT"; then
+  fail "failability: fallback mutant not generated"
+else
+  SWEEP="$FALLBACK_MUTANT" expect "failability: whole-chunk fallback on scrollback shell-prompt line" "$MODAL
+➜ old-worktree (main)
+❯ " shell 0
 fi
 
 [ "$FAILED" -eq 0 ] && echo "worker-pane-sweep: all checks passed" || { echo "worker-pane-sweep: FAILED"; exit 1; }

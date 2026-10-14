@@ -1,0 +1,1 @@
+`master-ops/model-tier-policy.json` lists `gpt-6.1-sol` in `tiers.efficient`, right after `gpt-5.6-luna`, so a dispatch naming it records the efficient tier instead of `tier=unknown` with `TIER_UNKNOWN_MODEL`. `gpt-5.6-luna` stays the first efficient gpt id, so the dispatch default for an unnamed codex model is unchanged.

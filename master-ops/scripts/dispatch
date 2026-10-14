@@ -1172,10 +1172,16 @@ fi
 # recording gate denies, Codex pretrust may have prepared a worktree that never
 # receives a worker; dispatch-gate needs an atomic reservation API to close that
 # race. This ordering still keeps dry runs, gate denials, and pretrust failures
-# from spending budget.
-ensure_codex_pretrust "$RUNTIME" "$WORKTREE" || exit 2
-ensure_cursor_pretrust "$RUNTIME" "$WORKTREE" || exit 2
-ensure_claude_pretrust "$RUNTIME" "$WORKTREE" || exit 2
+# from spending budget. A reused pane (--terminal with no --worktree) launches
+# nothing, so there is no worktree to pre-trust; the post-inject hook-trust
+# check still catches a trust dialog on that pane.
+if [ -n "$TERMINAL" ] && [ -z "$WORKTREE" ]; then
+  echo "pre-trust · skipped · pane reused, nothing launched; the post-inject pane check still catches a trust gate"
+else
+  ensure_codex_pretrust "$RUNTIME" "$WORKTREE" || exit 2
+  ensure_cursor_pretrust "$RUNTIME" "$WORKTREE" || exit 2
+  ensure_claude_pretrust "$RUNTIME" "$WORKTREE" || exit 2
+fi
 
 CHK=$("$GATE" "${GATE_ARGS[@]}" 2>/dev/null)
 ALLOW=$(echo "$CHK" | jqf "d['allow']")

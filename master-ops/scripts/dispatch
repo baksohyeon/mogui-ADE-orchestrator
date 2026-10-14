@@ -878,6 +878,10 @@ PY
 # hooks-review modal on.
 codex_hooks_vet_homes() {
   local home hooks_json rc overall=0
+  if [ -z "${WORKTREE#path:}" ]; then
+    echo "hooks-vet: worktree unknown on a reused pane, project hooks unmeasured; not answering the modal"
+    return 1
+  fi
   while IFS= read -r home; do
     hooks_json="$home/hooks.json"
     if [ ! -f "$hooks_json" ]; then
@@ -1279,7 +1283,9 @@ echo "→ $TASK → $TERMINAL ($KIND)"
 # actually clear the menu cannot loop forever; after a real answer the loop
 # gets a fresh budget of up to three more reads. Any other selection menu, a
 # vet failure, or the answer tool's own exit 1 all fall through to the
-# existing exit-3 path.
+# existing exit-3 path. A reused pane with no `--worktree` is never
+# auto-answered: project hooks cannot be measured without a worktree, so
+# codex_hooks_vet_homes fails closed and the vet-failure branch takes over.
 if [ "$RUNTIME" = codex ]; then
   CODEX_START_RC=2
   HOOKS_ANSWERED=0

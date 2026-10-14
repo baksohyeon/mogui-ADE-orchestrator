@@ -98,7 +98,10 @@ delivery, for the coordinator to act and then re-run `worker-wait`.
   sequence `scripts/codex-hooks-review-answer <pane>` runs. Redispatch into
   the cleared pane passes `--terminal <pane>` alone; pre-trust is skipped on
   a reused pane, and the post-inject `hook-trust` check still stops the
-  dispatch if the modal is back. `scripts/dispatch` now does this itself, under dispatch
+  dispatch if the modal is back. With `--terminal <pane>` alone the
+  hooks-review modal is not auto-answered, because the project hooks cannot
+  be measured without a worktree; pass `--worktree path:<absolute-worktree-path>`
+  as well when the auto-answer is wanted. `scripts/dispatch` now does this itself, under dispatch
   authority, whenever `codex_hooks_vet_homes` passes every hook command on
   the host's codex homes; it has no file to read for a plugin hook source,
   so the manual path above is for the vet failing, an answer that did not

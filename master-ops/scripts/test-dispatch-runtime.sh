@@ -1385,7 +1385,7 @@ codex_hooks_vet_wiring_test() (
   printf '%s\n' "$wiring_block" | grep -Fq '"$HOOKS_ANSWER_BIN"' || { echo "FAIL: extracted block does not call HOOKS_ANSWER_BIN" >&2; return 1; }
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-hooks-wiring-test.$$"
-  mkdir -p "$work/fakehome-pass/.codex" "$work/fakehome-fail/.codex"
+  mkdir -p "$work/fakehome-pass/.codex" "$work/fakehome-fail/.codex" "$work/default-worktree"
   trap 'rm -rf "$work"' EXIT
 
   cat > "$work/fakehome-pass/.codex/hooks.json" <<'EOF'
@@ -1433,7 +1433,7 @@ BIN
 
   write_script() {  # outfile  home  wiring-text  [hooks-answer-bin]  [accounts-dir]  [worktree]
     local outfile="$1" home="$2" wiring_text="$3" hooks_answer_bin="${4:-$work/fake-hooks-answer}"
-    local accounts_dir="${5:-$work/no-accounts-dir}" worktree="${6:-}"
+    local accounts_dir="${5:-$work/no-accounts-dir}" worktree="${6:-path:$work/default-worktree}"
     {
       echo 'set -u'
       printf 'export FAKE_MARKER=%s\n' "$work/injected"
@@ -1690,6 +1690,89 @@ EOF
     return 1
   fi
   echo "ok   : failability: a codex_hooks_homes that never resolves WORKTREE answers the modal despite the failing repo-root hooks.json (status=$status)"
+
+  # codex_hooks_vet_homes itself, not the full wiring: a reused pane with no
+  # worktree cannot have its project hooks measured, so it must fail closed
+  # even though $HOME's own hooks.json passes.
+  local vet_homes_script empty_out empty_status wt_out wt_status
+  vet_homes_script="$work/vet-homes-empty.sh"
+  {
+    echo 'set -u'
+    printf '%s\n' "$accounts_fn"
+    printf '%s\n' "$homes_fn"
+    printf '%s\n' "$vet_fn"
+    printf '%s\n' "$vet_homes_fn"
+    printf 'HOME=%s\n' "$work/fakehome-pass"
+    printf 'CODEX_ACCOUNTS_DIR=%s\n' "$work/no-accounts-dir"
+    echo 'WORKTREE='
+    echo 'codex_hooks_vet_homes'
+    echo 'echo RC=$?'
+  } > "$vet_homes_script"
+  empty_out=$(bash "$vet_homes_script" 2>&1)
+  empty_status=$?
+  if [ "$empty_status" -ne 0 ] || ! printf '%s\n' "$empty_out" | grep -q '^RC=1$'; then
+    echo "FAIL: codex_hooks_vet_homes should return 1 when WORKTREE is empty" >&2
+    printf '%s\n' "$empty_out" >&2
+    return 1
+  fi
+  printf '%s\n' "$empty_out" | grep -Fq 'hooks-vet: worktree unknown on a reused pane, project hooks unmeasured; not answering the modal' \
+    || { echo "FAIL: empty-WORKTREE case did not print the unmeasured line" >&2; printf '%s\n' "$empty_out" >&2; return 1; }
+  echo "ok   : codex_hooks_vet_homes returns 1 and prints the unmeasured line when WORKTREE is empty"
+
+  mkdir -p "$work/fixture-worktree"
+  vet_homes_script="$work/vet-homes-worktree.sh"
+  {
+    echo 'set -u'
+    printf '%s\n' "$accounts_fn"
+    printf '%s\n' "$homes_fn"
+    printf '%s\n' "$vet_fn"
+    printf '%s\n' "$vet_homes_fn"
+    printf 'HOME=%s\n' "$work/fakehome-pass"
+    printf 'CODEX_ACCOUNTS_DIR=%s\n' "$work/no-accounts-dir"
+    printf 'WORKTREE=path:%s\n' "$work/fixture-worktree"
+    echo 'codex_hooks_vet_homes'
+    echo 'echo RC=$?'
+  } > "$vet_homes_script"
+  wt_out=$(bash "$vet_homes_script" 2>&1)
+  wt_status=$?
+  if [ "$wt_status" -ne 0 ] || ! printf '%s\n' "$wt_out" | grep -q '^RC=0$'; then
+    echo "FAIL: codex_hooks_vet_homes should still return 0 with a real worktree and only passing homes" >&2
+    printf '%s\n' "$wt_out" >&2
+    return 1
+  fi
+  echo "ok   : codex_hooks_vet_homes returns 0 with WORKTREE set and the same passing fixtures"
+
+  # failability: a mutant that removes the empty-worktree guard treats an
+  # empty WORKTREE the same as a real one and returns 0.
+  mutant_vet_homes_fn=${vet_homes_fn/'  if [ -z "${WORKTREE#path:}" ]; then
+    echo "hooks-vet: worktree unknown on a reused pane, project hooks unmeasured; not answering the modal"
+    return 1
+  fi
+'/''}
+  if [ "$mutant_vet_homes_fn" = "$vet_homes_fn" ]; then
+    echo "FAIL: empty-worktree-guard mutant did not change the source" >&2
+    return 1
+  fi
+  vet_homes_script="$work/vet-homes-mutant.sh"
+  {
+    echo 'set -u'
+    printf '%s\n' "$accounts_fn"
+    printf '%s\n' "$homes_fn"
+    printf '%s\n' "$vet_fn"
+    printf '%s\n' "$mutant_vet_homes_fn"
+    printf 'HOME=%s\n' "$work/fakehome-pass"
+    printf 'CODEX_ACCOUNTS_DIR=%s\n' "$work/no-accounts-dir"
+    echo 'WORKTREE='
+    echo 'codex_hooks_vet_homes'
+    echo 'echo RC=$?'
+  } > "$vet_homes_script"
+  empty_out=$(bash "$vet_homes_script" 2>&1)
+  if ! printf '%s\n' "$empty_out" | grep -q '^RC=0$'; then
+    echo "FAIL: failability: removing the empty-worktree guard should make the WORKTREE=\"\" run return 0, but it didn't" >&2
+    printf '%s\n' "$empty_out" >&2
+    return 1
+  fi
+  echo "ok   : failability: removing the empty-worktree guard makes the WORKTREE=\"\" run return 0"
 )
 codex_hooks_vet_wiring_test "$dispatch" || exit 1
 

@@ -504,7 +504,7 @@ claude_pretrust_call_site_test() (
   local dispatch="$1" block mutant_block
 
   block=$(awk '
-    /^ensure_codex_pretrust "\$RUNTIME" "\$WORKTREE" \|\| exit 2$/{f=1}
+    /^[[:space:]]*ensure_codex_pretrust "\$RUNTIME" "\$WORKTREE" \|\| exit 2$/{f=1}
     f{print}
     f && /orca terminal create --worktree "\$WORKTREE"/{exit}
   ' "$dispatch")
@@ -513,7 +513,7 @@ claude_pretrust_call_site_test() (
 
   check_ordering() {
     local text="$1" call_line term_line
-    call_line=$(printf '%s\n' "$text" | grep -n '^ensure_claude_pretrust "\$RUNTIME" "\$WORKTREE" || exit 2$' | cut -d: -f1 | head -1)
+    call_line=$(printf '%s\n' "$text" | grep -n '^[[:space:]]*ensure_claude_pretrust "\$RUNTIME" "\$WORKTREE" || exit 2$' | cut -d: -f1 | head -1)
     term_line=$(printf '%s\n' "$text" | grep -n 'orca terminal create --worktree "\$WORKTREE"' | cut -d: -f1 | head -1)
     [ -n "$call_line" ] || return 1
     [ -n "$term_line" ] || return 1
@@ -530,7 +530,7 @@ claude_pretrust_call_site_test() (
   # Failability: a copy of the block with the claude pre-trust line dropped
   # (the shape of the call being silently removed from the wrapper) must
   # fail the ordering check above.
-  mutant_block=$(printf '%s\n' "$block" | grep -v '^ensure_claude_pretrust "\$RUNTIME" "\$WORKTREE" || exit 2$')
+  mutant_block=$(printf '%s\n' "$block" | grep -v '^[[:space:]]*ensure_claude_pretrust "\$RUNTIME" "\$WORKTREE" || exit 2$')
   if [ "$mutant_block" = "$block" ]; then
     echo "FAIL: dropped-call mutant did not change the source" >&2
     return 1
@@ -542,6 +542,102 @@ claude_pretrust_call_site_test() (
   echo "ok   : failability: dropping the ensure_claude_pretrust call makes the ordering check fail"
 )
 claude_pretrust_call_site_test "$dispatch" || exit 1
+
+# --- Feature: a reused pane with no worktree skips pre-trust ----------------
+#
+# --terminal HANDLE reuses an existing pane and leaves WORKTREE empty. The
+# three pre-trust helpers refuse an empty worktree path and return 1, so
+# every claude/codex/cursor dispatch onto a reused pane used to exit 2 before
+# the recording gate even though a reused pane launches nothing to pre-trust.
+# Extracts the three ensure_*_pretrust functions plus the new guarded block
+# and runs them in an isolated subshell with fake pre-trust binaries that
+# exit 9 and print nothing, so an accidental call on the skip path fails loud
+# instead of silently passing.
+pretrust_pane_reuse_skip_test() (
+  set +e
+  set -u
+  local dispatch="$1" work fn_codex fn_cursor fn_claude guard script_file \
+    out status mutant_guard rt
+
+  fn_codex=$(awk '$0=="ensure_codex_pretrust() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  fn_cursor=$(awk '$0=="ensure_cursor_pretrust() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  fn_claude=$(awk '$0=="ensure_claude_pretrust() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  guard=$(awk '
+    /^if \[ -n "\$TERMINAL" \] && \[ -z "\$WORKTREE" \]; then$/{f=1}
+    f{print}
+    f && /^fi$/{exit}
+  ' "$dispatch")
+
+  [ -n "$fn_codex" ] && [ -n "$fn_cursor" ] && [ -n "$fn_claude" ] \
+    || { echo "FAIL: could not extract the three ensure_*_pretrust functions" >&2; return 1; }
+  [ -n "$guard" ] || { echo "FAIL: could not extract the pane-reuse pre-trust guard block" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-pretrust-pane-reuse-test.$$"
+  mkdir -p "$work"
+  trap 'rm -rf "$work"' EXIT
+  cat > "$work/fake-pretrust" <<'BIN'
+#!/bin/bash
+exit 9
+BIN
+  chmod +x "$work/fake-pretrust"
+
+  write_script() {
+    local outfile="$1" guard_body="$2"
+    {
+      echo 'set -u'
+      printf 'PRETRUST_BIN=%s\n' "$work/fake-pretrust"
+      printf 'CURSOR_PRETRUST_BIN=%s\n' "$work/fake-pretrust"
+      printf 'CLAUDE_PRETRUST_BIN=%s\n' "$work/fake-pretrust"
+      printf '%s\n' "$fn_codex"
+      printf '%s\n' "$fn_cursor"
+      printf '%s\n' "$fn_claude"
+      printf '%s\n' "$guard_body"
+      echo 'echo SENTINEL'
+    } > "$outfile"
+  }
+
+  script_file="$work/run.sh"
+  write_script "$script_file" "$guard"
+
+  for rt in claude codex cursor; do
+    out=$(TERMINAL=term_x WORKTREE="" RUNTIME="$rt" bash "$script_file" 2>&1)
+    status=$?
+    if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^SENTINEL$' \
+        || ! printf '%s\n' "$out" | grep -Fq 'pre-trust · skipped · pane reused'; then
+      echo "FAIL: a reused pane with no worktree should skip pre-trust and still reach the sentinel for runtime=$rt" >&2
+      printf '%s\n' "$out" >&2
+      return 1
+    fi
+    echo "ok   : pane reuse with no worktree skips pre-trust and reaches the sentinel for runtime=$rt (status=0)"
+  done
+
+  out=$(TERMINAL="" WORKTREE="" RUNTIME=claude bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 2 ]; then
+    echo "FAIL: a fresh launch (no --terminal) with an empty worktree should still exit 2, the worktree path unchanged" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : a fresh launch with an empty worktree still exits 2, the worktree path unchanged"
+
+  # Failability: a mutant that replaces the skip condition with `false` must
+  # make the claude pane-reuse run exit 2 again, the same as before this fix.
+  mutant_guard=${guard/'[ -n "$TERMINAL" ] && [ -z "$WORKTREE" ]'/'false'}
+  if [ "$mutant_guard" = "$guard" ]; then
+    echo "FAIL: skip-condition mutant did not change the source" >&2
+    return 1
+  fi
+  write_script "$script_file" "$mutant_guard"
+  out=$(TERMINAL=term_x WORKTREE="" RUNTIME=claude bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 2 ]; then
+    echo "FAIL: failability: mutant replacing the skip condition with false should have made the claude pane-reuse run exit 2 again, but status=$status" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : failability: replacing the skip condition with false makes the claude pane-reuse run exit 2 again"
+)
+pretrust_pane_reuse_skip_test "$dispatch" || exit 1
 
 # --- Feature: claude folder-trust dialog classifies as hook-trust ----------
 #

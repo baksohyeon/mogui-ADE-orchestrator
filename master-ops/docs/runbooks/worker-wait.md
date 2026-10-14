@@ -95,10 +95,10 @@ delivery, for the coordinator to act and then re-run `worker-wait`.
   because a bare number only moves the selection. While the modal blocks the
   pane, orca refuses that send with `agent_prompt_blocked` and an
   `orchestrationRequestId`; re-issue it with `--retry-request <id>`, the same
-  sequence `scripts/codex-hooks-review-answer <pane>` runs. Redispatch after
-  with both `--terminal <pane>` and `--worktree
-  path:<absolute-worktree-path>`, since `--terminal` alone has no pre-trust
-  path and exits 2. `scripts/dispatch` now does this itself, under dispatch
+  sequence `scripts/codex-hooks-review-answer <pane>` runs. Redispatch into
+  the cleared pane passes `--terminal <pane>` alone; pre-trust is skipped on
+  a reused pane, and the post-inject `hook-trust` check still stops the
+  dispatch if the modal is back. `scripts/dispatch` now does this itself, under dispatch
   authority, whenever `codex_hooks_vet_homes` passes every hook command on
   the host's codex homes; it has no file to read for a plugin hook source,
   so the manual path above is for the vet failing, an answer that did not

@@ -17,7 +17,9 @@ happened" and "I could not check."
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -67,12 +69,35 @@ class Timeline:
         }
 
 
+def state_dir() -> Path:
+    """The directory that stands in for ``~/.mogui``, via ``MOGUI_STATE_DIR``.
+
+    Testability seam (docs/runbooks/host-harness-inventory.md): isolates only
+    this dispatch's mutable state (the ledger, tickets, known roots, and
+    event log) without also moving ``$HOME`` and the runtimes' trust state
+    with it. Unset or empty: today's default, unchanged. Set: must be an
+    absolute path to an existing directory, checked before any other work,
+    so an invalid value stops here with `SystemExit(1)` instead of reaching
+    a caller that could mistake it for a usable path.
+    """
+    value = os.environ.get("MOGUI_STATE_DIR")
+    if not value:
+        return Path.home() / ".mogui"
+    path = Path(value)
+    if not path.is_absolute() or not path.is_dir():
+        sys.stderr.write(
+            f"MOGUI_STATE_DIR must be an absolute path to an existing directory: {value}\n"
+        )
+        raise SystemExit(1)
+    return path
+
+
 def default_ledger_path() -> Path:
-    return Path.home() / ".mogui" / "dispatch-ledger.jsonl"
+    return state_dir() / "dispatch-ledger.jsonl"
 
 
 def default_event_log_path() -> Path:
-    return Path.home() / ".mogui" / "event-log.jsonl"
+    return state_dir() / "event-log.jsonl"
 
 
 class DispatchTimelineBuilder:

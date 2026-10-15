@@ -114,3 +114,32 @@ def test_emit_stamps_session_kind_from_env_override(tmp_path: Path, monkeypatch)
     monkeypatch.chdir(tmp_path)
     line = mogui_log.emit("info", "test_event", "pass")
     assert line["session_kind"] == "master"
+
+
+def test_emit_honors_mogui_state_dir_set_after_import(tmp_path: Path, monkeypatch) -> None:
+    """MOGUI_STATE_DIR (testability seam, docs/runbooks/host-harness-inventory.md)
+    is read at emit time, not at import time; setting it after mogui_log is
+    already imported still redirects the write."""
+    monkeypatch.setattr(mogui_log, "LOG_DIR", str(tmp_path / "unused"))
+    override = tmp_path / "override"
+    override.mkdir()
+    monkeypatch.setenv("MOGUI_STATE_DIR", str(override))
+
+    line = mogui_log.emit("info", "test_event", "pass")
+
+    assert line["event"] == "test_event"
+    assert (override / "event-log.jsonl").is_file()
+    assert not (tmp_path / "unused").exists()
+
+
+def test_emit_with_bad_mogui_state_dir_returns_none_and_writes_nothing(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    monkeypatch.setattr(mogui_log, "LOG_DIR", str(tmp_path / "unused"))
+    monkeypatch.setenv("MOGUI_STATE_DIR", "relative/missing")
+
+    result = mogui_log.emit("info", "test_event", "pass")
+
+    assert result is None
+    assert not (tmp_path / "unused").exists()
+    assert "MOGUI_STATE_DIR" in capsys.readouterr().err

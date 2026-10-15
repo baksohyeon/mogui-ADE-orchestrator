@@ -15,6 +15,7 @@ from typing import Callable, Iterator, Mapping, Sequence
 
 from master_runtime.core.dispatch_timeline import (
     default_ledger_path as _dispatch_timeline_default_ledger_path,
+    state_dir as _dispatch_timeline_state_dir,
 )
 
 try:
@@ -27,8 +28,6 @@ DEFAULT_SINGLE_DISPATCH_CHAR_LIMIT = 500_000
 DEFAULT_BATCH_DISPATCH_CHAR_LIMIT = 1_000_000
 DEFAULT_DUPLICATE_WINDOW_SECONDS = 30 * 60
 DEFAULT_HIGH_COST_RUNTIMES = frozenset({"fable"})
-DEFAULT_TICKET_DIR = Path(".mogui") / "dispatch-tickets"
-DEFAULT_KNOWN_ROOTS_PATH = Path(".mogui") / "known-roots.json"
 DEFAULT_TIER_POLICY_RELATIVE_PATH = Path("master-ops") / "model-tier-policy.json"
 # Instance-owned policy written during onboarding (agent-inventory consent).
 # Preferred over the template fallback when present.
@@ -53,11 +52,11 @@ def _default_ledger_path() -> Path:
 
 
 def _default_ticket_dir() -> Path:
-    return Path.home() / DEFAULT_TICKET_DIR
+    return _dispatch_timeline_state_dir() / "dispatch-tickets"
 
 
 def _default_known_roots_path() -> Path:
-    return Path.home() / DEFAULT_KNOWN_ROOTS_PATH
+    return _dispatch_timeline_state_dir() / "known-roots.json"
 
 
 def _default_tier_policy_path(

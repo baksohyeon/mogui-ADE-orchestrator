@@ -714,8 +714,27 @@ def _resolve_bound_run() -> str | None:
     return run.get("id") if isinstance(run, dict) else None
 
 
+def _state_dir() -> Path:
+    """``~/.mogui``, overridden by ``MOGUI_STATE_DIR`` (testability seam, see
+    docs/runbooks/host-harness-inventory.md) when set. Kept separate from
+    dispatch_timeline.state_dir() instead of importing it: this file is
+    self-contained (see module docstring), so it cannot import master_runtime.
+    """
+    value = os.environ.get("MOGUI_STATE_DIR")
+    if not value:
+        return Path.home() / ".mogui"
+    path = Path(value)
+    if not path.is_absolute() or not path.is_dir():
+        print(
+            f"MOGUI_STATE_DIR must be an absolute path to an existing directory: {value}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    return path
+
+
 def _default_ledger_path() -> Path:
-    return Path.home() / ".mogui" / "dispatch-ledger.jsonl"
+    return _state_dir() / "dispatch-ledger.jsonl"
 
 
 # --- lock --------------------------------------------------------------------

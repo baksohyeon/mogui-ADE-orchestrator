@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import sys
 import time
 
 
@@ -79,10 +80,35 @@ def _session_kind() -> str:
     return _SESSION_KIND_CACHE
 
 
+def _event_log_dir():
+    """LOG_DIR, overridden by MOGUI_STATE_DIR (testability seam, see
+    docs/runbooks/host-harness-inventory.md) when set, read at call time, not
+    at import time, so a test can set the variable after this module is
+    imported. Kept separate from dispatch_timeline.state_dir() instead of
+    importing it: this file is template-applied without a src/ tree to
+    import from.
+
+    Returns None when the override is set but invalid, so the caller can
+    refuse without raising.
+    """
+    value = os.environ.get("MOGUI_STATE_DIR")
+    if not value:
+        return LOG_DIR
+    if os.path.isabs(value) and os.path.isdir(value):
+        return value
+    sys.stderr.write(
+        f"MOGUI_STATE_DIR must be an absolute path to an existing directory: {value}\n"
+    )
+    return None
+
+
 def emit(level, event, outcome, *, component="tool-impl", evidence="observed",
          reason="", session_kind=None, runtime_hint=None, msg="", **fields):
     """Append one event line and never let logging failure escape the caller."""
     try:
+        log_dir = _event_log_dir()
+        if log_dir is None:
+            return None
         scrubbed_msg = _scrub(msg)
         line = {
             "ts": int(time.time()), "level": level, "event": event,
@@ -93,8 +119,8 @@ def emit(level, event, outcome, *, component="tool-impl", evidence="observed",
             "msg": scrubbed_msg[:200] if isinstance(scrubbed_msg, str) else scrubbed_msg,
         }
         line.update({_scrub(k): _scrub(v) for k, v in fields.items()})
-        os.makedirs(LOG_DIR, exist_ok=True)
-        with open(os.path.join(LOG_DIR, "event-log.jsonl"), "a", encoding="utf-8") as stream:
+        os.makedirs(log_dir, exist_ok=True)
+        with open(os.path.join(log_dir, "event-log.jsonl"), "a", encoding="utf-8") as stream:
             stream.write(json.dumps(line, ensure_ascii=False) + "\n")
         return line
     except Exception:

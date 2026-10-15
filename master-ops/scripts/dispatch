@@ -7,7 +7,6 @@
 set -u
 OPS={{OPS_REPO}}
 GATE={{RUNTIME_ROOT}}/scripts/dispatch-gate
-LEDGER=~/.mogui/dispatch-ledger.jsonl
 TEMPLATE_POLICY=$OPS/model-tier-policy.json
 PROBE_BIN={{RUNTIME_ROOT}}/scripts/model-identity-probe
 SCRIPTS_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -91,6 +90,27 @@ while [ $# -gt 0 ]; do
     *) usage;;
   esac
 done
+
+# Testability seam (docs/runbooks/host-harness-inventory.md): MOGUI_STATE_DIR
+# redirects this dispatch's mutable state (ledger, delivered-contract copies)
+# off ~/.mogui without also moving $HOME, so a smoke run does not relocate
+# trust state too and fail on a dialog production never shows. Unset or empty
+# keeps today's defaults; validated here, before any other work.
+if [ -n "${MOGUI_STATE_DIR:-}" ]; then
+  case "$MOGUI_STATE_DIR" in
+    /*) [ -d "$MOGUI_STATE_DIR" ] && STATE_DIR_OK=1 || STATE_DIR_OK=0 ;;
+    *) STATE_DIR_OK=0 ;;
+  esac
+  if [ "$STATE_DIR_OK" != 1 ]; then
+    echo "✗ MOGUI_STATE_DIR must be an absolute path to an existing directory: $MOGUI_STATE_DIR" >&2
+    exit 1
+  fi
+  STATE_DIR="$MOGUI_STATE_DIR"
+else
+  STATE_DIR="$HOME/.mogui"
+fi
+LEDGER="$STATE_DIR/dispatch-ledger.jsonl"
+
 [ -z "$CONTRACT" ] || [ ! -f "$CONTRACT" ] && { echo "✗ contract file missing: $CONTRACT" >&2; exit 1; }
 [ "$CHECK_ONLY" = 0 ] && [ -z "$SPEC" ] && usage
 
@@ -1221,7 +1241,7 @@ echo "⚙ gate ✓ $TIER · $MODEL · est $((EST/1000)).$(( (EST%1000)/100 ))k �
 # inside the delivered copy: a token quoted in the spec could be echoed back by a worker
 # that never read anything. Derived from characters the dispatch output never shows.
 if [ -n "$CONTRACT" ]; then
-  CONTRACT_DIR="$HOME/.mogui/dispatch-contracts"
+  CONTRACT_DIR="${STATE_DIR:-$HOME/.mogui}/dispatch-contracts"
   if ! mkdir -p "$CONTRACT_DIR" 2>/dev/null; then
     echo "✗ cannot create contract delivery directory: $CONTRACT_DIR" >&2; exit 3
   fi

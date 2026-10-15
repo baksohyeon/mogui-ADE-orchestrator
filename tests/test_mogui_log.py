@@ -140,6 +140,7 @@ def test_emit_with_bad_mogui_state_dir_returns_fallback_and_writes_nothing(
 
     result = mogui_log.emit("info", "test_event", "pass")
 
+    assert isinstance(result["ts"], int)
     assert result == {
         "ts": result["ts"],
         "level": "info",

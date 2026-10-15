@@ -2577,20 +2577,27 @@ def test_cli_check_honors_mogui_state_dir_for_ticket_and_known_roots(
     from the state dir, and leaves the real (fake-HOME) ticket dir and
     known-roots.json alone."""
     contract = _dispatch_contract(tmp_path, runtime="codex")
+    contract_payload = json.loads(contract.read_text(encoding="utf-8"))
+    contract_payload["workspace"] = "/srv/roots/alpha/workspace/example-product"
+    contract_payload["repo"] = "/srv/roots/alpha/projects/mogui-ADE-orchestrator"
+    contract.write_text(
+        json.dumps(contract_payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     ledger = tmp_path / "cli-ledger.jsonl"
     home = tmp_path / "home"
     state_dir = tmp_path / "state"
     state_dir.mkdir()
     real_mogui_dir = home / ".mogui"
     real_mogui_dir.mkdir(parents=True)
-    # The contract's paths (/Users/dev/...) sit under /Users/dev: the state-dir
-    # file allows that root, the fake-HOME file does not, so a fallback to
-    # ~/.mogui surfaces a PATH_OUTSIDE_KNOWN_ROOTS warning that this test fails on.
+    # The contract's paths (/srv/roots/alpha/...) sit under /srv/roots/alpha: the
+    # state-dir file allows that root, the fake-HOME file does not, so a fallback
+    # to ~/.mogui surfaces a PATH_OUTSIDE_KNOWN_ROOTS warning that this test fails on.
     (state_dir / "known-roots.json").write_text(
-        json.dumps(["/Users/dev"]), encoding="utf-8"
+        json.dumps(["/srv/roots/alpha"]), encoding="utf-8"
     )
     (real_mogui_dir / "known-roots.json").write_text(
-        json.dumps(["/Users/nobody"]), encoding="utf-8"
+        json.dumps(["/srv/roots/beta"]), encoding="utf-8"
     )
     env = os.environ.copy()
     env["HOME"] = str(home)

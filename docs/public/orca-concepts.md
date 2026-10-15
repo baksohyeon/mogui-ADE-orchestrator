@@ -11,7 +11,7 @@ Orca tracks three layers.
 **Workspace.** A seat inside a project where terminals and agents live. There are two kinds, and the project's shape decides which you get:
 
 - A *repository worktree* belongs to a Git repository project: one checked-out branch, created from the Create worktree dialog. A terminal opened there starts inside the checkout and git works immediately. This is where workers sit when they need to run git commands.
-- A *folder workspace* belongs to a folder project: the folder itself is the seat, with no Git checkout of its own, created from the Create Folder Workspace dialog. A terminal opened there starts outside any checkout. An empty `worktreePath` is the expected shape for this kind; judge placement by `worktreeId`, which reads as `folder:<uuid>`.
+- A *folder workspace* belongs to a folder project: the folder itself is the seat, with no Git checkout of its own, created from the Create Folder Workspace dialog. A terminal opened there starts outside any checkout. Judge placement by `worktreeId`. Its shape has drifted across Orca builds: earlier builds report `folder:<uuid>` with an empty `worktreePath`; Orca 1.4.224 reports `<repoId>::<path>` with `worktreePath` set to the folder.
 
 The kind determines what a session can do on its first command, not merely where it appears in the sidebar.
 
@@ -30,6 +30,8 @@ Seating a master inside one repository's worktree in a multi-repository workspac
 
 Workers are the opposite: each worker gets its own repository worktree on its own branch, never the folder workspace and never a shared checkout.
 
+Keep those worker worktrees outside the workspace root. Orca creates them under its workspace directory (`workspaceDir`, default `~/orca/workspaces`); when that directory sits inside the root, each worker loads the root session card as an ancestor instruction file. Move the base per repository with `orca project setup-update --setup <setup id> --worktree-base-path <dir>` (setup id from `orca project setups`) (with `nestWorkspaces` on, Orca appends the repository name); the app-wide default changes only in Orca Settings > General > Workspace directory.
+
 ## Selector Forms, Measured
 
 Placement commands (`orca terminal create --worktree`, `master-succeed spawn --workspace-selector`) take a selector. Verified behavior, measured 2026-08-03 on a live host:
@@ -38,6 +40,7 @@ Placement commands (`orca terminal create --worktree`, `master-succeed spawn --w
 | --- | --- |
 | `id:<repoId>::<path>` | Works end to end for repository worktrees. Copy the full `id` from `orca worktree list --json`; the repo id alone is not an address. |
 | `id:folder:<uuid>` | Works end to end for folder workspaces: precheck listing, terminal create, and spawn placement match all pass. |
+| `id:<repoId>::<path>` for a folder workspace | Orca 1.4.224 reports folder seats in this shape; terminal list and master-succeed placement both pass (`MATCH`). |
 | `folder:<uuid>` (bare) | Split behavior: `orca terminal create --worktree` accepts it, `orca terminal list --worktree` rejects it with `selector_not_found`. Measured identically on two independent hosts, so it is a subcommand asymmetry, not a host quirk. Prefer the `id:` form when one string must work everywhere. |
 | `path:/abs/dir` | Orca resolves it to `<repoId>::<path>`, so the spawn validator's comparison rejects it even when placement is correct. Prefer the `id:` forms. |
 
@@ -50,9 +53,13 @@ Two rules fall out:
 
 **"Unavailable worktree"** in Agent Session History means the session ran in a workspace that is not a Git worktree. Folder workspaces have no Git checkout, so every master session seated in one carries this chip.
 
-**Empty `worktreePath`** in `orca terminal list --json` output is the same fact from the CLI side: folder workspaces report a `worktreeId` of `folder:<uuid>` and an empty path. Judge placement by `worktreeId`, not by the path field or by the repository name shown in a pane's status line, which only reflects the shell's cwd.
+**Empty `worktreePath`** in `orca terminal list --json` output is the same fact from the CLI side: on builds that report `folder:<uuid>`, folder workspaces carry an empty path (Orca 1.4.224 fills it instead). Judge placement by `worktreeId`, not by the path field or by the repository name shown in a pane's status line, which only reflects the shell's cwd.
 
 **"Not a valid worktree folder"** (or similar) on the plain workspace root is also expected. The workspace root is intentionally a plain folder that groups member repositories as siblings. It is not a git repository and must never become a submodule parent: parent-pins-child-SHA coupling is the opposite of an overseeing master, and the version management is misery. Orca still registers that folder as a project and seats the master in its folder workspace; the warning names "this folder is not a git worktree," not "this install is broken."
+
+## The Root Session Card And Product Checkouts
+
+The master's session card is deployed to the workspace root as both `CLAUDE.md` and `AGENTS.md`. Claude Code loads `CLAUDE.md` from every ancestor directory, and `AGENTS.md` too when Project instructions is set to read both, so any session opened inside a product checkout under the root loads the master's card too. `claudeMdExcludes` cannot fix this from user settings because it has no cwd condition and would hide the card from the master as well. The measured fix is per checkout: `<repo>/.claude/settings.local.json` with `claudeMdExcludes` listing the two root files by absolute path (entries are globs, so escape `[`, `]`, `*`, `?` in the root path; git-ignore the file; Claude Code only does that for files it writes itself). The master's root session still loads the card.
 
 ## Workspace Descriptor (No Submodules)
 

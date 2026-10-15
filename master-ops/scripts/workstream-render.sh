@@ -16,7 +16,7 @@ if [ -n "${MOGUI_STATE_DIR:-}" ]; then
   fi
   STATE_DIR="$MOGUI_STATE_DIR"
 else
-  STATE_DIR="$HOME/.mogui"
+  STATE_DIR=~/.mogui
 fi
 LEDGER="$STATE_DIR/dispatch-ledger.jsonl"
 DAY="${1:-$(date +%F)}"

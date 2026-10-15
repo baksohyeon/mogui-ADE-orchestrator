@@ -132,7 +132,7 @@ def test_emit_honors_mogui_state_dir_set_after_import(tmp_path: Path, monkeypatc
     assert not (tmp_path / "unused").exists()
 
 
-def test_emit_with_bad_mogui_state_dir_returns_none_and_writes_nothing(
+def test_emit_with_bad_mogui_state_dir_returns_fallback_and_writes_nothing(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
     monkeypatch.setattr(mogui_log, "LOG_DIR", str(tmp_path / "unused"))
@@ -140,6 +140,12 @@ def test_emit_with_bad_mogui_state_dir_returns_none_and_writes_nothing(
 
     result = mogui_log.emit("info", "test_event", "pass")
 
-    assert result is None
+    assert result == {
+        "ts": result["ts"],
+        "level": "info",
+        "event": "test_event",
+        "outcome": "pass",
+        "evidence": "observed",
+    }
     assert not (tmp_path / "unused").exists()
     assert "MOGUI_STATE_DIR" in capsys.readouterr().err

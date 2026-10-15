@@ -108,7 +108,10 @@ def emit(level, event, outcome, *, component="tool-impl", evidence="observed",
     try:
         log_dir = _event_log_dir()
         if log_dir is None:
-            return None
+            return {
+                "ts": int(time.time()), "level": level, "event": event,
+                "outcome": outcome, "evidence": evidence,
+            }
         scrubbed_msg = _scrub(msg)
         line = {
             "ts": int(time.time()), "level": level, "event": event,

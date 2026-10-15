@@ -24,8 +24,9 @@ run would then fail on a trust dialog that production never shows. Unset or
 empty, every one of those five defaults is exactly what it is today; set, it
 must be an absolute path to an existing directory, checked before any other
 work, or the caller is refused with one line on stderr naming the variable and
-the value. No script creates the directory. Production never sets this
-variable.
+the value. `mogui_log.py`'s `emit()` is the fail-open exception: it writes
+that same stderr line and returns a fallback event dict instead of refusing.
+No script creates the directory. Production never sets this variable.
 
 Division of labor: gsd owns context-total measurement; the instance layer owns
 charter enforcement and dispatch provenance; gstack owns skill telemetry. No overlap

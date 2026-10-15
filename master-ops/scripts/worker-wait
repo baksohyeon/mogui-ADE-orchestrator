@@ -60,6 +60,8 @@ class WorkerListError(RuntimeError):
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
 
+    _state_dir()  # validates MOGUI_STATE_DIR before any other work, even with --ledger
+
     run_id = args.run or _resolve_bound_run()
     if not run_id:
         print("worker-wait: no --run given and no Run bound to this terminal", file=sys.stderr)

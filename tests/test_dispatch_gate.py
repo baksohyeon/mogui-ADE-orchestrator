@@ -2573,13 +2573,25 @@ def test_cli_check_honors_mogui_state_dir_for_ticket_and_known_roots(
 ) -> None:
     """MOGUI_STATE_DIR (testability seam, docs/runbooks/host-harness-inventory.md)
     redirects the default ticket_dir and known_roots_path off ~/.mogui: a
-    `check` run writes its ticket under the state dir and nothing under the
-    real (fake-HOME) ticket dir."""
+    `check` run writes its ticket under the state dir, reads known-roots.json
+    from the state dir, and leaves the real (fake-HOME) ticket dir and
+    known-roots.json alone."""
     contract = _dispatch_contract(tmp_path, runtime="codex")
     ledger = tmp_path / "cli-ledger.jsonl"
     home = tmp_path / "home"
     state_dir = tmp_path / "state"
     state_dir.mkdir()
+    real_mogui_dir = home / ".mogui"
+    real_mogui_dir.mkdir(parents=True)
+    # The contract's paths (/Users/dev/...) sit under /Users/dev: the state-dir
+    # file allows that root, the fake-HOME file does not, so a fallback to
+    # ~/.mogui surfaces a PATH_OUTSIDE_KNOWN_ROOTS warning that this test fails on.
+    (state_dir / "known-roots.json").write_text(
+        json.dumps(["/Users/dev"]), encoding="utf-8"
+    )
+    (real_mogui_dir / "known-roots.json").write_text(
+        json.dumps(["/Users/nobody"]), encoding="utf-8"
+    )
     env = os.environ.copy()
     env["HOME"] = str(home)
     env["MOGUI_STATE_DIR"] = str(state_dir)
@@ -2612,7 +2624,7 @@ def test_cli_check_honors_mogui_state_dir_for_ticket_and_known_roots(
     contract_sha = _sha256(contract)
     state_ticket_dir = state_dir / "dispatch-tickets"
     ticket = state_ticket_dir / f"codex-{contract_sha[:12]}.json"
-    real_ticket_dir = home / ".mogui" / "dispatch-tickets"
+    real_ticket_dir = real_mogui_dir / "dispatch-tickets"
 
     assert result.returncode == 0, result.stderr
     assert state_ticket_dir.is_dir()
@@ -2620,6 +2632,8 @@ def test_cli_check_honors_mogui_state_dir_for_ticket_and_known_roots(
     # The real (fake-HOME) ticket dir is never created: the dispatch's state
     # went entirely to MOGUI_STATE_DIR, never split across both.
     assert not real_ticket_dir.exists()
+    payload = json.loads(result.stdout)
+    assert "PATH_OUTSIDE_KNOWN_ROOTS" not in payload["warnings"]
 
 
 @skip_windows_exec_surface

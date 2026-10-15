@@ -18,7 +18,7 @@ if [ -n "${MOGUI_STATE_DIR:-}" ]; then
   fi
   STATE_DIR="$MOGUI_STATE_DIR"
 else
-  STATE_DIR="$HOME/.mogui"
+  STATE_DIR=~/.mogui
 fi
 LEDGER=${2:-"$STATE_DIR/dispatch-ledger.jsonl"}
 MOGUI_PRODUCT_REPO=${MOGUI_PRODUCT_REPO:-"baksohyeon/mogui-ADE-orchestrator"}

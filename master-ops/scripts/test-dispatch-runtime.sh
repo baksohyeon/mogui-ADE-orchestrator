@@ -269,7 +269,7 @@ state_dir_seam_test() (
 
   # Case: unset keeps today's two defaults.
   write_script "$script_file" "$block"
-  out=$(HOME="$fake_home" bash "$script_file" 2>&1)
+  out=$(env -u MOGUI_STATE_DIR HOME="$fake_home" bash "$script_file" 2>&1)
   status=$?
   if [ "$status" -ne 0 ]; then
     echo "FAIL: unset MOGUI_STATE_DIR exited non-zero" >&2
@@ -310,18 +310,25 @@ state_dir_seam_test() (
 
   # Case: a relative path is refused before any other work.
   write_script "$script_file" "$block"
-  out=$(HOME="$fake_home" MOGUI_STATE_DIR="relative/dir" bash "$script_file" 2>&1)
+  HOME="$fake_home" MOGUI_STATE_DIR="relative/dir" bash "$script_file" >"$work/stdout" 2>"$work/stderr"
   status=$?
-  if [ "$status" -eq 0 ]; then
-    echo "FAIL: a relative MOGUI_STATE_DIR should have been refused" >&2
+  err_lines=$(wc -l < "$work/stderr" | tr -d ' ')
+  if [ "$status" -ne 1 ]; then
+    echo "FAIL: a relative MOGUI_STATE_DIR should exit 1, got $status" >&2
+    cat "$work/stderr" >&2
     return 1
   fi
-  if ! printf '%s\n' "$out" | grep -q 'MOGUI_STATE_DIR must be an absolute path to an existing directory: relative/dir'; then
+  if [ "$err_lines" -ne 1 ]; then
+    echo "FAIL: refusal should write exactly one stderr line, got $err_lines" >&2
+    cat "$work/stderr" >&2
+    return 1
+  fi
+  if ! grep -qF 'MOGUI_STATE_DIR must be an absolute path to an existing directory: relative/dir' "$work/stderr"; then
     echo "FAIL: refusal did not name the variable and the value on stderr" >&2
-    printf '%s\n' "$out" >&2
+    cat "$work/stderr" >&2
     return 1
   fi
-  echo "ok   : a relative MOGUI_STATE_DIR exits 1 with one stderr line naming the variable and value"
+  echo "ok   : a relative MOGUI_STATE_DIR exits 1 with exactly one stderr line naming the variable and value"
 
   # Failability: dropping the validation check lets a relative value through.
   mutant_block=$(printf '%s\n' "$block" | awk '/^  if \[ "\$STATE_DIR_OK" != 1 \]; then$/{skip=1} skip&&/^  fi$/{skip=0; next} !skip')

@@ -37,7 +37,7 @@ What a failing run prints depends on the failure path:
 - **normal case** (exit 12, layers gate/orca/register/delivery/wrapper): the
   `smoke FAIL layer=<layer> step=<step>` verdict, plus `smoke.log`'s tail on
   stderr.
-- **timeout** (exit 12, layer=worker): the verdict plus the last line of
+- **timeout** (exit 12, layer=timeout): the verdict plus the last line of
   `smoke.log` on stderr.
 - **isolation** (exit 13): the stderr block naming the differing file(s) and
   the added row(s)/listing(s), plus the `smoke FAIL layer=isolation` verdict.
@@ -45,7 +45,7 @@ What a failing run prints depends on the failure path:
 | exit | layer | step | look next |
 |---|---|---|---|
 | 10 | (precondition) | named in the stderr line | the checkout/install itself: unrendered wrapper, missing seam, `claude` not on PATH, `orca status` |
-| 11 | gate | `top-tier-refusal` or `task-count-unreadable` | the refusal text in `failure.log`; confirm the scratch ledger is empty and the task count is unchanged |
+| 11 | gate | `top-tier-refusal`, `task-count-unreadable`, or `runtime-unavailable` | the refusal text in `failure.log`; confirm the scratch ledger is empty and the task count is unchanged |
 | 12, wrapper exit 2 | gate | (none) | the gate's denial reason in `smoke.log` |
 | 12, wrapper exit 3 | orca | `task-create`, `terminal-create`, or `dispatch` | `orca orchestration task-list --json`, then `orca terminal read --terminal <handle> --limit 40` for the pane the arrow line names |
 | 12, wrapper exit 4 | register | (none) | the register denial reason in `smoke.log`; the worker is running, resolve by hand |

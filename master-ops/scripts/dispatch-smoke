@@ -292,7 +292,10 @@ for m in top:
 # The failure case needs a top-tier id whose runtime is actually on this host,
 # since dispatch-smoke only guarantees claude on PATH. Pick the first top-tier
 # id whose mirrored vendor is claude; fall back to the tier's first id (and say
-# so in the failure-case line) if none mirrors claude.
+# so in the failure-case line) if none mirrors claude. A vendor match still
+# does not rule out the operator declaring claude itself unavailable in the
+# instance runtime config; that case is classified separately below rather
+# than predicted here.
 select_top_model() {
   local wrapper="$1" tier_policy="$2" first="" candidate vendor
   while IFS= read -r candidate; do
@@ -380,6 +383,18 @@ if [ -f "$STATE/dispatch-ledger.jsonl" ] && [ -s "$STATE/dispatch-ledger.jsonl" 
   FAIL_OK=0
 fi
 [ "$BEFORE_TASK_COUNT" = "$AFTER_TASK_COUNT" ] || FAIL_OK=0
+
+# A vendor match on $TOP_RUNTIME does not guarantee the gate was reached: the
+# operator can also declare a runtime unavailable in the instance runtime
+# config, and that refusal fires before the top-tier check with its own
+# message. Classify it rather than report it as a failed probe.
+if [ "$FAIL_OK" != 1 ] && grep -qE '^✗ runtime .* unavailable on this install' "$FAIL_LOG"; then
+  echo "smoke FAIL layer=gate step=runtime-unavailable"
+  echo "--- failure.log ---" >&2
+  tail -n 40 "$FAIL_LOG" >&2
+  FINAL_RC=11
+  exit 0
+fi
 
 if [ "$FAIL_OK" != 1 ]; then
   echo "smoke FAIL layer=gate step=top-tier-refusal"

@@ -3,7 +3,24 @@
 set -u
 
 CONTRACT=${1:-}
-LEDGER=${2:-"$HOME/.mogui/dispatch-ledger.jsonl"}
+
+# Testability seam (docs/runbooks/host-harness-inventory.md): MOGUI_STATE_DIR
+# redirects this dispatch's mutable state off ~/.mogui without touching $HOME.
+# Unset or empty keeps today's default.
+if [ -n "${MOGUI_STATE_DIR:-}" ]; then
+  case "$MOGUI_STATE_DIR" in
+    /*) [ -d "$MOGUI_STATE_DIR" ] && STATE_DIR_OK=1 || STATE_DIR_OK=0 ;;
+    *) STATE_DIR_OK=0 ;;
+  esac
+  if [ "$STATE_DIR_OK" != 1 ]; then
+    echo "✗ MOGUI_STATE_DIR must be an absolute path to an existing directory: $MOGUI_STATE_DIR" >&2
+    exit 1
+  fi
+  STATE_DIR="$MOGUI_STATE_DIR"
+else
+  STATE_DIR=~/.mogui
+fi
+LEDGER=${2:-"$STATE_DIR/dispatch-ledger.jsonl"}
 MOGUI_PRODUCT_REPO=${MOGUI_PRODUCT_REPO:-"baksohyeon/mogui-ADE-orchestrator"}
 
 [ -z "$CONTRACT" ] && exit 0

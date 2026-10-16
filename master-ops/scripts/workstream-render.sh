@@ -2,7 +2,23 @@
 # Render the dispatch ledger into a human-readable workstream (owner feedback
 # 2026-08-03: gate/worker activity was a black box). Reads only; the ledger
 # stays the machine record. Usage: workstream-render.sh [YYYY-MM-DD]
-LEDGER=~/.mogui/dispatch-ledger.jsonl
+# Testability seam (docs/runbooks/host-harness-inventory.md): MOGUI_STATE_DIR
+# redirects this dispatch's mutable state off ~/.mogui without touching $HOME.
+# Unset or empty keeps today's default.
+if [ -n "${MOGUI_STATE_DIR:-}" ]; then
+  case "$MOGUI_STATE_DIR" in
+    /*) [ -d "$MOGUI_STATE_DIR" ] && STATE_DIR_OK=1 || STATE_DIR_OK=0 ;;
+    *) STATE_DIR_OK=0 ;;
+  esac
+  if [ "$STATE_DIR_OK" != 1 ]; then
+    echo "✗ MOGUI_STATE_DIR must be an absolute path to an existing directory: $MOGUI_STATE_DIR" >&2
+    exit 1
+  fi
+  STATE_DIR="$MOGUI_STATE_DIR"
+else
+  STATE_DIR=~/.mogui
+fi
+LEDGER="$STATE_DIR/dispatch-ledger.jsonl"
 DAY="${1:-$(date +%F)}"
 python3 - "$LEDGER" "$DAY" <<'EOF'
 import json, sys, datetime

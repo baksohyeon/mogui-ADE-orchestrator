@@ -1,16 +1,21 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from master_runtime.core.dispatch_timeline import (
     DISPATCH_SHOW_SOURCE,
     EVENT_LOG_SOURCE,
     LEDGER_SOURCE,
     DispatchTimelineBuilder,
+    default_event_log_path,
+    default_ledger_path,
+    state_dir,
 )
 
 
@@ -404,6 +409,51 @@ class SinceListingTests(unittest.TestCase):
             self.assertEqual(rows[0]["last_outcome"], "terminal_closed:term_1")
             # Failability: a version that fell back to `entry.get("event")`
             # before `actions_taken` would report "reap" here instead.
+
+
+class StateDirTests(unittest.TestCase):
+    """MOGUI_STATE_DIR (docs/runbooks/host-harness-inventory.md testability seam):
+    unset keeps today's ~/.mogui paths, set redirects both, and a bad value
+    refuses before any other work instead of writing state nobody will look
+    for."""
+
+    def test_unset_keeps_todays_default_paths(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("MOGUI_STATE_DIR", None)
+            home = Path("/fake/home")
+            with mock.patch.object(Path, "home", return_value=home):
+                self.assertEqual(state_dir(), home / ".mogui")
+                self.assertEqual(
+                    default_ledger_path(), home / ".mogui" / "dispatch-ledger.jsonl"
+                )
+                self.assertEqual(
+                    default_event_log_path(), home / ".mogui" / "event-log.jsonl"
+                )
+
+    def test_set_to_a_temp_dir_moves_both_paths_under_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"MOGUI_STATE_DIR": tmp}):
+                self.assertEqual(state_dir(), Path(tmp))
+                self.assertEqual(
+                    default_ledger_path(), Path(tmp) / "dispatch-ledger.jsonl"
+                )
+                self.assertEqual(
+                    default_event_log_path(), Path(tmp) / "event-log.jsonl"
+                )
+
+    def test_relative_path_is_refused(self) -> None:
+        with mock.patch.dict(os.environ, {"MOGUI_STATE_DIR": "relative/dir"}):
+            with self.assertRaises(SystemExit) as ctx:
+                state_dir()
+            self.assertEqual(ctx.exception.code, 1)
+
+    def test_missing_directory_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = str(Path(tmp) / "does-not-exist")
+            with mock.patch.dict(os.environ, {"MOGUI_STATE_DIR": missing}):
+                with self.assertRaises(SystemExit) as ctx:
+                    state_dir()
+                self.assertEqual(ctx.exception.code, 1)
 
 
 if __name__ == "__main__":

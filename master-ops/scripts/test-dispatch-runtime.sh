@@ -225,6 +225,134 @@ BIN
 )
 checkonly_ledger_test "$dispatch" || exit 1
 
+# --- Feature: MOGUI_STATE_DIR state-root seam --------------------------------
+#
+# Extracts the wrapper's new MOGUI_STATE_DIR derivation block (the
+# if/else that sets STATE_DIR plus the LEDGER assignment right after it),
+# runs it in isolation with HOME pointed at a fake home: unset keeps today's
+# two defaults, a temp dir moves both LEDGER and (via the same STATE_DIR
+# fallback expression used at the contract-delivery site) CONTRACT_DIR under
+# it, and a relative path is refused with exit 1 and the one stderr line.
+state_dir_seam_test() (
+  set +e
+  set -u
+  local dispatch="$1" work block script_file out status
+  local contract_dir_expr fake_home mutant_block
+
+  block=$(awk '
+    $0=="if [ -n \"${MOGUI_STATE_DIR:-}\" ]; then"{f=1}
+    f{print}
+    f && $0=="LEDGER=\"$STATE_DIR/dispatch-ledger.jsonl\""{exit}
+  ' "$dispatch")
+  [ -n "$block" ] || { echo "FAIL: could not extract the MOGUI_STATE_DIR derivation block" >&2; return 1; }
+
+  contract_dir_expr=$(grep -F 'CONTRACT_DIR="${STATE_DIR:-$HOME/.mogui}/dispatch-contracts"' "$dispatch")
+  [ -n "$contract_dir_expr" ] || { echo "FAIL: could not find the CONTRACT_DIR fallback expression" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-state-dir-test.$$"
+  mkdir -p "$work"
+  trap 'rm -rf "$work"' EXIT
+  fake_home="$work/home"
+  mkdir -p "$fake_home"
+
+  write_script() {
+    local outfile="$1" body="$2"
+    {
+      echo 'set -u'
+      printf '%s\n' "$body"
+      printf '%s\n' "$contract_dir_expr"
+      echo 'printf "STATE_DIR=%s\nLEDGER=%s\nCONTRACT_DIR=%s\n" "$STATE_DIR" "$LEDGER" "$CONTRACT_DIR"'
+    } > "$outfile"
+  }
+
+  script_file="$work/run.sh"
+
+  # Case: unset keeps today's two defaults.
+  write_script "$script_file" "$block"
+  out=$(env -u MOGUI_STATE_DIR HOME="$fake_home" bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: unset MOGUI_STATE_DIR exited non-zero" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF "STATE_DIR=$fake_home/.mogui"; then
+    echo "FAIL: unset MOGUI_STATE_DIR did not fall back to \$HOME/.mogui" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF "LEDGER=$fake_home/.mogui/dispatch-ledger.jsonl"; then
+    echo "FAIL: unset MOGUI_STATE_DIR did not keep today's default LEDGER" >&2
+    return 1
+  fi
+  echo "ok   : MOGUI_STATE_DIR unset keeps today's \$HOME/.mogui defaults"
+
+  # Case: set to a temp dir moves both LEDGER and CONTRACT_DIR under it.
+  write_script "$script_file" "$block"
+  out=$(HOME="$fake_home" MOGUI_STATE_DIR="$work" bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: MOGUI_STATE_DIR set to an existing dir exited non-zero" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF "LEDGER=$work/dispatch-ledger.jsonl"; then
+    echo "FAIL: MOGUI_STATE_DIR did not redirect LEDGER under it" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF "CONTRACT_DIR=$work/dispatch-contracts"; then
+    echo "FAIL: MOGUI_STATE_DIR did not redirect CONTRACT_DIR under it" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : MOGUI_STATE_DIR set to an existing directory moves LEDGER and CONTRACT_DIR under it"
+
+  # Case: a relative path is refused before any other work.
+  write_script "$script_file" "$block"
+  HOME="$fake_home" MOGUI_STATE_DIR="relative/dir" bash "$script_file" >"$work/stdout" 2>"$work/stderr"
+  status=$?
+  err_lines=$(wc -l < "$work/stderr" | tr -d ' ')
+  if [ "$status" -ne 1 ]; then
+    echo "FAIL: a relative MOGUI_STATE_DIR should exit 1, got $status" >&2
+    cat "$work/stderr" >&2
+    return 1
+  fi
+  if [ "$err_lines" -ne 1 ]; then
+    echo "FAIL: refusal should write exactly one stderr line, got $err_lines" >&2
+    cat "$work/stderr" >&2
+    return 1
+  fi
+  if ! grep -qF 'MOGUI_STATE_DIR must be an absolute path to an existing directory: relative/dir' "$work/stderr"; then
+    echo "FAIL: refusal did not name the variable and the value on stderr" >&2
+    cat "$work/stderr" >&2
+    return 1
+  fi
+  echo "ok   : a relative MOGUI_STATE_DIR exits 1 with exactly one stderr line naming the variable and value"
+
+  # Failability: dropping the validation check lets a relative value through.
+  mutant_block=$(printf '%s\n' "$block" | awk '/^  if \[ "\$STATE_DIR_OK" != 1 \]; then$/{skip=1} skip&&/^  fi$/{skip=0; next} !skip')
+  if [ "$mutant_block" = "$block" ]; then
+    echo "FAIL: validation-drop mutant did not change the source" >&2
+    return 1
+  fi
+  write_script "$script_file" "$mutant_block"
+  out=$(HOME="$fake_home" MOGUI_STATE_DIR="relative/dir" bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: failability: dropping the validation should have let the relative value through instead of refusing it" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF "LEDGER=relative/dir/dispatch-ledger.jsonl"; then
+    echo "FAIL: failability: mutant did not accept the relative MOGUI_STATE_DIR value" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : failability: dropping the validation check accepts a relative MOGUI_STATE_DIR instead of refusing it"
+)
+state_dir_seam_test "$dispatch" || exit 1
+
 # --- Feature: contract delivery ---------------------------------------------
 #
 # Extracts the `if [ -n "$CONTRACT" ]; then ... fi` block that copies the
@@ -1776,4 +1904,4 @@ EOF
 )
 codex_hooks_vet_wiring_test "$dispatch" || exit 1
 
-echo "dispatch multi-vendor / check-only / contract-delivery / cursor-pretrust / claude-pretrust / claude-pretrust-call-site / claude-hook-trust-marker / codex-launch / codex-start-screen / codex-start-screen-wiring / codex-hooks-vet / codex-hooks-vet-wiring regression tests passed"
+echo "dispatch multi-vendor / check-only / state-dir-seam / contract-delivery / cursor-pretrust / claude-pretrust / claude-pretrust-call-site / claude-hook-trust-marker / codex-launch / codex-start-screen / codex-start-screen-wiring / codex-hooks-vet / codex-hooks-vet-wiring regression tests passed"

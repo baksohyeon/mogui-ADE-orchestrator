@@ -387,7 +387,7 @@ fi
 # A vendor match on $TOP_RUNTIME does not guarantee the gate was reached: the
 # operator can also declare a runtime unavailable in the instance runtime
 # config, and that refusal fires before the top-tier check with its own
-# message. Classify it rather than report it as a failed probe.
+# message. Classify it here under its own step name.
 if [ "$FAIL_OK" != 1 ] && grep -qE '^✗ runtime .* unavailable on this install' "$FAIL_LOG"; then
   echo "smoke FAIL layer=gate step=runtime-unavailable"
   echo "--- failure.log ---" >&2

@@ -28,18 +28,29 @@ pipe is open end to end; it says nothing about what the worker produced.
 
 ## The three layers and localization
 
-A failing run prints one line, `smoke FAIL layer=<layer> step=<step>`, to
-stdout, with `smoke.log`'s tail on stderr.
+What a failing run prints depends on the failure path:
+
+- **precondition** (exit 10): one stderr line naming the failed check; no
+  verdict line.
+- **failure case** (exit 11): the `smoke FAIL layer=gate step=...` verdict,
+  plus `failure.log`'s tail on stderr.
+- **normal case** (exit 12, layers gate/orca/register/delivery/wrapper): the
+  `smoke FAIL layer=<layer> step=<step>` verdict, plus `smoke.log`'s tail on
+  stderr.
+- **timeout** (exit 12, layer=worker): the verdict plus the last line of
+  `smoke.log` on stderr.
+- **isolation** (exit 13): the stderr block naming the differing file(s) and
+  the added row(s)/listing(s), plus the `smoke FAIL layer=isolation` verdict.
 
 | exit | layer | step | look next |
 |---|---|---|---|
 | 10 | (precondition) | named in the stderr line | the checkout/install itself: unrendered wrapper, missing seam, `claude` not on PATH, `orca status` |
-| 11 | gate | `top-tier-refusal` | the gate's ledger reason in the printed failure.log tail |
+| 11 | gate | `top-tier-refusal` or `task-count-unreadable` | the refusal text in `failure.log`; confirm the scratch ledger is empty and the task count is unchanged |
 | 12, wrapper exit 2 | gate | (none) | the gate's denial reason in `smoke.log` |
 | 12, wrapper exit 3 | orca | `task-create`, `terminal-create`, or `dispatch` | `orca orchestration task-list --json`, then `orca terminal read --terminal <handle> --limit 40` for the pane the arrow line names |
 | 12, wrapper exit 4 | register | (none) | the register denial reason in `smoke.log`; the worker is running, resolve by hand |
 | 12, wrapper exit 5 (or any exit with `class=` other than `agent-started`) | delivery | the delivery `class` (`hook-trust`, `limit`, `unknown`, ...) | `orca terminal read --terminal <handle> --limit 40` on the worktree's pane |
-| 12, other nonzero | wrapper | the wrapper's own exit code | `smoke.log` in full |
+| 12, other nonzero | wrapper | the wrapper's own exit code | the printed `smoke.log` tail on stderr |
 | 12, layer-2 timeout | worker | the last `dispatch-show` status seen | `orca orchestration dispatch-show --task <task> --json`; the worker's own home event log |
 | 12, layer-3 mismatch | contract-read | `missing` or `mismatch` | `<worktree>/SMOKE.txt` directly |
 | 13 | isolation | `leak` or `concurrent-writer` | the added ledger row(s) or contract copy name(s) printed to stderr |
@@ -76,10 +87,9 @@ seat-run smoke or because `MOGUI_STATE_DIR` was never meant to reach it:
   launched with `MOGUI_STATE_DIR` set, so whatever it writes through its own
   hooks lands in the real location.
 - Every other `$HOME`-relative path the wrapper still touches outside the
-  five seam-covered files: the claude transcript glob used for the (unused
-  here, since `--transcript-glob` is not passed and the probe is scoped by
-  worktree) model probe (`$HOME/.claude/projects/...`, read-only); the codex
-  accounts directory and `$HOME/.codex` (codex-only, not touched by a
+  five seam-covered files: the claude transcript glob derived from the
+  worktree for the active model probe (`$HOME/.claude/projects/...`, read-only);
+  the codex accounts directory and `$HOME/.codex` (codex-only, not touched by a
   `--runtime claude` smoke); `$HOME/.cursor/projects` (cursor-only, not
   reached here either).
 
@@ -96,7 +106,11 @@ One haiku worker, one scratch worktree, one to three minutes.
 
 Read the verdict line first, then the tail of `smoke.log` the script prints
 to stderr on any layer-1 failure (or the tail of `failure.log` for an
-exit-11 failure-case mismatch). For a layer-2 timeout, read the dispatch's
+exit-11 failure-case mismatch). `smoke.log` lives under the scratch `$STATE`
+directory, which cleanup removes at the end of every run, so only the
+printed tail survives past the run; the full log does not. A `--keep-state`
+flag that skips that removal and prints the kept path is not implemented; it
+is out of scope for this round. For a layer-2 timeout, read the dispatch's
 own status with `orca orchestration dispatch-show --task <task> --json` and
 the pane with `orca terminal read --terminal <handle> --limit 40`. For an
 isolation break (exit 13), the added ledger row(s) or contract copy name(s)
@@ -112,7 +126,8 @@ the shared ledger during the run.
 - `orca orchestration dispatch-show --task <id> --json` carries the dispatch
   under `.result.dispatch`, with `.status` the field this script polls and
   `completed` the value it waits for (measured against this contract's own
-  dispatch while it was still `dispatched`, with `completed_at: null`).
+  dispatch once it finished: `status: completed`, `completed_at` set, and
+  `termination_reason: null`).
 - `orca worktree create --json` returns the new worktree's absolute path at
   `.result.worktree.path` and its name at `.result.worktree.displayName`.
 - `orca orchestration task-list --json` requires a bound Run in the calling

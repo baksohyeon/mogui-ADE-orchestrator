@@ -115,7 +115,7 @@ verdict_test "$smoke" || exit 1
 isolation_test() (
   set +e
   set -u
-  local smoke="$1" fn work script_file out mutant_fn
+  local smoke="$1" fn work script_file out mutant_fn rc
 
   fn=$(extract_fn "$smoke" 'isolation_diff() {')
   [ -n "$fn" ] || { echo "FAIL: could not extract isolation_diff" >&2; return 1; }
@@ -138,6 +138,8 @@ isolation_test() (
 b" "a
 b"
   out=$(bash "$script_file" 2>&1)
+  rc=$?
+  [ "$rc" = 0 ] || { echo "FAIL: matching sha and listing should exit 0, got rc=$rc output='$out'" >&2; return 1; }
   [ -z "$out" ] || { echo "FAIL: matching sha and listing should report nothing, got '$out'" >&2; return 1; }
   echo "ok   : isolation_diff reports nothing when both the ledger sha and the contracts listing match"
 
@@ -164,10 +166,10 @@ c"
   fi
   write_script "$script_file" "$mutant_fn" shaA shaB "a" "a"
   out=$(bash "$script_file" 2>&1)
+  rc=$?
+  [ "$rc" = 0 ] || { echo "FAIL: mutant should exit 0, got rc=$rc output='$out'" >&2; return 1; }
   [ -z "$out" ] || { echo "FAIL: failability mutant unexpectedly still reported a diff ('$out')" >&2; return 1; }
-  if [ -z "$out" ]; then
-    echo "ok   : failability: dropping the sha comparison makes a real ledger difference go unreported"
-  fi
+  echo "ok   : failability: dropping the sha comparison makes a real ledger difference go unreported"
 )
 isolation_test "$smoke" || exit 1
 

@@ -7,6 +7,7 @@ tests drive it against a stubbed host so each verdict is measured, not assumed.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -133,6 +134,11 @@ def _host(
         }
     )
     env.pop("ORCA_SKILLS_DIRS", None)
+    # A developer shell that routes its own agent through a proxy must not leak
+    # into the agent-route verdict of a stub host.
+    for route_var in ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"):
+        env.pop(route_var, None)
+    env.pop("PREFLIGHT_ALLOW_AGENT_PROXY", None)
     return env
 
 
@@ -530,3 +536,54 @@ def test_no_essential_block_when_nothing_essential_is_missing(tmp_path: Path) ->
         (home / ".claude" / "skills" / pack).mkdir(parents=True, exist_ok=True)
     result = _run(env, tmp_path)
     assert "ESSENTIAL COMPONENTS MISSING" not in result.stdout, result.stdout
+
+
+PROXY_URL = "https://proxy.invalid/v1"
+
+
+def _write_claude_env(tmp_path: Path, env_block: dict) -> None:
+    (tmp_path / "home" / ".claude" / "settings.json").write_text(
+        json.dumps({"env": env_block}), encoding="utf-8"
+    )
+
+
+@skip_windows_exec_surface
+def test_agent_route_passes_on_a_clean_host(tmp_path: Path) -> None:
+    result = _run(_host(tmp_path), tmp_path)
+    assert "agent-route" in _labels(result.stdout, "PASS"), result.stdout
+
+
+@skip_windows_exec_surface
+def test_agent_route_fails_when_settings_env_redirects_claude(tmp_path: Path) -> None:
+    """A vendor setup command rewrote the agent config to a proxy once, and the
+    proxy did not serve the configured model; every request came back 429."""
+
+    env = _host(tmp_path)
+    _write_claude_env(tmp_path, {"ANTHROPIC_BASE_URL": PROXY_URL})
+    result = _run(env, tmp_path)
+    assert "agent-route" in _labels(result.stdout, "FAIL"), result.stdout
+    assert "settings.env.ANTHROPIC_BASE_URL" in result.stdout, result.stdout
+    assert "ESSENTIAL COMPONENTS MISSING" in result.stdout, result.stdout
+
+
+@skip_windows_exec_surface
+def test_agent_route_fails_when_the_shell_redirects_claude(tmp_path: Path) -> None:
+    env = _host(tmp_path)
+    env["ANTHROPIC_BASE_URL"] = PROXY_URL
+    result = _run(env, tmp_path)
+    assert "agent-route" in _labels(result.stdout, "FAIL"), result.stdout
+    assert "shell.ANTHROPIC_BASE_URL" in result.stdout, result.stdout
+
+
+@skip_windows_exec_surface
+def test_agent_route_proxy_passes_when_the_operator_allows_it(tmp_path: Path) -> None:
+    """An intentional proxy passes, and the pass names what it is routed through."""
+
+    env = _host(tmp_path)
+    _write_claude_env(tmp_path, {"ANTHROPIC_BASE_URL": PROXY_URL})
+    env["PREFLIGHT_ALLOW_AGENT_PROXY"] = "1"
+    result = _run(env, tmp_path)
+    assert "agent-route" in _labels(result.stdout, "PASS"), result.stdout
+    assert "agent-route" not in _labels(result.stdout, "FAIL"), result.stdout
+    assert "PREFLIGHT_ALLOW_AGENT_PROXY=1" in result.stdout, result.stdout
+    assert "settings.env.ANTHROPIC_BASE_URL" in result.stdout, result.stdout

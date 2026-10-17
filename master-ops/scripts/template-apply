@@ -9,7 +9,8 @@ Instance-owned paths are refused by name:
   docs/decisions/closed-decisions-and-facts.md,
   docs/runbooks/boot-comparison-set.md, docs/runbooks/role-state.md,
   docs/runbooks/succession-boot-card.md, scripts/compaction-probe.sh,
-  scripts/harness-selfcheck.sh, .beads/, config/, contracts/,
+  scripts/harness-selfcheck.sh, workspace-card/LOCAL.md, .beads/, config/,
+  contracts/,
   and anything the manifest does not claim.
 
 Per-file outcomes:

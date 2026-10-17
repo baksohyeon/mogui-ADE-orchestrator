@@ -559,6 +559,62 @@ codex_start_screen_problem() {
 # because the launch flags below and the footer check above must agree on both.
 CODEX_REASONING_EFFORT=xhigh
 CODEX_MIGRATION_ACK='notice.model_migrations={"gpt-5.5"="gpt-6.1-sol"}'
+CODEX_BYPASS_FLAG=
+
+# Two optional instance runtime config keys override the codex defaults above:
+# codex_reasoning_effort (a string) and codex_bypass_approvals_and_sandbox (a
+# JSON boolean, default false). Absent or null keys leave the launch line
+# exactly as above. The effort list is the one codex-cli 0.163.0 carries,
+# measured 2026-10-17; an unknown value is refused rather than passed through,
+# because the footer check would then wait on a footer codex never prints.
+# An unreadable config is left to unavailable_runtimes_guard, which refuses it.
+#   exit 0: two lines on stdout, effort then bypass (1 or 0).
+#   exit 1: a key is present but invalid, one-line reason on stdout.
+codex_instance_launch_config() {
+  [ -f "$INSTANCE_RUNTIME_CONFIG" ] || { printf '%s\n0\n' "$CODEX_REASONING_EFFORT"; return 0; }
+  python3 - "$INSTANCE_RUNTIME_CONFIG" "$CODEX_REASONING_EFFORT" <<'EOF'
+import json
+import sys
+
+path, effort = sys.argv[1], sys.argv[2]
+efforts = ("minimal", "low", "medium", "high", "xhigh", "max")
+try:
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+except Exception:
+    data = {}
+if not isinstance(data, dict):
+    data = {}
+value = data.get("codex_reasoning_effort")
+if value is not None:
+    if not isinstance(value, str) or value not in efforts:
+        print(f"codex_reasoning_effort is {value!r}; expected one of {', '.join(efforts)}")
+        sys.exit(1)
+    effort = value
+bypass = data.get("codex_bypass_approvals_and_sandbox")
+if bypass is not None and not isinstance(bypass, bool):
+    print(f"codex_bypass_approvals_and_sandbox is {bypass!r}; expected true or false")
+    sys.exit(1)
+print(effort)
+print(1 if bypass else 0)
+EOF
+}
+
+# Called bare, not through $(...), so the refusal can stop dispatch.
+apply_codex_instance_launch_config() {
+  local out status
+  out=$(codex_instance_launch_config)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "✗ invalid codex launch setting in $INSTANCE_RUNTIME_CONFIG: $out" >&2
+    exit 2
+  fi
+  CODEX_REASONING_EFFORT=$(printf '%s\n' "$out" | sed -n 1p)
+  if [ "$(printf '%s\n' "$out" | sed -n 2p)" = 1 ]; then
+    CODEX_BYPASS_FLAG=' --dangerously-bypass-approvals-and-sandbox'
+  fi
+}
+apply_codex_instance_launch_config
 
 shell_quote() {
   python3 - "$1" <<'EOF'
@@ -601,6 +657,8 @@ runtime_command() {
     # disables the sandbox as well as approvals. Weakening a sandbox is not a
     # side effect to take on while fixing a delivery bug, so the safer measured
     # path stays and the operator is told when it has not run.
+    # The bypass flag is added only as an explicit operator opt-in, through
+    # codex_bypass_approvals_and_sandbox in the instance runtime config.
     # The model flag is separate from the approval posture above and was missing
     # here until 2026-08-05. The gate validated a model id, the tier policy
     # recorded it, and the launcher dropped it: two codex dispatches declared
@@ -620,7 +678,7 @@ runtime_command() {
     # written as an inline table: the dotted form reads the dot inside the
     # model id as a nesting separator and fails with "invalid type: map,
     # expected a string".
-    codex) echo "codex --model $model_arg -c $(shell_quote "model_reasoning_effort=\"$CODEX_REASONING_EFFORT\"") -c check_for_update_on_startup=false -c $(shell_quote "$CODEX_MIGRATION_ACK")";;
+    codex) echo "codex --model $model_arg -c $(shell_quote "model_reasoning_effort=\"$CODEX_REASONING_EFFORT\"") -c check_for_update_on_startup=false -c $(shell_quote "$CODEX_MIGRATION_ACK")${CODEX_BYPASS_FLAG:-}";;
     gemini) echo "gemini";;
     opencode) echo "opencode";;
     # agy is the Gemini host; `agy models` reports gemini-* ids. Its approval flag

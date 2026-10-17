@@ -8,7 +8,7 @@ Load rule: read this file only when the router's mode question answered **Upgrad
 
 ## Owner script (kind ELI5, adapt to the owner's language)
 
-Where we are: this workspace was already set up, and the book the Master reads from may be behind the current template. What we do next: measure what is missing or unknown against the template's file list, show every path that would be written and why, then wait for a clear yes before writing anything. Paths the workspace owns for itself stay untouched by name: lineage, role state, operating cards, operations source of truth, closed decisions, succession card, boot comparison, self-check and compaction scripts, tracker data, local config, contracts. Provide the workspace root and ops repository path when those facts are not already available.
+Where we are: this workspace was already set up, and the book the Master reads from may be behind the current template. What we do next: measure what is missing or unknown against the template's file list, show every path that would be written and why, then wait for a clear yes before writing anything. Paths the workspace owns for itself stay untouched by name: lineage, role state, operating cards, operations source of truth, closed decisions, succession card, boot comparison, self-check and compaction scripts, the session card's local extension, tracker data, local config, contracts. Provide the workspace root and ops repository path when those facts are not already available.
 
 ## Checklist
 
@@ -49,6 +49,7 @@ When the ops repository already has the script:
    - `docs/runbooks/succession-boot-card.md`
    - `scripts/compaction-probe.sh`
    - `scripts/harness-selfcheck.sh`
+   - `workspace-card/LOCAL.md`
    - `.beads/`
    - `config/`
    - `contracts/`

@@ -6,6 +6,8 @@ Product repositories (`{{REPO_LIST}}`) are **worker territory**: write a contrac
 
 Commands on this card run from the workspace root and the shell stays there. Reach other repositories with `git -C`, `gh --repo`, and absolute paths rather than moving into them.
 
+If `{{OPS_REPO}}/workspace-card/LOCAL.md` exists, read it after this card: it holds this installation's own additions (for example an owner-assigned role or reply language), and nothing in it overrides the execution rule above. When it is absent, nothing changes.
+
 ## Skill routing
 
 When a request matches a row, invoke the skill FIRST — before answering, exploring, or editing.

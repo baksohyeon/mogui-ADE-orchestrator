@@ -54,6 +54,23 @@ def test_card_pair_names_the_extension_path_and_it_is_instance_owned():
     assert not (SKELETON / EXTENSION).exists(), "the template ships no extension file"
 
 
+def test_card_pair_says_the_extension_overrides_no_rule_on_the_card():
+    for name in ("CLAUDE.md", "AGENTS.md"):
+        card = (SKELETON / "workspace-card" / name).read_text(encoding="utf-8")
+        assert "nothing in it overrides any rule on this card" in card, name
+
+
+def test_upgrade_redeploys_both_root_cards_after_a_card_write():
+    upgrade = (SKELETON / "onboarding" / "upgrade.md").read_text(encoding="utf-8")
+    step = upgrade.split("8. **Redeploy the session card**", 1)
+    assert len(step) == 2, "upgrade.md has no redeploy step"
+    body = step[1].split("## Report", 1)[0]
+    for name in ("CLAUDE.md", "AGENTS.md"):
+        assert f'cp "{{{{OPS_REPO}}}}/workspace-card/{name}" "{{{{WORKSPACE_ROOT}}}}/{name}"' in body, name
+    assert "explicit confirmation" in body
+    assert EXTENSION in body
+
+
 def test_template_apply_refuses_the_extension_by_name(tmp_path: Path):
     ops = tmp_path / "ops"
     ops.mkdir()

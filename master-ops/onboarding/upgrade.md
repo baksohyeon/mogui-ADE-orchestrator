@@ -59,6 +59,15 @@ When the ops repository already has the script:
 
 7. **Re-check**: run `template-check` again with `--template` and confirm the report_set is `template-compare`. A clean shape is the goal; remaining unknown paths that are deliberate local additions stay listed as unknown and are not deleted.
 
+8. **Redeploy the session card**: if the write pass wrote `workspace-card/CLAUDE.md` or `workspace-card/AGENTS.md`, the copies at the workspace root are now behind, and the master keeps reading the old card. Compare each root copy to its ops copy and show the owner the difference. If a root copy carries sections of its own, move them into `{{OPS_REPO}}/workspace-card/LOCAL.md` first, because the copy replaces the root file. After an explicit confirmation, redeploy both:
+
+```console
+cp "{{OPS_REPO}}/workspace-card/CLAUDE.md" "{{WORKSPACE_ROOT}}/CLAUDE.md"
+cp "{{OPS_REPO}}/workspace-card/AGENTS.md" "{{WORKSPACE_ROOT}}/AGENTS.md"
+```
+
+If the owner declines, say that the root card is stale and that `LOCAL.md` is not read until it is redeployed.
+
 ## Report
 
-State, in the owner's language: which report set was produced, installed vs template version, how many paths were written, how many were refused as instance-owned, and how many unknown local paths remain. Then stop; Upgrade has no spawn and no further steps.
+State, in the owner's language: which report set was produced, installed vs template version, how many paths were written, how many were refused as instance-owned, how many unknown local paths remain, and whether the workspace-root card was redeployed. Then stop; Upgrade has no spawn and no further steps.

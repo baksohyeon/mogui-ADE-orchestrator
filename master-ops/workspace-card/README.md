@@ -29,7 +29,9 @@ When editing, verify each link by resolving it from the workspace root (with the
 
 ## Local extension
 
-An installation that needs sections of its own in the card (an owner-assigned role, a reply language and tone) writes them to `workspace-card/LOCAL.md` in the ops repository, not into this pair. The card tells the master to read that file after the card when it exists; its additions never override the card's execution rule. Without the file, the card reads exactly as before.
+An installation that needs sections of its own in the card (duties the owner gives this master, a reply language and tone) writes them to `workspace-card/LOCAL.md` in the ops repository, not into this pair. The card tells the master to read that file after the card when it exists; its additions never override a rule on the card. Without the file, the card reads exactly as before. Facts that already have a home stay there: the current role, seat path, and workspace id belong to role state (see [What is not here](#what-is-not-here)), and `LOCAL.md` points at them like the card does.
+
+The pointer reaches the master only through the deployed card. After an upgrade rewrites this pair, redeploy both files to the workspace root (Upgrade step 8 does this with the owner's confirmation); until then the root copy has no pointer and `LOCAL.md` is not read.
 
 The file is instance-owned: `template-apply` refuses it by name, so a template upgrade that rewrites this pair leaves it alone. It lives next to the card, inside the ops repository, so it is versioned and backed up with the rest of the install; the template ships no copy and the manifest does not claim it. It is not deployed to the workspace root: the deployed card points at it in the ops repository, so there is still one copy to edit. The pointer is plain prose rather than an include, because not every agent host that reads `AGENTS.md` supports include syntax and the pair must stay byte-identical.
 

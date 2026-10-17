@@ -481,25 +481,39 @@ fi
 # hand for an hour. Measure the route at boot: the config's env block and the
 # live environment must not redirect the agent unless the operator says so with
 # PREFLIGHT_ALLOW_AGENT_PROXY=1.
-if [[ "$agent_cli" == "claude" ]]; then
-  claude_settings="${HOME}/.claude/settings.json"
+if [[ "$agent_cli" == "claude" || "$agent_cli" == "claude-code" ]]; then
+  claude_settings="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/settings.json"
   route_hits=""
+  route_unmeasured=""
   if [[ -f "$claude_settings" ]]; then
-    route_hits=$(python3 - "$claude_settings" <<'PY'
+    if ! command -v python3 >/dev/null 2>&1; then
+      route_unmeasured="python3 is missing, so $claude_settings was not read"
+    elif ! route_hits=$(python3 - "$claude_settings" 2>&1 <<'PY'
 import json,sys
-try: env=(json.load(open(sys.argv[1])).get('env') or {})
-except Exception as e: print('settings.json unreadable: %s' % e); sys.exit()
-keys=[k for k in ('ANTHROPIC_BASE_URL','ANTHROPIC_AUTH_TOKEN','ANTHROPIC_API_KEY') if str(env.get(k,'')).strip()]
+try:
+    data=json.load(open(sys.argv[1]))
+    if not isinstance(data,dict): raise ValueError('top level is not a JSON object')
+    env=data.get('env') or {}
+    if not isinstance(env,dict): raise ValueError('env is not a JSON object')
+except Exception as e: print(e); sys.exit(2)
+keys=[k for k in ('ANTHROPIC_BASE_URL','ANTHROPIC_AUTH_TOKEN','ANTHROPIC_API_KEY') if str(env.get(k) or '').strip()]
 print(' '.join('settings.env.%s' % k for k in keys))
 PY
-)
+); then
+      route_unmeasured="$claude_settings is unreadable ($route_hits)"
+      route_hits=""
+    fi
   fi
-  for route_var in ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN; do
+  for route_var in ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY; do
     [[ -n "${!route_var:-}" ]] && route_hits="${route_hits:+$route_hits }shell.$route_var"
   done
   route_hits="${route_hits# }"
-  if [[ -z "$route_hits" ]]; then
-    pass "agent-route" "claude uses the vendor's own endpoint and login; no proxy or token override in ~/.claude/settings.json or the shell"
+  # An unread settings file is an unmeasured route, so the proxy allowance does
+  # not turn it into a PASS.
+  if [[ -n "$route_unmeasured" ]]; then
+    fail "agent-route" "route not measured: $route_unmeasured. Fix or restore the file, then rerun"
+  elif [[ -z "$route_hits" ]]; then
+    pass "agent-route" "claude uses the vendor's own endpoint and login; no proxy or token override in $claude_settings or the shell"
   elif [[ "${PREFLIGHT_ALLOW_AGENT_PROXY:-}" == "1" ]]; then
     pass "agent-route" "claude is routed through a proxy by operator decision (PREFLIGHT_ALLOW_AGENT_PROXY=1): $route_hits"
   else

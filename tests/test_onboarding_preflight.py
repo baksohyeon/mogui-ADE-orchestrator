@@ -14,6 +14,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from windows_exec_surface import skip_windows_exec_surface
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -136,9 +138,14 @@ def _host(
     env.pop("ORCA_SKILLS_DIRS", None)
     # A developer shell that routes its own agent through a proxy must not leak
     # into the agent-route verdict of a stub host.
-    for route_var in ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"):
+    for route_var in (
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_API_KEY",
+        "CLAUDE_CONFIG_DIR",
+        "PREFLIGHT_ALLOW_AGENT_PROXY",
+    ):
         env.pop(route_var, None)
-    env.pop("PREFLIGHT_ALLOW_AGENT_PROXY", None)
     return env
 
 
@@ -541,10 +548,14 @@ def test_no_essential_block_when_nothing_essential_is_missing(tmp_path: Path) ->
 PROXY_URL = "https://proxy.invalid/v1"
 
 
-def _write_claude_env(tmp_path: Path, env_block: dict) -> None:
+def _write_claude_settings(tmp_path: Path, text: str) -> None:
     (tmp_path / "home" / ".claude" / "settings.json").write_text(
-        json.dumps({"env": env_block}), encoding="utf-8"
+        text, encoding="utf-8"
     )
+
+
+def _write_claude_env(tmp_path: Path, env_block: dict) -> None:
+    _write_claude_settings(tmp_path, json.dumps({"env": env_block}))
 
 
 @skip_windows_exec_surface
@@ -587,3 +598,101 @@ def test_agent_route_proxy_passes_when_the_operator_allows_it(tmp_path: Path) ->
     assert "agent-route" not in _labels(result.stdout, "FAIL"), result.stdout
     assert "PREFLIGHT_ALLOW_AGENT_PROXY=1" in result.stdout, result.stdout
     assert "settings.env.ANTHROPIC_BASE_URL" in result.stdout, result.stdout
+
+
+@skip_windows_exec_surface
+def test_agent_route_fails_when_the_shell_sets_an_api_key(tmp_path: Path) -> None:
+    env = _host(tmp_path)
+    env["ANTHROPIC_API_KEY"] = "test-key"
+    result = _run(env, tmp_path)
+    assert "agent-route" in _labels(result.stdout, "FAIL"), result.stdout
+    assert "shell.ANTHROPIC_API_KEY" in result.stdout, result.stdout
+
+
+@skip_windows_exec_surface
+def test_agent_route_names_every_token_source(tmp_path: Path) -> None:
+    env = _host(tmp_path)
+    _write_claude_env(tmp_path, {"ANTHROPIC_API_KEY": "test-key"})
+    env["ANTHROPIC_AUTH_TOKEN"] = "test-token"
+    result = _run(env, tmp_path)
+    assert "agent-route" in _labels(result.stdout, "FAIL"), result.stdout
+    assert "settings.env.ANTHROPIC_API_KEY" in result.stdout, result.stdout
+    assert "shell.ANTHROPIC_AUTH_TOKEN" in result.stdout, result.stdout
+
+
+@skip_windows_exec_surface
+def test_agent_route_reads_settings_from_claude_config_dir(tmp_path: Path) -> None:
+    env = _host(tmp_path)
+    config_dir = tmp_path / "claude-config"
+    config_dir.mkdir()
+    (config_dir / "settings.json").write_text(
+        json.dumps({"env": {"ANTHROPIC_BASE_URL": PROXY_URL}}), encoding="utf-8"
+    )
+    env["CLAUDE_CONFIG_DIR"] = str(config_dir)
+    result = _run(env, tmp_path)
+    assert "agent-route" in _labels(result.stdout, "FAIL"), result.stdout
+    assert "settings.env.ANTHROPIC_BASE_URL" in result.stdout, result.stdout
+
+
+@skip_windows_exec_surface
+def test_agent_route_is_measured_for_claude_code(tmp_path: Path) -> None:
+    env = _host(tmp_path)
+    env["ORCA_AGENT_CLI"] = "claude-code"
+    _write_claude_env(tmp_path, {"ANTHROPIC_BASE_URL": PROXY_URL})
+    result = _run(env, tmp_path)
+    assert "agent-route" in _labels(result.stdout, "FAIL"), result.stdout
+
+
+@skip_windows_exec_surface
+def test_agent_route_treats_null_overrides_as_unset(tmp_path: Path) -> None:
+    env = _host(tmp_path)
+    _write_claude_settings(
+        tmp_path, json.dumps({"env": {"ANTHROPIC_BASE_URL": None}})
+    )
+    result = _run(env, tmp_path)
+    assert "agent-route" in _labels(result.stdout, "PASS"), result.stdout
+
+
+@pytest.mark.parametrize(
+    "settings_text",
+    ["{not json", '["a list"]', '{"env": ["a list"]}'],
+    ids=["malformed", "top-level-list", "env-list"],
+)
+@skip_windows_exec_surface
+def test_agent_route_fails_on_unreadable_settings_even_when_proxy_allowed(
+    tmp_path: Path, settings_text: str
+) -> None:
+    """An unread settings file is an unmeasured route: it fails as a file
+    problem, the run still reaches its summary, and the proxy allowance does
+    not pass it."""
+
+    env = _host(tmp_path)
+    _write_claude_settings(tmp_path, settings_text)
+    env["PREFLIGHT_ALLOW_AGENT_PROXY"] = "1"
+    result = _run(env, tmp_path)
+    assert "agent-route" in _labels(result.stdout, "FAIL"), result.stdout
+    assert "route not measured" in result.stdout, result.stdout
+    assert "settings.env." not in result.stdout, result.stdout
+    assert "ESSENTIAL COMPONENTS MISSING" in result.stdout, result.stdout
+
+
+@skip_windows_exec_surface
+def test_agent_route_fails_without_python_and_the_run_finishes(
+    tmp_path: Path,
+) -> None:
+    env = _host(tmp_path, sanitized_path=True)
+    _write_claude_env(tmp_path, {})
+    # Mirror the system directories minus python so `command -v python3` misses.
+    shim = tmp_path / "no-python"
+    shim.mkdir()
+    for system_dir in (Path("/usr/bin"), Path("/bin")):
+        for tool in system_dir.iterdir():
+            if tool.name.startswith("python") or (shim / tool.name).exists():
+                continue
+            (shim / tool.name).symlink_to(tool)
+    env["PATH"] = f"{tmp_path / 'bin'}:{shim}"
+    result = _run(env, tmp_path)
+    assert "python3" in _labels(result.stdout, "FAIL"), result.stdout
+    assert "agent-route" in _labels(result.stdout, "FAIL"), result.stdout
+    assert "python3 is missing" in result.stdout, result.stdout
+    assert "ESSENTIAL COMPONENTS MISSING" in result.stdout, result.stdout

@@ -600,7 +600,9 @@ print(1 if bypass else 0)
 EOF
 }
 
-# Called bare, not through $(...), so the refusal can stop dispatch.
+# Called bare, not through $(...), so the refusal can stop dispatch. Only a
+# codex dispatch calls it, so a bad codex key never stops another runtime. The
+# bypass warning goes to stdout because stdout is this script's mechanical log.
 apply_codex_instance_launch_config() {
   local out status
   out=$(codex_instance_launch_config)
@@ -612,9 +614,10 @@ apply_codex_instance_launch_config() {
   CODEX_REASONING_EFFORT=$(printf '%s\n' "$out" | sed -n 1p)
   if [ "$(printf '%s\n' "$out" | sed -n 2p)" = 1 ]; then
     CODEX_BYPASS_FLAG=' --dangerously-bypass-approvals-and-sandbox'
+    echo "WARNING: codex_bypass_approvals_and_sandbox is true in $INSTANCE_RUNTIME_CONFIG;"
+    echo "         this codex worker launches with --dangerously-bypass-approvals-and-sandbox (no sandbox, no approvals)."
   fi
 }
-apply_codex_instance_launch_config
 
 shell_quote() {
   python3 - "$1" <<'EOF'
@@ -1054,6 +1057,8 @@ UNAVAILABLE_RUNTIMES=$(unavailable_runtime_names | join_csv)
 # resolution or gate check spends effort on a runtime the operator already
 # declared unusable on this install.
 refuse_unavailable_runtime "$RUNTIME" "$ALTERNATIVE_RUNTIMES" || exit 2
+
+[ "$RUNTIME" = codex ] && apply_codex_instance_launch_config
 
 # The model id and the runtime are chosen independently, so nothing stopped a
 # claude model id from being declared for a codex or grok worker. That is not a

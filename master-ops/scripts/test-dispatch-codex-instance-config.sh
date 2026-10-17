@@ -3,8 +3,9 @@
 # the instance runtime config: codex_reasoning_effort and
 # codex_bypass_approvals_and_sandbox. Absent keys keep today's launch line, a
 # valid effort changes both the launch line and the footer the start-screen
-# check expects, a true bypass appends the flag, and an invalid value is
-# refused with exit 2. A new file because test-dispatch-runtime.sh is past the
+# check expects, a true bypass appends the flag and prints a warning on
+# stdout, an invalid value is refused with exit 2, and only a codex dispatch
+# reads the keys at all. A new file because test-dispatch-runtime.sh is past the
 # 1,000-line rule (CONTRIBUTING.md "When a file is full").
 #
 # dispatch carries template placeholders, so each case extracts the launch
@@ -36,12 +37,13 @@ start_fn=$(extract_fn codex_start_screen_problem)
 for name in markers shell_quote_fn read_fn apply_fn runtime_command_fn start_fn; do
   [ -n "${!name}" ] || { echo "FAIL: could not extract $name from dispatch" >&2; exit 1; }
 done
-grep -qx 'apply_codex_instance_launch_config' "$dispatch" \
-  || { echo "FAIL: dispatch never calls apply_codex_instance_launch_config" >&2; exit 1; }
+call_site='[ "$RUNTIME" = codex ] && apply_codex_instance_launch_config'
 
 today='codex --model gpt-5.5 -c '"'"'model_reasoning_effort="xhigh"'"'"' -c check_for_update_on_startup=false -c '"'"'notice.model_migrations={"gpt-5.5"="gpt-6.1-sol"}'"'"''
 high=${today/'"xhigh"'/'"high"'}
 bypass="$today --dangerously-bypass-approvals-and-sandbox"
+bypass_warning="WARNING: codex_bypass_approvals_and_sandbox is true in $work/instance-runtime.json;
+         this codex worker launches with --dangerously-bypass-approvals-and-sandbox (no sandbox, no approvals)."
 
 # run_case  read-fn  apply-fn  config-json|-  [footer-pane]
 # Prints the codex launch line; with a pane, also the start-screen verdict.
@@ -110,15 +112,21 @@ got=$(run_case "$mutant" "$apply_fn" '{"codex_reasoning_effort": "high"}' "$high
 footer-rc=0" ] || { echo "FAIL: failability: ignoring the configured effort still matched" >&2; exit 1; }
 echo "ok   : failability: ignoring the configured effort breaks the high case"
 
-# --- Case: bypass true appends the flag ---------------------------------------
-expect "bypass true appends --dangerously-bypass-approvals-and-sandbox" "$bypass" \
-  "$(run_case "$read_fn" "$apply_fn" '{"codex_bypass_approvals_and_sandbox": true}')"
+# --- Case: bypass true appends the flag and warns on stdout -------------------
+expect "bypass true warns on stdout and appends --dangerously-bypass-approvals-and-sandbox" "$bypass_warning
+$bypass" "$(run_case "$read_fn" "$apply_fn" '{"codex_bypass_approvals_and_sandbox": true}' 2>/dev/null)"
 expect "bypass false keeps today's launch line" "$today" \
   "$(run_case "$read_fn" "$apply_fn" '{"codex_bypass_approvals_and_sandbox": false}')"
 mutant=$(mutate "$apply_fn" "CODEX_BYPASS_FLAG=' --dangerously-bypass-approvals-and-sandbox'" ':')
 got=$(run_case "$read_fn" "$mutant" '{"codex_bypass_approvals_and_sandbox": true}')
-[ "$got" != "$bypass" ] || { echo "FAIL: failability: dropping the flag assignment still produced the bypass line" >&2; exit 1; }
+[ "$got" != "$bypass_warning
+$bypass" ] || { echo "FAIL: failability: dropping the flag assignment still produced the bypass line" >&2; exit 1; }
 echo "ok   : failability: dropping the flag assignment breaks the bypass case"
+mutant=$(mutate "$apply_fn" 'echo "WARNING: codex_bypass_approvals_and_sandbox' ': "WARNING: codex_bypass_approvals_and_sandbox')
+got=$(run_case "$read_fn" "$mutant" '{"codex_bypass_approvals_and_sandbox": true}')
+[ "$got" != "$bypass_warning
+$bypass" ] || { echo "FAIL: failability: dropping the warning still matched the bypass case" >&2; exit 1; }
+echo "ok   : failability: dropping the warning breaks the bypass case"
 
 # --- Case: invalid values are refused with exit 2 -----------------------------
 refused() {  # label  json  want-substring  [read-fn]
@@ -139,6 +147,46 @@ mutant=$(mutate "$read_fn" ' or value not in efforts' '')
 refused "mutant" '{"codex_reasoning_effort": "turbo"}' "expected one of" "$mutant" >/dev/null 2>&1
 [ $? -ne 0 ] || { echo "FAIL: failability: dropping the effort allowlist still refused 'turbo'" >&2; exit 1; }
 echo "ok   : failability: dropping the effort allowlist lets 'turbo' through"
+set -e
+
+# --- Case: only a codex dispatch reads the keys -------------------------------
+# dispatch must call apply_codex_instance_launch_config only through the
+# codex-gated block, and only once RUNTIME is final, so a bad codex key never
+# stops a claude, grok, or cursor dispatch.
+grep -qx 'apply_codex_instance_launch_config' "$dispatch" \
+  && { echo "FAIL: dispatch calls apply_codex_instance_launch_config outside the codex-gated block" >&2; exit 1; }
+gate_line=$(grep -nxF "$call_site" "$dispatch" | cut -d: -f1)
+[ -n "$gate_line" ] || { echo "FAIL: dispatch has no codex-gated apply_codex_instance_launch_config call" >&2; exit 1; }
+final_line=$(grep -n '^refuse_unavailable_runtime "\$RUNTIME"' "$dispatch" | cut -d: -f1)
+[ -n "$final_line" ] && [ "$gate_line" -gt "$final_line" ] \
+  || { echo "FAIL: the codex-gated call runs before RUNTIME is final (gate $gate_line, refuse ${final_line:-missing})" >&2; exit 1; }
+echo "ok   : the only call is codex-gated and follows the final RUNTIME"
+
+# call_site_case  call-site  runtime  config-json
+call_site_case() {
+  local config="$work/instance-runtime.json"
+  printf '%s\n' "$3" > "$config"
+  {
+    echo 'set -u'
+    printf 'INSTANCE_RUNTIME_CONFIG=%s\n' "$config"
+    printf '%s\n' "$vars" "$read_fn" "$apply_fn"
+    printf 'RUNTIME=%s\n' "$2"
+    printf '%s\n' "$1"
+    echo 'echo "continued effort=$CODEX_REASONING_EFFORT"'
+  } > "$work/call.sh"
+  bash "$work/call.sh" 2>&1
+}
+set +e
+got=$(call_site_case "$call_site" claude '{"codex_reasoning_effort": "turbo"}')
+expect "a bad codex key does not stop a claude dispatch" "continued effort=xhigh" "$got"
+got=$(call_site_case "$call_site" codex '{"codex_reasoning_effort": "turbo"}')
+case "$?:$got" in
+  "2:✗ invalid codex launch setting"*) echo "ok   : a bad codex key still stops a codex dispatch · rc=2";;
+  *) echo "FAIL: a bad codex key did not stop a codex dispatch (out: $got)" >&2; exit 1;;
+esac
+got=$(call_site_case 'apply_codex_instance_launch_config' claude '{"codex_reasoning_effort": "turbo"}')
+[ "$got" != "continued effort=xhigh" ] || { echo "FAIL: failability: an ungated call still let claude continue" >&2; exit 1; }
+echo "ok   : failability: an ungated call stops the claude dispatch"
 set -e
 
 echo "dispatch codex instance-config regression tests passed"

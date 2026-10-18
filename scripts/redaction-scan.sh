@@ -12,6 +12,8 @@
 #   scripts/redaction-scan.sh --commit-messages A..B   # message scan in any mode
 #   scripts/redaction-scan.sh --repo-root PATH         # scan PATH's repository instead of this one
 #   REDACTION_REPO_ROOT=PATH scripts/redaction-scan.sh # same, when a flag cannot be passed
+#   An empty REDACTION_REPO_ROOT is treated as unset (today's behaviour); an empty
+#   or missing --repo-root operand is a usage error (exit 2).
 #   scripts/redaction-scan.sh --help
 #
 # Exit: 0 clean, 1 findings, 2 cannot decide (missing tool, missing required rules, usage)
@@ -32,6 +34,10 @@
 # finding, or config/gitleaks.toml for a whole class.
 set -euo pipefail
 
+# Inherited GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, or GIT_COMMON_DIR would make
+# every git call below use the caller's repository instead of the resolved target.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
@@ -49,7 +55,7 @@ EXTRA_UNUSABLE=0
 EXTRA_CONSIDERED=0
 
 usage() {
-  sed -n '2,32p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,34p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 while [[ $# -gt 0 ]]; do
@@ -77,7 +83,11 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --repo-root)
-      TARGET_ROOT_INPUT="${2:-}"
+      if [[ -z "${2:-}" ]]; then
+        echo "redaction-scan: --repo-root requires a path" >&2
+        exit 2
+      fi
+      TARGET_ROOT_INPUT="${2}"
       shift 2
       ;;
     --require-extra) REQUIRE_EXTRA=1; shift ;;
@@ -88,14 +98,25 @@ while [[ $# -gt 0 ]]; do
 done
 
 # The target to scan: this script's own repository unless told otherwise. The
-# rules (config/gitleaks.toml, the legacy allowlist, organization rules) stay
-# with the script and keep resolving against REPO_ROOT above, never this.
+# gitleaks config (config/gitleaks.toml) stays anchored to REPO_ROOT, since that
+# is the scanner's own policy and the target cannot be expected to carry it.
 TARGET_ROOT="${REPO_ROOT}"
 if [[ -n "${TARGET_ROOT_INPUT}" ]]; then
   if ! TARGET_ROOT="$(git -C "${TARGET_ROOT_INPUT}" rev-parse --show-toplevel 2>/dev/null)"; then
     echo "redaction-scan: --repo-root (or REDACTION_REPO_ROOT) is not inside a git work tree: ${TARGET_ROOT_INPUT}" >&2
     exit 2
   fi
+fi
+
+# A relative REDACTION_EXTRA_PATTERNS or --allowlist value is what the caller
+# typed at the invocation directory, not at REPO_ROOT or TARGET_ROOT: resolve
+# both before the cd below changes what a relative path would mean.
+INVOCATION_PWD="${PWD}"
+if [[ -n "${REDACTION_EXTRA_PATTERNS:-}" && "${REDACTION_EXTRA_PATTERNS}" != /* ]]; then
+  REDACTION_EXTRA_PATTERNS="${INVOCATION_PWD}/${REDACTION_EXTRA_PATTERNS}"
+fi
+if [[ "${LEGACY_ALLOWLIST}" != /* ]]; then
+  LEGACY_ALLOWLIST="${INVOCATION_PWD}/${LEGACY_ALLOWLIST}"
 fi
 cd "${TARGET_ROOT}"
 

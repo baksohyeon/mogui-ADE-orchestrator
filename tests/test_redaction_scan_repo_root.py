@@ -51,6 +51,7 @@ def _scan(repo: Path, args: list[str], *, env_extra: dict[str, str] | None = Non
     env.pop("REDACTION_EXTRA_PATTERNS", None)
     env.pop("REDACTION_REQUIRE_EXTRA", None)
     env.pop("REDACTION_REPO_ROOT", None)
+    env.pop("REDACTION_ALLOWLIST", None)
     env.update(env_extra or {})
     return subprocess.run(
         ["bash", str(repo / "scripts" / "redaction-scan.sh"), *args],
@@ -135,3 +136,68 @@ def test_repo_root_outside_a_git_work_tree_exits_2_before_any_scan(
     assert result.stdout == ""
     assert "--repo-root" in result.stderr
     assert str(outside) in result.stderr
+
+
+def test_repo_root_without_operand_exits_2(tmp_path: Path) -> None:
+    repo = _repo_with_commits(tmp_path, ["plain change"])
+    result = _scan(repo, ["--repo-root"])
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert result.stdout == ""
+    assert "--repo-root requires a path" in result.stderr
+
+
+def test_repo_root_empty_operand_exits_2(tmp_path: Path) -> None:
+    repo = _repo_with_commits(tmp_path, ["plain change"])
+    result = _scan(repo, ["--repo-root", ""])
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert result.stdout == ""
+    assert "--repo-root requires a path" in result.stderr
+
+
+def test_inherited_git_dir_does_not_hijack_the_repo_root_target(
+    tmp_path: Path,
+) -> None:
+    """An inherited GIT_DIR must not make `git -C <target>` resolve the scanner's
+    own repository instead of the named target."""
+
+    repo = _repo_with_commits(tmp_path, ["plain change"])
+    target = _target_repo_with_staged_key(tmp_path)
+    result = _scan(
+        repo,
+        ["--staged", "--repo-root", str(target)],
+        env_extra={
+            "GIT_DIR": str(repo / ".git"),
+            "GIT_WORK_TREE": str(repo),
+        },
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode == 1, output
+    assert "secret.txt" in output, output
+    assert f"root={_toplevel(target)}" in output, output
+
+
+def test_relative_extra_patterns_resolve_against_the_callers_directory(
+    tmp_path: Path,
+) -> None:
+    """A relative REDACTION_EXTRA_PATTERNS is what the caller typed in its own
+    directory, not a path inside the target repository the scan lands in."""
+
+    repo = _repo_with_commits(tmp_path, ["plain change"])
+    target = tmp_path / "target"
+    target.mkdir()
+    _git(target, "init", "-q")
+    (target / "notes.txt").write_text("nothing here\n", encoding="utf-8")
+    _git(target, "add", "notes.txt")
+    _git(target, "commit", "-q", "-m", "seed")
+
+    (repo / "org-rules.txt").write_text(
+        "org_test|test rule|nonsense_pattern_xyz\n", encoding="utf-8"
+    )
+    result = _scan(
+        repo,
+        ["--repo-root", str(target), "-v"],
+        env_extra={"REDACTION_EXTRA_PATTERNS": "org-rules.txt"},
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    assert "org-rules=1" in output, output

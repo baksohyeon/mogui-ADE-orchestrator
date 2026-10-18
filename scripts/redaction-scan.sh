@@ -406,11 +406,11 @@ if [[ "${VERBOSE}" -eq 1 ]]; then
 fi
 
 if [[ "${FINDINGS}" -gt 0 ]]; then
-  echo "redaction-scan: FAIL — ${FINDINGS} finding(s) (fail-closed, root=${TARGET_ROOT})" >&2
+  echo "redaction-scan: FAIL: ${FINDINGS} finding(s) (fail-closed, root=${TARGET_ROOT})" >&2
   cat "${FINDINGS_FILE}" >&2
   echo "redaction-scan: fix, or exempt with a .gitleaksignore fingerprint, then re-run." >&2
   exit 1
 fi
 
-echo "redaction-scan: OK — 0 findings (mode=${MODE}, files=${file_count}, commit-messages=${COMMIT_MESSAGES_SCANNED}, org-rules=${EXTRA_RULE_COUNT}, root=${TARGET_ROOT})"
+echo "redaction-scan: OK: 0 findings (mode=${MODE}, files=${file_count}, commit-messages=${COMMIT_MESSAGES_SCANNED}, org-rules=${EXTRA_RULE_COUNT}, root=${TARGET_ROOT})"
 exit 0

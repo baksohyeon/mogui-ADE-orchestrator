@@ -34,9 +34,12 @@
 # finding, or config/gitleaks.toml for a whole class.
 set -euo pipefail
 
-# Inherited GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, or GIT_COMMON_DIR would make
-# every git call below use the caller's repository instead of the resolved target.
-unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR
+# Inherited GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_COMMON_DIR,
+# GIT_OBJECT_DIRECTORY, or GIT_ALTERNATE_OBJECT_DIRECTORIES would make every git
+# call below use the caller's repository, or its object store, instead of the
+# resolved target's.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR \
+  GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -333,6 +336,13 @@ scan_commit_messages() {
   # which is why this loop exists.
   local range="$1"
   local count=0 sha
+  local sha_list="${WORK_DIR}/commits-to-scan"
+  local list_rc=0
+  git log --format=%H "${range}" > "${sha_list}" 2>/dev/null || list_rc=$?
+  if [[ "${list_rc}" -ne 0 ]]; then
+    echo "redaction-scan: FAIL: cannot list commits for range=${range} (git exit ${list_rc})" >&2
+    exit 2
+  fi
   while IFS= read -r sha; do
     [[ -z "${sha}" ]] && continue
     report_index=$((report_index + 1))
@@ -362,7 +372,7 @@ with open(path, "w", encoding="utf-8") as handle:
 PY
     fi
     count=$((count + 1))
-  done < <(git log --format=%H "${range}" 2>/dev/null || true)
+  done < "${sha_list}"
   COMMIT_MESSAGES_SCANNED="${count}"
 }
 
@@ -373,12 +383,20 @@ if [[ -n "${COMMIT_RANGE}" ]]; then
   scan_commit_messages "${COMMIT_RANGE}"
 fi
 
+FILES_LIST="${WORK_DIR}/files-to-scan"
+list_rc=0
+list_scan_files > "${FILES_LIST}" || list_rc=$?
+if [[ "${list_rc}" -ne 0 ]]; then
+  echo "redaction-scan: FAIL: cannot list files for mode=${MODE} (git exit ${list_rc})" >&2
+  exit 2
+fi
+
 file_count=0
 while IFS= read -r -d '' path; do
   [[ -z "${path}" ]] && continue
   file_count=$((file_count + 1))
   scan_path "${path}"
-done < <(list_scan_files)
+done < "${FILES_LIST}"
 
 FINDINGS_FILE="${WORK_DIR}/findings.txt"
 python3 - "${REPORTS}" "${FINDINGS_FILE}" > /dev/null <<'PY'

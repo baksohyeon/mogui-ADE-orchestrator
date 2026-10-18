@@ -16,6 +16,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from test_redaction_scan_commit_messages import LEAK, _git, _repo_with_commits
 
 from windows_exec_surface import skip_windows_exec_surface
@@ -169,6 +171,49 @@ def test_inherited_git_dir_does_not_hijack_the_repo_root_target(
             "GIT_DIR": str(repo / ".git"),
             "GIT_WORK_TREE": str(repo),
         },
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode == 1, output
+    assert "secret.txt" in output, output
+    assert f"root={_toplevel(target)}" in output, output
+
+
+def test_unreadable_index_exits_2_with_named_line_and_scans_nothing(
+    tmp_path: Path,
+) -> None:
+    """A target whose index cannot be read must fail closed, not read as a
+    clean scan of zero files."""
+
+    if os.name != "nt" and os.geteuid() == 0:
+        pytest.skip("root reads an unreadable file; chmod 000 has no effect")
+
+    repo = _repo_with_commits(tmp_path, ["plain change"])
+    target = _target_repo_with_staged_key(tmp_path)
+    index_path = target / ".git" / "index"
+    original_mode = index_path.stat().st_mode
+    index_path.chmod(0o000)
+    try:
+        result = _scan(repo, ["--staged", "--repo-root", str(target)])
+    finally:
+        index_path.chmod(original_mode)
+    output = result.stdout + result.stderr
+    assert result.returncode == 2, output
+    assert "cannot list files for mode=staged" in result.stderr, output
+    assert "secret.txt" not in output, output
+
+
+def test_object_directory_env_at_caller_does_not_hijack_the_repo_root_target(
+    tmp_path: Path,
+) -> None:
+    """An inherited GIT_OBJECT_DIRECTORY pointing nowhere must not make the
+    target's object lookup fail and silently miss the staged finding."""
+
+    repo = _repo_with_commits(tmp_path, ["plain change"])
+    target = _target_repo_with_staged_key(tmp_path)
+    result = _scan(
+        repo,
+        ["--staged", "--repo-root", str(target)],
+        env_extra={"GIT_OBJECT_DIRECTORY": str(tmp_path / "does-not-exist")},
     )
     output = result.stdout + result.stderr
     assert result.returncode == 1, output

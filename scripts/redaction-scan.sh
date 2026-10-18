@@ -10,6 +10,8 @@
 #   scripts/redaction-scan.sh --staged        # index / staged only
 #   scripts/redaction-scan.sh --range A..B    # files changed in a range, and those commits' messages
 #   scripts/redaction-scan.sh --commit-messages A..B   # message scan in any mode
+#   scripts/redaction-scan.sh --repo-root PATH         # scan PATH's repository instead of this one
+#   REDACTION_REPO_ROOT=PATH scripts/redaction-scan.sh # same, when a flag cannot be passed
 #   scripts/redaction-scan.sh --help
 #
 # Exit: 0 clean, 1 findings, 2 cannot decide (missing tool, missing required rules, usage)
@@ -32,7 +34,6 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-cd "${REPO_ROOT}"
 
 BASE_CONFIG="${REPO_ROOT}/config/gitleaks.toml"
 LEGACY_ALLOWLIST="${REDACTION_ALLOWLIST:-${SCRIPT_DIR}/redaction-allowlist.txt}"
@@ -41,13 +42,14 @@ RANGE=""
 COMMIT_RANGE=""
 VERBOSE=0
 REQUIRE_EXTRA="${REDACTION_REQUIRE_EXTRA:-0}"
+TARGET_ROOT_INPUT="${REDACTION_REPO_ROOT:-}"
 COMMIT_MESSAGES_SCANNED="not-scanned"
 EXTRA_RULE_COUNT=0
 EXTRA_UNUSABLE=0
 EXTRA_CONSIDERED=0
 
 usage() {
-  sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,32p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 while [[ $# -gt 0 ]]; do
@@ -74,12 +76,28 @@ while [[ $# -gt 0 ]]; do
       LEGACY_ALLOWLIST="${2:-}"
       shift 2
       ;;
+    --repo-root)
+      TARGET_ROOT_INPUT="${2:-}"
+      shift 2
+      ;;
     --require-extra) REQUIRE_EXTRA=1; shift ;;
     -v|--verbose) VERBOSE=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "redaction-scan: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+
+# The target to scan: this script's own repository unless told otherwise. The
+# rules (config/gitleaks.toml, the legacy allowlist, organization rules) stay
+# with the script and keep resolving against REPO_ROOT above, never this.
+TARGET_ROOT="${REPO_ROOT}"
+if [[ -n "${TARGET_ROOT_INPUT}" ]]; then
+  if ! TARGET_ROOT="$(git -C "${TARGET_ROOT_INPUT}" rev-parse --show-toplevel 2>/dev/null)"; then
+    echo "redaction-scan: --repo-root (or REDACTION_REPO_ROOT) is not inside a git work tree: ${TARGET_ROOT_INPUT}" >&2
+    exit 2
+  fi
+fi
+cd "${TARGET_ROOT}"
 
 if ! command -v gitleaks >/dev/null 2>&1; then
   echo "redaction-scan: FAIL — gitleaks is not on PATH; install it (brew install gitleaks) or see https://gitleaks.io" >&2
@@ -384,15 +402,15 @@ PY
 FINDINGS="$(wc -l < "${FINDINGS_FILE}" | tr -d ' ')"
 
 if [[ "${VERBOSE}" -eq 1 ]]; then
-  echo "redaction-scan: mode=${MODE} range=${RANGE:-none} files=${file_count} commit-messages=${COMMIT_MESSAGES_SCANNED} org-rules=${EXTRA_RULE_COUNT} config=$(basename "${CONFIG}") engine=$(gitleaks version 2>/dev/null | head -1)"
+  echo "redaction-scan: mode=${MODE} range=${RANGE:-none} files=${file_count} commit-messages=${COMMIT_MESSAGES_SCANNED} org-rules=${EXTRA_RULE_COUNT} config=$(basename "${CONFIG}") engine=$(gitleaks version 2>/dev/null | head -1) root=${TARGET_ROOT}"
 fi
 
 if [[ "${FINDINGS}" -gt 0 ]]; then
-  echo "redaction-scan: FAIL — ${FINDINGS} finding(s) (fail-closed)" >&2
+  echo "redaction-scan: FAIL — ${FINDINGS} finding(s) (fail-closed, root=${TARGET_ROOT})" >&2
   cat "${FINDINGS_FILE}" >&2
   echo "redaction-scan: fix, or exempt with a .gitleaksignore fingerprint, then re-run." >&2
   exit 1
 fi
 
-echo "redaction-scan: OK — 0 findings (mode=${MODE}, files=${file_count}, commit-messages=${COMMIT_MESSAGES_SCANNED}, org-rules=${EXTRA_RULE_COUNT})"
+echo "redaction-scan: OK — 0 findings (mode=${MODE}, files=${file_count}, commit-messages=${COMMIT_MESSAGES_SCANNED}, org-rules=${EXTRA_RULE_COUNT}, root=${TARGET_ROOT})"
 exit 0

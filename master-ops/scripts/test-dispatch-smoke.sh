@@ -236,7 +236,9 @@ rendered_precondition_test() (
   rendered="$work/dispatch-rendered"
   unrendered="$work/dispatch-unrendered"
   printf '#!/bin/bash\nOPS=/opt/ops\nGATE=/opt/ops/scripts/dispatch-gate\n' > "$rendered"
-  printf '#!/bin/bash\nOPS={{OPS_REPO}}\nGATE={{RUNTIME_ROOT}}/scripts/dispatch-gate\n' > "$unrendered"
+  # The braces are split ('{''{') so install-time placeholder substitution cannot
+  # render this fixture; the shell joins them back into a literal template token.
+  printf '#!/bin/bash\nOPS={''{OPS_REPO}}\nGATE={''{RUNTIME_ROOT}}/scripts/dispatch-gate\n' > "$unrendered"
 
   script_file="$work/run.sh"
   {
@@ -254,8 +256,8 @@ rendered_precondition_test() (
     printf 'wrapper_is_rendered %q && echo RENDERED || echo UNRENDERED\n' "$unrendered"
   } > "$script_file"
   out=$(bash "$script_file" 2>&1)
-  [ "$out" = "UNRENDERED" ] || { echo "FAIL: a copy carrying {{RUNTIME_ROOT}} should be refused, got '$out'" >&2; return 1; }
-  echo "ok   : wrapper_is_rendered refuses a copy carrying {{RUNTIME_ROOT}}"
+  [ "$out" = "UNRENDERED" ] || { echo "FAIL: a copy carrying an unrendered RUNTIME_ROOT token should be refused, got '$out'" >&2; return 1; }
+  echo "ok   : wrapper_is_rendered refuses a copy carrying an unrendered RUNTIME_ROOT token"
 
   # Failability: drop the negation, so a template copy reports rendered.
   mutant_fn=${fn/'! grep -qF'/'grep -qF'}

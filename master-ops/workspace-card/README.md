@@ -29,7 +29,7 @@ When editing, verify each link by resolving it from the workspace root (with the
 
 ## Local extension
 
-An installation that needs sections of its own in the card (duties the owner gives this master, a reply language and tone) writes them to `workspace-card/LOCAL.md` in the ops repository, not into this pair. The card tells the master to read that file after the card when it exists; its additions never override a rule on the card. Without the file, the card reads exactly as before. Facts that already have a home stay there: the current role, seat path, and workspace id belong to role state (see [What is not here](#what-is-not-here)), and `LOCAL.md` points at them like the card does.
+An installation that needs sections of its own in the card (duties the owner gives this master, a reply language and tone) writes them to `workspace-card/LOCAL.md` in the ops repository, not into this pair. The card tells the master to read that file after the card when it exists; its additions never override a rule on the card. Without the file, the card reads exactly as before. Facts that already have a home stay there: the seat path and workspace id belong to role state (see [What is not here](#what-is-not-here)), and `LOCAL.md` points at them like the card does.
 
 The pointer reaches the master only through the deployed card. After an upgrade rewrites this pair, redeploy both files to the workspace root (Upgrade step 8 does this with the owner's confirmation); until then the root copy has no pointer and `LOCAL.md` is not read.
 

@@ -561,15 +561,11 @@ CODEX_REASONING_EFFORT=xhigh
 CODEX_MIGRATION_ACK='notice.model_migrations={"gpt-5.5"="gpt-6.1-sol"}'
 CODEX_BYPASS_FLAG=
 
-# Two optional instance runtime config keys override the codex defaults above:
-# codex_reasoning_effort (a string) and codex_bypass_approvals_and_sandbox (a
-# JSON boolean, default false). Absent or null keys leave the launch line
-# exactly as above. The effort list is the one codex-cli 0.163.0 carries,
-# measured 2026-10-17; an unknown value is refused rather than passed through,
-# because the footer check would then wait on a footer codex never prints.
+# Optional codex_reasoning_effort and codex_bypass_approvals_and_sandbox from the
+# instance runtime config. Effort list from codex-cli 0.163.0 (2026-10-17); an
+# unknown value is refused because the footer check would wait forever.
 # An unreadable config is left to unavailable_runtimes_guard, which refuses it.
-#   exit 0: two lines on stdout, effort then bypass (1 or 0).
-#   exit 1: a key is present but invalid, one-line reason on stdout.
+#   exit 0: effort, then bypass (1 or 0), on stdout. exit 1: one-line reason.
 codex_instance_launch_config() {
   [ -f "$INSTANCE_RUNTIME_CONFIG" ] || { printf '%s\n0\n' "$CODEX_REASONING_EFFORT"; return 0; }
   python3 - "$INSTANCE_RUNTIME_CONFIG" "$CODEX_REASONING_EFFORT" <<'EOF'

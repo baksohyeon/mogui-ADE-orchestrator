@@ -477,9 +477,9 @@ fi
 # --- agent API route -------------------------------------------------------
 # Vendor "setup" commands (measured 2026-09-18: `vercel ai-gateway setup`) rewrite
 # the agent CLI's own config to point at a proxy, and the proxy may not carry the
-# lineage model at all. The failure then surfaces as 429s the operator debugs by
-# hand for an hour. Measure the route at boot: the config's env block and the
-# live environment must not redirect the agent unless the operator says so with
+# lineage model at all. The failure then surfaces only as 429s. Measure the
+# route at boot: the config's env block and the live environment must not
+# redirect the agent unless the operator says so with
 # PREFLIGHT_ALLOW_AGENT_PROXY=1.
 if [[ "$agent_cli" == "claude" || "$agent_cli" == "claude-code" ]]; then
   claude_settings="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/settings.json"

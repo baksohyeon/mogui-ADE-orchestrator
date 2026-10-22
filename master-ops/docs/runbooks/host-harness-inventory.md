@@ -29,8 +29,9 @@ that same stderr line and returns a fallback event dict instead of refusing.
 No script creates the directory. Production never sets this variable.
 
 The master's bounded loop over `loop-ok` tracker items
-(`scripts/loop-check`) reads a per-run progress file and nothing else: no
-tracker, no `orca`, no `git`. State lives in one markdown file per run,
+(`scripts/loop-check`) reads a per-run progress file and the owner's stop
+file (`STOP` beside it, or `--stop-file`), and nothing else: no tracker, no
+`orca`, no `git`. State lives in one markdown file per run,
 `docs/loop/<YYYY-MM-DD>-<name>.md` in ops. See the
 [loop runbook](loop.md).
 

@@ -21,10 +21,26 @@ items, and anything the standing rules route to the owner stay outside it.
    file's `approved` line.
 2. Label the eligible tracker items `loop-ok` by hand. The loop never labels
    an item itself.
-3. Create `docs/loop/<YYYY-MM-DD>-<name>.md` in ops from the grammar section 7
-   of the loop harness design spec (ops
-   `docs/superpowers/specs/2026-10-18-loop-harness-design.md`) carries: the
-   header bullets, `status: running`, an empty table.
+3. Create `docs/loop/<YYYY-MM-DD>-<name>.md` in ops with `status: running`
+   and an empty table, following this grammar:
+
+   ```
+   # Loop <name>                      first line, required
+   - started: <ISO 8601 with offset>  required
+   - budget: rounds=<int> hours=<int> required
+   - approved: <free text>            required, non-empty while status: running
+   - compactions-seen: <int>          required
+   - status: running | stopped        required
+   - stop-reason: <text or empty>     required line, value may be empty
+   - next-proposal: <text or empty>   required line
+   <blank line>
+   | round | item | contract | state | task | dispatch | pr | sha | updated |
+   |---|---|---|---|---|---|---|---|---|
+   ```
+
+   State vocabulary: `picked`, `contracted`, `dispatched`, `dispatched:
+   relaunched`, `verifying`, `bot-round(<n>)`, `merge-ready`, `failed` or
+   `failed: <text>`, `blocked` or `blocked: <text>`.
 4. Commit that file to ops before the first round.
 
 ## 3. Each round
@@ -35,8 +51,11 @@ items, and anything the standing rules route to the owner stay outside it.
 2. A `stop reason=...` line sends the master to section 5; the loop never
    picks past a `stop` line.
 3. A `continue round=<n> pick` line (with or without ` ready=unknown`): take
-   the highest-priority eligible item (section 2's rule) and append a
-   `picked` row for it.
+   the eligible item with the lowest priority number first (`P0` before
+   `P1`), then the oldest `created` date, then the lexically smallest id.
+   `bd ready --json` is the source:
+   `bd ready --json --label loop-ok --exclude-label blocked --exclude-label architectural | jq -r 'sort_by(.priority, .created_at, .id)[0].id'`
+   Append a `picked` row for the item this selects.
 4. A `continue round=<n> item=<id> state=<state>` line: resume that row from
    its own state, at the matching step below.
 5. **picked → contracted.** Write the contract under `contracts/` per
@@ -53,9 +72,12 @@ items, and anything the standing rules route to the owner stay outside it.
    verification: scope, gates, hygiene, redaction, PR body, in the shape
    [dispatch-smoke](dispatch-smoke.md)'s localization table uses to name
    which layer a check belongs to. Then poll checks and threads.
-8. **dispatched → dispatched** once, on a worker process gone with no
-   `worker_done` (one relaunch on the same worktree); a second death ends the
-   row `failed`. See section 4.
+8. **dispatched → dispatched: relaunched**, once, on a worker process gone
+   with no `worker_done` (one relaunch on the same worktree); write the
+   row's state as `dispatched: relaunched`. A second death on a `dispatched:
+   relaunched` row ends the item `failed: worker-died-twice`. `loop-check`
+   treats `dispatched*` as in flight, so either state resumes at step 6. See
+   section 4.
 9. **dispatched → blocked**, on a worker `question` or `escalation`. The loop
    stops here (`stop reason=5`); it does not pick further while that is open.
 10. **verifying → failed**, on a clone verification failure. No retry; name
@@ -80,7 +102,9 @@ Verbatim from the spec's retry limits:
 1. A worker that dies without `worker_done` gets one relaunch on the same
    worktree, with edits preserved: fence the dead dispatch with
    `worker-abandon` first, then create a new task and dispatch into the same
-   worktree. A second death ends the item `failed`.
+   worktree, and write the row's state `dispatched: relaunched`. A second
+   death on a `dispatched: relaunched` row ends the item `failed:
+   worker-died-twice`.
 2. Bot rounds: at most three per item; the third unresolved re-review ends
    the item `blocked`.
 3. Clone verification failure: no retry; the item ends `failed` with the
@@ -108,10 +132,14 @@ Verbatim from the spec's retry limits:
    coordinator terminal unbound.
 3. If a compaction happened since the start line, increment
    `compactions-seen` in the header.
-4. Run `scripts/loop-check` again. A `compactions-seen` of 1 or more stops
-   the run (`stop reason=6`) once the item in flight reaches its next stable
-   state: a dispatched item waits for `worker_done`, a verifying item
-   finishes verification.
+4. Run `scripts/loop-check` again.
+5. On `stop reason=6: compaction passed; drain item=<id> state=<state>`,
+   finish that item to its next stable state before writing `status:
+   stopped`: a `dispatched` row waits for `worker_done` and is verified; a
+   `verifying` or `bot-round` row is verified to `merge-ready`, `failed`, or
+   `blocked`. Only then write `status: stopped` with reason 6.
+6. On `stop reason=6: compaction passed; nothing in flight`, write `status:
+   stopped` with reason 6 immediately; there is nothing to drain.
 
 ## 7. Succession
 
@@ -135,8 +163,10 @@ Verbatim from the spec's retry limits:
 | `stop reason=5: worker question on <id>` | a row is `blocked: worker-question` | section 5 |
 | `stop reason=5: escalation on <id>` | a row is `blocked: escalation` | section 5 |
 | `stop reason=5: stop file present` | the owner's stop file exists | section 5 |
-| `stop reason=6: compaction passed; finish the item in flight and stop` | one compaction has passed | section 6 |
+| `stop reason=6: compaction passed; drain item=<id> state=<state>` | one compaction has passed with an item in flight | section 6 |
+| `stop reason=6: compaction passed; nothing in flight` | one compaction has passed with nothing in flight | section 6 |
 
 Exit codes: `0` on every `continue` line, `3` on every `stop` line, `2` on a
-malformed progress file or a `--now` earlier than `started`, with the line
-number on stderr. The runbook forbids picking when `loop-check` says `stop`.
+malformed progress file (the line number on stderr, including a `--now`
+earlier than `started`) or a malformed option (the option name on stderr).
+The runbook forbids picking when `loop-check` says `stop`.

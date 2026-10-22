@@ -5,9 +5,15 @@ Progress file grammar and verdict order:
 docs/superpowers/specs/2026-10-18-loop-harness-design.md sections 4 and 7
 (docs/runbooks/loop.md quotes the verdict lines this script prints).
 
-Exit codes: 0 `continue`, 3 `stop`, 2 malformed file or invocation (line
-number and reason on stderr). Reads nothing but the progress file and its own
-arguments: no call to `orca`, `bd`, `gh`, or `git`.
+State vocabulary: `picked`, `contracted`, `dispatched`, `dispatched:
+relaunched`, `verifying`, `bot-round(<n>)`, `merge-ready`, `failed` or
+`failed: <text>`, `blocked` or `blocked: <text>`. `dispatched*` (both
+`dispatched` and `dispatched: relaunched`) counts as in flight.
+
+Exit codes: 0 `continue`, 3 `stop`, 2 on a malformed progress file (line
+number on stderr) or a malformed option (the option name on stderr). Reads
+nothing but the progress file and its own arguments: no call to `orca`,
+`bd`, `gh`, or `git`.
 """
 
 from __future__ import annotations
@@ -21,7 +27,7 @@ from pathlib import Path
 
 USAGE = "loop-check PROGRESS_FILE [--now ISO] [--ready-count N] [--compactions N] [--stop-file PATH]"
 
-_IN_FLIGHT_PLAIN = {"picked", "contracted", "dispatched", "verifying"}
+_IN_FLIGHT_PLAIN = {"picked", "contracted", "verifying"}
 _TERMINAL_PLAIN = {"merge-ready"}
 _BOT_ROUND_RE = re.compile(r"^bot-round\((\d+)\)$")
 _BUDGET_RE = re.compile(r"^rounds=(\d+)\s+hours=(\d+)$")
@@ -37,6 +43,18 @@ class Malformed(Exception):
     def __init__(self, line_no: int, message: str) -> None:
         super().__init__(message)
         self.line_no = line_no
+        self.message = message
+
+
+class InvocationError(Exception):
+    """A command-line option, not the progress file, is invalid.
+
+    Carries the option name `main` reports on stderr.
+    """
+
+    def __init__(self, option: str, message: str) -> None:
+        super().__init__(message)
+        self.option = option
         self.message = message
 
 
@@ -63,8 +81,12 @@ class Progress:
     rows: list[Row] = field(default_factory=list)
 
 
+def _is_dispatched(state: str) -> bool:
+    return state == "dispatched" or state.startswith("dispatched:")
+
+
 def _is_in_flight(state: str) -> bool:
-    return state in _IN_FLIGHT_PLAIN or bool(_BOT_ROUND_RE.match(state))
+    return state in _IN_FLIGHT_PLAIN or _is_dispatched(state) or bool(_BOT_ROUND_RE.match(state))
 
 
 def _is_terminal(state: str) -> bool:
@@ -110,7 +132,7 @@ def _parse_int(text: str, line_no: int, field_name: str) -> int:
 
 
 def _is_known_state(state: str) -> bool:
-    if state in _IN_FLIGHT_PLAIN or state in _TERMINAL_PLAIN or _BOT_ROUND_RE.match(state):
+    if state in _IN_FLIGHT_PLAIN or state in _TERMINAL_PLAIN or _is_dispatched(state) or _BOT_ROUND_RE.match(state):
         return True
     return state in ("failed", "blocked") or state.startswith("failed:") or state.startswith("blocked:")
 
@@ -132,7 +154,7 @@ def _parse_row(raw: str, line_no: int) -> Row:
 def parse(path: str) -> Progress:
     try:
         text = Path(path).read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, UnicodeError) as exc:
         raise Malformed(0, f"cannot read {path}: {exc}") from None
     lines = text.splitlines()
 
@@ -157,6 +179,8 @@ def parse(path: str) -> Progress:
     status = _require_prefix(lines, 6, "- status:")
     if status not in ("running", "stopped"):
         raise Malformed(6, f"status must be 'running' or 'stopped', got {status!r}")
+    if status == "running" and not approved:
+        raise Malformed(4, "value after '- approved:' must not be empty while status is running")
     stop_reason = _require_prefix(lines, 7, "- stop-reason:", allow_empty=True)
     next_proposal = _require_prefix(lines, 8, "- next-proposal:", allow_empty=True)
 
@@ -232,7 +256,10 @@ def verdict(
 
     effective_compactions = compactions if compactions is not None else p.compactions_seen
     if effective_compactions >= 1:
-        return 3, "stop reason=6: compaction passed; finish the item in flight and stop"
+        if in_flight_rows:
+            row = in_flight_rows[0]
+            return 3, f"stop reason=6: compaction passed; drain item={row.item} state={row.state}"
+        return 3, "stop reason=6: compaction passed; nothing in flight"
 
     if in_flight_rows:
         row = in_flight_rows[0]
@@ -245,9 +272,12 @@ def verdict(
 
 
 def _parse_now_arg(text: str) -> datetime:
-    dt = datetime.fromisoformat(text)
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        raise InvocationError("--now", f"invalid ISO 8601 timestamp: {text!r}") from None
     if dt.tzinfo is None:
-        dt = dt.astimezone()
+        raise InvocationError("--now", f"timestamp must include a UTC offset: {text!r}")
     return dt
 
 
@@ -273,13 +303,20 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     try:
-        progress = parse(args.progress_file)
+        if args.ready_count is not None and args.ready_count < 0:
+            raise InvocationError("--ready-count", f"must not be negative, got {args.ready_count}")
+        if args.compactions is not None and args.compactions < 0:
+            raise InvocationError("--compactions", f"must not be negative, got {args.compactions}")
         now = _parse_now_arg(args.now) if args.now else datetime.now().astimezone()
+        progress = parse(args.progress_file)
         stop_file = (
             Path(args.stop_file) if args.stop_file
             else Path(args.progress_file).parent / "STOP"
         )
         code, line = verdict(progress, now, args.ready_count, args.compactions, stop_file.exists())
+    except InvocationError as exc:
+        print(f"loop-check: {exc.option}: {exc.message}", file=sys.stderr)
+        return 2
     except Malformed as exc:
         print(f"loop-check: line {exc.line_no}: {exc.message}", file=sys.stderr)
         return 2

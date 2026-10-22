@@ -226,9 +226,6 @@ def _detect_dual_instances(
     cwd_probe: Optional[CwdProbe] = None,
     ancestor_probe: Optional[AncestorProbe] = None,
 ) -> List[str]:
-    if not session_id:
-        return []
-
     probe = process_probe or _default_process_probe
     try:
         output = probe()
@@ -260,7 +257,7 @@ def _detect_dual_instances(
             continue
         if not _is_claude_command(command):
             continue
-        if session_id in command:
+        if session_id and session_id in command and pid not in excluded_pids:
             warnings.append("DUAL_INSTANCE:" + str(pid))
             continue
         if pid in excluded_pids:

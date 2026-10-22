@@ -157,6 +157,45 @@ def test_seat_peer_excludes_claude_ancestor(tmp_path: Path) -> None:
     assert warnings == []
 
 
+def test_seat_peer_detected_without_session_id(tmp_path: Path) -> None:
+    ps_output = "40400 claude --dangerously-skip-permissions\n"
+
+    warnings = _detect_dual_instances(
+        None,
+        lambda: ps_output,
+        seat_root=tmp_path,
+        cwd_probe=lambda pid: str(tmp_path),
+    )
+
+    assert warnings == ["SEAT_PEER:40400"]
+
+
+def test_ancestor_with_session_id_in_argv_is_excluded(tmp_path: Path) -> None:
+    ps_output = "40400 claude --resume session-abc\n"
+
+    warnings = _detect_dual_instances(
+        "session-abc",
+        lambda: ps_output,
+        seat_root=tmp_path,
+        cwd_probe=lambda pid: str(tmp_path),
+        ancestor_probe=lambda: 40400,
+    )
+
+    assert warnings == []
+
+    bootstrap(
+        BootstrapConfig(
+            charter_path=_file(tmp_path, "charter.md", "# Charter\n"),
+            session_id="session-abc",
+            strict_lease=True,
+            seat_root=tmp_path,
+        ),
+        process_probe=lambda: ps_output,
+        cwd_probe=lambda pid: str(tmp_path),
+        ancestor_probe=lambda: 40400,
+    )
+
+
 def test_dual_instance_unchanged_at_different_cwd(tmp_path: Path) -> None:
     ps_output = "40309 claude --session-id session-abc\n"
     other = tmp_path / "elsewhere"

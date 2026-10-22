@@ -18,9 +18,9 @@ trap 'rm -rf "$work"' EXIT
 # Each row is "round|item|state|updated". Prints the new progress file's
 # path, always a direct child of $work so the default --stop-file (STOP next
 # to the progress file) resolves to "$work/STOP" for every case. A counter
-# names each file rather than mktemp's template: BSD mktemp (macOS) does not
-# randomize a template with a suffix after the X run, so a literal
-# "progress.XXXXXX.md" template collides with itself on the second call.
+# names each file, since BSD mktemp (macOS) does not randomize a template
+# with a suffix after the X run: a literal "progress.XXXXXX.md" template
+# collides with itself on the second call.
 _fixture_n=0
 fixture() {
   local status="$1" rounds="$2" hours="$3" compactions="$4" started="$5"

@@ -197,6 +197,20 @@ class RunLiveTests(unittest.TestCase):
             "[MASTER-BOOTSTRAP v1]" in out or "[BOOTSTRAP-FALLBACK]" in out
         )
 
+    def test_run_live_reports_seat_peer(self) -> None:
+        ps_output = "40400 claude --dangerously-skip-permissions\n"
+
+        out = run_live(
+            self._dir / "none",
+            bd_runner=lambda argv: "",
+            probe=lambda: ps_output,
+            session_id="session-abc",
+            seat_root=self._dir,
+            cwd_probe=lambda pid: str(self._dir),
+        )
+
+        self.assertIn("[DUAL-INSTANCE] SEAT_PEER:40400", out)
+
 
 class CliTests(unittest.TestCase):
     def setUp(self) -> None:

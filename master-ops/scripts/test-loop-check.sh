@@ -1,0 +1,231 @@
+#!/usr/bin/env bash
+# Regression checks for loop-check's six stop conditions and the progress
+# file parser, plus one failability line per stop condition: each runs its
+# case against a sed-mutated copy of the script and asserts the stop line no
+# longer prints, then against the unmutated copy to prove it still does.
+# Mutates a temp copy only, never the committed script.
+set -u
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+SCRIPT="$ROOT/scripts/loop-check"
+FAILED=0
+fail() { echo "  FAIL: $*"; FAILED=1; }
+ok() { echo "  ok:   $*"; }
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+# fixture <status> <rounds> <hours> <compactions> <started> <row...>
+# Each row is "round|item|state|updated". Prints the new progress file's
+# path, always a direct child of $work so the default --stop-file (STOP next
+# to the progress file) resolves to "$work/STOP" for every case. A counter
+# names each file rather than mktemp's template: BSD mktemp (macOS) does not
+# randomize a template with a suffix after the X run, so a literal
+# "progress.XXXXXX.md" template collides with itself on the second call.
+_fixture_n=0
+fixture() {
+  local status="$1" rounds="$2" hours="$3" compactions="$4" started="$5"
+  shift 5
+  _fixture_n=$((_fixture_n + 1))
+  local file="$work/progress-$_fixture_n.md"
+  {
+    echo "# Loop fixture"
+    echo "- started: $started"
+    echo "- budget: rounds=$rounds hours=$hours"
+    echo "- approved: test fixture"
+    echo "- compactions-seen: $compactions"
+    echo "- status: $status"
+    if [ "$status" = stopped ]; then
+      echo "- stop-reason: owner"
+    else
+      echo "- stop-reason:"
+    fi
+    echo "- next-proposal:"
+    echo ""
+    echo "| round | item | contract | state | task | dispatch | pr | sha | updated |"
+    echo "|---|---|---|---|---|---|---|---|---|"
+    local row rnd item state updated
+    for row in "$@"; do
+      IFS='|' read -r rnd item state updated <<<"$row"
+      echo "| $rnd | $item | contract-$item | $state | task_$item | ctx_$item | #1 | sha0000 | $updated |"
+    done
+  } >"$file"
+  printf '%s' "$file"
+}
+
+# run <interpreter> <file> <arg...> ; sets OUT, ERR, RC
+run() {
+  local interpreter="$1" file="$2"
+  shift 2
+  OUT="$("$interpreter" "$file" "$@" 2>"$work/stderr")"
+  RC=$?
+  ERR="$(cat "$work/stderr")"
+}
+
+assert_case() {  # label want_rc want_line file arg...
+  local label="$1" want_rc="$2" want_line="$3" file="$4"
+  shift 4
+  run "$SCRIPT" "$file" "$@"
+  if [ "$RC" -eq "$want_rc" ] && [ "$OUT" = "$want_line" ]; then
+    ok "$label"
+  else
+    fail "$label: want rc=$want_rc out='$want_line', got rc=$RC out='$OUT' err='$ERR'"
+  fi
+}
+
+# --- Case 1: continue_pick ---------------------------------------------------
+pf="$(fixture running 3 4 0 2026-10-20T09:00:00+09:00 '1|mgm-a|merge-ready')"
+assert_case continue_pick 0 "continue round=2 pick" "$pf" \
+  --now 2026-10-20T10:00:00+09:00 --ready-count 2
+
+# --- Case 2: continue_in_flight ----------------------------------------------
+pf="$(fixture running 3 4 0 2026-10-20T09:00:00+09:00 '1|mgm-a|merge-ready' '2|mgm-b|dispatched')"
+assert_case continue_in_flight 0 "continue round=2 item=mgm-b state=dispatched" "$pf" \
+  --now 2026-10-20T10:00:00+09:00 --ready-count 2
+
+# --- Case 3: ready_unknown ----------------------------------------------------
+pf="$(fixture running 3 4 0 2026-10-20T09:00:00+09:00 '1|mgm-a|merge-ready')"
+assert_case ready_unknown 0 "continue round=2 pick ready=unknown" "$pf" \
+  --now 2026-10-20T10:00:00+09:00
+
+# --- Case 4: stop_round_budget ------------------------------------------------
+pf="$(fixture running 3 4 0 2026-10-20T09:00:00+09:00 \
+  '1|mgm-a|merge-ready' '2|mgm-b|failed' '3|mgm-c|merge-ready')"
+assert_case stop_round_budget 3 "stop reason=1: round budget spent (3/3)" "$pf" \
+  --now 2026-10-20T10:00:00+09:00 --ready-count 2
+
+# --- Case 5: stop_wall_clock ---------------------------------------------------
+pf="$(fixture running 3 4 0 2026-10-20T09:00:00+09:00 '1|mgm-a|merge-ready')"
+assert_case stop_wall_clock 3 "stop reason=2: wall-clock budget spent (4.0h/4h)" "$pf" \
+  --now 2026-10-20T13:00:00+09:00 --ready-count 2
+
+# --- Case 6: stop_no_eligible --------------------------------------------------
+pf="$(fixture running 3 4 0 2026-10-20T09:00:00+09:00 '1|mgm-a|merge-ready')"
+assert_case stop_no_eligible 3 "stop reason=3: no eligible item" "$pf" \
+  --now 2026-10-20T10:00:00+09:00 --ready-count 0
+
+# --- Case 7: stop_two_failures -------------------------------------------------
+pf="$(fixture running 3 4 0 2026-10-20T09:00:00+09:00 \
+  '1|mgm-a|failed' '2|mgm-b|failed: verification')"
+assert_case stop_two_failures 3 "stop reason=4: two consecutive failures (mgm-a, mgm-b)" "$pf" \
+  --now 2026-10-20T10:00:00+09:00 --ready-count 2
+
+# --- Case 8: stop_worker_question ----------------------------------------------
+pf="$(fixture running 3 4 0 2026-10-20T09:00:00+09:00 '1|mgm-a|blocked: worker-question')"
+assert_case stop_worker_question 3 "stop reason=5: worker question on mgm-a" "$pf" \
+  --now 2026-10-20T10:00:00+09:00 --ready-count 2
+
+# --- Case 9: stop_file_empty_counts --------------------------------------------
+pf="$(fixture running 3 4 0 2026-10-20T09:00:00+09:00 '1|mgm-a|merge-ready')"
+touch "$work/STOP"
+assert_case stop_file_empty_counts 3 "stop reason=5: stop file present" "$pf" \
+  --now 2026-10-20T10:00:00+09:00 --ready-count 2
+rm -f "$work/STOP"
+
+# --- Case 10: stop_compaction_header -------------------------------------------
+pf="$(fixture running 3 4 1 2026-10-20T09:00:00+09:00 '1|mgm-a|merge-ready')"
+assert_case stop_compaction_header 3 \
+  "stop reason=6: compaction passed; finish the item in flight and stop" "$pf" \
+  --now 2026-10-20T10:00:00+09:00 --ready-count 2
+
+# --- Case 11: stop_compaction_flag ---------------------------------------------
+pf="$(fixture running 3 4 0 2026-10-20T09:00:00+09:00 '1|mgm-a|merge-ready')"
+assert_case stop_compaction_flag 3 \
+  "stop reason=6: compaction passed; finish the item in flight and stop" "$pf" \
+  --now 2026-10-20T10:00:00+09:00 --ready-count 2 --compactions 1
+
+# --- Case 12: status_stopped_wins ----------------------------------------------
+pf="$(fixture stopped 3 4 0 2026-10-20T09:00:00+09:00 '1|mgm-a|dispatched')"
+assert_case status_stopped_wins 3 "stop reason=stopped: owner" "$pf" \
+  --now 2026-10-20T10:00:00+09:00 --ready-count 2
+
+# --- Case 13: bot_round_count_parsed --------------------------------------------
+pf="$(fixture running 3 4 0 2026-10-20T09:00:00+09:00 '1|mgm-a|bot-round(3)')"
+assert_case bot_round_count_parsed 0 "continue round=1 item=mgm-a state=bot-round(3)" "$pf" \
+  --now 2026-10-20T10:00:00+09:00 --ready-count 2
+
+# --- Case 14: started_requires_offset -------------------------------------------
+pf="$(fixture running 3 4 0 2026-10-20T09:00:00 '1|mgm-a|merge-ready')"
+run "$SCRIPT" "$pf"
+if [ "$RC" -eq 2 ] && [ -z "$OUT" ] && printf '%s' "$ERR" | grep -q '^loop-check: line 2:'; then
+  ok "started_requires_offset: exit 2, no stdout, stderr names line 2"
+else
+  fail "started_requires_offset: want rc=2 no stdout stderr naming line 2, got rc=$RC out='$OUT' err='$ERR'"
+fi
+
+# --- Case 15: now_before_start_is_malformed -------------------------------------
+pf="$(fixture running 3 4 0 2026-10-20T09:00:00+09:00 '1|mgm-a|merge-ready')"
+run "$SCRIPT" "$pf" --now 2026-10-20T08:00:00+09:00 --ready-count 2
+if [ "$RC" -eq 2 ] && printf '%s' "$ERR" | grep -q 'now precedes started'; then
+  ok "now_before_start_is_malformed: exit 2, stderr names the clock skew"
+else
+  fail "now_before_start_is_malformed: want rc=2 stderr 'now precedes started', got rc=$RC out='$OUT' err='$ERR'"
+fi
+
+# --- Case 16: unknown_state_is_malformed ----------------------------------------
+pf="$(fixture running 3 4 0 2026-10-20T09:00:00+09:00 '1|mgm-a|done')"
+run "$SCRIPT" "$pf" --now 2026-10-20T10:00:00+09:00 --ready-count 2
+if [ "$RC" -eq 2 ] && printf '%s' "$ERR" | grep -q '^loop-check: line 12:'; then
+  ok "unknown_state_is_malformed: exit 2, stderr names the row's line number"
+else
+  fail "unknown_state_is_malformed: want rc=2 stderr naming line 12, got rc=$RC out='$OUT' err='$ERR'"
+fi
+
+# --- Failability: one per stop condition ----------------------------------------
+# Each mutates a fresh temp copy of the real script, re-runs the case that
+# proves the condition, and asserts the stop line no longer appears; then
+# re-runs the unmutated script and asserts the stop line is back.
+failability() {  # condition_label sed_expr file arg...
+  local label="$1" expr="$2" file="$3"
+  shift 3
+  local mutant="$work/loop-check-mutant-$label"
+  sed "$expr" "$SCRIPT" >"$mutant"
+  chmod +x "$mutant"
+  if cmp -s "$SCRIPT" "$mutant"; then
+    fail "failability $label: sed expression did not change the script"
+    return
+  fi
+  run "$mutant" "$file" "$@"
+  case "$OUT" in
+    "stop reason="*)
+      fail "failability $label: mutant still printed a stop line: '$OUT'"
+      return
+      ;;
+  esac
+  ok "failability: $label mutant no longer stops (now: '$OUT')"
+
+  run "$SCRIPT" "$file" "$@"
+  case "$OUT" in
+    "stop reason="*) ok "failability: $label restored script still stops ('$OUT')" ;;
+    *) fail "failability $label: restored script should still stop, got '$OUT'" ;;
+  esac
+}
+
+pf="$(fixture running 3 4 0 2026-10-20T09:00:00+09:00 \
+  '1|mgm-a|merge-ready' '2|mgm-b|failed' '3|mgm-c|merge-ready')"
+failability condition1-round-budget 's/completed >= p.rounds/completed > p.rounds/' "$pf" \
+  --now 2026-10-20T10:00:00+09:00 --ready-count 2
+
+pf="$(fixture running 3 4 0 2026-10-20T09:00:00+09:00 '1|mgm-a|merge-ready')"
+failability condition2-wall-clock 's/elapsed_hours >= p.hours/elapsed_hours > p.hours/' "$pf" \
+  --now 2026-10-20T13:00:00+09:00 --ready-count 2
+
+pf="$(fixture running 3 4 0 2026-10-20T09:00:00+09:00 '1|mgm-a|merge-ready')"
+failability condition3-no-eligible 's/ready_count == 0/ready_count == 999/' "$pf" \
+  --now 2026-10-20T10:00:00+09:00 --ready-count 0
+
+pf="$(fixture running 3 4 0 2026-10-20T09:00:00+09:00 \
+  '1|mgm-a|failed' '2|mgm-b|failed: verification')"
+failability condition4-two-failures 's/len(completed_rows) >= 2/len(completed_rows) >= 99/' "$pf" \
+  --now 2026-10-20T10:00:00+09:00 --ready-count 2
+
+pf="$(fixture running 3 4 0 2026-10-20T09:00:00+09:00 '1|mgm-a|blocked: worker-question')"
+failability condition5-blocked 's/blocked: worker-question/never-matches/' "$pf" \
+  --now 2026-10-20T10:00:00+09:00 --ready-count 2
+
+pf="$(fixture running 3 4 1 2026-10-20T09:00:00+09:00 '1|mgm-a|merge-ready')"
+failability condition6-compaction 's/effective_compactions >= 1/effective_compactions >= 99/' "$pf" \
+  --now 2026-10-20T10:00:00+09:00 --ready-count 2
+
+[ "$FAILED" -eq 0 ] && { echo "loop-check regression tests passed"; exit 0; }
+echo "loop-check: FAILED"
+exit 1

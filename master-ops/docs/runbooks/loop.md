@@ -148,8 +148,9 @@ Verbatim from the spec's retry limits:
    verification summary.
 5. The owner approves the merges in one answer; the master merges them in
    order, with the existing per-PR re-check
-   ([contract conventions](contract-conventions.md) clause 6 and clause 7)
-   before each merge. The loop itself never merges.
+   ([contract conventions](contract-conventions.md) clause 6, "Merge
+   stewardship clause," and clause 7, "Merge ordering") before each merge.
+   The loop itself never merges.
 
 ## 6. Compaction and resume
 

@@ -152,7 +152,7 @@ assert_case stop_compaction_flag 3 \
 
 # --- Case 13: status_stopped_wins ----------------------------------------------
 pf="$(fixture stopped 3 4 0 2026-10-20T09:00:00+09:00 '1|mgm-a|dispatched')"
-assert_case status_stopped_wins 3 "stop reason=stopped: owner" "$pf" \
+assert_case status_stopped_wins 3 "stop reason=stopped: owner drain item=mgm-a state=dispatched" "$pf" \
   --now 2026-10-20T10:00:00+09:00 --ready-count 2
 
 # --- Case 14: bot_round_count_parsed --------------------------------------------
@@ -247,6 +247,32 @@ pf_bin="$work/progress-non-utf8.md"
 cp "$pf" "$pf_bin"
 printf '\xff\xfe' >"$pf_bin"
 assert_malformed non_utf8_is_malformed '^loop-check: line 0:' "$pf_bin" \
+  --now 2026-10-20T10:00:00+09:00 --ready-count 2
+
+# --- Case 24: stop_round_budget_drains -------------------------------------------
+# A row in flight when the round budget is also spent: the stop line still
+# names the item to drain before the master writes status: stopped.
+pf="$(fixture running 3 4 0 2026-10-20T09:00:00+09:00 \
+  '1|mgm-a|merge-ready' '2|mgm-b|failed' '3|mgm-c|merge-ready' '4|mgm-d|dispatched')"
+assert_case stop_round_budget_drains 3 \
+  "stop reason=1: round budget spent (3/3) drain item=mgm-d state=dispatched" "$pf" \
+  --now 2026-10-20T10:00:00+09:00 --ready-count 2
+
+# --- Case 25: stop_file_drains ----------------------------------------------------
+# The owner's stop file with a row still in flight: drain it before stopping.
+pf="$(fixture running 3 4 0 2026-10-20T09:00:00+09:00 '1|mgm-a|dispatched')"
+touch "$work/STOP"
+assert_case stop_file_drains 3 \
+  "stop reason=5: stop file present drain item=mgm-a state=dispatched" "$pf" \
+  --now 2026-10-20T10:00:00+09:00 --ready-count 2
+rm -f "$work/STOP"
+
+# --- Case 26: needs_approval_does_not_spend_a_round --------------------------------
+# Two needs-approval rows would spend the whole 2-round budget if counted;
+# excluded, the loop keeps going instead of stopping.
+pf="$(fixture running 2 4 0 2026-10-20T09:00:00+09:00 \
+  '1|mgm-a|blocked: needs-approval' '2|mgm-b|blocked: needs-approval')"
+assert_case needs_approval_does_not_spend_a_round 0 "continue round=1 pick" "$pf" \
   --now 2026-10-20T10:00:00+09:00 --ready-count 2
 
 # --- Failability: one per stop condition ----------------------------------------

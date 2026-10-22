@@ -9,6 +9,7 @@ State vocabulary: `picked`, `contracted`, `dispatched`, `dispatched:
 relaunched`, `verifying`, `bot-round(<n>)`, `merge-ready`, `failed` or
 `failed: <text>`, `blocked` or `blocked: <text>`. `dispatched*` (both
 `dispatched` and `dispatched: relaunched`) counts as in flight.
+`blocked: needs-approval` is terminal but does not spend a round.
 
 Exit codes: 0 `continue`, 3 `stop`, 2 on a malformed progress file (line
 number on stderr) or a malformed option (the option name on stderr). Reads
@@ -215,6 +216,13 @@ def parse(path: str) -> Progress:
     )
 
 
+def _drain_suffix(in_flight_rows: list[Row]) -> str:
+    if not in_flight_rows:
+        return ""
+    row = in_flight_rows[0]
+    return f" drain item={row.item} state={row.state}"
+
+
 def verdict(
     p: Progress,
     now: datetime,
@@ -225,34 +233,38 @@ def verdict(
     if now < p.started:
         raise Malformed(2, "now precedes started")
 
-    if p.status != "running":
-        return 3, f"stop reason=stopped: {p.stop_reason}"
+    in_flight_rows = [r for r in p.rows if _is_in_flight(r.state)]
+    drain = _drain_suffix(in_flight_rows)
 
-    completed_rows = [r for r in p.rows if _is_terminal(r.state)]
+    if p.status != "running":
+        return 3, f"stop reason=stopped: {p.stop_reason}{drain}"
+
+    completed_rows = [
+        r for r in p.rows if _is_terminal(r.state) and r.state != "blocked: needs-approval"
+    ]
     completed = len(completed_rows)
     if completed >= p.rounds:
-        return 3, f"stop reason=1: round budget spent ({completed}/{p.rounds})"
+        return 3, f"stop reason=1: round budget spent ({completed}/{p.rounds}){drain}"
 
     elapsed_hours = (now - p.started).total_seconds() / 3600.0
     if elapsed_hours >= p.hours:
-        return 3, f"stop reason=2: wall-clock budget spent ({elapsed_hours:.1f}h/{p.hours}h)"
+        return 3, f"stop reason=2: wall-clock budget spent ({elapsed_hours:.1f}h/{p.hours}h){drain}"
 
-    in_flight_rows = [r for r in p.rows if _is_in_flight(r.state)]
     if ready_count == 0 and not in_flight_rows:
         return 3, "stop reason=3: no eligible item"
 
     if len(completed_rows) >= 2:
         last_two = completed_rows[-2:]
         if all(_is_failed(r.state) for r in last_two):
-            return 3, f"stop reason=4: two consecutive failures ({last_two[0].item}, {last_two[1].item})"
+            return 3, f"stop reason=4: two consecutive failures ({last_two[0].item}, {last_two[1].item}){drain}"
 
     for r in p.rows:
         if r.state == "blocked: worker-question":
-            return 3, f"stop reason=5: worker question on {r.item}"
+            return 3, f"stop reason=5: worker question on {r.item}{drain}"
         if r.state == "blocked: escalation":
-            return 3, f"stop reason=5: escalation on {r.item}"
+            return 3, f"stop reason=5: escalation on {r.item}{drain}"
     if stop_file_exists:
-        return 3, "stop reason=5: stop file present"
+        return 3, f"stop reason=5: stop file present{drain}"
 
     effective_compactions = compactions if compactions is not None else p.compactions_seen
     if effective_compactions >= 1:

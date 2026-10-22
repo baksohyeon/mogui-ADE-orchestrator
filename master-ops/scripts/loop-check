@@ -82,7 +82,7 @@ class Progress:
 
 
 def _is_dispatched(state: str) -> bool:
-    return state == "dispatched" or state.startswith("dispatched:")
+    return state in ("dispatched", "dispatched: relaunched")
 
 
 def _is_in_flight(state: str) -> bool:

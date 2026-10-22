@@ -54,10 +54,15 @@ items, and anything the standing rules route to the owner stay outside it.
    the eligible item with the lowest priority number first (`P0` before
    `P1`), then the oldest `created` date, then the lexically smallest id.
    `bd ready --json` is the source:
-   `bd ready --json --label loop-ok --exclude-label blocked --exclude-label architectural | jq -r 'sort_by(.priority, .created_at, .id)[0].id'`
+   `bd ready --limit 0 --json --label loop-ok --exclude-label blocked --exclude-label architectural | jq -r 'sort_by(.priority, .created_at, .id)[0].id'`
    Append a `picked` row for the item this selects.
 4. A `continue round=<n> item=<id> state=<state>` line: resume that row from
-   its own state, at the matching step below.
+   its own state, at the matching step below. A `dispatched` or `dispatched:
+   relaunched` row resumes by waiting on its existing dispatch (the row's
+   `task` and `dispatch` columns, with `orca orchestration dispatch-show
+   --task <task>` and the existing waiter from step 6), never by re-entering
+   step 6's dispatch path; it relaunches, once, only on the worker-death case
+   in section 4.
 5. **picked → contracted.** Write the contract under `contracts/` per
    [contract conventions](contract-conventions.md) and commit it to ops. A
    contract that would add a new file to a product repository or change a
@@ -76,8 +81,8 @@ items, and anything the standing rules route to the owner stay outside it.
    with no `worker_done` (one relaunch on the same worktree); write the
    row's state as `dispatched: relaunched`. A second death on a `dispatched:
    relaunched` row ends the item `failed: worker-died-twice`. `loop-check`
-   treats `dispatched*` as in flight, so either state resumes at step 6. See
-   section 4.
+   treats both states as in flight; resume either state by waiting on its
+   existing dispatch, not by creating another task. See section 4.
 9. **dispatched → blocked**, on a worker `question` or `escalation`. The loop
    stops here (`stop reason=5`); it does not pick further while that is open.
 10. **verifying → failed**, on a clone verification failure. No retry; name
@@ -135,9 +140,11 @@ Verbatim from the spec's retry limits:
 4. Run `scripts/loop-check` again.
 5. On `stop reason=6: compaction passed; drain item=<id> state=<state>`,
    finish that item to its next stable state before writing `status:
-   stopped`: a `dispatched` row waits for `worker_done` and is verified; a
-   `verifying` or `bot-round` row is verified to `merge-ready`, `failed`, or
-   `blocked`. Only then write `status: stopped` with reason 6.
+   stopped`: a `dispatched` or `dispatched: relaunched` row waits on its
+   existing dispatch (section 3, step 4) for `worker_done` and is verified,
+   relaunching only on the worker-death case in section 4; a `verifying` or
+   `bot-round` row is verified to `merge-ready`, `failed`, or `blocked`.
+   Only then write `status: stopped` with reason 6.
 6. On `stop reason=6: compaction passed; nothing in flight`, write `status:
    stopped` with reason 6 immediately; there is nothing to drain.
 

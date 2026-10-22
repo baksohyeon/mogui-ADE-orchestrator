@@ -184,6 +184,11 @@ pf="$(fixture running 3 4 0 2026-10-20T09:00:00+09:00 '1|mgm-a|done')"
 assert_malformed unknown_state_is_malformed '^loop-check: line 12:' "$pf" \
   --now 2026-10-20T10:00:00+09:00 --ready-count 2
 
+# --- Case 18b: dispatched_variant_is_malformed -----------------------------------
+pf="$(fixture running 3 4 0 2026-10-20T09:00:00+09:00 '1|mgm-a|dispatched: stale')"
+assert_malformed dispatched_variant_is_malformed '^loop-check: line 12:' "$pf" \
+  --now 2026-10-20T10:00:00+09:00 --ready-count 2
+
 # --- Case 19: now_not_iso --------------------------------------------------------
 pf="$(fixture running 3 4 0 2026-10-20T09:00:00+09:00 '1|mgm-a|merge-ready')"
 assert_malformed now_not_iso '^loop-check: --now:' "$pf" \

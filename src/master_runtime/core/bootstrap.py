@@ -39,6 +39,7 @@ class BootstrapConfig:
     budget_chars: int = DEFAULT_BUDGET_CHARS
     session_id: Optional[str] = None
     strict_lease: bool = False
+    seat_root: Optional[Path] = None
 
 
 @dataclass(frozen=True)
@@ -66,11 +67,15 @@ class BootstrapResult:
 
 
 ProcessProbe = Callable[[], str]
+CwdProbe = Callable[[int], Optional[str]]
+AncestorProbe = Callable[[], Optional[int]]
 
 
 def bootstrap(
     config: BootstrapConfig,
     process_probe: Optional[ProcessProbe] = None,
+    cwd_probe: Optional[CwdProbe] = None,
+    ancestor_probe: Optional[AncestorProbe] = None,
 ) -> BootstrapResult:
     """Load charter and optional handoff, then run non-owning lease detection."""
 
@@ -108,9 +113,21 @@ def bootstrap(
         if l1_truncated:
             warnings.append("BUDGET_TRUNCATED:L1")
 
-    warnings.extend(_detect_dual_instances(config.session_id, process_probe))
+    warnings.extend(
+        _detect_dual_instances(
+            config.session_id,
+            process_probe,
+            seat_root=config.seat_root,
+            cwd_probe=cwd_probe,
+            ancestor_probe=ancestor_probe,
+        )
+    )
     if config.strict_lease:
-        dual_warnings = [warning for warning in warnings if warning.startswith("DUAL_INSTANCE:")]
+        dual_warnings = [
+            warning
+            for warning in warnings
+            if warning.startswith(("DUAL_INSTANCE:", "SEAT_PEER:"))
+        ]
         if dual_warnings:
             raise BootstrapError(dual_warnings[0])
 
@@ -205,17 +222,32 @@ def _parse_lock(value: str) -> bool:
 def _detect_dual_instances(
     session_id: Optional[str],
     process_probe: Optional[ProcessProbe],
+    seat_root: Optional[Union[str, Path]] = None,
+    cwd_probe: Optional[CwdProbe] = None,
+    ancestor_probe: Optional[AncestorProbe] = None,
 ) -> List[str]:
-    if not session_id:
-        return []
-
     probe = process_probe or _default_process_probe
     try:
         output = probe()
     except OSError as exc:
         return ["PROCESS_PROBE_FAILED:" + exc.__class__.__name__]
+
     own_pid = os.getpid()
-    warnings = []
+    find_ancestor = ancestor_probe or _default_ancestor_probe
+    try:
+        ancestor_pid = find_ancestor()
+    except OSError:
+        ancestor_pid = None
+    excluded_pids = {own_pid}
+    if ancestor_pid is not None:
+        excluded_pids.add(ancestor_pid)
+
+    resolve_cwd = cwd_probe or _default_cwd_probe
+    seat_root_real = os.path.realpath(
+        str(seat_root) if seat_root is not None else os.getcwd()
+    )
+
+    warnings: List[str] = []
     for line in output.splitlines():
         parsed = _parse_process_line(line)
         if parsed is None:
@@ -223,8 +255,21 @@ def _detect_dual_instances(
         pid, command = parsed
         if pid == own_pid:
             continue
-        if session_id in command and _is_claude_command(command):
+        if not _is_claude_command(command):
+            continue
+        if session_id and session_id in command and pid not in excluded_pids:
             warnings.append("DUAL_INSTANCE:" + str(pid))
+            continue
+        if pid in excluded_pids:
+            continue
+        try:
+            cwd = resolve_cwd(pid)
+        except OSError:
+            continue
+        if cwd is None:
+            continue
+        if os.path.realpath(cwd) == seat_root_real:
+            warnings.append("SEAT_PEER:" + str(pid))
     return warnings
 
 
@@ -236,6 +281,45 @@ def _default_process_probe() -> str:
         text=True,
     )
     return result.stdout
+
+
+def _default_cwd_probe(pid: int) -> Optional[str]:
+    result = subprocess.run(
+        ("lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    for line in result.stdout.splitlines():
+        if line.startswith("n"):
+            return line[1:]
+    return None
+
+
+def _default_ancestor_probe() -> Optional[int]:
+    own_pid = os.getpid()
+    pid = own_pid
+    for _ in range(64):
+        result = subprocess.run(
+            ("ps", "-o", "ppid=,command=", "-p", str(pid)),
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        line = result.stdout.strip()
+        if not line:
+            return None
+        parts = line.split(None, 1)
+        if not parts or not parts[0].isdigit():
+            return None
+        ppid = int(parts[0])
+        command = parts[1] if len(parts) > 1 else ""
+        if pid != own_pid and _is_claude_command(command):
+            return pid
+        if ppid <= 1:
+            return None
+        pid = ppid
+    return None
 
 
 def _parse_process_line(line: str) -> Optional[Tuple[int, str]]:

@@ -446,10 +446,11 @@ Keys, all at top level:
 - `repo` (required): the repository the worker writes to.
 - `budget` (optional): `[rounds=N, hours=N, cost_usd=N.N]`, recorded only.
 - `writes` (optional): path globs the worker is expected to touch, recorded only.
-- `standing_rules` (optional): a lowercase, hyphenated name declared in
-  [rules/standing-rules.md](../../rules/standing-rules.md) or the seat's own
-  `config/standing-rules.overlay.md` (which wins on a name both declare); the
-  wrapper appends each named block's text to the dispatched spec.
+- `standing_rules` (optional): a list of lowercase, hyphenated names, each
+  declared in [rules/standing-rules.md](../../rules/standing-rules.md) or
+  the seat's own `config/standing-rules.overlay.md` (which wins on a name
+  both declare); the wrapper appends each named block's text to the
+  dispatched spec.
 
 Example head:
 

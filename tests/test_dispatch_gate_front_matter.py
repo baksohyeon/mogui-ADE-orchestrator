@@ -485,6 +485,7 @@ def test_cli_check_prints_front_matter_and_allows(tmp_path: Path) -> None:
     result = _run_cli_check(tmp_path, contract)
 
     payload = json.loads(result.stdout)
+    assert result.returncode == 0
     assert payload["allow"] is True
     assert payload["front_matter"] == {
         "tier": "efficient",
@@ -518,6 +519,7 @@ def test_cli_check_with_a_named_standing_rule_appears_in_front_matter(
     result = _run_cli_check(tmp_path, contract)
 
     payload = json.loads(result.stdout)
+    assert result.returncode == 0
     assert payload["allow"] is True
     assert payload["front_matter"]["standing_rules"] == ["headless"]
 

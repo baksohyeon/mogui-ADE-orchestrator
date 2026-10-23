@@ -38,7 +38,8 @@ and sentences use plain punctuation, never the long dash.
 
 Titles follow `<type>: <lowercase description>`, `<type>` one of feat, fix,
 docs, refactor, test, chore, perf, or ci. The assignee is set at creation,
-never after. The body fills four named sections: Problem, Why this
+never after. The body fills every section the repository's pull request
+template names, including the four narrative ones: Problem, Why this
 approach, What this changes, Expected effect, plus a provenance line. A
 review-bot thread gets a reply inside the thread and a resolve; a silent
 batch resolve is never acceptable.

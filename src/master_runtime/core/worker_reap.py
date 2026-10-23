@@ -639,10 +639,26 @@ class WorkerReaper:
 
     def _remove_worktree(self, worktree_path: Path) -> None:
         """Remove a worktree safely."""
-        # Use git worktree remove if it's a linked worktree. -C points git at
-        # the worktree itself, so removal does not depend on the caller's cwd.
+        # Resolve the shared git dir, then remove through --git-dir. The remove
+        # must not run with the worktree as git's cwd: Windows cannot delete a
+        # process's current directory. It also must not depend on the caller's cwd.
         code, stdout, stderr = self.orca_runner(
-            ["git", "-C", str(worktree_path), "worktree", "remove", str(worktree_path)]
+            [
+                "git",
+                "-C",
+                str(worktree_path),
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-common-dir",
+            ]
+        )
+        common_dir = stdout.strip()
+        if code != 0 or not common_dir:
+            raise ReapError(
+                f"Failed to resolve git common dir for {worktree_path}: {stderr}", code or 1
+            )
+        code, stdout, stderr = self.orca_runner(
+            ["git", f"--git-dir={common_dir}", "worktree", "remove", str(worktree_path)]
         )
         if code != 0:
             raise ReapError(f"Failed to remove worktree {worktree_path}: {stderr}", code)

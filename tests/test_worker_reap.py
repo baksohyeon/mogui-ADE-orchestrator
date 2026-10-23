@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -731,6 +732,8 @@ class WorkerReaperTests(unittest.TestCase):
                     return 0, "main\n", ""
                 if "git" in cmd and "branch" in cmd and "--merged" in cmd:
                     return 0, "* main\n", ""
+                if "git" in cmd and "rev-parse" in cmd and "--git-common-dir" in cmd:
+                    return 0, f"{FAKE_GIT_COMMON_DIR}\n", ""
                 if "git" in cmd and "worktree" in cmd and "remove" in cmd:
                     removed_paths.append(cmd[-1])
                     return 0, "", ""
@@ -880,6 +883,83 @@ class WorkerReaperTests(unittest.TestCase):
             self.assertIn(tmp_path, removed_paths)
             self.assertIn("worktree_removed:", record.actions_taken)
 
+    def test_reap_removes_the_worktree_through_its_git_dir_from_outside(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = tmp
+            commands = []
+            fake_runner, _removed_paths = _clean_worktree_runner(
+                tmp_path,
+                current_branch="main",
+                merged_branches="* main\n",
+            )
+
+            def recording_runner(cmd: list[str]) -> tuple[int, str, str]:
+                commands.append(cmd)
+                return fake_runner(cmd)
+
+            reaper = WorkerReaper(orca_runner=recording_runner)
+            reaper.reap(task_id="t1", execute=True)
+
+            common_dir_commands = [cmd for cmd in commands if "--git-common-dir" in cmd]
+            self.assertEqual(
+                common_dir_commands,
+                [
+                    [
+                        "git",
+                        "-C",
+                        tmp_path,
+                        "rev-parse",
+                        "--path-format=absolute",
+                        "--git-common-dir",
+                    ]
+                ],
+            )
+            remove_commands = [
+                cmd for cmd in commands
+                if "git" in cmd and "worktree" in cmd and "remove" in cmd
+            ]
+            self.assertEqual(
+                remove_commands,
+                [["git", f"--git-dir={FAKE_GIT_COMMON_DIR}", "worktree", "remove", tmp_path]],
+            )
+            self.assertNotIn("-C", remove_commands[0])
+
+    def test_remove_worktree_raises_when_the_git_dir_cannot_be_resolved(self) -> None:
+        commands = []
+
+        def failing_runner(cmd: list[str]) -> tuple[int, str, str]:
+            commands.append(cmd)
+            if "--git-common-dir" in cmd:
+                return 128, "", "fatal: not a git repository"
+            return 0, "", ""
+
+        with self.assertRaises(ReapError):
+            WorkerReaper(orca_runner=failing_runner)._remove_worktree(Path("/tmp/wt"))
+        self.assertFalse(any("remove" in cmd for cmd in commands))
+
+    def test_remove_worktree_works_from_a_non_repository_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            worktree = Path(tmp) / "wt"
+            outside = Path(tmp) / "outside"
+            repo.mkdir()
+            outside.mkdir()
+            _git(repo, "init", "--initial-branch", "main")
+            _git(repo, "config", "user.email", "test@example.invalid")
+            _git(repo, "config", "user.name", "Test User")
+            _git(repo, "commit", "--allow-empty", "-m", "base")
+            _git(repo, "worktree", "add", "-b", "feature-x", str(worktree))
+
+            previous_cwd = os.getcwd()
+            os.chdir(outside)
+            try:
+                WorkerReaper()._remove_worktree(worktree)
+            finally:
+                os.chdir(previous_cwd)
+
+            self.assertFalse(worktree.exists())
+            self.assertNotIn(str(worktree.resolve()), _git(repo, "worktree", "list"))
+
     def test_reap_leaves_clean_unmerged_worktree_with_unique_changes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = tmp
@@ -959,6 +1039,9 @@ class _FakeRunner:
         return 0, "", ""
 
 
+FAKE_GIT_COMMON_DIR = "/repo/.git"
+
+
 def _clean_worktree_runner(
     worktree_path: str,
     *,
@@ -985,6 +1068,8 @@ def _clean_worktree_runner(
             return 0, f"{current_branch}\n", ""
         if "git" in cmd and "branch" in cmd and "--merged" in cmd:
             return 0, merged_branches, ""
+        if "git" in cmd and "rev-parse" in cmd and "--git-common-dir" in cmd:
+            return 0, f"{FAKE_GIT_COMMON_DIR}\n", ""
         if "git" in cmd and "rev-parse" in cmd and origin_main_tree is not None:
             return 0, f"{origin_main_tree}\n", ""
         if "git" in cmd and "merge-tree" in cmd and virtual_merge_tree is not None:

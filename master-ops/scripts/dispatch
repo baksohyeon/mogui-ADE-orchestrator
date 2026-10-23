@@ -579,6 +579,62 @@ codex_start_screen_problem() {
 # because the launch flags below and the footer check above must agree on both.
 CODEX_REASONING_EFFORT=xhigh
 CODEX_MIGRATION_ACK='notice.model_migrations={"gpt-5.5"="gpt-6.1-sol"}'
+CODEX_BYPASS_FLAG=
+
+# Optional codex_reasoning_effort and codex_bypass_approvals_and_sandbox from the
+# instance runtime config. Effort list from codex-cli 0.163.0 (2026-10-17); an
+# unknown value is refused because the footer check would wait forever.
+# An unreadable config is left to unavailable_runtimes_guard, which refuses it.
+#   exit 0: effort, then bypass (1 or 0), on stdout. exit 1: one-line reason.
+codex_instance_launch_config() {
+  [ -f "$INSTANCE_RUNTIME_CONFIG" ] || { printf '%s\n0\n' "$CODEX_REASONING_EFFORT"; return 0; }
+  python3 - "$INSTANCE_RUNTIME_CONFIG" "$CODEX_REASONING_EFFORT" <<'EOF'
+import json
+import sys
+
+path, effort = sys.argv[1], sys.argv[2]
+efforts = ("minimal", "low", "medium", "high", "xhigh", "max")
+try:
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+except Exception:
+    data = {}
+if not isinstance(data, dict):
+    data = {}
+value = data.get("codex_reasoning_effort")
+if value is not None:
+    if not isinstance(value, str) or value not in efforts:
+        print(f"codex_reasoning_effort is {value!r}; expected one of {', '.join(efforts)}")
+        sys.exit(1)
+    effort = value
+bypass = data.get("codex_bypass_approvals_and_sandbox")
+if bypass is not None and not isinstance(bypass, bool):
+    print(f"codex_bypass_approvals_and_sandbox is {bypass!r}; expected true or false")
+    sys.exit(1)
+print(effort)
+print(1 if bypass else 0)
+EOF
+}
+
+# Called bare, not through $(...), so the refusal can stop dispatch. Only a
+# codex dispatch calls it, so a bad codex key never stops another runtime. The
+# bypass warning goes to stdout because stdout is this script's mechanical log;
+# the ledger keeps the choice as codex_bypass on the host-diversity audit line.
+apply_codex_instance_launch_config() {
+  local out status
+  out=$(codex_instance_launch_config)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "✗ invalid codex launch setting in $INSTANCE_RUNTIME_CONFIG: $out" >&2
+    exit 2
+  fi
+  CODEX_REASONING_EFFORT=$(printf '%s\n' "$out" | sed -n 1p)
+  if [ "$(printf '%s\n' "$out" | sed -n 2p)" = 1 ]; then
+    CODEX_BYPASS_FLAG=' --dangerously-bypass-approvals-and-sandbox'
+    echo "WARNING: codex_bypass_approvals_and_sandbox is true in $INSTANCE_RUNTIME_CONFIG;"
+    echo "         this codex worker launches with --dangerously-bypass-approvals-and-sandbox (no sandbox, no approvals)."
+  fi
+}
 
 shell_quote() {
   python3 - "$1" <<'EOF'
@@ -621,6 +677,11 @@ runtime_command() {
     # disables the sandbox as well as approvals. Weakening a sandbox is not a
     # side effect to take on while fixing a delivery bug, so the safer measured
     # path stays and the operator is told when it has not run.
+    # Since 2026-10-17 that stays the default: the flag is off unless the operator
+    # opts in with codex_bypass_approvals_and_sandbox in the instance runtime config.
+    # Measured 2026-10-24 on codex-cli 0.164.0 with one unreviewed hook in a scratch
+    # CODEX_HOME: the "Hooks need review" modal shows the same with and without the
+    # flag, so a bypass launch still reaches the hooks vet in the launch loop below.
     # The model flag is separate from the approval posture above and was missing
     # here until 2026-08-05. The gate validated a model id, the tier policy
     # recorded it, and the launcher dropped it: two codex dispatches declared
@@ -640,7 +701,7 @@ runtime_command() {
     # written as an inline table: the dotted form reads the dot inside the
     # model id as a nesting separator and fails with "invalid type: map,
     # expected a string".
-    codex) echo "codex --model $model_arg -c $(shell_quote "model_reasoning_effort=\"$CODEX_REASONING_EFFORT\"") -c check_for_update_on_startup=false -c $(shell_quote "$CODEX_MIGRATION_ACK")";;
+    codex) echo "codex --model $model_arg -c $(shell_quote "model_reasoning_effort=\"$CODEX_REASONING_EFFORT\"") -c check_for_update_on_startup=false -c $(shell_quote "$CODEX_MIGRATION_ACK")${CODEX_BYPASS_FLAG:-}";;
     gemini) echo "gemini";;
     opencode) echo "opencode";;
     # agy is the Gemini host; `agy models` reports gemini-* ids. Its approval flag
@@ -954,12 +1015,12 @@ codex_hooks_vet_homes() {
 
 record_host_diversity_audit() {
   [ "$CHECK_ONLY" = 1 ] && return 0
-  python3 - "$LEDGER" "$RUNTIME" "$MASTER_HOST_RUNTIME" "$INSTALLED_RUNTIMES" "$ALTERNATIVE_RUNTIMES" "$UNAVAILABLE_RUNTIMES" "$SAME_HOST_REASON" "$TASK" "$DISP" "$SHA" <<'EOF'
+  python3 - "$LEDGER" "$RUNTIME" "$MASTER_HOST_RUNTIME" "$INSTALLED_RUNTIMES" "$ALTERNATIVE_RUNTIMES" "$UNAVAILABLE_RUNTIMES" "$SAME_HOST_REASON" "$TASK" "$DISP" "$SHA" "${CODEX_BYPASS_FLAG:-}" <<'EOF'
 import json
 import sys
 import time
 
-ledger, runtime, master, installed, alternatives, unavailable, reason, task, dispatch, sha = sys.argv[1:]
+ledger, runtime, master, installed, alternatives, unavailable, reason, task, dispatch, sha, bypass_flag = sys.argv[1:]
 entry = {
     "ts": time.time(),
     "kind": "host_diversity_audit",
@@ -973,6 +1034,7 @@ entry = {
     "orchestration_task": task,
     "job_id": dispatch,
     "contract_sha": sha,
+    "codex_bypass": bool(bypass_flag),
 }
 with open(ledger, "a", encoding="utf-8") as fh:
     fh.write(json.dumps(entry, sort_keys=True, separators=(",", ":")) + "\n")
@@ -1033,6 +1095,8 @@ UNAVAILABLE_RUNTIMES=$(unavailable_runtime_names | join_csv)
 # resolution or gate check spends effort on a runtime the operator already
 # declared unusable on this install.
 refuse_unavailable_runtime "$RUNTIME" "$ALTERNATIVE_RUNTIMES" || exit 2
+
+[ "$RUNTIME" = codex ] && apply_codex_instance_launch_config
 
 # The model id and the runtime are chosen independently, so nothing stopped a
 # claude model id from being declared for a codex or grok worker. That is not a

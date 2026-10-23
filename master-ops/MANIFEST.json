@@ -103,6 +103,7 @@
     "scripts/test-codex-hooks-review-answer.sh",
     "scripts/test-contributing-shell-loop.sh",
     "scripts/test-conversation-redaction-scan-glob-guard.sh",
+    "scripts/test-dispatch-codex-instance-config.sh",
     "scripts/test-dispatch-runtime.sh",
     "scripts/test-dispatch-smoke.sh",
     "scripts/test-dispatch-timeline.sh",

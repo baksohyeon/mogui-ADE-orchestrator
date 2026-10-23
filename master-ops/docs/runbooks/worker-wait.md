@@ -103,9 +103,10 @@ delivery, for the coordinator to act and then re-run `worker-wait`.
   be measured without a worktree; pass `--worktree path:<absolute-worktree-path>`
   as well when the auto-answer is wanted. `scripts/dispatch` now does this itself, under dispatch
   authority, whenever `codex_hooks_vet_homes` passes every hook command on
-  the host's codex homes; it has no file to read for a plugin hook source,
-  so the manual path above is for the vet failing, an answer that did not
-  clear the modal, or a home outside scope, a plugin included.
+  the host's codex homes; it refuses when nothing was measured, so the
+  manual path above is for the vet failing or an uncleared answer. An
+  unenumerated source beside a passing enumerated file is still answered
+  on faith, the documented gap.
 - **`STALL`** with sweep class `limit` or `shell` — redispatch elsewhere; the
   worktree and terminal are not reusable as-is.
 - **`STALL`** with sweep class `start-screen` or `update` — dismiss/restart

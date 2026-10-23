@@ -770,6 +770,17 @@ codex_accounts_dir() {
 # repository's `.orca/worktrees/`, that repository root's `.codex/hooks.json`
 # too. One per line; a missing accounts directory, worktree, or project
 # `.codex` directory just yields none from the glob or case match.
+#
+# Gap: a plugin ships its own hooks.json, and that file is not one of the
+# homes above. Measured read-only on this host (`codex --help`, `codex plugin
+# list --help`, `codex doctor --all`, and `find "$HOME/.codex" -iname
+# hooks.json`): codex has no `hooks` subcommand and ships no docs describing
+# where it reads plugin hook sources. The plugin hooks.json files that do
+# exist sit nested per marketplace, plugin, and installed version under
+# `.codex/plugins/cache/`, a set that grows and churns with what is
+# installed, unlike the fixed home paths above. Nothing matching that shape
+# was found, so nothing is added here; a modal triggered by a plugin hook
+# while an enumerated hooks.json elsewhere passes is still answered on faith.
 codex_hooks_homes() {
   local accounts_dir home wt repo_root
   printf '%s\n' "$HOME/.codex"
@@ -895,9 +906,10 @@ PY
 # hooks.json is skipped with one printed line. A home whose hooks.json exists
 # but fails the vet (a bad command, or hooks.json itself unparsable) fails the
 # whole pass closed, which is the only outcome the 3b wiring below answers the
-# hooks-review modal on.
+# hooks-review modal on. When every home is skipped, nothing was measured, so
+# this also fails closed instead of returning the empty-loop's default 0.
 codex_hooks_vet_homes() {
-  local home hooks_json rc overall=0
+  local home hooks_json rc overall=0 measured=0
   if [ -z "${WORKTREE#path:}" ]; then
     echo "hooks-vet: worktree unknown on a reused pane, project hooks unmeasured; not answering the modal"
     return 1
@@ -908,10 +920,15 @@ codex_hooks_vet_homes() {
       echo "hooks-vet: $hooks_json: not found, skipping"
       continue
     fi
+    measured=$((measured + 1))
     codex_hooks_vet "$home"
     rc=$?
     [ "$rc" -eq 0 ] || overall=1
   done < <(codex_hooks_homes)
+  if [ "$measured" -eq 0 ]; then
+    echo "hooks-vet: no hooks.json measured in any codex home; the modal's source is unenumerated, not answering the modal"
+    return 1
+  fi
   return "$overall"
 }
 

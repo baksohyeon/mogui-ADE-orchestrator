@@ -300,7 +300,10 @@ assert_case needs_approval_does_not_spend_a_round 0 "continue round=1 pick" "$pf
 # The runbook's pick pipeline (loop.md section 3, step 3) must skip every id
 # already in the progress table, whatever its state, so a row that already
 # consumed its pick is never picked again. `bd` itself is never run here: a
-# fixture JSON file stands in for `bd ready --json`.
+# fixture JSON file stands in for `bd ready --json`. The pipeline is read out
+# of loop.md itself, not retyped here, so a regression to the documented
+# command (for example, dropping the exclusion filter) fails this case
+# instead of passing silently.
 pf="$(fixture running 3 4 0 2026-10-20T09:00:00+09:00 \
   '1|mgm-a|picked' '2|mgm-b|contracted')"
 bd_fixture="$work/bd-ready.json"
@@ -312,12 +315,20 @@ cat >"$bd_fixture" <<'JSON'
 ]
 JSON
 
-picked_id="$(cat "$bd_fixture" | jq -r --arg picked "$(tail -n +12 "$pf" | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/,"",$3); print $3}' | tr '\n' ' ')" \
-  'sort_by(.priority, .created_at, .id) | map(select(.id as $i | ($picked | split(" ")) | index($i) | not)) | .[0].id')"
-if [ "$picked_id" = "mgm-x" ]; then
-  ok "pick_filter_excludes_table_items"
+pick_pipeline_doc="$(grep -F 'bd ready --limit 0 --json' "$ROOT/docs/runbooks/loop.md" \
+  | grep -F '.[0].id' | sed -E 's/^[[:space:]]*`(.*)`[[:space:]]*$/\1/')"
+pick_pipeline="${pick_pipeline_doc//<file>/$pf}"
+pick_pipeline="${pick_pipeline/#bd ready --limit 0 --json --label loop-ok --exclude-label blocked --exclude-label architectural/cat $bd_fixture}"
+
+if [ -z "$pick_pipeline_doc" ]; then
+  fail "pick_filter_excludes_table_items: could not find the pick pipeline in loop.md"
 else
-  fail "pick_filter_excludes_table_items: want mgm-x, got '$picked_id'"
+  picked_id="$(eval "$pick_pipeline")"
+  if [ "$picked_id" = "mgm-x" ]; then
+    ok "pick_filter_excludes_table_items"
+  else
+    fail "pick_filter_excludes_table_items: want mgm-x, got '$picked_id'"
+  fi
 fi
 
 # Failability: dropping the filter picks the id already in the table (lowest

@@ -47,7 +47,10 @@ items, and anything the standing rules route to the owner stay outside it.
 
 1. Run `scripts/loop-check <file> --ready-count <n>`, where `<n>` is the
    count of open `loop-ok` items the tracker reports for this run's
-   repositories.
+   repositories, after excluding every id already in the progress table (the
+   same exclusion step 3's pick pipeline applies, so a `ready-count` of zero
+   and an empty pick pool always agree):
+   `bd ready --limit 0 --json --label loop-ok --exclude-label blocked --exclude-label architectural | jq -r --arg picked "$(tail -n +12 <file> | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/,"",$3); print $3}' | tr '\n' ' ')" '[.[] | select(.id as $i | ($picked | split(" ")) | index($i) | not)] | length'`
 2. A `stop reason=...` line sends the master to section 5; the loop never
    picks past a `stop` line. When the line carries a trailing ` drain
    item=<id> state=<state>`, section 5 starts with that drain.

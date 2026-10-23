@@ -13,6 +13,7 @@ fixture rule files passed through `DISPATCH_STANDING_RULES` and
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -309,11 +310,9 @@ def test_cli_check_prints_front_matter_and_allows(tmp_path: Path) -> None:
     policy = _tier_policy(tmp_path)
     standing_rules = _standing_rules(tmp_path)
     contract = _contract(tmp_path, VALID_HEAD + "\nbody\n")
-    env = {
-        "PATH": "/usr/bin:/bin",
-        "DISPATCH_STANDING_RULES": str(standing_rules),
-        "DISPATCH_STANDING_RULES_LOCAL": str(tmp_path / "missing-standing-rules.overlay.md"),
-    }
+    env = os.environ.copy()
+    env["DISPATCH_STANDING_RULES"] = str(standing_rules)
+    env["DISPATCH_STANDING_RULES_LOCAL"] = str(tmp_path / "missing-standing-rules.overlay.md")
 
     result = subprocess.run(
         [
@@ -363,11 +362,9 @@ def test_cli_check_with_an_unknown_key_prints_the_refusal(tmp_path: Path) -> Non
         tmp_path,
         "---\ntier: efficient\nruntime: claude\nrepo: example-repo\nbogus: x\n---\n",
     )
-    env = {
-        "PATH": "/usr/bin:/bin",
-        "DISPATCH_STANDING_RULES": str(standing_rules),
-        "DISPATCH_STANDING_RULES_LOCAL": str(tmp_path / "missing-standing-rules.overlay.md"),
-    }
+    env = os.environ.copy()
+    env["DISPATCH_STANDING_RULES"] = str(standing_rules)
+    env["DISPATCH_STANDING_RULES_LOCAL"] = str(tmp_path / "missing-standing-rules.overlay.md")
 
     result = subprocess.run(
         [

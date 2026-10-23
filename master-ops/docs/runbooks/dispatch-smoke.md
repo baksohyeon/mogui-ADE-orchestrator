@@ -45,7 +45,8 @@ What a failing run prints depends on the failure path:
 | exit | layer | step | look next |
 |---|---|---|---|
 | 10 | (precondition) | named in the stderr line | the checkout/install itself: unrendered wrapper, missing seam, `claude` not on PATH, `orca status` |
-| 11 | gate | `top-tier-refusal`, `task-count-unreadable`, or `runtime-unavailable` | the refusal text in `failure.log`; confirm the scratch ledger is empty and the task count is unchanged |
+| 11 | gate | `top-tier-refusal` or `runtime-unavailable` | the refusal text in `failure.log`; confirm the scratch ledger is empty and the task count is unchanged |
+| 11 | gate | `task-count-unreadable` | the printed `before:`/`after:` task counts on stderr, checked by hand against `orca orchestration task-list --json` |
 | 12, wrapper exit 2 | gate | (none) | the gate's denial reason in `smoke.log` |
 | 12, wrapper exit 3 | orca | `task-create`, `terminal-create`, or `dispatch` | `orca orchestration task-list --json`, then `orca terminal read --terminal <handle> --limit 40` for the pane the arrow line names |
 | 12, wrapper exit 4 | register | (none) | the register denial reason in `smoke.log`; the worker is running, resolve by hand |
@@ -56,6 +57,7 @@ What a failing run prints depends on the failure path:
 | 12, layer-2 timeout | worker | the last `dispatch-show` status seen | `orca orchestration dispatch-show --task <task> --json`; the worker's own home event log |
 | 12, layer-3 mismatch | contract-read | `missing` or `mismatch` | `<worktree>/SMOKE.txt` directly |
 | 13 | isolation | `leak` or `concurrent-writer` | the added ledger row(s) or contract copy name(s) printed to stderr |
+| 13 | isolation | `no-scratch-ledger-row` | the scratch state directory's `dispatch-ledger.jsonl`, which should hold the smoke dispatch's register row |
 
 ## Exit codes
 

@@ -104,8 +104,9 @@ delivery, for the coordinator to act and then re-run `worker-wait`.
   as well when the auto-answer is wanted. `scripts/dispatch` now does this itself, under dispatch
   authority, whenever `codex_hooks_vet_homes` passes every hook command on
   the host's codex homes; it refuses when nothing was measured, so the
-  manual path above is for the vet failing, an uncleared answer, or an
-  unenumerated source beside a passing file, the gap.
+  manual path above is for the vet failing or an uncleared answer. An
+  unenumerated source beside a passing enumerated file is still answered
+  on faith, the documented gap.
 - **`STALL`** with sweep class `limit` or `shell` — redispatch elsewhere; the
   worktree and terminal are not reusable as-is.
 - **`STALL`** with sweep class `start-screen` or `update` — dismiss/restart

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import time
@@ -452,13 +453,17 @@ class DispatchGate:
                 Path(self.config.standing_rules_local_path),
             )
             if error_reason is not None:
+                # front_matter is exposed only on a decision whose block
+                # passed full validation: the raw parsed dict here may hold
+                # a value that failed shape-checking (an un-coerced budget
+                # entry, for one), and showing it under the same field a
+                # caller trusts for the validated form would be misleading.
                 decision = GateDecision(
                     False,
                     error_reason,
                     warnings=lint_warnings,
                     contract_sha=contract_sha,
                     message=error_message,
-                    front_matter=front_matter_result,
                 )
                 append_decision(decision)
                 return decision
@@ -1152,6 +1157,8 @@ def _parse_front_matter(text: str) -> tuple[dict[str, object] | None, str | None
         raw_value = raw_value.strip()
         if key not in FRONT_MATTER_KNOWN_KEYS:
             return None, f"unknown key: {key}"
+        if key in parsed:
+            return None, f"line {line_number}: duplicate key: {key}"
         if raw_value.startswith("["):
             if not raw_value.endswith("]"):
                 return None, f"line {line_number}: unterminated list"
@@ -1176,12 +1183,26 @@ def _known_standing_rule_names(
 
     names: set[str] = set()
     for path in (standing_rules_path, standing_rules_local_path):
-        if not path.is_file():
+        try:
+            if not path.is_file():
+                continue
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            # An unreadable or malformed rules file contributes no names
+            # instead of crashing the gate; a name a contract declares still
+            # refuses, as a clean STANDING_RULE_UNKNOWN, never an exception.
             continue
-        for line in path.read_text(encoding="utf-8").splitlines():
+        for line in text.splitlines():
             if line.startswith("## "):
                 names.add(line[3:].strip())
     return frozenset(names)
+
+
+# Lowercase, hyphenated token shape: matches the five canonical blocks
+# (headless, ack-token, ...) and rejects a name that would break the
+# dispatch wrapper's unquoted, space-joined shell loop over the names this
+# gate allows through (a space, quote, or shell metacharacter).
+STANDING_RULE_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9-]*$")
 
 
 def _validate_front_matter(
@@ -1213,7 +1234,15 @@ def _validate_front_matter(
             )
 
     declared_tier = front_matter["tier"].strip()
-    if declared_tier not in tier_policy.tier_names or declared_tier != computed_tier:
+    # "unknown" is reserved and never appears in tier_names (the v2 loader
+    # refuses a policy that names it as a real tier), so an unlisted model's
+    # own computed tier of "unknown" could never match a declared tier by the
+    # membership check alone; a contract correctly describing that model has
+    # to be able to say so.
+    known_tier = declared_tier in tier_policy.tier_names or (
+        declared_tier == UNKNOWN_TIER and computed_tier == UNKNOWN_TIER
+    )
+    if not known_tier or declared_tier != computed_tier:
         return (
             None,
             ReasonCode.CONTRACT_TIER_MISMATCH,
@@ -1260,7 +1289,9 @@ def _validate_front_matter(
             name = name.strip()
             value = value.strip()
             if name in FRONT_MATTER_BUDGET_INT_NAMES:
-                if not value.isdigit():
+                # isdigit() alone accepts non-ASCII digit shapes (e.g. "²")
+                # that int() cannot parse; isascii() narrows to plain "0"-"9".
+                if not value.isascii() or not value.isdigit():
                     return (
                         None,
                         ReasonCode.CONTRACT_FRONT_MATTER,
@@ -1271,12 +1302,12 @@ def _validate_front_matter(
                 try:
                     cost = float(value)
                 except ValueError:
-                    cost = -1.0
-                if cost < 0:
+                    cost = float("nan")
+                if not math.isfinite(cost) or cost < 0:
                     return (
                         None,
                         ReasonCode.CONTRACT_FRONT_MATTER,
-                        "budget.cost_usd must be a non-negative number",
+                        "budget.cost_usd must be a non-negative finite number",
                     )
                 budget[name] = cost
             else:
@@ -1311,6 +1342,12 @@ def _validate_front_matter(
             )
         known = _known_standing_rule_names(standing_rules_path, standing_rules_local_path)
         for name in names:
+            if STANDING_RULE_NAME_PATTERN.fullmatch(name) is None:
+                return (
+                    None,
+                    ReasonCode.CONTRACT_FRONT_MATTER,
+                    f"standing_rules: invalid name shape: {name}",
+                )
             if name not in known:
                 return (
                     None,

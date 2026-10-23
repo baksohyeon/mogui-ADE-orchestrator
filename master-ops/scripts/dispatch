@@ -248,13 +248,18 @@ export INSTANCE_RUNTIME_CONFIG="$INSTANCE_RUNTIME_CONFIG"
 # template-copy fallback, the same seam DISPATCH_TIER_POLICY already fills
 # for the tier policy. rules/standing-rules.md refreshes on every template
 # re-stamp; config/standing-rules.overlay.md, under the instance-owned config/
-# directory, never does. Unset only when the file does not exist yet (a
-# checkout predating this feature); the gate then falls back on its own
-# template copy, same as it does for a bare CLI call with no override.
+# directory, never does.
+#
+# The main file export is conditional: unset only when it does not exist yet
+# (a checkout predating this feature), so the gate falls back on its own
+# bundled template copy, the same copy a bare CLI call with no override reads.
+# The overlay export is unconditional, since it never had a meaningful
+# template-side fallback to defer to in the first place (the template ships
+# no overlay at all) and the gate already treats a missing overlay path as
+# "no extra names" instead of an error.
 STANDING_RULES_PATH="$SCRIPTS_DIR/../rules/standing-rules.md"
 [ -f "$STANDING_RULES_PATH" ] && export DISPATCH_STANDING_RULES="$STANDING_RULES_PATH"
-STANDING_RULES_LOCAL_PATH="$SCRIPTS_DIR/../config/standing-rules.overlay.md"
-[ -f "$STANDING_RULES_LOCAL_PATH" ] && export DISPATCH_STANDING_RULES_LOCAL="$STANDING_RULES_LOCAL_PATH"
+export DISPATCH_STANDING_RULES_LOCAL="$SCRIPTS_DIR/../config/standing-rules.overlay.md"
 
 # Transcript glob for a model probe, per runtime.
 #

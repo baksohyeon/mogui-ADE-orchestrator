@@ -435,7 +435,8 @@ parser and validator, backed by `tests/test_dispatch_gate_front_matter.py`.
 
 A contract may open with a typed front matter block: a first line `---`, flat
 `key: value` lines, and a closing `---`. A value is a bare scalar or a one-line list
-`[a, b, c]`. Nothing nested, no quoting beyond trimming spaces.
+`[a, b, c]`. Nothing nested; no quoting syntax exists, so a quote character typed
+around a value stays in the value as literal content instead of being stripped.
 
 Keys, all at top level:
 
@@ -445,9 +446,10 @@ Keys, all at top level:
 - `repo` (required): the repository the worker writes to.
 - `budget` (optional): `[rounds=N, hours=N, cost_usd=N.N]`, recorded only.
 - `writes` (optional): path globs the worker is expected to touch, recorded only.
-- `standing_rules` (optional): block names declared in `rules/standing-rules.md` or the
-  seat's own `config/standing-rules.overlay.md`; the wrapper appends each named block's
-  text to the dispatched spec.
+- `standing_rules` (optional): a lowercase, hyphenated name declared in
+  [rules/standing-rules.md](../../rules/standing-rules.md) or the seat's own
+  `config/standing-rules.overlay.md` (which wins on a name both declare); the
+  wrapper appends each named block's text to the dispatched spec.
 
 Example head:
 
@@ -464,13 +466,13 @@ An unknown key, a malformed line, or a name neither rules file declares refuses 
 dispatch before any Orca call. A contract carrying no front matter block only warns
 this release; a later release refuses it.
 
-The verification list gains two lines: the pull request's changed files match the
-globs named in `writes`, and the worker tree holds no `.venv` or `site-packages`
-directory.
+The verification list gains two manual lines, for a worker to check by hand rather
+than something this gate enforces: the pull request's changed files match the globs
+named in `writes`, and the worker tree holds no `.venv` or `site-packages` directory.
 
-## Grade distribution (2026-08-05)
+## Grade distribution (2026-10-23, clause 15 added)
 
-- machine-enforced: 1
+- machine-enforced: 2
 - measured: 10
 - prose: 3
 

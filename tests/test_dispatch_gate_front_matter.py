@@ -283,6 +283,139 @@ def test_unterminated_block_names_its_line(tmp_path: Path) -> None:
     assert "unterminated" in decision.message
 
 
+def test_duplicate_key_is_refused(tmp_path: Path) -> None:
+    contract = _contract(
+        tmp_path,
+        "---\ntier: efficient\nruntime: claude\nrepo: example-repo\n"
+        "tier: top\n---\n",
+    )
+    decision = _gate(tmp_path).check(_request(contract))
+
+    assert decision.allow is False
+    assert decision.reason == ReasonCode.CONTRACT_FRONT_MATTER
+    assert "duplicate key: tier" in decision.message
+
+
+def test_non_ascii_digit_in_budget_rounds_is_refused(tmp_path: Path) -> None:
+    # "²" (superscript two) passes str.isdigit() but int() cannot parse
+    # it; this must refuse cleanly instead of raising ValueError.
+    contract = _contract(
+        tmp_path,
+        "---\ntier: efficient\nruntime: claude\nrepo: example-repo\n"
+        "budget: [rounds=²]\n---\n",
+    )
+    decision = _gate(tmp_path).check(_request(contract))
+
+    assert decision.allow is False
+    assert decision.reason == ReasonCode.CONTRACT_FRONT_MATTER
+    assert "rounds" in decision.message
+
+
+def test_non_finite_cost_usd_is_refused(tmp_path: Path) -> None:
+    contract = _contract(
+        tmp_path,
+        "---\ntier: efficient\nruntime: claude\nrepo: example-repo\n"
+        "budget: [cost_usd=nan]\n---\n",
+    )
+    decision = _gate(tmp_path).check(_request(contract))
+
+    assert decision.allow is False
+    assert decision.reason == ReasonCode.CONTRACT_FRONT_MATTER
+    assert "cost_usd" in decision.message
+
+
+def test_malformed_writes_shape_is_refused(tmp_path: Path) -> None:
+    contract = _contract(
+        tmp_path,
+        "---\ntier: efficient\nruntime: claude\nrepo: example-repo\n"
+        "writes: not-a-list\n---\n",
+    )
+    decision = _gate(tmp_path).check(_request(contract))
+
+    assert decision.allow is False
+    assert decision.reason == ReasonCode.CONTRACT_FRONT_MATTER
+    assert "writes" in decision.message
+
+
+def test_standing_rule_name_with_an_unsafe_shape_is_refused(tmp_path: Path) -> None:
+    # A space in the name would break the dispatch wrapper's unquoted,
+    # space-joined shell loop over the names the gate allows through.
+    contract = _contract(
+        tmp_path,
+        "---\ntier: efficient\nruntime: claude\nrepo: example-repo\n"
+        "standing_rules: [my rule]\n---\n",
+    )
+    decision = _gate(tmp_path).check(_request(contract))
+
+    assert decision.allow is False
+    assert decision.reason == ReasonCode.CONTRACT_FRONT_MATTER
+    assert "my rule" in decision.message
+
+
+def test_declared_tier_unknown_matches_an_unlisted_models_computed_tier(
+    tmp_path: Path,
+) -> None:
+    contract = _contract(
+        tmp_path,
+        "---\ntier: unknown\nruntime: claude\nrepo: example-repo\n---\n",
+    )
+    decision = _gate(tmp_path).check(
+        _request(contract, model="some-unlisted-model")
+    )
+
+    assert decision.allow is True
+    assert decision.front_matter["tier"] == "unknown"
+
+
+def test_declared_tier_unknown_for_a_known_models_tier_is_refused(
+    tmp_path: Path,
+) -> None:
+    contract = _contract(
+        tmp_path,
+        "---\ntier: unknown\nruntime: claude\nrepo: example-repo\n---\n",
+    )
+    decision = _gate(tmp_path).check(_request(contract, model="claude-sonnet-5"))
+
+    assert decision.allow is False
+    assert decision.reason == ReasonCode.CONTRACT_TIER_MISMATCH
+
+
+def test_error_decisions_never_expose_unvalidated_front_matter(
+    tmp_path: Path,
+) -> None:
+    contract = _contract(
+        tmp_path,
+        "---\ntier: top\nruntime: claude\nrepo: example-repo\n---\n",
+    )
+    decision = _gate(tmp_path).check(_request(contract, model="claude-sonnet-5"))
+
+    assert decision.allow is False
+    assert decision.front_matter is None
+
+
+def test_v1_tier_policy_denies_any_declared_tier(tmp_path: Path) -> None:
+    # Front matter's `tier` key is a version 2 concept; a version 1 policy
+    # names no tiers at all, so tier_names is empty and any declared tier
+    # refuses as a mismatch, documented in the charter paragraph.
+    policy = tmp_path / "v1-policy.json"
+    policy.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "worker_allowed": ["claude-sonnet-5"],
+                "worker_denied_tiers": [],
+                "unknown_model": "warn",
+            }
+        ),
+        encoding="utf-8",
+    )
+    contract = _contract(tmp_path, VALID_HEAD + "\nbody\n")
+    decision = _gate(tmp_path, tier_policy_path=policy).check(_request(contract))
+
+    assert decision.allow is False
+    assert decision.reason == ReasonCode.CONTRACT_TIER_MISMATCH
+
+
 def test_ledger_row_carries_only_schema_keys(tmp_path: Path) -> None:
     contract = _contract(tmp_path, VALID_HEAD + "\nbody\n")
     gate = _gate(tmp_path)
@@ -303,18 +436,21 @@ def test_ledger_row_carries_only_schema_keys(tmp_path: Path) -> None:
     assert row["contract_repo"] == "example-repo"
 
 
-def test_cli_check_prints_front_matter_and_allows(tmp_path: Path) -> None:
-    script = (
-        Path(__file__).resolve().parents[1] / "scripts" / "dispatch-gate"
-    )
+def _run_cli_check(
+    tmp_path: Path,
+    contract: Path,
+    *,
+    standing_rules_local_path: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    script = Path(__file__).resolve().parents[1] / "scripts" / "dispatch-gate"
     policy = _tier_policy(tmp_path)
     standing_rules = _standing_rules(tmp_path)
-    contract = _contract(tmp_path, VALID_HEAD + "\nbody\n")
     env = os.environ.copy()
     env["DISPATCH_STANDING_RULES"] = str(standing_rules)
-    env["DISPATCH_STANDING_RULES_LOCAL"] = str(tmp_path / "missing-standing-rules.overlay.md")
-
-    result = subprocess.run(
+    env["DISPATCH_STANDING_RULES_LOCAL"] = str(
+        standing_rules_local_path or tmp_path / "missing-standing-rules.overlay.md"
+    )
+    return subprocess.run(
         [
             sys.executable,
             str(script),
@@ -342,6 +478,11 @@ def test_cli_check_prints_front_matter_and_allows(tmp_path: Path) -> None:
         text=True,
         env=env,
     )
+
+
+def test_cli_check_prints_front_matter_and_allows(tmp_path: Path) -> None:
+    contract = _contract(tmp_path, VALID_HEAD + "\nbody\n")
+    result = _run_cli_check(tmp_path, contract)
 
     payload = json.loads(result.stdout)
     assert payload["allow"] is True
@@ -353,50 +494,45 @@ def test_cli_check_prints_front_matter_and_allows(tmp_path: Path) -> None:
 
 
 def test_cli_check_with_an_unknown_key_prints_the_refusal(tmp_path: Path) -> None:
-    script = (
-        Path(__file__).resolve().parents[1] / "scripts" / "dispatch-gate"
-    )
-    policy = _tier_policy(tmp_path)
-    standing_rules = _standing_rules(tmp_path)
     contract = _contract(
         tmp_path,
         "---\ntier: efficient\nruntime: claude\nrepo: example-repo\nbogus: x\n---\n",
     )
-    env = os.environ.copy()
-    env["DISPATCH_STANDING_RULES"] = str(standing_rules)
-    env["DISPATCH_STANDING_RULES_LOCAL"] = str(tmp_path / "missing-standing-rules.overlay.md")
-
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(script),
-            "--ledger",
-            str(tmp_path / "ledger.jsonl"),
-            "check",
-            "--runtime",
-            "claude",
-            "--model",
-            "claude-sonnet-5",
-            "--tier-policy",
-            str(policy),
-            "--contract",
-            str(contract),
-            "--agents",
-            "1",
-            "--est-chars",
-            "1000",
-            "--completion-channel",
-            "orchestration",
-            "--no-record",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-        env=env,
-    )
+    result = _run_cli_check(tmp_path, contract)
 
     payload = json.loads(result.stdout)
     assert payload["allow"] is False
     assert payload["reason"] == "CONTRACT_FRONT_MATTER"
     assert "front_matter" not in payload
+    assert result.returncode == 2
+
+
+def test_cli_check_with_a_named_standing_rule_appears_in_front_matter(
+    tmp_path: Path,
+) -> None:
+    contract = _contract(
+        tmp_path,
+        "---\ntier: efficient\nruntime: claude\nrepo: example-repo\n"
+        "standing_rules: [headless]\n---\n",
+    )
+    result = _run_cli_check(tmp_path, contract)
+
+    payload = json.loads(result.stdout)
+    assert payload["allow"] is True
+    assert payload["front_matter"]["standing_rules"] == ["headless"]
+
+
+def test_cli_check_with_an_unknown_standing_rule_prints_the_refusal(
+    tmp_path: Path,
+) -> None:
+    contract = _contract(
+        tmp_path,
+        "---\ntier: efficient\nruntime: claude\nrepo: example-repo\n"
+        "standing_rules: [nonexistent]\n---\n",
+    )
+    result = _run_cli_check(tmp_path, contract)
+
+    payload = json.loads(result.stdout)
+    assert payload["allow"] is False
+    assert payload["reason"] == "STANDING_RULE_UNKNOWN"
     assert result.returncode == 2

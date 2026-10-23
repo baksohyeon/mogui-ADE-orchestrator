@@ -2217,6 +2217,50 @@ RULES
   fi
   echo "ok   : an empty standing_rules list appends nothing and prints no milestone line"
 
+  # Case: an overlay entry sharing a name with the shipped file wins.
+  mkdir -p "$work/config"
+  cat > "$work/config/standing-rules.overlay.md" <<'RULES'
+## headless
+
+seat overlay headless text.
+RULES
+  write_script "$script_file" '{"allow": true, "front_matter": {"standing_rules": ["headless"]}}'
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: an overlay-shadowed name should not fail the append block" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF 'seat overlay headless text.'; then
+    echo "FAIL: the overlay's own text should win over the shipped file's text for a shared name" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if printf '%s\n' "$out" | grep -qF 'headless body text.'; then
+    echo "FAIL: the shipped file's text should not appear when the overlay names the same block" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : an overlay entry sharing a name with the shipped file wins"
+  rm -f "$work/config/standing-rules.overlay.md"
+
+  # Case: a name neither file declares exits 3 and names the block.
+  write_script "$script_file" '{"allow": true, "front_matter": {"standing_rules": ["nonexistent"]}}'
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 3 ]; then
+    echo "FAIL: a standing_rules name neither file declares should exit 3, got $status" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF 'standing rule block not found: nonexistent'; then
+    echo "FAIL: the exit-3 case should name the missing block" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : a standing_rules name neither file declares exits 3 and names the block"
+
   # Failability: drop the milestone echo; the first case above must then stop
   # printing it, proving the assertion actually exercises the real line.
   mutant_block=${append_block/'  echo "📎 standing rules · $STANDING_RULE_NAMES"'/'  :'}

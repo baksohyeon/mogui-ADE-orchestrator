@@ -36,7 +36,9 @@ and sentences use plain punctuation, never the long dash.
 
 ## pr-house
 
-Titles follow `<type>: <lowercase description>`. The assignee is set at
-creation, never after. The body carries the four-part narrative plus a
-provenance line. A review-bot thread gets a reply inside the thread and a
-resolve; a silent batch resolve is never acceptable.
+Titles follow `<type>: <lowercase description>`, `<type>` one of feat, fix,
+docs, refactor, test, chore, perf, or ci. The assignee is set at creation,
+never after. The body fills four named sections: Problem, Why this
+approach, What this changes, Expected effect, plus a provenance line. A
+review-bot thread gets a reply inside the thread and a resolve; a silent
+batch resolve is never acceptable.

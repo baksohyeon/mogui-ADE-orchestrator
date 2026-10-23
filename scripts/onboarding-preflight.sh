@@ -478,7 +478,7 @@ fi
 # Vendor "setup" commands (measured 2026-09-18: `vercel ai-gateway setup`) rewrite
 # the agent CLI's own config to point at a proxy, and the proxy may not carry the
 # lineage model at all. The failure then surfaces only as 429s. Measure the
-# route at boot: the config's env block and the live environment must not
+# route here: the config's env block and the live environment must not
 # redirect the agent unless the operator says so with
 # PREFLIGHT_ALLOW_AGENT_PROXY=1.
 if [[ "$agent_cli" == "claude" || "$agent_cli" == "claude-code" ]]; then
@@ -488,7 +488,7 @@ if [[ "$agent_cli" == "claude" || "$agent_cli" == "claude-code" ]]; then
   if [[ -f "$claude_settings" ]]; then
     if ! command -v python3 >/dev/null 2>&1; then
       route_unmeasured="python3 is missing, so $claude_settings was not read"
-    elif ! route_hits=$(python3 - "$claude_settings" 2>&1 <<'PY'
+    elif ! route_hits=$(python3 - "$claude_settings" 2>/dev/null <<'PY'
 import json,sys
 try:
     data=json.load(open(sys.argv[1]))
@@ -519,6 +519,8 @@ PY
   else
     fail "agent-route" "claude is redirected away from the vendor endpoint ($route_hits); a vendor setup command likely rewrote it. Remove the override (backup first) or set PREFLIGHT_ALLOW_AGENT_PROXY=1 if intentional"
   fi
+else
+  warn "agent-route" "route not measured for ${agent_cli:-an unset ORCA_AGENT_CLI}; this check reads the claude settings file and the shell only"
 fi
 
 # One reachable executor is enough to delegate. Requiring every listed runtime

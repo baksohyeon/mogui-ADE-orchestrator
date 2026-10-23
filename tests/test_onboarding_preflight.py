@@ -696,3 +696,39 @@ def test_agent_route_fails_without_python_and_the_run_finishes(
     assert "agent-route" in _labels(result.stdout, "FAIL"), result.stdout
     assert "python3 is missing" in result.stdout, result.stdout
     assert "ESSENTIAL COMPONENTS MISSING" in result.stdout, result.stdout
+
+
+@skip_windows_exec_surface
+def test_agent_route_ignores_python_stderr_on_a_clean_settings_file(
+    tmp_path: Path,
+) -> None:
+    """A warning the interpreter prints on stderr is not an override."""
+
+    env = _host(tmp_path)
+    _write_claude_env(tmp_path, {})
+    site_dir = tmp_path / "noisy-site"
+    site_dir.mkdir()
+    (site_dir / "sitecustomize.py").write_text(
+        "import sys\nsys.stderr.write('stray interpreter warning\\n')\n",
+        encoding="utf-8",
+    )
+    env["PYTHONPATH"] = str(site_dir)
+    result = _run(env, tmp_path)
+    assert "agent-route" in _labels(result.stdout, "PASS"), result.stdout
+    assert "stray interpreter warning" not in result.stdout, result.stdout
+
+
+@pytest.mark.parametrize("agent_cli", ["codex", ""], ids=["codex", "unset"])
+@skip_windows_exec_surface
+def test_agent_route_warns_unmeasured_for_other_agent_clis(
+    tmp_path: Path, agent_cli: str
+) -> None:
+    """The label is essential, so a seat it cannot measure still says so."""
+
+    env = _host(tmp_path)
+    env["ORCA_AGENT_CLI"] = agent_cli
+    (tmp_path / "bin" / "codex").chmod(0o755)
+    result = _run(env, tmp_path)
+    assert "agent-route" in _labels(result.stdout, "WARN"), result.stdout
+    assert "route not measured" in result.stdout, result.stdout
+    assert re.search(r"!! +agent-route", result.stdout), result.stdout

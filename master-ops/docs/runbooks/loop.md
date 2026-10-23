@@ -61,10 +61,9 @@ items, and anything the standing rules route to the owner stay outside it.
    the eligible item with the lowest priority number first (`P0` before
    `P1`), then the oldest `created` date, then the lexically smallest id,
    excluding every id already in the progress table: a row in the table
-   already consumed its pick, whatever happened to it since. `$bd_ready_json`
-   from step 1 is the source, not a fresh `bd ready` call; collect the
-   table's `item` column into a space-separated list and filter it out in
-   the `jq` sort:
+   already consumed its pick, whatever happened to it since. The source is
+   `$bd_ready_json` from step 1, reused as is; collect the table's `item`
+   column into a space-separated list and filter it out in the `jq` sort:
    `printf '%s' "$bd_ready_json" | jq -r --arg picked "$(tail -n +12 <file> | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/,"",$3); print $3}' | tr '\n' ' ')" 'sort_by(.priority, .created_at, .id) | map(select(.id as $i | ($picked | split(" ")) | index($i) | not)) | .[0].id'`
    Append a `picked` row for the item this selects.
 4. A `continue round=<n> item=<id> state=<state>` line: resume that row from

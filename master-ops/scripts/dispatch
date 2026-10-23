@@ -598,7 +598,8 @@ EOF
 
 # Called bare, not through $(...), so the refusal can stop dispatch. Only a
 # codex dispatch calls it, so a bad codex key never stops another runtime. The
-# bypass warning goes to stdout because stdout is this script's mechanical log.
+# bypass warning goes to stdout because stdout is this script's mechanical log;
+# the ledger keeps the choice as codex_bypass on the host-diversity audit line.
 apply_codex_instance_launch_config() {
   local out status
   out=$(codex_instance_launch_config)
@@ -656,8 +657,11 @@ runtime_command() {
     # disables the sandbox as well as approvals. Weakening a sandbox is not a
     # side effect to take on while fixing a delivery bug, so the safer measured
     # path stays and the operator is told when it has not run.
-    # The bypass flag is added only as an explicit operator opt-in, through
-    # codex_bypass_approvals_and_sandbox in the instance runtime config.
+    # Since 2026-10-17 that stays the default: the flag is off unless the operator
+    # opts in with codex_bypass_approvals_and_sandbox in the instance runtime config.
+    # Measured 2026-10-24 on codex-cli 0.164.0 with one unreviewed hook in a scratch
+    # CODEX_HOME: the "Hooks need review" modal shows the same with and without the
+    # flag, so a bypass launch still reaches the hooks vet in the launch loop below.
     # The model flag is separate from the approval posture above and was missing
     # here until 2026-08-05. The gate validated a model id, the tier policy
     # recorded it, and the launcher dropped it: two codex dispatches declared
@@ -974,12 +978,12 @@ codex_hooks_vet_homes() {
 
 record_host_diversity_audit() {
   [ "$CHECK_ONLY" = 1 ] && return 0
-  python3 - "$LEDGER" "$RUNTIME" "$MASTER_HOST_RUNTIME" "$INSTALLED_RUNTIMES" "$ALTERNATIVE_RUNTIMES" "$UNAVAILABLE_RUNTIMES" "$SAME_HOST_REASON" "$TASK" "$DISP" "$SHA" <<'EOF'
+  python3 - "$LEDGER" "$RUNTIME" "$MASTER_HOST_RUNTIME" "$INSTALLED_RUNTIMES" "$ALTERNATIVE_RUNTIMES" "$UNAVAILABLE_RUNTIMES" "$SAME_HOST_REASON" "$TASK" "$DISP" "$SHA" "${CODEX_BYPASS_FLAG:-}" <<'EOF'
 import json
 import sys
 import time
 
-ledger, runtime, master, installed, alternatives, unavailable, reason, task, dispatch, sha = sys.argv[1:]
+ledger, runtime, master, installed, alternatives, unavailable, reason, task, dispatch, sha, bypass_flag = sys.argv[1:]
 entry = {
     "ts": time.time(),
     "kind": "host_diversity_audit",
@@ -993,6 +997,7 @@ entry = {
     "orchestration_task": task,
     "job_id": dispatch,
     "contract_sha": sha,
+    "codex_bypass": bool(bypass_flag),
 }
 with open(ledger, "a", encoding="utf-8") as fh:
     fh.write(json.dumps(entry, sort_keys=True, separators=(",", ":")) + "\n")

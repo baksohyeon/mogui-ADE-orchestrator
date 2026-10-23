@@ -5,7 +5,7 @@
 # valid effort changes both the launch line and the footer the start-screen
 # check expects, a true bypass appends the flag and prints a warning on
 # stdout, an invalid value is refused with exit 2, and only a codex dispatch
-# reads the keys at all. A new file because test-dispatch-runtime.sh is past the
+# reads the keys at all, and the ledger audit line records the bypass. A new file because test-dispatch-runtime.sh is past the
 # 1,000-line rule (CONTRIBUTING.md "When a file is full").
 #
 # dispatch carries template placeholders, so each case extracts the launch
@@ -188,5 +188,39 @@ got=$(call_site_case 'apply_codex_instance_launch_config' claude '{"codex_reason
 [ "$got" != "continued effort=xhigh" ] || { echo "FAIL: failability: an ungated call still let claude continue" >&2; exit 1; }
 echo "ok   : failability: an ungated call stops the claude dispatch"
 set -e
+
+# --- Case: the audit line records the bypass ---------------------------------
+# A bypass launch must stay visible in the ledger after the pane is gone, so
+# record_host_diversity_audit carries codex_bypass on its per-dispatch line.
+# Its python body closes a dict with a bare "}", so this range ends at the
+# "}" that follows the heredoc's EOF rather than at the first one.
+audit_fn=$(awk '$0=="record_host_diversity_audit() {"{f=1} f{print} f&&$0=="EOF"{e=1} f&&e&&$0=="}"{exit}' "$dispatch")
+[ -n "$audit_fn" ] || { echo "FAIL: could not extract record_host_diversity_audit from dispatch" >&2; exit 1; }
+
+# audit_case  audit-fn  config-json  -> codex_bypass value from the ledger line
+audit_case() {
+  local config="$work/instance-runtime.json" ledger="$work/ledger.jsonl"
+  rm -f "$ledger"
+  printf '%s\n' "$2" > "$config"
+  {
+    echo 'set -u'
+    printf 'INSTANCE_RUNTIME_CONFIG=%s\nLEDGER=%s\n' "$config" "$ledger"
+    printf '%s\n' "$vars" "$read_fn" "$apply_fn" "$1"
+    echo 'CHECK_ONLY=0 RUNTIME=codex MASTER_HOST_RUNTIME=claude INSTALLED_RUNTIMES=codex ALTERNATIVE_RUNTIMES= UNAVAILABLE_RUNTIMES='
+    echo 'SAME_HOST_REASON= TASK=task_x DISP=ctx_x SHA=abc'
+    echo 'apply_codex_instance_launch_config >/dev/null'
+    echo 'record_host_diversity_audit'
+  } > "$work/audit.sh"
+  bash "$work/audit.sh" >/dev/null 2>&1
+  python3 -c 'import json,sys; print(json.dumps(json.loads(open(sys.argv[1]).readline()).get("codex_bypass", "missing")))' "$ledger"
+}
+expect "a bypass dispatch records codex_bypass true" true \
+  "$(audit_case "$audit_fn" '{"codex_bypass_approvals_and_sandbox": true}')"
+expect "a normal dispatch records codex_bypass false" false \
+  "$(audit_case "$audit_fn" '{"codex_bypass_approvals_and_sandbox": false}')"
+mutant=$(mutate "$audit_fn" '    "codex_bypass": bool(bypass_flag),' '')
+got=$(audit_case "$mutant" '{"codex_bypass_approvals_and_sandbox": true}')
+[ "$got" != true ] || { echo "FAIL: failability: removing codex_bypass still recorded true" >&2; exit 1; }
+echo "ok   : failability: removing the codex_bypass field breaks the bypass audit case"
 
 echo "dispatch codex instance-config regression tests passed"

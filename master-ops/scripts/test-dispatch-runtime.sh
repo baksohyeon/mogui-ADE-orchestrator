@@ -839,6 +839,148 @@ claude_hook_trust_marker_test() (
 )
 claude_hook_trust_marker_test "$dispatch" || exit 1
 
+# --- Feature: fresh claude TUI prompt classifies as prepared-prompt --------
+#
+# 2026-10-23: a fresh `claude` pane's arrow line carries placeholder text
+# ("Try \"...\"") next to the arrow instead of a bare arrow, so
+# PREPARED_UNICODE_PROMPT_MARKERS read it as unknown before and after inject,
+# and a worker that finished inside the delivery window never registered as
+# delivered. Extracts pane_classify_text and the four marker variables, then
+# runs the function against the five measured pane lines.
+fresh_claude_prompt_marker_test() (
+  set +e
+  set -u
+  local dispatch="$1" markers classify_fn script_file pane out status mutant_markers work
+
+  markers=$(grep -E '^(LIMIT_MARKERS|HOOK_TRUST_MARKERS|PREPARED_PROMPT_MARKERS|PREPARED_UNICODE_PROMPT_MARKERS)=' "$dispatch")
+  classify_fn=$(awk '$0=="pane_classify_text() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+
+  [ "$(printf '%s\n' "$markers" | grep -c .)" = 4 ] || { echo "FAIL: could not extract all four marker variables" >&2; return 1; }
+  [ -n "$classify_fn" ] || { echo "FAIL: could not extract pane_classify_text" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-fresh-claude-prompt-test.$$"
+  mkdir -p "$work"
+  trap 'rm -rf "$work"' EXIT
+
+  pane=$(printf '%s\n%s\n%s\n%s\n%s' \
+    '──────────────────────────────────────────────────────────────────────────────────────────────────────────────' \
+    $'\xe2\x9d\xaf\xc2\xa0Try "fix lint errors"' \
+    '──────────────────────────────────────────────────────────────────────────────────────────────────────────────' \
+    '  claude-haiku-5 │ codex-hooks-vet-unmeasured' \
+    '  ⏵⏵ auto mode on (shift+tab to cycle) · PR #190')
+
+  write_script() {
+    local outfile="$1" markers_body="$2"
+    {
+      echo 'set -u'
+      printf '%s\n' "$markers_body"
+      printf '%s\n' "$classify_fn"
+      printf 'pane_classify_text %s\n' "$(printf '%q' "$pane")"
+    } > "$outfile"
+  }
+
+  script_file="$work/run.sh"
+  write_script "$script_file" "$markers"
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] || [ "$out" != "prepared-prompt" ]; then
+    echo "FAIL: a fresh claude TUI prompt pane should classify as prepared-prompt, got '$out' (status=$status)" >&2
+    return 1
+  fi
+  echo "ok   : a fresh claude TUI prompt's placeholder arrow line classifies as prepared-prompt"
+
+  # Failability: restoring the bare-arrow-only pattern (dropping the added
+  # placeholder alternation) must misclassify the same pane as unknown.
+  mutant_markers=${markers/'([\xc2\xa0 ]+Try "[^"]*")?'/}
+  if [ "$mutant_markers" = "$markers" ]; then
+    echo "FAIL: unicode-marker mutant did not change the source" >&2
+    return 1
+  fi
+  write_script "$script_file" "$mutant_markers"
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ] && [ "$out" = "prepared-prompt" ]; then
+    echo "FAIL: failability: mutant restoring the bare-arrow-only pattern should have misclassified the pane" >&2
+    return 1
+  fi
+  echo "ok   : failability: restoring the bare-arrow-only pattern misclassifies the fresh prompt pane (got '$out')"
+)
+fresh_claude_prompt_marker_test "$dispatch" || exit 1
+
+# --- Feature: delivery_result folds the dispatch status in --------------------
+#
+# 2026-10-18: a haiku worker completed in 17s and returned the pane to the
+# same prepared prompt it started from, so the pane transition alone read
+# unknown while the dispatch record already said completed. Extracts
+# delivery_result and runs it against the three status-aware cases: a
+# completed dispatch becomes done, hook-trust still wins over a completed
+# status, and an unreadable status leaves the existing pane-transition
+# fallback untouched.
+delivery_result_test() (
+  set +e
+  set -u
+  local dispatch="$1" fn work script_file out status mutant_fn
+
+  fn=$(awk '$0=="delivery_result() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  [ -n "$fn" ] || { echo "FAIL: could not extract delivery_result" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-delivery-result-test.$$"
+  mkdir -p "$work"
+  trap 'rm -rf "$work"' EXIT
+
+  run_case() {  # pre post status want
+    local body="$1" pre="$2" post="$3" dstatus="$4" want="$5" out
+    script_file="$work/run.sh"
+    {
+      echo 'set -u'
+      printf '%s\n' "$body"
+      printf 'delivery_result %q %q %q\n' "$pre" "$post" "$dstatus"
+    } > "$script_file"
+    out=$(bash "$script_file" 2>&1)
+    if [ "$out" != "$want" ]; then
+      echo "FAIL: delivery_result $pre $post $dstatus gave '$out', want '$want'" >&2
+      return 1
+    fi
+  }
+
+  run_case "$fn" prepared-prompt prepared-prompt completed done || return 1
+  echo "ok   : delivery_result · a completed dispatch with the pane still on a prepared prompt reads done"
+
+  run_case "$fn" prepared-prompt hook-trust completed hook-trust || return 1
+  echo "ok   : delivery_result · hook-trust after inject still wins over a completed dispatch status"
+
+  run_case "$fn" prepared-prompt limit completed limit || return 1
+  echo "ok   : delivery_result · limit after inject still wins over a completed dispatch status"
+
+  run_case "$fn" prepared-prompt unknown unreadable agent-started || return 1
+  echo "ok   : delivery_result · an unreadable dispatch status leaves the prepared-prompt-to-unknown transition reading agent-started"
+
+  # Failability: drop the completed-status branch; the first case above must
+  # then stop reading done.
+  mutant_fn=${fn/'  if [ "$3" = completed ]; then
+    echo done
+    return
+  fi
+'/''}
+  if [ "$mutant_fn" = "$fn" ]; then
+    echo "FAIL: completed-status mutant did not change the source" >&2
+    return 1
+  fi
+  script_file="$work/run.sh"
+  {
+    echo 'set -u'
+    printf '%s\n' "$mutant_fn"
+    printf 'delivery_result %q %q %q\n' prepared-prompt prepared-prompt completed
+  } > "$script_file"
+  out=$(bash "$script_file" 2>&1)
+  if [ "$out" = done ]; then
+    echo "FAIL: failability: mutant dropping the completed-status check should have stopped reporting done" >&2
+    return 1
+  fi
+  echo "ok   : failability: dropping the completed-status check stops the completed-dispatch case from reading done (got '$out')"
+)
+delivery_result_test "$dispatch" || exit 1
+
 # --- Feature: codex launch flags ---------------------------------------------
 #
 # 2026-10-01: a bare `codex --model <id>` opened a model-retirement migration
@@ -1970,4 +2112,4 @@ EOF
 )
 codex_hooks_vet_wiring_test "$dispatch" || exit 1
 
-echo "dispatch multi-vendor / check-only / state-dir-seam / contract-delivery / cursor-pretrust / claude-pretrust / claude-pretrust-call-site / claude-hook-trust-marker / codex-launch / codex-start-screen / codex-start-screen-wiring / codex-hooks-vet / codex-hooks-vet-wiring regression tests passed"
+echo "dispatch multi-vendor / check-only / state-dir-seam / contract-delivery / cursor-pretrust / claude-pretrust / claude-pretrust-call-site / claude-hook-trust-marker / fresh-claude-prompt-marker / delivery-result / codex-launch / codex-start-screen / codex-start-screen-wiring / codex-hooks-vet / codex-hooks-vet-wiring regression tests passed"

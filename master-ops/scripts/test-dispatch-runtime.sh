@@ -1868,7 +1868,73 @@ EOF
     printf '%s\n' "$wt_out" >&2
     return 1
   fi
-  echo "ok   : codex_hooks_vet_homes returns 0 with WORKTREE set and the same passing fixtures"
+  if printf '%s\n' "$wt_out" | grep -Fq 'no hooks.json measured'; then
+    echo "FAIL: one_home_measured: a passing measured home should not print the no-hooks.json-measured line" >&2
+    printf '%s\n' "$wt_out" >&2
+    return 1
+  fi
+  echo "ok   : one_home_measured: codex_hooks_vet_homes returns 0 with WORKTREE set and one passing measured home, no unmeasured line"
+
+  # all_homes_missing: every enumerated home (the fixture $HOME's .codex and
+  # the worktree's own .codex) lacks hooks.json, so nothing is measured. The
+  # count-zero guard must fail closed instead of returning the empty loop's
+  # default 0.
+  mkdir -p "$work/fakehome-none/.codex" "$work/fixture-worktree-none"
+  vet_homes_script="$work/vet-homes-all-missing.sh"
+  {
+    echo 'set -u'
+    printf '%s\n' "$accounts_fn"
+    printf '%s\n' "$homes_fn"
+    printf '%s\n' "$vet_fn"
+    printf '%s\n' "$vet_homes_fn"
+    printf 'HOME=%s\n' "$work/fakehome-none"
+    printf 'CODEX_ACCOUNTS_DIR=%s\n' "$work/no-accounts-dir"
+    printf 'WORKTREE=path:%s\n' "$work/fixture-worktree-none"
+    echo 'codex_hooks_vet_homes'
+    echo 'echo RC=$?'
+  } > "$vet_homes_script"
+  all_missing_out=$(bash "$vet_homes_script" 2>&1)
+  all_missing_status=$?
+  if [ "$all_missing_status" -ne 0 ] || ! printf '%s\n' "$all_missing_out" | grep -q '^RC=1$'; then
+    echo "FAIL: all_homes_missing: codex_hooks_vet_homes should return 1 when no home has a hooks.json" >&2
+    printf '%s\n' "$all_missing_out" >&2
+    return 1
+  fi
+  printf '%s\n' "$all_missing_out" | grep -Fq "hooks-vet: no hooks.json measured in any codex home; the modal's source is unenumerated, not answering the modal" \
+    || { echo "FAIL: all_homes_missing: did not print the no-hooks.json-measured line" >&2; printf '%s\n' "$all_missing_out" >&2; return 1; }
+  echo "ok   : all_homes_missing: codex_hooks_vet_homes returns 1 and prints the unmeasured line when no home has a hooks.json"
+
+  # Failability: with the zero-count guard removed by sed into a temp copy of
+  # vet_homes_fn, the all_homes_missing case must fail: the empty loop's
+  # default overall=0 would answer the modal on faith.
+  zero_count_start=$(printf '%s\n' "$vet_homes_fn" | grep -Fn 'if [ "$measured" -eq 0 ]; then' | head -1 | cut -d: -f1)
+  zero_count_end=$(printf '%s\n' "$vet_homes_fn" | awk -v start="$zero_count_start" 'NR>=start && /^  fi$/{print NR; exit}')
+  [ -n "$zero_count_start" ] && [ -n "$zero_count_end" ] || { echo "FAIL: could not locate the zero-count guard to mutate" >&2; return 1; }
+  mutant_vet_homes_fn=$(printf '%s\n' "$vet_homes_fn" | sed "${zero_count_start},${zero_count_end}d")
+  if [ "$mutant_vet_homes_fn" = "$vet_homes_fn" ]; then
+    echo "FAIL: zero-count-guard mutant did not change the source" >&2
+    return 1
+  fi
+  vet_homes_script="$work/vet-homes-all-missing-mutant.sh"
+  {
+    echo 'set -u'
+    printf '%s\n' "$accounts_fn"
+    printf '%s\n' "$homes_fn"
+    printf '%s\n' "$vet_fn"
+    printf '%s\n' "$mutant_vet_homes_fn"
+    printf 'HOME=%s\n' "$work/fakehome-none"
+    printf 'CODEX_ACCOUNTS_DIR=%s\n' "$work/no-accounts-dir"
+    printf 'WORKTREE=path:%s\n' "$work/fixture-worktree-none"
+    echo 'codex_hooks_vet_homes'
+    echo 'echo RC=$?'
+  } > "$vet_homes_script"
+  mutant_out=$(bash "$vet_homes_script" 2>&1)
+  if ! printf '%s\n' "$mutant_out" | grep -q '^RC=0$'; then
+    echo "FAIL: failability: removing the zero-count guard should make the all_homes_missing run return 0, but it didn't" >&2
+    printf '%s\n' "$mutant_out" >&2
+    return 1
+  fi
+  echo "ok   : failability: removing the zero-count guard makes the all_homes_missing run return 0"
 
   # failability: a mutant that removes the empty-worktree guard treats an
   # empty WORKTREE the same as a real one and returns 0.

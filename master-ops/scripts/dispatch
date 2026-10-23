@@ -140,8 +140,15 @@ jqf() { python3 -c "import json,sys;d=json.load(sys.stdin);print($1)"; }
 # (so a seat's own copy of a shared block name wins) and the shipped file
 # second. Exit 1 when neither file carries the heading.
 standing_rule_block() {
-  local name="$1" main_file="$SCRIPTS_DIR/../rules/standing-rules.md"
-  local local_file="$SCRIPTS_DIR/../config/standing-rules.overlay.md"
+  # Reads the same two env-var overrides the gate itself resolves
+  # (DISPATCH_STANDING_RULES / DISPATCH_STANDING_RULES_LOCAL), falling back to
+  # this install's own paths exactly as the gate does. Without this, a value
+  # inherited from the caller's shell could make the gate validate a name
+  # against a file this function never looks at, allowing a dispatch the
+  # append step then cannot find the block for.
+  local name="$1"
+  local main_file="${DISPATCH_STANDING_RULES:-$SCRIPTS_DIR/../rules/standing-rules.md}"
+  local local_file="${DISPATCH_STANDING_RULES_LOCAL:-$SCRIPTS_DIR/../config/standing-rules.overlay.md}"
   python3 - "$name" "$local_file" "$main_file" <<'EOF'
 import sys
 

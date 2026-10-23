@@ -24,7 +24,7 @@ token never appears in a commit, a pull request body, or a review reply.
 
 The first action reports three lines and no absolute path: `in_expected_worktree:
 yes|no`, `is_master_checkout: yes|no` (yes stops the task), and `branch: <git
-branch --show-current>` next to the expected base sha.
+branch --show-current>` next to the base sha the dispatching contract states.
 
 ## voice
 

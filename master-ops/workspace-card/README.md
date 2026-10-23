@@ -27,6 +27,14 @@ Onboarding step 05 deploys the filled card. Reverify check 7 compares the two an
 
 When editing, verify each link by resolving it from the workspace root (with the card's installation values already filled), not from this directory.
 
+## Local extension
+
+An installation that needs sections of its own in the card (duties the owner gives this master, a reply language and tone) writes them to `workspace-card/LOCAL.md` in the ops repository, not into this pair. The card tells the master to read that file after the card when it exists; its additions never override a rule on the card. Without the file, the card reads exactly as before. Facts that already have a home stay there: the seat path and workspace id belong to role state (see [What is not here](#what-is-not-here)), and `LOCAL.md` points at them like the card does.
+
+The pointer reaches the master only through the deployed card. After an upgrade rewrites this pair, redeploy both files to the workspace root (Upgrade step 8 does this with the owner's confirmation); until then the root copy has no pointer and `LOCAL.md` is not read.
+
+The file is instance-owned: `template-apply` refuses it by name, so a template upgrade that rewrites this pair leaves it alone. It lives next to the card, inside the ops repository, so it is versioned and backed up with the rest of the install; the template ships no copy and the manifest does not claim it. It is not deployed to the workspace root: the deployed card points at it in the ops repository, so there is still one copy to edit. The pointer is plain prose: an include would need syntax that some agent hosts reading `AGENTS.md` do not support, and the pair must stay byte-identical. Write no `{{...}}` token into `LOCAL.md`: `template-apply` never substitutes this file, and the reverify placeholder check scans the whole ops repository and reads any hit as an installation error.
+
 ## What is not here
 
 Instance-specific values that already have a home stay in their home. The seat path and workspace id belong to [role state](../docs/runbooks/role-state.md); operating rules belong to [Master Operations](../docs/MASTER-OPERATIONS.md). The card points at those files instead of restating them, so each fact has one place to be corrected. Product-repository test commands are measured from each product repository's own CI, not baked into this template card.

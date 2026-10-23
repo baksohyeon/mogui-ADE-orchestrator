@@ -296,14 +296,15 @@ pf="$(fixture running 2 4 0 2026-10-20T09:00:00+09:00 \
 assert_case needs_approval_does_not_spend_a_round 0 "continue round=1 pick" "$pf" \
   --now 2026-10-20T10:00:00+09:00 --ready-count 2
 
-# --- Case 27: pick_filter_excludes_table_items -----------------------------------
-# The runbook's pick pipeline (loop.md section 3, step 3) must skip every id
-# already in the progress table, whatever its state, so a row that already
-# consumed its pick is never picked again. `bd` itself is never run here: a
-# fixture JSON file stands in for `bd ready --json`. The pipeline is read out
-# of loop.md itself, not retyped here, so a regression to the documented
-# command (for example, dropping the exclusion filter) fails this case
-# instead of passing silently.
+# --- Case 27: pick_filter_excludes_table_items and ready_count_excludes_table_items
+# The runbook's pick and ready-count pipelines (loop.md section 3, steps 1
+# and 3) must both skip every id already in the progress table, whatever its
+# state, so a row that already consumed its pick is never picked again and
+# the two never disagree. `bd` itself is never run here: a fixture JSON file
+# stands in for the `$bd_ready_json` snapshot step 1 captures. Both pipelines
+# are read out of loop.md itself, not retyped here, so a regression to
+# either documented command (for example, dropping the exclusion filter)
+# fails these cases instead of passing silently.
 pf="$(fixture running 3 4 0 2026-10-20T09:00:00+09:00 \
   '1|mgm-a|picked' '2|mgm-b|contracted')"
 bd_fixture="$work/bd-ready.json"
@@ -314,30 +315,48 @@ cat >"$bd_fixture" <<'JSON'
   {"id": "mgm-y", "priority": 2, "created_at": "2026-01-03T00:00:00Z"}
 ]
 JSON
+bd_ready_json="$(cat "$bd_fixture")"
 
-pick_pipeline_doc="$(grep -F 'bd ready --limit 0 --json' "$ROOT/docs/runbooks/loop.md" \
-  | grep -F '.[0].id' | sed -E 's/^[[:space:]]*`(.*)`[[:space:]]*$/\1/')"
-pick_pipeline="${pick_pipeline_doc//<file>/$pf}"
-pick_pipeline="${pick_pipeline/#bd ready --limit 0 --json --label loop-ok --exclude-label blocked --exclude-label architectural/cat $bd_fixture}"
+pick_pipeline_doc="$(grep -F 'bd_ready_json' "$ROOT/docs/runbooks/loop.md" | grep -F '.[0].id' \
+  | sed -E 's/^[[:space:]]*`(.*)`[[:space:]]*$/\1/')"
+count_pipeline_doc="$(grep -F 'bd_ready_json' "$ROOT/docs/runbooks/loop.md" | grep -F '] | length' \
+  | sed -E 's/^[[:space:]]*`(.*)`[[:space:]]*$/\1/')"
 
-if [ -z "$pick_pipeline_doc" ]; then
-  fail "pick_filter_excludes_table_items: could not find the pick pipeline in loop.md"
+if [ -z "$pick_pipeline_doc" ] || [ -z "$count_pipeline_doc" ]; then
+  fail "pick_filter_excludes_table_items: could not find the pick or count pipeline in loop.md"
 else
+  pick_pipeline="${pick_pipeline_doc//<file>/$pf}"
+  count_pipeline="${count_pipeline_doc//<file>/$pf}"
+
   picked_id="$(eval "$pick_pipeline")"
   if [ "$picked_id" = "mgm-x" ]; then
     ok "pick_filter_excludes_table_items"
   else
     fail "pick_filter_excludes_table_items: want mgm-x, got '$picked_id'"
   fi
+
+  ready_n="$(eval "$count_pipeline")"
+  if [ "$ready_n" = "2" ]; then
+    ok "ready_count_excludes_table_items"
+  else
+    fail "ready_count_excludes_table_items: want 2, got '$ready_n'"
+  fi
 fi
 
 # Failability: dropping the filter picks the id already in the table (lowest
-# priority there, but already spent its pick).
-no_filter_id="$(cat "$bd_fixture" | jq -r 'sort_by(.priority, .created_at, .id)[0].id')"
+# priority there, but already spent its pick), and the raw count stops
+# agreeing with the filtered pick pool.
+no_filter_id="$(printf '%s' "$bd_ready_json" | jq -r 'sort_by(.priority, .created_at, .id)[0].id')"
 if [ "$no_filter_id" = "mgm-a" ]; then
   ok "failability: pick_filter_excludes_table_items mutant (no filter) picks mgm-a"
 else
   fail "failability pick_filter_excludes_table_items: want mgm-a, got '$no_filter_id'"
+fi
+no_filter_n="$(printf '%s' "$bd_ready_json" | jq -r 'length')"
+if [ "$no_filter_n" = "3" ]; then
+  ok "failability: ready_count_excludes_table_items mutant (no filter) counts 3"
+else
+  fail "failability ready_count_excludes_table_items: want 3, got '$no_filter_n'"
 fi
 
 # --- Failability: one per stop condition ----------------------------------------

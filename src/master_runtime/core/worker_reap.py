@@ -639,9 +639,10 @@ class WorkerReaper:
 
     def _remove_worktree(self, worktree_path: Path) -> None:
         """Remove a worktree safely."""
-        # Use git worktree remove if it's a linked worktree
+        # Use git worktree remove if it's a linked worktree. -C points git at
+        # the worktree itself, so removal does not depend on the caller's cwd.
         code, stdout, stderr = self.orca_runner(
-            ["git", "worktree", "remove", str(worktree_path)]
+            ["git", "-C", str(worktree_path), "worktree", "remove", str(worktree_path)]
         )
         if code != 0:
             raise ReapError(f"Failed to remove worktree {worktree_path}: {stderr}", code)

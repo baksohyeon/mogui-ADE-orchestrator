@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -879,6 +880,55 @@ class WorkerReaperTests(unittest.TestCase):
 
             self.assertIn(tmp_path, removed_paths)
             self.assertIn("worktree_removed:", record.actions_taken)
+
+    def test_reap_remove_argv_targets_the_worktree_with_dash_c(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = tmp
+            commands = []
+            fake_runner, _removed_paths = _clean_worktree_runner(
+                tmp_path,
+                current_branch="main",
+                merged_branches="* main\n",
+            )
+
+            def recording_runner(cmd: list[str]) -> tuple[int, str, str]:
+                commands.append(cmd)
+                return fake_runner(cmd)
+
+            reaper = WorkerReaper(orca_runner=recording_runner)
+            reaper.reap(task_id="t1", execute=True)
+
+            remove_commands = [
+                cmd for cmd in commands
+                if "git" in cmd and "worktree" in cmd and "remove" in cmd
+            ]
+            self.assertEqual(
+                remove_commands,
+                [["git", "-C", tmp_path, "worktree", "remove", tmp_path]],
+            )
+
+    def test_remove_worktree_works_from_a_non_repository_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            worktree = Path(tmp) / "wt"
+            outside = Path(tmp) / "outside"
+            repo.mkdir()
+            outside.mkdir()
+            _git(repo, "init", "--initial-branch", "main")
+            _git(repo, "config", "user.email", "test@example.invalid")
+            _git(repo, "config", "user.name", "Test User")
+            _git(repo, "commit", "--allow-empty", "-m", "base")
+            _git(repo, "worktree", "add", "-b", "feature-x", str(worktree))
+
+            previous_cwd = os.getcwd()
+            os.chdir(outside)
+            try:
+                WorkerReaper()._remove_worktree(worktree)
+            finally:
+                os.chdir(previous_cwd)
+
+            self.assertFalse(worktree.exists())
+            self.assertNotIn(str(worktree.resolve()), _git(repo, "worktree", "list"))
 
     def test_reap_leaves_clean_unmerged_worktree_with_unique_changes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

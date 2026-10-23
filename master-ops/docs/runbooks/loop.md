@@ -45,17 +45,26 @@ items, and anything the standing rules route to the owner stay outside it.
 
 ## 3. Each round
 
-1. Run `scripts/loop-check <file> --ready-count <n>`, where `<n>` is the
-   count of open `loop-ok` items the tracker reports for this run's
-   repositories.
+1. Capture this round's ready items once, before the check, so the round's
+   count and its eventual pick (step 3) see the same snapshot and a tracker
+   change between the two cannot make them disagree:
+   `bd_ready_json=$(bd ready --limit 0 --json --label loop-ok --exclude-label blocked --exclude-label architectural)`.
+   Run `scripts/loop-check <file> --ready-count <n>`, where `<n>` excludes
+   every id already in the progress table (the same exclusion step 3's pick
+   pipeline applies, so a `ready-count` of zero and an empty pick pool always
+   agree):
+   `printf '%s' "$bd_ready_json" | jq -r --arg picked "$(tail -n +12 <file> | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/,"",$3); print $3}' | tr '\n' ' ')" '[.[] | select(.id as $i | ($picked | split(" ")) | index($i) | not)] | length'`
 2. A `stop reason=...` line sends the master to section 5; the loop never
    picks past a `stop` line. When the line carries a trailing ` drain
    item=<id> state=<state>`, section 5 starts with that drain.
 3. A `continue round=<n> pick` line (with or without ` ready=unknown`): take
    the eligible item with the lowest priority number first (`P0` before
-   `P1`), then the oldest `created` date, then the lexically smallest id.
-   `bd ready --json` is the source:
-   `bd ready --limit 0 --json --label loop-ok --exclude-label blocked --exclude-label architectural | jq -r 'sort_by(.priority, .created_at, .id)[0].id'`
+   `P1`), then the oldest `created` date, then the lexically smallest id,
+   excluding every id already in the progress table: a row in the table
+   already consumed its pick, whatever happened to it since. The source is
+   `$bd_ready_json` from step 1, reused as is; collect the table's `item`
+   column into a space-separated list and filter it out in the `jq` sort:
+   `printf '%s' "$bd_ready_json" | jq -r --arg picked "$(tail -n +12 <file> | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/,"",$3); print $3}' | tr '\n' ' ')" 'sort_by(.priority, .created_at, .id) | map(select(.id as $i | ($picked | split(" ")) | index($i) | not)) | .[0].id'`
    Append a `picked` row for the item this selects.
 4. A `continue round=<n> item=<id> state=<state>` line: resume that row from
    its own state, at the matching step below. A `dispatched` or `dispatched:
@@ -75,9 +84,13 @@ items, and anything the standing rules route to the owner stay outside it.
    return to step 1 for the next item. A `blocked: needs-approval` row does
    not spend one of the run's rounds; `loop-check` excludes it from the
    round count (section 8, reason 1).
-6. **contracted → dispatched.** Run the existing dispatch path, unchanged:
-   worktree, pane, recording gate check, task creation, `scripts/dispatch`,
-   register. Wait on the dispatch with
+6. **contracted → dispatched.** Before anything else, test for the owner's
+   stop file (the same path `loop-check` reads: `STOP` beside the progress
+   file, or the `--stop-file` path). If it exists, the row stays
+   `contracted`; dispatch nothing and go to section 5
+   (`stop reason=5: stop file present`). Otherwise run the existing dispatch
+   path, unchanged: worktree, pane, recording gate check, task creation,
+   `scripts/dispatch`, register. Wait on the dispatch with
    [worker-wait](worker-wait.md) or the manual
    [orca-wait](orca-wait.md) sequence.
 7. **dispatched → verifying**, on `worker_done`. Run the existing clone
@@ -135,7 +148,10 @@ Verbatim from the spec's retry limits:
    `dispatched: relaunched` row waits on its existing dispatch (section 3,
    step 4) for `worker_done` and is verified, relaunching only on the
    worker-death case in section 4; a `verifying` or `bot-round` row is
-   verified to `merge-ready`, `failed`, or `blocked`. One exception: when the
+   verified to `merge-ready`, `failed`, or `blocked`. A `contracted` or
+   `picked` row counts as in flight for `loop-check`'s drain suffix, but
+   needs no drain here: nothing has been dispatched yet, so the row keeps
+   its state unchanged. One exception: when the
    stop reason is `stop file present` and the row is `dispatched` or
    `dispatched: relaunched`, fence it with `worker-abandon` and write the
    row's state `blocked: owner-stopped` instead of waiting: the owner's stop

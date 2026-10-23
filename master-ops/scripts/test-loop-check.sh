@@ -206,6 +206,27 @@ assert_malformed "negative_counts_are_malformed (--ready-count)" '^loop-check: -
 assert_malformed "negative_counts_are_malformed (--compactions)" '^loop-check: --compactions:' "$pf" \
   --now 2026-10-20T10:00:00+09:00 --ready-count 2 --compactions -1
 
+# --- Case 21b: negative_compactions_seen_is_malformed ----------------------------
+pf="$(fixture running 3 4 -1 2026-10-20T09:00:00+09:00 '1|mgm-a|merge-ready')"
+assert_malformed negative_compactions_seen_is_malformed '^loop-check: line 5:' "$pf" \
+  --now 2026-10-20T10:00:00+09:00 --ready-count 2
+
+# Failability: neutralise the new header check in a temp copy; the fixture
+# then parses normally, so the mutant must exit 0 (continue) or 3 (stop)
+# instead of 2 (malformed).
+mutant="$work/loop-check-mutant-compactions-seen-header"
+sed 's/if compactions_seen < 0:/if False:/' "$SCRIPT" >"$mutant"
+chmod +x "$mutant"
+if cmp -s "$SCRIPT" "$mutant"; then
+  fail "failability compactions-seen-header: sed expression did not change the script"
+else
+  run "$mutant" "$pf" --now 2026-10-20T10:00:00+09:00 --ready-count 2
+  case "$RC" in
+    0|3) ok "failability: compactions-seen-header mutant parses the fixture (rc=$RC out='$OUT')" ;;
+    *) fail "failability compactions-seen-header: want rc=0 or 3, got rc=$RC out='$OUT' err='$ERR'" ;;
+  esac
+fi
+
 # --- Case 22: running_requires_approval ------------------------------------------
 pf_running="$work/progress-approval-running.md"
 {
@@ -274,6 +295,69 @@ pf="$(fixture running 2 4 0 2026-10-20T09:00:00+09:00 \
   '1|mgm-a|blocked: needs-approval' '2|mgm-b|blocked: needs-approval')"
 assert_case needs_approval_does_not_spend_a_round 0 "continue round=1 pick" "$pf" \
   --now 2026-10-20T10:00:00+09:00 --ready-count 2
+
+# --- Case 27: pick_filter_excludes_table_items and ready_count_excludes_table_items
+# The runbook's pick and ready-count pipelines (loop.md section 3, steps 1
+# and 3) must both skip every id already in the progress table, whatever its
+# state, so a row that already consumed its pick is never picked again and
+# the two never disagree. `bd` itself is never run here: a fixture JSON file
+# stands in for the `$bd_ready_json` snapshot step 1 captures. Both pipelines
+# are read out of loop.md itself, not retyped here, so a regression to
+# either documented command (for example, dropping the exclusion filter)
+# fails these cases instead of passing silently.
+pf="$(fixture running 3 4 0 2026-10-20T09:00:00+09:00 \
+  '1|mgm-a|picked' '2|mgm-b|contracted')"
+bd_fixture="$work/bd-ready.json"
+cat >"$bd_fixture" <<'JSON'
+[
+  {"id": "mgm-a", "priority": 0, "created_at": "2026-01-01T00:00:00Z"},
+  {"id": "mgm-x", "priority": 1, "created_at": "2026-01-02T00:00:00Z"},
+  {"id": "mgm-y", "priority": 2, "created_at": "2026-01-03T00:00:00Z"}
+]
+JSON
+bd_ready_json="$(cat "$bd_fixture")"
+
+pick_pipeline_doc="$(grep -F 'bd_ready_json' "$ROOT/docs/runbooks/loop.md" | grep -F '.[0].id' \
+  | sed -E 's/^[[:space:]]*`(.*)`[[:space:]]*$/\1/')"
+count_pipeline_doc="$(grep -F 'bd_ready_json' "$ROOT/docs/runbooks/loop.md" | grep -F '] | length' \
+  | sed -E 's/^[[:space:]]*`(.*)`[[:space:]]*$/\1/')"
+
+if [ -z "$pick_pipeline_doc" ] || [ -z "$count_pipeline_doc" ]; then
+  fail "pick_filter_excludes_table_items: could not find the pick or count pipeline in loop.md"
+else
+  pick_pipeline="${pick_pipeline_doc//<file>/$pf}"
+  count_pipeline="${count_pipeline_doc//<file>/$pf}"
+
+  picked_id="$(eval "$pick_pipeline")"
+  if [ "$picked_id" = "mgm-x" ]; then
+    ok "pick_filter_excludes_table_items"
+  else
+    fail "pick_filter_excludes_table_items: want mgm-x, got '$picked_id'"
+  fi
+
+  ready_n="$(eval "$count_pipeline")"
+  if [ "$ready_n" = "2" ]; then
+    ok "ready_count_excludes_table_items"
+  else
+    fail "ready_count_excludes_table_items: want 2, got '$ready_n'"
+  fi
+fi
+
+# Failability: dropping the filter picks the id already in the table (lowest
+# priority there, but already spent its pick), and the raw count stops
+# agreeing with the filtered pick pool.
+no_filter_id="$(printf '%s' "$bd_ready_json" | jq -r 'sort_by(.priority, .created_at, .id)[0].id')"
+if [ "$no_filter_id" = "mgm-a" ]; then
+  ok "failability: pick_filter_excludes_table_items mutant (no filter) picks mgm-a"
+else
+  fail "failability pick_filter_excludes_table_items: want mgm-a, got '$no_filter_id'"
+fi
+no_filter_n="$(printf '%s' "$bd_ready_json" | jq -r 'length')"
+if [ "$no_filter_n" = "3" ]; then
+  ok "failability: ready_count_excludes_table_items mutant (no filter) counts 3"
+else
+  fail "failability ready_count_excludes_table_items: want 3, got '$no_filter_n'"
+fi
 
 # --- Failability: one per stop condition ----------------------------------------
 # Each mutates a fresh temp copy of the real script, re-runs the case that

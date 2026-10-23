@@ -177,6 +177,8 @@ def parse(path: str) -> Progress:
     compactions_seen = _parse_int(
         _require_prefix(lines, 5, "- compactions-seen:"), 5, "compactions-seen"
     )
+    if compactions_seen < 0:
+        raise Malformed(5, "compactions-seen must not be negative")
     status = _require_prefix(lines, 6, "- status:")
     if status not in ("running", "stopped"):
         raise Malformed(6, f"status must be 'running' or 'stopped', got {status!r}")

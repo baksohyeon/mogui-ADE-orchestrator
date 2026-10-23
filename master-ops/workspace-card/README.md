@@ -33,7 +33,7 @@ An installation that needs sections of its own in the card (duties the owner giv
 
 The pointer reaches the master only through the deployed card. After an upgrade rewrites this pair, redeploy both files to the workspace root (Upgrade step 8 does this with the owner's confirmation); until then the root copy has no pointer and `LOCAL.md` is not read.
 
-The file is instance-owned: `template-apply` refuses it by name, so a template upgrade that rewrites this pair leaves it alone. It lives next to the card, inside the ops repository, so it is versioned and backed up with the rest of the install; the template ships no copy and the manifest does not claim it. It is not deployed to the workspace root: the deployed card points at it in the ops repository, so there is still one copy to edit. The pointer is plain prose rather than an include, because not every agent host that reads `AGENTS.md` supports include syntax and the pair must stay byte-identical.
+The file is instance-owned: `template-apply` refuses it by name, so a template upgrade that rewrites this pair leaves it alone. It lives next to the card, inside the ops repository, so it is versioned and backed up with the rest of the install; the template ships no copy and the manifest does not claim it. It is not deployed to the workspace root: the deployed card points at it in the ops repository, so there is still one copy to edit. The pointer is plain prose: an include would need syntax that some agent hosts reading `AGENTS.md` do not support, and the pair must stay byte-identical. Write no `{{...}}` token into `LOCAL.md`: `template-apply` never substitutes this file, and the reverify placeholder check scans the whole ops repository and reads any hit as an installation error.
 
 ## What is not here
 

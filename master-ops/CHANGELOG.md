@@ -48,6 +48,24 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+## v0.5.258
+
+Release v0.5.258 (2026-10-23): `master-ops/TEMPLATE-VERSION` and `master-ops/MANIFEST.json` move to v0.5.258 alongside the changelog fold.
+
+`_detect_dual_instances` in `src/master_runtime/core/bootstrap.py` warned only about another `claude` process whose argv carried the booting session's own id, so a second `claude` started at the same seat root under a different session id was invisible by design; measured by a peer seat with a second session at its root since 2026-10-18 15:23 while eleven boots printed `[DUAL-INSTANCE] none`.
+A new `SEAT_PEER:<pid>` boot line now covers any other process whose argv[0] basename is `claude` and whose current directory, resolved with `realpath`, equals the seat root (a new optional `seat_root` on `BootstrapConfig`, defaulting to `os.getcwd()`), whatever its session id.
+The detector excludes its own pid and the nearest `claude` ancestor found by walking `ppid` from `os.getpid()`; if that walk fails, only the own pid is excluded, so matching peers can still appear.
+The process, cwd, and ancestor probes are all injectable for tests.
+`strict_lease=True` rejects `SEAT_PEER:` the same way it already rejected `DUAL_INSTANCE:`, and `recovery.py` treats both prefixes the same at its Step 0 check.
+
+Added `scripts/loop-check PROGRESS_FILE [--now ISO] [--ready-count N] [--compactions N] [--stop-file PATH]`, which reads a loop progress file and its own arguments only (no `orca`, `bd`, `gh`, or `git`).
+It evaluates the six stop conditions in order: the round budget spent, the wall-clock budget spent, no eligible item open, two consecutive failures, a worker question or escalation or the owner's stop file, and a compaction passed since the start line.
+It prints one `continue round=<n> ...` or `stop reason=<k>: ...` line and exits 0, 3, or 2: a malformed file names its line; a malformed option names the option.
+`test-loop-check.sh` covers each stop condition, including the escalation and malformed-option cases, with a failability line per condition.
+[`docs/runbooks/loop.md`](../docs/runbooks/loop.md) is the procedure the master follows around it, linked from `host-harness-inventory.md`.
+
+`scripts/redaction-scan.sh` fixed its working directory to its own repository, so a caller in another repository that ran it with `--staged` scanned this repository's empty index and read `clean` with `files=0`; measured when a gate wired this script as its staged credential lane and that lane scanned nothing while gitleaks run directly on the same staged file found the planted key. `--repo-root PATH`, or `REDACTION_REPO_ROOT` for callers that cannot pass a flag (the flag wins when both are set), names the repository to scan instead: every `git` call and every finding path is relative to it. Unset, the target stays the script's own repository, exactly as before. The gitleaks config (`config/gitleaks.toml`) keeps resolving against the script's own repository regardless of the target; a relative `REDACTION_EXTRA_PATTERNS`, `--allowlist`, or `REDACTION_ALLOWLIST` value resolves against the caller's own invocation directory instead, since that is where the caller typed the path. Both summary lines now carry `root=<target top level>` so a caller can see what was scanned. A target that is not inside a git work tree prints one stderr line naming the flag and the value and exits 2 before any scan, as does `--repo-root` given an empty or missing operand. Inherited `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_COMMON_DIR`, `GIT_OBJECT_DIRECTORY`, and `GIT_ALTERNATE_OBJECT_DIRECTORIES` are unset before the target is resolved, so they cannot point any `git` call, or its object lookup, at another repository. A failure enumerating files or commits exits 2 with the mode or range named; it no longer scans zero and reads `OK`.
+
 ## v0.5.254
 
 Release v0.5.254 (2026-10-17): `master-ops/TEMPLATE-VERSION` and `master-ops/MANIFEST.json` move to v0.5.254 alongside the changelog fold.

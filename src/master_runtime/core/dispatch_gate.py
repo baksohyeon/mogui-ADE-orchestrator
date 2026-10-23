@@ -29,6 +29,13 @@ DEFAULT_BATCH_DISPATCH_CHAR_LIMIT = 1_000_000
 DEFAULT_DUPLICATE_WINDOW_SECONDS = 30 * 60
 DEFAULT_HIGH_COST_RUNTIMES = frozenset({"fable"})
 DEFAULT_TIER_POLICY_RELATIVE_PATH = Path("master-ops") / "model-tier-policy.json"
+DEFAULT_STANDING_RULES_RELATIVE_PATH = Path("master-ops") / "rules" / "standing-rules.md"
+# Named "overlay", not "local": the repository's generic redaction scan
+# flags any token shaped like "<word>.local" as a suspected internal
+# hostname, and this file name is written into docs, scripts, and tests.
+DEFAULT_STANDING_RULES_LOCAL_RELATIVE_PATH = (
+    Path("master-ops") / "config" / "standing-rules.overlay.md"
+)
 # Instance-owned policy written during onboarding (agent-inventory consent).
 # Preferred over the template fallback when present.
 INSTANCE_TIER_POLICY_RELATIVE_PATH = Path("config") / "model-tier-policy.json"
@@ -87,6 +94,49 @@ def _default_tier_policy_path(
     return root / DEFAULT_TIER_POLICY_RELATIVE_PATH
 
 
+def _default_standing_rules_path(
+    *,
+    repo_root: Path | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> Path:
+    """Resolve the template-layer standing-rules file, env override first.
+
+    An install's dispatch wrapper exports `DISPATCH_STANDING_RULES` pointing at
+    its own `rules/standing-rules.md` before calling this gate, the same seam
+    `DISPATCH_TIER_POLICY` already uses; without it this falls back to the
+    template copy this repository ships, which is the file
+    `scripts/dispatch-gate` reads when called bare, as the verification
+    command does. This file refreshes on every template re-stamp.
+    """
+
+    env = environ if environ is not None else os.environ
+    value = env.get("DISPATCH_STANDING_RULES")
+    if value:
+        return Path(value)
+    root = repo_root if repo_root is not None else Path(__file__).resolve().parents[3]
+    return root / DEFAULT_STANDING_RULES_RELATIVE_PATH
+
+
+def _default_standing_rules_local_path(
+    *,
+    repo_root: Path | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> Path:
+    """Resolve the instance-owned standing-rules overlay, env override first.
+
+    Lives under `config/`, which `template_common.py` already marks
+    instance-owned, so a seat's own blocks here survive a template re-stamp
+    that refreshes `rules/standing-rules.md` itself.
+    """
+
+    env = environ if environ is not None else os.environ
+    value = env.get("DISPATCH_STANDING_RULES_LOCAL")
+    if value:
+        return Path(value)
+    root = repo_root if repo_root is not None else Path(__file__).resolve().parents[3]
+    return root / DEFAULT_STANDING_RULES_LOCAL_RELATIVE_PATH
+
+
 class ReasonCode(str, Enum):
     """Stable gate decision reason codes."""
 
@@ -114,6 +164,12 @@ class ReasonCode(str, Enum):
     MODEL_UNVERIFIED = "MODEL_UNVERIFIED"
     MODEL_PROBE_FAILED = "MODEL_PROBE_FAILED"
     UNKNOWN_RUNTIME = "UNKNOWN_RUNTIME"
+    CONTRACT_FRONT_MATTER = "CONTRACT_FRONT_MATTER"
+    CONTRACT_FRONT_MATTER_MISSING = "CONTRACT_FRONT_MATTER_MISSING"
+    CONTRACT_TIER_MISMATCH = "CONTRACT_TIER_MISMATCH"
+    CONTRACT_RUNTIME_MISMATCH = "CONTRACT_RUNTIME_MISMATCH"
+    RUNTIME_NOT_ELIGIBLE = "RUNTIME_NOT_ELIGIBLE"
+    STANDING_RULE_UNKNOWN = "STANDING_RULE_UNKNOWN"
 
 
 @dataclass(frozen=True)
@@ -141,6 +197,7 @@ class GateDecision:
     cost_proxy: int = 0
     message: str = ""
     tier_override: str | None = None
+    front_matter: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -157,6 +214,10 @@ class DispatchGateConfig:
     ticket_ttl_seconds: int = DEFAULT_TICKET_TTL_SECONDS
     expired_ticket_gc_grace_seconds: int = DEFAULT_EXPIRED_TICKET_GC_GRACE_SECONDS
     tier_policy_path: str | Path = field(default_factory=_default_tier_policy_path)
+    standing_rules_path: str | Path = field(default_factory=_default_standing_rules_path)
+    standing_rules_local_path: str | Path = field(
+        default_factory=_default_standing_rules_local_path
+    )
 
 
 @dataclass(frozen=True)
@@ -205,6 +266,11 @@ class ModelTierPolicy:
     fanout_caps: Mapping[str, int] = field(default_factory=dict)
     window_seconds: int = DEFAULT_TIER_WINDOW_SECONDS
     runtimes: frozenset[str] | None = None
+    # Named tiers the policy declares, independent of whether any model is
+    # currently assigned to one: an empty-model tier is still a valid name a
+    # contract's front matter may declare. Empty for a version 1 policy, which
+    # has no named-tier concept at all.
+    tier_names: frozenset[str] = frozenset()
 
     def tier_of(self, model_key: str) -> str:
         """Return the tier for a casefolded model id, or the unknown tier."""
@@ -359,6 +425,45 @@ class DispatchGate:
         )
         if tier_warning is not None:
             lint_warnings = (*lint_warnings, tier_warning)
+
+        front_matter_result, front_matter_error = _parse_front_matter(
+            contract_content.decode("utf-8", errors="replace")
+        )
+        if front_matter_error is not None:
+            decision = GateDecision(
+                False,
+                ReasonCode.CONTRACT_FRONT_MATTER,
+                warnings=lint_warnings,
+                contract_sha=contract_sha,
+                message=front_matter_error,
+            )
+            append_decision(decision)
+            return decision
+        if front_matter_result is None:
+            # Warning release: a missing block does not change the decision.
+            lint_warnings = (*lint_warnings, ReasonCode.CONTRACT_FRONT_MATTER_MISSING)
+        else:
+            normalized, error_reason, error_message = _validate_front_matter(
+                front_matter_result,
+                request,
+                tier_policy,
+                self._tier or UNKNOWN_TIER,
+                Path(self.config.standing_rules_path),
+                Path(self.config.standing_rules_local_path),
+            )
+            if error_reason is not None:
+                decision = GateDecision(
+                    False,
+                    error_reason,
+                    warnings=lint_warnings,
+                    contract_sha=contract_sha,
+                    message=error_message,
+                    front_matter=front_matter_result,
+                )
+                append_decision(decision)
+                return decision
+            front_matter_result = normalized
+
         cost_proxy = request.n_agents * est_input_chars
         if (
             _dispatch_ticket_path(
@@ -374,6 +479,7 @@ class DispatchGate:
                 warnings=lint_warnings,
                 contract_sha=contract_sha,
                 cost_proxy=cost_proxy,
+                front_matter=front_matter_result,
             )
             append_decision(decision)
             return decision
@@ -388,6 +494,7 @@ class DispatchGate:
                 warnings=lint_warnings,
                 contract_sha=contract_sha,
                 cost_proxy=cost_proxy,
+                front_matter=front_matter_result,
             )
             append_decision(decision)
             return decision
@@ -400,6 +507,7 @@ class DispatchGate:
                 warnings=lint_warnings,
                 contract_sha=contract_sha,
                 cost_proxy=cost_proxy,
+                front_matter=front_matter_result,
             )
             append_decision(decision)
             return decision
@@ -415,6 +523,7 @@ class DispatchGate:
             contract_sha=contract_sha,
             cost_proxy=cost_proxy,
             tier_override=tier_override,
+            front_matter=front_matter_result,
         )
         append_decision(decision)
         if record:
@@ -528,6 +637,9 @@ class DispatchGate:
             }
             if orchestration_task is not None:
                 entry["orchestration_task"] = orchestration_task
+            contract_repo = pending.get("contract_repo")
+            if isinstance(contract_repo, str) and contract_repo:
+                entry["contract_repo"] = contract_repo
             # A caller expanding an unset shell variable can pass an empty or
             # whitespace-only value; worker-wait treats any present worker_pid
             # as measured, and an empty one would read as a live-but-not-alive
@@ -795,6 +907,18 @@ class DispatchGate:
             entry["warnings"] = [warning.value for warning in decision.warnings]
         if decision.tier_override is not None:
             entry["tier_override"] = decision.tier_override
+        if decision.front_matter is not None:
+            # Reject-unknown: serialise only the keys the schema names, so a
+            # row never carries a field the schema does not define even if a
+            # future bug let one slip past validation above.
+            entry["front_matter"] = {
+                key: decision.front_matter[key]
+                for key in FRONT_MATTER_KNOWN_KEYS
+                if key in decision.front_matter
+            }
+            repo = decision.front_matter.get("repo")
+            if isinstance(repo, str) and repo:
+                entry["contract_repo"] = repo
         # Which policy decided. The path is caller-supplied through --tier-policy
         # or DISPATCH_TIER_POLICY, so an ALLOW that names neither path nor digest
         # cannot be told apart from one a substituted policy allowed.
@@ -991,6 +1115,213 @@ def _validate_request(request: DispatchRequest) -> ReasonCode | None:
     return None
 
 
+FRONT_MATTER_DELIMITER = "---"
+FRONT_MATTER_KNOWN_KEYS = frozenset(
+    {"tier", "runtime", "repo", "budget", "writes", "standing_rules"}
+)
+FRONT_MATTER_REQUIRED_KEYS = ("tier", "runtime", "repo")
+FRONT_MATTER_BUDGET_INT_NAMES = frozenset({"rounds", "hours"})
+
+
+def _parse_front_matter(text: str) -> tuple[dict[str, object] | None, str | None]:
+    """Parse a contract's optional front matter block.
+
+    Grammar: a first line "---", then flat "key: value" lines, then a line
+    "---". A value is a bare scalar, or a list written "[a, b, c]" on one
+    line. Nothing nested, no quoting beyond trimming surrounding spaces, no
+    PyYAML (stdlib only, by design).
+
+    Returns ``(parsed, None)`` when a block is present and well formed (an
+    empty dict for a block with no lines), ``(None, None)`` when the text does
+    not open with a front matter block at all, or ``(None, error)`` where
+    ``error`` already names the offending key or line number.
+    """
+
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != FRONT_MATTER_DELIMITER:
+        return None, None
+
+    parsed: dict[str, object] = {}
+    for line_number, line in enumerate(lines[1:], start=2):
+        if line.strip() == FRONT_MATTER_DELIMITER:
+            return parsed, None
+        if ":" not in line:
+            return None, f"line {line_number}: not a key: value line"
+        key, _, raw_value = line.partition(":")
+        key = key.strip()
+        raw_value = raw_value.strip()
+        if key not in FRONT_MATTER_KNOWN_KEYS:
+            return None, f"unknown key: {key}"
+        if raw_value.startswith("["):
+            if not raw_value.endswith("]"):
+                return None, f"line {line_number}: unterminated list"
+            inner = raw_value[1:-1].strip()
+            items = [] if not inner else [item.strip() for item in inner.split(",")]
+            if any(not item for item in items):
+                return None, f"line {line_number}: malformed list"
+            parsed[key] = items
+        else:
+            parsed[key] = raw_value
+    return None, f"line {len(lines) + 1}: unterminated front matter block"
+
+
+def _known_standing_rule_names(
+    standing_rules_path: Path, standing_rules_local_path: Path
+) -> frozenset[str]:
+    """Block names declared by ``## <name>`` headings in the rules file(s).
+
+    A seat's local overlay joins the template file's own names, so a contract
+    may reference a block either file declares.
+    """
+
+    names: set[str] = set()
+    for path in (standing_rules_path, standing_rules_local_path):
+        if not path.is_file():
+            continue
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.startswith("## "):
+                names.add(line[3:].strip())
+    return frozenset(names)
+
+
+def _validate_front_matter(
+    front_matter: Mapping[str, object],
+    request: DispatchRequest,
+    tier_policy: ModelTierPolicy,
+    computed_tier: str,
+    standing_rules_path: Path,
+    standing_rules_local_path: Path,
+) -> tuple[dict[str, object] | None, ReasonCode | None, str]:
+    """Validate a parsed front matter block against this check's context.
+
+    Returns ``(normalized, None, "")`` on success, where ``normalized`` is a
+    fresh dict (budget values coerced to int/float); the input is never
+    mutated. Returns ``(None, reason, message)`` on the first refusal, in the
+    order the contract fixes: required keys and shape, tier, runtime
+    eligibility then runtime match, budget, writes, standing_rules.
+    """
+
+    for key in FRONT_MATTER_REQUIRED_KEYS:
+        value = front_matter.get(key)
+        if key not in front_matter:
+            return None, ReasonCode.CONTRACT_FRONT_MATTER, f"missing required key: {key}"
+        if not isinstance(value, str) or not value.strip():
+            return (
+                None,
+                ReasonCode.CONTRACT_FRONT_MATTER,
+                f"{key} must be a non-empty scalar",
+            )
+
+    declared_tier = front_matter["tier"].strip()
+    if declared_tier not in tier_policy.tier_names or declared_tier != computed_tier:
+        return (
+            None,
+            ReasonCode.CONTRACT_TIER_MISMATCH,
+            f"front_matter_tier={declared_tier} model_tier={computed_tier}",
+        )
+
+    declared_runtime = front_matter["runtime"].strip().casefold()
+    # No policy shape joins a runtime to a tier today (measured: `tiers` names
+    # model ids, not runtimes), so eligibility falls back to the policy's
+    # whole runtime list for every tier until that join exists.
+    if tier_policy.runtimes is not None and declared_runtime not in tier_policy.runtimes:
+        return (
+            None,
+            ReasonCode.RUNTIME_NOT_ELIGIBLE,
+            f"runtime={declared_runtime} tier={declared_tier}",
+        )
+    if declared_runtime != request.runtime.casefold():
+        return (
+            None,
+            ReasonCode.CONTRACT_RUNTIME_MISMATCH,
+            f"front_matter_runtime={declared_runtime} request_runtime={request.runtime}",
+        )
+
+    repo = front_matter["repo"].strip()
+    normalized: dict[str, object] = {
+        "tier": declared_tier,
+        "runtime": declared_runtime,
+        "repo": repo,
+    }
+
+    if "budget" in front_matter:
+        budget_items = front_matter["budget"]
+        if not isinstance(budget_items, list):
+            return None, ReasonCode.CONTRACT_FRONT_MATTER, "budget must be a list"
+        budget: dict[str, object] = {}
+        for item in budget_items:
+            if "=" not in item:
+                return (
+                    None,
+                    ReasonCode.CONTRACT_FRONT_MATTER,
+                    f"budget: malformed item: {item}",
+                )
+            name, _, value = item.partition("=")
+            name = name.strip()
+            value = value.strip()
+            if name in FRONT_MATTER_BUDGET_INT_NAMES:
+                if not value.isdigit():
+                    return (
+                        None,
+                        ReasonCode.CONTRACT_FRONT_MATTER,
+                        f"budget.{name} must be a non-negative integer",
+                    )
+                budget[name] = int(value)
+            elif name == "cost_usd":
+                try:
+                    cost = float(value)
+                except ValueError:
+                    cost = -1.0
+                if cost < 0:
+                    return (
+                        None,
+                        ReasonCode.CONTRACT_FRONT_MATTER,
+                        "budget.cost_usd must be a non-negative number",
+                    )
+                budget[name] = cost
+            else:
+                return (
+                    None,
+                    ReasonCode.CONTRACT_FRONT_MATTER,
+                    f"budget: unknown item name: {name}",
+                )
+        normalized["budget"] = budget
+
+    if "writes" in front_matter:
+        writes = front_matter["writes"]
+        if not isinstance(writes, list) or any(
+            not isinstance(w, str) or not w.strip() for w in writes
+        ):
+            return (
+                None,
+                ReasonCode.CONTRACT_FRONT_MATTER,
+                "writes must be a list of non-empty strings",
+            )
+        normalized["writes"] = list(writes)
+
+    if "standing_rules" in front_matter:
+        names = front_matter["standing_rules"]
+        if not isinstance(names, list) or any(
+            not isinstance(name, str) or not name.strip() for name in names
+        ):
+            return (
+                None,
+                ReasonCode.CONTRACT_FRONT_MATTER,
+                "standing_rules must be a list of non-empty strings",
+            )
+        known = _known_standing_rule_names(standing_rules_path, standing_rules_local_path)
+        for name in names:
+            if name not in known:
+                return (
+                    None,
+                    ReasonCode.STANDING_RULE_UNKNOWN,
+                    f"standing_rules: unknown block: {name}",
+                )
+        normalized["standing_rules"] = list(names)
+
+    return normalized, None, ""
+
+
 def _load_tier_policy(path: Path) -> ModelTierPolicy:
     raw = path.read_bytes()
     payload = json.loads(raw.decode("utf-8"))
@@ -1076,6 +1407,7 @@ def _load_tier_policy_v2(
         fanout_caps=fanout_caps,
         window_seconds=window_seconds,
         runtimes=runtimes,
+        tier_names=frozenset(tiers.keys()),
     )
 
 

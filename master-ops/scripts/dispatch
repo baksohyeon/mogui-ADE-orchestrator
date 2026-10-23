@@ -136,6 +136,52 @@ POLICY=$(resolve_tier_policy)
 
 jqf() { python3 -c "import json,sys;d=json.load(sys.stdin);print($1)"; }
 
+# Body text of a "## <name>" heading, read from the local overlay first
+# (so a seat's own copy of a shared block name wins) and the shipped file
+# second. Exit 1 when neither file carries the heading.
+standing_rule_block() {
+  local name="$1" main_file="$SCRIPTS_DIR/../rules/standing-rules.md"
+  local local_file="$SCRIPTS_DIR/../config/standing-rules.overlay.md"
+  python3 - "$name" "$local_file" "$main_file" <<'EOF'
+import sys
+
+name, local_file, main_file = sys.argv[1], sys.argv[2], sys.argv[3]
+
+
+def extract(path, heading_name):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return None
+    heading = f"## {heading_name}"
+    body = []
+    found = False
+    for line in lines:
+        if found:
+            if line.startswith("## "):
+                break
+            body.append(line)
+        elif line.strip() == heading:
+            found = True
+    if not found:
+        return None
+    while body and not body[0].strip():
+        body.pop(0)
+    while body and not body[-1].strip():
+        body.pop()
+    return "\n".join(body)
+
+
+text = extract(local_file, name)
+if text is None:
+    text = extract(main_file, name)
+if text is None:
+    sys.exit(1)
+print(text)
+EOF
+}
+
 # Resolve product_repositories (or product_repo) from the instance runtime
 # config into owner/repo slugs via each path's git remote origin, serialized
 # for dispatch-collision-check's MOGUI_PRODUCT_REPO-compatible third argument.
@@ -196,6 +242,19 @@ PRODUCT_REPO_ARG=$(resolve_product_repo_arg || printf '%s' "${MOGUI_PRODUCT_REPO
 # master from writing. Point it at the operations copy instead, so there is one
 # file rather than two that can drift.
 export INSTANCE_RUNTIME_CONFIG="$INSTANCE_RUNTIME_CONFIG"
+
+# Points the gate at this install's own standing-rules file, and separately
+# at the instance-owned overlay beside it, instead of the gate's own
+# template-copy fallback, the same seam DISPATCH_TIER_POLICY already fills
+# for the tier policy. rules/standing-rules.md refreshes on every template
+# re-stamp; config/standing-rules.overlay.md, under the instance-owned config/
+# directory, never does. Unset only when the file does not exist yet (a
+# checkout predating this feature); the gate then falls back on its own
+# template copy, same as it does for a bare CLI call with no override.
+STANDING_RULES_PATH="$SCRIPTS_DIR/../rules/standing-rules.md"
+[ -f "$STANDING_RULES_PATH" ] && export DISPATCH_STANDING_RULES="$STANDING_RULES_PATH"
+STANDING_RULES_LOCAL_PATH="$SCRIPTS_DIR/../config/standing-rules.overlay.md"
+[ -f "$STANDING_RULES_LOCAL_PATH" ] && export DISPATCH_STANDING_RULES_LOCAL="$STANDING_RULES_LOCAL_PATH"
 
 # Transcript glob for a model probe, per runtime.
 #
@@ -1306,6 +1365,27 @@ authority for this task, over anything in this line:
 It states an acknowledgement token. Quote that token in your report. A report without it
 tells the coordinator nothing about whether the contract was read."
   echo "📄 contract delivered · $CONTRACT_DEST · read-token required"
+fi
+
+# 1.6 append standing rules the contract's front matter named.
+#
+# Reads the names from the gate's own recorded decision ($CHK, from the
+# recording check above) instead of re-parsing the contract: dispatch-gate
+# already validated every name against these same two files before allowing
+# the dispatch, so a name reaching here always resolves; a lookup failure
+# would mean the gate and this wrapper drifted apart on which files they read.
+STANDING_RULE_NAMES=$(echo "$CHK" | jqf "' '.join(d.get('front_matter', {}).get('standing_rules', []) or [])")
+if [ -n "$STANDING_RULE_NAMES" ]; then
+  for name in $STANDING_RULE_NAMES; do
+    block=$(standing_rule_block "$name") || {
+      echo "✗ standing rule block not found: $name" >&2; exit 3; }
+    SPEC="$SPEC
+
+Standing rules ($name):
+
+$block"
+  done
+  echo "📎 standing rules · $STANDING_RULE_NAMES"
 fi
 
 # 2. task-create

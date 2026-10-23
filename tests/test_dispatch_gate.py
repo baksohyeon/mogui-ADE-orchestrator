@@ -459,7 +459,10 @@ def test_unknown_model_follows_policy_setting(tmp_path: Path) -> None:
     assert deny_decision.allow is False
     assert deny_decision.reason == ReasonCode.TIER_POLICY
     assert warn_decision.allow is True
-    assert warn_decision.warnings == (ReasonCode.TIER_POLICY,)
+    assert warn_decision.warnings == (
+        ReasonCode.TIER_POLICY,
+        ReasonCode.CONTRACT_FRONT_MATTER_MISSING,
+    )
 
 
 def test_check_records_sentinel_log_completion_channel(tmp_path: Path) -> None:
@@ -575,7 +578,10 @@ def test_r2_allows_single_high_cost_runtime_with_warning(tmp_path: Path) -> None
 
     assert decision.allow is True
     assert decision.reason == ReasonCode.OK
-    assert decision.warnings == (ReasonCode.HIGH_COST_RUNTIME,)
+    assert decision.warnings == (
+        ReasonCode.CONTRACT_FRONT_MATTER_MISSING,
+        ReasonCode.HIGH_COST_RUNTIME,
+    )
 
 
 def test_check_allow_issues_dispatch_ticket_with_contract_fixture(
@@ -2153,7 +2159,10 @@ def test_contract_lint_warns_for_mcp_without_trust_handling(
     assert decision.allow is True
     assert decision.reason == ReasonCode.OK
     assert ReasonCode.MCP_TRUST_UNHANDLED in decision.warnings
-    assert _ledger_entries(tmp_path)[-1]["warnings"] == ["MCP_TRUST_UNHANDLED"]
+    assert _ledger_entries(tmp_path)[-1]["warnings"] == [
+        "MCP_TRUST_UNHANDLED",
+        "CONTRACT_FRONT_MATTER_MISSING",
+    ]
 
 
 def test_contract_lint_accepts_mcp_with_trust_handling(
@@ -2999,7 +3008,7 @@ def test_v2_unknown_model_is_capped_not_denied(tmp_path: Path) -> None:
     assert ReasonCode.TIER_POLICY not in allowed.warnings
     entry = _ledger_entries(tmp_path)[-1]
     assert entry["tier"] == "unknown"
-    assert entry["warnings"] == ["TIER_UNKNOWN_MODEL"]
+    assert entry["warnings"] == ["TIER_UNKNOWN_MODEL", "CONTRACT_FRONT_MATTER_MISSING"]
 
     denied = gate.check(
         DispatchRequest(

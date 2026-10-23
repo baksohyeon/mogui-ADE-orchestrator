@@ -949,6 +949,9 @@ delivery_result_test() (
   run_case "$fn" prepared-prompt hook-trust completed hook-trust || return 1
   echo "ok   : delivery_result · hook-trust after inject still wins over a completed dispatch status"
 
+  run_case "$fn" prepared-prompt limit completed limit || return 1
+  echo "ok   : delivery_result · limit after inject still wins over a completed dispatch status"
+
   run_case "$fn" prepared-prompt unknown unreadable agent-started || return 1
   echo "ok   : delivery_result · an unreadable dispatch status leaves the prepared-prompt-to-unknown transition reading agent-started"
 

@@ -154,6 +154,32 @@ delivery pre=prepared-prompt post=unknown status=completed class=unknown
   run_case_with_status "$fn" 0 "$UNKNOWN_LOG" active "layer=delivery step=unknown" || return 1
   echo "ok   : normal_case_verdict · class=unknown with dispatch status active reports layer=delivery step=unknown"
 
+  # Failability: drop the unknown+completed fold; the completed-status case
+  # above must then stop reporting worker=completed.
+  mutant_fn=${fn/'    if [ "$class" = unknown ] && [ "$status" = completed ]; then
+      printf '"'"'layer=delivery step=unknown worker=completed\n'"'"'
+    else
+      printf '"'"'layer=delivery step=%s\n'"'"' "$class"
+    fi'/'    printf '"'"'layer=delivery step=%s\n'"'"' "$class"'}
+  if [ "$mutant_fn" = "$fn" ]; then
+    echo "FAIL: unknown-completed-fold mutant did not change the source" >&2
+    return 1
+  fi
+  logfile="$work/mutant-unknown-completed.log"
+  printf '%s' "$UNKNOWN_LOG" > "$logfile"
+  script_file="$work/run.sh"
+  {
+    echo 'set -u'
+    printf '%s\n' "$mutant_fn"
+    printf 'normal_case_verdict 0 %s completed\n' "$(printf '%q' "$logfile")"
+  } > "$script_file"
+  out=$(bash "$script_file" 2>&1)
+  if [ "$out" = "layer=delivery step=unknown worker=completed" ]; then
+    echo "FAIL: failability: mutant dropping the unknown+completed fold should have stopped reporting worker=completed" >&2
+    return 1
+  fi
+  echo "ok   : failability: dropping the unknown+completed fold stops the completed-status case from reporting worker=completed (got '$out')"
+
   # Failability: a done-class milestone set must stop reporting PASS if the
   # done literal the delivery-class check compares against is renamed away.
   mutant_fn=${fn/'"$class" != done'/'"$class" != nevermatches'}

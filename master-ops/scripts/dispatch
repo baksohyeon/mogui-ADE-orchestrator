@@ -470,8 +470,8 @@ choose_default_runtime() {
 # host shows a gate that is not here yet; a missing marker is a silent delivery
 # failure, which is the whole defect this guards (measured delivery incidents).
 #
-# A fresh claude TUI prompt carries placeholder text next to the arrow, not a
-# bare arrow. Measured 2026-10-23, `orca terminal read --limit 40` on a fresh
+# A fresh claude TUI prompt carries placeholder text next to the arrow.
+# Measured 2026-10-23, `orca terminal read --limit 40` on a fresh
 # `claude` pane:
 #   '❯\xa0Try "fix lint errors"'                      (U+00A0 after the arrow)
 #   '  claude-haiku-5 │ codex-hooks-vet-unmeasured'

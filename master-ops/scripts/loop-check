@@ -1,0 +1,340 @@
+#!/usr/bin/env python3
+"""Evaluate a loop progress file against its six stop conditions.
+
+Progress file grammar and verdict order:
+docs/superpowers/specs/2026-10-18-loop-harness-design.md sections 4 and 7
+(docs/runbooks/loop.md quotes the verdict lines this script prints).
+
+State vocabulary: `picked`, `contracted`, `dispatched`, `dispatched:
+relaunched`, `verifying`, `bot-round(<n>)`, `merge-ready`, `failed` or
+`failed: <text>`, `blocked` or `blocked: <text>`. `dispatched*` (both
+`dispatched` and `dispatched: relaunched`) counts as in flight.
+`blocked: needs-approval` is terminal but does not spend a round.
+
+Exit codes: 0 `continue`, 3 `stop`, 2 on a malformed progress file (line
+number on stderr) or a malformed option (the option name on stderr). Reads
+nothing but the progress file and its own arguments: no call to `orca`,
+`bd`, `gh`, or `git`.
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+
+USAGE = "loop-check PROGRESS_FILE [--now ISO] [--ready-count N] [--compactions N] [--stop-file PATH]"
+
+_IN_FLIGHT_PLAIN = {"picked", "contracted", "verifying"}
+_TERMINAL_PLAIN = {"merge-ready"}
+_BOT_ROUND_RE = re.compile(r"^bot-round\((\d+)\)$")
+_BUDGET_RE = re.compile(r"^rounds=(\d+)\s+hours=(\d+)$")
+
+
+class Malformed(Exception):
+    """A progress file, or an argument evaluated against it, is invalid.
+
+    Carries the line number `main` reports on stderr; line 0 means no single
+    line is at fault (the file could not be read at all).
+    """
+
+    def __init__(self, line_no: int, message: str) -> None:
+        super().__init__(message)
+        self.line_no = line_no
+        self.message = message
+
+
+class InvocationError(Exception):
+    """A command-line option, not the progress file, is invalid.
+
+    Carries the option name `main` reports on stderr.
+    """
+
+    def __init__(self, option: str, message: str) -> None:
+        super().__init__(message)
+        self.option = option
+        self.message = message
+
+
+@dataclass
+class Row:
+    round: int
+    item: str
+    state: str
+    updated: str
+    line: int
+
+
+@dataclass
+class Progress:
+    name: str
+    started: datetime
+    rounds: int
+    hours: int
+    approved: str
+    compactions_seen: int
+    status: str
+    stop_reason: str
+    next_proposal: str
+    rows: list[Row] = field(default_factory=list)
+
+
+def _is_dispatched(state: str) -> bool:
+    return state in ("dispatched", "dispatched: relaunched")
+
+
+def _is_in_flight(state: str) -> bool:
+    return state in _IN_FLIGHT_PLAIN or _is_dispatched(state) or bool(_BOT_ROUND_RE.match(state))
+
+
+def _is_terminal(state: str) -> bool:
+    return state in _TERMINAL_PLAIN or state == "failed" or state == "blocked" \
+        or state.startswith("failed:") or state.startswith("blocked:")
+
+
+def _is_failed(state: str) -> bool:
+    return state == "failed" or state.startswith("failed:")
+
+
+def _require_line(lines: list[str], line_no: int) -> str:
+    if line_no - 1 >= len(lines):
+        raise Malformed(line_no, "missing required line")
+    return lines[line_no - 1]
+
+
+def _require_prefix(lines: list[str], line_no: int, prefix: str, *, allow_empty: bool = False) -> str:
+    text = _require_line(lines, line_no)
+    if not text.startswith(prefix):
+        raise Malformed(line_no, f"expected line to start with {prefix!r}")
+    value = text[len(prefix):].strip()
+    if not allow_empty and not value:
+        raise Malformed(line_no, f"value after {prefix!r} must not be empty")
+    return value
+
+
+def _parse_datetime(text: str, line_no: int, *, require_offset: bool) -> datetime:
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        raise Malformed(line_no, f"invalid ISO 8601 timestamp: {text!r}") from None
+    if require_offset and dt.tzinfo is None:
+        raise Malformed(line_no, f"timestamp must include a UTC offset: {text!r}")
+    return dt
+
+
+def _parse_int(text: str, line_no: int, field_name: str) -> int:
+    try:
+        return int(text)
+    except ValueError:
+        raise Malformed(line_no, f"{field_name} must be an integer, got {text!r}") from None
+
+
+def _is_known_state(state: str) -> bool:
+    if state in _IN_FLIGHT_PLAIN or state in _TERMINAL_PLAIN or _is_dispatched(state) or _BOT_ROUND_RE.match(state):
+        return True
+    return state in ("failed", "blocked") or state.startswith("failed:") or state.startswith("blocked:")
+
+
+def _parse_row(raw: str, line_no: int) -> Row:
+    stripped = raw.strip()
+    if not stripped.startswith("|") or not stripped.endswith("|"):
+        raise Malformed(line_no, "table row must start and end with '|'")
+    cols = [c.strip() for c in stripped[1:-1].split("|")]
+    if len(cols) != 9:
+        raise Malformed(line_no, f"table row must have 9 columns, got {len(cols)}")
+    round_text, item, _contract, state, _task, _dispatch, _pr, _sha, updated = cols
+    round_num = _parse_int(round_text, line_no, "round")
+    if not _is_known_state(state):
+        raise Malformed(line_no, f"unknown state {state!r}")
+    return Row(round=round_num, item=item, state=state, updated=updated, line=line_no)
+
+
+def parse(path: str) -> Progress:
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise Malformed(0, f"cannot read {path}: {exc}") from None
+    lines = text.splitlines()
+
+    name_line = _require_line(lines, 1)
+    if not name_line.startswith("# Loop "):
+        raise Malformed(1, "first line must be '# Loop <name>'")
+    name = name_line[len("# Loop "):].strip()
+
+    started = _parse_datetime(
+        _require_prefix(lines, 2, "- started:"), 2, require_offset=True
+    )
+    rounds_text = _require_prefix(lines, 3, "- budget:")
+    budget_match = _BUDGET_RE.match(rounds_text)
+    if not budget_match:
+        raise Malformed(3, f"budget must match 'rounds=<int> hours=<int>', got {rounds_text!r}")
+    rounds, hours = int(budget_match.group(1)), int(budget_match.group(2))
+
+    approved = _require_prefix(lines, 4, "- approved:", allow_empty=True)
+    compactions_seen = _parse_int(
+        _require_prefix(lines, 5, "- compactions-seen:"), 5, "compactions-seen"
+    )
+    status = _require_prefix(lines, 6, "- status:")
+    if status not in ("running", "stopped"):
+        raise Malformed(6, f"status must be 'running' or 'stopped', got {status!r}")
+    if status == "running" and not approved:
+        raise Malformed(4, "value after '- approved:' must not be empty while status is running")
+    stop_reason = _require_prefix(lines, 7, "- stop-reason:", allow_empty=True)
+    next_proposal = _require_prefix(lines, 8, "- next-proposal:", allow_empty=True)
+
+    blank_line = _require_line(lines, 9)
+    if blank_line.strip() != "":
+        raise Malformed(9, "line 9 must be blank")
+    header_line = _require_line(lines, 10)
+    if not header_line.strip().startswith("|"):
+        raise Malformed(10, "expected the table header row")
+    sep_line = _require_line(lines, 11)
+    if not sep_line.strip().startswith("|---"):
+        raise Malformed(11, "expected the table separator row")
+
+    rows: list[Row] = []
+    for line_no in range(12, len(lines) + 1):
+        raw = lines[line_no - 1]
+        if not raw.strip():
+            continue
+        rows.append(_parse_row(raw, line_no))
+
+    return Progress(
+        name=name,
+        started=started,
+        rounds=rounds,
+        hours=hours,
+        approved=approved,
+        compactions_seen=compactions_seen,
+        status=status,
+        stop_reason=stop_reason,
+        next_proposal=next_proposal,
+        rows=rows,
+    )
+
+
+def _drain_suffix(in_flight_rows: list[Row]) -> str:
+    if not in_flight_rows:
+        return ""
+    row = in_flight_rows[0]
+    return f" drain item={row.item} state={row.state}"
+
+
+def verdict(
+    p: Progress,
+    now: datetime,
+    ready_count: int | None,
+    compactions: int | None,
+    stop_file_exists: bool,
+) -> tuple[int, str]:
+    if now < p.started:
+        raise Malformed(2, "now precedes started")
+
+    in_flight_rows = [r for r in p.rows if _is_in_flight(r.state)]
+    drain = _drain_suffix(in_flight_rows)
+
+    if p.status != "running":
+        return 3, f"stop reason=stopped: {p.stop_reason}{drain}"
+
+    completed_rows = [
+        r for r in p.rows if _is_terminal(r.state) and r.state != "blocked: needs-approval"
+    ]
+    completed = len(completed_rows)
+    if completed >= p.rounds:
+        return 3, f"stop reason=1: round budget spent ({completed}/{p.rounds}){drain}"
+
+    elapsed_hours = (now - p.started).total_seconds() / 3600.0
+    if elapsed_hours >= p.hours:
+        return 3, f"stop reason=2: wall-clock budget spent ({elapsed_hours:.1f}h/{p.hours}h){drain}"
+
+    if ready_count == 0 and not in_flight_rows:
+        return 3, "stop reason=3: no eligible item"
+
+    if len(completed_rows) >= 2:
+        last_two = completed_rows[-2:]
+        if all(_is_failed(r.state) for r in last_two):
+            return 3, f"stop reason=4: two consecutive failures ({last_two[0].item}, {last_two[1].item}){drain}"
+
+    for r in p.rows:
+        if r.state == "blocked: worker-question":
+            return 3, f"stop reason=5: worker question on {r.item}{drain}"
+        if r.state == "blocked: escalation":
+            return 3, f"stop reason=5: escalation on {r.item}{drain}"
+    if stop_file_exists:
+        return 3, f"stop reason=5: stop file present{drain}"
+
+    effective_compactions = compactions if compactions is not None else p.compactions_seen
+    if effective_compactions >= 1:
+        if in_flight_rows:
+            row = in_flight_rows[0]
+            return 3, f"stop reason=6: compaction passed; drain item={row.item} state={row.state}"
+        return 3, "stop reason=6: compaction passed; nothing in flight"
+
+    if in_flight_rows:
+        row = in_flight_rows[0]
+        return 0, f"continue round={row.round} item={row.item} state={row.state}"
+
+    next_round = completed + 1
+    if ready_count is None:
+        return 0, f"continue round={next_round} pick ready=unknown"
+    return 0, f"continue round={next_round} pick"
+
+
+def _parse_now_arg(text: str) -> datetime:
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        raise InvocationError("--now", f"invalid ISO 8601 timestamp: {text!r}") from None
+    if dt.tzinfo is None:
+        raise InvocationError("--now", f"timestamp must include a UTC offset: {text!r}")
+    return dt
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="loop-check", usage=USAGE)
+    parser.add_argument("progress_file", metavar="PROGRESS_FILE")
+    parser.add_argument("--now", help="ISO 8601 timestamp with offset; default: current time")
+    parser.add_argument(
+        "--ready-count", type=int, default=None,
+        help="eligible open item count; default: unknown, skips condition 4",
+    )
+    parser.add_argument(
+        "--compactions", type=int, default=None,
+        help="compactions since start; default: the header's compactions-seen",
+    )
+    parser.add_argument(
+        "--stop-file", default=None,
+        help="path to the stop file; default: STOP next to the progress file",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _build_parser().parse_args(argv)
+    try:
+        if args.ready_count is not None and args.ready_count < 0:
+            raise InvocationError("--ready-count", f"must not be negative, got {args.ready_count}")
+        if args.compactions is not None and args.compactions < 0:
+            raise InvocationError("--compactions", f"must not be negative, got {args.compactions}")
+        now = _parse_now_arg(args.now) if args.now else datetime.now().astimezone()
+        progress = parse(args.progress_file)
+        stop_file = (
+            Path(args.stop_file) if args.stop_file
+            else Path(args.progress_file).parent / "STOP"
+        )
+        code, line = verdict(progress, now, args.ready_count, args.compactions, stop_file.exists())
+    except InvocationError as exc:
+        print(f"loop-check: {exc.option}: {exc.message}", file=sys.stderr)
+        return 2
+    except Malformed as exc:
+        print(f"loop-check: line {exc.line_no}: {exc.message}", file=sys.stderr)
+        return 2
+    print(line)
+    return code
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

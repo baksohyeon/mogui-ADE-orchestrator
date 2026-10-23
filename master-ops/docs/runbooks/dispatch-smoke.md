@@ -49,7 +49,9 @@ What a failing run prints depends on the failure path:
 | 12, wrapper exit 2 | gate | (none) | the gate's denial reason in `smoke.log` |
 | 12, wrapper exit 3 | orca | `task-create`, `terminal-create`, or `dispatch` | `orca orchestration task-list --json`, then `orca terminal read --terminal <handle> --limit 40` for the pane the arrow line names |
 | 12, wrapper exit 4 | register | (none) | the register denial reason in `smoke.log`; the worker is running, resolve by hand |
-| 12, wrapper exit 5 (or any exit with `class=` other than `agent-started`) | delivery | the delivery `class` (`hook-trust`, `limit`, `unknown`, ...) | `orca terminal read --terminal <handle> --limit 40` on the worktree's pane |
+| 0, `class=done` | delivery | (none, a pass) | the dispatch record already read `completed`; the pane itself carries no signal for this case |
+| 12, wrapper exit 5 and `class=unknown` with dispatch status `completed` | delivery | `unknown worker=completed` | `orca orchestration dispatch-show --task <task> --json`; the pane itself for what the delivery check actually saw |
+| 12, wrapper exit 5 (or any exit with `class=` other than `agent-started` or `done`) | delivery | the delivery `class` (`hook-trust`, `limit`, `unknown`, ...) | `orca terminal read --terminal <handle> --limit 40` on the worktree's pane |
 | 12, other nonzero | wrapper | the wrapper's own exit code | the printed `smoke.log` tail on stderr |
 | 12, layer-2 timeout | worker | the last `dispatch-show` status seen | `orca orchestration dispatch-show --task <task> --json`; the worker's own home event log |
 | 12, layer-3 mismatch | contract-read | `missing` or `mismatch` | `<worktree>/SMOKE.txt` directly |

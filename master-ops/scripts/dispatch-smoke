@@ -62,13 +62,22 @@ isolation_diff() {
 }
 
 normal_case_verdict() {
-  local rc="$1" log="$2" class="" line step
+  local rc="$1" log="$2" status="${3:-}" class="" line step
   line=$(grep -m1 '^delivery pre=.*class=' "$log" 2>/dev/null || true)
   if [ -n "$line" ]; then
     class=$(printf '%s\n' "$line" | sed -n 's/.*class=\([^ ]*\).*/\1/p')
   fi
-  if [ -n "$class" ] && [ "$class" != agent-started ]; then
-    printf 'layer=delivery step=%s\n' "$class"
+  if [ -n "$class" ] && [ "$class" != agent-started ] && [ "$class" != done ]; then
+    # class=unknown with a dispatch record that already reads completed is
+    # the seat-smoke case this guards: the worker finished inside the window
+    # and the pane carries no signal either way. Fold both facts into one
+    # verdict instead of letting the seat read "delivery unverified" next to
+    # a dispatch-show that disagrees.
+    if [ "$class" = unknown ] && [ "$status" = completed ]; then
+      printf 'layer=delivery step=unknown worker=completed\n'
+    else
+      printf 'layer=delivery step=%s\n' "$class"
+    fi
     return 0
   fi
   case "$rc" in
@@ -490,7 +499,21 @@ if [ -f "$STATE/.timeout" ]; then
   exit 0
 fi
 
-VERDICT=$(normal_case_verdict "$WRAPPER_RC" "$NORMAL_LOG")
+# Same dispatch-show call the worker layer below makes, read once here so the
+# verdict can tell "delivery unverified, worker still running" apart from
+# "delivery unverified, worker already completed" instead of reporting the
+# pane transition alone.
+PRE_VERDICT_STATUS=$(orca orchestration dispatch-show --task "$TASK" --json 2>/dev/null | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    print(d["result"]["dispatch"]["status"] if d.get("ok") else "unreadable")
+except Exception:
+    print("unreadable")
+' 2>/dev/null)
+[ -n "$PRE_VERDICT_STATUS" ] || PRE_VERDICT_STATUS=unreadable
+
+VERDICT=$(normal_case_verdict "$WRAPPER_RC" "$NORMAL_LOG" "$PRE_VERDICT_STATUS")
 if [ "$VERDICT" != PASS ]; then
   echo "smoke FAIL $VERDICT"
   echo "--- smoke.log (tail) ---" >&2

@@ -469,10 +469,19 @@ choose_default_runtime() {
 # lost with every step still printing success. Extend this list the first time a
 # host shows a gate that is not here yet; a missing marker is a silent delivery
 # failure, which is the whole defect this guards (measured delivery incidents).
+#
+# A fresh claude TUI prompt carries placeholder text next to the arrow, not a
+# bare arrow. Measured 2026-10-23, `orca terminal read --limit 40` on a fresh
+# `claude` pane:
+#   '❯\xa0Try "fix lint errors"'                      (U+00A0 after the arrow)
+#   '  claude-haiku-5 │ codex-hooks-vet-unmeasured'
+#   '  ⏵⏵ auto mode on (shift+tab to cycle) · PR #190'
+# so the unicode marker below matches that placeholder shape too, with either
+# a no-break space or regular spaces between the arrow and `Try "..."`.
 HOOK_TRUST_MARKERS='^[[:space:]]*(Resume session.*|New worktree.*|Coming from Claude Code.*|Changelog.*|Select a model.*|Welcome to Claude.*|Do you trust the files.*|Sign in.*|press enter to continue.*|/login.*|Antigravity CLI requires permission.*|I trust this folder.*|trust this workspace.*|workspace trust.*|permission to access.*|Quick safety check.*|pre-approves .* tool permissions.*)[[:space:][:punct:]]*$'
 LIMIT_MARKERS='^[[:space:]]*(rate limit|rate-limit|too many requests|quota exceeded|out of credits|credits are exhausted|usage limit reached|you.?ve hit your limit|you have reached your limit|try again after)[[:space:][:punct:]]*.*$'
 PREPARED_PROMPT_MARKERS='^[[:space:]]*(claude|codex|grok|gemini)[[:space:]]*>[[:space:]]*$'
-PREPARED_UNICODE_PROMPT_MARKERS='^[[:space:]]*(❯|›|➜)[[:space:]]*$'
+PREPARED_UNICODE_PROMPT_MARKERS=$'^[[:space:]]*(❯|›|➜)([\xc2\xa0 ]+Try "[^"]*")?[[:space:]]*$'
 
 pane_classify_text() {
   local pane="$1" state
@@ -494,12 +503,23 @@ pane_classify_text() {
 }
 
 delivery_result() {
-  # Post-injection gates take precedence over every prior state. The only
-  # positive transition is a prepared prompt becoming unknown; every other
-  # transition stays unverified.
+  # Post-injection gates take precedence over every prior state. A worker
+  # that finishes inside the window returns the pane to the same prepared
+  # prompt it started from, so the pane transition alone carries no positive
+  # signal; the dispatch record's own status fills that gap (measured
+  # 2026-10-23: three dispatches read `completed` with the pane back at a
+  # prepared prompt). Precedence: hook-trust and limit win regardless of
+  # status, then a completed dispatch is `done`, then the pane-transition
+  # fallback.
   case "$1:$2" in
-    *:hook-trust) echo hook-trust;;
-    *:limit) echo limit;;
+    *:hook-trust) echo hook-trust; return;;
+    *:limit) echo limit; return;;
+  esac
+  if [ "$3" = completed ]; then
+    echo done
+    return
+  fi
+  case "$1:$2" in
     prepared-prompt:unknown) echo agent-started;;
     *) echo unknown;;
   esac
@@ -1419,10 +1439,17 @@ for _ in 1 2 3 4 5 6; do
   POST_INJECT_CLASS=$(pane_classification "$TERMINAL")
   [ "$POST_INJECT_CLASS" != prepared-prompt ] && break
 done
-DELIVERY_CLASS=$(delivery_result "$PRE_INJECT_CLASS" "$POST_INJECT_CLASS")
-echo "delivery pre=$PRE_INJECT_CLASS post=$POST_INJECT_CLASS class=$DELIVERY_CLASS"
+# A worker that finishes inside the window above returns the pane to the same
+# prepared prompt it started from, so the pane carries no positive signal at
+# all. The Orca dispatch record does: read its status once, here, and fold it
+# into the classification below.
+DISPATCH_STATUS=$(orca orchestration dispatch-show --task "$TASK" --json 2>/dev/null \
+  | jqf "d['result']['dispatch']['status']" 2>/dev/null)
+[ -n "$DISPATCH_STATUS" ] || DISPATCH_STATUS=unreadable
+DELIVERY_CLASS=$(delivery_result "$PRE_INJECT_CLASS" "$POST_INJECT_CLASS" "$DISPATCH_STATUS")
+echo "delivery pre=$PRE_INJECT_CLASS post=$POST_INJECT_CLASS status=$DISPATCH_STATUS class=$DELIVERY_CLASS"
 case "$DELIVERY_CLASS" in
-  agent-started) record_dispatch_launched pass "";;
+  agent-started|done) record_dispatch_launched pass "";;
   hook-trust|limit) record_dispatch_launched finding "$DELIVERY_CLASS";;
   *) record_dispatch_launched undetermined "$DELIVERY_CLASS";;
 esac
@@ -1440,6 +1467,9 @@ case "$DELIVERY_CLASS" in
     echo "✗ delivery FAILED · provider limit is present; the spec was NOT consumed"
     echo "  Wait for the provider limit to clear or use an available runtime."
     exit 5;;
+  done)
+    echo "✓ delivery ✓ worker completed inside the window (dispatch completed)"
+    exit 0;;
   agent-started)
     echo "✓ delivery ✓ agent left its prepared prompt after inject and began processing"
     echo "  Read the pane to verify the contracted work: orca terminal read --terminal $TERMINAL --limit 40";;

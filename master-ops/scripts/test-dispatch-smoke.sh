@@ -108,6 +108,79 @@ delivery pre=prepared-prompt post=unknown class=agent-started
     return 1
   fi
   echo "ok   : failability: replacing the agent-started literal makes the full-pass case stop reporting PASS (got '$out')"
+
+  # 2026-10-23: a worker that completes inside the delivery window returns
+  # the pane to a prepared prompt, so the wrapper's own pane-transition class
+  # reads done (a positive class, same shape as agent-started) while the rest
+  # of the milestone set is unchanged.
+  run_case "$fn" 0 "⚙ gate ✓ efficient · claude-haiku-4-5 · est 3.0k · 계약 abcdef12
+📄 contract delivered · /tmp/x · read-token required
+→ task_abc123 → term_def456-0000-0000-0000-000000000000 (신규)
+⚡ register ✓ ctx_111222 · probe: job=원장대조 model=scoped-to-worktree
+delivery pre=prepared-prompt post=prepared-prompt status=completed class=done
+✓ delivery ✓ worker completed inside the window (dispatch completed)
+" "PASS" || return 1
+  echo "ok   : normal_case_verdict · full milestone set with class=done (exit 0) reports PASS"
+
+  # class=unknown with a dispatch status read by the caller: completed folds
+  # into one combined step instead of leaving "delivery unverified" next to a
+  # dispatch-show that already says the worker is done.
+  run_case_with_status() {  # fn-body  rc  log-content  status  want
+    local body="$1" rc="$2" content="$3" dstatus="$4" want="$5" logfile="$work/case-status.log" out
+    printf '%s' "$content" > "$logfile"
+    script_file="$work/run.sh"
+    {
+      echo 'set -u'
+      printf '%s\n' "$body"
+      printf 'normal_case_verdict %s %s %s\n' "$rc" "$(printf '%q' "$logfile")" "$(printf '%q' "$dstatus")"
+    } > "$script_file"
+    out=$(bash "$script_file" 2>&1)
+    if [ "$out" != "$want" ]; then
+      echo "FAIL: expected '$want', got '$out' for rc=$rc status=$dstatus" >&2
+      return 1
+    fi
+  }
+
+  UNKNOWN_LOG="⚙ gate ✓ efficient · claude-haiku-4-5 · est 3.0k · 계약 abcdef12
+📄 contract delivered · /tmp/x · read-token required
+→ task_abc123 → term_def456-0000-0000-0000-000000000000 (신규)
+⚡ register ✓ ctx_111222 · probe: job=원장대조 model=scoped-to-worktree
+delivery pre=prepared-prompt post=unknown status=completed class=unknown
+⚠ delivery UNVERIFIED · pane is not a recognized prepared prompt
+"
+  run_case_with_status "$fn" 0 "$UNKNOWN_LOG" completed "layer=delivery step=unknown worker=completed" || return 1
+  echo "ok   : normal_case_verdict · class=unknown with dispatch status completed reports layer=delivery step=unknown worker=completed"
+
+  run_case_with_status "$fn" 0 "$UNKNOWN_LOG" active "layer=delivery step=unknown" || return 1
+  echo "ok   : normal_case_verdict · class=unknown with dispatch status active reports layer=delivery step=unknown"
+
+  # Failability: a done-class milestone set must stop reporting PASS if the
+  # done literal the delivery-class check compares against is renamed away.
+  mutant_fn=${fn/'"$class" != done'/'"$class" != nevermatches'}
+  if [ "$mutant_fn" = "$fn" ]; then
+    echo "FAIL: done mutant did not change the source" >&2
+    return 1
+  fi
+  logfile="$work/mutant-done.log"
+  printf '%s' "⚙ gate ✓ efficient · claude-haiku-4-5 · est 3.0k · 계약 abcdef12
+📄 contract delivered · /tmp/x · read-token required
+→ task_abc123 → term_def456-0000-0000-0000-000000000000 (신규)
+⚡ register ✓ ctx_111222 · probe: job=원장대조 model=scoped-to-worktree
+delivery pre=prepared-prompt post=prepared-prompt status=completed class=done
+✓ delivery ✓ worker completed inside the window (dispatch completed)
+" > "$logfile"
+  script_file="$work/run.sh"
+  {
+    echo 'set -u'
+    printf '%s\n' "$mutant_fn"
+    printf 'normal_case_verdict 0 %s\n' "$(printf '%q' "$logfile")"
+  } > "$script_file"
+  out=$(bash "$script_file" 2>&1)
+  if [ "$out" = "PASS" ]; then
+    echo "FAIL: failability: mutant replacing the done literal should have broken the done-class pass case, still got PASS" >&2
+    return 1
+  fi
+  echo "ok   : failability: replacing the done literal makes the done-class case stop reporting PASS (got '$out')"
 )
 verdict_test "$smoke" || exit 1
 

@@ -22,10 +22,11 @@ scripts root (code stays where it is), any runtime's trust state, or `$HOME`
 itself; moving `$HOME` would move trust state with it, and a real-worker smoke
 run would then fail on a trust dialog that production never shows. Unset or
 empty, every one of those five defaults is exactly what it is today; set, it
-must be an absolute path to an existing directory, checked before any other
-work, or the caller is refused with one line on stderr naming the variable and
-the value. `mogui_log.py`'s `emit()` is the fail-open exception: it writes
-that same stderr line and returns a fallback event dict instead of refusing.
+must be an absolute path to an existing directory, checked before any state
+operation, or the caller is refused with one line on stderr naming the
+variable and the value. `mogui_log.py`'s `emit()` is the fail-open exception:
+it writes that same stderr line and returns a fallback event dict instead of
+refusing.
 No script creates the directory. Production never sets this variable.
 
 The master's bounded loop over `loop-ok` tracker items

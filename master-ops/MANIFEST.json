@@ -61,6 +61,7 @@
     "docs/runbooks/worker-wait.md",
     "docs/travelog/README.md",
     "model-tier-policy.json",
+    "rules/standing-rules.md",
     "scripts/approval-prompt-markers.txt",
     "scripts/codex-hooks-review-answer",
     "scripts/compaction-probe.sh",

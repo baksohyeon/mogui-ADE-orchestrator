@@ -2112,4 +2112,179 @@ EOF
 )
 codex_hooks_vet_wiring_test "$dispatch" || exit 1
 
-echo "dispatch multi-vendor / check-only / state-dir-seam / contract-delivery / cursor-pretrust / claude-pretrust / claude-pretrust-call-site / claude-hook-trust-marker / fresh-claude-prompt-marker / delivery-result / codex-launch / codex-start-screen / codex-start-screen-wiring / codex-hooks-vet / codex-hooks-vet-wiring regression tests passed"
+# --- Feature: standing rules append -----------------------------------------
+#
+# A contract's front matter can name `standing_rules` blocks; dispatch-gate
+# validates and echoes them back on `$CHK` under `front_matter.standing_rules`,
+# and this wrapper reads that field (never re-parsing the contract) to append
+# each named block's text to the dispatched spec. Extracts jqf,
+# standing_rule_block, and the STANDING_RULE_NAMES/append block, then runs
+# them against fixture standing-rules.md/.local.md files and a fake `$CHK`.
+standing_rules_append_test() (
+  set +e
+  set -u
+  local dispatch="$1" work jqf_fn block_fn append_block script_file
+  local out status mutant_block
+
+  jqf_fn=$(grep -m1 -F 'jqf() {' "$dispatch")
+  block_fn=$(awk '$0=="standing_rule_block() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  append_block=$(awk '
+    /^STANDING_RULE_NAMES=\$\(echo "\$CHK" \| jqf/{f=1}
+    f{print}
+    f && /^fi$/{exit}
+  ' "$dispatch")
+
+  [ -n "$jqf_fn" ] || { echo "FAIL: could not extract jqf" >&2; return 1; }
+  [ -n "$block_fn" ] || { echo "FAIL: could not extract standing_rule_block" >&2; return 1; }
+  [ -n "$append_block" ] || { echo "FAIL: could not extract the STANDING_RULE_NAMES append block" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-standing-rules-test.$$"
+  mkdir -p "$work/rules" "$work/scripts"
+  trap 'rm -rf "$work"' EXIT
+  cat > "$work/rules/standing-rules.md" <<'RULES'
+## headless
+
+headless body text.
+
+## ack-token
+
+ack-token body text.
+RULES
+
+  write_script() {
+    local outfile="$1" chat_json="$2"
+    {
+      echo 'set -u'
+      printf 'SCRIPTS_DIR=%s\n' "$work/scripts"
+      printf '%s\n' "$jqf_fn"
+      printf '%s\n' "$block_fn"
+      printf 'CHK=%s\n' "$(printf '%q' "$chat_json")"
+      echo 'SPEC="original spec"'
+      printf '%s\n' "$append_block"
+      echo 'printf "SPEC_TAIL::%s\n" "$SPEC"'
+    } > "$outfile"
+  }
+
+  script_file="$work/run.sh"
+  write_script "$script_file" '{"allow": true, "front_matter": {"standing_rules": ["headless", "ack-token"]}}'
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: standing-rules append block exited non-zero" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF 'headless body text.'; then
+    echo "FAIL: appended spec is missing the headless block text" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF 'ack-token body text.'; then
+    echo "FAIL: appended spec is missing the ack-token block text" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF 'Standing rules (headless):'; then
+    echo "FAIL: appended spec is missing the Standing rules (headless): label" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF '📎 standing rules · headless ack-token'; then
+    echo "FAIL: dispatch did not print the standing-rules milestone line" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : standing_rules: [headless, ack-token] appends both block texts and prints the milestone line"
+
+  # Case: an empty list appends nothing and prints no milestone line.
+  write_script "$script_file" '{"allow": true, "front_matter": {"standing_rules": []}}'
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: an empty standing_rules list should not fail the append block" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if printf '%s\n' "$out" | grep -qF '📎 standing rules'; then
+    echo "FAIL: an empty standing_rules list should not print the milestone line" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF 'SPEC_TAIL::original spec'; then
+    echo "FAIL: an empty standing_rules list should leave SPEC unchanged" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : an empty standing_rules list appends nothing and prints no milestone line"
+
+  # Case: an overlay entry sharing a name with the shipped file wins.
+  mkdir -p "$work/config"
+  cat > "$work/config/standing-rules.overlay.md" <<'RULES'
+## headless
+
+seat overlay headless text.
+RULES
+  write_script "$script_file" '{"allow": true, "front_matter": {"standing_rules": ["headless"]}}'
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: an overlay-shadowed name should not fail the append block" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF 'seat overlay headless text.'; then
+    echo "FAIL: the overlay's own text should win over the shipped file's text for a shared name" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if printf '%s\n' "$out" | grep -qF 'headless body text.'; then
+    echo "FAIL: the shipped file's text should not appear when the overlay names the same block" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : an overlay entry sharing a name with the shipped file wins"
+  rm -f "$work/config/standing-rules.overlay.md"
+
+  # Case: a name neither file declares exits 3 and names the block.
+  write_script "$script_file" '{"allow": true, "front_matter": {"standing_rules": ["nonexistent"]}}'
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 3 ]; then
+    echo "FAIL: a standing_rules name neither file declares should exit 3, got $status" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF 'standing rule block not found: nonexistent'; then
+    echo "FAIL: the exit-3 case should name the missing block" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : a standing_rules name neither file declares exits 3 and names the block"
+
+  # Failability: drop the milestone echo; the first case above must then stop
+  # printing it, proving the assertion actually exercises the real line.
+  mutant_block=${append_block/'  echo "📎 standing rules · $STANDING_RULE_NAMES"'/'  :'}
+  if [ "$mutant_block" = "$append_block" ]; then
+    echo "FAIL: milestone-echo mutant did not change the source" >&2
+    return 1
+  fi
+  {
+    echo 'set -u'
+    printf 'SCRIPTS_DIR=%s\n' "$work/scripts"
+    printf '%s\n' "$jqf_fn"
+    printf '%s\n' "$block_fn"
+    printf 'CHK=%s\n' "$(printf '%q' '{"allow": true, "front_matter": {"standing_rules": ["headless"]}}')"
+    echo 'SPEC="original spec"'
+    printf '%s\n' "$mutant_block"
+    echo 'printf "SPEC_TAIL::%s\n" "$SPEC"'
+  } > "$script_file"
+  out=$(bash "$script_file" 2>&1)
+  if printf '%s\n' "$out" | grep -qF '📎 standing rules'; then
+    echo "FAIL: failability: dropping the milestone echo should have stopped printing it, but it still appeared" >&2
+    return 1
+  fi
+  echo "ok   : failability: dropping the milestone echo makes the milestone-line assertion fail"
+)
+standing_rules_append_test "$dispatch" || exit 1
+
+echo "dispatch multi-vendor / check-only / state-dir-seam / contract-delivery / cursor-pretrust / claude-pretrust / claude-pretrust-call-site / claude-hook-trust-marker / fresh-claude-prompt-marker / delivery-result / codex-launch / codex-start-screen / codex-start-screen-wiring / codex-hooks-vet / codex-hooks-vet-wiring / standing-rules-append regression tests passed"

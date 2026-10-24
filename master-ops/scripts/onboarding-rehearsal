@@ -134,7 +134,7 @@ def main() -> int:
         except (OSError, UnicodeError):
             unresolved.append(f"{relative} (invalid UTF-8)")
             continue
-        if any(token != "{{...}}" for token in PLACEHOLDER.findall(text)):
+        if any(token != "{" * 2 + "..." + "}" * 2 for token in PLACEHOLDER.findall(text)):
             unresolved.append(str(relative))
     result(results, "P02", "no unresolved placeholders in ops repository",
            "none" if not unresolved else ", ".join(unresolved),

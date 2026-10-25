@@ -47,6 +47,10 @@ decide and should block a release cut until resolved.
 
 ## 4) Finalize release metadata
 
+This repository cuts through a release pull request (`release: cut v0.5.265`
+was #196), so the fold and the roll below are committed on the release branch
+and merged before anything is tagged.
+
 - Ensure `CHANGELOG.md` has the release notes for `v${version}`.
 - Verify links and release date text.
 - Roll the root changelog's `## [Unreleased]` section into `## [${version}]`:
@@ -54,8 +58,12 @@ decide and should block a release cut until resolved.
   The first roll after this change gathers everything recorded since
   `0.4.1` under one version heading, which is the honest record of what
   shipped between those two tags.
+- Inspect `git diff --stat`, stage the changed files, and commit
+  `release: cut v${version}` on the release branch.
 
 ## 5) Tagging is owner-approved and manual
+
+The tag below is created from `main` after that release pull request merges.
 
 Use the command below only after explicit owner approval:
 

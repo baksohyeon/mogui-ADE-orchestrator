@@ -199,6 +199,8 @@ def _validate_args(args: argparse.Namespace) -> int | None:
         return 2
     if args.date is not None:
         try:
+            if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", args.date):
+                raise ValueError(args.date)
             date.fromisoformat(args.date)
         except ValueError:
             sys.stderr.write(f"changelog-release: bad --date: {args.date}\n")

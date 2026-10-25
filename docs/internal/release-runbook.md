@@ -58,7 +58,7 @@ and merged before anything is tagged.
   The first roll after this change gathers everything recorded since
   `0.4.1` under one version heading, which is the honest record of what
   shipped between those two tags.
-- Inspect `git diff --stat`, stage the changed files, and commit
+- Inspect `git diff HEAD --stat`, stage the changed files, and commit
   `release: cut v${version}` on the release branch.
 
 ## 5) Tagging is owner-approved and manual

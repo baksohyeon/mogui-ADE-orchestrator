@@ -1,6 +1,6 @@
 name: Bug report
 description: Something behaved differently from what the docs say
-labels: ["bug"]
+labels: ["bug", "untriaged"]
 body:
   - type: textarea
     id: what
@@ -8,6 +8,16 @@ body:
       label: What happened
       description: Command run, output, exit code. Paste rather than summarise.
       render: shell
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Linux
+        - macOS
+        - Windows
     validations:
       required: true
   - type: textarea

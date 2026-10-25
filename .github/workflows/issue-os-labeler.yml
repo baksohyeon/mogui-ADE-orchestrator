@@ -1,0 +1,37 @@
+name: issue-os-labeler
+
+on:
+  issues:
+    types: [opened]
+
+permissions: {}
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/github-script@v9.0.0
+        with:
+          script: |
+            const body = context.payload.issue.body || "";
+            const match = body.match(/###\s*Operating system\s*\r?\n+([^\r\n]*)/i);
+            if (!match) {
+              return;
+            }
+            const byValue = {
+              linux: "os:linux",
+              macos: "os:macos",
+              windows: "os:windows",
+            };
+            const label = byValue[match[1].trim().toLowerCase()];
+            if (!label) {
+              return;
+            }
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: [label],
+            });

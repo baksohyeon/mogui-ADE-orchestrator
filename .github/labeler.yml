@@ -24,6 +24,8 @@ area/template-apply:
       - any-glob-to-any-file:
           - scripts/generate-manifest
           - master-ops/MANIFEST.json
+          - master-ops/scripts/template-apply
+          - master-ops/scripts/template-check
 
 area/loop:
   - changed-files:

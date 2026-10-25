@@ -117,8 +117,8 @@ commit on `main`.
 A pull request or issue with no activity for 14 days after it closes gets a
 `locked` label and its thread locks.
 
-The `risk:` label and the `untriaged` label are set by a person, not by
-automation.
+The `risk:` label is set by a person; issue forms apply `untriaged`
+automatically to new issues.
 
 ## Scope
 

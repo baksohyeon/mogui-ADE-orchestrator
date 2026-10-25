@@ -22,4 +22,4 @@ jobs:
           pr-inactive-days: "14"
           add-issue-labels: "locked"
           add-pr-labels: "locked"
-          process-only: ""
+          process-only: "issues, prs"

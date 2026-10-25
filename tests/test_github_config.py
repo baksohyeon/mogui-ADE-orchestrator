@@ -46,8 +46,23 @@ def test_every_label_name_is_replayed_by_labels_create():
     assert not missing, f"labels missing from scripts/labels-create: {sorted(missing)}"
 
 
+PERMISSIONS_BLOCK_RE = re.compile(r"^[ \t]*permissions:\n((?:[ \t]+\S.*\n?)*)", re.MULTILINE)
+
+
+def _write_token_workflow_names() -> set[str]:
+    """Every file under .github/workflows/ with `write` inside a permissions: block."""
+    names = set()
+    for path in sorted((GITHUB_DIR / "workflows").glob("*.yml")):
+        text = path.read_text(encoding="utf-8")
+        if any("write" in block for block in PERMISSIONS_BLOCK_RE.findall(text)):
+            names.add(path.name)
+    return names
+
+
 def test_write_token_workflows_pin_actions_to_a_commit_sha():
-    for name in ("labeler.yml", "lock.yml"):
+    names = _write_token_workflow_names()
+    assert names == {"issue-os-labeler.yml", "labeler.yml", "lock.yml"}
+    for name in sorted(names):
         text = (GITHUB_DIR / "workflows" / name).read_text(encoding="utf-8")
         uses_lines = [line for line in text.splitlines() if "uses:" in line]
         assert uses_lines, f"no uses: lines in {name}"

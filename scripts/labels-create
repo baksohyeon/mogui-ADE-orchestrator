@@ -5,14 +5,14 @@
 # only GitHub's nine defaults. Run this once against the new repository to
 # catch it up.
 #
-# Usage: bash scripts/labels-create <owner/repo>
-#
-# No execute bit: every executable under scripts/ needs a row in
-# docs/public/reference.md (tests/test_reference_command_table.py), and that
-# page is out of scope for this change.
+# Usage: scripts/labels-create <owner/repo>
 set -euo pipefail
 
-repo="${1:?repo}"
+if (( $# != 1 )); then
+  printf 'usage: scripts/labels-create <owner/repo>\n' >&2
+  exit 2
+fi
+repo="$1"
 
 while IFS=$'\t' read -r name color description; do
   [ -z "$name" ] && continue

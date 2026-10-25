@@ -12,12 +12,37 @@ jobs:
     permissions:
       issues: write
     steps:
-      - uses: actions/github-script@v9.0.0
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const body = context.payload.issue.body || "";
-            const match = body.match(/###\s*Operating system\s*\r?\n+([^\r\n]*)/i);
-            if (!match) {
+            const lines = body.split(/\r?\n/);
+            const sections = [];
+            let heading = null;
+            let section = [];
+            for (const line of lines) {
+              const match = line.match(/^###\s+(.*)$/);
+              if (match) {
+                if (heading !== null) {
+                  sections.push([heading, section]);
+                }
+                heading = match[1].trim();
+                section = [];
+              } else if (heading !== null) {
+                section.push(line);
+              }
+            }
+            if (heading !== null) {
+              sections.push([heading, section]);
+            }
+            const osSection = sections.find(
+              ([name]) => name.toLowerCase() === "operating system"
+            );
+            if (!osSection) {
+              return;
+            }
+            const value = osSection[1].find((line) => line.trim() !== "");
+            if (value === undefined) {
               return;
             }
             const byValue = {
@@ -25,7 +50,7 @@ jobs:
               macos: "os:macos",
               windows: "os:windows",
             };
-            const label = byValue[match[1].trim().toLowerCase()];
+            const label = byValue[value.trim().toLowerCase()];
             if (!label) {
               return;
             }

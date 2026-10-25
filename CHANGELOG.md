@@ -25,9 +25,11 @@ you build on it.
 - GitHub-native contribution automation: issue forms label new issues `bug`
   or `enhancement` plus `untriaged`, and a bug report's OS dropdown drives
   `issue-os-labeler.yml` into an `os:*` label. `actions/labeler` applies
-  `area/*` and PR-size labels from `.github/labeler.yml`, `.github/CODEOWNERS`
-  requests the owner as reviewer, and a scheduled `dessant/lock-threads` run
-  locks threads 14 days after close. `scripts/labels-create` replays the
+  `area/*` labels from `.github/labeler.yml`. The same workflow's
+  `github-script` step applies the `size/*` label from the pull request's
+  diff stats. `.github/CODEOWNERS` requests the owner as reviewer, and a
+  scheduled `dessant/lock-threads` run locks threads 14 days after close.
+  `scripts/labels-create` replays the
   label set onto a repository that lacks it, since "Use this template" does
   not copy labels.
 

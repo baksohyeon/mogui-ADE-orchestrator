@@ -27,7 +27,8 @@ you build on it.
   configuration, Dependencies, Other changes), crediting the pull requests
   and authors it folded. The release runbook's tagging step now follows with
   `gh release create --generate-notes` to create the Release object, which
-  the three bare tags after `v0.5.239` still lack.
+  the four bare tags after `v0.5.239` (`v0.5.249`, `v0.5.254`, `v0.5.258`,
+  `v0.5.265`) still lack.
 
 - GitHub-native contribution automation: issue forms label new issues `bug`
   or `enhancement` plus `untriaged`, and a bug report's OS dropdown drives

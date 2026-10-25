@@ -77,12 +77,24 @@ The awk line writes `master-ops/CHANGELOG.md`'s `## v${version}` section, where
 `--notes-file`. `--verify-tag` refuses the command when the tag is not already
 on the remote, so a mistyped or unpushed tag cannot become a Release cut from
 the default branch. `--generate-notes` appends the pull request list, grouped
-by `.github/release.yml`, under the handwritten notes. The four tags without a
-Release (`v0.5.249`, `v0.5.254`, `v0.5.258`, `v0.5.265`) are back-filled by the
-owner oldest first with the same command, once each, naming
-`--notes-start-tag` with the tag directly before the one being backfilled:
-`v0.5.239` for `v0.5.249`, `v0.5.249` for `v0.5.254`, `v0.5.254` for
-`v0.5.258`, and `v0.5.258` for `v0.5.265`. A normal cut names no
-`--notes-start-tag` because its previous Release is already the latest one.
+by `.github/release.yml`, under the handwritten notes.
+
+The four tags without a Release (`v0.5.249`, `v0.5.254`, `v0.5.258`,
+`v0.5.265`) are back-filled once, oldest first, by the owner, with the
+version typed into each command below and `--notes-start-tag` naming the tag
+directly before it. A normal cut names no `--notes-start-tag` because its
+previous Release is already the latest one.
+
+```console
+awk -v ver="0.5.249" 'BEGIN{p=0} $0=="## v"ver{p=1; print; next} p && /^## /{exit} p; END{if (!p) exit 1}' master-ops/CHANGELOG.md > "${TMPDIR:-/tmp}/release-notes-v0.5.249.md" && \
+gh release create "v0.5.249" --title "v0.5.249" --notes-file "${TMPDIR:-/tmp}/release-notes-v0.5.249.md" --verify-tag --generate-notes --notes-start-tag "v0.5.239"
+awk -v ver="0.5.254" 'BEGIN{p=0} $0=="## v"ver{p=1; print; next} p && /^## /{exit} p; END{if (!p) exit 1}' master-ops/CHANGELOG.md > "${TMPDIR:-/tmp}/release-notes-v0.5.254.md" && \
+gh release create "v0.5.254" --title "v0.5.254" --notes-file "${TMPDIR:-/tmp}/release-notes-v0.5.254.md" --verify-tag --generate-notes --notes-start-tag "v0.5.249"
+awk -v ver="0.5.258" 'BEGIN{p=0} $0=="## v"ver{p=1; print; next} p && /^## /{exit} p; END{if (!p) exit 1}' master-ops/CHANGELOG.md > "${TMPDIR:-/tmp}/release-notes-v0.5.258.md" && \
+gh release create "v0.5.258" --title "v0.5.258" --notes-file "${TMPDIR:-/tmp}/release-notes-v0.5.258.md" --verify-tag --generate-notes --notes-start-tag "v0.5.254"
+awk -v ver="0.5.265" 'BEGIN{p=0} $0=="## v"ver{p=1; print; next} p && /^## /{exit} p; END{if (!p) exit 1}' master-ops/CHANGELOG.md > "${TMPDIR:-/tmp}/release-notes-v0.5.265.md" && \
+gh release create "v0.5.265" --title "v0.5.265" --notes-file "${TMPDIR:-/tmp}/release-notes-v0.5.265.md" --verify-tag --generate-notes --notes-start-tag "v0.5.258"
+```
+
 This step inherits the rule above: tagging and the
 Release stay manual and owner-approved.

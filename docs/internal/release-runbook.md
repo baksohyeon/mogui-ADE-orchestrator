@@ -61,3 +61,16 @@ git tag "v${version}"
 
 Never automate tag creation or tag push. Do not push tags unless the owner asks
 for that release cut action.
+
+After the owner approves `git push origin "v${version}"`, create the Release from
+the pushed tag:
+
+```console
+gh release create "v${version}" --title "v${version}" --notes-file <file holding this version's CHANGELOG.md section> --generate-notes
+```
+
+`--generate-notes` appends the pull request list, grouped by `.github/release.yml`,
+under the handwritten notes. The three tags without a Release (`v0.5.254`,
+`v0.5.258`, `v0.5.265`) are back-filled by the owner with the same command, once.
+This step inherits the rule above: tagging and the Release stay manual and
+owner-approved.

@@ -1,0 +1,28 @@
+changelog:
+  exclude:
+    labels:
+      - locked
+      - wip
+  categories:
+    - title: Breaking changes
+      labels:
+        - risk:high
+    - title: Features
+      labels:
+        - enhancement
+    - title: Fixes
+      labels:
+        - bug
+    - title: Documentation
+      labels:
+        - documentation
+        - area/docs
+    - title: CI and repository configuration
+      labels:
+        - area/ci
+    - title: Dependencies
+      labels:
+        - dependencies
+    - title: Other changes
+      labels:
+        - '*'

@@ -123,7 +123,7 @@ Every `scripts/test-*.sh` in the clone: 21 scripts, 19 pass, 2 fail
   type `apply` at the interactive prompt. A headless pipe satisfies the prompt (confirmed working above),
   but the phrase itself still has to come from a deliberate step, not a default.
 - **Placeholders.** `template-apply` will not prompt for, warn about, or refuse a missing placeholder; it
-  silently ships `{{...}}` tokens verbatim, including inside executable script source. The real re-stamp
+  silently ships double-brace placeholder tokens verbatim, including inside executable script source. The real re-stamp
   must supply all eight documented placeholders (`WORKSPACE_NAME`, `WORKSPACE_ROOT`, `OPS_REPO`,
   `MONITOR_NS`, `MODEL_ID`, `REPO_LIST`, `RUNTIME_ROOT`, `TEMPLATE_VERSION`) explicitly via repeated
   `--placeholder KEY=VALUE`, reading the values from the seat's own `config/workspace-descriptor.json`

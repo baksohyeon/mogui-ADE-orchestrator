@@ -74,9 +74,9 @@ PY
 # exclusively to event-log.jsonl through mg_emit.
 trap record_fire EXIT
 
-if [[ "$INSTANCE_RUNTIME_CONFIG" == *"{{RUNTIME_ROOT}}"* ]]; then
+if [[ "$INSTANCE_RUNTIME_CONFIG" == *"{""{RUNTIME_ROOT}}"* ]]; then
   VERDICT="block"
-  echo "[product-path-guard] BLOCKED: unsubstituted {{RUNTIME_ROOT}} token in INSTANCE_RUNTIME_CONFIG; set MOGUI_INSTANCE_RUNTIME_CONFIG to a real runtime config path" >&2
+  echo "[product-path-guard] BLOCKED: unsubstituted {""{RUNTIME_ROOT}} token in INSTANCE_RUNTIME_CONFIG; set MOGUI_INSTANCE_RUNTIME_CONFIG to a real runtime config path" >&2
   exit 2
 fi
 

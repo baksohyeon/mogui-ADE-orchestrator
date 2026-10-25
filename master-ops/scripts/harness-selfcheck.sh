@@ -346,7 +346,7 @@ allowed_beads_2=""
 if [ -d "$OPS_DIR/.beads" ]; then
   allowed_beads_1=$(cd "$OPS_DIR/.beads" 2>/dev/null && pwd -P)
 fi
-if [ -n "$OPS_REPO" ] && [ "$OPS_REPO" != "{{OPS_REPO}}" ] && [ -d "$OPS_REPO/.beads" ]; then
+if [ -n "$OPS_REPO" ] && [ "$OPS_REPO" != "{""{OPS_REPO}}" ] && [ -d "$OPS_REPO/.beads" ]; then
   allowed_beads_2=$(cd "$OPS_REPO/.beads" 2>/dev/null && pwd -P)
 fi
 tracker_ok=0

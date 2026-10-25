@@ -45,10 +45,10 @@ INSTANCE_OWNED_EXACT = frozenset(
     }
 )
 
-# Built without a literal "{{NAME}}" substring so template-apply substitution
-# cannot rewrite this registry when the file itself is copied.
+# Built from split braces so neither template-apply substitution nor the
+# step 05 Verify token scan sees a literal placeholder in this file.
 def _token(name: str) -> str:
-    return "{{" + name + "}}"
+    return "{" "{" + name + "}" "}"
 
 
 PLACEHOLDERS = (

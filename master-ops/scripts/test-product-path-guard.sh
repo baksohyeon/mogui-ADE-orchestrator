@@ -469,7 +469,7 @@ expect_verdict block both-fields-malformed-legacy-blocked
 grep -q "cannot load product_repositories" "$TMP/stderr" || { echo "FAIL: both-fields-malformed-legacy-blocked missing load failure message" >&2; cat "$TMP/stderr" >&2; exit 1; }
 expect_blocked unsubstituted-runtime-root-token run_bash_default_config "ls" "$ops"
 expect_verdict block unsubstituted-runtime-root-token
-grep -q "{{RUNTIME_ROOT}}" "$TMP/stderr" || { echo "FAIL: unsubstituted-runtime-root-token missing token name" >&2; exit 1; }
+grep -q "{""{RUNTIME_ROOT}}" "$TMP/stderr" || { echo "FAIL: unsubstituted-runtime-root-token missing token name" >&2; exit 1; }
 grep -q "MOGUI_INSTANCE_RUNTIME_CONFIG" "$TMP/stderr" || { echo "FAIL: unsubstituted-runtime-root-token missing override name" >&2; exit 1; }
 
 echo "product-path-guard regression tests passed"

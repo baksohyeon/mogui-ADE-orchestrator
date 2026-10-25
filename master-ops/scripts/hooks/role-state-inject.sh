@@ -44,7 +44,12 @@ if [ -r "$RS" ]; then
   role_value="${role#Current Role:}"
   lock_value="${lock#Role Lock:}"
   if [ -n "$role" ] && [ -n "$lock" ] && [ -n "$(printf '%s' "$role_value" | tr -d '[:space:]')" ] && [ -n "$(printf '%s' "$lock_value" | tr -d '[:space:]')" ]; then
-    echo "[role-state] ${role} | ${lock} | Execution rule: Proposal -> Approval -> Execution. Product-repo implementation goes to dispatched workers, never inline."
+    rule=$(grep -m1 '^Execution rule:' "$RS")
+    rule_value="${rule#Execution rule:}"
+    if [ -z "$(printf '%s' "$rule_value" | tr -d '[:space:]')" ]; then
+      rule="Execution rule: Proposal -> Approval -> Execution."
+    fi
+    echo "[role-state] ${role} | ${lock} | ${rule} Product-repo implementation goes to dispatched workers, never inline."
   else
     VERDICT="warn"
     echo "[role-state] WARNING: role-state markers missing in $RS — declare Current Role and Role Lock before proceeding."

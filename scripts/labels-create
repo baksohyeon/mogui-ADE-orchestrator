@@ -32,6 +32,7 @@ area/loop	0052cc	Loop harness and runbook
 area/onboarding	0052cc	Onboarding steps, preflight, bootstrap
 area/template-apply	0052cc	Template rendering, placeholders, manifest
 bug	d73a4a	Something isn't working
+dependencies	0366d6	Dependency updates; Dependabot applies this label itself
 documentation	0075ca	Improvements or additions to documentation
 duplicate	cfd3d7	This issue or pull request already exists
 enhancement	a2eeef	New feature or request

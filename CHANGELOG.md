@@ -22,6 +22,14 @@ you build on it.
 
 ### Added
 
+- `.github/release.yml` groups each Release's generated notes by label
+  (High-risk changes, Features, Fixes, Documentation, CI and repository
+  configuration, Dependencies, Other changes), crediting the pull requests
+  and authors it folded. The release runbook's tagging step now follows with
+  `gh release create --generate-notes` to create the Release object, which
+  the four bare tags after `v0.5.239` (`v0.5.249`, `v0.5.254`, `v0.5.258`,
+  `v0.5.265`) still lack.
+
 - GitHub-native contribution automation: issue forms label new issues `bug`
   or `enhancement` plus `untriaged`, and a bug report's OS dropdown drives
   `issue-os-labeler.yml` into an `os:*` label. `actions/labeler` applies

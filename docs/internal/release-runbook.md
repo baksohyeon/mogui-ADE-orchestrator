@@ -47,10 +47,23 @@ decide and should block a release cut until resolved.
 
 ## 4) Finalize release metadata
 
+This repository cuts through a release pull request (`release: cut v0.5.265`
+was #196), so the fold and the roll below are committed on the release branch
+and merged before anything is tagged.
+
 - Ensure `CHANGELOG.md` has the release notes for `v${version}`.
 - Verify links and release date text.
+- Roll the root changelog's `## [Unreleased]` section into `## [${version}]`:
+  `./scripts/changelog-release --roll-root CHANGELOG.md --version "${version}"`.
+  The first roll after this change gathers everything recorded since
+  `0.4.1` under one version heading, which is the honest record of what
+  shipped between those two tags.
+- Inspect `git diff HEAD --stat`, stage the changed files, and commit
+  `release: cut v${version}` on the release branch.
 
 ## 5) Tagging is owner-approved and manual
+
+The tag below is created from `main` after that release pull request merges.
 
 Use the command below only after explicit owner approval:
 
@@ -67,10 +80,12 @@ the pushed tag:
 
 ```console
 awk -v ver="${version}" 'BEGIN{p=0} $0=="## v"ver{p=1; print; next} p && /^## /{exit} p; END{if (!p) exit 1}' master-ops/CHANGELOG.md > "${TMPDIR:-/tmp}/release-notes-v${version}.md" && \
+awk -v ver="${version}" 'BEGIN{p=0} $0 ~ "^## \\[" ver "\\] - "{p=1; print; next} p && /^## /{exit} p; END{if (!p) exit 1}' CHANGELOG.md >> "${TMPDIR:-/tmp}/release-notes-v${version}.md" && \
 gh release create "v${version}" --title "v${version}" --notes-file "${TMPDIR:-/tmp}/release-notes-v${version}.md" --verify-tag --generate-notes
 ```
 
-A missing `## v${version}` section makes the awk line exit non-zero, and the `&&` stops the step before any Release exists.
+A missing `## v${version}` or `## [${version}] - ` section makes its awk line
+exit non-zero, and the `&&` stops the step before any Release exists.
 
 The awk line writes `master-ops/CHANGELOG.md`'s `## v${version}` section, where
 `scripts/changelog-release` folds each cut's notes, to a temp file for

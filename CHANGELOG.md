@@ -22,6 +22,13 @@ you build on it.
 
 ### Added
 
+- `scripts/changelog-release` gains `--roll-root PATH --version X.Y.Z [--date YYYY-MM-DD]`:
+  after the fragment fold, it rolls a root changelog's `## [Unreleased]`
+  section into a version heading and the matching link-footer lines, the same
+  way the cut already rolls `master-ops/CHANGELOG.md`. The release runbook's
+  cut step runs it, and its notes-file step now appends the root section
+  alongside the template one.
+
 - `.github/release.yml` groups each Release's generated notes by label
   (High-risk changes, Features, Fixes, Documentation, CI and repository
   configuration, Dependencies, Other changes), crediting the pull requests

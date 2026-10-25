@@ -79,5 +79,9 @@ on the remote, so a mistyped or unpushed tag cannot become a Release cut from
 the default branch. `--generate-notes` appends the pull request list, grouped
 by `.github/release.yml`, under the handwritten notes. The three tags without a
 Release (`v0.5.254`, `v0.5.258`, `v0.5.265`) are back-filled by the owner with
-the same command, once. This step inherits the rule above: tagging and the
+the same command, once each, naming `--notes-start-tag` with the tag directly
+before the one being backfilled: `v0.5.239` for `v0.5.254`, `v0.5.254` for
+`v0.5.258`, and `v0.5.258` for `v0.5.265`. A normal cut names no
+`--notes-start-tag` because its previous Release is already the latest one.
+This step inherits the rule above: tagging and the
 Release stay manual and owner-approved.

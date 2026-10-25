@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -81,3 +84,21 @@ def test_pull_request_target_workflows_have_no_checkout():
 def test_gates_yml_has_top_level_permissions():
     text = (GITHUB_DIR / "workflows" / "gates.yml").read_text(encoding="utf-8")
     assert re.search(r"^permissions:", text, re.MULTILINE)
+
+
+def test_os_labeler_gates_on_the_bug_label():
+    text = (GITHUB_DIR / "workflows" / "issue-os-labeler.yml").read_text(encoding="utf-8")
+    assert "contains(github.event.issue.labels.*.name, 'bug')" in text
+
+
+def test_labels_create_help_exits_zero_without_gh():
+    with tempfile.TemporaryDirectory() as empty_dir:
+        env = {**os.environ, "PATH": f"{empty_dir}{os.pathsep}{os.environ['PATH']}"}
+        result = subprocess.run(
+            [str(REPO_ROOT / "scripts" / "labels-create"), "--help"],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+    assert result.returncode == 0
+    assert result.stdout.startswith("usage:")

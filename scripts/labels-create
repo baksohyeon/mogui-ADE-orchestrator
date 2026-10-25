@@ -8,6 +8,12 @@
 # Usage: scripts/labels-create <owner/repo>
 set -euo pipefail
 
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  printf 'usage: scripts/labels-create <owner/repo>\n'
+  printf 'Replays this repository'"'"'s label set onto another repo.\n'
+  exit 0
+fi
+
 if (( $# != 1 )); then
   printf 'usage: scripts/labels-create <owner/repo>\n' >&2
   exit 2

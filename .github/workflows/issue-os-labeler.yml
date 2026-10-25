@@ -9,6 +9,7 @@ permissions: {}
 jobs:
   label:
     runs-on: ubuntu-latest
+    if: contains(github.event.issue.labels.*.name, 'bug')
     permissions:
       issues: write
     steps:
@@ -35,12 +36,13 @@ jobs:
             if (heading !== null) {
               sections.push([heading, section]);
             }
-            const osSection = sections.find(
+            const osSections = sections.filter(
               ([name]) => name.toLowerCase() === "operating system"
             );
-            if (!osSection) {
+            if (osSections.length !== 1) {
               return;
             }
+            const osSection = osSections[0];
             const value = osSection[1].find((line) => line.trim() !== "");
             if (value === undefined) {
               return;

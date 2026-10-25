@@ -384,6 +384,78 @@ def test_fold_only_path_unchanged_when_roll_root_absent(tmp_path: Path):
     assert "Alpha (2026-01-01)" in after
 
 
+def test_roll_root_bad_version_refused_before_any_write(tmp_path: Path):
+    _seed(tmp_path, {"2026-01-01-alpha.md": "Alpha (2026-01-01):\n\n- did alpha\n"})
+    changelog = _seed_root(tmp_path)
+    before_root = changelog.read_text(encoding="utf-8")
+    before_changelog = (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8")
+
+    result = _run(tmp_path, "--roll-root", str(changelog), "--version", "0.5")
+    assert result.returncode == 2
+    assert "--version" in result.stderr
+    assert changelog.read_text(encoding="utf-8") == before_root
+    assert (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8") == before_changelog
+    assert (tmp_path / "master-ops" / "changelog.d" / "2026-01-01-alpha.md").exists()
+
+
+def test_roll_root_bad_date_refused_before_any_write(tmp_path: Path):
+    _seed(tmp_path, {"2026-01-01-alpha.md": "Alpha (2026-01-01):\n\n- did alpha\n"})
+    changelog = _seed_root(tmp_path)
+    before_root = changelog.read_text(encoding="utf-8")
+    before_changelog = (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8")
+
+    result = _run(
+        tmp_path, "--roll-root", str(changelog), "--version", "0.5.0", "--date", "2026-13-40"
+    )
+    assert result.returncode == 2
+    assert "--date" in result.stderr
+    assert changelog.read_text(encoding="utf-8") == before_root
+    assert (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8") == before_changelog
+    assert (tmp_path / "master-ops" / "changelog.d" / "2026-01-01-alpha.md").exists()
+
+
+def test_version_without_roll_root_refused_before_any_write(tmp_path: Path):
+    _seed(tmp_path, {"2026-01-01-alpha.md": "Alpha (2026-01-01):\n\n- did alpha\n"})
+    before_changelog = (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8")
+
+    result = _run(tmp_path, "--version", "0.5.0")
+    assert result.returncode == 2
+    assert (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8") == before_changelog
+    assert (tmp_path / "master-ops" / "changelog.d" / "2026-01-01-alpha.md").exists()
+
+
+def test_date_without_roll_root_refused_before_any_write(tmp_path: Path):
+    _seed(tmp_path, {"2026-01-01-alpha.md": "Alpha (2026-01-01):\n\n- did alpha\n"})
+    before_changelog = (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8")
+
+    result = _run(tmp_path, "--date", "2026-10-25")
+    assert result.returncode == 2
+    assert (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8") == before_changelog
+    assert (tmp_path / "master-ops" / "changelog.d" / "2026-01-01-alpha.md").exists()
+
+
+def test_roll_root_write_failure_leaves_fold_done_and_fragments_gone(tmp_path: Path):
+    _seed(tmp_path, {"2026-01-01-alpha.md": "Alpha (2026-01-01):\n\n- did alpha\n"})
+    root_path = _seed_root(tmp_path)
+    # Read-only, so the preflight read and validation succeed and only the
+    # final write fails with an OSError, after the fold and fragment
+    # deletion already ran.
+    root_path.chmod(0o444)
+    try:
+        result = _run(tmp_path, "--roll-root", str(root_path), "--version", "0.5.0")
+    finally:
+        root_path.chmod(0o644)
+
+    assert result.returncode == 2
+    assert str(root_path) in result.stderr
+    assert "already folded" in result.stderr
+    assert "changelog.d/ fragments are already deleted" in result.stderr
+
+    after_changelog = (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert "Alpha (2026-01-01)" in after_changelog
+    assert list((tmp_path / "master-ops" / "changelog.d").glob("*.md")) == []
+
+
 def test_dry_run_leaves_tree_unchanged(tmp_path: Path):
     _seed(tmp_path, {"2026-01-01-alpha.md": "Alpha (2026-01-01):\n\n- did alpha\n"})
     before_changelog = (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8")

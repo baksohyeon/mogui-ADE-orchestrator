@@ -8,6 +8,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from windows_exec_surface import skip_windows_exec_surface
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 GITHUB_DIR = REPO_ROOT / ".github"
 
@@ -91,6 +93,7 @@ def test_os_labeler_gates_on_the_bug_label():
     assert "contains(github.event.issue.labels.*.name, 'bug')" in text
 
 
+@skip_windows_exec_surface
 def test_labels_create_help_exits_zero_without_gh():
     with tempfile.TemporaryDirectory() as empty_dir:
         env = {**os.environ, "PATH": f"{empty_dir}{os.pathsep}{os.environ['PATH']}"}

@@ -1,0 +1,67 @@
+name: labeler
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: labeler-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+    steps:
+      - uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13 # v7.0.0
+        with:
+          sync-labels: true
+
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+            });
+
+            const additions = pr.additions;
+            const changedFiles = pr.changed_files;
+            let size;
+            if (additions <= 25 && changedFiles <= 1) {
+              size = "size/xs";
+            } else if (additions <= 150 && changedFiles <= 10) {
+              size = "size/s";
+            } else if (additions <= 600 && changedFiles <= 25) {
+              size = "size/m";
+            } else if (additions <= 2500 && changedFiles <= 50) {
+              size = "size/l";
+            } else {
+              size = "size/xl";
+            }
+
+            const sizeLabels = ["size/xs", "size/s", "size/m", "size/l", "size/xl"];
+            const current = pr.labels.map((label) => label.name);
+            for (const label of current) {
+              if (sizeLabels.includes(label) && label !== size) {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.payload.pull_request.number,
+                  name: label,
+                });
+              }
+            }
+            if (!current.includes(size)) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                labels: [size],
+              });
+            }

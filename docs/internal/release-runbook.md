@@ -66,11 +66,16 @@ After the owner approves `git push origin "v${version}"`, create the Release fro
 the pushed tag:
 
 ```console
-gh release create "v${version}" --title "v${version}" --notes-file <file holding this version's CHANGELOG.md section> --generate-notes
+awk -v ver="${version}" 'BEGIN{p=0} $0=="## v"ver{p=1; print; next} p && /^## /{exit} p' master-ops/CHANGELOG.md > "${TMPDIR:-/tmp}/release-notes-v${version}.md"
+gh release create "v${version}" --title "v${version}" --notes-file "${TMPDIR:-/tmp}/release-notes-v${version}.md" --verify-tag --generate-notes
 ```
 
-`--generate-notes` appends the pull request list, grouped by `.github/release.yml`,
-under the handwritten notes. The three tags without a Release (`v0.5.254`,
-`v0.5.258`, `v0.5.265`) are back-filled by the owner with the same command, once.
-This step inherits the rule above: tagging and the Release stay manual and
-owner-approved.
+The awk line writes `master-ops/CHANGELOG.md`'s `## v${version}` section, where
+`scripts/changelog-release` folds each cut's notes, to a temp file for
+`--notes-file`. `--verify-tag` refuses the command when the tag is not already
+on the remote, so a mistyped or unpushed tag cannot become a Release cut from
+the default branch. `--generate-notes` appends the pull request list, grouped
+by `.github/release.yml`, under the handwritten notes. The three tags without a
+Release (`v0.5.254`, `v0.5.258`, `v0.5.265`) are back-filled by the owner with
+the same command, once. This step inherits the rule above: tagging and the
+Release stay manual and owner-approved.

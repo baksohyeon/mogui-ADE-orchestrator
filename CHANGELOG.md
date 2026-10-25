@@ -23,7 +23,7 @@ you build on it.
 ### Added
 
 - `.github/release.yml` groups each Release's generated notes by label
-  (Breaking changes, Features, Fixes, Documentation, CI and repository
+  (High-risk changes, Features, Fixes, Documentation, CI and repository
   configuration, Dependencies, Other changes), crediting the pull requests
   and authors it folded. The release runbook's tagging step now follows with
   `gh release create --generate-notes` to create the Release object, which

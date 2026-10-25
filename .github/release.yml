@@ -4,7 +4,7 @@ changelog:
       - locked
       - wip
   categories:
-    - title: Breaking changes
+    - title: High-risk changes
       labels:
         - risk:high
     - title: Features

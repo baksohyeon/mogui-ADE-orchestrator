@@ -66,20 +66,29 @@ and log `terminal_closed:<terminal-id>` (or, on `--dry-run`,
 
 ### 3. Check Worktree Safety
 
-The reaper checks two conditions before removing the worktree:
+The reaper checks three conditions before removing the worktree:
 
 1. **Git status is clean** — no uncommitted changes (`git status --porcelain`
    is empty; untracked `__pycache__/` litter does not by itself count as dirty)
 2. **Current branch is included in `origin/main`** — either the checked-out branch appears in `git branch -a --merged origin/main`, or a virtual merge of `HEAD` into `origin/main` produces the same tree as `origin/main`
+3. **No ignored media**: `git status --porcelain` never lists ignored files,
+   so once the first two conditions pass, the reaper also runs `git status
+   --porcelain --ignored` and checks its `!! ` paths against a suffix list:
+   `.mp4 .webm .mov .mkv .wav .mp3 .flac .png .jpg .jpeg .gif .webp .pdf`
+   (case-insensitive). A worktree whose `.gitignore` covers rendered media
+   would otherwise lose that media to `git worktree remove` with no warning.
+   Pass `--remove-ignored-media` to remove the worktree anyway.
 
 The worktree must also exist on disk to be a removal candidate at all.
 
-If both are true, the worktree is removed and `worktree_removed:<path>` is
+If all three are true, the worktree is removed and `worktree_removed:<path>` is
 logged (`would_remove_worktree:<path>` on `--dry-run`).
 
 If **any** condition fails, the worktree is left in place and the reason is logged:
 - `worktree_left:<path>` + reason
 - Example: "Current branch feature/x is not merged to origin/main (branch changes are not included in origin/main)"
+- Ignored media present, flag not set: `worktree_left:<path>:ignored_media:<count>`
+- Ignored media scan failed: `worktree_left:<path>:ignored_media_unmeasured`
 
 ### 4. Record the Reap
 
@@ -87,6 +96,8 @@ A reap record is appended to the dispatch ledger with:
 - `task_id`, `dispatch_id`, `terminal_id`, `worktree_path`
 - `actions_taken` (semicolon-separated list of actions)
 - `timestamp` (Unix epoch)
+- `measurements`, including `worktree_ignored_media` (the ignored-media count,
+  or `None` when unmeasured, set only once the clean and merged checks pass)
 
 ## Safe Reap Guards
 

@@ -921,6 +921,120 @@ class WorkerReaperTests(unittest.TestCase):
             self.assertTrue(merged)
             self.assertEqual(reason, "")
 
+    def test_reap_leaves_clean_merged_worktree_holding_ignored_media(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_runner, removed_paths = _clean_worktree_runner(
+                tmp,
+                current_branch="main",
+                merged_branches="* main\n",
+            )
+            original_runner = fake_runner
+
+            def runner_with_ignored_media(cmd: list[str]) -> tuple[int, str, str]:
+                if "git" in cmd and "status" in cmd and "--ignored" in cmd:
+                    return 0, "!! out/render.mp4\n", ""
+                return original_runner(cmd)
+
+            reaper = WorkerReaper(orca_runner=runner_with_ignored_media)
+            record = reaper.reap(task_id="t1", execute=True)
+
+            self.assertEqual(removed_paths, [])
+            self.assertIn(f"worktree_left:{tmp}:ignored_media:1", record.actions_taken)
+            self.assertEqual(record.measurements["worktree_ignored_media"], 1)
+            # Failability: a version that ignored this measurement would
+            # remove a worktree whose .gitignore covers rendered media,
+            # losing that media with the worktree.
+
+    def test_reap_removes_worktree_with_ignored_media_when_flag_set(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_runner, removed_paths = _clean_worktree_runner(
+                tmp,
+                current_branch="main",
+                merged_branches="* main\n",
+            )
+            original_runner = fake_runner
+
+            def runner_with_ignored_media(cmd: list[str]) -> tuple[int, str, str]:
+                if "git" in cmd and "status" in cmd and "--ignored" in cmd:
+                    return 0, "!! out/render.mp4\n", ""
+                return original_runner(cmd)
+
+            reaper = WorkerReaper(orca_runner=runner_with_ignored_media)
+            record = reaper.reap(task_id="t1", execute=True, remove_ignored_media=True)
+
+            self.assertIn(tmp, removed_paths)
+            self.assertIn(f"worktree_removed:{tmp}", record.actions_taken)
+            self.assertEqual(record.measurements["worktree_ignored_media"], 1)
+
+    def test_reap_removes_worktree_with_only_non_media_ignored_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_runner, removed_paths = _clean_worktree_runner(
+                tmp,
+                current_branch="main",
+                merged_branches="* main\n",
+            )
+            original_runner = fake_runner
+
+            def runner_with_ignored_pyc(cmd: list[str]) -> tuple[int, str, str]:
+                if "git" in cmd and "status" in cmd and "--ignored" in cmd:
+                    return 0, "!! module.pyc\n", ""
+                return original_runner(cmd)
+
+            reaper = WorkerReaper(orca_runner=runner_with_ignored_pyc)
+            record = reaper.reap(task_id="t1", execute=True)
+
+            self.assertIn(tmp, removed_paths)
+            self.assertIn(f"worktree_removed:{tmp}", record.actions_taken)
+            self.assertEqual(record.measurements["worktree_ignored_media"], 0)
+
+    def test_reap_leaves_worktree_whose_ignored_media_scan_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_runner, removed_paths = _clean_worktree_runner(
+                tmp,
+                current_branch="main",
+                merged_branches="* main\n",
+            )
+            original_runner = fake_runner
+
+            def runner_with_ignored_scan_failure(cmd: list[str]) -> tuple[int, str, str]:
+                if "git" in cmd and "status" in cmd and "--ignored" in cmd:
+                    return 1, "", "git error"
+                return original_runner(cmd)
+
+            reaper = WorkerReaper(orca_runner=runner_with_ignored_scan_failure)
+            record = reaper.reap(task_id="t1", execute=True)
+
+            self.assertEqual(removed_paths, [])
+            self.assertIn(
+                f"worktree_left:{tmp}:ignored_media_unmeasured", record.actions_taken
+            )
+            self.assertIsNone(record.measurements["worktree_ignored_media"])
+            # Failability: a version that read a failed `--ignored` scan as
+            # "no ignored media" would remove the worktree unmeasured.
+
+    def test_reap_dry_run_ignored_media_shape(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_runner, removed_paths = _clean_worktree_runner(
+                tmp,
+                current_branch="main",
+                merged_branches="* main\n",
+            )
+            original_runner = fake_runner
+
+            def runner_with_ignored_media(cmd: list[str]) -> tuple[int, str, str]:
+                if "git" in cmd and "status" in cmd and "--ignored" in cmd:
+                    return 0, "!! out/render.mp4\n", ""
+                return original_runner(cmd)
+
+            reaper = WorkerReaper(orca_runner=runner_with_ignored_media)
+            record = reaper.reap(task_id="t1", execute=False)
+
+            self.assertEqual(removed_paths, [])
+            self.assertIn(f"worktree_left:{tmp}:ignored_media:1", record.actions_taken)
+            self.assertEqual(record.measurements["worktree_ignored_media"], 1)
+            # Failability: a dry run that skipped this measurement would not
+            # warn about the media before a real reap removes it.
+
     def test_reap_appends_to_ledger(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ledger_path = Path(tmp) / "reap.jsonl"

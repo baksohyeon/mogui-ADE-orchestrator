@@ -44,6 +44,7 @@ def main(argv: list[str] | None = None) -> int:
             task_id=args.task_id,
             dispatch_id=args.dispatch_id,
             execute=not args.dry_run,
+            remove_ignored_media=args.remove_ignored_media,
         )
     except ReapError as exc:
         print(str(exc), file=sys.stderr)
@@ -94,6 +95,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="Show what would happen without actually closing/removing",
+    )
+    parser.add_argument(
+        "--remove-ignored-media",
+        action="store_true",
+        help="Remove a clean, merged worktree even when it holds ignored media",
     )
     parser.add_argument(
         "--json",

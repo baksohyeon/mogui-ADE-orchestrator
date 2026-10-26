@@ -29,6 +29,28 @@ AGENT_CLI_COMMANDS = frozenset(
     {"claude", "codex", "cursor", "cursor-agent", "agy", "grok"}
 )
 
+# Rendered media suffixes a worktree's .gitignore commonly covers. `git
+# status --porcelain` never lists ignored files, so a worktree holding one of
+# these loses it silently to `git worktree remove` unless this set catches it
+# first. Matched by suffix, case-insensitively.
+IGNORED_MEDIA_SUFFIXES = frozenset(
+    {
+        ".mp4",
+        ".webm",
+        ".mov",
+        ".mkv",
+        ".wav",
+        ".mp3",
+        ".flac",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".webp",
+        ".pdf",
+    }
+)
+
 MAX_WORKER_LIST_PAGES = 20
 WORKER_LIST_PAGE_LIMIT = 100
 
@@ -181,15 +203,18 @@ class WorkerReaper:
         self,
         orca_runner: Optional[callable] = None,
         reap_ledger_path: Optional[Path] = None,
+        remove_ignored_media: bool = False,
     ) -> None:
         self.orca_runner = orca_runner or self._run_subprocess
         self.reap_ledger_path = reap_ledger_path
+        self.remove_ignored_media = remove_ignored_media
 
     def reap(
         self,
         task_id: Optional[str] = None,
         dispatch_id: Optional[str] = None,
         execute: bool = True,
+        remove_ignored_media: bool = False,
     ) -> ReapRecord:
         """
         Reap a settled dispatch.
@@ -198,6 +223,8 @@ class WorkerReaper:
             task_id: Task ID to look up (or dispatch_id must be provided)
             dispatch_id: Dispatch ID directly (or task_id must be provided)
             execute: If False, dry-run only
+            remove_ignored_media: If True (here or on the instance), remove
+                a clean, merged worktree even when it holds ignored media
 
         Returns:
             ReapRecord with actions taken
@@ -240,7 +267,22 @@ class WorkerReaper:
                 measurements["worktree_clean"] = wt_clean
                 measurements["worktree_merged"] = wt_merged
                 if wt_clean and wt_merged:
-                    if execute:
+                    ignored_media = self._ignored_media(worktree_path)
+                    measurements["worktree_ignored_media"] = (
+                        None if ignored_media is None else len(ignored_media)
+                    )
+                    if ignored_media is None:
+                        actions.append(
+                            f"worktree_left:{worktree_path}:ignored_media_unmeasured"
+                        )
+                    elif ignored_media and not (
+                        remove_ignored_media or self.remove_ignored_media
+                    ):
+                        actions.append(
+                            f"worktree_left:{worktree_path}:ignored_media:"
+                            f"{len(ignored_media)}"
+                        )
+                    elif execute:
                         self._remove_worktree(worktree_path)
                         actions.append(f"worktree_removed:{worktree_path}")
                     else:
@@ -599,6 +641,23 @@ class WorkerReaper:
             f"Current branch {current_branch} is not merged to origin/main"
             f" ({squash_reason})"
         )
+
+    def _ignored_media(self, worktree_path: Path) -> Optional[list[str]]:
+        """Ignored paths under `worktree_path` whose suffix is in
+        `IGNORED_MEDIA_SUFFIXES` (case-insensitive), from `git status
+        --porcelain --ignored`'s `!! ` lines. `None` on a git failure,
+        never read as "no ignored media"."""
+        code, stdout, _stderr = self.orca_runner(
+            ["git", "-C", str(worktree_path), "status", "--porcelain", "--ignored"]
+        )
+        if code != 0:
+            return None
+        return [
+            line[3:]
+            for line in stdout.splitlines()
+            if line.startswith("!! ")
+            and Path(line[3:]).suffix.lower() in IGNORED_MEDIA_SUFFIXES
+        ]
 
     def _branch_changes_included_in_origin_main(
         self, worktree_path: Path

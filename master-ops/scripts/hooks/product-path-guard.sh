@@ -324,6 +324,32 @@ def redirects_into_root(value, base):
             continue
         i += 1
     return False
+CD_REDIRECTION_OPERATORS={">",">>","2>","2>>","&>",">&",">|"}
+def strip_cd_redirections(parts):
+    # A cd segment operand count must ignore its own redirection: the fd digit
+    # (if any) and the operator are punctuation-split from each other and from
+    # their target by the same tokenizer that splits segments, so each pair is
+    # dropped from the operand count while the target is kept for a root
+    # check by the caller.
+    operands=[parts[0]]
+    redirect_targets=[]
+    index=1
+    while index < len(parts):
+        token=parts[index]
+        if token in CD_REDIRECTION_OPERATORS:
+            if index + 1 < len(parts):
+                redirect_targets.append(parts[index + 1])
+                index += 2
+            else:
+                operands.append(token)
+                index += 1
+            continue
+        if re.match(r"^[0-9]+$", token) and index + 1 < len(parts) and parts[index + 1] in CD_REDIRECTION_OPERATORS:
+            index += 1
+            continue
+        operands.append(token)
+        index += 1
+    return operands, redirect_targets
 def collect_non_option_operands(parts, start, options_with_values):
     values=set(options_with_values)
     index=start
@@ -381,13 +407,18 @@ if heredoc_forced_deny_name:
     print("DENY\t" + heredoc_forced_deny_name + "\topaque interpreter heredoc body may contain an unparsed write")
     raise SystemExit
 try:
-    tokens=list(shlex.shlex(heredoc_stripped_command, posix=True, punctuation_chars=";&|><"))
+    # A newline ends a segment the same way ; does: dropping it from the
+    # lexer whitespace set (instead of adding it to punctuation_chars, which
+    # shlex still swallows as whitespace) makes it surface as its own token.
+    lexer=shlex.shlex(heredoc_stripped_command, posix=True, punctuation_chars=";&|><")
+    lexer.whitespace=lexer.whitespace.replace("\n", "")
+    tokens=list(lexer)
 except Exception:
     print("DENY\tunparseable\tunparseable command")
     raise SystemExit
 segments=[]; current=[]
 for token in tokens:
-    if token in {";","&&","||","|","&"}:
+    if token in {";","&&","||","|","&","\n"}:
         if current: segments.append(current)
         current=[]
     else: current.append(token)
@@ -404,10 +435,14 @@ for parts in segments:
     if not parts: continue
     name=os.path.basename(parts[0])
     if name == "cd":
-        if len(parts) != 2:
+        operands, redirect_targets = strip_cd_redirections(parts)
+        if len(operands) != 2:
             print("DENY\tcd\tcd target cannot be resolved")
             raise SystemExit
-        current_cwd=resolve(current_cwd, parts[1])
+        if any(under(resolve(current_cwd, target)) for target in redirect_targets):
+            print("DENY\tcd\tshell redirection is a write")
+            raise SystemExit
+        current_cwd=resolve(current_cwd, operands[1])
         if os.environ["FAIL_CLOSED"] != "1" and under(current_cwd):
             print("DENY\tcd\tlegacy policy blocks entering product root")
             raise SystemExit

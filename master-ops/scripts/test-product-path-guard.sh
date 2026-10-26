@@ -54,6 +54,19 @@ print(json.dumps({"tool_input": {"command": sys.argv[1], "working_directory": sy
 PY
 }
 
+# Same shape as run_bash, but against a caller-chosen hook binary; needed by
+# the cd-redirection failability check below to re-run one allowed case
+# against a mutated copy of the guard.
+run_bash_hook() {
+  local hook="$1"
+  local command="$2"
+  local working_directory="${3:-.}"
+  python3 - "$command" "$working_directory" <<'PY' | HOME="$TMP/home" MOGUI_INLINE_EDIT_OVERRIDE=0 MOGUI_PRODUCT_GUARD_FAIL_CLOSED=0 MOGUI_PRODUCT_GUARD_ALLOWLIST=/dev/null MOGUI_EVENT_LOG="$TMP/home/.mogui/event-log.jsonl" MOGUI_INSTANCE_RUNTIME_CONFIG="$TMP/runtime.json" MOGUI_HOOK_FIRE_LOG="$TMP/logs/fire.jsonl" "$hook" >/dev/null 2>"$TMP/stderr"
+import json, sys
+print(json.dumps({"tool_input": {"command": sys.argv[1], "working_directory": sys.argv[2] if len(sys.argv) > 2 else "."}}))
+PY
+}
+
 run_bash_strict() {
   local command="$1"
   local working_directory="${2:-.}"
@@ -423,6 +436,70 @@ expect_blocked awk-pipe-getline-not-admitted run_bash "awk 'BEGIN{\"id\" | getli
 expect_verdict block awk-pipe-getline-not-admitted
 expect_allowed awk-safe-program-passes run_bash "awk '{print \$1}' $product/in" "$ops"
 expect_verdict pass awk-safe-program-passes
+
+# Shape 4: a cd segment may carry a redirection or sit on its own physical
+# line. The operand count ignores a stripped redirection and a newline ends
+# a segment the same way ; does, so a later line's cd is checked on its own
+# merits by the existing legacy-policy and redirection-target checks.
+expect_allowed cd-redirection-then-write run_bash "cd $ops 2>/dev/null && printf ok > $ops/out.txt"
+expect_verdict pass cd-redirection-then-write
+expect_allowed cd-newline-then-write run_bash "cd $ops
+printf ok > $ops/out.txt"
+expect_verdict pass cd-newline-then-write
+expect_blocked cd-redirection-then-write-into-root run_bash "cd $ops 2>/dev/null && printf bad > $product/out.txt"
+expect_verdict block cd-redirection-then-write-into-root
+expect_blocked cd-redirection-into-root run_bash "cd $product 2>/dev/null && ls"
+expect_verdict block cd-redirection-into-root
+expect_blocked cd-newline-second-line-into-root run_bash "cd $ops
+cd $product && ls"
+expect_verdict block cd-newline-second-line-into-root
+expect_blocked cd-redirection-target-into-root run_bash "cd $ops > $product/out.txt"
+expect_verdict block cd-redirection-target-into-root
+
+CD_MUTANT_HOOK="$TMP/product-path-guard-cd-mutant.sh"
+python3 - "$HOOK" "$CD_MUTANT_HOOK" <<'PY'
+import pathlib, sys
+source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+needle = (
+    "    if name == \"cd\":\n"
+    "        operands, redirect_targets = strip_cd_redirections(parts)\n"
+    "        if len(operands) != 2:\n"
+    "            print(\"DENY\\tcd\\tcd target cannot be resolved\")\n"
+    "            raise SystemExit\n"
+    "        if any(under(resolve(current_cwd, target)) for target in redirect_targets):\n"
+    "            print(\"DENY\\tcd\\tshell redirection is a write\")\n"
+    "            raise SystemExit\n"
+    "        current_cwd=resolve(current_cwd, operands[1])\n"
+)
+replacement = (
+    "    if name == \"cd\":\n"
+    "        if len(parts) != 2:\n"
+    "            print(\"DENY\\tcd\\tcd target cannot be resolved\")\n"
+    "            raise SystemExit\n"
+    "        current_cwd=resolve(current_cwd, parts[1])\n"
+)
+if needle not in source:
+    raise SystemExit("cd mutant patch anchor not found")
+pathlib.Path(sys.argv[2]).write_text(source.replace(needle, replacement, 1), encoding="utf-8")
+PY
+if [ ! -f "$CD_MUTANT_HOOK" ] || cmp -s "$HOOK" "$CD_MUTANT_HOOK"; then
+  echo "FAIL: cd mutant not generated" >&2
+  exit 1
+fi
+chmod +x "$CD_MUTANT_HOOK"
+
+(
+  expect_allowed cd-redirection-failability-mutant run_bash_hook "$CD_MUTANT_HOOK" "cd $ops 2>/dev/null && printf ok > $ops/out.txt"
+)
+cd_mutant_exit=$?
+(
+  expect_allowed cd-redirection-failability-restored run_bash_hook "$HOOK" "cd $ops 2>/dev/null && printf ok > $ops/out.txt"
+)
+cd_restored_exit=$?
+[ "$cd_mutant_exit" -eq 1 ] || { echo "FAIL: cd failability mutant exit expected 1 got $cd_mutant_exit" >&2; exit 1; }
+[ "$cd_restored_exit" -eq 0 ] || { echo "FAIL: cd failability restored exit expected 0 got $cd_restored_exit" >&2; exit 1; }
+echo "PASS: cd failability mutant exit code $cd_mutant_exit"
+echo "PASS: cd failability restored exit code $cd_restored_exit"
 
 if [ ! -s "$TMP/logs/fire.jsonl" ]; then
   echo "FAIL: MOGUI_HOOK_FIRE_LOG was ignored" >&2

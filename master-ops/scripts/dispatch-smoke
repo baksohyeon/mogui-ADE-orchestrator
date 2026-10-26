@@ -182,6 +182,25 @@ FINAL_RC=0
 PASS_LINE=""
 SMOKE_SHA_HINT=""
 
+print_artifact() {
+  local label="$1" path="$2" max="${3:-5}"
+  if [ -d "$path" ]; then
+    echo "$label: $path" >&2
+    ls -la "$path" >&2
+    return 0
+  fi
+  if [ ! -e "$path" ]; then
+    echo "$label: $path (absent)" >&2
+    return 0
+  fi
+  if [ ! -s "$path" ]; then
+    echo "$label: $path (empty)" >&2
+    return 0
+  fi
+  echo "$label: $path (first $max line(s))" >&2
+  head -n "$max" "$path" >&2
+}
+
 cleanup() {
   local ledger_sha_after ledger_lines_after contracts_after diff added isolation_rc=0
 
@@ -207,6 +226,7 @@ cleanup() {
             echo "  step=concurrent-writer (added rows do not reference this smoke's own identifiers; another seat wrote the shared ledger during this run)" >&2
           fi
         fi
+        print_artifact "ledger" "$LEDGER_FILE"
         ;;
     esac
     case "$diff" in
@@ -525,6 +545,8 @@ echo "layer 1 ✓ wrapper milestones in order"
 
 if [ ! -f "$STATE/dispatch-ledger.jsonl" ] || [ ! -s "$STATE/dispatch-ledger.jsonl" ]; then
   echo "smoke FAIL layer=isolation step=no-scratch-ledger-row"
+  print_artifact "ledger" "$STATE/dispatch-ledger.jsonl"
+  print_artifact "state dir" "$STATE"
   FINAL_RC=13
   exit 0
 fi
@@ -563,6 +585,8 @@ echo "layer 2 ✓ dispatch completed · task=$TASK dispatch=$DISP"
 SMOKE_FILE="$WORKTREE_PATH/SMOKE.txt"
 if [ ! -f "$SMOKE_FILE" ]; then
   echo "smoke FAIL layer=contract-read step=missing"
+  print_artifact "SMOKE.txt" "$SMOKE_FILE"
+  print_artifact "worktree root" "$WORKTREE_PATH"
   FINAL_RC=12
   exit 0
 fi
@@ -572,6 +596,7 @@ if [ "$ACTUAL_TOKEN" != "$EXPECTED_TOKEN_TRIMMED" ]; then
   echo "smoke FAIL layer=contract-read step=mismatch"
   echo "expected: $EXPECTED_TOKEN_TRIMMED" >&2
   echo "actual:   $ACTUAL_TOKEN" >&2
+  print_artifact "SMOKE.txt" "$SMOKE_FILE"
   FINAL_RC=12
   exit 0
 fi

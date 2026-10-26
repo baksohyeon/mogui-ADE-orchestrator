@@ -19,6 +19,24 @@ SKELETON = REPO_ROOT / "master-ops"
 TEMPLATE_CHECK = SKELETON / "scripts" / "template-check"
 TEMPLATE_APPLY = SKELETON / "scripts" / "template-apply"
 MANIFEST = SKELETON / "MANIFEST.json"
+LIVING_RECORDS = (
+    "AGENTS.md",
+    "CLAUDE.md",
+    "docs/MASTER-OPERATIONS.md",
+    "docs/decisions/closed-decisions-and-facts.md",
+    "docs/runbooks/boot-comparison-set.md",
+    "docs/runbooks/role-state.md",
+    "docs/runbooks/succession-boot-card.md",
+    "scripts/compaction-probe.sh",
+    "scripts/harness-selfcheck.sh",
+)
+
+
+def _seed_living_records(ops: Path, marker: str = "keep") -> None:
+    for rel in LIVING_RECORDS:
+        dest = ops / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(f"{marker}:{rel}\n", encoding="utf-8")
 
 
 def _run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
@@ -41,6 +59,24 @@ def _seed_ops_from_manifest(ops: Path, *, drop: list[str] | None = None) -> None
     # Always install the manifest itself with the listed version.
     if "MANIFEST.json" not in drop_set:
         shutil.copy2(MANIFEST, ops / "MANIFEST.json")
+
+
+def _full_placeholders(ops: Path) -> list[str]:
+    """--placeholder args for every documented key except TEMPLATE_VERSION,
+    which template-apply defaults from the template's own TEMPLATE-VERSION."""
+    pairs = {
+        "WORKSPACE_NAME": "fixture",
+        "WORKSPACE_ROOT": "/tmp/ws",
+        "OPS_REPO": str(ops),
+        "MONITOR_NS": "fixture",
+        "MODEL_ID": "test-model",
+        "REPO_LIST": "none",
+        "RUNTIME_ROOT": str(REPO_ROOT),
+    }
+    args: list[str] = []
+    for key, value in pairs.items():
+        args.extend(["--placeholder", f"{key}={value}"])
+    return args
 
 
 def test_template_check_install_manifest_set_on_current_shape(tmp_path: Path):
@@ -115,6 +151,184 @@ def test_template_check_malformed_manifest_exit_2(tmp_path: Path):
     assert report["manifest_status"] == "malformed"
 
 
+def _write_retirements(ops: Path, entries: list[dict]) -> None:
+    retirements = ops / "config" / "template-retirements.json"
+    retirements.parent.mkdir(parents=True, exist_ok=True)
+    retirements.write_text(json.dumps(entries), encoding="utf-8")
+
+
+def test_template_check_retired_path_is_not_reported_absent(tmp_path: Path):
+    # Failability mutant 1: a retired path is not absent.
+    ops = tmp_path / "ops"
+    ops.mkdir()
+    _seed_ops_from_manifest(ops, drop=["workspace-card/CLAUDE.md"])
+    _write_retirements(
+        ops,
+        [{"path": "workspace-card/CLAUDE.md", "since": "2026-08-05", "why": "retired by owner"}],
+    )
+    result = _run([sys.executable, str(TEMPLATE_CHECK), "--ops", str(ops), "--json"])
+    assert result.returncode == 0, result.stdout + result.stderr
+    report = json.loads(result.stdout)
+    assert report["absent_required"] == []
+    assert report["retired"] == ["workspace-card/CLAUDE.md"]
+    assert report["retirements_status"] == "ok"
+
+
+def test_template_check_retirement_not_in_manifest_reported_not_failing(tmp_path: Path):
+    # Failability mutant 2: a retirement not in the manifest is reported and
+    # does not fail.
+    ops = tmp_path / "ops"
+    ops.mkdir()
+    _seed_ops_from_manifest(ops)
+    _write_retirements(
+        ops,
+        [{"path": "scripts/retired-tool.sh", "since": "2026-08-05", "why": "removed on purpose"}],
+    )
+    result = _run([sys.executable, str(TEMPLATE_CHECK), "--ops", str(ops), "--json"])
+    assert result.returncode == 0, result.stdout + result.stderr
+    report = json.loads(result.stdout)
+    assert report["retirements_unknown"] == ["scripts/retired-tool.sh"]
+    assert report["retired"] == []
+
+
+def test_template_check_genuinely_absent_path_still_fails(tmp_path: Path):
+    # Failability mutant 4: a genuinely absent path (no retirement declared)
+    # still gives exit 1.
+    ops = tmp_path / "ops"
+    ops.mkdir()
+    _seed_ops_from_manifest(ops, drop=["workspace-card/CLAUDE.md"])
+    result = _run([sys.executable, str(TEMPLATE_CHECK), "--ops", str(ops), "--json"])
+    assert result.returncode == 1, result.stdout
+    report = json.loads(result.stdout)
+    assert report["absent_required"] == ["workspace-card/CLAUDE.md"]
+    assert report["retired"] == []
+
+
+def test_template_check_malformed_retirements_file(tmp_path: Path):
+    # Failability mutant 5: a malformed retirements file gives manifest=ok
+    # plus a retirements=malformed marker and exit 1.
+    ops = tmp_path / "ops"
+    ops.mkdir()
+    _seed_ops_from_manifest(ops)
+    retirements = ops / "config" / "template-retirements.json"
+    retirements.parent.mkdir(parents=True, exist_ok=True)
+    retirements.write_text("{not-a-list", encoding="utf-8")
+    result = _run([sys.executable, str(TEMPLATE_CHECK), "--ops", str(ops), "--json"])
+    assert result.returncode == 1, result.stdout
+    report = json.loads(result.stdout)
+    assert report["manifest_status"] == "ok"
+    assert report["retirements_status"] == "malformed"
+
+
+def test_template_check_retired_path_passes_in_template_compare_mode(tmp_path: Path):
+    # cubic finding on this contract's own PR: the install-manifest-mode
+    # retirement tests above do not exercise build_report's template-compare
+    # recompute (absent_required/retired/retirements_unknown against
+    # t_required_set), which is a separate code path from the install-only one.
+    ops = tmp_path / "ops"
+    ops.mkdir()
+    _seed_ops_from_manifest(ops, drop=["workspace-card/CLAUDE.md"])
+    _write_retirements(
+        ops,
+        [{"path": "workspace-card/CLAUDE.md", "since": "2026-08-05", "why": "retired by owner"}],
+    )
+    result = _run(
+        [
+            sys.executable,
+            str(TEMPLATE_CHECK),
+            "--ops",
+            str(ops),
+            "--template",
+            str(SKELETON),
+            "--json",
+        ],
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    report = json.loads(result.stdout)
+    assert report["report_set"] == "template-compare"
+    assert report["absent_required"] == []
+    assert report["retired"] == ["workspace-card/CLAUDE.md"]
+
+
+def test_template_check_malformed_retirements_fails_in_template_compare_mode(tmp_path: Path):
+    ops = tmp_path / "ops"
+    ops.mkdir()
+    _seed_ops_from_manifest(ops)
+    retirements = ops / "config" / "template-retirements.json"
+    retirements.parent.mkdir(parents=True, exist_ok=True)
+    retirements.write_text("{not-a-list", encoding="utf-8")
+    result = _run(
+        [
+            sys.executable,
+            str(TEMPLATE_CHECK),
+            "--ops",
+            str(ops),
+            "--template",
+            str(SKELETON),
+            "--json",
+        ],
+    )
+    assert result.returncode == 1, result.stdout
+    report = json.loads(result.stdout)
+    assert report["report_set"] == "template-compare"
+    assert report["manifest_status"] == "ok"
+    assert report["retirements_status"] == "malformed"
+
+
+def test_template_check_retirements_path_is_directory_is_malformed(tmp_path: Path):
+    # CodeRabbit finding on this contract's own PR: a present non-file
+    # retirements path (e.g. a directory) used to be treated the same as an
+    # absent one. It must report malformed and fail instead.
+    ops = tmp_path / "ops"
+    ops.mkdir()
+    _seed_ops_from_manifest(ops)
+    (ops / "config" / "template-retirements.json").mkdir(parents=True)
+    result = _run([sys.executable, str(TEMPLATE_CHECK), "--ops", str(ops), "--json"])
+    assert result.returncode == 1, result.stdout
+    report = json.loads(result.stdout)
+    assert report["manifest_status"] == "ok"
+    assert report["retirements_status"] == "malformed"
+
+
+def test_template_check_retirements_file_itself_is_not_unknown(tmp_path: Path):
+    ops = tmp_path / "ops"
+    ops.mkdir()
+    _seed_ops_from_manifest(ops)
+    _write_retirements(ops, [])
+    result = _run([sys.executable, str(TEMPLATE_CHECK), "--ops", str(ops), "--json"])
+    assert result.returncode == 0, result.stdout + result.stderr
+    report = json.loads(result.stdout)
+    assert "config/template-retirements.json" not in report["unknown_present"]
+    assert report["retirements_status"] == "ok"
+
+
+def test_template_check_retirements_path_overridable(tmp_path: Path):
+    ops = tmp_path / "ops"
+    ops.mkdir()
+    _seed_ops_from_manifest(ops, drop=["workspace-card/CLAUDE.md"])
+    custom = tmp_path / "custom-retirements.json"
+    custom.write_text(
+        json.dumps(
+            [{"path": "workspace-card/CLAUDE.md", "since": "2026-08-05", "why": "retired"}]
+        ),
+        encoding="utf-8",
+    )
+    result = _run(
+        [
+            sys.executable,
+            str(TEMPLATE_CHECK),
+            "--ops",
+            str(ops),
+            "--retirements",
+            str(custom),
+            "--json",
+        ],
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    report = json.loads(result.stdout)
+    assert report["retired"] == ["workspace-card/CLAUDE.md"]
+
+
 def test_template_apply_refuses_instance_owned_and_unknown(tmp_path: Path):
     ops = tmp_path / "ops"
     ops.mkdir()
@@ -169,6 +383,49 @@ def test_template_apply_refuses_instance_owned_and_unknown(tmp_path: Path):
     assert (ops / "docs" / "runbooks" / "role-state.md").read_text() == "mine\n"
 
 
+def test_template_apply_skips_living_records_even_when_claimed(tmp_path: Path):
+    ops = tmp_path / "ops"
+    ops.mkdir()
+    _seed_living_records(ops, marker="mine")
+    result = _run(
+        [
+            sys.executable,
+            str(TEMPLATE_APPLY),
+            "--ops",
+            str(ops),
+            "--template",
+            str(SKELETON),
+            "--json",
+            *_full_placeholders(ops),
+        ],
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    payload = json.loads(result.stdout)
+    actions = {a["path"]: a["action"] for a in payload["actions"]}
+    for rel in LIVING_RECORDS:
+        assert actions[rel] == "skipped-as-instance-owned", rel
+        assert (ops / rel).read_text(encoding="utf-8") == f"mine:{rel}\n"
+
+    write = _run(
+        [
+            sys.executable,
+            str(TEMPLATE_APPLY),
+            "--ops",
+            str(ops),
+            "--template",
+            str(SKELETON),
+            "--write",
+            "--confirm-input",
+            "apply",
+            "--json",
+            *_full_placeholders(ops),
+        ],
+    )
+    assert write.returncode == 0, write.stderr + write.stdout
+    for rel in LIVING_RECORDS:
+        assert (ops / rel).read_text(encoding="utf-8") == f"mine:{rel}\n"
+
+
 def test_template_apply_clean_write_after_confirm(tmp_path: Path):
     ops = tmp_path / "ops"
     ops.mkdir()
@@ -182,6 +439,7 @@ def test_template_apply_clean_write_after_confirm(tmp_path: Path):
     (ops / "docs" / "lineage" / "README.md").write_text("lineage-readme\n", encoding="utf-8")
     (ops / "docs" / "runbooks").mkdir(parents=True)
     (ops / "docs" / "runbooks" / "role-state.md").write_text("role-keep\n", encoding="utf-8")
+    _seed_living_records(ops, marker="founded")
 
     dry = _run(
         [
@@ -192,11 +450,13 @@ def test_template_apply_clean_write_after_confirm(tmp_path: Path):
             "--template",
             str(SKELETON),
             "--json",
+            *_full_placeholders(ops),
         ],
     )
     assert dry.returncode == 0, dry.stderr
     dry_payload = json.loads(dry.stdout)
     assert dry_payload["phase"] == "dry-run"
+    assert dry_payload["missing_placeholders"] == {}
     planned = [a for a in dry_payload["actions"] if a["action"] == "planned"]
     assert planned, "expected at least one planned template-layer write"
 
@@ -211,21 +471,8 @@ def test_template_apply_clean_write_after_confirm(tmp_path: Path):
             "--write",
             "--confirm-input",
             "apply",
-            "--placeholder",
-            f"WORKSPACE_ROOT={tmp_path / 'ws'}",
-            "--placeholder",
-            f"OPS_REPO={ops}",
-            "--placeholder",
-            "WORKSPACE_NAME=fixture",
-            "--placeholder",
-            "MONITOR_NS=fixture",
-            "--placeholder",
-            "MODEL_ID=test-model",
-            "--placeholder",
-            "REPO_LIST=none",
-            "--placeholder",
-            f"RUNTIME_ROOT={REPO_ROOT}",
             "--json",
+            *_full_placeholders(ops),
         ],
     )
     assert write.returncode == 0, write.stderr + write.stdout
@@ -237,7 +484,12 @@ def test_template_apply_clean_write_after_confirm(tmp_path: Path):
     assert (ops / "scripts" / "template-check").is_file()
     # Instance-owned records preserved.
     assert (ops / "docs" / "lineage" / "MASTER-LINEAGE.md").read_text() == "keep-me\n"
-    assert (ops / "docs" / "runbooks" / "role-state.md").read_text() == "role-keep\n"
+    assert (ops / "docs" / "runbooks" / "role-state.md").read_text() == "founded:docs/runbooks/role-state.md\n"
+    for rel in LIVING_RECORDS:
+        assert (ops / rel).read_text(encoding="utf-8") == f"founded:{rel}\n"
+    assert (ops / "scripts" / "template_common.py").read_bytes() == (
+        SKELETON / "scripts" / "template_common.py"
+    ).read_bytes()
 
     # Re-check is clean against template for claimed paths that were written.
     check = _run(
@@ -271,9 +523,11 @@ def test_template_apply_declined_confirmation_writes_nothing(tmp_path: Path):
             "--write",
             "--confirm-input",
             "nope",
+            *_full_placeholders(ops),
         ],
     )
     assert result.returncode == 2
+    assert "confirmation declined" in result.stderr
     assert list(ops.iterdir()) == []
 
 
@@ -306,6 +560,55 @@ def test_template_check_unreadable_template_version_exit_2(tmp_path: Path):
     assert result.returncode == 2, result.stdout + result.stderr
     report = json.loads(result.stdout)
     assert any("VERSION" in q for q in report["questions_unanswered"])
+
+
+def test_template_check_adoption_notes_prepend_fragment_bodies(tmp_path: Path):
+    ops = tmp_path / "ops"
+    template = tmp_path / "template"
+    ops.mkdir()
+    template.mkdir()
+    (ops / "MANIFEST.json").write_text(
+        json.dumps({"template_version": "v0.0.0", "files": []}) + "\n",
+        encoding="utf-8",
+    )
+    (template / "TEMPLATE-VERSION").write_text("v0.1.0\n", encoding="utf-8")
+    (template / "MANIFEST.json").write_text(
+        json.dumps({"template_version": "v0.1.0", "files": []}) + "\n",
+        encoding="utf-8",
+    )
+    (template / "CHANGELOG.md").write_text(
+        "## Unreleased\n\nOld entry that predates fragments.\n", encoding="utf-8"
+    )
+    changelog_d = template / "changelog.d"
+    changelog_d.mkdir()
+    (changelog_d / "README.md").write_text("fragments live here\n", encoding="utf-8")
+    (changelog_d / "2026-01-01-alpha.md").write_text(
+        "Alpha (2026-01-01):\n\n- did alpha\n", encoding="utf-8"
+    )
+    (changelog_d / "2026-01-02-beta.md").write_text(
+        "Beta (2026-01-02):\n\n- did beta\n", encoding="utf-8"
+    )
+    result = _run(
+        [
+            sys.executable,
+            str(TEMPLATE_CHECK),
+            "--ops",
+            str(ops),
+            "--template",
+            str(template),
+            "--json",
+        ]
+    )
+    report = json.loads(result.stdout)
+    notes = report["adoption_notes"]
+    assert len(notes) == 1
+    assert notes[0]["version"] == "Unreleased"
+    body = notes[0]["body"]
+    assert "fragments live here" not in body
+    beta_at = body.find("Beta (2026-01-02)")
+    alpha_at = body.find("Alpha (2026-01-01)")
+    old_at = body.find("Old entry that predates fragments.")
+    assert 0 <= beta_at < alpha_at < old_at
 
 
 def test_template_apply_rejects_path_escape_and_missing_manifest_file(tmp_path: Path):
@@ -345,7 +648,10 @@ def test_template_apply_rejects_path_escape_and_missing_manifest_file(tmp_path: 
     assert not (ops / "ok.md").exists()
 
 
-def test_template_check_empty_manifest_still_reports_unknown_paths(tmp_path: Path):
+def test_template_check_empty_manifest_reports_unknown_paths_without_failing(tmp_path: Path):
+    # Failability mutant 3: unknown files alone give exit 0. Installs add files
+    # by design; drift the template cares about is a required file missing or
+    # changed, not a file the install wrote.
     ops = tmp_path / "ops"
     ops.mkdir()
     (ops / "MANIFEST.json").write_text(
@@ -355,8 +661,9 @@ def test_template_check_empty_manifest_still_reports_unknown_paths(tmp_path: Pat
     (ops / "unexpected.txt").write_text("x\n", encoding="utf-8")
     result = _run([sys.executable, str(TEMPLATE_CHECK), "--ops", str(ops), "--json"])
     report = json.loads(result.stdout)
-    assert result.returncode == 1
+    assert result.returncode == 0, result.stdout + result.stderr
     assert report["unknown_present"] == ["unexpected.txt"]
+    assert report["absent_required"] == []
 
 
 def test_template_check_rejects_symlink_and_bad_changelog(tmp_path: Path):
@@ -522,6 +829,181 @@ def test_frame_hygiene_guards_use_explicit_template_and_shared_skeleton_name():
     assert "basename" not in harness[harness.index("# --- Tracker check ---") : harness.index("# --- Template currency check ---")]
     assert 'SKELETON_DIR="master"$\'-\'"ops"' in spawn
     assert 'local ade_clone_path="$sandbox_dir/$ADE_REPO_NAME"' in spawn
+
+
+def test_template_apply_missing_placeholder_blocks_dry_run_and_write(tmp_path: Path):
+    template = tmp_path / "template"
+    ops = tmp_path / "ops"
+    template.mkdir()
+    ops.mkdir()
+    (template / "TEMPLATE-VERSION").write_text("v0.0.0\n", encoding="utf-8")
+    (template / "scripts").mkdir()
+    (template / "scripts" / "dispatch").write_text("OPS={{OPS_REPO}}\n", encoding="utf-8")
+    (template / "MANIFEST.json").write_text(
+        json.dumps({"template_version": "v0.0.0", "files": ["scripts/dispatch"]}) + "\n",
+        encoding="utf-8",
+    )
+
+    dry = _run(
+        [
+            sys.executable,
+            str(TEMPLATE_APPLY),
+            "--ops",
+            str(ops),
+            "--template",
+            str(template),
+            "--json",
+        ],
+    )
+    assert dry.returncode == 2, dry.stdout + dry.stderr
+    payload = json.loads(dry.stdout)
+    assert payload["missing_placeholders"] == {"OPS_REPO": ["scripts/dispatch"]}
+
+    write = _run(
+        [
+            sys.executable,
+            str(TEMPLATE_APPLY),
+            "--ops",
+            str(ops),
+            "--template",
+            str(template),
+            "--write",
+            "--confirm-input",
+            "apply",
+        ],
+    )
+    assert write.returncode == 2, write.stdout + write.stderr
+    assert "OPS_REPO" in write.stderr
+    assert "scripts/dispatch" in write.stderr
+    assert not (ops / "scripts" / "dispatch").exists()
+
+    # Empty stdin, no --confirm-input: proves the missing-key refusal fires
+    # before confirmation is read at all.
+    unconfirmed = _run(
+        [
+            sys.executable,
+            str(TEMPLATE_APPLY),
+            "--ops",
+            str(ops),
+            "--template",
+            str(template),
+            "--write",
+        ],
+        input="",
+    )
+    assert unconfirmed.returncode == 2, unconfirmed.stdout + unconfirmed.stderr
+    assert "OPS_REPO" in unconfirmed.stderr
+    assert "scripts/dispatch" in unconfirmed.stderr
+    assert "Type " not in unconfirmed.stderr
+    assert "no confirmation (EOF)" not in unconfirmed.stderr
+    assert not (ops / "scripts" / "dispatch").exists()
+
+
+def test_template_apply_missing_placeholder_catches_token_reintroduced_by_a_value(
+    tmp_path: Path,
+):
+    # A supplied value can itself carry a documented token. substitute()
+    # replaces placeholders in a fixed key order, so a value equal to a
+    # not-yet-supplied key's token survives into the rendered text.
+    template = tmp_path / "template"
+    ops = tmp_path / "ops"
+    template.mkdir()
+    ops.mkdir()
+    (template / "TEMPLATE-VERSION").write_text("v0.0.0\n", encoding="utf-8")
+    (template / "card.md").write_text("name={{WORKSPACE_NAME}}\n", encoding="utf-8")
+    (template / "MANIFEST.json").write_text(
+        json.dumps({"template_version": "v0.0.0", "files": ["card.md"]}) + "\n",
+        encoding="utf-8",
+    )
+
+    dry = _run(
+        [
+            sys.executable,
+            str(TEMPLATE_APPLY),
+            "--ops",
+            str(ops),
+            "--template",
+            str(template),
+            "--placeholder",
+            "WORKSPACE_NAME={{OPS_REPO}}",
+            "--json",
+        ],
+    )
+    assert dry.returncode == 2, dry.stdout + dry.stderr
+    payload = json.loads(dry.stdout)
+    assert payload["missing_placeholders"] == {"OPS_REPO": ["card.md"]}
+
+
+def test_template_apply_missing_placeholder_reports_only_unsupplied_keys(tmp_path: Path):
+    template = tmp_path / "template"
+    ops = tmp_path / "ops"
+    template.mkdir()
+    ops.mkdir()
+    (template / "TEMPLATE-VERSION").write_text("v0.0.0\n", encoding="utf-8")
+    (template / "card.md").write_text(
+        "name={{WORKSPACE_NAME}} ops={{OPS_REPO}}\n", encoding="utf-8"
+    )
+    (template / "MANIFEST.json").write_text(
+        json.dumps({"template_version": "v0.0.0", "files": ["card.md"]}) + "\n",
+        encoding="utf-8",
+    )
+
+    dry = _run(
+        [
+            sys.executable,
+            str(TEMPLATE_APPLY),
+            "--ops",
+            str(ops),
+            "--template",
+            str(template),
+            "--placeholder",
+            "WORKSPACE_NAME=fixture",
+            "--json",
+        ],
+    )
+    assert dry.returncode == 2, dry.stdout + dry.stderr
+    payload = json.loads(dry.stdout)
+    assert payload["missing_placeholders"] == {"OPS_REPO": ["card.md"]}
+
+
+def test_template_apply_full_placeholder_set_writes_clean(tmp_path: Path):
+    template = tmp_path / "template"
+    ops = tmp_path / "ops"
+    template.mkdir()
+    ops.mkdir()
+    (template / "TEMPLATE-VERSION").write_text("v0.0.0\n", encoding="utf-8")
+    (template / "card.md").write_text(
+        "name={{WORKSPACE_NAME}} ops={{OPS_REPO}}\n", encoding="utf-8"
+    )
+    (template / "MANIFEST.json").write_text(
+        json.dumps({"template_version": "v0.0.0", "files": ["card.md"]}) + "\n",
+        encoding="utf-8",
+    )
+
+    write = _run(
+        [
+            sys.executable,
+            str(TEMPLATE_APPLY),
+            "--ops",
+            str(ops),
+            "--template",
+            str(template),
+            "--write",
+            "--confirm-input",
+            "apply",
+            "--placeholder",
+            "WORKSPACE_NAME=fixture",
+            "--placeholder",
+            f"OPS_REPO={ops}",
+            "--json",
+        ],
+    )
+    assert write.returncode == 0, write.stdout + write.stderr
+    payload = json.loads(write.stdout)
+    assert payload["phase"] == "write"
+    written_text = (ops / "card.md").read_text(encoding="utf-8")
+    assert "{{" not in written_text
+    assert written_text == f"name=fixture ops={ops}\n"
 
 
 def test_onboarding_docs_name_template_root_and_placeholder_flags():

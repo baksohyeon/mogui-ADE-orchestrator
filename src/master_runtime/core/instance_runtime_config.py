@@ -1,7 +1,7 @@
 """Load instance-owned runtime facts written during onboarding.
 
 Instance facts (which agent CLI hosts the master, where each runtime keeps
-session transcripts, optional primary product repo) must not be baked into the
+session transcripts, optional product repositories) must not be baked into the
 template. Onboarding writes them to an instance config file; consumers resolve
 values with a fixed fallback order and refuse to invent defaults.
 
@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -32,9 +33,34 @@ MASTER_HOST_RUNTIME_ENV_ALT = "MASTER_HOST_RUNTIME"
 TRANSCRIPT_GLOB_ENV = "MOGUI_TRANSCRIPT_GLOB"
 PRODUCT_REPO_ENV = "MOGUI_PRODUCT_REPO"
 
+# Mirrors RUNTIME_CANDIDATES in master-ops/scripts/dispatch, the only consumer
+# of unavailable_runtimes; the two lists cannot share source across the
+# bash/Python boundary, so a new runtime candidate updates both.
+KNOWN_RUNTIME_CANDIDATES = frozenset({"claude", "codex", "cursor", "grok", "gemini", "opencode"})
+
 
 class InstanceRuntimeConfigError(ValueError):
     """Raised when a required instance runtime fact is unconfigured or invalid."""
+
+
+@dataclass(frozen=True)
+class UnavailableRuntime:
+    """An operator-declared runtime this install cannot dispatch to.
+
+    ``until`` is required: a recurrence guard (reprobing the runtime at every
+    boot) was rejected in review for being fixed-cost and blind between boots;
+    a required expiry date is what replaces it. ``expired`` is a property, not
+    a stored field, so two entries with the same since/why/until still
+    compare equal regardless of when the comparison runs.
+    """
+
+    since: str
+    why: str
+    until: str
+
+    @property
+    def expired(self) -> bool:
+        return date.today() > date.fromisoformat(self.until)
 
 
 @dataclass(frozen=True)
@@ -43,9 +69,11 @@ class InstanceRuntimeConfig:
 
     master_host_runtime: str | None
     transcript_globs: Mapping[str, str]
-    product_repo: str | None
+    product_repositories: tuple[str, ...]
+    unavailable_runtimes: Mapping[str, UnavailableRuntime]
     source_path: Path | None
     transcript_glob_env_override: str | None = None
+    warnings: tuple[str, ...] = ()
 
     def require_master_host_runtime(self) -> str:
         if self.master_host_runtime is None or not self.master_host_runtime.strip():
@@ -77,15 +105,24 @@ class InstanceRuntimeConfig:
             )
         return str(glob).strip()
 
-    def require_product_repo(self) -> str:
-        if self.product_repo is None or not self.product_repo.strip():
+    def require_product_repositories(self) -> tuple[str, ...]:
+        if not self.product_repositories:
             raise InstanceRuntimeConfigError(
-                "product_repo is unconfigured: set "
-                f"{PRODUCT_REPO_ENV}, or write product_repo in the instance "
-                f"config file (default {DEFAULT_RELATIVE_CONFIG_PATH}; override "
-                f"path with {CONFIG_PATH_ENV})"
+                "product_repositories is unconfigured: set "
+                f"{PRODUCT_REPO_ENV}, or write product_repositories (array) or "
+                "product_repo (one-entry string) in the instance config file "
+                f"(default {DEFAULT_RELATIVE_CONFIG_PATH}; override path with "
+                f"{CONFIG_PATH_ENV})"
             )
-        return self.product_repo.strip()
+        # Validated lazily, here, rather than at load(): MOGUI_PRODUCT_REPO is
+        # also used elsewhere in this repo with owner/repo slug semantics
+        # (dispatch-collision-check), and a caller that never asks for product
+        # repositories (e.g. model-identity-probe) must not crash just because
+        # that unrelated env var happens to be set when it loads the config.
+        return tuple(
+            _require_absolute_path(entry, "product_repositories")
+            for entry in self.product_repositories
+        )
 
 
 def default_config_path(repo_root: Path | None = None) -> Path:
@@ -131,33 +168,60 @@ def load_instance_runtime_config(
     payload = _read_payload(config_path)
 
     file_master = _config_optional_str(payload.get("master_host_runtime"), "master_host_runtime")
-    file_product = _config_optional_str(payload.get("product_repo"), "product_repo")
     file_globs = _parse_transcript_globs(payload.get("transcript_globs"))
+    file_unavailable = _parse_unavailable_runtimes(payload.get("unavailable_runtimes"))
 
     master = (
         _optional_str(env.get(MASTER_HOST_RUNTIME_ENV))
         or _optional_str(env.get(MASTER_HOST_RUNTIME_ENV_ALT))
         or file_master
     )
-    product = _optional_str(env.get(PRODUCT_REPO_ENV)) or file_product
     # Env transcript glob is runtime-agnostic so a single override can target
     # the active probe without inventing per-runtime env var names.
     transcript_env = _optional_str(env.get(TRANSCRIPT_GLOB_ENV))
 
+    product_env = _optional_str(env.get(PRODUCT_REPO_ENV))
+    if product_env is not None:
+        # Not validated here: see require_product_repositories(), which is
+        # where this is checked lazily.
+        product_repositories: tuple[str, ...] = (product_env,)
+        warnings: tuple[str, ...] = ()
+    else:
+        product_repositories, warnings = _parse_product_repositories(payload)
+
     return InstanceRuntimeConfig(
         master_host_runtime=master,
         transcript_globs=file_globs,
-        product_repo=product,
+        product_repositories=product_repositories,
+        unavailable_runtimes=file_unavailable,
         source_path=config_path if config_path.is_file() else None,
         transcript_glob_env_override=transcript_env,
+        warnings=warnings,
     )
+
+
+def _reject_duplicate_members(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """object_pairs_hook: json.loads keeps only the last of two identical
+    member names and silently drops the first, so a duplicate (e.g. two
+    "claude" entries in unavailable_runtimes) never reaches the checks below.
+    Catch it here, for any object anywhere in the document."""
+    seen: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in seen:
+            raise InstanceRuntimeConfigError(
+                f"instance runtime config has a duplicate JSON member name: {key!r}"
+            )
+        seen[key] = value
+    return seen
 
 
 def _read_payload(path: Path) -> dict[str, Any]:
     if not path.is_file():
         return {}
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw = json.loads(
+            path.read_text(encoding="utf-8"), object_pairs_hook=_reject_duplicate_members
+        )
     except json.JSONDecodeError as exc:
         raise InstanceRuntimeConfigError(
             f"instance runtime config is not valid JSON: {path}: {exc}"
@@ -191,6 +255,147 @@ def _parse_transcript_globs(value: object) -> dict[str, str]:
             )
         globs[key.strip()] = raw.strip()
     return globs
+
+
+def _parse_unavailable_runtimes(value: object) -> dict[str, UnavailableRuntime]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise InstanceRuntimeConfigError(
+            "unavailable_runtimes must be a JSON object mapping runtime name to "
+            "{since, why, until}"
+        )
+    result: dict[str, UnavailableRuntime] = {}
+    for key, raw in value.items():
+        if str(key).startswith("_"):
+            continue
+        if not isinstance(key, str) or not key.strip():
+            raise InstanceRuntimeConfigError(
+                "unavailable_runtimes keys must be non-empty runtime names"
+            )
+        name = key.strip()
+        if name not in KNOWN_RUNTIME_CANDIDATES:
+            raise InstanceRuntimeConfigError(
+                f"unavailable_runtimes[{name!r}] names a runtime outside the known "
+                f"candidate list: {sorted(KNOWN_RUNTIME_CANDIDATES)}"
+            )
+        if name in result:
+            raise InstanceRuntimeConfigError(
+                f"unavailable_runtimes[{key!r}] duplicates another key that also "
+                f"normalizes to {name!r}"
+            )
+        if not isinstance(raw, dict):
+            raise InstanceRuntimeConfigError(
+                f"unavailable_runtimes[{name!r}] must be an object with since, why, "
+                "and until"
+            )
+        since = raw.get("since")
+        why = raw.get("why")
+        until = raw.get("until")
+        if not isinstance(since, str) or not since.strip():
+            raise InstanceRuntimeConfigError(
+                f"unavailable_runtimes[{name!r}].since must be a non-empty string"
+            )
+        if not isinstance(why, str) or not why.strip():
+            raise InstanceRuntimeConfigError(
+                f"unavailable_runtimes[{name!r}].why must be a non-empty string"
+            )
+        if not isinstance(until, str) or not until.strip():
+            raise InstanceRuntimeConfigError(
+                f"unavailable_runtimes[{name!r}].until must be a non-empty string"
+            )
+        until = until.strip()
+        try:
+            parsed_until = date.fromisoformat(until)
+        except ValueError as exc:
+            raise InstanceRuntimeConfigError(
+                f"unavailable_runtimes[{name!r}].until must be a YYYY-MM-DD date: {exc}"
+            ) from exc
+        # date.fromisoformat also accepts compact (20261008) and week-date
+        # (2026-W41-4) forms; the round trip through isoformat() is what
+        # narrows acceptance down to the documented YYYY-MM-DD shape.
+        if parsed_until.isoformat() != until:
+            raise InstanceRuntimeConfigError(
+                f"unavailable_runtimes[{name!r}].until must be a YYYY-MM-DD date, "
+                f"got {until!r}"
+            )
+        # Consumers print since/why/until as one line each and read them back
+        # by line number (master-ops/scripts/dispatch refuse_unavailable_runtime);
+        # a CR or LF embedded in any of them would shift that readback.
+        if "\r" in since or "\n" in since:
+            raise InstanceRuntimeConfigError(
+                f"unavailable_runtimes[{name!r}].since must not contain CR or LF"
+            )
+        if "\r" in why or "\n" in why:
+            raise InstanceRuntimeConfigError(
+                f"unavailable_runtimes[{name!r}].why must not contain CR or LF"
+            )
+        result[name] = UnavailableRuntime(since=since.strip(), why=why.strip(), until=until)
+    return result
+
+
+def _parse_product_repositories(payload: Mapping[str, Any]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Resolve product_repositories (canonical array) vs product_repo (one-entry string).
+
+    product_repositories wins when both are present, with a warning naming the
+    redundancy. Returns (repositories, warnings).
+    """
+    raw_list = payload.get("product_repositories")
+    raw_string = payload.get("product_repo")
+
+    if raw_list is not None:
+        if not isinstance(raw_list, list) or not raw_list:
+            raise InstanceRuntimeConfigError(
+                "product_repositories must be a non-empty array of absolute paths"
+            )
+        repos_from_list = tuple(
+            _require_absolute_path(entry, "product_repositories") for entry in raw_list
+        )
+        # product_repositories wins outright: a malformed legacy product_repo
+        # must not block a valid array, so it is never validated here, only
+        # checked for presence to raise the redundancy warning.
+        warnings = (
+            (
+                "product_repositories and product_repo are both set in the "
+                "instance runtime config; product_repositories wins and "
+                "product_repo is ignored",
+            )
+            if _product_repo_is_present(raw_string)
+            else ()
+        )
+        return repos_from_list, warnings
+
+    if raw_string is not None:
+        if not isinstance(raw_string, str):
+            raise InstanceRuntimeConfigError(
+                "product_repo must be a string or null in the instance runtime config"
+            )
+        stripped = raw_string.strip()
+        if stripped:
+            return (_require_absolute_path(stripped, "product_repo"),), ()
+
+    return (), ()
+
+
+def _product_repo_is_present(raw_string: object) -> bool:
+    if raw_string is None:
+        return False
+    if isinstance(raw_string, str):
+        return bool(raw_string.strip())
+    return True
+
+
+def _require_absolute_path(value: object, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise InstanceRuntimeConfigError(f"{field} entries must be non-empty strings")
+    stripped = value.strip()
+    expanded = os.path.expanduser(stripped)
+    if not os.path.isabs(expanded):
+        raise InstanceRuntimeConfigError(f"{field} entries must be absolute paths: {stripped!r}")
+    # Only expand "~"; os.path.abspath/realpath would rewrite an already-absolute
+    # POSIX-style path (e.g. "/repo-one") into a drive-rooted Windows path on that
+    # platform, which is not what "expand ~" was asking for.
+    return expanded
 
 
 def _optional_str(value: object) -> str | None:

@@ -15,6 +15,7 @@ Example: "Split one box into four fixed headings so missing reasoning appears as
 - List concrete file-level changes and what is intentionally out of scope.
 - Use bullets only in this section; do not write a paragraph.
 - Rejected: "Updated the template a bit and left other things alone."
+- Add one `risk:` label (low, medium, or high) to the PR, or say here why none fits.
 
 ## Expected effect
 

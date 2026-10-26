@@ -16,6 +16,8 @@ Where we are: the ops repository skeleton exists, and the earlier steps recorded
 
 2. **Placeholder rule:** every `{{...}}` token in the ops repository must receive a confirmed or measured value in this step. The workspace session card is ordinary filled content — do not leave tokens in `workspace-card/`, do not special-case the assertion to ignore it, and **do not record a deferral** for any remaining token. An undecided value stops this step; ask, then fill. Never delete a placeholder to silence a check.
 
+`scripts/template-apply` enforces the rule for these eight registered placeholders only: a write refuses, before the confirmation prompt, if any of `{{WORKSPACE_NAME}}`, `{{WORKSPACE_ROOT}}`, `{{OPS_REPO}}`, `{{MONITOR_NS}}`, `{{MODEL_ID}}`, `{{REPO_LIST}}`, `{{RUNTIME_ROOT}}`, or `{{TEMPLATE_VERSION}}` remains in the substituted text of a planned, non-skipped file, including when a supplied value reintroduces it. Any other `{{...}}` text in a planned file is outside this guard; the `rg` scan in Verify below is what catches that.
+
 3. Deploy the filled session card to the workspace root under both host-recognized names (overwrite both root copies; the ops repository files remain canonical). This is a Run action that happens after fill and before Verify — Verify's session-card `cmp` expects both root files to already exist:
 
 ```console
@@ -24,6 +26,12 @@ deployed
 ```
 
 The root file is outside every git repository. Links inside the card resolve from the workspace root, not from `workspace-card/` — see [workspace-card README](../workspace-card/README.md).
+
+4. Keep the card out of product sessions. Claude Code loads every ancestor `CLAUDE.md` (and `AGENTS.md` too when Project instructions is set to read both), so a session the owner opens inside a product checkout under the root also loads the master's card. `claudeMdExcludes` has no cwd condition, so it cannot go in user settings without also hiding the card from the master. Write it per product checkout instead, in `<repo>/.claude/settings.local.json` (merge with any existing keys), listing both root files by absolute path; the master's root session still loads the card. Entries are globs, so escape any `[`, `]`, `*`, or `?` in the root path. A hand-made `settings.local.json` is not gitignored automatically; make sure the product repo ignores it so the absolute paths are never committed:
+
+```json
+{"claudeMdExcludes": ["{{WORKSPACE_ROOT}}/CLAUDE.md", "{{WORKSPACE_ROOT}}/AGENTS.md"]}
+```
 
 ## Verify
 
@@ -42,7 +50,7 @@ match
 - The first `cmp` is the **ops repository agent instruction pair** only (root `CLAUDE.md` vs `AGENTS.md` inside `{{OPS_REPO}}`).
 - The second `cmp` sequence first checks the **canonical workspace-card pair**, then checks both deployed root copies against their matching canonical files. Never cross-compare those two pairs.
 
-Also verify no source workspace's private names were copied accidentally.
+Also verify each product checkout's `.claude/settings.local.json` lists both root card files under `claudeMdExcludes` and is git-ignored, and that no source workspace's private names were copied accidentally.
 
 ## If fail
 

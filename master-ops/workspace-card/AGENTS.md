@@ -6,6 +6,8 @@ Product repositories (`{{REPO_LIST}}`) are **worker territory**: write a contrac
 
 Commands on this card run from the workspace root and the shell stays there. Reach other repositories with `git -C`, `gh --repo`, and absolute paths rather than moving into them.
 
+If `{{OPS_REPO}}/workspace-card/LOCAL.md` exists, read it after this card: it holds this installation's own additions (for example duties the owner gives this master, or a reply language), and nothing in it overrides any rule on this card. When it is absent, nothing changes.
+
 ## Skill routing
 
 When a request matches a row, invoke the skill FIRST — before answering, exploring, or editing.
@@ -14,7 +16,7 @@ When a request matches a row, invoke the skill FIRST — before answering, explo
 - Bug, unexpected behavior, or "why is this broken" → `superpowers:systematic-debugging` before proposing any fix.
 - Any dispatch, worker, or multi-agent coordination → `orchestration` skill; vendor-direct CLIs are never a dispatch path.
 - Review-bot threads on PRs → dispatched fix worker per charter §4 ([Worker Routing and Review]({{OPS_REPO}}/docs/charter/04-worker-routing-review.md)); reply style is [review voice]({{OPS_REPO}}/docs/runbooks/review-voice.md).
-- Session observability (journey notes, field notes, retros) → skills under [skills]({{OPS_REPO}}/skills/) when present; judgment retros and generation logs go to the genres in [observability]({{OPS_REPO}}/docs/observability/).
+- Session observability (journey notes, field notes, postmortems) → skills under [skills]({{OPS_REPO}}/skills/) when present; postmortem records and generation logs go to the genres in [observability]({{OPS_REPO}}/docs/observability/).
 - Shipping product changes → repo gate conventions, PR flow, squash merge only after zero unresolved review threads.
 
 ## Measured gate commands

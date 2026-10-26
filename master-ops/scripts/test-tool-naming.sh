@@ -44,6 +44,11 @@ self_test() {
     rm -rf "$tmp"; return 2
   fi
   rm -rf "$tmp"
+  if grep -rEl 'ctx\.(zzz)\b' "$tmp/bad.md" >/dev/null 2>&1; then
+    echo "self-test FAILED: a pattern for a different verb matched the known-bad line" >&2
+    rm -rf "$tmp"; exit 2
+  fi
+  echo "self-test: failability: a wrong-verb pattern misses the known-bad line"
   echo "self-test: pattern rejects ctx.sql and accepts mcp__ctx__sql"
   return 0
 }

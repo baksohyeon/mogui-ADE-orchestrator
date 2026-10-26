@@ -1,1 +1,6 @@
-blank_issues_enabled: true
+blank_issues_enabled: false
+contact_links:
+  - name: Security report
+    url: https://github.com/baksohyeon/mogui-ADE-orchestrator/security/advisories/new
+    about: Send a vulnerability report there instead of a public issue; see SECURITY.md.
+

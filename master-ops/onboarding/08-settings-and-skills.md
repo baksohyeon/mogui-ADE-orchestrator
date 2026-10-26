@@ -23,16 +23,17 @@ Wire every shipped hook and skill this template documents, without offering an o
 - PreToolUse: supervised-dispatch bypass warning
 - PreToolUse(Edit|Write|NotebookEdit) and PreToolUse(Bash): fail closed for
   product-repository writes with `scripts/hooks/product-path-guard.sh`; configure
-  the instance `product_repo` path during onboarding before enabling it. The
-  measured Bash inversion is opt-in via `MOGUI_PRODUCT_GUARD_FAIL_CLOSED=1`;
-  it is off by default so an unmeasured allowlist is never the default policy.
-  With the flag on, Bash allows only command classes measured as read-only in
-  the event log when they target product-repository territory; unresolved targets
-  and unmeasured product-targeting commands are denied. If this is a multi-product
-  workspace or the owner declines a primary product, leave the guard unwired
-  until a real primary path is configured; otherwise its fail-closed behavior
-  intentionally blocks all matching tool calls, including operations-repository
-  paths that cannot be classified without a product root.
+  the instance `product_repositories` array (or the one-entry `product_repo`
+  string) during onboarding before enabling it. The measured Bash inversion is
+  opt-in via `MOGUI_PRODUCT_GUARD_FAIL_CLOSED=1`; it is off by default so an
+  unmeasured allowlist is never the default policy. With the flag on, Bash
+  allows only command classes measured as read-only in the event log when they
+  target territory under any listed product repository; unresolved targets
+  and unmeasured product-targeting commands are denied. If the owner declines
+  naming any product repository, leave the guard unwired until at least one
+  real path is configured; otherwise its fail-closed behavior intentionally
+  blocks all matching tool calls, including operations-repository paths that
+  cannot be classified without a product root.
 - PostToolUse: non-sensitive audit markers when locally approved
 - SessionStart: tracker reachability from `{{WORKSPACE_ROOT}}`
 - Shipped skills under `master-ops/skills/` (for example blame-agent) and the recommended methodology / restraint / tracker skill layers named in the stack table below
@@ -71,7 +72,7 @@ Never re-introduce per-item opt-out questions into this onboarding step. Disable
 
 ### Land host answers in the instance runtime config
 
-`transcript_globs` is keyed by **runtime name** (agent CLI name such as `claude` or `codex`), not by machine or host nickname. The optional primary product path is `product_repo` in `{{RUNTIME_ROOT}}/config/instance-runtime.json`. For each runtime name the master or a worker probe will use — at minimum the current `master_host_runtime`, plus any other runtime the owner names for master sessions or that the preflight measured on `PATH` and expects to probe — ensure `transcript_globs.<runtime>` in `{{RUNTIME_ROOT}}/config/instance-runtime.json` is either measured on this machine or explicitly supplied. Prefer measurement: locate that runtime's session JSONL tree when the host exposes one; do not paste another workspace's encoded path. Keep `master_host_runtime` equal to the preflight agent CLI, and update the matching glob key if the owner explicitly changes it. Verify that the configured keys are the runtime names the probe will look up (including `master_host_runtime` itself).
+`transcript_globs` is keyed by **runtime name** (agent CLI name such as `claude` or `codex`), not by machine or host nickname. The optional product repositories are the array `product_repositories` (or the one-entry string `product_repo`) in `{{RUNTIME_ROOT}}/config/instance-runtime.json`. For each runtime name the master or a worker probe will use — at minimum the current `master_host_runtime`, plus any other runtime the owner names for master sessions or that the preflight measured on `PATH` and expects to probe — ensure `transcript_globs.<runtime>` in `{{RUNTIME_ROOT}}/config/instance-runtime.json` is either measured on this machine or explicitly supplied. Prefer measurement: locate that runtime's session JSONL tree when the host exposes one; do not paste another workspace's encoded path. Keep `master_host_runtime` equal to the preflight agent CLI, and update the matching glob key if the owner explicitly changes it. Verify that the configured keys are the runtime names the probe will look up (including `master_host_runtime` itself).
 
 When `--transcript` is omitted, consumers such as `{{RUNTIME_ROOT}}/scripts/model-identity-probe` resolve transcript location with environment override (`MOGUI_TRANSCRIPT_GLOB`) → this config file → unconfigured (exit 2 with an honest message). An explicit `--transcript` still wins over both. They must never fall back to a baked default glob.
 

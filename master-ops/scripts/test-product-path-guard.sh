@@ -8,11 +8,21 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
 product="$TMP/workspace/product"
+product2="$TMP/workspace/product-two"
+# Ends in a digit on purpose: distinguishes a product path whose trailing
+# character happens to be a digit from an attached file-descriptor digit.
+product_digit="$TMP/workspace/product2"
+product_legacy="$TMP/workspace/product-legacy"
 ops="$TMP/workspace/ops"
 link="$TMP/workspace/product-link"
-mkdir -p "$product" "$ops" "$TMP/home" "$TMP/logs"
+mkdir -p "$product" "$product2" "$product_digit" "$product_legacy" "$ops" "$TMP/home" "$TMP/logs"
 ln -s "$product" "$link"
-printf '{"master_host_runtime":"claude","product_repo":"%s"}\n' "$product" >"$TMP/runtime.json"
+product_real=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$product")
+printf '{"master_host_runtime":"claude","product_repositories":["%s","%s","%s"]}\n' "$product" "$product2" "$product_digit" >"$TMP/runtime.json"
+# Legacy one-entry string form must stay covered by a valid fixture: the
+# array fixture above exercises only product_repositories, and the only
+# other product_repo fixture (below) is intentionally malformed.
+printf '{"master_host_runtime":"claude","product_repo":"%s"}\n' "$product_legacy" >"$TMP/runtime-legacy.json"
 
 run_file() {
   local path="$1"
@@ -30,10 +40,44 @@ print(json.dumps({"tool_input": {"file_path": sys.argv[1]}}))
 PY
 }
 
+run_file_override() {
+  local path="$1"
+  python3 - "$path" <<'PY' | HOME="$TMP/home" MOGUI_INLINE_EDIT_OVERRIDE=1 MOGUI_PRODUCT_GUARD_FAIL_CLOSED=0 MOGUI_EVENT_LOG="$TMP/home/.mogui/event-log.jsonl" MOGUI_INSTANCE_RUNTIME_CONFIG="$TMP/runtime.json" MOGUI_HOOK_FIRE_LOG="$TMP/logs/fire.jsonl" "$HOOK" >/dev/null 2>"$TMP/stderr"
+import json, sys
+print(json.dumps({"tool_input": {"file_path": sys.argv[1]}}))
+PY
+}
+
 run_bash() {
   local command="$1"
   local working_directory="${2:-.}"
   python3 - "$command" "$working_directory" <<'PY' | HOME="$TMP/home" MOGUI_INLINE_EDIT_OVERRIDE=0 MOGUI_PRODUCT_GUARD_FAIL_CLOSED=0 MOGUI_PRODUCT_GUARD_ALLOWLIST=/dev/null MOGUI_EVENT_LOG="$TMP/home/.mogui/event-log.jsonl" MOGUI_INSTANCE_RUNTIME_CONFIG="$TMP/runtime.json" MOGUI_HOOK_FIRE_LOG="$TMP/logs/fire.jsonl" "$HOOK" >/dev/null 2>"$TMP/stderr"
+import json, sys
+print(json.dumps({"tool_input": {"command": sys.argv[1], "working_directory": sys.argv[2] if len(sys.argv) > 2 else "."}}))
+PY
+}
+
+# Same shape as run_bash, but against a caller-chosen hook binary; needed by
+# the cd-redirection failability check below to re-run one allowed case
+# against a mutated copy of the guard.
+run_bash_hook() {
+  local hook="$1"
+  local command="$2"
+  local working_directory="${3:-.}"
+  python3 - "$command" "$working_directory" <<'PY' | HOME="$TMP/home" MOGUI_INLINE_EDIT_OVERRIDE=0 MOGUI_PRODUCT_GUARD_FAIL_CLOSED=0 MOGUI_PRODUCT_GUARD_ALLOWLIST=/dev/null MOGUI_EVENT_LOG="$TMP/home/.mogui/event-log.jsonl" MOGUI_INSTANCE_RUNTIME_CONFIG="$TMP/runtime.json" MOGUI_HOOK_FIRE_LOG="$TMP/logs/fire.jsonl" "$hook" >/dev/null 2>"$TMP/stderr"
+import json, sys
+print(json.dumps({"tool_input": {"command": sys.argv[1], "working_directory": sys.argv[2] if len(sys.argv) > 2 else "."}}))
+PY
+}
+
+# Same shape as run_bash_hook, but fail-closed; needed by the cd-redirection-
+# into-root failability check below to re-run one denied case against a
+# mutated copy of the guard under the mode the bug in question is specific to.
+run_bash_hook_strict() {
+  local hook="$1"
+  local command="$2"
+  local working_directory="${3:-.}"
+  python3 - "$command" "$working_directory" <<'PY' | HOME="$TMP/home" MOGUI_INLINE_EDIT_OVERRIDE=0 MOGUI_PRODUCT_GUARD_FAIL_CLOSED=1 MOGUI_PRODUCT_GUARD_ALLOWLIST="$TMP/allowlist.txt" MOGUI_EVENT_LOG="$TMP/home/.mogui/event-log.jsonl" MOGUI_INSTANCE_RUNTIME_CONFIG="$TMP/runtime.json" MOGUI_HOOK_FIRE_LOG="$TMP/logs/fire.jsonl" "$hook" >/dev/null 2>"$TMP/stderr"
 import json, sys
 print(json.dumps({"tool_input": {"command": sys.argv[1], "working_directory": sys.argv[2] if len(sys.argv) > 2 else "."}}))
 PY
@@ -57,11 +101,32 @@ print(json.dumps({"tool_input": {"command": sys.argv[1], "working_directory": sy
 PY
 }
 
+run_bash_default_config() {
+  local command="$1"
+  local working_directory="${2:-.}"
+  python3 - "$command" "$working_directory" <<'PY' 2>/dev/null | HOME="$TMP/home" MOGUI_INSTANCE_RUNTIME_CONFIG= MOGUI_INLINE_EDIT_OVERRIDE=0 MOGUI_PRODUCT_GUARD_FAIL_CLOSED=0 MOGUI_EVENT_LOG="$TMP/home/.mogui/event-log.jsonl" MOGUI_HOOK_FIRE_LOG="$TMP/logs/fire.jsonl" "$HOOK" >/dev/null 2>"$TMP/stderr"
+import json, sys
+print(json.dumps({"tool_input": {"command": sys.argv[1], "working_directory": sys.argv[2] if len(sys.argv) > 2 else "."}}))
+PY
+}
+
+run_raw_payload() {
+  local payload="$1"
+  local fail_closed="${2:-0}"
+  local config="${3:-$TMP/runtime.json}"
+  local hook="${4:-$HOOK}"
+  printf '%s' "$payload" | HOME="$TMP/home" MOGUI_INLINE_EDIT_OVERRIDE=0 MOGUI_PRODUCT_GUARD_FAIL_CLOSED="$fail_closed" MOGUI_EVENT_LOG="$TMP/home/.mogui/event-log.jsonl" MOGUI_INSTANCE_RUNTIME_CONFIG="$config" MOGUI_HOOK_FIRE_LOG="$TMP/logs/fire.jsonl" "$hook" >/dev/null 2>"$TMP/stderr"
+}
+
 expect_blocked() {
   local label="$1" rc
   shift
+  local before after
+  before=$(fire_count)
   "$@"; rc=$?
+  after=$(fire_count)
   [ "$rc" -eq 2 ] || { echo "FAIL: $label rc=$rc" >&2; cat "$TMP/stderr" >&2; exit 1; }
+  [ $((after - before)) -eq 1 ] || { echo "FAIL: $label expected exactly one new fire-log record, before=$before after=$after" >&2; exit 1; }
   grep -q BLOCKED "$TMP/stderr" || { echo "FAIL: $label had no BLOCKED" >&2; exit 1; }
   echo "PASS: $label"
 }
@@ -69,39 +134,639 @@ expect_blocked() {
 expect_allowed() {
   local label="$1" rc
   shift
+  local before after
+  before=$(fire_count)
   "$@"; rc=$?
+  after=$(fire_count)
   [ "$rc" -eq 0 ] || { echo "FAIL: $label rc=$rc" >&2; cat "$TMP/stderr" >&2; exit 1; }
+  [ $((after - before)) -eq 1 ] || { echo "FAIL: $label expected exactly one new fire-log record, before=$before after=$after" >&2; exit 1; }
   echo "PASS: $label"
 }
 
+fire_count() {
+  if [ -f "$TMP/logs/fire.jsonl" ]; then
+    wc -l < "$TMP/logs/fire.jsonl"
+  else
+    echo 0
+  fi
+}
+
+last_verdict() {
+  python3 - "$TMP/logs/fire.jsonl" <<'PY'
+import json, sys
+lines = [ln.strip() for ln in open(sys.argv[1], encoding="utf-8") if ln.strip()]
+print(json.loads(lines[-1]).get("verdict", ""))
+PY
+}
+
+expect_verdict() {
+  local expected="$1" label="$2" got
+  got="$(last_verdict 2>/dev/null || true)"
+  [ "$got" = "$expected" ] || { echo "FAIL: $label verdict expected $expected got ${got:-<none>}" >&2; exit 1; }
+  echo "PASS: $label verdict=$expected"
+}
+
+expect_invalid_input_blocked() {
+  local label="$1"
+  shift
+  expect_blocked "$label" "$@"
+  grep -q "invalid hook input" "$TMP/stderr" || { echo "FAIL: $label missing invalid hook input message" >&2; cat "$TMP/stderr" >&2; exit 1; }
+  expect_verdict block "$label"
+}
+
 expect_blocked file-path run_file "$product/file.txt"
+expect_verdict block file-path
+expect_allowed file-path-override run_file_override "$product/file.txt"
+expect_verdict override file-path-override
 expect_blocked bash-redirection run_bash "echo bad > $product/file.txt"
+expect_verdict block bash-redirection
 expect_blocked bash-cd-and-write run_bash "cd $product && echo bad > file.txt"
+expect_verdict block bash-cd-and-write
 expect_blocked bash-cp run_bash "cp /dev/null $product/file.txt"
+expect_verdict block bash-cp
 expect_blocked bash-mv run_bash "mv $ops/file.txt $product/file.txt"
+expect_verdict block bash-mv
 expect_blocked bash-tee run_bash "tee $product/file.txt"
+expect_verdict block bash-tee
+expect_blocked bash-dd-of-equals run_bash "dd if=/dev/null of=$product/file.txt"
+expect_verdict block bash-dd-of-equals
 expect_blocked bash-opaque-wrapper run_bash "bash -c 'echo bad > $product/file.txt'"
-expect_blocked bash-hidden-relative-wrapper run_bash "sh -c 'cd $product && cp /dev/null file.txt'"
+expect_verdict block bash-opaque-wrapper
+expect_blocked bash-hidden-relative-wrapper run_bash "sh -c 'cd $product_real && cp /dev/null file.txt'"
+expect_verdict block bash-hidden-relative-wrapper
 expect_blocked bash-combined-redirection run_bash "echo bad >& $product/file.txt"
+expect_verdict block bash-combined-redirection
 expect_blocked bash-relative-working-directory run_bash "echo bad > file.txt" "$product"
+expect_verdict block bash-relative-working-directory
+expect_allowed legacy-python3-c-outside-root run_bash "python3 -c 'print(1)'" "$ops"
+expect_verdict pass legacy-python3-c-outside-root
+expect_blocked strict-unparseable-input-block run_raw_payload "not json" 1
+expect_verdict block strict-unparseable-input-block
+expect_invalid_input_blocked strict-json-array-input-block run_raw_payload "[]" 1
+expect_invalid_input_blocked strict-json-string-input-block run_raw_payload '"str"' 1
+expect_invalid_input_blocked strict-json-null-input-block run_raw_payload "null" 1
+expect_invalid_input_blocked strict-tool-input-null-block run_raw_payload '{"tool_input": null}' 1
+
+MUTANT_HOOK="$TMP/product-path-guard-mutant.sh"
+python3 - "$HOOK" "$MUTANT_HOOK" <<'PY'
+import pathlib, sys
+source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+needle = (
+    "if ! printf '%s' \"$input\" | python3 -c 'import json,sys; "
+    "payload=json.load(sys.stdin); tool=payload.get(\"tool_input\") if isinstance(payload, dict) else None; "
+    "raise SystemExit(0 if isinstance(payload, dict) and isinstance(tool, dict) else 1)' >/dev/null 2>&1; then"
+)
+replacement = (
+    "if ! printf '%s' \"$input\" | python3 -c 'import json,sys; json.load(sys.stdin); "
+    "raise SystemExit(0)' >/dev/null 2>&1; then"
+)
+if needle not in source:
+    raise SystemExit("mutant patch anchor not found")
+pathlib.Path(sys.argv[2]).write_text(source.replace(needle, replacement, 1), encoding="utf-8")
+PY
+if [ ! -f "$MUTANT_HOOK" ] || cmp -s "$HOOK" "$MUTANT_HOOK"; then
+  echo "FAIL: mutant not generated" >&2
+  exit 1
+fi
+chmod +x "$MUTANT_HOOK"
+
+(
+  expect_invalid_input_blocked failability-invalid-shape-load-order run_raw_payload "[]" 1 "$TMP/missing.json" "$MUTANT_HOOK"
+)
+mutant_exit=$?
+(
+  expect_invalid_input_blocked failability-invalid-shape-load-order run_raw_payload "[]" 1 "$TMP/missing.json" "$HOOK"
+)
+restored_exit=$?
+[ "$mutant_exit" -eq 1 ] || { echo "FAIL: failability mutant exit expected 1 got $mutant_exit" >&2; exit 1; }
+[ "$restored_exit" -eq 0 ] || { echo "FAIL: failability restored exit expected 0 got $restored_exit" >&2; exit 1; }
+echo "PASS: failability mutant exit code $mutant_exit"
+echo "PASS: failability restored exit code $restored_exit"
+
+expect_allowed legacy-bash-c-outside-root run_bash "bash -c 'echo ok'" "$ops"
+expect_verdict pass legacy-bash-c-outside-root
+expect_allowed legacy-python3-plain-arg-in-root-is-read run_bash "python3 $product_real/probe.py" "$ops"
+expect_verdict pass legacy-python3-plain-arg-in-root-is-read
+expect_blocked legacy-bash-c-relative-cd-into-root run_bash "bash -c 'cd ../product && cp /dev/null x.txt'" "$ops"
+expect_verdict block legacy-bash-c-relative-cd-into-root
+expect_blocked legacy-bash-c-relative-redirect-into-root run_bash "bash -c 'echo bad > ../product/x.txt'" "$ops"
+expect_verdict block legacy-bash-c-relative-redirect-into-root
+expect_blocked legacy-bash-c-relative-clobber-redirect-into-root run_bash "bash -c 'echo bad >| ../product/x2.txt'" "$ops"
+expect_verdict block legacy-bash-c-relative-clobber-redirect-into-root
+expect_blocked legacy-python3-c-inside-root run_bash "python3 -c 'print(1)'" "$product"
+expect_verdict block legacy-python3-c-inside-root
+expect_blocked strict-python3-c-outside-root run_bash_strict "python3 -c 'print(1)'" "$ops"
+expect_verdict block strict-python3-c-outside-root
+expect_allowed legacy-python3-c-redirection-outside-root run_bash "python3 -c 'print(1)' > /tmp/guard-probe.txt" "$ops"
+expect_verdict pass legacy-python3-c-redirection-outside-root
 expect_allowed legacy-read-only run_bash "ls" "$product"
+expect_verdict pass legacy-read-only
 printf 'ls\nrg\n' >"$TMP/allowlist.txt"
 expect_allowed measured-read-only run_bash_strict "ls" "$product"
+expect_verdict pass measured-read-only
 expect_blocked strict-unmeasured-read-only run_bash_strict "cat" "$product"
+expect_verdict block strict-unmeasured-read-only
 expect_blocked strict-write-capable-argument run_bash_strict "find . -exec touch file.txt \\;" "$product"
+expect_verdict block strict-write-capable-argument
 expect_allowed strict-read-search-flag run_bash_strict "rg -i needle" "$product"
+expect_verdict pass strict-read-search-flag
+printf 'git apply\ngit checkout\ngit reset\ngit stash\ngit worktree\n' >>"$TMP/allowlist.txt"
+expect_allowed strict-allowlisted-git-apply-check run_bash_strict "git -C $product apply --check patch.diff"
+expect_verdict pass strict-allowlisted-git-apply-check
+expect_blocked strict-apply-double-dash-check-bypass run_bash_strict "git -C $product apply -- --check"
+expect_verdict block strict-apply-double-dash-check-bypass
+expect_allowed strict-allowlisted-git-worktree-list run_bash_strict "git -C $product worktree list"
+expect_verdict pass strict-allowlisted-git-worktree-list
+expect_blocked strict-stash-message-list-bypass run_bash_strict "git -C $product stash --message list"
+expect_verdict block strict-stash-message-list-bypass
+expect_blocked strict-stash-show-output-flag run_bash_strict "git -C $product stash show --output result.patch"
+expect_verdict block strict-stash-show-output-flag
+expect_blocked strict-stash-show-output-equals run_bash_strict "git -C $product stash show --output=result.patch"
+expect_verdict block strict-stash-show-output-equals
+expect_blocked strict-git-dir-product-metadata-bypass run_bash_strict "git --git-dir=$product/.git --work-tree=$ops checkout -- ."
+expect_verdict block strict-git-dir-product-metadata-bypass
 expect_blocked git-remote-mutation run_bash "git -C $product remote set-url origin https://example.invalid/repo"
+expect_verdict block git-remote-mutation
 expect_blocked git-diff-output run_bash "git -C $product diff --output=result.txt"
+expect_verdict block git-diff-output
+expect_blocked strict-git-reset-hard run_bash_strict "git -C $product reset --hard"
+expect_verdict block strict-git-reset-hard
 expect_blocked sed-relative-product-target run_bash "sed -i $product/file.txt"
+expect_verdict block sed-relative-product-target
 expect_allowed git-remote-show-argument run_bash "git -C $product remote show add"
+expect_verdict pass git-remote-show-argument
+expect_allowed git-blame-is-measured-reader run_bash "git -C $product blame file.txt"
+expect_verdict pass git-blame-is-measured-reader
+expect_allowed git-worktree-list-is-measured-reader run_bash "git -C $product worktree list"
+expect_verdict pass git-worktree-list-is-measured-reader
+expect_allowed git-fetch-is-measured-reader run_bash "git -C $product fetch"
+expect_verdict pass git-fetch-is-measured-reader
+expect_allowed git-branch-show-current-is-measured-reader run_bash "git -C $product branch --show-current"
+expect_verdict pass git-branch-show-current-is-measured-reader
+expect_blocked git-branch-create-is-still-a-write run_bash "git -C $product branch newbranch"
+expect_verdict block git-branch-create-is-still-a-write
 expect_blocked find-exec-shell-wrapper run_bash "find . -exec sh -c 'touch $product/nested.txt' \\;" "$ops"
+expect_verdict block find-exec-shell-wrapper
 expect_blocked git-remote-verbose-update run_bash "git -C $product remote -v update"
+expect_verdict block git-remote-verbose-update
 expect_blocked git-diff-output-equals run_bash "git -C $ops diff --output=$product/result.txt"
+expect_verdict block git-diff-output-equals
 expect_allowed event-log-failure-does-not-block run_bash_event_failure "ls" "$product"
+expect_verdict pass event-log-failure-does-not-block
 expect_blocked git-add run_bash "git -C $product add file.txt"
+expect_verdict block git-add
 expect_blocked git-work-tree run_bash "git --git-dir=$TMP/repo.git --work-tree=$product add file.txt"
+expect_verdict block git-work-tree
+expect_allowed cp-source-in-product-destination-outside run_bash "cp $product/source.txt $ops/out.txt" "$ops"
+expect_verdict pass cp-source-in-product-destination-outside
+expect_blocked install-flagged-destination-in-product run_bash "install -b $ops/source.txt $product/out.txt" "$ops"
+expect_verdict block install-flagged-destination-in-product
+expect_allowed install-source-in-product-destination-outside run_bash "install $product/source.txt $ops/out.txt" "$ops"
+expect_verdict pass install-source-in-product-destination-outside
+expect_allowed install-double-dash-literal-directory-token run_bash "install -- $product/source.txt --directory" "$ops"
+expect_verdict pass install-double-dash-literal-directory-token
+expect_allowed install-attached-suffix-value run_bash "install -Sd $product/source.txt $ops/out2.txt" "$ops"
+expect_verdict pass install-attached-suffix-value
+expect_blocked install-directory-single-target run_bash "install -d $product/newdir" "$ops"
+expect_verdict block install-directory-single-target
+expect_blocked install-directory-multi-target run_bash "install -d $ops/newdir $product/newdir2" "$ops"
+expect_verdict block install-directory-multi-target
+expect_blocked ln-source-in-product-destination-outside run_bash "ln $product/source.txt $ops/out.txt" "$ops"
+expect_verdict block ln-source-in-product-destination-outside
+expect_blocked ln-symbolic-source-in-product-destination-outside run_bash "ln -s $product/source.txt $ops/link.txt" "$ops"
+expect_verdict block ln-symbolic-source-in-product-destination-outside
+expect_blocked ln-single-source-in-product run_bash "ln $product/source.txt" "$ops"
+expect_verdict block ln-single-source-in-product
 expect_blocked symlink-path run_file "$link/file.txt"
+expect_verdict block symlink-path
 expect_allowed outside-read run_bash "printf ok > $ops/file.txt"
+expect_verdict pass outside-read
+expect_blocked file-path-repo-two run_file "$product2/file.txt"
+expect_verdict block file-path-repo-two
+expect_blocked bash-repo-two run_bash "cp /dev/null $product2/file.txt"
+expect_verdict block bash-repo-two
+expect_allowed outside-both-repos run_bash "printf ok > file-two.txt" "$ops"
+expect_verdict pass outside-both-repos
+expect_blocked legacy-string-config-file-path run_file_config "$TMP/runtime-legacy.json" "$product_legacy/file.txt"
+expect_verdict block legacy-string-config-file-path
+expect_allowed legacy-string-config-outside run_file_config "$TMP/runtime-legacy.json" "$ops/file.txt"
+expect_verdict pass legacy-string-config-outside
+
+# Shape 1: heredoc bodies are stripped before tokenizing, so an apostrophe in
+# prose does not unbalance the tokenizer, while a redirect into a product root
+# on the operator's own line is still parsed and still denied.
+expect_allowed heredoc-apostrophe-body-passes run_bash "cat > $ops/out.txt <<'EOF'
+the PR's body
+EOF" "$ops"
+expect_verdict pass heredoc-apostrophe-body-passes
+expect_blocked heredoc-operator-line-redirect-into-root-still-blocks run_bash "cat > $product/out.txt <<'EOF'
+body text
+EOF" "$ops"
+expect_verdict block heredoc-operator-line-redirect-into-root-still-blocks
+expect_allowed heredoc-quoted-angle-brackets-not-misparsed run_bash 'printf "%s\n" "use <<EOF"' "$ops"
+expect_verdict pass heredoc-quoted-angle-brackets-not-misparsed
+expect_allowed heredoc-operator-with-no-space-before-it run_bash "cat<<'EOF' > $ops/out.txt
+the PR's body
+EOF" "$ops"
+expect_verdict pass heredoc-operator-with-no-space-before-it
+expect_blocked heredoc-fed-interpreter-body-writes-into-root run_bash "bash <<'EOF'
+rm -rf $product_real/file
+EOF" "$ops"
+expect_verdict block heredoc-fed-interpreter-body-writes-into-root
+expect_allowed heredoc-fed-interpreter-body-outside-root run_bash "bash <<'EOF'
+echo hello
+EOF" "$ops"
+expect_verdict pass heredoc-fed-interpreter-body-outside-root
+expect_blocked heredoc-fed-interpreter-not-first-token-and run_bash "true && bash <<'EOF'
+rm -rf $product_real/file
+EOF" "$ops"
+expect_verdict block heredoc-fed-interpreter-not-first-token-and
+expect_blocked heredoc-fed-interpreter-not-first-token-semicolon run_bash "cd /tmp; python3 <<'EOF'
+open(\"$product_real/x\", \"w\")
+EOF" "$ops"
+expect_verdict block heredoc-fed-interpreter-not-first-token-semicolon
+expect_blocked heredoc-fed-interpreter-not-first-token-pipe run_bash "echo x | sh <<'EOF'
+rm -rf $product_real/file
+EOF" "$ops"
+expect_verdict block heredoc-fed-interpreter-not-first-token-pipe
+expect_allowed heredoc-fed-interpreter-not-first-token-benign-passes run_bash "true && bash <<'EOF'
+echo hello
+EOF" "$ops"
+expect_verdict pass heredoc-fed-interpreter-not-first-token-benign-passes
+
+# Shape 2: a plain argument beside an interpreter's -c body is a read (the
+# interpreter is only given the path to open); the -c body itself is still
+# fully parsed and a write inside it is still denied.
+expect_allowed python3-dash-c-with-product-path-sibling-arg run_bash "python3 -c 'print(1)' $product_real/dispatch-gate" "$ops"
+expect_verdict pass python3-dash-c-with-product-path-sibling-arg
+expect_blocked python3-dash-c-body-writes-into-root run_bash "python3 -c 'open(\"$product_real/x\", \"w\")'" "$ops"
+expect_verdict block python3-dash-c-body-writes-into-root
+
+# Shape 3: `diff` is a measured legacy reader and may touch a product root to
+# compare against it; `sed -i` on a product path (test sed-relative-product-target
+# above) still blocks since it is write-capable regardless of this addition.
+expect_allowed diff-reads-product-blob-passes run_bash "diff $ops/file.txt $product/file.txt" "$ops"
+expect_verdict pass diff-reads-product-blob-passes
+expect_blocked awk-system-call-not-admitted run_bash "awk 'BEGIN{system(\"touch out\")}' $product/in.txt" "$ops"
+expect_verdict block awk-system-call-not-admitted
+expect_blocked sed-dash-e-write-command-not-admitted run_bash "sed -e 'w $product/out' $product/in.txt" "$ops"
+expect_verdict block sed-dash-e-write-command-not-admitted
+expect_blocked sed-dash-f-external-script-not-admitted run_bash "sed -f script.sed $product/in.txt" "$ops"
+expect_verdict block sed-dash-f-external-script-not-admitted
+# A relative target with a matching working directory, not an absolute path under $product: the
+# scratch $product directory name is a random mktemp suffix, and the guard's sed/awk unsafe-command
+# check scans every non-flag operand (including a file path) for a bare w, W, or e letter between
+# non-letters. That suffix occasionally contains one, which once flipped this case to BLOCKED on a
+# CI runner (rc 2) though it passed locally and on rerun.
+expect_allowed sed-dash-n-print-range-passes run_bash "sed -n '1,5p' in.txt" "$product"
+expect_verdict pass sed-dash-n-print-range-passes
+expect_blocked heredoc-comment-not-misparsed-as-operator run_bash "echo hi # see <<EOF below
+rm -rf $product_real/file
+EOF" "$ops"
+expect_verdict block heredoc-comment-not-misparsed-as-operator
+expect_blocked sort-dash-o-write-into-root run_bash "sort -o $product/out $product/in" "$ops"
+expect_verdict block sort-dash-o-write-into-root
+expect_allowed sort-no-output-flag-passes run_bash "sort $product/in" "$ops"
+expect_verdict pass sort-no-output-flag-passes
+expect_blocked uniq-second-positional-write-into-root run_bash "uniq $product/in $product/out" "$ops"
+expect_verdict block uniq-second-positional-write-into-root
+expect_allowed uniq-single-operand-passes run_bash "uniq $product/in" "$ops"
+expect_verdict pass uniq-single-operand-passes
+expect_blocked xxd-second-positional-write-into-root run_bash "xxd $product/in $product/out" "$ops"
+expect_verdict block xxd-second-positional-write-into-root
+expect_blocked xxd-value-option-shifts-positional-still-blocks run_bash "xxd -s 0x10 $product/in $product/out" "$ops"
+expect_verdict block xxd-value-option-shifts-positional-still-blocks
+expect_allowed xxd-value-option-single-file-passes run_bash "xxd -s 0x10 $product/in" "$ops"
+expect_verdict pass xxd-value-option-single-file-passes
+expect_blocked uniq-value-option-shifts-positional-still-blocks run_bash "uniq -s 2 $product/in $product/out" "$ops"
+expect_verdict block uniq-value-option-shifts-positional-still-blocks
+expect_blocked sed-write-flag-no-space-before-filename run_bash "sed -e 's/a/b/w$product/out' $product/in" "$ops"
+expect_verdict block sed-write-flag-no-space-before-filename
+expect_blocked sed-e-command-not-admitted run_bash "sed '1e whoami' $product/in" "$ops"
+expect_verdict block sed-e-command-not-admitted
+expect_blocked sed-combined-short-flags-with-inplace run_bash "sed -ni '1p' $product/in" "$ops"
+expect_verdict block sed-combined-short-flags-with-inplace
+expect_blocked awk-output-redirect-not-admitted run_bash "awk '{print > \"out\"}' $product/in" "$ops"
+expect_verdict block awk-output-redirect-not-admitted
+expect_blocked awk-pipe-getline-not-admitted run_bash "awk 'BEGIN{\"id\" | getline}' $product/in" "$ops"
+expect_verdict block awk-pipe-getline-not-admitted
+expect_allowed awk-safe-program-passes run_bash "awk '{print \$1}' $product/in" "$ops"
+expect_verdict pass awk-safe-program-passes
+
+# Shape 4: a cd segment may carry a redirection or sit on its own physical
+# line. The operand count ignores a stripped redirection and a newline ends
+# a segment the same way ; does, so a later line's cd is checked on its own
+# merits by the existing legacy-policy and redirection-target checks.
+expect_allowed cd-redirection-then-write run_bash "cd $ops 2>/dev/null && printf ok > $ops/out.txt"
+expect_verdict pass cd-redirection-then-write
+expect_allowed cd-newline-then-write run_bash "cd $ops
+printf ok > $ops/out.txt"
+expect_verdict pass cd-newline-then-write
+expect_blocked cd-redirection-then-write-into-root run_bash "cd $ops 2>/dev/null && printf bad > $product/out.txt"
+expect_verdict block cd-redirection-then-write-into-root
+expect_blocked cd-redirection-into-root run_bash "cd $product 2>/dev/null && ls"
+expect_verdict block cd-redirection-into-root
+expect_blocked cd-newline-second-line-into-root run_bash "cd $ops
+cd $product && ls"
+expect_verdict block cd-newline-second-line-into-root
+expect_blocked cd-redirection-target-into-root run_bash "cd $ops > $product/out.txt"
+expect_verdict block cd-redirection-target-into-root
+
+# Round two: a spaced digit before a redirection operator is a second cd
+# operand, not a dropped file descriptor, so from a product-root cwd it must
+# still deny instead of letting the guard's simulated cwd leave the root
+# while the real shell (which rejects this cd for the same reason) stays in
+# it.
+expect_blocked cd-spaced-digit-operand-bypass run_bash "cd $ops 2 > /dev/null; touch out.txt" "$product"
+expect_verdict block cd-spaced-digit-operand-bypass
+expect_allowed cd-attached-fd-redirection-allowed run_bash "cd $ops 2>/dev/null && ls"
+expect_verdict pass cd-attached-fd-redirection-allowed
+expect_allowed cd-attached-fd-duplication-allowed run_bash "cd $ops 2>&1 >/dev/null && ls"
+expect_verdict pass cd-attached-fd-duplication-allowed
+
+# Round three: a backslash-escaped space right before # is a literal
+# character inside the word, not an unescaped boundary, so the # that
+# follows does not start a comment and the redirection after it still
+# reaches the write check. An unescaped boundary space keeps starting a
+# real comment, which swallows the redirection along with it.
+expect_blocked escaped-space-before-hash-keeps-redirection run_bash "echo foo\ # > $product/x.txt"
+expect_verdict block escaped-space-before-hash-keeps-redirection
+expect_allowed real-comment-swallows-redirection run_bash "echo foo # > $product/x.txt"
+expect_verdict pass real-comment-swallows-redirection
+
+# Round three: a digit stuck to the end of a word is part of that word's
+# text, never a dropped file descriptor, so a product path ending in a
+# digit keeps its text and its root check across an adjacent redirection.
+# A digit separated by a space from its redirection operator is still the
+# attached-fd case this guard already classified (and from a product-root
+# cwd, any literal redirection operator is already blocked on its own,
+# unrelated to the digit analysis, so this stays blocked unchanged).
+expect_blocked product-path-trailing-digit-redirect-still-checked run_bash "git -C $product_digit>/dev/null add file"
+expect_verdict block product-path-trailing-digit-redirect-still-checked
+expect_blocked spaced-fd-digit-redirect-unchanged run_bash "echo x 2>/dev/null" "$product"
+expect_verdict block spaced-fd-digit-redirect-unchanged
+
+# Round three: the fd sentinel this guard injects must stay unique in the
+# text it marks; a sentinel-shaped literal already present in the command
+# is a collision and is denied instead of guessed at.
+expect_blocked sentinel-collision-denied run_bash "cd /outside MOGUICDFDSENTINEL2ENDSENTINEL > /dev/null; touch out.txt" "$product"
+expect_verdict block sentinel-collision-denied
+grep -q "sentinel collision" "$TMP/stderr" || { echo "FAIL: sentinel-collision-denied missing sentinel collision message" >&2; cat "$TMP/stderr" >&2; exit 1; }
+
+# A cd redirection target containing an unexpanded shell expansion reaches
+# the guard as literal text; Bash expands it before opening the file, so the
+# guard must deny instead of resolving the literal text as the real target.
+expect_blocked cd-redirection-target-unexpanded-dollar run_bash "cd $ops > \$DEST/out.txt"
+expect_verdict block cd-redirection-target-unexpanded-dollar
+expect_allowed cd-redirection-target-expanded-literal run_bash "cd $ops > $ops/out.txt"
+expect_verdict pass cd-redirection-target-expanded-literal
+
+# A cd segment's input redirection target reaches the guard as literal text
+# too, and bash expands it the same way before opening the file, so the
+# expansion refusal applies to an input target exactly as it does to an
+# output target.
+expect_blocked cd-input-redirection-target-expansion-denied run_bash 'cd /tmp < "$(touch '"$product"'/pwned; printf /dev/null)"' "$ops"
+expect_verdict block cd-input-redirection-target-expansion-denied
+
+# An unquoted # comment must still end its line at the newline instead of
+# consuming it, or the next physical line's command silently becomes extra
+# arguments to the commented line's own command.
+expect_allowed cd-comment-then-newline-allowed run_bash "cd $ops # note
+ls"
+expect_verdict pass cd-comment-then-newline-allowed
+expect_blocked comment-swallowed-newline-hides-write run_bash "ls # note
+cp a $product/x.txt"
+expect_verdict block comment-swallowed-newline-hides-write
+
+# A cd segment's input redirection is a read, not a write, so its target
+# skips the product-root write check even though it still goes through the
+# operand count and the expansion refusal above.
+expect_allowed cd-input-redirection-allowed run_bash "cd $ops < /dev/null && ls"
+expect_verdict pass cd-input-redirection-allowed
+
+# The cd operand itself reaches the guard as literal text, same as a
+# redirection target; resolve() cannot know where an unexpanded operand
+# sends bash, so it is refused the same way, with or without a redirection
+# on the same segment.
+expect_blocked cd-operand-expansion-with-redirection-denied run_bash 'cd "$PWD/product" >/dev/null; touch pwned.txt' "$TMP/workspace"
+expect_verdict block cd-operand-expansion-with-redirection-denied
+expect_blocked cd-operand-expansion-plain-denied run_bash 'cd $X/y && ls'
+expect_verdict block cd-operand-expansion-plain-denied
+
+# Round four: a cd segment carrying any redirection, output or input, keeps
+# the simulated cwd where it was. Bash resolves that redirection before
+# running the cd builtin and aborts the cd without moving if the target
+# cannot be opened, so advancing current_cwd on that shape assumes a move
+# that may never have happened; a later relative write must still resolve
+# against the old cwd.
+expect_blocked cd-output-redirection-missing-dir-keeps-cwd run_bash "cd /tmp >/no/such/dir/x ; touch pwned.txt" "$product2"
+expect_verdict block cd-output-redirection-missing-dir-keeps-cwd
+expect_blocked cd-input-redirection-missing-file-keeps-cwd run_bash "cd /tmp </no/such/file ; touch pwned.txt" "$product2"
+expect_verdict block cd-input-redirection-missing-file-keeps-cwd
+expect_allowed cd-redirection-no-advance-still-allowed run_bash "cd $ops 2>/dev/null && ls" "$ops"
+expect_verdict pass cd-redirection-no-advance-still-allowed
+
+CD_NO_ADVANCE_MUTANT_HOOK="$TMP/product-path-guard-cd-no-advance-mutant.sh"
+python3 - "$HOOK" "$CD_NO_ADVANCE_MUTANT_HOOK" <<'PY'
+import pathlib, sys
+source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+needle = (
+    "        if not had_redirection:\n"
+    "            current_cwd=target_cwd\n"
+)
+replacement = (
+    "        current_cwd=target_cwd\n"
+)
+if needle not in source:
+    raise SystemExit("cd no-advance mutant patch anchor not found")
+pathlib.Path(sys.argv[2]).write_text(source.replace(needle, replacement, 1), encoding="utf-8")
+PY
+if [ ! -f "$CD_NO_ADVANCE_MUTANT_HOOK" ] || cmp -s "$HOOK" "$CD_NO_ADVANCE_MUTANT_HOOK"; then
+  echo "FAIL: cd no-advance mutant not generated" >&2
+  exit 1
+fi
+chmod +x "$CD_NO_ADVANCE_MUTANT_HOOK"
+
+(
+  expect_blocked cd-no-advance-failability-mutant run_bash_hook "$CD_NO_ADVANCE_MUTANT_HOOK" "cd /tmp >/no/such/dir/x ; touch pwned.txt" "$product2"
+)
+no_advance_mutant_exit=$?
+(
+  expect_blocked cd-no-advance-failability-restored run_bash_hook "$HOOK" "cd /tmp >/no/such/dir/x ; touch pwned.txt" "$product2"
+)
+no_advance_restored_exit=$?
+[ "$no_advance_mutant_exit" -eq 1 ] || { echo "FAIL: cd no-advance mutant exit expected 1 got $no_advance_mutant_exit" >&2; exit 1; }
+[ "$no_advance_restored_exit" -eq 0 ] || { echo "FAIL: cd no-advance restored exit expected 0 got $no_advance_restored_exit" >&2; exit 1; }
+echo "PASS: cd no-advance failability mutant exit code $no_advance_mutant_exit"
+echo "PASS: cd no-advance failability restored exit code $no_advance_restored_exit"
+
+CD_MUTANT_HOOK="$TMP/product-path-guard-cd-mutant.sh"
+python3 - "$HOOK" "$CD_MUTANT_HOOK" <<'PY'
+import pathlib, sys
+source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+needle = (
+    "    if name == \"cd\":\n"
+    "        operands, output_targets, input_targets, had_redirection = strip_cd_redirections(parts)\n"
+    "        if len(operands) != 2:\n"
+    "            print(\"DENY\\tcd\\tcd target cannot be resolved\")\n"
+    "            raise SystemExit\n"
+    "        # resolve() reads a cd operand literally, but bash expands it first, so an operand carrying an expansion character is refused, with or without a redirection.\n"
+    "        if CD_REDIRECTION_TARGET_EXPANSION_RE.search(operands[1]):\n"
+    "            print(\"DENY\\tcd\\tcd target cannot be resolved\")\n"
+    "            raise SystemExit\n"
+    "        if any(CD_REDIRECTION_TARGET_EXPANSION_RE.search(target) for target in output_targets + input_targets):\n"
+    "            print(\"DENY\\tcd\\tredirection target cannot be resolved\")\n"
+    "            raise SystemExit\n"
+    "        if any(under(resolve(current_cwd, target)) for target in output_targets):\n"
+    "            print(\"DENY\\tcd\\tshell redirection is a write\")\n"
+    "            raise SystemExit\n"
+    "        target_cwd=resolve(current_cwd, operands[1])\n"
+    "        if had_redirection and under(target_cwd):\n"
+    "            print(\"DENY\\tcd\\tredirection-bearing cd into a product root cannot be modeled\")\n"
+    "            raise SystemExit\n"
+    "        if os.environ[\"FAIL_CLOSED\"] != \"1\" and under(target_cwd):\n"
+    "            print(\"DENY\\tcd\\tlegacy policy blocks entering product root\")\n"
+    "            raise SystemExit\n"
+    "        if not had_redirection:\n"
+    "            current_cwd=target_cwd\n"
+)
+replacement = (
+    "    if name == \"cd\":\n"
+    "        if len(parts) != 2:\n"
+    "            print(\"DENY\\tcd\\tcd target cannot be resolved\")\n"
+    "            raise SystemExit\n"
+    "        current_cwd=resolve(current_cwd, parts[1])\n"
+    "        if os.environ[\"FAIL_CLOSED\"] != \"1\" and under(current_cwd):\n"
+    "            print(\"DENY\\tcd\\tlegacy policy blocks entering product root\")\n"
+    "            raise SystemExit\n"
+)
+if needle not in source:
+    raise SystemExit("cd mutant patch anchor not found")
+pathlib.Path(sys.argv[2]).write_text(source.replace(needle, replacement, 1), encoding="utf-8")
+PY
+if [ ! -f "$CD_MUTANT_HOOK" ] || cmp -s "$HOOK" "$CD_MUTANT_HOOK"; then
+  echo "FAIL: cd mutant not generated" >&2
+  exit 1
+fi
+chmod +x "$CD_MUTANT_HOOK"
+
+(
+  expect_allowed cd-redirection-failability-mutant run_bash_hook "$CD_MUTANT_HOOK" "cd $ops 2>/dev/null && printf ok > $ops/out.txt"
+)
+cd_mutant_exit=$?
+(
+  expect_allowed cd-redirection-failability-restored run_bash_hook "$HOOK" "cd $ops 2>/dev/null && printf ok > $ops/out.txt"
+)
+cd_restored_exit=$?
+[ "$cd_mutant_exit" -eq 1 ] || { echo "FAIL: cd failability mutant exit expected 1 got $cd_mutant_exit" >&2; exit 1; }
+[ "$cd_restored_exit" -eq 0 ] || { echo "FAIL: cd failability restored exit expected 0 got $cd_restored_exit" >&2; exit 1; }
+echo "PASS: cd failability mutant exit code $cd_mutant_exit"
+echo "PASS: cd failability restored exit code $cd_restored_exit"
+
+# Round two: a mutant that reverts just the sentinel check back to a bare
+# digit regex reproduces the fd-adjacency bug on its own, independent of the
+# rest of the cd-redirection feature the mutant above already covers.
+DIGIT_MUTANT_HOOK="$TMP/product-path-guard-digit-mutant.sh"
+python3 - "$HOOK" "$DIGIT_MUTANT_HOOK" <<'PY'
+import pathlib, sys
+source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+needle = (
+    "        if FD_SENTINEL_RE.match(token) and index + 1 < len(parts) and (\n"
+    "            parts[index + 1] in CD_OUTPUT_REDIRECTION_OPERATORS\n"
+    "            or parts[index + 1] in CD_INPUT_REDIRECTION_OPERATORS\n"
+    "        ):\n"
+    "            index += 1\n"
+    "            continue\n"
+)
+replacement = (
+    "        if re.match(r\"^[0-9]+$\", token) and index + 1 < len(parts) and (\n"
+    "            parts[index + 1] in CD_OUTPUT_REDIRECTION_OPERATORS\n"
+    "            or parts[index + 1] in CD_INPUT_REDIRECTION_OPERATORS\n"
+    "        ):\n"
+    "            index += 1\n"
+    "            continue\n"
+)
+if needle not in source:
+    raise SystemExit("digit mutant patch anchor not found")
+pathlib.Path(sys.argv[2]).write_text(source.replace(needle, replacement, 1), encoding="utf-8")
+PY
+if [ ! -f "$DIGIT_MUTANT_HOOK" ] || cmp -s "$HOOK" "$DIGIT_MUTANT_HOOK"; then
+  echo "FAIL: digit mutant not generated" >&2
+  exit 1
+fi
+chmod +x "$DIGIT_MUTANT_HOOK"
+
+(
+  expect_blocked cd-fd-adjacency-failability-mutant run_bash_hook "$DIGIT_MUTANT_HOOK" "cd $ops 2 > /dev/null" "$product"
+)
+digit_mutant_exit=$?
+(
+  expect_blocked cd-fd-adjacency-failability-restored run_bash_hook "$HOOK" "cd $ops 2 > /dev/null" "$product"
+)
+digit_restored_exit=$?
+[ "$digit_mutant_exit" -eq 1 ] || { echo "FAIL: cd fd-adjacency mutant exit expected 1 got $digit_mutant_exit" >&2; exit 1; }
+[ "$digit_restored_exit" -eq 0 ] || { echo "FAIL: cd fd-adjacency restored exit expected 0 got $digit_restored_exit" >&2; exit 1; }
+echo "PASS: cd fd-adjacency failability mutant exit code $digit_mutant_exit"
+echo "PASS: cd fd-adjacency failability restored exit code $digit_restored_exit"
+
+# Round five: legacy mode already denies any cd into a product root, with or
+# without a redirection, so a redirection-bearing cd into the root was always
+# covered there. Fail-closed mode skips that legacy check, and round four
+# left the simulated cwd outside the root on a redirection-bearing cd, so the
+# cd itself passed unmodeled while the real shell still moved in; a relative
+# write right after then resolved against the stale (outside) simulated cwd
+# instead of the real (inside) one. The new check denies that shape in every
+# mode, right where target_cwd is computed.
+printf 'touch\n' >>"$TMP/allowlist.txt"
+expect_blocked strict-cd-redirection-into-root-blocked run_bash_strict "cd $product >/dev/null ; touch pwned.txt" "$ops"
+expect_verdict block strict-cd-redirection-into-root-blocked
+grep -q "redirection-bearing cd into a product root cannot be modeled" "$TMP/stderr" || { echo "FAIL: strict-cd-redirection-into-root-blocked missing new denial message" >&2; cat "$TMP/stderr" >&2; exit 1; }
+# Same shape without a redirection is unaffected by this round: cd already
+# advances the simulated cwd into the root (fail-closed mode has no legacy
+# check to stop it), and the touch segment that follows is still denied by
+# the pre-existing write-capable check once it lands there.
+expect_blocked strict-cd-no-redirection-into-root-write-blocked run_bash_strict "cd $product ; touch pwned.txt" "$ops"
+expect_verdict block strict-cd-no-redirection-into-root-write-blocked
+expect_blocked legacy-cd-redirection-into-root-blocked run_bash "cd $product >/dev/null ; touch pwned.txt" "$ops"
+expect_verdict block legacy-cd-redirection-into-root-blocked
+
+CD_REDIRECTION_ROOT_MUTANT_HOOK="$TMP/product-path-guard-cd-redirection-root-mutant.sh"
+python3 - "$HOOK" "$CD_REDIRECTION_ROOT_MUTANT_HOOK" <<'PY'
+import pathlib, sys
+source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+needle = (
+    "        target_cwd=resolve(current_cwd, operands[1])\n"
+    "        if had_redirection and under(target_cwd):\n"
+    "            print(\"DENY\\tcd\\tredirection-bearing cd into a product root cannot be modeled\")\n"
+    "            raise SystemExit\n"
+    "        if os.environ[\"FAIL_CLOSED\"] != \"1\" and under(target_cwd):\n"
+)
+replacement = (
+    "        target_cwd=resolve(current_cwd, operands[1])\n"
+    "        if os.environ[\"FAIL_CLOSED\"] != \"1\" and under(target_cwd):\n"
+)
+if needle not in source:
+    raise SystemExit("cd redirection root mutant patch anchor not found")
+pathlib.Path(sys.argv[2]).write_text(source.replace(needle, replacement, 1), encoding="utf-8")
+PY
+if [ ! -f "$CD_REDIRECTION_ROOT_MUTANT_HOOK" ] || cmp -s "$HOOK" "$CD_REDIRECTION_ROOT_MUTANT_HOOK"; then
+  echo "FAIL: cd redirection root mutant not generated" >&2
+  exit 1
+fi
+chmod +x "$CD_REDIRECTION_ROOT_MUTANT_HOOK"
+
+(
+  expect_blocked cd-redirection-root-failability-mutant run_bash_hook_strict "$CD_REDIRECTION_ROOT_MUTANT_HOOK" "cd $product >/dev/null ; touch pwned.txt" "$ops"
+)
+redirection_root_mutant_exit=$?
+(
+  expect_blocked cd-redirection-root-failability-restored run_bash_hook_strict "$HOOK" "cd $product >/dev/null ; touch pwned.txt" "$ops"
+)
+redirection_root_restored_exit=$?
+[ "$redirection_root_mutant_exit" -eq 1 ] || { echo "FAIL: cd redirection root mutant exit expected 1 got $redirection_root_mutant_exit" >&2; exit 1; }
+[ "$redirection_root_restored_exit" -eq 0 ] || { echo "FAIL: cd redirection root restored exit expected 0 got $redirection_root_restored_exit" >&2; exit 1; }
+echo "PASS: cd redirection root failability mutant exit code $redirection_root_mutant_exit"
+echo "PASS: cd redirection root failability restored exit code $redirection_root_restored_exit"
 
 if [ ! -s "$TMP/logs/fire.jsonl" ]; then
   echo "FAIL: MOGUI_HOOK_FIRE_LOG was ignored" >&2
@@ -125,7 +790,7 @@ if seen != {"bash", "file"}:
 PY
 python3 - "$TMP/logs/fire.jsonl" <<'PY'
 import json, sys
-expected = {"ts", "hook", "event", "cwd", "runtime_hint", "session_kind"}
+expected = {"ts", "hook", "event", "cwd", "runtime_hint", "session_kind", "verdict"}
 with open(sys.argv[1], encoding="utf-8") as stream:
     for line in stream:
         record = json.loads(line)
@@ -135,6 +800,20 @@ PY
 
 printf '{"product_repo":"relative/product"}\n' >"$TMP/bad-schema.json"
 expect_blocked bad-schema run_file_config "$TMP/bad-schema.json" "$ops/file.txt"
+expect_verdict block bad-schema
 expect_blocked missing-config run_file_config "$TMP/missing.json" "$ops/file.txt"
+expect_verdict block missing-config
+printf '{"master_host_runtime":"claude","product_repositories":["%s"],"product_repo":"%s"}\n' "$product" "$product_legacy" >"$TMP/runtime-both.json"
+expect_allowed both-fields-warning-outside run_file_config "$TMP/runtime-both.json" "$ops/file.txt"
+expect_verdict pass both-fields-warning-outside
+grep -q "configuration warning: product_repositories and product_repo are both set" "$TMP/stderr" || { echo "FAIL: both-fields-warning-outside missing configuration warning" >&2; cat "$TMP/stderr" >&2; exit 1; }
+printf '{"master_host_runtime":"claude","product_repositories":["%s"],"product_repo":"relative/product"}\n' "$product" >"$TMP/runtime-both-malformed.json"
+expect_blocked both-fields-malformed-legacy-blocked run_file_config "$TMP/runtime-both-malformed.json" "$ops/file.txt"
+expect_verdict block both-fields-malformed-legacy-blocked
+grep -q "cannot load product_repositories" "$TMP/stderr" || { echo "FAIL: both-fields-malformed-legacy-blocked missing load failure message" >&2; cat "$TMP/stderr" >&2; exit 1; }
+expect_blocked unsubstituted-runtime-root-token run_bash_default_config "ls" "$ops"
+expect_verdict block unsubstituted-runtime-root-token
+grep -q "{""{RUNTIME_ROOT}}" "$TMP/stderr" || { echo "FAIL: unsubstituted-runtime-root-token missing token name" >&2; exit 1; }
+grep -q "MOGUI_INSTANCE_RUNTIME_CONFIG" "$TMP/stderr" || { echo "FAIL: unsubstituted-runtime-root-token missing override name" >&2; exit 1; }
 
 echo "product-path-guard regression tests passed"

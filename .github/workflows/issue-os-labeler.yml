@@ -1,0 +1,64 @@
+name: issue-os-labeler
+
+on:
+  issues:
+    types: [opened]
+
+permissions: {}
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    if: contains(github.event.issue.labels.*.name, 'bug')
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const body = context.payload.issue.body || "";
+            const lines = body.split(/\r?\n/);
+            const sections = [];
+            let heading = null;
+            let section = [];
+            for (const line of lines) {
+              const match = line.match(/^###\s+(.*)$/);
+              if (match) {
+                if (heading !== null) {
+                  sections.push([heading, section]);
+                }
+                heading = match[1].trim();
+                section = [];
+              } else if (heading !== null) {
+                section.push(line);
+              }
+            }
+            if (heading !== null) {
+              sections.push([heading, section]);
+            }
+            const osSections = sections.filter(
+              ([name]) => name.toLowerCase() === "operating system"
+            );
+            if (osSections.length !== 1) {
+              return;
+            }
+            const osSection = osSections[0];
+            const value = osSection[1].find((line) => line.trim() !== "");
+            if (value === undefined) {
+              return;
+            }
+            const byValue = {
+              linux: "os:linux",
+              macos: "os:macos",
+              windows: "os:windows",
+            };
+            const label = byValue[value.trim().toLowerCase()];
+            if (!label) {
+              return;
+            }
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: [label],
+            });

@@ -51,7 +51,7 @@ scripts/conversation-redaction-scan [--repo owner/name] [--limit N]
 
 Options:
 - `--repo` - Target repository (default: `$MOGUI_PRODUCT_REPO` or `baksohyeon/mogui-ADE-orchestrator`)
-- `--limit` - Maximum PRs to scan (default: 30, always stated in output)
+- `--limit` - Maximum PRs and maximum issues to scan separately (default: 30 each, so up to 60 items; always stated in output)
 
 Output format (one line per finding):
 ```text

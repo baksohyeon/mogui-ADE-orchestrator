@@ -34,6 +34,9 @@ Do not define incident scope alone. State scope and whether the owner confirmed 
 - `[형성]` context or tool result shaped the action
 - `[판단]` my interpretation and prioritization - **confabulation risk, main culprit**; include at least one rejected alternative
 
+Coverage is mandatory at report time: each of the four labels must have at least one explicit line.
+If a label does not apply, write `not applicable: <reason>` for that label instead of leaving it blank.
+
 Fact = `[관측]` / Why = `[판단]`. No source-less "facts."
 
 ## Evidence (short)
@@ -92,6 +95,14 @@ If not checked, write `미확인` and treat that as fault.
 7. **Roast** - destroy my job failure using user standards (accuracy, record, trust). Harsh. No flattery
 8. **재발방지** x3 - trigger -> signal to check -> stop condition on failure
 9. **싹싹 사죄** 2~3 lines + one compensation action
+
+For item 6, include this fixed measurable schema (one line per field):
+- `turns_to_discovery`: turns between incident and discovery
+- `user_interventions_count`: count of user interventions
+- `workaround_attempts_count`: count of attempts to work around a block
+- `violation_counts_by_discipline`: machine-scored counts and prose counts separated by discipline type
+- `time_to_restore`: elapsed time from incident start to restore
+If any tracker candidate is omitted, add one explicit omission note with reason in item 6.
 
 ## Submission (required - do not end at chat output only)
 

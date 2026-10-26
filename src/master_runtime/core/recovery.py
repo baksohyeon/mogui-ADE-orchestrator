@@ -279,7 +279,7 @@ def _step0(
     actions = tuple(
         "Session lease warning: " + warning
         for warning in warnings
-        if warning.startswith("DUAL_INSTANCE:")
+        if warning.startswith(("DUAL_INSTANCE:", "SEAT_PEER:"))
     )
     return RecoveryStep(step="0", status=status, evidence=evidence, manual_actions=actions)
 

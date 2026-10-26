@@ -155,3 +155,24 @@ def test_frame_hygiene_exempts_excluded_files(tmp_path: Path):
     assert result.returncode == 0, result.stderr
     data = json.loads(result.stdout)
     assert data["files"] == ["MANIFEST.json", "ok.md"]
+
+
+def test_changelog_fragment_not_in_manifest(tmp_path: Path):
+    skeleton = tmp_path / "master-ops"
+    skeleton.mkdir()
+    (skeleton / "TEMPLATE-VERSION").write_text("v0.0.0\n", encoding="utf-8")
+    (skeleton / "ok.md").write_text("clean\n", encoding="utf-8")
+    changelog_d = skeleton / "changelog.d"
+    changelog_d.mkdir()
+    (changelog_d / "README.md").write_text("fragments live here\n", encoding="utf-8")
+    (changelog_d / "2026-01-01-a-thing.md").write_text(
+        "A thing (2026-01-01):\n\n- did it\n", encoding="utf-8"
+    )
+    result = subprocess.run(
+        [sys.executable, str(GENERATOR), "--skeleton", str(skeleton), "--stdout"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+    assert data["files"] == ["MANIFEST.json", "ok.md"]

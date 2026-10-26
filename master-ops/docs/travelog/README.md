@@ -4,7 +4,7 @@ status: active
 
 # Travelog
 
-A per-generation journey log. Where the retro ledger holds judgment and misjudgment, the
+A per-generation journey log. Where the postmortem ledger holds judgment and misjudgment, the
 travelog holds the itinerary — where the master went, what it actually ran, and what came
 back. When a master says it "verified" something, this is where the reader learns what it
 actually executed.

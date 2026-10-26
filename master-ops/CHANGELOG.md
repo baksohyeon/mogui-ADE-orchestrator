@@ -20,9 +20,15 @@ That reads installed `MANIFEST.json` (version plus required paths). Compare
 against a live template with `--template <path-to-skeleton>`. This changelog
 file is not in the generated repository — Step 3 keeps it on the template side.
 
-When a change touches `master-ops/`, add an entry under `## Unreleased` in the
-same change. `TEMPLATE-VERSION` moves only when a release is cut, and it holds
-that release's tag string. The repository's existing scheme continues, so the
+When a change touches `master-ops/`, add a fragment under
+`master-ops/changelog.d/<YYYY-MM-DD>-<slug>.md` in the same change (a change touching only
+`changelog.d/` or only `CHANGELOG.md` is exempt), holding what
+would have been the `## Unreleased` entry: concurrent pull requests would
+otherwise all edit the same lines under that heading and re-conflict on every
+squash. `scripts/changelog-release` folds every fragment into `## Unreleased`,
+newest first, when the owner cuts a release; nothing folds them at merge time.
+`TEMPLATE-VERSION` moves only when a release is cut, and it holds that
+release's tag string. The repository's existing scheme continues, so the
 release after `v0.1.0` is `v0.2.0`. Merging a change is not releasing it, and
 between releases this file keeps whatever the last release left in it.
 
@@ -41,6 +47,595 @@ not the exact body it received. When the difference matters, record the commit t
 installation was taken from alongside the tag.
 
 ## Unreleased
+
+## v0.5.265
+
+Release v0.5.265 (2026-10-24): `master-ops/TEMPLATE-VERSION` and `master-ops/MANIFEST.json` move to v0.5.265 alongside the changelog fold.
+
+`codex_hooks_vet_homes` in `master-ops/scripts/dispatch` skipped every codex home with no `hooks.json` and returned 0 when every home was skipped, so a codex "Hooks need review" modal triggered by a hook source outside its enumerated homes was auto-answered with no hook command ever read. It now counts the homes it actually measured and fails closed, printing one line and returning 1, when that count is zero; a measured-and-passing or measured-and-failing set behaves exactly as before. `codex --help`, `codex plugin list --help`, `codex doctor --all`, and a read-only listing under `~/.codex` found no single plugin-hooks home in the shape the function already enumerates, only a per-marketplace, per-plugin, per-version cache that grows as plugins install, so that gap stays documented as found and nothing was guessed. `master-ops/scripts/test-dispatch-runtime.sh` gained the `all_homes_missing` and `one_home_measured` cases plus a failability line for the new guard, and `master-ops/docs/runbooks/worker-wait.md` now describes the refusal instead of the old no-file explanation.
+
+A contract may now open with a typed front matter block (`tier`, `runtime`, `repo` required; `budget`, `writes`, `standing_rules` optional), parsed and validated in `DispatchGate.check` before any Orca call. An unknown key, a missing required key, or a malformed line all refuse with `CONTRACT_FRONT_MATTER`; a declared tier or runtime that does not match the dispatch refuses with `CONTRACT_TIER_MISMATCH` or `CONTRACT_RUNTIME_MISMATCH`, a runtime that is not eligible for the declared tier refuses with `RUNTIME_NOT_ELIGIBLE` (eligible means the runtime appears in the policy's `runtimes` list and the declared tier exists, the same list for every tier until the policy carries a runtime-to-tier join), and an unrecognized `standing_rules` name refuses with `STANDING_RULE_UNKNOWN`; a contract with no block only warns (`CONTRACT_FRONT_MATTER_MISSING`) this release. The validated object is exposed on `GateDecision.front_matter` and in the CLI's JSON (never the raw form behind a refusal), so `master-ops/scripts/dispatch` reads named `standing_rules` blocks straight off the gate's own recorded check instead of re-parsing the contract, and appends each block's text to the dispatched spec, checking the never-overwritten instance overlay `master-ops/config/standing-rules.overlay.md` first and the template-layer `master-ops/rules/standing-rules.md` second, so the overlay's own text wins when both name the same block. Five canonical blocks ship: `headless`, `ack-token`, `placement`, `voice`, `pr-house`.
+
+`master-ops/scripts/dispatch`'s unicode prompt marker now also matches a fresh `claude` pane's placeholder arrow line (the arrow, a no-break space, then `Try "..."`, measured 2026-10-23), so a pane whose prompt never emptied is no longer read as `unknown` before an inject even lands. `delivery_result` takes a third argument, the dispatch record's own status, and reports a new `done` class when that status reads `completed` even while the pane sits back on a prepared prompt, which is what a worker finishing inside the delivery window actually looks like; the printed line carries the new `status=` field alongside `pre=`, `post=`, and `class=`. `master-ops/scripts/dispatch-smoke`'s `normal_case_verdict` treats `done` as a pass like `agent-started`, and folds a `completed` dispatch status into its `unknown` verdict so the seat reads one combined line instead of two that disagree. The runbook table and both test suites cover the new class and the folded verdict, each with a failability line.
+
+`master-ops/scripts/loop-check` now rejects a negative `compactions-seen` header value as malformed, naming line 5, matching the existing check on a negative `--compactions` count. The loop runbook's pick step now excludes every id already in the progress table, whatever its state, so a finished or blocked row is never picked again, and the round's `--ready-count` applies the same exclusion so the count and the pick pool always agree. The runbook's dispatch step now checks the owner's stop file before dispatching a contracted row, and section 5's drain step says a `contracted` or `picked` row needs no drain since nothing has been dispatched yet.
+
+`master-ops/docs/runbooks/dispatch-smoke.md`'s exit table now matches `scripts/dispatch-smoke` on two rows: the gate row splits `task-count-unreadable` from `top-tier-refusal` and `runtime-unavailable`, since the script prints only the `before:`/`after:` task counts for that step and writes no `failure.log` line for it, and the isolation row gains `no-scratch-ledger-row` for an empty scratch ledger after a passing wrapper run. `master-ops/docs/runbooks/host-harness-inventory.md`'s seam paragraph now says the `MOGUI_STATE_DIR` check runs before any state operation, matching the wrapper's own order: the instance runtime config read and argument parsing both run first.
+
+`scripts/test-dispatch-smoke.sh` failed in an installed copy: its unrendered-wrapper fixture spelled `{{OPS_REPO}}` and `{{RUNTIME_ROOT}}` literally, so `template-apply` replaced them with the instance's paths at install time, `wrapper_is_rendered` then answered `RENDERED`, and the assertion that the fixture is refused failed; measured when an installed instance merged v0.5.254 (CI runs the unrendered tree, so it passed there). The fixture now splits the braces as `'{''{'` so substitution sees no token and the shell joins them back into a literal template token at run time. The matching `FAIL:` and `ok   :` lines name "an unrendered RUNTIME_ROOT token" instead of a token rendering would rewrite. The test passes both in the repository tree and in a copy rendered by `template-apply --write`.
+
+## v0.5.258
+
+Release v0.5.258 (2026-10-23): `master-ops/TEMPLATE-VERSION` and `master-ops/MANIFEST.json` move to v0.5.258 alongside the changelog fold.
+
+`_detect_dual_instances` in `src/master_runtime/core/bootstrap.py` warned only about another `claude` process whose argv carried the booting session's own id, so a second `claude` started at the same seat root under a different session id was invisible by design; measured by a peer seat with a second session at its root since 2026-10-18 15:23 while eleven boots printed `[DUAL-INSTANCE] none`.
+A new `SEAT_PEER:<pid>` boot line now covers any other process whose argv[0] basename is `claude` and whose current directory, resolved with `realpath`, equals the seat root (a new optional `seat_root` on `BootstrapConfig`, defaulting to `os.getcwd()`), whatever its session id.
+The detector excludes its own pid and the nearest `claude` ancestor found by walking `ppid` from `os.getpid()`; if that walk fails, only the own pid is excluded, so matching peers can still appear.
+The process, cwd, and ancestor probes are all injectable for tests.
+`strict_lease=True` rejects `SEAT_PEER:` the same way it already rejected `DUAL_INSTANCE:`, and `recovery.py` treats both prefixes the same at its Step 0 check.
+
+Added `scripts/loop-check PROGRESS_FILE [--now ISO] [--ready-count N] [--compactions N] [--stop-file PATH]`, which reads a loop progress file and its own arguments only (no `orca`, `bd`, `gh`, or `git`).
+It evaluates the six stop conditions in order: the round budget spent, the wall-clock budget spent, no eligible item open, two consecutive failures, a worker question or escalation or the owner's stop file, and a compaction passed since the start line.
+It prints one `continue round=<n> ...` or `stop reason=<k>: ...` line and exits 0, 3, or 2: a malformed file names its line; a malformed option names the option.
+`test-loop-check.sh` covers each stop condition, including the escalation and malformed-option cases, with a failability line per condition.
+[`docs/runbooks/loop.md`](docs/runbooks/loop.md) is the procedure the master follows around it, linked from `host-harness-inventory.md`.
+
+`scripts/redaction-scan.sh` fixed its working directory to its own repository, so a caller in another repository that ran it with `--staged` scanned this repository's empty index and read `clean` with `files=0`; measured when a gate wired this script as its staged credential lane and that lane scanned nothing while gitleaks run directly on the same staged file found the planted key. `--repo-root PATH`, or `REDACTION_REPO_ROOT` for callers that cannot pass a flag (the flag wins when both are set), names the repository to scan instead: every `git` call and every finding path is relative to it. Unset, the target stays the script's own repository, exactly as before. The gitleaks config (`config/gitleaks.toml`) keeps resolving against the script's own repository regardless of the target; a relative `REDACTION_EXTRA_PATTERNS`, `--allowlist`, or `REDACTION_ALLOWLIST` value resolves against the caller's own invocation directory instead, since that is where the caller typed the path. Both summary lines now carry `root=<target top level>` so a caller can see what was scanned. A target that is not inside a git work tree prints one stderr line naming the flag and the value and exits 2 before any scan, as does `--repo-root` given an empty or missing operand. Inherited `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_COMMON_DIR`, `GIT_OBJECT_DIRECTORY`, and `GIT_ALTERNATE_OBJECT_DIRECTORIES` are unset before the target is resolved, so they cannot point any `git` call, or its object lookup, at another repository. A failure enumerating files or commits exits 2 with the mode or range named; it no longer scans zero and reads `OK`.
+
+## v0.5.254
+
+Release v0.5.254 (2026-10-17): `master-ops/TEMPLATE-VERSION` and `master-ops/MANIFEST.json` move to v0.5.254 alongside the changelog fold.
+
+`master-ops/scripts/dispatch-smoke`, a new seat-run check, drives the real `scripts/dispatch` wrapper through one deterministic top-tier refusal and one real haiku worker under the `MOGUI_STATE_DIR` seam, and prints `smoke PASS` or a `smoke FAIL` verdict; failures may identify gate, orca, register, delivery, wrapper, worker, contract-read, timeout, or isolation (precondition failures are reported separately). It covers only the wrapper's created-pane path for `--runtime claude`; the reused-pane path, codex and cursor, and worker output quality stay out of scope. `master-ops/scripts/test-dispatch-smoke.sh` extracts the script's pure functions (the milestone parser and layer verdict, the isolation comparison, the expected-token derivation, and the precondition that refuses an unrendered wrapper) and runs them under CI with no Orca, no network, and no `claude`. `master-ops/docs/runbooks/dispatch-smoke.md` documents the localization table, exit codes, what `MOGUI_STATE_DIR` isolates and what stays shared by design, and the Orca field vocabulary measured for this contract.
+
+`MOGUI_STATE_DIR`, a new environment override, redirects a dispatch's mutable state off `~/.mogui` without moving `$HOME`: the dispatch ledger, the delivered-contract copies, the gate's tickets and known roots, and the event log. `master-ops/scripts/dispatch`, `src/master_runtime/core/dispatch_gate.py`, `src/master_runtime/core/dispatch_timeline.py`, `master-ops/scripts/mogui_log.py`, `master-ops/scripts/worker-wait`, `master-ops/scripts/dispatch-collision-check`, and `master-ops/scripts/workstream-render.sh` all derive their state paths from it. Unset or empty, every default is exactly what it was before; set, it must be an absolute path to an existing directory, checked before any other work, one line on stderr naming the variable and the value, exit 1 (`SystemExit(1)` from the Python CLI entries). `mogui_log.py`'s `emit` keeps its fail-open contract: a bad value there writes the one stderr line and returns the same minimal fallback event dict its exception path returns, writing no file. No script creates the directory; the caller owns it, and production never sets the variable. This is the precondition for the next contract's `master-ops/scripts/dispatch-smoke`.
+
+`master-ops/scripts/dispatch` skipped pre-trust on a reused pane: `--terminal` alone, with no `--worktree`, left `WORKTREE` empty, so the selected runtime's pre-trust helper rejected the empty path and dispatch exited 2 before the recording gate, for every claude, codex, and cursor dispatch onto a reused pane. The three helpers now run only when there is something to pre-trust; a reused pane with no worktree named skips them and prints `pre-trust · skipped · pane reused, nothing launched; the post-inject pane check still catches a trust gate`, and the post-inject `hook-trust` classification still catches a trust dialog on that pane. A reused pane with no worktree also never auto-answers the codex hooks-review modal, because `codex_hooks_vet_homes` cannot measure project hooks without one and now fails closed.
+
+`master-ops/model-tier-policy.json` lists `gpt-6.1-sol` in `tiers.efficient`, right after `gpt-5.6-luna`, so a dispatch naming it records the efficient tier instead of `tier=unknown` with `TIER_UNKNOWN_MODEL`. `gpt-5.6-luna` stays the first efficient gpt id, so the dispatch default for an unnamed codex model is unchanged. This applies when dispatch resolves the template policy at `master-ops/model-tier-policy.json`; an instance with its own `config/model-tier-policy.json` still classifies `gpt-6.1-sol` as unknown until it adds the id there itself.
+
+## v0.5.249
+
+Release v0.5.249 (2026-10-12): `master-ops/TEMPLATE-VERSION` and `master-ops/MANIFEST.json` move to v0.5.249 alongside the changelog fold.
+
+`scripts/changelog-fragment-check` now exempts a release-shaped diff from the added-fragment requirement: when every `master-ops/` path changed outside `changelog.d/` is `CHANGELOG.md`, `TEMPLATE-VERSION`, or `MANIFEST.json`, and at least one root fragment is deleted, the gate exits 0 with no fragment of its own; a `TEMPLATE-VERSION` or `MANIFEST.json` bump with no fragment deleted still needs one, and `master-ops/scripts/test-changelog-fragment-check.sh` carries two new cases plus a failability line for the deleted-fragment condition.
+
+Lands the seven round-three rows from `docs/reports/test-gaps-2026-10-07.md`. Row 6 adds a
+`tests/test_dispatch_gate.py` case pinning that `--ledger` given after the subcommand already exits 2
+on argparse's own unrecognized-arguments refusal and writes no file in the cwd. Row 7 fixes a live
+`IndexError` in `dispatch_gate.py`'s `_registration_candidate`: registering once without
+`--contract-sha` leaves that ticket's file on disk, and registering again with its contract sha hit an
+unguarded `matching_pending` lookup; the guard now matches its two sibling branches. Row 9 adds a
+`tests/test_changelog_release.py` case pinning that a fragment added after a release's own fold still
+carries over whole into the next fold. Row 8 adds `scripts/test-contributing-shell-loop.sh`, extracting
+`CONTRIBUTING.md`'s documented shell-test loop at runtime and replaying it against a failing and a
+passing fixture script. Row 10 fixes `scripts/worker-pane-sweep` to classify from the lines at and
+after a pane's last prompt line, so an approval marker left in scrollback above a now-idle prompt no
+longer reports a false `ACTION approval`. Row 11 hardens `scripts/test-product-path-guard.sh`'s
+`sed-dash-n-print-range-passes` case against the guard's unsafe-command check reading a bare `w`, `W`,
+or `e` in the scratch temp path's random name. Row 12 makes `scripts/test-bash-output-size-warn.sh`
+resolve the real `python3` before swapping `$HOME`, so a mise-managed shim no longer installs a Python
+mid-test and leaks its banner into the captured output.
+
+`template-apply` collects, at plan time, which documented placeholder tokens the planned write set's substituted text still carries, and refuses the write while any of them remains. `plan_actions` marks instance-owned and refused paths as skipped or refused, leaving only template-layer paths as planned and write-eligible; `scripts/template_common.py` stays planned among them and is written byte-for-byte, and `missing_placeholders` skips reading it only for token-scanning because it is never substituted. A `--write` run without `--placeholder OPS_REPO=...` against a founded install used to exit 0, write every file, and leave `OPS={{OPS_REPO}}` in `scripts/dispatch` for `test-dispatch-multi-vendor-host.sh` to trip over later as a `FileNotFoundError`. The write pass now prints the missing set and exits 2 before the confirmation prompt and writes nothing, the same could-not-decide status `template-check` already uses for an unreadable input; a dry run with the same gap prints the same report and exits 2. A supplied key that no planned file uses stays unreported, and a token in a skipped or refused file is never counted toward the gap.
+
+Upgrade apply will not overwrite living records that an existing installation customizes in place: operating cards (`AGENTS.md`, `CLAUDE.md`), `docs/MASTER-OPERATIONS.md`, the closed-decisions ledger, the succession boot card, the boot comparison set, and the local self-check and compaction scripts. They stay in the manifest so presence is still required; apply refuses them by name the same way it refuses role-state. `scripts/template_common.py` is copied without placeholder substitution so the token registry cannot be rewritten into installation values.
+
+Makes `until` a required `YYYY-MM-DD` field of every `unavailable_runtimes` entry: an entry past its `until` date is expired, and dispatch stops refusing the runtime it names, printing one line on stderr naming the expired entry and dispatching anyway; `config/instance-runtime.example.json`, `01-preflight.md`, and `reverify.md` document the field, and an expired entry is removed or re-dated by the owner on reverify.
+
+Adds an optional `unavailable_runtimes` key to `config/instance-runtime.json`: dispatch refuses a listed runtime with its reason and the remaining alternatives, and drops it from the default pick and the alternatives list; the host-diversity audit row in the ledger now carries the names. The unavailable-runtime helpers and `default_model_for_runtime` pass the runtime name and the config contents into Python through `sys.argv`, never interpolated into the source: a crafted `--runtime` value is data, never code. A config file that is missing, or missing the key, is "no entries" and dispatch proceeds; unreadable JSON, a non-object `unavailable_runtimes` value, a non-object entry, or a non-string, empty, or CR/LF-carrying `since` or `why` is malformed, and dispatch refuses closed with `✗ invalid unavailable_runtimes in <path>: <reason>`, on the explicit `--runtime` path and the default-pick path alike, under `--check-only` too. Empties `config/instance-runtime.example.json`'s `unavailable_runtimes` map so copying the example declares no outage; the entry shape stays documented in `_docs`. Fixes `reverify.md`'s instance config path to match `01-preflight.md`'s spelling, and names the six accepted runtime names in `01-preflight.md`'s schema sentence.
+
+Adds `docs/reports/test-gaps-2026-10-07.md`: maps the twelve behaviours that broke in the last two weeks
+to what pins each one now, classifying each row (`covered`, `pytest`, `shell-inline`, `out-of-harness`,
+`fix-flaky`) and placing the gaps under `CONTRIBUTING.md`'s "Adding a test" rules for round three. Finds
+two live bugs (`dispatch-gate register`'s `IndexError` on a stale ticket, `worker-pane-sweep`'s false
+`approval` verdict from a resolved dialog's scrollback) and one live flake: the `small result` case in
+`test-bash-output-size-warn.sh` already exercises the hook under a scratch `HOME` and fails on this
+install, so it guards nothing until the fix lands (`fix-flaky`).
+
+Adds `docs/reports/upgrade-rehearsal-2026-10-07.md`: a full dry-run-then-write rehearsal of Upgrade mode against a scratch clone of the ops repository at v0.5.230, finding that `template-apply` silently ships unsubstituted `{{...}}` placeholders with no `--placeholder` supplied (one of them load-bearing in `scripts/dispatch`'s executable source), that it has no awareness of `config/template-retirements.json` and recreates a file the ops install deliberately retired, and that in this run refusal-by-name only matched `docs/runbooks/role-state.md` among the five named instance-owned paths, because the template's manifest ships no entry under the other four prefixes today.
+
+## v0.5.239
+
+Release v0.5.239 (2026-10-07): `master-ops/TEMPLATE-VERSION` and `master-ops/MANIFEST.json` move to `v0.5.239` alongside the changelog fold, satisfying the `changelog-fragment-check` gate for a release commit that touches `master-ops/` outside `changelog.d/`.
+
+`dispatch` now runs `scripts/claude-worker-pretrust` before a claude launch, the same way it already does for codex and cursor: the script writes `hasTrustDialogAccepted: true` into the `projects["<absolute worktree>"]` entry of `CLAUDE_CONFIG_PATH` (defaulting to `~/.claude.json`), measured against a scratch install of Claude Code accepting its own folder-trust dialog, and `HOOK_TRUST_MARKERS` now recognizes that dialog's wording ("Quick safety check...", "pre-approves ... tool permissions...") so a pane still carrying it classifies as hook-trust instead of reporting a false delivery success.
+
+Adds `docs/reports/test-audit-2026-10-06.md`: a case-by-case audit of the dispatch template's test
+suites (`scripts/test-dispatch-runtime.sh`, `scripts/test-dispatch-timeline.sh`,
+`scripts/test-worker-wait.sh`, and the orchestrator's `tests/test_dispatch_gate.py`), re-deriving round
+one's result for the runtime suite and adding an assertion-based pass for `test_dispatch_gate.py` after
+round one's exhaustive-mutation approach to it was terminated unfinished at 600 seconds. No deletion; the
+report finds every measured case earns its keep.
+
+`test-dispatch-timeline.sh` resolves its runtime root from `MOGUI_RUNTIME_ROOT` when set, then the two-up layout when `scripts/dispatch-timeline` exists there, then prints `SKIP: runtime root not found (set MOGUI_RUNTIME_ROOT)` and exits 0 instead of failing an install's suite for a runtime checkout it cannot see.
+
+`codex_hooks_vet` tokenizes each hook command with `shlex.shlex(command, posix=True, punctuation_chars=True)` instead of `shlex.split`, so a quoted path immediately followed by `;`, `&&`, `||`, `|`, `(`, `)`, `<`, or `>` tokenizes as a clean path plus a separate punctuation token instead of fusing the punctuation onto the path and failing the existence check; this restores the hooks-review modal answer on every host whose Codex hooks carry an Orca-managed hook command shaped that way.
+
+`dispatch` now launches codex with its reasoning effort pinned, update checks on startup disabled, and the one measured model-migration pair acknowledged, then reads the pane's own model/effort footer up to three times before injecting. A start screen it cannot recognize (a migration menu, a limit notice, an update prompt, or a footer that does not match the request) fails the dispatch closed instead of swallowing the spec.
+
+`dispatch_gate`'s default ledger path now matches `dispatch_timeline` and the `worker-wait` docs (`~/.mogui/dispatch-ledger.jsonl`), so a direct `dispatch-gate register` without `--ledger` is no longer invisible to `worker-wait`.
+
+`dispatch` now answers codex's "Hooks need review" start-screen modal itself, under dispatch authority, once `codex_hooks_vet_homes` accepts every hook command on the host's Codex homes: the listed shell keywords and builtins as first words, every other first word on PATH, and every absolute path on disk; a vet failure or any other selection menu still takes the existing exit-3 path instead of answering.
+
+Succession boot card step 4 now tells the owner the predecessor stays alive before any measurement, then runs the retirement handshake to CLOSED before the test and drift sweep and not after, so the owner no longer reads the sweep's duration as a stall.
+
+## v0.5.230
+
+Release v0.5.230 (2026-10-01): `master-ops/TEMPLATE-VERSION` and `master-ops/MANIFEST.json` move to `v0.5.230` alongside the changelog fold, satisfying the `changelog-fragment-check` gate for a release commit that touches `master-ops/` outside `changelog.d/` and `CHANGELOG.md`.
+
+Release verification (2026-10-01):
+
+- `PYTHONPATH=src python -m pytest tests -q` reported 735 passed and 19 subtests.
+- `./scripts/generate-manifest --check` exited 0.
+- `./scripts/redaction-scan.sh` exited 0: 0 findings (mode=tracked, files=318), with organization
+  rules unmeasured (`REDACTION_EXTRA_PATTERNS` unset), same follow-up as v0.5.187 (mgm-e7e).
+- Every `master-ops/scripts/test-*.sh` exited 0 except `test-bash-output-size-warn.sh`, which fails
+  in this execution environment because the test resets `$HOME` to a scratch directory and the
+  sandbox's `python3` is a `mise` shim: with no cache under the scratch `$HOME`, `mise` downloads
+  `python@3.12.14` on every invocation, and that download's progress text leaks into the hook's
+  captured stdout, breaking the test's "small result is silent" assertion. The failure reproduces
+  identically on an unmodified checkout and is independent of this release's changes (changelog,
+  version file, manifest).
+
+Reclamation that measures before it closes, and a dispatch lifecycle you can read back (2026-09-30):
+
+- `src/master_runtime/core/worker_reap.py`: `WorkerReaper.reap()` no longer closes a settled
+  dispatch's pane unconditionally. Three measurements now gate the close, all required: the
+  terminal handle is still present in `orca terminal list`; no `dispatched` row in `orca
+  orchestration worker-list` (paginated, every Run) names the same handle — a newer dispatch may
+  have reused the pane before this one was reaped; and no agent CLI process (`claude`, `codex`,
+  `cursor`, `agy`, `grok`, matched by comm basename) has its cwd inside the dispatch's worktree
+  (`lsof -a -p <pid> -d cwd -Fn`, falling back to `/proc/<pid>/cwd`). A measurement that could not
+  be taken at all is a refusal, the same as a measurement that failed — never a pass. Each refusal
+  is a named reason in `actions_taken` (`pane_absent`, `reused_by:<dispatch-id>`,
+  `agent_process:<pid>:<comm>`, or an `_unmeasured` suffix). `--dry-run` now prints
+  `would_close_terminal:`/`would_remove_worktree:` instead of the executed-action strings, and
+  never prints `terminal_closed` — the bug this scope item exists for: a dry run on a pane closed
+  hours earlier, and on a pane a newer, still-`dispatched` dispatch was using, both reported
+  `terminal_closed:<handle>` with no check against measured state. Untracked `__pycache__/` litter
+  no longer counts as dirty when deciding whether a worktree is safe to remove. `ReapRecord` gained
+  a `measurements` field (`terminal_present`, `terminal_reused_by`, `agent_process`,
+  `worktree_clean`, `worktree_merged`) carried through to the ledger and the CLI's JSON output.
+- `master-ops/scripts/worker-wait` gains `--reap` (default off): an `OPEN_PANE` row additionally
+  calls `scripts/worker-reap --task-id <id> --json` for that row's dispatch and folds the reaper's
+  record into the row under a `reap` key, instead of the coordinator running it as a manual
+  follow-up. `_worker_list` now also tracks a handle-to-taskId map (every worker-list row seen, not
+  just `dispatched` ones) so an `OPEN_PANE` row can resolve the task id of whichever dispatch last
+  claimed that pane. Without `--reap`, `--once --json` output is byte-identical to before. A
+  missing `scripts/worker-reap` (a template-applied tree with no sibling orchestrator checkout)
+  reports `worker_reap_not_found` on the row rather than raising.
+- Dispatch lifecycle events, through the existing `master-ops/scripts/mogui_log.py` `emit()`, no
+  new file: `master-ops/scripts/dispatch` emits `dispatch_launched` after its register step, with
+  dispatch id, task id, pane, pid (usually empty — `dispatch` creates the worker's terminal through
+  an RPC, not a local process), and model. `scripts/dispatch-gate register` emits
+  `dispatch_registered`. `worker-wait` emits `wait_verdict` once per actionable row (`DEAD`,
+  `STALL`, `OPEN_PANE`) per accounting pass, and `wait_wake` once per non-heartbeat delivery, with
+  the message type(s) and delivery id. `scripts/worker-reap` emits `reaped` with `actions_taken`
+  after a real (non-dry-run) reap. Every event carries `dispatch_id`/`task_id` where known.
+  `mogui_log._session_kind()` now returns `master` when the process's cwd is the workspace root
+  (`config/workspace-descriptor.json`'s `workspace_root`, checked at `<cwd>/config/`, or the new
+  `MOGUI_SEAT_ROOT` environment variable when set — checked first, ahead of the descriptor file),
+  `worker` as today (unchanged: `ORCA_TASK_ID` set, or `.orca/worktrees` in the cwd), `unknown`
+  otherwise. `worker-wait`'s `mogui_log` import is fail-open (a copy of the script made without its
+  sibling, or a template-apply that has not landed `mogui_log.py` yet, logs nothing instead of
+  crashing the wait loop) — this file is template-applied together with its sibling in normal
+  deployment, so the fallback is a defensive floor, not the expected path.
+- `scripts/dispatch-timeline <task_id|dispatch_id>`, new, read-only
+  (`src/master_runtime/core/dispatch_timeline.py` plus a thin CLI, mirroring `worker-reap`'s own
+  split): joins the ledger row(s), every event-log line, and the current `dispatch-show` record for
+  one dispatch into a time-ordered table (timestamp, source, event, outcome, detail) and `--json`.
+  A source with nothing matching is named in `missing_sources`, never silently absent. `--since
+  <hours>` with no id lists every dispatch seen in that window with its last event — the seat's
+  daily accounting view.
+- Tests, each with a failability case: `tests/test_worker_reap.py` gained pane-absent,
+  pane-reused-by-a-dispatched-dispatch, agent-process-in-the-worktree, each measurement's
+  unmeasured case, `__pycache__`-litter-is-not-dirty (mocked and real-git), and dry-run-shape
+  cases, alongside the existing dirty/clean/squash-merge coverage (now routed through one
+  `_MeasuredEnvironment` fake covering all five external measurements, defaulted to the happy
+  path). `tests/test_worker_wait.py` gained `--reap` invoking the reaper exactly once per
+  `OPEN_PANE` row and not otherwise, plus an autouse fixture pointing `mogui_log.LOG_DIR` at a
+  scratch path so the suite never appends to a developer's real `~/.mogui/event-log.jsonl`.
+  `tests/test_mogui_log.py` (new): `session_kind` `master` via `MOGUI_SEAT_ROOT` and via the
+  descriptor file, `worker`, `unknown`, and a malformed descriptor swallowed rather than raised.
+  `tests/test_dispatch_timeline.py` (new): join order across all three sources, each source named
+  missing independently (not just an all-or-nothing check), and `--since` windowing.
+  `master-ops/scripts/test-dispatch-timeline.sh` (new, promoted shell test): `--json` against
+  fixture ledger/event-log files and a fake `orca`, with a sort-removal mutant against a mirrored
+  scripts+src tree (`__pycache__` stripped from the copy, since a stale compiled copy of the
+  mutated module silently shadowed the edit during development of this test).
+- Docs: `master-ops/docs/runbooks/worker-wait.md` gained the `--reap` section and the reaper's
+  three pane measurements; new `master-ops/docs/runbooks/dispatch-timeline.md` names the event
+  kinds and the accounting view. `docs/runbooks/worker-reap.md` (repo root) corrected — it
+  described the pre-existing unconditional close and a two-measurement-only worktree check; now
+  describes all three pane measurements, `--dry-run`'s `would_*` action shape, and the
+  `measurements` field on the record and ledger row. `docs/public/reference.md` gained a row for
+  `scripts/dispatch-timeline`. `MANIFEST.json` regenerated for the new files.
+- Tracker: `mgm-cxj2`.
+
+Changelog fragment tooling: thirteen review-thread fixes in one pass (2026-09-29):
+
+- `scripts/changelog-release`: `--dry-run` no longer truncates the preview when a fragment or
+  existing entry contains a `## ` line inside a fenced code block. The fold is now a recoverable
+  step — a rerun after a partial failure (changelog written, a fragment's deletion failed) detects
+  that a fragment's body is already present as a whole paragraph block under `## Unreleased`
+  (boundary-padded match, not a bare substring test, so a new fragment whose body merely overlaps
+  unrelated existing text still folds instead of being silently dropped), reports it
+  `already folded`, and deletes it without folding it again. A malformed date (e.g. `2026-02-30`)
+  is refused the same way a bad name is. A missing or unreadable `master-ops/CHANGELOG.md` prints
+  one stderr line and exits 2 instead of a raw traceback.
+- `scripts/changelog-fragment-check`: only root-level `changelog.d/*.md` files count as fragments,
+  matching what both fold consumers actually read — a fragment left in a subdirectory, or a
+  non-`.md` file such as a stray `.DS_Store`, no longer satisfies or trips the gate. Both diff
+  scans now run with `--no-renames`, so `git mv` of a fragment (or of a `master-ops/` file) is seen
+  as an add/delete pair instead of a rename `--diff-filter=A` would silently drop. An added
+  fragment with an empty body, or an impossible calendar date, now fails the gate, mirroring the
+  release script's own refusals — an impossible date could otherwise merge and then block the
+  next release-time fold.
+- Fragment-name grammar (`FRAGMENT_RE`): the canonical definition, plus the impossible-date check,
+  now lives in `master-ops/scripts/template_common.py`; `master-ops/scripts/template-check` imports
+  it. `scripts/changelog-release` and `scripts/changelog-fragment-check` cannot import across the
+  template boundary without a `sys.path` hack, so they keep string-identical duplicates instead,
+  checked by a test that compares the compiled regex patterns.
+- `master-ops/scripts/template-check`: an unreadable fragment (bad encoding, etc.) is now skipped
+  and recorded under `questions_unanswered`, matching its own docstring, instead of aborting the
+  whole check with exit 2.
+- `master-ops/CHANGELOG.md`: the fragment instruction now states the two gate exemptions
+  (`changelog.d/`-only and `CHANGELOG.md`-only changes) so the guidance agrees with the gate.
+- `master-ops/MANIFEST.json`: `scripts/test-changelog-fragment-check.sh` is now excluded from the
+  install manifest (`scripts/generate-manifest` `EXCLUDE_FILES`) since the script it exercises,
+  `scripts/changelog-fragment-check`, is deliberately not installed; a skipping test is a line
+  nobody reads, so exclusion was chosen over a subject-absent skip.
+- Tests: `tests/test_changelog_release.py` gained coverage for the fenced-heading preview, the
+  impossible-date refusal, the missing-changelog error, both idempotent-rerun halves, and the
+  shared-grammar equality check. `tests/test_template_check_apply.py` now asserts the `README.md`
+  fixture body never leaks into an adoption note. `master-ops/scripts/test-changelog-fragment-check.sh`
+  gained cases for the subdirectory fragment, the empty-body fragment, and the `git mv` rename.
+- Tracker: `mgm-q5am`; round one `task_04bfdb95c7d6`.
+
+One wait loop over live dispatches, with dead and stall verdicts from measured state (2026-09-29):
+
+- `master-ops/scripts/worker-wait`: new, self-contained script — one loop per Run over
+  `check --wait --types worker_done,escalation,question`. A pure-heartbeat batch is acked and the
+  wait re-armed silently (parsed with `raw_decode`, since keepalive documents precede the result
+  in the same stream); anything else wakes the caller and is left unacknowledged for the
+  coordinator to ack after acting. `--once` runs a single accounting pass with no wait at all — a
+  read-only snapshot safe to run from any seat. Before arming the wait, a second `worker-wait` on
+  the same Run refuses with exit 2 via a lock file at `~/.mogui/worker-wait/<run_id>.lock` holding
+  the waiter's pid; a lock whose pid is no longer alive is taken over rather than honored.
+- Accounting per pass, from `orca orchestration worker-list --run <id>`, `orca terminal list`
+  (`lastOutputAt`), the registered pid (via `scripts/dispatch-gate register`'s new fields, read
+  from the dispatch ledger), and one `scripts/worker-pane-sweep` call: `working`, `DEAD` (pid
+  recorded, not alive), `STALL` (pid alive, output stale, sweep class idle/shell/limit/
+  start-screen/update/approval), `UNKNOWN` (no pid, sweep cannot classify), and `OPEN_PANE` for a
+  settled dispatch whose pane is still listed. A no-pid row can never read `DEAD` or `STALL` — both
+  require a measured pid — and, when the sweep does classify a no-pid row as something other than
+  `working`, the sweep class is reported verbatim rather than forced into `UNKNOWN`, since every
+  real row on this seat is a no-pid row (`dispatch` creates a worker's terminal through `orca
+  terminal create`, an RPC, so it never has a local pid to record). Only `DEAD`, `STALL`, and
+  `OPEN_PANE` wake the caller; the loop never closes a pane, never abandons a dispatch, and never
+  sends to a pane.
+- `scripts/dispatch-gate register` gains `--worker-pid` and `--pane` (both optional), stored on
+  the ledger row only when given. `master-ops/scripts/dispatch` now passes `--pane "$TERMINAL"`;
+  it never passes `--worker-pid`, since it always creates the worker's terminal through the Orca
+  RPC rather than launching the process itself.
+- Tests: `tests/test_worker_wait.py` (fake `orca` and `ps` on `PATH`) covers the heartbeat
+  ack-and-rearm, an unacked `worker_done` wake, `DEAD`/`STALL`/`working`/`UNKNOWN` verdicts (pure
+  and end-to-end through the real `worker-pane-sweep`), `OPEN_PANE`, the ledger-to-pid/pane index,
+  a held lock refusing a second waiter, and a stale lock being taken over.
+  `tests/test_dispatch_gate.py` gained the `--worker-pid`/`--pane` round-trip through the ledger,
+  both via the API and the CLI, and confirms omitted fields write no placeholder keys.
+  `master-ops/scripts/test-worker-wait.sh`: `--once --json` against a scratch ledger and fake
+  `orca` prints the table and exits 0, and a held lock exits 2 — each case also run against a
+  sed-mutated copy of the script to prove it can fail, then against the original to confirm it
+  passes again.
+- Runbook: `master-ops/docs/runbooks/worker-wait.md` — the verdict table, what the coordinator
+  does on each verdict, and the single-waiter rule. Cross-linked from
+  `master-ops/docs/charter/05-dispatch-gate.md`.
+- Review hardening (cubic and CodeRabbit, same PR): the loop accounts once before ever waiting
+  (an already-settled Run no longer sits through a wait timeout) and returns immediately on a real
+  delivery or an actionable verdict instead of looping past it — the prior shape re-entered
+  `check --wait` with the same already-seen ack after printing a delivery, which the orchestration
+  contract replays forever until acked, and a heartbeat-only batch was re-armed inside an internal
+  loop that could starve accounting for as long as heartbeats kept arriving. `_pid_alive` and the
+  ledger's `worker_pid` now distinguish "confirmed not running" from "could not be measured" (bad
+  pid data, empty/whitespace pid, `ps` missing or erroring) — only a confirmed answer may read
+  `DEAD`; an unmeasurable one reads `UNKNOWN`. The `STALL` verdict now requires a measured age, not
+  just a stall-shaped sweep class, so a pid alive with no readable `lastOutputAt` no longer reads
+  `STALL` from the sweep class alone. `orca orchestration worker-list` failing or returning a
+  well-formed `{"ok": false, ...}` envelope now raises rather than being read as zero dispatches
+  (which would exit 0, claiming the Run had settled). The lock is now acquired with
+  `os.open(O_CREAT|O_EXCL)` instead of an `exists()`-then-`write_text()` check, closing the
+  race the single-waiter rule exists to close. `master-ops/scripts/test-worker-wait.sh`'s lock
+  mutant now asserts the bypassed-lock exit code exactly (`-eq 0`) instead of merely `-ne 2`, and
+  no longer depends on GNU `timeout` (not present on macOS by default) since the fixed initial
+  accounting pass makes the bypassed case exit before any wait call.
+- Tracker: `mgm-pstc`.
+
+Per-change changelog fragments replace shared `## Unreleased` edits (2026-09-28):
+
+- `master-ops/changelog.d/`: a change touching `master-ops/` now adds a dated fragment file here
+  instead of editing `## Unreleased` directly, so concurrent pull requests stop conflicting on the
+  same shared lines. `README.md` documents the name pattern and the fold script; the directory
+  ships with no fragment in it once a release folds the ones that came before.
+- `scripts/changelog-release` (template side, not installed): folds every `changelog.d/*.md`
+  fragment into `## Unreleased`, newest first by date then name, when the owner cuts a release.
+  `--dry-run` previews the fold without changing anything. It refuses a malformed fragment name or
+  an empty body instead of folding it silently.
+- `scripts/generate-manifest` and `master-ops/scripts/template-check` both exclude `changelog.d`
+  from the install manifest, so fragments never install and are never reported as unknown files.
+- `master-ops/scripts/template-check`: `adoption_notes` for the `Unreleased` section now prepends
+  the template's fragment bodies (same newest-first order) ahead of whatever `CHANGELOG.md` itself
+  already holds under that heading, so an install compared against a live template still sees
+  notes added since the last release.
+- `.github/workflows/gates.yml`: a new `changelog-fragment` job, `pull_request` only, requires at
+  least one added, well-named fragment whenever a pull request changes `master-ops/` outside
+  `changelog.d/`. Its logic lives in `scripts/changelog-fragment-check <base-sha>` so it can also
+  run locally. A pull request touching only `changelog.d/` or only `CHANGELOG.md` passes without one.
+- Tracker: `mgm-q5am`.
+
+The unknown tier stops capping models the policy has never heard of (2026-09-29):
+
+- `master-ops/model-tier-policy.json` and `config/model-tier-policy.example.json`: the
+  `fanout_caps.unknown` entry is removed, so both ship `fanout_caps: {}`. A dispatch denied only
+  because its model post-dates the tier table was a harness error, not a policy decision: the gate
+  already treats a missing `fanout_caps` key as uncapped for every tier
+  (`src/master_runtime/core/dispatch_gate.py` `cap_for`), and `TIER_UNKNOWN_MODEL` already stays a
+  warning rather than a denial. An unlisted model is recorded as `unknown` with that warning and no
+  longer blocked on fan-out.
+- Measured side effect, not changed: `strictness_of` ranks an uncapped tier as loosest. With
+  `unknown` now uncapped, a job with `declared=top` and a measured model that resolves to `unknown`
+  goes from a `MODEL_TIER_ESCALATION` denial to a `MODEL_MISMATCH` warning: previously the measured
+  `unknown` tier (cap 8) was stricter than declared `top` (uncapped), so the escalation branch in
+  `_model_verification` denied the job; now both sides are uncapped, so the disagreement is a
+  warning rather than a denial (measured: `gate._model_verification` returns
+  `(None, "declared=... measured=...")` before the fix, `(ReasonCode.MODEL_MISMATCH, None)` after).
+  The ranking itself is untouched.
+- `_notes` (template) and `_docs.fanout_caps` (example): each gained one sentence dated 2026-09-29
+  recording the directive.
+- `tests/test_dispatch_gate.py`: `test_instance_tier_policy_example_is_loadable_version_2` and
+  `test_template_policy_resolves_claude_sonnet_5_as_efficient` now assert `cap_for("unknown") is
+  None` against the shipped files instead of `== 8`; a new
+  `test_template_policy_unknown_model_is_allowed_uncapped` loads the shipped template and asserts
+  ten dispatches of an unlisted model all allow with the `TIER_UNKNOWN_MODEL` warning.
+- Onboarding already read as uncapped-by-default (`master-ops/onboarding/01-preflight.md` lines 44,
+  53, 56 already describe a missing key, including `unknown`, as uncapped); no step required the
+  `unknown` key, so no onboarding text changed.
+- Tracker: `mgm-lnd3`.
+
+The manifest learns retirements; unknown files stop failing the check (2026-09-26):
+
+- `scripts/template-check`: reads an optional `config/template-retirements.json` at the install
+  root (path overridable with `--retirements`), a JSON array of `{"path", "since", "why"}`. A
+  manifest path listed there is reported under a new `retired` key instead of `absent_required`.
+  A listed path not in the manifest is reported under `retirements_unknown` and does not fail. A
+  malformed retirements file is reported as `retirements_status: malformed` and does fail (exit
+  1), leaving `manifest_status` untouched.
+- `scripts/template-check`: `unknown_present` is still reported (count and list) but no longer
+  contributes to a failing exit code, on its own or in the `--template` comparison branch.
+  Installs add contracts, lineage, and runbooks by design; the drift the template cares about is
+  a required file missing or changed, not a file the install wrote. Root cause `mgm-o4g`: the
+  previous all-or-nothing manifest could not express partial adoption, so an install that
+  retired one file on purpose and accumulated its own contracts read "run Upgrade mode" forever.
+- `scripts/harness-selfcheck.sh`: the `Template:` currency line now reads
+  `Template: <ver> (manifest=ok, absent=N, retired=M, unknown=K) — run Upgrade mode` on a
+  failing install, or `Template: <ver> (matches template <tver>, M retired)` when the install is
+  current with `M` declared retirements. A malformed retirements file reads
+  `Template: <ver> (manifest=ok, retirements=malformed) — run Upgrade mode`. The formatting logic
+  moved into `format_template_currency_line()` so it is directly testable, the same way
+  `template_adoption_probe` and `twins_probe` already are.
+- `docs/runbooks/harness-selfcheck.md`: documents how an install declares a retirement and that
+  unknown files are reported, not failed.
+- Tracker: `mgm-xlen`; root cause `mgm-o4g`.
+
+Product-path guard admits three measured read-only shapes (2026-09-25):
+
+- `scripts/hooks/product-path-guard.sh`: a heredoc body (`<<WORD`, `<<-WORD`, `<<'WORD'`,
+  `<<"WORD"`, `<<\WORD`) is now stripped, terminator line included, before the command is
+  tokenized, so prose with an apostrophe in the body no longer unbalances the tokenizer into a
+  fail-closed "unparseable command" denial. Recognizing the operator is quote-and-comment-aware
+  (`<<` inside a quoted string, or after an unquoted `#`, is not a heredoc — the latter closes a
+  gap where a `#` comment mentioning `<<WORD` made the guard strip and ignore real commands that
+  Bash would still execute) and does not require whitespace before it (`cat<<EOF` is recognized,
+  not just `cat << EOF`). The operator's own line keeps its tokens, so a redirect into
+  a product root on that line still denies. When the operator line is a bare interpreter
+  invocation with no `-c` (`bash <<'EOF'`), the heredoc body is the whole script and gets the same
+  scrutiny a `-c` body already gets — a `cd`, a root substring, or a redirect into the root denies
+  the command outright, in both modes, closing a gap the stripping would otherwise have opened (an
+  opaque interpreter script that used to leak into the general token scan and get caught by
+  accident would otherwise now be invisible). The interpreter need not be the operator line's
+  first token — `true && bash <<'EOF'`, `cd /tmp; python3 <<EOF`, `echo x | sh <<EOF` all get the
+  same scrutiny, by segmenting the operator line on `;`/`&&`/`||`/`|`/`&` the same way the main
+  parser does and checking every segment that itself carries the heredoc redirect. An unterminated
+  heredoc is still unparseable, as before.
+- `scripts/hooks/product-path-guard.sh`: an interpreter command (`bash`, `sh`, `dash`, `ksh`,
+  `zsh`, `python`, `python3`, `perl`, `ruby`, `node`) no longer denies merely because some plain
+  argument's text contains a product root. A plain argument now denies only when it is a write
+  shape — a product path following `-o`, `--output`, or a literal `>` inside that argument — and a
+  plain argument no longer counts as a touch on its own, matching that the interpreter is only
+  given a path to open (this means `python3 <root>/script.py` from a cwd outside the root is now a
+  read, regardless of the `legacy_readonly` entry below — that entry only matters when the command
+  touches the root some other way, e.g. a cwd already under it). A `-c` body is unaffected: it
+  still denies on a `cd`, a root substring anywhere in the body, or a redirect into the root, and
+  every existing fail-closed rule is unchanged (`FAIL_CLOSED=1` keeps the old blanket substring
+  check, so this widens legacy mode only).
+- `scripts/hooks/product-path-guard.sh`: `legacy_readonly` gained `diff`, `cmp`, `comm`, `wc`,
+  `sort`, `uniq`, `cut`, `tr`, `shasum`, `sha256sum`, `md5`, `xxd`, `od`, `less`, `more`, `jq`;
+  `legacy_git_readonly` gained `git blame`, `git cat-file`, `git ls-tree`, `git merge-base`, `git
+  merge-tree`, `git rev-list`, `git branch --show-current`, `git worktree` (`git worktree
+  add`/etc. are independently denied as write-capable before this gate, so in practice only `git
+  worktree list` passes), `git fetch`. `diff`/`cmp`/`sort` lose that admission if an `-o`/
+  `--output` flag points into the root (`sort -o <root>/out` writes there); `uniq`/`xxd` lose it
+  if their second positional operand — an optional output file, not an input — resolves into the
+  root, tracking each command's own value-taking options first so a flag's value is never
+  mistaken for that positional operand. `sed` and `awk` are admitted through a separate branch,
+  not this set: without `-i` (anywhere in a combined short-flag cluster, not just as its own
+  token), without `-f` (an external script file this guard cannot inspect), and without an unsafe
+  construct in the program text — a `w`, `W`, or `e` command for `sed` (`e` and `s///e` execute a
+  shell command), or a `system(` call, `>`, or `|` for `awk` (`print > file`, `print | "cmd"`, and
+  `"cmd" | getline` are program-level I/O this guard cannot otherwise see). `python3` admits, when
+  it reaches this gate at all (see above), only with no `-c` and a first non-flag argument that is
+  `-` or outside every product root. `git branch` admits only the exact `--show-current`
+  invocation, so creating, deleting, or renaming a branch is still denied.
+- `scripts/test-product-path-guard.sh`: a pass/deny pair per shape above, plus `git blame`, `git
+  worktree list`, `git fetch`, `git branch --show-current`, and `git branch <name>` staying
+  denied.
+- `docs/runbooks/product-path-guard.md`: new runbook documenting the guard and all three shapes.
+
+Twins probe and test-hook-verdict guard (2026-09-25):
+
+- `scripts/harness-selfcheck.sh`: ported the seat's `Twins:` probe (seat lines 282-311, owner
+  instruction 2026-08-06) as `twins_probe()`, added right after the `Card:` check. Confirms the
+  canonical `workspace-card/{CLAUDE.md,AGENTS.md}` pair is byte-identical, the deployed `AGENTS.md`
+  at the workspace root matches its canonical copy, and this repository's own `CLAUDE.md`/`AGENTS.md`
+  agree — the pair `Card:` above never compares, since it inspects only the canonical and deployed
+  copies; the other two `Twins:` confirmations mirror checks `Card:` already performs. Paths through
+  the same `CARD_*` variables the `Card:` check already resolves, so no duplicate
+  `TWIN_CANONICAL`/`TWIN_DEPLOYED` variables were introduced. Fixed a bug carried over from the
+  seat's own version along the way: a missing canonical file (one file present, the other absent) was
+  reported as "DIVERGED" instead of "missing" — `twins_probe` now checks existence of both canonical
+  files first, matching `Card:`'s own "canonical pair missing" phrasing for the same state. A
+  codex-hosted master boots from `AGENTS.md`; a diverged twin boots it with a different card than a
+  claude-hosted master gets.
+- `scripts/test-seat-check.sh`: added `Twins:` cases beside the existing `check_template` cases —
+  canonical pair diverged, canonical pair missing, deployed copy missing, deployed copy drifted, the
+  ops repository's own pair diverged, the ops repository missing an entry file, and all pairs
+  identical — each exercising `twins_probe` directly with `OPS_DIR`/`CARD_*` overridden (same
+  isolation technique as `template_adoption_probe`), paired with a generated-mutant failability guard
+  per case.
+- `scripts/test-hook-verdict.sh`: the `bash-poll-warn` block now runs only when
+  `hooks/bash-poll-warn.sh` exists, printing one `skip:` line otherwise instead of failing the whole
+  test in a checkout that retired the hook (the seat did, 2026-08-05); the skip does not change the
+  test's other pass/fail counts.
+- `docs/runbooks/harness-selfcheck.md`: documented the `Twins:` check.
+
+Conversation-redaction-scan glob guard, per-match follow-up (2026-09-25):
+
+- `master-ops/scripts/conversation-redaction-scan` and `master-ops/scripts/pr-body-check`: the
+  glob guard now decides per home-path match, not per whitespace token. A token that holds both a
+  glob segment and a real home path no longer loses the real path when the glob segment follows it,
+  and a glob path comma-joined to a real leak in one whitespace token no longer excuses the leak —
+  candidates now split on commas as well as whitespace.
+- `master-ops/scripts/test-pr-body-check-redaction.sh`: added one fixture per shape above (real
+  path then glob in one token; comma-joined), each with a failability mutant, alongside the
+  existing glob-only and real-leak fixtures.
+- Added `master-ops/scripts/test-conversation-redaction-scan-glob-guard.sh`: the same fixtures
+  driven through `conversation-redaction-scan`'s own `scan_text`, plus a regression case proving an
+  ordinary non-matching candidate no longer aborts the scan under `set -euo pipefail` (the capture
+  that fed the glob-guard decision was an unguarded command substitution, which failed the whole
+  scan on the first candidate that matched no pattern — the common case for real scanned text).
+
+Conversation-redaction-scan glob false positive, follow-up (2026-09-24):
+
+- `master-ops/scripts/conversation-redaction-scan`: the glob guard is now scoped to the
+  whitespace-delimited path token (`*/` or `/*/` anywhere in the same token), replacing the
+  single-preceding-character check that could excuse a real leak sitting right after an
+  unrelated `*`. The PR-comment and PR-review-body fetches now fail closed (exit 2) like the
+  PR-list and issue-list fetches, instead of swallowing a fetch failure and reporting 0 findings.
+- Added `master-ops/scripts/test-pr-body-check-redaction.sh` covering `pr-body-check`'s
+  `(?<!\*)` guard: glob passes, real leak fails, real leak after an unrelated asterisk still
+  fails, plus a failability mutant.
+
+Dispatch seat-ahead features (2026-09-24):
+
+- `scripts/dispatch`: ported `MULTI_VENDOR_HOSTS`, `is_multi_vendor_host`, and `host_model_ids` from
+  the seat, plus the mismatch-check branch that validates a model against a multi-vendor host's own
+  list (`cursor-agent models`) instead of a vendor prefix. `runtime_accepts_vendor` still handles
+  single-vendor hosts.
+- `scripts/dispatch`: ported the contract-delivery block that copies `--contract` into
+  `$HOME/.mogui/dispatch-contracts/<hash>-<name>.md`, appends an acknowledgement token, prints
+  `contract delivered · <path> · read-token required`, and writes the delivered path into the spec
+  the worker receives.
+- Did not port the seat's `GATE_LEDGER` mktemp/cp/`EXIT`-trap workaround for `--check-only`: this
+  template already keeps a dry run from consuming the fanout cap through `dispatch-gate`'s own
+  `--no-record` flag, which the seat has not adopted yet. Porting the seat's copy here would add dead
+  machinery beside the mechanism already doing the job.
+- `scripts/test-dispatch-runtime.sh`: added one case per feature above (including the already-met
+  check-only case, to guard `--no-record` going forward), each extracting its function or block by
+  exact-line range and running it in an isolated subshell against a fake `cursor-agent`/`dispatch-gate`
+  or `$HOME`, paired with a mutant-based failability check.
+
+Seat-ahead promotion, batch 4 runbooks (2026-09-24):
+
+- `docs/runbooks/ctx-query-doctrine.md`, `docs/runbooks/dispatch-collision-warning.md`,
+  `docs/runbooks/harness-selfcheck.md`, `docs/runbooks/host-harness-inventory.md`,
+  `docs/runbooks/master-placement.md`, `docs/runbooks/orca-surface-drift.md`,
+  `docs/runbooks/pr-body-check.md`, `docs/runbooks/worker-host-diversity.md`: promoted from the
+  seat with seat identifiers (session ids, terminal handles, workspace selectors, tracker ids,
+  a peer seat name, Korean example text) de-instanced. Draft PR: the owner reads every file
+  before it leaves draft, per charter 01 section 1.1.
+
+Seat-ahead promotion, batch 3 template four (2026-09-24):
+
+- `scripts/harness-selfcheck.sh`: ported the seat's `Template:` probe as the first check, into a
+  `template_adoption_probe` function, reading `MANIFEST.json` and an adoption-ledger path from
+  `TEMPLATE_MANIFEST_FILE`/`TEMPLATE_ADOPTION_LEDGER` (both overridable, defaulting to the ops
+  repository root and the seat's ledger file name; this template ships its own `MANIFEST.json` but no
+  ledger, so a default run here takes the "ledger missing" branch). The python substitution is guarded
+  with `|| probe=""` under `set -e`, so a malformed `MANIFEST.json` falls through to the "undecided"
+  line instead of aborting the script with no output. An install's boot banner can now say which
+  template version it was stamped from and whether adoption is recorded, the same as the seat.
+- `scripts/test-seat-check.sh`: ported the seat's `check_template` cases (manifest absent, stamped
+  with the ledger missing, stamped with the ledger present), each asserting `template_adoption_probe`'s
+  exit-code contribution (1, 1, 0) as well as its printed line — exercised directly via `eval` of the
+  function body sourced from `harness-selfcheck.sh` — plus each case's own generated-mutant failability
+  guard (`FAIL: mutant not generated` on a no-op `sed`, verdict-text mutation asserted to change the
+  reported line).
+
+Product-repositories schema, template-to-seat (2026-09-23):
+
+- `scripts/hooks/product-path-guard.sh`: `load_product_repo` (single string) is now
+  `load_product_repositories`, printing one absolute path per line; every guarded
+  target check (`Edit`/`Write`/`NotebookEdit` file paths and the Bash command
+  parser's `PRODUCT_ROOT`) now matches under any listed repository instead of one.
+  Reads the canonical `product_repositories` array, still accepts the one-entry
+  `product_repo` string, and warns to stderr when both are set. Fixes a seat whose
+  live config carries three product repositories under `product_repositories`:
+  installing this guard verbatim blocked every tool call with `cannot load
+  product_repo`.
+- `scripts/test-product-path-guard.sh`: fixture config now uses a two-repository
+  `product_repositories` array; added cases for the second repository (file-path
+  and Bash write) and a path outside both. All prior cases stay green.
+- `scripts/dispatch-collision-check`: `MOGUI_PRODUCT_REPO` now accepts either a
+  single `owner/repo` string or a JSON array of them, scanning PRs across every
+  configured product repository instead of one.
+- `config/instance-runtime.example.json`, `onboarding/01-preflight.md`,
+  `02-workspace-facts.md`, `08-settings-and-skills.md`: document
+  `product_repositories` as the canonical key, with `product_repo` named as the
+  still-accepted one-entry form.
+
+Conversation-redaction-scan glob false positive (2026-09-22):
+
+- `master-ops/scripts/conversation-redaction-scan` no longer flags `/Users/` or `/home/` segments immediately preceded by a glob `*` (for example `codex-accounts/*/home/sessions`) as leaked home directories; real leaks still match. The summary line now labels the scanned total as items (PRs+issues) instead of calling the combined count PRs.
+- The `/home/` finding class is now `home_path_linux`, issue-list failures fail closed, and `master-ops/scripts/pr-body-check` applies the same glob guard as the conversation scan.
+
+Seat-ahead promotion, batch 3 template three (2026-09-22):
+
+- `scripts/test-spawn-test.sh`: added the failability block proving a `spawn-test` mutant whose
+  `FAIL*` arm reports `SKIP` makes the failure-kind cases fail, plus the generated-mutant guard the
+  other template tests carry (`FAIL: mutant not generated`, exit 1, cleanup via an `EXIT` trap) so a
+  no-op `sed` cannot pass silently.
+
+Seat-ahead promotion, batch 3 template one (2026-09-21):
+
+- `scripts/hooks/orch-inbox-warn.sh`: the `messages` type check now rejects a list containing non-dict
+  elements outright (`__SKIP__`) instead of silently filtering them out before use.
+- `scripts/test-tool-naming.sh`: added a self-test case intended to prove a pattern for the wrong verb
+  (`ctx.zzz`) does not match the known-bad `ctx.sql` line. Ported verbatim from the seat; review found
+  the check runs after its fixture directory is already removed, so it currently passes vacuously
+  regardless of the pattern's behavior. Fix belongs in the seat (read-only from this worktree);
+  follow-up needed there before this assertion actually exercises anything.
+- `scripts/test-measure.sh`: added a mutant case intended to prove `scripts/measure` fails case 2
+  (silent failure) when its status-line `echo` is stripped out. Ported verbatim from the seat.
+- `model-tier-policy.json`: `tiers.top` now lists `claude-fable-5-1`, not `claude-fable-5`. Owner
+  decision 2026-09-21: two generations of drift audits on two seats measured `claude-fable-5-1` and
+  the old id never appeared in a transcript.
+- `onboarding/02-workspace-facts.md`: the master-session model table's `claude` row now recommends
+  `claude-fable-5-1`, matching the identifier `model-tier-policy.json` has recommended since PR #137.
+
+Skill-composition guide (2026-08-25):
+
+- Added `docs/guides/skill-composition.md`, documenting the workspace's adopted skill-layer composition with measured host-skill counts, measured template-shipped skills, the harness discovery path, the routing table source text, and explicit `unmeasured` labeling where checkout-local evidence is unavailable.
 
 ## v0.5.187
 

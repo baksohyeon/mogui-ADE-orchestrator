@@ -1,12 +1,2400 @@
 #!/bin/bash
-# Static regression check for the minimal agy capability mapping in dispatch.
+# Regression checks for dispatch: the static agy capability mapping, plus the
+# three seat-ported features (multi-vendor hosts, check-only leaving the real
+# ledger untouched, contract delivery). dispatch carries {{RUNTIME_ROOT}} and
+# {{OPS_REPO}} template placeholders, so it cannot be executed end to end
+# unrendered here — each feature case below extracts just its function or
+# block by exact-line sed/awk range and runs that snippet in an isolated
+# subshell with fakes on PATH or in $HOME, rather than invoking the whole
+# script.
 set -eu
 
 dispatch=$(cd "$(dirname "$0")" && pwd)/dispatch
+dispatch=${1:-$dispatch}
 for pattern in \
   'agy:gemini' \
   "if runtime == 'agy': runtime = 'gemini'" \
   'agy) echo "agy --model $model_arg --dangerously-skip-permissions"'; do
   grep -Fq "$pattern" "$dispatch" || { echo "FAIL: missing dispatch pattern: $pattern" >&2; exit 1; }
 done
+
+probe_args_expansion_guard_test() {
+  local target="$1" probe_expansion='"${MODEL_PROBE_ARGS[@]+"${MODEL_PROBE_ARGS[@]}"}"'
+  if ! grep -Fq "$probe_expansion" "$target"; then
+    echo "FAIL: missing guarded MODEL_PROBE_ARGS expansion in dispatch register call" >&2
+    return 1
+  fi
+
+  /bin/bash -uc "set -u; MODEL_PROBE_ARGS=(); : $probe_expansion" >/dev/null 2>&1
+}
+
+probe_args_expansion_guard_test "$dispatch" || {
+  echo "FAIL: MODEL_PROBE_ARGS expansion is not bash 3.2 set -u safe when empty" >&2
+  exit 1
+}
 echo "dispatch agy capability regression test passed"
+
+# --- Feature: multi-vendor hosts (cursor) -----------------------------------
+#
+# cursor-agent serves several vendors' model ids, so the mismatch check must
+# validate a model against that host's own list instead of a vendor prefix.
+# Extracts model_vendor, the MULTI_VENDOR_HOSTS/is_multi_vendor_host/
+# host_model_ids block, runtime_accepts_vendor, and the if/elif branch that
+# uses them, then runs that snippet against a fake cursor-agent on PATH.
+cursor_multivendor_test() (
+  set +e
+  set -u
+  local dispatch="$1" work model_vendor_fn multivendor_fns accepts_fn if_block
+  local script_file out status mutant_fns
+
+  model_vendor_fn=$(awk '$0=="model_vendor() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  multivendor_fns=$(awk '$0=="MULTI_VENDOR_HOSTS=\"cursor\""{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  accepts_fn=$(awk '$0=="runtime_accepts_vendor() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  if_block=$(awk '$0=="if is_multi_vendor_host \"$RUNTIME\"; then"{f=1} f{print} f&&$0=="fi"{exit}' "$dispatch")
+
+  [ -n "$model_vendor_fn" ] || { echo "FAIL: could not extract model_vendor" >&2; return 1; }
+  [ -n "$multivendor_fns" ] || { echo "FAIL: could not extract MULTI_VENDOR_HOSTS/is_multi_vendor_host/host_model_ids" >&2; return 1; }
+  [ -n "$accepts_fn" ] || { echo "FAIL: could not extract runtime_accepts_vendor" >&2; return 1; }
+  [ -n "$if_block" ] || { echo "FAIL: could not extract the multi-vendor mismatch-check branch" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-cursor-test.$$"
+  mkdir -p "$work"
+  trap 'rm -rf "$work"' EXIT
+  cat > "$work/cursor-agent" <<'BIN'
+#!/bin/bash
+[ "$1" = models ] || exit 1
+printf 'claude-opus-5-thinking-high - Anthropic\ngpt-5.3-codex - OpenAI\n'
+BIN
+  chmod +x "$work/cursor-agent"
+
+  write_script() {
+    local outfile="$1" fns="$2" branch="$3"
+    {
+      echo 'set -u'
+      printf '%s\n' "$fns"
+      printf '%s\n' "$accepts_fn"
+      echo 'RUNTIME=cursor'
+      echo 'MODEL=gpt-5.3-codex'
+      echo 'POLICY=/dev/null'
+      printf '%s\n' "$model_vendor_fn"
+      echo 'MODEL_VENDOR=$(model_vendor "$MODEL")'
+      printf '%s\n' "$branch"
+      echo 'echo ACCEPTED'
+    } > "$outfile"
+  }
+
+  script_file="$work/run.sh"
+  write_script "$script_file" "$multivendor_fns" "$if_block"
+  out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
+  status=$?
+
+  if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^ACCEPTED$'; then
+    echo "FAIL: cursor multi-vendor host should accept gpt-5.3-codex from its own model list" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   — cursor accepts a model present in cursor-agent models output"
+
+  # Failability: dropping cursor from MULTI_VENDOR_HOSTS falls back to the
+  # single-vendor check, which rejects a model cursor legitimately offers.
+  mutant_fns=${multivendor_fns/'MULTI_VENDOR_HOSTS="cursor"'/'MULTI_VENDOR_HOSTS=""'}
+  if [ "$mutant_fns" = "$multivendor_fns" ]; then
+    echo "FAIL: MULTI_VENDOR_HOSTS mutant did not change the source" >&2
+    return 1
+  fi
+  write_script "$script_file" "$mutant_fns" "$if_block"
+  out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ] && printf '%s\n' "$out" | grep -q '^ACCEPTED$'; then
+    echo "FAIL: failability — mutant with cursor dropped from MULTI_VENDOR_HOSTS still accepted the model" >&2
+    return 1
+  fi
+  echo "ok   — failability: dropping cursor from MULTI_VENDOR_HOSTS makes this case fail"
+)
+cursor_multivendor_test "$dispatch" || exit 1
+
+# --- Feature: --check-only does not consume the fanout cap ------------------
+#
+# The template already meets this through dispatch-gate's own --no-record flag
+# (record=not args.no_record) rather than the seat's GATE_LEDGER mktemp/cp/trap
+# copy — the seat has not adopted --no-record yet, so it is behind here, not
+# ahead; porting its copy mechanism would just be dead machinery next to the
+# already-working one. This case guards the existing behaviour: extracts the
+# TIER/top-approval/gate-check block through the --check-only exit path and
+# runs it against a fake dispatch-gate that only appends to the ledger when
+# called without --no-record.
+checkonly_ledger_test() (
+  set +e
+  set -u
+  local dispatch="$1" work jqf_fn tier_fn block
+  local gate ledger policy contract script_file status before after out mutant_block
+
+  jqf_fn=$(grep -m1 -F 'jqf() {' "$dispatch")
+  tier_fn=$(awk '$0=="tier_for_model() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  block=$(awk '
+    $0=="TIER=$(tier_for_model \"$MODEL\" 2>/dev/null || echo unknown)"{f=1}
+    f{print}
+    f && $0=="fi" && prev=="  exit 0"{exit}
+    {prev=$0}
+  ' "$dispatch")
+
+  [ -n "$jqf_fn" ] || { echo "FAIL: could not extract jqf" >&2; return 1; }
+  [ -n "$tier_fn" ] || { echo "FAIL: could not extract tier_for_model" >&2; return 1; }
+  [ -n "$block" ] || { echo "FAIL: could not extract the check-only gate block" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-checkonly-test.$$"
+  mkdir -p "$work"
+  trap 'rm -rf "$work"' EXIT
+  gate="$work/dispatch-gate"
+  ledger="$work/ledger.jsonl"
+  policy="$work/policy.json"
+  contract="$work/contract.md"
+  printf '{"tiers": {"efficient": [], "top": []}}\n' > "$policy"
+  printf '# fake contract\n' > "$contract"
+  cat > "$gate" <<'BIN'
+#!/bin/bash
+no_record=0
+for a in "$@"; do [ "$a" = --no-record ] && no_record=1; done
+if [ "$no_record" -eq 0 ]; then
+  prev=""
+  for a in "$@"; do
+    [ "$prev" = --ledger ] && printf '{"kind":"recorded"}\n' >> "$a"
+    prev=$a
+  done
+fi
+printf '{"allow": true, "contract_sha": "abcdef0123456789"}\n'
+BIN
+  chmod +x "$gate"
+
+  write_script() {
+    local outfile="$1" body="$2"
+    {
+      echo 'set -u'
+      printf '%s\n' "$jqf_fn"
+      printf '%s\n' "$tier_fn"
+      printf 'GATE=%s\n' "$gate"
+      printf 'LEDGER=%s\n' "$ledger"
+      printf 'POLICY=%s\n' "$policy"
+      printf 'CONTRACT=%s\n' "$contract"
+      echo 'RUNTIME=claude'
+      echo 'MODEL=claude-haiku-4-5-20251001'
+      echo 'EST=3000'
+      echo 'TOP_APPROVED=""'
+      echo 'CHECK_ONLY=1'
+      echo 'COLLISION_CHECK=/bin/true'
+      printf '%s\n' "$body"
+    } > "$outfile"
+  }
+
+  script_file="$work/run.sh"
+  printf '{"kind":"seed1"}\n{"kind":"seed2"}\n' > "$ledger"
+  before=$(wc -l < "$ledger" | tr -d ' ')
+  write_script "$script_file" "$block"
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  after=$(wc -l < "$ledger" | tr -d ' ')
+
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: check-only gate block exited non-zero (status=$status)" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if [ "$before" -ne "$after" ]; then
+    echo "FAIL: --check-only changed the real ledger's line count ($before -> $after)" >&2
+    return 1
+  fi
+  echo "ok   — --check-only leaves the real ledger's line count unchanged"
+
+  # Failability: if dispatch stopped passing --no-record under --check-only,
+  # this fake gate would append to the real ledger and the case above would fail.
+  mutant_block=${block/'"${GATE_ARGS[@]}" --no-record'/'"${GATE_ARGS[@]}"'}
+  if [ "$mutant_block" = "$block" ]; then
+    echo "FAIL: --no-record mutant did not change the source" >&2
+    return 1
+  fi
+  printf '{"kind":"seed1"}\n{"kind":"seed2"}\n' > "$ledger"
+  before=$(wc -l < "$ledger" | tr -d ' ')
+  write_script "$script_file" "$mutant_block"
+  bash "$script_file" >/dev/null 2>&1 || true
+  after=$(wc -l < "$ledger" | tr -d ' ')
+  if [ "$before" -eq "$after" ]; then
+    echo "FAIL: failability — dropping --no-record under --check-only should have consumed ledger budget" >&2
+    return 1
+  fi
+  echo "ok   — failability: dropping --no-record under --check-only would consume the fanout cap"
+)
+checkonly_ledger_test "$dispatch" || exit 1
+
+# --- Feature: MOGUI_STATE_DIR state-root seam --------------------------------
+#
+# Extracts the wrapper's new MOGUI_STATE_DIR derivation block (the
+# if/else that sets STATE_DIR plus the LEDGER assignment right after it),
+# runs it in isolation with HOME pointed at a fake home: unset keeps today's
+# two defaults, a temp dir moves both LEDGER and (via the same STATE_DIR
+# fallback expression used at the contract-delivery site) CONTRACT_DIR under
+# it, and a relative path is refused with exit 1 and the one stderr line.
+state_dir_seam_test() (
+  set +e
+  set -u
+  local dispatch="$1" work block script_file out status
+  local contract_dir_expr fake_home mutant_block
+
+  block=$(awk '
+    $0=="if [ -n \"${MOGUI_STATE_DIR:-}\" ]; then"{f=1}
+    f{print}
+    f && $0=="LEDGER=\"$STATE_DIR/dispatch-ledger.jsonl\""{exit}
+  ' "$dispatch")
+  [ -n "$block" ] || { echo "FAIL: could not extract the MOGUI_STATE_DIR derivation block" >&2; return 1; }
+
+  contract_dir_expr=$(grep -F 'CONTRACT_DIR="${STATE_DIR:-$HOME/.mogui}/dispatch-contracts"' "$dispatch")
+  [ -n "$contract_dir_expr" ] || { echo "FAIL: could not find the CONTRACT_DIR fallback expression" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-state-dir-test.$$"
+  mkdir -p "$work"
+  trap 'rm -rf "$work"' EXIT
+  fake_home="$work/home"
+  mkdir -p "$fake_home"
+
+  write_script() {
+    local outfile="$1" body="$2"
+    {
+      echo 'set -u'
+      printf '%s\n' "$body"
+      printf '%s\n' "$contract_dir_expr"
+      echo 'printf "STATE_DIR=%s\nLEDGER=%s\nCONTRACT_DIR=%s\n" "$STATE_DIR" "$LEDGER" "$CONTRACT_DIR"'
+    } > "$outfile"
+  }
+
+  script_file="$work/run.sh"
+
+  # Case: unset keeps today's two defaults.
+  write_script "$script_file" "$block"
+  out=$(env -u MOGUI_STATE_DIR HOME="$fake_home" bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: unset MOGUI_STATE_DIR exited non-zero" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF "STATE_DIR=$fake_home/.mogui"; then
+    echo "FAIL: unset MOGUI_STATE_DIR did not fall back to \$HOME/.mogui" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF "LEDGER=$fake_home/.mogui/dispatch-ledger.jsonl"; then
+    echo "FAIL: unset MOGUI_STATE_DIR did not keep today's default LEDGER" >&2
+    return 1
+  fi
+  echo "ok   : MOGUI_STATE_DIR unset keeps today's \$HOME/.mogui defaults"
+
+  # Case: set to a temp dir moves both LEDGER and CONTRACT_DIR under it.
+  write_script "$script_file" "$block"
+  out=$(HOME="$fake_home" MOGUI_STATE_DIR="$work" bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: MOGUI_STATE_DIR set to an existing dir exited non-zero" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF "LEDGER=$work/dispatch-ledger.jsonl"; then
+    echo "FAIL: MOGUI_STATE_DIR did not redirect LEDGER under it" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF "CONTRACT_DIR=$work/dispatch-contracts"; then
+    echo "FAIL: MOGUI_STATE_DIR did not redirect CONTRACT_DIR under it" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : MOGUI_STATE_DIR set to an existing directory moves LEDGER and CONTRACT_DIR under it"
+
+  # Case: a relative path is refused before any other work.
+  write_script "$script_file" "$block"
+  HOME="$fake_home" MOGUI_STATE_DIR="relative/dir" bash "$script_file" >"$work/stdout" 2>"$work/stderr"
+  status=$?
+  err_lines=$(wc -l < "$work/stderr" | tr -d ' ')
+  if [ "$status" -ne 1 ]; then
+    echo "FAIL: a relative MOGUI_STATE_DIR should exit 1, got $status" >&2
+    cat "$work/stderr" >&2
+    return 1
+  fi
+  if [ "$err_lines" -ne 1 ]; then
+    echo "FAIL: refusal should write exactly one stderr line, got $err_lines" >&2
+    cat "$work/stderr" >&2
+    return 1
+  fi
+  if ! grep -qF 'MOGUI_STATE_DIR must be an absolute path to an existing directory: relative/dir' "$work/stderr"; then
+    echo "FAIL: refusal did not name the variable and the value on stderr" >&2
+    cat "$work/stderr" >&2
+    return 1
+  fi
+  echo "ok   : a relative MOGUI_STATE_DIR exits 1 with exactly one stderr line naming the variable and value"
+
+  # Failability: dropping the validation check lets a relative value through.
+  mutant_block=$(printf '%s\n' "$block" | awk '/^  if \[ "\$STATE_DIR_OK" != 1 \]; then$/{skip=1} skip&&/^  fi$/{skip=0; next} !skip')
+  if [ "$mutant_block" = "$block" ]; then
+    echo "FAIL: validation-drop mutant did not change the source" >&2
+    return 1
+  fi
+  write_script "$script_file" "$mutant_block"
+  out=$(HOME="$fake_home" MOGUI_STATE_DIR="relative/dir" bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: failability: dropping the validation should have let the relative value through instead of refusing it" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF "LEDGER=relative/dir/dispatch-ledger.jsonl"; then
+    echo "FAIL: failability: mutant did not accept the relative MOGUI_STATE_DIR value" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : failability: dropping the validation check accepts a relative MOGUI_STATE_DIR instead of refusing it"
+)
+state_dir_seam_test "$dispatch" || exit 1
+
+# --- Feature: contract delivery ---------------------------------------------
+#
+# Extracts the `if [ -n "$CONTRACT" ]; then ... fi` block that copies the
+# contract to $HOME/.mogui/dispatch-contracts/<sha8>-<name>, appends the
+# acknowledgement token, and writes the delivered path into $SPEC, then runs
+# it against a fake $HOME.
+contract_delivery_test() (
+  set +e
+  set -u
+  local dispatch="$1" work block contract fake_home sha script_file
+  local out status dest token_line_no mutant_block spec_tail
+
+  block=$(awk '$0=="if [ -n \"$CONTRACT\" ]; then"{f=1} f{print} f&&$0=="fi"{exit}' "$dispatch")
+  [ -n "$block" ] || { echo "FAIL: could not extract the contract delivery block" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-contract-test.$$"
+  mkdir -p "$work"
+  trap 'rm -rf "$work"' EXIT
+  contract="$work/src-contract.md"
+  printf '# fake contract\n\nbody text\n' > "$contract"
+  fake_home="$work/home"
+  mkdir -p "$fake_home"
+  sha="abcdef0123456789beef"
+  dest="$fake_home/.mogui/dispatch-contracts/${sha:0:8}-$(basename "$contract")"
+
+  write_script() {
+    local outfile="$1" body="$2"
+    {
+      echo 'set -u'
+      printf 'CONTRACT=%s\n' "$contract"
+      printf 'SHA=%s\n' "$sha"
+      echo 'SPEC="original spec"'
+      printf '%s\n' "$body"
+      echo 'printf "SPEC_TAIL::%s\n" "$SPEC"'
+    } > "$outfile"
+  }
+
+  script_file="$work/run.sh"
+  write_script "$script_file" "$block"
+  out=$(HOME="$fake_home" bash "$script_file" 2>&1)
+  status=$?
+
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: contract delivery block exited non-zero" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if [ ! -f "$dest" ]; then
+    echo "FAIL: contract was not delivered to $dest" >&2
+    return 1
+  fi
+  if ! grep -q '^## Acknowledgement token$' "$dest"; then
+    echo "FAIL: delivered contract is missing the acknowledgement token section" >&2
+    return 1
+  fi
+  if ! grep -q '^    ack-' "$dest"; then
+    echo "FAIL: delivered contract has no ack-<token> line" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -q 'contract delivered .* read-token required'; then
+    echo "FAIL: dispatch did not print the contract-delivered confirmation line" >&2
+    return 1
+  fi
+  # Match only inside the SPEC_TAIL:: marker's own output: $dest also appears in
+  # the "contract delivered" confirmation line above, so matching against all of
+  # $out would pass even if the path were never written into $SPEC.
+  spec_tail=$(printf '%s\n' "$out" | awk '/^SPEC_TAIL::/{f=1} f{print}')
+  if [ -z "$spec_tail" ]; then
+    echo "FAIL: dispatch output has no SPEC_TAIL:: marker" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$spec_tail" | grep -qF "$dest"; then
+    echo "FAIL: delivered contract path was not written into the spec" >&2
+    return 1
+  fi
+  echo "ok   — --contract delivers the file with an acknowledgement token and updates the spec"
+
+  # Failability: drop the line that appends the token value; the delivered
+  # file then has the token section but no ack-<token> line.
+  token_line_no=$(printf '%s\n' "$block" | grep -Fn 'READ_TOKEN"' | head -1 | cut -d: -f1)
+  [ -n "$token_line_no" ] || { echo "FAIL: could not locate the token-append line to mutate" >&2; return 1; }
+  mutant_block=$(printf '%s\n' "$block" | sed "${token_line_no}d")
+  if [ "$mutant_block" = "$block" ]; then
+    echo "FAIL: read-token mutant did not change the source" >&2
+    return 1
+  fi
+  rm -rf "$fake_home"
+  mkdir -p "$fake_home"
+  write_script "$script_file" "$mutant_block"
+  HOME="$fake_home" bash "$script_file" >/dev/null 2>&1 || true
+  if [ -f "$dest" ] && grep -q '^    ack-' "$dest"; then
+    echo "FAIL: failability — mutant should have produced a delivered file without the ack-<token> line" >&2
+    return 1
+  fi
+  echo "ok   — failability: dropping the token-append line leaves the delivered file without ack-<token>"
+)
+contract_delivery_test "$dispatch" || exit 1
+
+# --- Feature: cursor pre-trust before launch --------------------------------
+#
+# Cursor Agent's launch flags (--force --trust) cover the approval/permission
+# prompt but not the first-visit workspace-trust prompt (charter's
+# dispatch-gate and worker-routing-review docs), so dispatch must run
+# scripts/cursor-worker-pretrust before a cursor launch and fail closed on a
+# skipped summary, the same way ensure_codex_pretrust does for codex. Extracts
+# ensure_cursor_pretrust and runs it against a fake cursor-worker-pretrust.
+cursor_pretrust_test() (
+  set +e
+  set -u
+  local dispatch="$1" work fn script_file out status mutant_fn
+
+  fn=$(awk '$0=="ensure_cursor_pretrust() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  [ -n "$fn" ] || { echo "FAIL: could not extract ensure_cursor_pretrust" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-cursor-pretrust-test.$$"
+  mkdir -p "$work"
+  trap 'rm -rf "$work"' EXIT
+  cat > "$work/cursor-worker-pretrust" <<'BIN'
+#!/bin/bash
+printf '%s/.workspace-trusted: already trusted\n' "$1"
+printf 'Summary: 0 added, 0 updated, 1 already trusted\n'
+BIN
+  chmod +x "$work/cursor-worker-pretrust"
+
+  write_script() {
+    local outfile="$1" body="$2"
+    {
+      echo 'set -u'
+      printf 'CURSOR_PRETRUST_BIN=%s\n' "$work/cursor-worker-pretrust"
+      printf '%s\n' "$body"
+      printf 'ensure_cursor_pretrust cursor %s && echo TRUSTED\n' "$work"
+    } > "$outfile"
+  }
+
+  script_file="$work/run.sh"
+  write_script "$script_file" "$fn"
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^TRUSTED$' \
+      || ! printf '%s\n' "$out" | grep -q 'pre-trust ✓ cursor'; then
+    echo "FAIL: ensure_cursor_pretrust should succeed against a fake pre-trust binary reporting a trusted summary" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   — ensure_cursor_pretrust succeeds against a fake cursor-worker-pretrust reporting a trusted summary"
+
+  # A skipped summary must fail closed: it leaves the trust prompt in place.
+  cat > "$work/cursor-worker-pretrust" <<'BIN'
+#!/bin/bash
+printf 'SKIP no python3 found\n'
+printf 'Summary: skipped — 0 added, 0 updated, 0 already trusted\n'
+BIN
+  chmod +x "$work/cursor-worker-pretrust"
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ]; then
+    echo "FAIL: ensure_cursor_pretrust should fail closed on a skipped pre-trust summary" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   — ensure_cursor_pretrust fails closed on a skipped pre-trust summary"
+
+  # Failability: if the *skipped*) case stopped matching, a worktree the
+  # pretrust binary could not actually trust would still be launched into.
+  mutant_fn=${fn/'*skipped*)'/'*nevermatches*)'}
+  if [ "$mutant_fn" = "$fn" ]; then
+    echo "FAIL: skipped-case mutant did not change the source" >&2
+    return 1
+  fi
+  write_script "$script_file" "$mutant_fn"
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^TRUSTED$'; then
+    echo "FAIL: failability — mutant dropping the *skipped*) case should have wrongly succeeded, but still failed closed" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   — failability: dropping the *skipped*) case makes the fail-closed assertion above fail"
+)
+cursor_pretrust_test "$dispatch" || exit 1
+
+# --- Feature: claude pre-trust before launch --------------------------------
+#
+# Claude Code's own folder-trust dialog is not covered by
+# --dangerously-skip-permissions, so dispatch must run
+# scripts/claude-worker-pretrust before a claude launch and fail closed when
+# the pre-trust binary produces no Summary line, the same way
+# ensure_cursor_pretrust fails closed on a skipped summary. Extracts
+# ensure_claude_pretrust and runs it against a fake claude-worker-pretrust.
+claude_pretrust_test() (
+  set +e
+  set -u
+  local dispatch="$1" work fn script_file out status mutant_fn
+
+  fn=$(awk '$0=="ensure_claude_pretrust() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  [ -n "$fn" ] || { echo "FAIL: could not extract ensure_claude_pretrust" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-claude-pretrust-test.$$"
+  mkdir -p "$work"
+  trap 'rm -rf "$work"' EXIT
+  cat > "$work/claude-worker-pretrust" <<'BIN'
+#!/bin/bash
+printf '%s/.claude.json: already trusted\n' "$1"
+printf 'Summary: already trusted\n'
+BIN
+  chmod +x "$work/claude-worker-pretrust"
+
+  write_script() {
+    local outfile="$1" body="$2"
+    {
+      echo 'set -u'
+      printf 'CLAUDE_PRETRUST_BIN=%q\n' "$work/claude-worker-pretrust"
+      printf '%s\n' "$body"
+      printf 'ensure_claude_pretrust claude %q && echo TRUSTED\n' "$work"
+    } > "$outfile"
+  }
+
+  script_file="$work/run.sh"
+  write_script "$script_file" "$fn"
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^TRUSTED$' \
+      || ! printf '%s\n' "$out" | grep -q 'pre-trust ✓ claude'; then
+    echo "FAIL: ensure_claude_pretrust should succeed against a fake pre-trust binary reporting a trusted summary" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : ensure_claude_pretrust succeeds against a fake claude-worker-pretrust reporting a trusted summary"
+
+  # No Summary line at all (an unmeasured or broken pre-trust binary) must
+  # fail closed: it leaves the trust dialog in place.
+  cat > "$work/claude-worker-pretrust" <<'BIN'
+#!/bin/bash
+printf 'nothing useful here\n'
+BIN
+  chmod +x "$work/claude-worker-pretrust"
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ]; then
+    echo "FAIL: ensure_claude_pretrust should fail closed when the pre-trust binary produces no Summary line" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : ensure_claude_pretrust fails closed on a missing pre-trust summary"
+
+  # Failability: if the empty-summary case stopped matching, a worktree the
+  # pretrust binary could not actually trust would still be launched into.
+  mutant_fn=${fn/'"")'/'"nevermatches")'}
+  if [ "$mutant_fn" = "$fn" ]; then
+    echo "FAIL: empty-summary-case mutant did not change the source" >&2
+    return 1
+  fi
+  write_script "$script_file" "$mutant_fn"
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^TRUSTED$'; then
+    echo "FAIL: failability: mutant dropping the empty-summary case should have wrongly succeeded, but still didn't" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : failability: dropping the empty-summary case makes the fail-closed assertion above fail"
+)
+claude_pretrust_test "$dispatch" || exit 1
+
+# --- Feature: dispatch actually calls ensure_claude_pretrust before launch -
+#
+# claude_pretrust_test above proves ensure_claude_pretrust itself behaves
+# correctly in isolation; it does not prove dispatch's real call site still
+# invokes it before the claude terminal is created. Extracts the block
+# between the pre-trust calls and terminal creation as plain text and checks
+# both that the call is present and that it comes before
+# `orca terminal create`, so a dropped or reordered line fails here even
+# though the function body extracted above is untouched.
+claude_pretrust_call_site_test() (
+  set +e
+  set -u
+  local dispatch="$1" block mutant_block
+
+  block=$(awk '
+    /^[[:space:]]*ensure_codex_pretrust "\$RUNTIME" "\$WORKTREE" \|\| exit 2$/{f=1}
+    f{print}
+    f && /orca terminal create --worktree "\$WORKTREE"/{exit}
+  ' "$dispatch")
+
+  [ -n "$block" ] || { echo "FAIL: could not extract the pre-trust-to-terminal-creation block" >&2; return 1; }
+
+  check_ordering() {
+    local text="$1" call_line term_line
+    call_line=$(printf '%s\n' "$text" | grep -n '^[[:space:]]*ensure_claude_pretrust "\$RUNTIME" "\$WORKTREE" || exit 2$' | cut -d: -f1 | head -1)
+    term_line=$(printf '%s\n' "$text" | grep -n 'orca terminal create --worktree "\$WORKTREE"' | cut -d: -f1 | head -1)
+    [ -n "$call_line" ] || return 1
+    [ -n "$term_line" ] || return 1
+    [ "$call_line" -lt "$term_line" ]
+  }
+
+  if ! check_ordering "$block"; then
+    echo "FAIL: dispatch does not call ensure_claude_pretrust before creating the claude terminal" >&2
+    printf '%s\n' "$block" >&2
+    return 1
+  fi
+  echo "ok   : dispatch calls ensure_claude_pretrust before orca terminal create"
+
+  # Failability: a copy of the block with the claude pre-trust line dropped
+  # (the shape of the call being silently removed from the wrapper) must
+  # fail the ordering check above.
+  mutant_block=$(printf '%s\n' "$block" | grep -v '^[[:space:]]*ensure_claude_pretrust "\$RUNTIME" "\$WORKTREE" || exit 2$')
+  if [ "$mutant_block" = "$block" ]; then
+    echo "FAIL: dropped-call mutant did not change the source" >&2
+    return 1
+  fi
+  if check_ordering "$mutant_block"; then
+    echo "FAIL: failability: mutant dropping ensure_claude_pretrust should have failed the ordering check, but still passed" >&2
+    return 1
+  fi
+  echo "ok   : failability: dropping the ensure_claude_pretrust call makes the ordering check fail"
+)
+claude_pretrust_call_site_test "$dispatch" || exit 1
+
+# --- Feature: a reused pane with no worktree skips pre-trust ----------------
+#
+# --terminal HANDLE reuses an existing pane and leaves WORKTREE empty. The
+# three pre-trust helpers refuse an empty worktree path and return 1, so
+# every claude/codex/cursor dispatch onto a reused pane used to exit 2 before
+# the recording gate even though a reused pane launches nothing to pre-trust.
+# Extracts the three ensure_*_pretrust functions plus the new guarded block
+# and runs them in an isolated subshell with fake pre-trust binaries that
+# exit 9 and print nothing, so an accidental call on the skip path fails loud
+# instead of silently passing.
+pretrust_pane_reuse_skip_test() (
+  set +e
+  set -u
+  local dispatch="$1" work fn_codex fn_cursor fn_claude guard script_file \
+    out status mutant_guard rt
+
+  fn_codex=$(awk '$0=="ensure_codex_pretrust() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  fn_cursor=$(awk '$0=="ensure_cursor_pretrust() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  fn_claude=$(awk '$0=="ensure_claude_pretrust() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  guard=$(awk '
+    /^if \[ -n "\$TERMINAL" \] && \[ -z "\$WORKTREE" \]; then$/{f=1}
+    f{print}
+    f && /^fi$/{exit}
+  ' "$dispatch")
+
+  [ -n "$fn_codex" ] && [ -n "$fn_cursor" ] && [ -n "$fn_claude" ] \
+    || { echo "FAIL: could not extract the three ensure_*_pretrust functions" >&2; return 1; }
+  [ -n "$guard" ] || { echo "FAIL: could not extract the pane-reuse pre-trust guard block" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-pretrust-pane-reuse-test.$$"
+  mkdir -p "$work"
+  trap 'rm -rf "$work"' EXIT
+  cat > "$work/fake-pretrust" <<'BIN'
+#!/bin/bash
+exit 9
+BIN
+  chmod +x "$work/fake-pretrust"
+
+  write_script() {
+    local outfile="$1" guard_body="$2"
+    {
+      echo 'set -u'
+      printf 'PRETRUST_BIN=%s\n' "$work/fake-pretrust"
+      printf 'CURSOR_PRETRUST_BIN=%s\n' "$work/fake-pretrust"
+      printf 'CLAUDE_PRETRUST_BIN=%s\n' "$work/fake-pretrust"
+      printf '%s\n' "$fn_codex"
+      printf '%s\n' "$fn_cursor"
+      printf '%s\n' "$fn_claude"
+      printf '%s\n' "$guard_body"
+      echo 'echo SENTINEL'
+    } > "$outfile"
+  }
+
+  script_file="$work/run.sh"
+  write_script "$script_file" "$guard"
+
+  for rt in claude codex cursor; do
+    out=$(TERMINAL=term_x WORKTREE="" RUNTIME="$rt" bash "$script_file" 2>&1)
+    status=$?
+    if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^SENTINEL$' \
+        || ! printf '%s\n' "$out" | grep -Fq 'pre-trust · skipped · pane reused'; then
+      echo "FAIL: a reused pane with no worktree should skip pre-trust and still reach the sentinel for runtime=$rt" >&2
+      printf '%s\n' "$out" >&2
+      return 1
+    fi
+    echo "ok   : pane reuse with no worktree skips pre-trust and reaches the sentinel for runtime=$rt (status=0)"
+  done
+
+  out=$(TERMINAL="" WORKTREE="" RUNTIME=claude bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 2 ]; then
+    echo "FAIL: a fresh launch (no --terminal) with an empty worktree should still exit 2, the worktree path unchanged" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : a fresh launch with an empty worktree still exits 2, the worktree path unchanged"
+
+  # Failability: a mutant that replaces the skip condition with `false` must
+  # make the claude pane-reuse run exit 2 again, the same as before this fix.
+  mutant_guard=${guard/'[ -n "$TERMINAL" ] && [ -z "$WORKTREE" ]'/'false'}
+  if [ "$mutant_guard" = "$guard" ]; then
+    echo "FAIL: skip-condition mutant did not change the source" >&2
+    return 1
+  fi
+  write_script "$script_file" "$mutant_guard"
+  out=$(TERMINAL=term_x WORKTREE="" RUNTIME=claude bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 2 ]; then
+    echo "FAIL: failability: mutant replacing the skip condition with false should have made the claude pane-reuse run exit 2 again, but status=$status" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : failability: replacing the skip condition with false makes the claude pane-reuse run exit 2 again"
+)
+pretrust_pane_reuse_skip_test "$dispatch" || exit 1
+
+# --- Feature: claude folder-trust dialog classifies as hook-trust ----------
+#
+# 2026-10-02: claude's "Quick safety check..." folder-trust dialog had no
+# marker, so an untrusted worktree's dialog read as an unrecognized pane
+# instead of the hook-trust class that stops a dispatch before it reports a
+# false success. Extracts pane_classify_text and the four marker variables,
+# then runs the function against a captured dialog pane.
+claude_hook_trust_marker_test() (
+  set +e
+  set -u
+  local dispatch="$1" markers classify_fn script_file pane out status mutant_markers work
+
+  markers=$(grep -E '^(LIMIT_MARKERS|HOOK_TRUST_MARKERS|PREPARED_PROMPT_MARKERS|PREPARED_UNICODE_PROMPT_MARKERS)=' "$dispatch")
+  classify_fn=$(awk '$0=="pane_classify_text() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+
+  [ "$(printf '%s\n' "$markers" | grep -c .)" = 4 ] || { echo "FAIL: could not extract all four marker variables" >&2; return 1; }
+  [ -n "$classify_fn" ] || { echo "FAIL: could not extract pane_classify_text" >&2; return 1; }
+  printf '%s\n' "$markers" | grep -Fq 'Quick safety check' || { echo "FAIL: HOOK_TRUST_MARKERS does not carry the claude folder-trust wording" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-claude-hook-trust-test.$$"
+  mkdir -p "$work"
+  trap 'rm -rf "$work"' EXIT
+
+  pane=' Accessing workspace:
+
+ /private/tmp/claude-pretrust-scratch-project
+
+ Quick safety check: Is this a project you created or one you trust? (Like your
+ own code, a well-known open source project, or work from your team). If not,
+ take a moment to review what'"'"'s in this folder first.
+
+ ❯ No, exit
+   Yes, I trust this folder'
+
+  write_script() {
+    local outfile="$1" markers_body="$2"
+    {
+      echo 'set -u'
+      printf '%s\n' "$markers_body"
+      printf '%s\n' "$classify_fn"
+      printf 'pane_classify_text %s\n' "$(printf '%q' "$pane")"
+    } > "$outfile"
+  }
+
+  script_file="$work/run.sh"
+  write_script "$script_file" "$markers"
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] || [ "$out" != "hook-trust" ]; then
+    echo "FAIL: a pane carrying claude's folder-trust dialog should classify as hook-trust, got '$out' (status=$status)" >&2
+    return 1
+  fi
+  echo "ok   : a pane carrying claude's folder-trust dialog classifies as hook-trust"
+
+  # Failability: dropping the claude-specific marker must misclassify the
+  # same pane.
+  mutant_markers=${markers/'|Quick safety check.*|pre-approves .* tool permissions.*'/}
+  if [ "$mutant_markers" = "$markers" ]; then
+    echo "FAIL: claude-marker mutant did not change the source" >&2
+    return 1
+  fi
+  write_script "$script_file" "$mutant_markers"
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ] && [ "$out" = "hook-trust" ]; then
+    echo "FAIL: failability: mutant dropping the claude folder-trust marker should have misclassified the pane" >&2
+    return 1
+  fi
+  echo "ok   : failability: dropping the claude folder-trust marker misclassifies the dialog pane (got '$out')"
+)
+claude_hook_trust_marker_test "$dispatch" || exit 1
+
+# --- Feature: fresh claude TUI prompt classifies as prepared-prompt --------
+#
+# 2026-10-23: a fresh `claude` pane's arrow line carries placeholder text
+# ("Try \"...\"") next to the arrow instead of a bare arrow, so
+# PREPARED_UNICODE_PROMPT_MARKERS read it as unknown before and after inject,
+# and a worker that finished inside the delivery window never registered as
+# delivered. Extracts pane_classify_text and the four marker variables, then
+# runs the function against the five measured pane lines.
+fresh_claude_prompt_marker_test() (
+  set +e
+  set -u
+  local dispatch="$1" markers classify_fn script_file pane out status mutant_markers work
+
+  markers=$(grep -E '^(LIMIT_MARKERS|HOOK_TRUST_MARKERS|PREPARED_PROMPT_MARKERS|PREPARED_UNICODE_PROMPT_MARKERS)=' "$dispatch")
+  classify_fn=$(awk '$0=="pane_classify_text() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+
+  [ "$(printf '%s\n' "$markers" | grep -c .)" = 4 ] || { echo "FAIL: could not extract all four marker variables" >&2; return 1; }
+  [ -n "$classify_fn" ] || { echo "FAIL: could not extract pane_classify_text" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-fresh-claude-prompt-test.$$"
+  mkdir -p "$work"
+  trap 'rm -rf "$work"' EXIT
+
+  pane=$(printf '%s\n%s\n%s\n%s\n%s' \
+    '──────────────────────────────────────────────────────────────────────────────────────────────────────────────' \
+    $'\xe2\x9d\xaf\xc2\xa0Try "fix lint errors"' \
+    '──────────────────────────────────────────────────────────────────────────────────────────────────────────────' \
+    '  claude-haiku-5 │ codex-hooks-vet-unmeasured' \
+    '  ⏵⏵ auto mode on (shift+tab to cycle) · PR #190')
+
+  write_script() {
+    local outfile="$1" markers_body="$2"
+    {
+      echo 'set -u'
+      printf '%s\n' "$markers_body"
+      printf '%s\n' "$classify_fn"
+      printf 'pane_classify_text %s\n' "$(printf '%q' "$pane")"
+    } > "$outfile"
+  }
+
+  script_file="$work/run.sh"
+  write_script "$script_file" "$markers"
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] || [ "$out" != "prepared-prompt" ]; then
+    echo "FAIL: a fresh claude TUI prompt pane should classify as prepared-prompt, got '$out' (status=$status)" >&2
+    return 1
+  fi
+  echo "ok   : a fresh claude TUI prompt's placeholder arrow line classifies as prepared-prompt"
+
+  # Failability: restoring the bare-arrow-only pattern (dropping the added
+  # placeholder alternation) must misclassify the same pane as unknown.
+  mutant_markers=${markers/'([\xc2\xa0 ]+Try "[^"]*")?'/}
+  if [ "$mutant_markers" = "$markers" ]; then
+    echo "FAIL: unicode-marker mutant did not change the source" >&2
+    return 1
+  fi
+  write_script "$script_file" "$mutant_markers"
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ] && [ "$out" = "prepared-prompt" ]; then
+    echo "FAIL: failability: mutant restoring the bare-arrow-only pattern should have misclassified the pane" >&2
+    return 1
+  fi
+  echo "ok   : failability: restoring the bare-arrow-only pattern misclassifies the fresh prompt pane (got '$out')"
+)
+fresh_claude_prompt_marker_test "$dispatch" || exit 1
+
+# --- Feature: delivery_result folds the dispatch status in --------------------
+#
+# 2026-10-18: a haiku worker completed in 17s and returned the pane to the
+# same prepared prompt it started from, so the pane transition alone read
+# unknown while the dispatch record already said completed. Extracts
+# delivery_result and runs it against the three status-aware cases: a
+# completed dispatch becomes done, hook-trust still wins over a completed
+# status, and an unreadable status leaves the existing pane-transition
+# fallback untouched.
+delivery_result_test() (
+  set +e
+  set -u
+  local dispatch="$1" fn work script_file out status mutant_fn
+
+  fn=$(awk '$0=="delivery_result() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  [ -n "$fn" ] || { echo "FAIL: could not extract delivery_result" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-delivery-result-test.$$"
+  mkdir -p "$work"
+  trap 'rm -rf "$work"' EXIT
+
+  run_case() {  # pre post status want
+    local body="$1" pre="$2" post="$3" dstatus="$4" want="$5" out
+    script_file="$work/run.sh"
+    {
+      echo 'set -u'
+      printf '%s\n' "$body"
+      printf 'delivery_result %q %q %q\n' "$pre" "$post" "$dstatus"
+    } > "$script_file"
+    out=$(bash "$script_file" 2>&1)
+    if [ "$out" != "$want" ]; then
+      echo "FAIL: delivery_result $pre $post $dstatus gave '$out', want '$want'" >&2
+      return 1
+    fi
+  }
+
+  run_case "$fn" prepared-prompt prepared-prompt completed done || return 1
+  echo "ok   : delivery_result · a completed dispatch with the pane still on a prepared prompt reads done"
+
+  run_case "$fn" prepared-prompt hook-trust completed hook-trust || return 1
+  echo "ok   : delivery_result · hook-trust after inject still wins over a completed dispatch status"
+
+  run_case "$fn" prepared-prompt limit completed limit || return 1
+  echo "ok   : delivery_result · limit after inject still wins over a completed dispatch status"
+
+  run_case "$fn" prepared-prompt unknown unreadable agent-started || return 1
+  echo "ok   : delivery_result · an unreadable dispatch status leaves the prepared-prompt-to-unknown transition reading agent-started"
+
+  # Failability: drop the completed-status branch; the first case above must
+  # then stop reading done.
+  mutant_fn=${fn/'  if [ "$3" = completed ]; then
+    echo done
+    return
+  fi
+'/''}
+  if [ "$mutant_fn" = "$fn" ]; then
+    echo "FAIL: completed-status mutant did not change the source" >&2
+    return 1
+  fi
+  script_file="$work/run.sh"
+  {
+    echo 'set -u'
+    printf '%s\n' "$mutant_fn"
+    printf 'delivery_result %q %q %q\n' prepared-prompt prepared-prompt completed
+  } > "$script_file"
+  out=$(bash "$script_file" 2>&1)
+  if [ "$out" = done ]; then
+    echo "FAIL: failability: mutant dropping the completed-status check should have stopped reporting done" >&2
+    return 1
+  fi
+  echo "ok   : failability: dropping the completed-status check stops the completed-dispatch case from reading done (got '$out')"
+)
+delivery_result_test "$dispatch" || exit 1
+
+# --- Feature: codex launch flags ---------------------------------------------
+#
+# 2026-10-01: a bare `codex --model <id>` opened a model-retirement migration
+# menu with "Try new model" preselected, and the injected spec's first
+# keystroke confirmed it. Extracts shell_quote, runtime_command, and the two
+# launch-flag variables, then compares the codex case's output against the
+# exact string the three added -c flags must produce.
+codex_launch_flags_test() (
+  set +e
+  set -u
+  local dispatch="$1" work shell_quote_fn runtime_command_fn vars want got mutant_fn out status
+
+  shell_quote_fn=$(awk '$0=="shell_quote() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  runtime_command_fn=$(awk '$0=="runtime_command() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  vars=$(grep -E '^CODEX_(REASONING_EFFORT|MIGRATION_ACK)=' "$dispatch")
+
+  [ -n "$shell_quote_fn" ] || { echo "FAIL: could not extract shell_quote" >&2; return 1; }
+  [ -n "$runtime_command_fn" ] || { echo "FAIL: could not extract runtime_command" >&2; return 1; }
+  [ "$(printf '%s\n' "$vars" | grep -c .)" = 2 ] || { echo "FAIL: could not extract both CODEX_ launch variables" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-codex-launch-test.$$"
+  mkdir -p "$work"
+  trap 'rm -rf "$work"' EXIT
+
+  write_script() {
+    local outfile="$1" fn="$2"
+    {
+      echo 'set -u'
+      printf '%s\n' "$vars"
+      printf '%s\n' "$shell_quote_fn"
+      printf '%s\n' "$fn"
+      echo 'MODEL=gpt-5.5'
+      echo 'runtime_command codex'
+    } > "$outfile"
+  }
+
+  want='codex --model gpt-5.5 -c '"'"'model_reasoning_effort="xhigh"'"'"' -c check_for_update_on_startup=false -c '"'"'notice.model_migrations={"gpt-5.5"="gpt-6.1-sol"}'"'"''
+
+  script_file="$work/run.sh"
+  write_script "$script_file" "$runtime_command_fn"
+  got=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] || [ "$got" != "$want" ]; then
+    echo "FAIL: codex launch command is '$got' (status=$status)" >&2
+    echo "  want '$want'" >&2
+    return 1
+  fi
+  echo "ok   : codex launch carries --model, reasoning effort, update-check off, and the migration ack · rc=0"
+
+  # Failability: dropping check_for_update_on_startup=false must break the exact-string match.
+  mutant_fn=${runtime_command_fn/' -c check_for_update_on_startup=false'/}
+  if [ "$mutant_fn" = "$runtime_command_fn" ]; then
+    echo "FAIL: launch-flag mutant did not change the source" >&2
+    return 1
+  fi
+  write_script "$script_file" "$mutant_fn"
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ] && [ "$out" = "$want" ]; then
+    echo "FAIL: failability: mutant dropping check_for_update_on_startup=false still produced the exact wanted string" >&2
+    return 1
+  fi
+  echo "ok   : failability: dropping check_for_update_on_startup=false breaks the exact-string match (mutant rc=$status)"
+)
+codex_launch_flags_test "$dispatch" || exit 1
+
+# --- Feature: codex start-screen check before inject -------------------------
+#
+# 2026-10-01: a codex pane sitting on that migration menu, a folder-trust
+# prompt, or a provider-limit notice reports idle exactly like a ready prompt.
+# `terminal wait --for tui-idle` cannot tell them apart, only the footer
+# line "<model> <effort> · <path>" can. Extracts codex_start_screen_problem
+# and the LIMIT_MARKERS it reuses, then runs it against the pane tails read
+# that day (ready, mismatched footer, update notice, provider limit, the
+# migration menu) plus an empty pane, checking both the returned exit code
+# and the printed reason. One mutant per check inside the function, each
+# breaking only the case it guards.
+codex_start_screen_test() (
+  set +e
+  set -u
+  local dispatch="$1" work fn markers ready mismatched update limit menu
+
+  fn=$(awk '$0=="codex_start_screen_problem() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  markers=$(grep -E '^LIMIT_MARKERS=' "$dispatch")
+  [ -n "$fn" ] || { echo "FAIL: could not extract codex_start_screen_problem" >&2; return 1; }
+  [ -n "$markers" ] || { echo "FAIL: could not extract LIMIT_MARKERS" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-codex-start-test.$$"
+  mkdir -p "$work"
+  trap 'rm -rf "$work"' EXIT
+
+  run_case() {  # fn-body  pane-text
+    local body="$1" pane="$2" script_file="$work/case.sh"
+    {
+      echo 'set -u'
+      printf '%s\n' "$markers"
+      printf '%s\n' "$body"
+      printf 'codex_start_screen_problem "$1" gpt-5.5 xhigh\n'
+    } > "$script_file"
+    bash "$script_file" "$pane"
+  }
+
+  ready='› Ask Codex to do anything
+  GPT-5.5 xhigh · ~/worktree
+  ? for shortcuts                                   ⚠ 1 warning · f2 to view'
+  mismatched='Model changed to gpt-6.1-sol medium
+› Ask Codex to do anything
+  GPT-6.1-Sol medium · ~/worktree'
+  update='Update available!'
+  limit="out of credits
+$ready"
+  menu='  GPT-5.5 retires on October 14, 2026. Switch to GPT-6.1 Sol to continue working in Codex.
+› 1. Try new model
+  2. Use existing model
+  enter/esc confirm · ctrl+c quit'
+
+  assert_case() {  # label  want-rc  want-substring  pane
+    local label="$1" want_rc="$2" want_sub="$3" pane="$4" out rc
+    out=$(run_case "$fn" "$pane")
+    rc=$?
+    if [ "$rc" != "$want_rc" ]; then
+      echo "FAIL: case $label expected rc $want_rc, got $rc (out: $out)" >&2
+      return 1
+    fi
+    case "$out" in
+      *"$want_sub"*) ;;
+      *) echo "FAIL: case $label output '$out' lacks '$want_sub'" >&2; return 1;;
+    esac
+    echo "ok   : case $label · rc=$rc"
+  }
+
+  assert_case ready "0" "" "  >_ OpenAI Codex (v0.159.3)
+$ready" || return 1
+  assert_case footer-mismatch "1" "requested 'gpt-5.5 xhigh'" "$mismatched" || return 1
+  assert_case update "1" "update notice" "$update" || return 1
+  assert_case limit "1" "provider limit notice" "$limit" || return 1
+  assert_case menu "1" "Try new model" "$menu" || return 1
+  assert_case no-footer "2" "no model footer yet" "" || return 1
+
+  mutate_line() {  # unique-substring-of-target-line  replacement-line
+    local needle="$1" repl="$2" line out="" replaced=0
+    while IFS= read -r line; do
+      case "$line" in
+        *"$needle"*) line="$repl"; replaced=1;;
+      esac
+      out="$out$line
+"
+    done <<EOF
+$fn
+EOF
+    [ "$replaced" -eq 1 ] || return 1
+    printf '%s' "$out"
+  }
+
+  failability_case() {  # label  needle  replacement-line  pane  blocked-rc
+    local label="$1" needle="$2" repl="$3" pane="$4" blocked_rc="$5" mutant out rc
+    mutant=$(mutate_line "$needle" "$repl") || { echo "FAIL: $label needle not found in function body" >&2; return 1; }
+    if [ "$mutant" = "$fn" ]; then
+      echo "FAIL: $label mutant did not change the source" >&2
+      return 1
+    fi
+    out=$(run_case "$mutant" "$pane")
+    rc=$?
+    if [ "$rc" = "$blocked_rc" ]; then
+      echo "FAIL: failability: $label mutant still returns $blocked_rc" >&2
+      return 1
+    fi
+    echo "ok   : failability: $label mutant changes rc $blocked_rc -> $rc"
+  }
+
+  failability_case limit-marker 'grep -Eiq "$LIMIT_MARKERS"' \
+    '  if printf "%s\n" "$state" | grep -Eiq "zz-never-matches-zz"; then' \
+    "$limit" "1" || return 1
+  failability_case update-phrase "grep -Eiq 'update available'" \
+    '  if printf "%s\n" "$state" | grep -Eiq "zz-never-matches-zz"; then' \
+    "$update" "1" || return 1
+  failability_case menu-pattern "grep -Eq '^[[:space:]]*›[[:space:]]*[0-9]+\\.'; then" \
+    '  if printf "%s\n" "$state" | grep -Eq "zz-never-matches-zz"; then' \
+    "$menu" "1" || return 1
+  failability_case no-footer-yet '[ -z "$footer" ]' \
+    '  if [ -z "zz-never-empty-zz" ]; then' \
+    "" "2" || return 1
+  failability_case footer-mismatch-compare '[ "$shown" != "$want" ]' \
+    '  if [ "$shown" = "$want" ]; then' \
+    "$mismatched" "1" || return 1
+)
+codex_start_screen_test "$dispatch" || exit 1
+
+# --- Feature: codex start-screen check actually gates --inject -------------
+#
+# The case-level test above proves codex_start_screen_problem classifies a
+# pane correctly; it does not prove the wrapper acts on that classification.
+# Extracts the call site itself (from the `if [ "$RUNTIME" = codex ]` guard
+# through the `--inject` call and its own failure check) and runs it against
+# a fake `orca` that records whether `orchestration dispatch --inject` was
+# ever reached. A migration-menu pane must never reach it; a ready pane must.
+codex_start_screen_wiring_test() (
+  set +e
+  set -u
+  local dispatch="$1" work jqf_fn pane_classification_fn start_fn markers wiring_block
+  local menu ready script_file out status
+
+  jqf_fn=$(grep -m1 -F 'jqf() {' "$dispatch")
+  pane_classification_fn=$(awk '$0=="pane_classification() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  start_fn=$(awk '$0=="codex_start_screen_problem() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  markers=$(grep -E '^(LIMIT_MARKERS|HOOK_TRUST_MARKERS|PREPARED_PROMPT_MARKERS|PREPARED_UNICODE_PROMPT_MARKERS)=' "$dispatch")
+  wiring_block=$(awk '
+    $0=="if [ \"$RUNTIME\" = codex ]; then"{f=1}
+    f{print}
+    f && /dispatch failed/{exit}
+  ' "$dispatch")
+
+  [ -n "$jqf_fn" ] || { echo "FAIL: could not extract jqf" >&2; return 1; }
+  [ -n "$pane_classification_fn" ] || { echo "FAIL: could not extract pane_classification" >&2; return 1; }
+  [ -n "$start_fn" ] || { echo "FAIL: could not extract codex_start_screen_problem" >&2; return 1; }
+  [ -n "$wiring_block" ] || { echo "FAIL: could not extract the codex start-screen wiring block" >&2; return 1; }
+  printf '%s\n' "$wiring_block" | grep -Fq 'codex_start_screen_problem' || { echo "FAIL: extracted block does not call codex_start_screen_problem" >&2; return 1; }
+  printf '%s\n' "$wiring_block" | grep -Fq 'orca orchestration dispatch' || { echo "FAIL: extracted block does not reach the inject call" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-codex-wiring-test.$$"
+  mkdir -p "$work"
+  trap 'rm -rf "$work"' EXIT
+
+  cat > "$work/orca" <<'BIN'
+#!/bin/bash
+if [ "$1 $2" = "terminal read" ]; then
+  cat "$FAKE_PANE_FILE"
+  exit 0
+fi
+if [ "$1 $2" = "orchestration dispatch" ]; then
+  echo INJECTED >> "$FAKE_MARKER"
+  printf '{"result":{"dispatch":{"id":"disp_fake"}}}\n'
+  exit 0
+fi
+exit 1
+BIN
+  chmod +x "$work/orca"
+
+  write_script() {
+    local outfile="$1" body="$2" pane="$3"
+    printf '%s\n' "$pane" > "$work/pane.txt"
+    {
+      echo 'set -u'
+      printf 'export FAKE_MARKER=%s\n' "$work/injected"
+      printf 'export FAKE_PANE_FILE=%s\n' "$work/pane.txt"
+      printf '%s\n' "$jqf_fn"
+      printf '%s\n' "$markers"
+      printf '%s\n' "$pane_classification_fn"
+      printf '%s\n' "$start_fn"
+      echo 'RUNTIME=codex'
+      echo 'MODEL=gpt-5.5'
+      echo 'CODEX_REASONING_EFFORT=xhigh'
+      echo 'TERMINAL=term_fake'
+      echo 'TASK=task_fake'
+      printf '%s\n' "$body"
+      echo 'echo WIRING_SURVIVED'
+    } > "$outfile"
+  }
+
+  menu='  GPT-5.5 retires on October 14, 2026. Switch to GPT-6.1 Sol to continue working in Codex.
+› 1. Try new model
+  2. Use existing model
+  enter/esc confirm · ctrl+c quit'
+  ready='› Ask Codex to do anything
+  GPT-5.5 xhigh · ~/worktree
+  ? for shortcuts                                   ⚠ 1 warning · f2 to view'
+
+  script_file="$work/run.sh"
+  rm -f "$work/injected"
+  write_script "$script_file" "$wiring_block" "$menu"
+  out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ] || [ -f "$work/injected" ]; then
+    echo "FAIL: a migration-menu codex pane should exit nonzero and never reach --inject (status=$status)" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : a migration-menu codex pane never reaches orca orchestration dispatch --inject"
+
+  rm -f "$work/injected"
+  write_script "$script_file" "$wiring_block" "$ready"
+  out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] || [ ! -f "$work/injected" ] || ! printf '%s\n' "$out" | grep -q '^WIRING_SURVIVED$'; then
+    echo "FAIL: a ready codex pane should reach --inject and fall through the wiring block" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : a ready codex pane reaches orca orchestration dispatch --inject"
+
+  # Failability: a copy of the wiring block whose gate conditional is disabled
+  # (the shape of a guard caller silently dropped from the wrapper) must
+  # still inject even on a migration-menu pane.
+  mutant_wiring=${wiring_block/'if [ "$CODEX_START_RC" != 0 ]; then'/'if false; then'}
+  if [ "$mutant_wiring" = "$wiring_block" ]; then
+    echo "FAIL: gate-disabled mutant did not change the source" >&2
+    return 1
+  fi
+  rm -f "$work/injected"
+  write_script "$script_file" "$mutant_wiring" "$menu"
+  out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] && [ ! -f "$work/injected" ]; then
+    echo "FAIL: failability: gate-disabled mutant should have injected on a migration-menu pane, but still didn't" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : failability: disabling the gate conditional injects on a migration-menu pane (status=$status, injected=$([ -f "$work/injected" ] && echo yes || echo no))"
+)
+codex_start_screen_wiring_test "$dispatch" || exit 1
+
+# --- Feature: codex_hooks_vet -------------------------------------------------
+#
+# 2026-10-01: codex's "Hooks need review" modal is answerable under dispatch
+# authority only once the hooks it would trust are read, not just trusted on
+# faith. Extracts codex_hooks_vet and runs it against fixture hooks.json
+# files shaped like the real file measured on this host (top-level "hooks",
+# per-event arrays of {matcher, hooks:[{command}]}): one with only
+# already-resolvable commands, one with a builtin first word, one with a
+# missing absolute path, one with a first word not on PATH, one with a
+# malformed event shape, one whose document is `{}`, one whose document is a
+# JSON list, and one home with no hooks.json at all. The badpath/badword
+# fixtures carry a valid hook in an earlier event before the invalid one, so
+# a vet that stops checking after the first event or the first command would
+# still pass them. A mutant turns the top-level guard into a no-op: both the
+# `{}` and the list document then fall through to the dict-only `hooks =
+# document["hooks"]` lookup and crash with an uncaught exception, which also
+# exits 1, so the mutant is caught on the dropped "top level: wrong shape"
+# message, not on the exit code.
+codex_hooks_vet_test() (
+  set +e
+  set -u
+  local dispatch="$1" work fn
+
+  fn=$(awk '$0=="codex_hooks_vet() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  [ -n "$fn" ] || { echo "FAIL: could not extract codex_hooks_vet" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-hooks-vet-test.$$"
+  mkdir -p "$work/pass" "$work/builtin" "$work/badpath" "$work/badword" "$work/badshape" "$work/missing" "$work/topempty" "$work/toplist" "$work/orcahook" "$work/commenthash" "$work/redirect"
+  trap 'rm -rf "$work"' EXIT
+
+  cat > "$work/pass/hooks.json" <<'EOF'
+{"hooks": {"PreToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "echo hi"}]}]}}
+EOF
+  cat > "$work/builtin/hooks.json" <<'EOF'
+{"hooks": {"PreToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "cd /tmp && echo hi"}]}]}}
+EOF
+  cat > "$work/badpath/hooks.json" <<'EOF'
+{"hooks": {"SessionStart": [{"matcher": "", "hooks": [{"type": "command", "command": "echo hi"}]}], "PreToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "/no/such/binary --flag"}]}]}}
+EOF
+  cat > "$work/badword/hooks.json" <<'EOF'
+{"hooks": {"SessionStart": [{"matcher": "", "hooks": [{"type": "command", "command": "echo hi"}]}], "PreToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "zz-mogui-never-on-path --flag"}]}]}}
+EOF
+  cat > "$work/badshape/hooks.json" <<'EOF'
+{"hooks": {"PreToolUse": {}}}
+EOF
+  cat > "$work/topempty/hooks.json" <<'EOF'
+{}
+EOF
+  cat > "$work/toplist/hooks.json" <<'EOF'
+[]
+EOF
+  cat > "$work/commenthash/hooks.json" <<'EOF'
+{"hooks": {"PreToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "echo ok#; /no/such/binary"}]}]}}
+EOF
+  cat > "$work/redirect/hooks.json" <<'EOF'
+{"hooks": {"PreToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "echo hi >/no/such/dir/created-later.log"}]}]}}
+EOF
+
+  # Orca's own managed codex-hook.sh wrapper (the command every codex home
+  # on an Orca host carries): quoted paths followed directly by `;`, which
+  # is exactly what shlex.split used to fuse onto the path. The fixture
+  # points the quoted paths at a script it creates so the vet's existence
+  # check can pass.
+  orcahook_script="$work/orcahook-home/.orca/agent-hooks/codex-hook.sh"
+  mkdir -p "$(dirname "$orcahook_script")"
+  printf '#!/bin/sh\n' > "$orcahook_script"
+  chmod +x "$orcahook_script"
+  orcahook_command="if [ -f '$orcahook_script' ] && [ -r '$orcahook_script' ]; then /bin/sh '$orcahook_script'; else { command -p cat 2>/dev/null || cat; } >/dev/null 2>&1 || :; fi"
+  python3 -c '
+import json, sys
+command = sys.argv[1]
+doc = {"hooks": {"PreToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": command}]}]}}
+print(json.dumps(doc))
+' "$orcahook_command" > "$work/orcahook/hooks.json"
+
+  run_case() {  # fn-body  home-dir
+    local body="$1" home="$2" script_file="$work/case.sh"
+    {
+      echo 'set -u'
+      printf '%s\n' "$body"
+      printf 'codex_hooks_vet "$1"\n'
+    } > "$script_file"
+    bash "$script_file" "$home"
+  }
+
+  assert_case() {  # label  want-rc  want-substring  home
+    local label="$1" want_rc="$2" want_sub="$3" home="$4" out rc
+    out=$(run_case "$fn" "$home")
+    rc=$?
+    if [ "$rc" != "$want_rc" ]; then
+      echo "FAIL: case $label expected rc $want_rc, got $rc (out: $out)" >&2
+      return 1
+    fi
+    case "$out" in
+      *"$want_sub"*) ;;
+      *) echo "FAIL: case $label output '$out' lacks '$want_sub'" >&2; return 1;;
+    esac
+    echo "ok   : case $label · rc=$rc"
+  }
+
+  assert_case all-local "0" "1 command(s) checked" "$work/pass" || return 1
+  assert_case builtin-first-word "0" "1 command(s) checked" "$work/builtin" || return 1
+  assert_case bad-abs-path "1" "/no/such/binary: no such file" "$work/badpath" || return 1
+  assert_case bad-path-word "1" "zz-mogui-never-on-path: not found on PATH" "$work/badword" || return 1
+  assert_case bad-event-shape "1" "wrong shape" "$work/badshape" || return 1
+  assert_case top-level-empty-dict "1" "top level: wrong shape" "$work/topempty" || return 1
+  assert_case top-level-json-list "1" "top level: wrong shape" "$work/toplist" || return 1
+  assert_case missing-hooks-json "2" "not found" "$work/missing" || return 1
+  assert_case orca-managed-hook-shape "0" "1 command(s) checked" "$work/orcahook" || return 1
+  assert_case comment-hash-not-dropped "1" "/no/such/binary: no such file" "$work/commenthash" || return 1
+  assert_case redirect-target-not-checked "0" "1 command(s) checked" "$work/redirect" || return 1
+
+  mutate_line() {  # unique-substring-of-target-line  replacement-line
+    local needle="$1" repl="$2" line out="" replaced=0
+    while IFS= read -r line; do
+      case "$line" in
+        *"$needle"*) line="$repl"; replaced=1;;
+      esac
+      out="$out$line
+"
+    done <<EOF
+$fn
+EOF
+    [ "$replaced" -eq 1 ] || return 1
+    printf '%s' "$out"
+  }
+
+  failability_case() {  # label  needle  replacement-line  home  blocked-rc
+    local label="$1" needle="$2" repl="$3" home="$4" blocked_rc="$5" mutant out rc
+    mutant=$(mutate_line "$needle" "$repl") || { echo "FAIL: $label needle not found in function body" >&2; return 1; }
+    if [ "$mutant" = "$fn" ]; then
+      echo "FAIL: $label mutant did not change the source" >&2
+      return 1
+    fi
+    out=$(run_case "$mutant" "$home")
+    rc=$?
+    if [ "$rc" = "$blocked_rc" ]; then
+      echo "FAIL: failability: $label mutant still returns $blocked_rc" >&2
+      return 1
+    fi
+    echo "ok   : failability: $label mutant changes rc $blocked_rc -> $rc"
+  }
+
+  failability_case abs-path-check \
+    '                if not is_redirect_target and token.startswith("/") and not os.path.exists(token):' \
+    '                if False:' \
+    "$work/badpath" "1" || return 1
+  failability_case path-word-check \
+    '                if shutil.which(first) is None:' \
+    '                if False:' \
+    "$work/badword" "1" || return 1
+  failability_case missing-file-check \
+    '    print(f"hooks-vet: {path}: not found")' \
+    '    sys.exit(0)' \
+    "$work/missing" "2" || return 1
+  failability_case entries-shape-check \
+    '    if not isinstance(entries, list):' \
+    '    if False:' \
+    "$work/badshape" "1" || return 1
+  failability_case early-stop \
+    '            checked += 1' \
+    '            checked += 1
+            sys.exit(0)' \
+    "$work/badpath" "1" || return 1
+
+  # Failability for the fix itself: reverting the three-line shlex.shlex
+  # tokenizer back to the one-line shlex.split it replaced must make the
+  # orca-managed-hook-shape fixture fail again, fused semicolon and all,
+  # the exact regression this contract closes.
+  tokenizer_regression_case() {
+    local mutant out rc
+    mutant=$(printf '%s\n' "$fn" | awk '
+      !found && index($0, "lexer = shlex.shlex(command, posix=True, punctuation_chars=True)") {
+        print "                tokens = shlex.split(command)"
+        found = 1
+        skip = 3
+        next
+      }
+      skip > 0 { skip--; next }
+      { print }
+    ')
+    if [ "$mutant" = "$fn" ]; then
+      echo "FAIL: tokenizer-regression mutant did not change the source" >&2
+      return 1
+    fi
+    out=$(run_case "$mutant" "$work/orcahook"); rc=$?
+    if [ "$rc" != "1" ]; then
+      echo "FAIL: tokenizer-regression mutant expected rc 1 on the orca-managed-hook-shape fixture, got $rc (out: $out)" >&2
+      return 1
+    fi
+    case "$out" in
+      *"$orcahook_script;"*) ;;
+      *) echo "FAIL: tokenizer-regression mutant output '$out' does not name the fused-semicolon token" >&2; return 1;;
+    esac
+    echo "ok   : failability: tokenizer-regression mutant (shlex.split restored) rc 0 -> $rc, naming '$orcahook_script;'"
+  }
+  tokenizer_regression_case || return 1
+
+  failability_case comment-hash-check \
+    '                lexer.commenters = ""' \
+    '                lexer.commenters = "#"' \
+    "$work/commenthash" "1" || return 1
+  failability_case redirect-target-check \
+    '                if not is_redirect_target and token.startswith("/") and not os.path.exists(token):' \
+    '                if token.startswith("/") and not os.path.exists(token):' \
+    "$work/redirect" "0" || return 1
+
+  # The top-level guard's own crash-path coincidence: disabling it doesn't
+  # flip the exit code away from 1, because the dict-only `document["hooks"]`
+  # lookup that follows raises an uncaught exception on both a `{}` document
+  # (KeyError) and a list document (TypeError), and an uncaught exception
+  # also exits 1. So this mutant is caught on the dropped message, not rc.
+  top_level_noop_case() {
+    local mutant out1 out2 rc1 rc2
+    mutant=$(mutate_line \
+      'if not isinstance(document, dict) or not isinstance(document.get("hooks"), dict):' \
+      'if False:') || { echo "FAIL: top-level-noop needle not found in function body" >&2; return 1; }
+    if [ "$mutant" = "$fn" ]; then
+      echo "FAIL: top-level-noop mutant did not change the source" >&2
+      return 1
+    fi
+    out1=$(run_case "$mutant" "$work/topempty"); rc1=$?
+    out2=$(run_case "$mutant" "$work/toplist"); rc2=$?
+    if [ "$rc1" != "1" ] || [ "$rc2" != "1" ]; then
+      echo "FAIL: top-level-noop mutant expected an uncaught exception (rc 1) on both fixtures, got $rc1 and $rc2" >&2
+      return 1
+    fi
+    case "$out1" in
+      *"top level: wrong shape"*)
+        echo "FAIL: failability: top-level-noop mutant still prints the controlled message for {}" >&2
+        return 1;;
+    esac
+    case "$out2" in
+      *"top level: wrong shape"*)
+        echo "FAIL: failability: top-level-noop mutant still prints the controlled message for []" >&2
+        return 1;;
+    esac
+    echo "ok   : failability: top-level-noop mutant drops to an uncaught exception on both fixtures (rc stays $rc1/$rc2, controlled message gone)"
+  }
+  top_level_noop_case || return 1
+)
+codex_hooks_vet_test "$dispatch" || exit 1
+
+# --- Feature: HOOKS_ANSWER_BIN resolves beside the wrapper -----------------
+#
+# Round two of PR #157: the wrapper pointed HOOKS_ANSWER_BIN at
+# {{RUNTIME_ROOT}}/scripts/codex-hooks-review-answer, a path no install has;
+# the tool ships in the same directory as the wrapper itself. Extracts the
+# HOOKS_ANSWER_BIN assignment and evaluates it with SCRIPTS_DIR set to the
+# wrapper's real directory, then to an empty temp directory, to prove the
+# assignment tracks SCRIPTS_DIR.
+hooks_answer_bin_path_test() (
+  set +e
+  set -u
+  local dispatch="$1" assign real_dir empty_dir script_file out rc
+
+  assign=$(grep -E '^HOOKS_ANSWER_BIN=' "$dispatch")
+  [ -n "$assign" ] || { echo "FAIL: could not extract HOOKS_ANSWER_BIN assignment" >&2; return 1; }
+
+  script_file="${TMPDIR:-/tmp}/mogui-dispatch-hooks-answer-bin-test.$$.sh"
+  trap 'rm -f "$script_file"' EXIT
+  {
+    echo 'set -u'
+    printf '%s\n' "$assign"
+    echo '[ -x "$HOOKS_ANSWER_BIN" ] && printf "%s\n" "$HOOKS_ANSWER_BIN"'
+  } > "$script_file"
+
+  real_dir=$(cd "$(dirname "$dispatch")" && pwd)
+  out=$(SCRIPTS_DIR="$real_dir" bash "$script_file")
+  rc=$?
+  if [ "$rc" != 0 ] || [ "$out" != "$real_dir/codex-hooks-review-answer" ]; then
+    echo "FAIL: HOOKS_ANSWER_BIN did not resolve by name to codex-hooks-review-answer under the wrapper's real SCRIPTS_DIR" >&2
+    return 1
+  fi
+  echo "ok   : HOOKS_ANSWER_BIN resolves to an existing executable (${out##*/}) under the real SCRIPTS_DIR"
+
+  # Failability: an assignment pointed at dispatch itself, not
+  # codex-hooks-review-answer, is still an existing executable beside the
+  # wrapper. The old -x-only check waved this through; the name compare
+  # above must fail it instead.
+  mutant_assign=${assign/codex-hooks-review-answer/dispatch}
+  if [ "$mutant_assign" = "$assign" ]; then
+    echo "FAIL: dispatch-target mutant did not change the source" >&2
+    return 1
+  fi
+  {
+    echo 'set -u'
+    printf '%s\n' "$mutant_assign"
+    echo '[ -x "$HOOKS_ANSWER_BIN" ] && printf "%s\n" "$HOOKS_ANSWER_BIN"'
+  } > "$script_file"
+  out=$(SCRIPTS_DIR="$real_dir" bash "$script_file")
+  if [ "$out" = "$real_dir/codex-hooks-review-answer" ]; then
+    echo "FAIL: failability: an assignment pointed at dispatch should fail the name compare" >&2
+    return 1
+  fi
+  echo "ok   : failability: an assignment pointed at dispatch resolves to an executable (${out##*/}) and fails the name compare"
+
+  {
+    echo 'set -u'
+    printf '%s\n' "$assign"
+    echo '[ -x "$HOOKS_ANSWER_BIN" ] && printf "%s\n" "$HOOKS_ANSWER_BIN"'
+  } > "$script_file"
+
+  empty_dir="${TMPDIR:-/tmp}/mogui-dispatch-hooks-answer-bin-empty.$$"
+  mkdir -p "$empty_dir"
+  out=$(SCRIPTS_DIR="$empty_dir" bash "$script_file")
+  rc=$?
+  rm -rf "$empty_dir"
+  if [ "$rc" -eq 0 ]; then
+    echo "FAIL: failability: an empty SCRIPTS_DIR should not resolve HOOKS_ANSWER_BIN to an executable, but the check passed" >&2
+    return 1
+  fi
+  echo "ok   : failability: an empty SCRIPTS_DIR fails the existence check (rc=$rc)"
+)
+hooks_answer_bin_path_test "$dispatch" || exit 1
+
+# --- Feature: hooks-review modal answered only after a vetted pass ---------
+#
+# 2026-10-01: PR #156 made codex_start_screen_problem read the "Hooks need
+# review" modal as a selection menu and take the exit-3 path, same as any
+# other menu it cannot act on, closing the door codex-hooks-review-answer
+# (shipped in PR #133) was meant to open. Extracts the 3b wiring block plus
+# codex_hooks_vet_homes/codex_hooks_homes/codex_accounts_dir/codex_hooks_vet
+# and HOOKS_ANSWER_BIN, and runs it against a fake orca (terminal read
+# returns the hooks-review pane once, then a ready pane), a fake answer
+# tool, and a fake $HOME whose .codex/hooks.json either passes or fails the
+# vet.
+codex_hooks_vet_wiring_test() (
+  set +e
+  set -u
+  local dispatch="$1" work jqf_fn pane_classification_fn start_fn markers wiring_block
+  local vet_fn homes_fn accounts_fn vet_homes_fn hooks_answer_var
+  local menu ready script_file out status mutant_wiring
+  local mutant_homes homes_fn_saved
+
+  jqf_fn=$(grep -m1 -F 'jqf() {' "$dispatch")
+  pane_classification_fn=$(awk '$0=="pane_classification() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  start_fn=$(awk '$0=="codex_start_screen_problem() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  markers=$(grep -E '^(LIMIT_MARKERS|HOOK_TRUST_MARKERS|PREPARED_PROMPT_MARKERS|PREPARED_UNICODE_PROMPT_MARKERS)=' "$dispatch")
+  accounts_fn=$(awk '$0=="codex_accounts_dir() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  homes_fn=$(awk '$0=="codex_hooks_homes() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  vet_fn=$(awk '$0=="codex_hooks_vet() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  vet_homes_fn=$(awk '$0=="codex_hooks_vet_homes() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  hooks_answer_var=$(grep -E '^HOOKS_ANSWER_BIN=' "$dispatch")
+  wiring_block=$(awk '
+    $0=="if [ \"$RUNTIME\" = codex ]; then"{f=1}
+    f{print}
+    f && /dispatch failed/{exit}
+  ' "$dispatch")
+
+  [ -n "$jqf_fn" ] || { echo "FAIL: could not extract jqf" >&2; return 1; }
+  [ -n "$pane_classification_fn" ] || { echo "FAIL: could not extract pane_classification" >&2; return 1; }
+  [ -n "$start_fn" ] || { echo "FAIL: could not extract codex_start_screen_problem" >&2; return 1; }
+  [ -n "$accounts_fn" ] || { echo "FAIL: could not extract codex_accounts_dir" >&2; return 1; }
+  [ -n "$homes_fn" ] || { echo "FAIL: could not extract codex_hooks_homes" >&2; return 1; }
+  [ -n "$vet_fn" ] || { echo "FAIL: could not extract codex_hooks_vet" >&2; return 1; }
+  [ -n "$vet_homes_fn" ] || { echo "FAIL: could not extract codex_hooks_vet_homes" >&2; return 1; }
+  [ -n "$hooks_answer_var" ] || { echo "FAIL: could not extract HOOKS_ANSWER_BIN" >&2; return 1; }
+  [ -n "$wiring_block" ] || { echo "FAIL: could not extract the codex start-screen wiring block" >&2; return 1; }
+  printf '%s\n' "$wiring_block" | grep -Fq 'codex_hooks_vet_homes' || { echo "FAIL: extracted block does not call codex_hooks_vet_homes" >&2; return 1; }
+  printf '%s\n' "$wiring_block" | grep -Fq '"$HOOKS_ANSWER_BIN"' || { echo "FAIL: extracted block does not call HOOKS_ANSWER_BIN" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-hooks-wiring-test.$$"
+  mkdir -p "$work/fakehome-pass/.codex" "$work/fakehome-fail/.codex" "$work/default-worktree"
+  trap 'rm -rf "$work"' EXIT
+
+  cat > "$work/fakehome-pass/.codex/hooks.json" <<'EOF'
+{"hooks": {"PreToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "echo hi"}]}]}}
+EOF
+  cat > "$work/fakehome-fail/.codex/hooks.json" <<'EOF'
+{"hooks": {"PreToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "/no/such/binary"}]}]}}
+EOF
+
+  cat > "$work/orca" <<'BIN'
+#!/bin/bash
+if [ "$1 $2" = "terminal read" ]; then
+  n=$(( $(cat "$FAKE_READ_COUNT" 2>/dev/null || echo 0) + 1 ))
+  echo "$n" > "$FAKE_READ_COUNT"
+  if [ "$n" -eq 1 ]; then cat "$FAKE_PANE_FILE"; else cat "$FAKE_READY_PANE_FILE"; fi
+  exit 0
+fi
+if [ "$1 $2" = "orchestration dispatch" ]; then
+  echo INJECTED >> "$FAKE_MARKER"
+  printf '{"result":{"dispatch":{"id":"disp_fake"}}}\n'
+  exit 0
+fi
+exit 1
+BIN
+  chmod +x "$work/orca"
+
+  cat > "$work/fake-hooks-answer" <<'BIN'
+#!/bin/bash
+echo ANSWERED >> "$FAKE_ANSWER_MARKER"
+echo "hooks-review ✓ codex · trusted 1 new/changed hook(s) by dispatch authority (charter §4)"
+exit 0
+BIN
+  chmod +x "$work/fake-hooks-answer"
+
+  menu='Hooks need review
+4 hooks are new or changed
+› 1. Review hooks
+  2. Trust all and continue
+  3. Continue without trusting'
+  ready='› Ask Codex to do anything
+  GPT-5.5 xhigh · ~/worktree
+  ? for shortcuts                                   ⚠ 1 warning · f2 to view'
+  printf '%s\n' "$menu" > "$work/pane.txt"
+  printf '%s\n' "$ready" > "$work/ready.txt"
+
+  write_script() {  # outfile  home  wiring-text  [hooks-answer-bin]  [accounts-dir]  [worktree]
+    local outfile="$1" home="$2" wiring_text="$3" hooks_answer_bin="${4:-$work/fake-hooks-answer}"
+    local accounts_dir="${5:-$work/no-accounts-dir}" worktree="${6:-path:$work/default-worktree}"
+    {
+      echo 'set -u'
+      printf 'export FAKE_MARKER=%s\n' "$work/injected"
+      printf 'export FAKE_ANSWER_MARKER=%s\n' "$work/answered"
+      printf 'export FAKE_READ_COUNT=%s\n' "$work/read-count"
+      printf 'export FAKE_PANE_FILE=%s\n' "$work/pane.txt"
+      printf 'export FAKE_READY_PANE_FILE=%s\n' "$work/ready.txt"
+      printf '%s\n' "$jqf_fn"
+      printf '%s\n' "$markers"
+      printf '%s\n' "$pane_classification_fn"
+      printf '%s\n' "$start_fn"
+      printf '%s\n' "$accounts_fn"
+      printf '%s\n' "$homes_fn"
+      printf '%s\n' "$vet_fn"
+      printf '%s\n' "$vet_homes_fn"
+      echo 'RUNTIME=codex'
+      echo 'MODEL=gpt-5.5'
+      echo 'CODEX_REASONING_EFFORT=xhigh'
+      echo 'TERMINAL=term_fake'
+      echo 'TASK=task_fake'
+      printf 'HOME=%s\n' "$home"
+      printf 'CODEX_ACCOUNTS_DIR=%s\n' "$accounts_dir"
+      printf 'WORKTREE=%s\n' "$worktree"
+      printf 'HOOKS_ANSWER_BIN=%s\n' "$hooks_answer_bin"
+      printf '%s\n' "$wiring_text"
+      echo 'echo WIRING_SURVIVED'
+    } > "$outfile"
+  }
+
+  script_file="$work/run.sh"
+
+  # Vet passes: the modal is answered, dispatch --inject is reached.
+  rm -f "$work/injected" "$work/answered" "$work/read-count"
+  write_script "$script_file" "$work/fakehome-pass" "$wiring_block"
+  out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] || [ ! -f "$work/answered" ] || [ ! -f "$work/injected" ] \
+      || ! printf '%s\n' "$out" | grep -q '^WIRING_SURVIVED$'; then
+    echo "FAIL: a vetted-pass hooks-review pane should answer the modal and reach --inject" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : a vetted-pass hooks-review pane answers the modal and reaches orca orchestration dispatch --inject"
+
+  # Vet passes, but HOOKS_ANSWER_BIN names no file: the wiring block takes
+  # the exit-3 path before trying to run anything.
+  rm -f "$work/injected" "$work/answered" "$work/read-count"
+  write_script "$script_file" "$work/fakehome-pass" "$wiring_block" "$work/no-such-hooks-answer"
+  out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 3 ] || [ -f "$work/answered" ] || [ -f "$work/injected" ]; then
+    echo "FAIL: a missing HOOKS_ANSWER_BIN should take the exit-3 path without answering or injecting (status=$status)" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  printf '%s\n' "$out" | grep -q 'hooks-review answer tool missing or not executable' || { echo "FAIL: missing-answer-tool case did not print the missing-or-not-executable message" >&2; return 1; }
+  echo "ok   : a missing HOOKS_ANSWER_BIN takes the exit-3 path without answering the modal or reaching --inject"
+
+  # Failability: a copy of the wiring block whose existence check is disabled
+  # still exits 3 on a missing HOOKS_ANSWER_BIN, since the shell can't exec a
+  # file that isn't there. It drops the exit-3 path's own message, the call
+  # was attempted instead of refused.
+  mutant_wiring=${wiring_block/'if [ ! -f "$HOOKS_ANSWER_BIN" ] || [ ! -x "$HOOKS_ANSWER_BIN" ]; then'/'if false; then'}
+  if [ "$mutant_wiring" = "$wiring_block" ]; then
+    echo "FAIL: existence-check mutant did not change the source" >&2
+    return 1
+  fi
+  rm -f "$work/injected" "$work/answered" "$work/read-count"
+  write_script "$script_file" "$work/fakehome-pass" "$mutant_wiring" "$work/no-such-hooks-answer"
+  out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
+  status=$?
+  if printf '%s\n' "$out" | grep -q 'hooks-review answer tool missing or not executable'; then
+    echo "FAIL: failability: disabling the existence check should drop the missing-tool message, but it is still printed" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : failability: disabling the existence check attempts the call instead of refusing it (status=$status, message dropped)"
+
+  # Vet passes, but HOOKS_ANSWER_BIN names an executable directory: -x alone
+  # would pass for a directory, so the guard also checks -f and takes the
+  # exit-3 path before trying to run anything.
+  rm -f "$work/injected" "$work/answered" "$work/read-count"
+  mkdir -p "$work/dir-hooks-answer"
+  write_script "$script_file" "$work/fakehome-pass" "$wiring_block" "$work/dir-hooks-answer"
+  out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 3 ] || [ -f "$work/answered" ] || [ -f "$work/injected" ]; then
+    echo "FAIL: a directory at HOOKS_ANSWER_BIN should take the exit-3 path without answering or injecting (status=$status)" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  printf '%s\n' "$out" | grep -q 'hooks-review answer tool missing or not executable' || { echo "FAIL: directory case did not print the missing-or-not-executable message" >&2; return 1; }
+  echo "ok   : a directory at HOOKS_ANSWER_BIN takes the exit-3 path without answering the modal or reaching --inject"
+
+  # Failability: a copy of the wiring block whose guard drops back to -x
+  # alone lets an executable directory through instead of refusing it.
+  mutant_wiring=${wiring_block/'if [ ! -f "$HOOKS_ANSWER_BIN" ] || [ ! -x "$HOOKS_ANSWER_BIN" ]; then'/'if [ ! -x "$HOOKS_ANSWER_BIN" ]; then'}
+  if [ "$mutant_wiring" = "$wiring_block" ]; then
+    echo "FAIL: directory-check mutant did not change the source" >&2
+    return 1
+  fi
+  rm -f "$work/injected" "$work/answered" "$work/read-count"
+  write_script "$script_file" "$work/fakehome-pass" "$mutant_wiring" "$work/dir-hooks-answer"
+  out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
+  status=$?
+  if printf '%s\n' "$out" | grep -q 'hooks-review answer tool missing or not executable'; then
+    echo "FAIL: failability: dropping the -f check should let an executable directory through, but the guard still refused it" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : failability: dropping the -f check lets an executable directory through instead of refusing it (status=$status)"
+
+  # Vet passes and the answer tool runs, but it exits 1 (did not clear the
+  # modal): the fail-closed answer-error path, not the always-exits-0 fake
+  # tool every other case above uses.
+  cat > "$work/fake-hooks-answer-fail" <<'BIN'
+#!/bin/bash
+echo ANSWERED >> "$FAKE_ANSWER_MARKER"
+echo "hooks-review: still blocked after answering (some-reason)" >&2
+exit 1
+BIN
+  chmod +x "$work/fake-hooks-answer-fail"
+  rm -f "$work/injected" "$work/answered" "$work/read-count"
+  write_script "$script_file" "$work/fakehome-pass" "$wiring_block" "$work/fake-hooks-answer-fail"
+  out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 3 ] || [ ! -f "$work/answered" ] || [ -f "$work/injected" ]; then
+    echo "FAIL: an answer tool that exits 1 should take the exit-3 path without injecting (status=$status)" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  printf '%s\n' "$out" | grep -q 'hooks-review answer did not clear the modal' || { echo "FAIL: answer-failure case did not print the modal-not-cleared message" >&2; return 1; }
+  echo "ok   : an answer tool exit 1 takes the exit-3 path without injecting (status=$status)"
+
+  # Failability: a copy of the wiring block that ignores the answer tool's
+  # own exit code would inject even though the modal was never cleared.
+  mutant_wiring=${wiring_block/'if [ "$HOOKS_ANSWER_RC" != 0 ]; then'/'if false; then'}
+  if [ "$mutant_wiring" = "$wiring_block" ]; then
+    echo "FAIL: answer-rc-check mutant did not change the source" >&2
+    return 1
+  fi
+  rm -f "$work/injected" "$work/answered" "$work/read-count"
+  write_script "$script_file" "$work/fakehome-pass" "$mutant_wiring" "$work/fake-hooks-answer-fail"
+  out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
+  status=$?
+  if [ ! -f "$work/injected" ]; then
+    echo "FAIL: failability: ignoring the answer tool's exit code should still inject (status=$status)" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : failability: ignoring the answer tool's exit code injects despite the modal never clearing (status=$status)"
+
+  # Vet fails: the modal is never answered, --inject is never reached.
+  rm -f "$work/injected" "$work/answered" "$work/read-count"
+  write_script "$script_file" "$work/fakehome-fail" "$wiring_block"
+  out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ] || [ -f "$work/answered" ] || [ -f "$work/injected" ]; then
+    echo "FAIL: a vet-failed hooks-review pane should not answer the modal or reach --inject (status=$status)" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  printf '%s\n' "$out" | grep -q 'hooks-vet:' || { echo "FAIL: vet-failed case did not print the vet's own line" >&2; return 1; }
+  echo "ok   : a vet-failed hooks-review pane prints the vet's line and never answers the modal"
+
+  # Failability: a copy of the wiring block whose vet gate is disabled would
+  # answer the modal even on a vet-failed home.
+  mutant_wiring=${wiring_block/'if codex_hooks_vet_homes; then'/'if true; then'}
+  if [ "$mutant_wiring" = "$wiring_block" ]; then
+    echo "FAIL: vet-gate mutant did not change the source" >&2
+    return 1
+  fi
+  rm -f "$work/injected" "$work/answered" "$work/read-count"
+  write_script "$script_file" "$work/fakehome-fail" "$mutant_wiring"
+  out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
+  status=$?
+  if [ ! -f "$work/answered" ]; then
+    echo "FAIL: failability: disabling the vet gate should have answered the modal on a vet-failed home, but didn't (status=$status)" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : failability: disabling the vet gate answers the modal on a vet-failed home (status=$status)"
+
+  # Account-seat home: $HOME's own hooks.json passes, but codex_accounts_dir
+  # enumerates a seat whose hooks.json fails. "every codex home" means every
+  # home, not just $HOME.
+  mkdir -p "$work/accounts/seat1/home"
+  cat > "$work/accounts/seat1/home/hooks.json" <<'EOF'
+{"hooks": {"PreToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "/no/such/binary"}]}]}}
+EOF
+  rm -f "$work/injected" "$work/answered" "$work/read-count"
+  write_script "$script_file" "$work/fakehome-pass" "$wiring_block" "$work/fake-hooks-answer" "$work/accounts"
+  out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ] || [ -f "$work/answered" ] || [ -f "$work/injected" ]; then
+    echo "FAIL: a failing account-seat home should block the modal even though \$HOME's own hooks.json passes (status=$status)" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : a failing account-seat home blocks the modal despite a passing \$HOME hooks.json (status=$status)"
+
+  # Project sources: a worktree under a repository's .orca/worktrees/ carries
+  # its own `.codex/hooks.json`, and so can the repository root. Both are in
+  # scope even when $HOME's own hooks.json passes.
+  mkdir -p "$work/repo/.orca/worktrees/wt/.codex"
+  cat > "$work/repo/.orca/worktrees/wt/.codex/hooks.json" <<'EOF'
+{"hooks": {"PreToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "/no/such/binary"}]}]}}
+EOF
+  rm -f "$work/injected" "$work/answered" "$work/read-count"
+  write_script "$script_file" "$work/fakehome-pass" "$wiring_block" "$work/fake-hooks-answer" "$work/no-accounts-dir" "path:$work/repo/.orca/worktrees/wt"
+  out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ] || [ -f "$work/answered" ] || [ -f "$work/injected" ]; then
+    echo "FAIL: a failing worktree .codex/hooks.json should block the modal (status=$status)" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : a failing worktree .codex/hooks.json blocks the modal (status=$status)"
+
+  rm -rf "$work/repo/.orca/worktrees/wt/.codex"
+  mkdir -p "$work/repo/.codex"
+  cat > "$work/repo/.codex/hooks.json" <<'EOF'
+{"hooks": {"PreToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "/no/such/binary"}]}]}}
+EOF
+  rm -f "$work/injected" "$work/answered" "$work/read-count"
+  write_script "$script_file" "$work/fakehome-pass" "$wiring_block" "$work/fake-hooks-answer" "$work/no-accounts-dir" "path:$work/repo/.orca/worktrees/wt"
+  out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ] || [ -f "$work/answered" ] || [ -f "$work/injected" ]; then
+    echo "FAIL: a failing repository-root .codex/hooks.json should block the modal (status=$status)" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : a failing repository-root .codex/hooks.json blocks the modal via the .orca/worktrees derivation (status=$status)"
+
+  # Failability: a copy of codex_hooks_homes that never resolves WORKTREE
+  # reads neither project source, so the repo-root failure above would go
+  # unseen and the modal would be answered.
+  mutant_homes=${homes_fn/'  wt="${WORKTREE#path:}"'/'  wt=""'}
+  if [ "$mutant_homes" = "$homes_fn" ]; then
+    echo "FAIL: worktree-resolution mutant did not change the source" >&2
+    return 1
+  fi
+  homes_fn_saved="$homes_fn"
+  homes_fn="$mutant_homes"
+  rm -f "$work/injected" "$work/answered" "$work/read-count"
+  write_script "$script_file" "$work/fakehome-pass" "$wiring_block" "$work/fake-hooks-answer" "$work/no-accounts-dir" "path:$work/repo/.orca/worktrees/wt"
+  out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
+  status=$?
+  homes_fn="$homes_fn_saved"
+  if [ "$status" -ne 0 ] || [ ! -f "$work/answered" ]; then
+    echo "FAIL: failability: a codex_hooks_homes that never resolves WORKTREE should answer the modal despite the failing repo-root hooks.json (status=$status)" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : failability: a codex_hooks_homes that never resolves WORKTREE answers the modal despite the failing repo-root hooks.json (status=$status)"
+
+  # codex_hooks_vet_homes itself, not the full wiring: a reused pane with no
+  # worktree cannot have its project hooks measured, so it must fail closed
+  # even though $HOME's own hooks.json passes.
+  local vet_homes_script empty_out empty_status wt_out wt_status
+  vet_homes_script="$work/vet-homes-empty.sh"
+  {
+    echo 'set -u'
+    printf '%s\n' "$accounts_fn"
+    printf '%s\n' "$homes_fn"
+    printf '%s\n' "$vet_fn"
+    printf '%s\n' "$vet_homes_fn"
+    printf 'HOME=%s\n' "$work/fakehome-pass"
+    printf 'CODEX_ACCOUNTS_DIR=%s\n' "$work/no-accounts-dir"
+    echo 'WORKTREE='
+    echo 'codex_hooks_vet_homes'
+    echo 'echo RC=$?'
+  } > "$vet_homes_script"
+  empty_out=$(bash "$vet_homes_script" 2>&1)
+  empty_status=$?
+  if [ "$empty_status" -ne 0 ] || ! printf '%s\n' "$empty_out" | grep -q '^RC=1$'; then
+    echo "FAIL: codex_hooks_vet_homes should return 1 when WORKTREE is empty" >&2
+    printf '%s\n' "$empty_out" >&2
+    return 1
+  fi
+  printf '%s\n' "$empty_out" | grep -Fq 'hooks-vet: worktree unknown on a reused pane, project hooks unmeasured; not answering the modal' \
+    || { echo "FAIL: empty-WORKTREE case did not print the unmeasured line" >&2; printf '%s\n' "$empty_out" >&2; return 1; }
+  echo "ok   : codex_hooks_vet_homes returns 1 and prints the unmeasured line when WORKTREE is empty"
+
+  mkdir -p "$work/fixture-worktree"
+  vet_homes_script="$work/vet-homes-worktree.sh"
+  {
+    echo 'set -u'
+    printf '%s\n' "$accounts_fn"
+    printf '%s\n' "$homes_fn"
+    printf '%s\n' "$vet_fn"
+    printf '%s\n' "$vet_homes_fn"
+    printf 'HOME=%s\n' "$work/fakehome-pass"
+    printf 'CODEX_ACCOUNTS_DIR=%s\n' "$work/no-accounts-dir"
+    printf 'WORKTREE=path:%s\n' "$work/fixture-worktree"
+    echo 'codex_hooks_vet_homes'
+    echo 'echo RC=$?'
+  } > "$vet_homes_script"
+  wt_out=$(bash "$vet_homes_script" 2>&1)
+  wt_status=$?
+  if [ "$wt_status" -ne 0 ] || ! printf '%s\n' "$wt_out" | grep -q '^RC=0$'; then
+    echo "FAIL: codex_hooks_vet_homes should still return 0 with a real worktree and only passing homes" >&2
+    printf '%s\n' "$wt_out" >&2
+    return 1
+  fi
+  if printf '%s\n' "$wt_out" | grep -Fq 'no hooks.json measured'; then
+    echo "FAIL: one_home_measured: a passing measured home should not print the no-hooks.json-measured line" >&2
+    printf '%s\n' "$wt_out" >&2
+    return 1
+  fi
+  echo "ok   : one_home_measured: codex_hooks_vet_homes returns 0 with WORKTREE set and one passing measured home, no unmeasured line"
+
+  # all_homes_missing: every enumerated home (the fixture $HOME's .codex and
+  # the worktree's own .codex) lacks hooks.json, so nothing is measured. The
+  # count-zero guard must fail closed instead of returning the empty loop's
+  # default 0.
+  mkdir -p "$work/fakehome-none/.codex" "$work/fixture-worktree-none"
+  vet_homes_script="$work/vet-homes-all-missing.sh"
+  {
+    echo 'set -u'
+    printf '%s\n' "$accounts_fn"
+    printf '%s\n' "$homes_fn"
+    printf '%s\n' "$vet_fn"
+    printf '%s\n' "$vet_homes_fn"
+    printf 'HOME=%s\n' "$work/fakehome-none"
+    printf 'CODEX_ACCOUNTS_DIR=%s\n' "$work/no-accounts-dir"
+    printf 'WORKTREE=path:%s\n' "$work/fixture-worktree-none"
+    echo 'codex_hooks_vet_homes'
+    echo 'echo RC=$?'
+  } > "$vet_homes_script"
+  all_missing_out=$(bash "$vet_homes_script" 2>&1)
+  all_missing_status=$?
+  if [ "$all_missing_status" -ne 0 ] || ! printf '%s\n' "$all_missing_out" | grep -q '^RC=1$'; then
+    echo "FAIL: all_homes_missing: codex_hooks_vet_homes should return 1 when no home has a hooks.json" >&2
+    printf '%s\n' "$all_missing_out" >&2
+    return 1
+  fi
+  printf '%s\n' "$all_missing_out" | grep -Fq "hooks-vet: no hooks.json measured in any codex home; the modal's source is unenumerated, not answering the modal" \
+    || { echo "FAIL: all_homes_missing: did not print the no-hooks.json-measured line" >&2; printf '%s\n' "$all_missing_out" >&2; return 1; }
+  echo "ok   : all_homes_missing: codex_hooks_vet_homes returns 1 and prints the unmeasured line when no home has a hooks.json"
+
+  # Failability: with the zero-count guard removed by sed into a temp copy of
+  # vet_homes_fn, the all_homes_missing case must fail: the empty loop's
+  # default overall=0 would answer the modal on faith.
+  zero_count_start=$(printf '%s\n' "$vet_homes_fn" | grep -Fn 'if [ "$measured" -eq 0 ]; then' | head -1 | cut -d: -f1)
+  zero_count_end=$(printf '%s\n' "$vet_homes_fn" | awk -v start="$zero_count_start" 'NR>=start && /^  fi$/{print NR; exit}')
+  [ -n "$zero_count_start" ] && [ -n "$zero_count_end" ] || { echo "FAIL: could not locate the zero-count guard to mutate" >&2; return 1; }
+  mutant_vet_homes_fn=$(printf '%s\n' "$vet_homes_fn" | sed "${zero_count_start},${zero_count_end}d")
+  if [ "$mutant_vet_homes_fn" = "$vet_homes_fn" ]; then
+    echo "FAIL: zero-count-guard mutant did not change the source" >&2
+    return 1
+  fi
+  vet_homes_script="$work/vet-homes-all-missing-mutant.sh"
+  {
+    echo 'set -u'
+    printf '%s\n' "$accounts_fn"
+    printf '%s\n' "$homes_fn"
+    printf '%s\n' "$vet_fn"
+    printf '%s\n' "$mutant_vet_homes_fn"
+    printf 'HOME=%s\n' "$work/fakehome-none"
+    printf 'CODEX_ACCOUNTS_DIR=%s\n' "$work/no-accounts-dir"
+    printf 'WORKTREE=path:%s\n' "$work/fixture-worktree-none"
+    echo 'codex_hooks_vet_homes'
+    echo 'echo RC=$?'
+  } > "$vet_homes_script"
+  mutant_out=$(bash "$vet_homes_script" 2>&1)
+  if ! printf '%s\n' "$mutant_out" | grep -q '^RC=0$'; then
+    echo "FAIL: failability: removing the zero-count guard should make the all_homes_missing run return 0, but it didn't" >&2
+    printf '%s\n' "$mutant_out" >&2
+    return 1
+  fi
+  echo "ok   : failability: removing the zero-count guard makes the all_homes_missing run return 0"
+
+  # failability: a mutant that removes the empty-worktree guard treats an
+  # empty WORKTREE the same as a real one and returns 0.
+  mutant_vet_homes_fn=${vet_homes_fn/'  if [ -z "${WORKTREE#path:}" ]; then
+    echo "hooks-vet: worktree unknown on a reused pane, project hooks unmeasured; not answering the modal"
+    return 1
+  fi
+'/''}
+  if [ "$mutant_vet_homes_fn" = "$vet_homes_fn" ]; then
+    echo "FAIL: empty-worktree-guard mutant did not change the source" >&2
+    return 1
+  fi
+  vet_homes_script="$work/vet-homes-mutant.sh"
+  {
+    echo 'set -u'
+    printf '%s\n' "$accounts_fn"
+    printf '%s\n' "$homes_fn"
+    printf '%s\n' "$vet_fn"
+    printf '%s\n' "$mutant_vet_homes_fn"
+    printf 'HOME=%s\n' "$work/fakehome-pass"
+    printf 'CODEX_ACCOUNTS_DIR=%s\n' "$work/no-accounts-dir"
+    echo 'WORKTREE='
+    echo 'codex_hooks_vet_homes'
+    echo 'echo RC=$?'
+  } > "$vet_homes_script"
+  empty_out=$(bash "$vet_homes_script" 2>&1)
+  if ! printf '%s\n' "$empty_out" | grep -q '^RC=0$'; then
+    echo "FAIL: failability: removing the empty-worktree guard should make the WORKTREE=\"\" run return 0, but it didn't" >&2
+    printf '%s\n' "$empty_out" >&2
+    return 1
+  fi
+  echo "ok   : failability: removing the empty-worktree guard makes the WORKTREE=\"\" run return 0"
+)
+codex_hooks_vet_wiring_test "$dispatch" || exit 1
+
+# --- Feature: missing standing-rules file refuses before the gate call -----
+#
+# A missing install file used to leave DISPATCH_STANDING_RULES unset, so the
+# gate validated a contract's standing_rules names against its own bundled
+# template copy while standing_rule_block's append step read nothing at the
+# same unset-falls-back-to-this-install-path expression, passing a contract
+# the append step then could not deliver. Extracts the STANDING_RULES_PATH
+# guard block and runs it in isolation against a missing file, an existing
+# one, and a caller-supplied override.
+standing_rules_missing_file_test() (
+  set +e
+  set -u
+  local dispatch="$1" work block script_file out status mutant_block mutant_file
+
+  block=$(awk '
+    /^STANDING_RULES_PATH="\$SCRIPTS_DIR\/\.\.\/rules\/standing-rules\.md"$/{f=1}
+    f{print}
+    f && /^export DISPATCH_STANDING_RULES_LOCAL="\$SCRIPTS_DIR\/\.\.\/config\/standing-rules\.overlay\.md"$/{exit}
+  ' "$dispatch")
+  [ -n "$block" ] || { echo "FAIL: could not extract the STANDING_RULES_PATH guard block" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-standing-rules-missing-test.$$"
+  mkdir -p "$work/scripts"
+  trap 'rm -rf "$work"' EXIT
+
+  write_script() {
+    local outfile="$1"
+    {
+      echo 'set -u'
+      printf 'SCRIPTS_DIR=%s\n' "$work/scripts"
+      printf '%s\n' "$block"
+      echo 'printf "DISPATCH_STANDING_RULES=%s\n" "${DISPATCH_STANDING_RULES:-}"'
+    } > "$outfile"
+  }
+
+  script_file="$work/run.sh"
+  write_script "$script_file"
+
+  # Case: missing file and unset variable exits 10 naming the path.
+  out=$(env -u DISPATCH_STANDING_RULES bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 10 ]; then
+    echo "FAIL: a missing rules file with DISPATCH_STANDING_RULES unset should exit 10, got $status" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF "standing rules file missing: $work/scripts/../rules/standing-rules.md"; then
+    echo "FAIL: the exit-10 message does not name the missing path" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : a missing rules file with DISPATCH_STANDING_RULES unset exits 10 naming the path"
+
+  # Case: an existing file exports DISPATCH_STANDING_RULES unconditionally.
+  mkdir -p "$work/rules"
+  : > "$work/rules/standing-rules.md"
+  out=$(env -u DISPATCH_STANDING_RULES bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -qF "DISPATCH_STANDING_RULES=$work/scripts/../rules/standing-rules.md"; then
+    echo "FAIL: an existing rules file should export DISPATCH_STANDING_RULES to it" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : an existing rules file exports DISPATCH_STANDING_RULES unconditionally"
+
+  # Case: a caller override is left alone even when the install file is missing.
+  rm -f "$work/rules/standing-rules.md"
+  out=$(DISPATCH_STANDING_RULES=/nonexistent/override.md bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -qF 'DISPATCH_STANDING_RULES=/nonexistent/override.md'; then
+    echo "FAIL: a caller-supplied DISPATCH_STANDING_RULES override should skip the missing-file check" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : a caller-supplied DISPATCH_STANDING_RULES override skips the missing-file check"
+
+  # Failability: drop just the exit line, leaving the echo in place so the
+  # if-body stays non-empty; the missing-file case must then stop refusing,
+  # the behaviour this fix replaces.
+  mutant_block=${block/'    exit 10
+'/''}
+  if [ "$mutant_block" = "$block" ]; then
+    echo "FAIL: exit-10 mutant did not change the source" >&2
+    return 1
+  fi
+  mutant_file="$work/run-mutant.sh"
+  {
+    echo 'set -u'
+    printf 'SCRIPTS_DIR=%s\n' "$work/scripts"
+    printf '%s\n' "$mutant_block"
+    echo 'printf "DISPATCH_STANDING_RULES=%s\n" "${DISPATCH_STANDING_RULES:-}"'
+  } > "$mutant_file"
+  out=$(env -u DISPATCH_STANDING_RULES bash "$mutant_file" 2>&1)
+  status=$?
+  if [ "$status" -eq 10 ]; then
+    echo "FAIL: failability: mutant dropping the exit-10 branch should no longer refuse, but it still exited 10" >&2
+    return 1
+  fi
+  echo "ok   : failability: dropping the exit-10 branch stops refusing a missing rules file (status=$status)"
+)
+standing_rules_missing_file_test "$dispatch" || exit 1
+
+# --- Feature: standing rules append -----------------------------------------
+#
+# A contract's front matter can name `standing_rules` blocks; dispatch-gate
+# validates and echoes them back on `$CHK` under `front_matter.standing_rules`,
+# and this wrapper reads that field (never re-parsing the contract) to append
+# each named block's text to the dispatched spec. Extracts jqf,
+# standing_rule_block, and the STANDING_RULE_NAMES/append block, then runs
+# them against fixture standing-rules.md/.local.md files and a fake `$CHK`.
+standing_rules_append_test() (
+  set +e
+  set -u
+  local dispatch="$1" work jqf_fn block_fn append_block script_file
+  local out status mutant_block
+
+  jqf_fn=$(grep -m1 -F 'jqf() {' "$dispatch")
+  block_fn=$(awk '$0=="standing_rule_block() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  append_block=$(awk '
+    /^STANDING_RULE_NAMES=\$\(echo "\$CHK" \| jqf/{f=1}
+    f{print}
+    f && /^fi$/{exit}
+  ' "$dispatch")
+
+  [ -n "$jqf_fn" ] || { echo "FAIL: could not extract jqf" >&2; return 1; }
+  [ -n "$block_fn" ] || { echo "FAIL: could not extract standing_rule_block" >&2; return 1; }
+  [ -n "$append_block" ] || { echo "FAIL: could not extract the STANDING_RULE_NAMES append block" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-standing-rules-test.$$"
+  mkdir -p "$work/rules" "$work/scripts"
+  trap 'rm -rf "$work"' EXIT
+  cat > "$work/rules/standing-rules.md" <<'RULES'
+## headless
+
+headless body text.
+
+## ack-token
+
+ack-token body text.
+RULES
+
+  write_script() {
+    local outfile="$1" chat_json="$2"
+    {
+      echo 'set -u'
+      printf 'SCRIPTS_DIR=%s\n' "$work/scripts"
+      # Pins both overrides to this case's own fixtures, in the subshell the
+      # extracted block already runs in, so a value inherited from the
+      # caller's environment (this test script's own wrapper might export
+      # one) never reaches standing_rule_block instead of these fixtures.
+      printf 'export DISPATCH_STANDING_RULES=%s\n' "$work/rules/standing-rules.md"
+      printf 'export DISPATCH_STANDING_RULES_LOCAL=%s\n' "$work/config/standing-rules.overlay.md"
+      printf '%s\n' "$jqf_fn"
+      printf '%s\n' "$block_fn"
+      printf 'CHK=%s\n' "$(printf '%q' "$chat_json")"
+      echo 'SPEC="original spec"'
+      printf '%s\n' "$append_block"
+      echo 'printf "SPEC_TAIL::%s\n" "$SPEC"'
+    } > "$outfile"
+  }
+
+  script_file="$work/run.sh"
+  write_script "$script_file" '{"allow": true, "front_matter": {"standing_rules": ["headless", "ack-token"]}}'
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: standing-rules append block exited non-zero" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF 'headless body text.'; then
+    echo "FAIL: appended spec is missing the headless block text" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF 'ack-token body text.'; then
+    echo "FAIL: appended spec is missing the ack-token block text" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF 'Standing rules (headless):'; then
+    echo "FAIL: appended spec is missing the Standing rules (headless): label" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF '📎 standing rules · headless ack-token'; then
+    echo "FAIL: dispatch did not print the standing-rules milestone line" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : standing_rules: [headless, ack-token] appends both block texts and prints the milestone line"
+
+  # Case: an empty list appends nothing and prints no milestone line.
+  write_script "$script_file" '{"allow": true, "front_matter": {"standing_rules": []}}'
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: an empty standing_rules list should not fail the append block" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if printf '%s\n' "$out" | grep -qF '📎 standing rules'; then
+    echo "FAIL: an empty standing_rules list should not print the milestone line" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF 'SPEC_TAIL::original spec'; then
+    echo "FAIL: an empty standing_rules list should leave SPEC unchanged" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : an empty standing_rules list appends nothing and prints no milestone line"
+
+  # Case: an overlay entry sharing a name with the shipped file wins.
+  mkdir -p "$work/config"
+  cat > "$work/config/standing-rules.overlay.md" <<'RULES'
+## headless
+
+seat overlay headless text.
+RULES
+  write_script "$script_file" '{"allow": true, "front_matter": {"standing_rules": ["headless"]}}'
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: an overlay-shadowed name should not fail the append block" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF 'seat overlay headless text.'; then
+    echo "FAIL: the overlay's own text should win over the shipped file's text for a shared name" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if printf '%s\n' "$out" | grep -qF 'headless body text.'; then
+    echo "FAIL: the shipped file's text should not appear when the overlay names the same block" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : an overlay entry sharing a name with the shipped file wins"
+  rm -f "$work/config/standing-rules.overlay.md"
+
+  # Case: a name neither file declares exits 3 and names the block.
+  write_script "$script_file" '{"allow": true, "front_matter": {"standing_rules": ["nonexistent"]}}'
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 3 ]; then
+    echo "FAIL: a standing_rules name neither file declares should exit 3, got $status" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF 'standing rule block not found: nonexistent'; then
+    echo "FAIL: the exit-3 case should name the missing block" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : a standing_rules name neither file declares exits 3 and names the block"
+
+  # Failability: drop the milestone echo; the first case above must then stop
+  # printing it, proving the assertion actually exercises the real line.
+  mutant_block=${append_block/'  echo "📎 standing rules · $STANDING_RULE_NAMES"'/'  :'}
+  if [ "$mutant_block" = "$append_block" ]; then
+    echo "FAIL: milestone-echo mutant did not change the source" >&2
+    return 1
+  fi
+  {
+    echo 'set -u'
+    printf 'SCRIPTS_DIR=%s\n' "$work/scripts"
+    printf 'export DISPATCH_STANDING_RULES=%s\n' "$work/rules/standing-rules.md"
+    printf 'export DISPATCH_STANDING_RULES_LOCAL=%s\n' "$work/config/standing-rules.overlay.md"
+    printf '%s\n' "$jqf_fn"
+    printf '%s\n' "$block_fn"
+    printf 'CHK=%s\n' "$(printf '%q' '{"allow": true, "front_matter": {"standing_rules": ["headless"]}}')"
+    echo 'SPEC="original spec"'
+    printf '%s\n' "$mutant_block"
+    echo 'printf "SPEC_TAIL::%s\n" "$SPEC"'
+  } > "$script_file"
+  out=$(bash "$script_file" 2>&1)
+  if printf '%s\n' "$out" | grep -qF '📎 standing rules'; then
+    echo "FAIL: failability: dropping the milestone echo should have stopped printing it, but it still appeared" >&2
+    return 1
+  fi
+  echo "ok   : failability: dropping the milestone echo makes the milestone-line assertion fail"
+)
+standing_rules_append_test "$dispatch" || exit 1
+
+echo "dispatch multi-vendor / check-only / state-dir-seam / contract-delivery / cursor-pretrust / claude-pretrust / claude-pretrust-call-site / claude-hook-trust-marker / fresh-claude-prompt-marker / delivery-result / codex-launch / codex-start-screen / codex-start-screen-wiring / codex-hooks-vet / codex-hooks-vet-wiring / standing-rules-missing-file / standing-rules-append regression tests passed"

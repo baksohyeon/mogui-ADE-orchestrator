@@ -19,6 +19,69 @@ TEMPLATE_CHECK="$OPS_DIR/scripts/template-check"
 
 exit_code=0
 
+# --- Seat's template-adoption check ---
+# Ported from the seat's harness-selfcheck.sh (owner direction 2026-09-23): a
+# generated operations repository stamps the template version it was created
+# from into MANIFEST.json, then records adoption progress in a ledger under
+# docs/observability/. This template ships its own MANIFEST.json but no
+# ledger, so a default run here takes the "ledger missing" branch; both paths
+# stay overridable so a test fixture can stand in for either.
+TEMPLATE_MANIFEST_FILE="${TEMPLATE_MANIFEST_FILE:-$OPS_DIR/MANIFEST.json}"
+TEMPLATE_ADOPTION_LEDGER="${TEMPLATE_ADOPTION_LEDGER:-$OPS_DIR/docs/observability/template-adoption-2026-08-08.md}"
+
+# A function, not inline code, so a test can exercise it directly (like
+# tracker_candidate_from_line below) instead of running the whole script and
+# hitting whatever the later Skills/Hooks/Card checks do in that environment.
+# Return status doubles as this probe's exit-code contribution.
+template_adoption_probe() {
+  if [ ! -f "$TEMPLATE_MANIFEST_FILE" ]; then
+    echo "Template: absent (MANIFEST.json missing)"
+    return 1
+  fi
+  local probe
+  # The `|| probe=""` guard matters under `set -e`: without it, a python3
+  # failure (malformed MANIFEST.json) fails the assignment itself and aborts
+  # the whole script with no output instead of falling through to the
+  # "undecided" case below.
+  probe=$(python3 - "$TEMPLATE_MANIFEST_FILE" << 'EOFTEMPLATE' 2>/dev/null
+import json, sys
+
+manifest_path = sys.argv[1]
+manifest = json.load(open(manifest_path, encoding="utf-8"))
+manifest_version = manifest.get("template_version")
+files = manifest.get("files")
+if not isinstance(manifest_version, str) or not manifest_version.strip():
+    print("ERROR|MANIFEST.json template_version missing")
+elif not isinstance(files, list):
+    print("ERROR|MANIFEST.json files list missing")
+else:
+    print(f"OK|{manifest_version.strip()}")
+EOFTEMPLATE
+  ) || probe=""
+  case "$probe" in
+    OK\|*)
+      local stamped_version="${probe#OK|}"
+      if [ -f "$TEMPLATE_ADOPTION_LEDGER" ]; then
+        echo "Template: $stamped_version stamped, adoption incomplete (see $TEMPLATE_ADOPTION_LEDGER)"
+        return 0
+      else
+        echo "Template: $stamped_version stamped, adoption ledger missing"
+        return 1
+      fi
+      ;;
+    ERROR\|*)
+      echo "Template: undecided (${probe#ERROR|})"
+      return 1
+      ;;
+    *)
+      echo "Template: undecided (could not read TEMPLATE-VERSION or MANIFEST.json)"
+      return 1
+      ;;
+  esac
+}
+
+template_adoption_probe || exit_code=1
+
 # --- Seat check ---
 # A master that is seated in the wrong place passes every other check in this
 # script, and passed all three placement-evidence checks in the succession
@@ -228,6 +291,51 @@ else
   exit_code=1
 fi
 
+# --- Twin entry-file check ---
+# Ported from the seat's harness-selfcheck.sh (owner instruction 2026-08-06,
+# stated unconditionally): CLAUDE.md and AGENTS.md are twins. A master hosted
+# by codex reads AGENTS.md; a diverged twin boots that master with a different
+# card than the one CLAUDE.md carries. Paths through the same CARD_* variables
+# the check above already resolved, plus this repository's own entry files —
+# a pair the Card: check above never looks at, since it only compares the
+# canonical pair against the deployed one.
+#
+# A function, not inline code, for the same reason as template_adoption_probe
+# above: a test can call it directly with CARD_* and OPS_DIR overridden,
+# instead of running the whole script.
+twins_probe() {
+  local fail=0
+  if [ ! -f "$CARD_CLAUDE_CANONICAL" ] || [ ! -f "$CARD_AGENTS_CANONICAL" ]; then
+    echo "Twins: canonical pair missing at workspace-card/{CLAUDE.md,AGENTS.md} — a codex master would boot with no card"
+    fail=1
+  elif ! cmp -s "$CARD_CLAUDE_CANONICAL" "$CARD_AGENTS_CANONICAL"; then
+    echo "Twins: canonical pair DIVERGED — workspace-card/CLAUDE.md and workspace-card/AGENTS.md must be byte-identical"
+    fail=1
+  fi
+  if [ ! -f "$CARD_AGENTS_DEPLOYED" ]; then
+    echo "Twins: AGENTS.md not deployed to the workspace root — cp workspace-card/AGENTS.md to $CARD_AGENTS_DEPLOYED"
+    fail=1
+  elif [ -f "$CARD_AGENTS_CANONICAL" ] && ! cmp -s "$CARD_AGENTS_CANONICAL" "$CARD_AGENTS_DEPLOYED"; then
+    echo "Twins: deployed AGENTS.md differs from canonical; redeploy, or promote the root edit first"
+    fail=1
+  fi
+  if [ -f "$OPS_DIR/CLAUDE.md" ] && [ -f "$OPS_DIR/AGENTS.md" ]; then
+    cmp -s "$OPS_DIR/CLAUDE.md" "$OPS_DIR/AGENTS.md" || {
+      echo "Twins: this repository's own CLAUDE.md and AGENTS.md diverged"
+      fail=1
+    }
+  else
+    echo "Twins: this repository is missing one of its own entry files"
+    fail=1
+  fi
+  if [ "$fail" = 0 ]; then
+    echo "Twins: canonical, deployed, and ops entry pairs all byte-identical"
+  fi
+  return "$fail"
+}
+
+twins_probe || exit_code=1
+
 # --- Tracker check ---
 # Resolve candidates and compare real paths; substring name matches can accept a
 # sibling directory that merely contains the same repository-name fragment.
@@ -238,7 +346,7 @@ allowed_beads_2=""
 if [ -d "$OPS_DIR/.beads" ]; then
   allowed_beads_1=$(cd "$OPS_DIR/.beads" 2>/dev/null && pwd -P)
 fi
-if [ -n "$OPS_REPO" ] && [ "$OPS_REPO" != "{{OPS_REPO}}" ] && [ -d "$OPS_REPO/.beads" ]; then
+if [ -n "$OPS_REPO" ] && [ "$OPS_REPO" != "{""{OPS_REPO}}" ] && [ -d "$OPS_REPO/.beads" ]; then
   allowed_beads_2=$(cd "$OPS_REPO/.beads" 2>/dev/null && pwd -P)
 fi
 tracker_ok=0
@@ -296,6 +404,47 @@ fi
 # onboarding/upgrade.md and scripts/template-apply. Nonzero from this block is
 # intentional boot gating (pre-manifest and shape-broken installs fail open
 # awareness), not a silent report line.
+
+# Turns a template-check JSON report + its exit code into the boot-time
+# "Template:" line. Isolated as a function (like template_adoption_probe and
+# twins_probe above) so a test can feed it a synthetic report instead of
+# standing up a real ops install. Uses env: TEMPLATE_JSON, TEMPLATE_RC.
+# unknown_present is reported but never turns this line into a failing one —
+# installs add files by design; drift the template cares about is a required
+# file missing, not a file the install wrote. A retired path (declared in the
+# install's own config/template-retirements.json) is likewise not absence.
+format_template_currency_line() {
+  python3 - <<'EOF'
+import json, os
+data = json.loads(os.environ["TEMPLATE_JSON"])
+rc = int(os.environ["TEMPLATE_RC"])
+ver = data.get("installed_version") or "undeterminable"
+absent = len(data.get("absent_required") or [])
+retired = len(data.get("retired") or [])
+unknown = len(data.get("unknown_present") or [])
+status = data.get("manifest_status") or "?"
+report_set = data.get("report_set") or "?"
+tver = data.get("template_version")
+retirements_status = data.get("retirements_status") or "ok"
+if status == "absent":
+    print("Template: no MANIFEST.json (run Upgrade mode; pre-manifest install)")
+    raise SystemExit(1)
+if retirements_status == "malformed":
+    print(f"Template: {ver} (manifest={status}, retirements=malformed) — run Upgrade mode")
+    raise SystemExit(1)
+if rc == 0 and status == "ok" and absent == 0:
+    suffix = f", {retired} retired" if retired else ""
+    if report_set == "template-compare" and tver:
+        print(f"Template: {ver} (matches template {tver}{suffix})")
+    else:
+        print(f"Template: {ver} (installed-manifest shape ok; no template path for currency compare{suffix})")
+    raise SystemExit(0)
+extra = f", template={tver}" if tver else ""
+print(f"Template: {ver} (manifest={status}, absent={absent}, retired={retired}, unknown={unknown}{extra}) — run Upgrade mode")
+raise SystemExit(1)
+EOF
+}
+
 if [ -x "$TEMPLATE_CHECK" ]; then
   template_args=(--ops "$OPS_DIR" --json)
   # Prefer template-compare when a live ADE skeleton is measurable.
@@ -310,29 +459,14 @@ if [ -x "$TEMPLATE_CHECK" ]; then
     echo "Template: undecided (template-check produced no report)"
     exit_code=1
   else
-    template_line=$(
-      TEMPLATE_JSON="$template_json" TEMPLATE_RC="$template_rc" python3 - <<'EOF'
-import json, os
-data = json.loads(os.environ["TEMPLATE_JSON"])
-rc = int(os.environ["TEMPLATE_RC"])
-ver = data.get("installed_version") or "undeterminable"
-absent = len(data.get("absent_required") or [])
-unknown = len(data.get("unknown_present") or [])
-status = data.get("manifest_status") or "?"
-report_set = data.get("report_set") or "?"
-tver = data.get("template_version")
-if rc == 0 and status == "ok" and absent == 0:
-    if report_set == "template-compare" and tver:
-        print(f"Template: {ver} (matches template {tver})")
-    else:
-        print(f"Template: {ver} (installed-manifest shape ok; no template path for currency compare)")
-elif status == "absent":
-    print(f"Template: no MANIFEST.json (run Upgrade mode; pre-manifest install)")
-else:
-    extra = f", template={tver}" if tver else ""
-    print(f"Template: {ver} (set={report_set}, manifest={status}, absent={absent}, unknown={unknown}{extra}) — run Upgrade mode")
-EOF
-    )
+    # format_template_currency_line raises SystemExit(1) on most reporting
+    # branches to make its own return code testable (see the mutant tests in
+    # test-template-currency-line.sh). Under `set -e`, a bare assignment would
+    # abort this whole script before the line below ever prints — the
+    # existing template_rc (from the real template-check invocation above)
+    # stays the sole arbiter of exit_code, so the substitution's own status is
+    # deliberately discarded here.
+    template_line=$(TEMPLATE_JSON="$template_json" TEMPLATE_RC="$template_rc" format_template_currency_line) || true
     echo "$template_line"
     if [ "$template_rc" -ne 0 ]; then
       exit_code=1

@@ -5,7 +5,12 @@ Always dry-runs first: prints the exact file list and the reason for each entry.
 A write pass requires an interactive confirmation phrase. There is no --yes.
 
 Instance-owned paths are refused by name:
-  docs/lineage/, docs/runbooks/role-state.md, .beads/, config/, contracts/,
+  docs/lineage/, AGENTS.md, CLAUDE.md, docs/MASTER-OPERATIONS.md,
+  docs/decisions/closed-decisions-and-facts.md,
+  docs/runbooks/boot-comparison-set.md, docs/runbooks/role-state.md,
+  docs/runbooks/succession-boot-card.md, scripts/compaction-probe.sh,
+  scripts/harness-selfcheck.sh, workspace-card/LOCAL.md, .beads/, config/,
+  contracts/,
   and anything the manifest does not claim.
 
 Per-file outcomes:
@@ -33,6 +38,7 @@ if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 from template_common import (  # noqa: E402
     PLACEHOLDERS,
+    SKIP_SUBSTITUTE_PATHS,
     is_instance_owned,
 )
 
@@ -117,6 +123,42 @@ def substitute(text: str, values: dict[str, str]) -> str:
         if key in out and name in values:
             out = out.replace(key, values[name])
     return out
+
+
+def missing_placeholders(
+    template_root: Path,
+    actions: list[dict],
+    values: dict[str, str],
+) -> dict[str, list[str]]:
+    """Per documented key, the relative paths of planned files whose
+    substituted text still carries that token: the gap is read from the
+    rendered text, since a supplied value can itself hold an unsubstituted
+    key's placeholder and `substitute()` leaves that in place. Skipped,
+    refused, and error entries are not read; a skip-substitute path is never
+    read for tokens either, since it is copied byte-for-byte and never
+    substituted."""
+    found: dict[str, list[str]] = {}
+    for item in actions:
+        if item["action"] != "planned":
+            continue
+        rel = item["path"]
+        if rel in SKIP_SUBSTITUTE_PATHS:
+            continue
+        src = resolved_under(template_root, rel)
+        if src is None or not src.is_file():
+            continue
+        rendered = substitute(src.read_text(encoding="utf-8"), values)
+        for key in PLACEHOLDERS:
+            if key in rendered:
+                found.setdefault(key[2:-2], []).append(rel)
+    return {key[2:-2]: found[key[2:-2]] for key in PLACEHOLDERS if key[2:-2] in found}
+
+
+def format_missing(missing: dict[str, list[str]]) -> str:
+    lines = ["missing placeholders (write refused):"]
+    for name, paths in missing.items():
+        lines.append(f"  {name}: {', '.join(paths)}")
+    return "\n".join(lines) + "\n"
 
 
 def plan_actions(
@@ -310,8 +352,11 @@ def apply_planned(
             raise RuntimeError(
                 f"destination became instance-owned or escaped before write: {rel}"
             )
-        text = src.read_text(encoding="utf-8")
-        text = substitute(text, values)
+        skip_substitute = rel in SKIP_SUBSTITUTE_PATHS
+        if skip_substitute:
+            payload = src.read_bytes()
+        else:
+            payload = substitute(src.read_text(encoding="utf-8"), values).encode("utf-8")
         dest.parent.mkdir(parents=True, exist_ok=True)
         # Atomic replace within the destination directory so a crash mid-write
         # does not leave a truncated target. Preserve destination mode when the
@@ -325,8 +370,8 @@ def apply_planned(
             dir=str(dest.parent),
         )
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as tmp:
-                tmp.write(text)
+            with os.fdopen(fd, "wb") as tmp:
+                tmp.write(payload)
             os.chmod(tmp_name, mode)
             os.replace(tmp_name, dest)
         except Exception:
@@ -359,7 +404,7 @@ def parse_placeholder_args(items: list[str] | None) -> dict[str, str]:
             raise SystemExit(f"template-apply: expected KEY=VALUE, got {item!r}")
         key, value = item.split("=", 1)
         key = key.strip()
-        if f"{{{{{key}}}}}" not in PLACEHOLDERS:
+        if "{" * 2 + key + "}" * 2 not in PLACEHOLDERS:
             raise SystemExit(
                 f"template-apply: unknown placeholder {key!r}; "
                 f"allowed: {', '.join(p[2:-2] for p in PLACEHOLDERS)}"
@@ -447,18 +492,33 @@ def main(argv: list[str] | None = None) -> int:
 
     actions = plan_actions(template_root, ops_root, manifest, args.attempt)
 
+    try:
+        missing = missing_placeholders(template_root, actions, values)
+    except (OSError, UnicodeDecodeError) as exc:
+        sys.stderr.write(f"template-apply: cannot read template source: {exc}\n")
+        return 2
+    missing_text = format_missing(missing) if missing else ""
+
     # Always surface the plan before any write. Human mode prints it on stdout;
     # JSON mode keeps stdout machine-readable and puts the plan on stderr when
     # a write pass will follow.
     plan_text = format_plan(actions)
     if args.json:
         if not args.write:
-            json.dump({"phase": "dry-run", "actions": actions}, sys.stdout, indent=2)
+            payload = {"phase": "dry-run", "actions": actions, "missing_placeholders": missing}
+            json.dump(payload, sys.stdout, indent=2)
             sys.stdout.write("\n")
         else:
             sys.stderr.write(plan_text)
+            if missing:
+                sys.stderr.write(missing_text)
     else:
         sys.stdout.write(plan_text)
+        if missing:
+            if args.write:
+                sys.stderr.write(missing_text)
+            else:
+                sys.stdout.write(missing_text)
 
     if plan_has_errors(actions):
         # Missing or invalid manifest entries are apply errors, not a clean plan.
@@ -478,6 +538,12 @@ def main(argv: list[str] | None = None) -> int:
         # Attempt-only dry-run that includes a refused path: exit 1 so tests
         # can assert the refusal status as a number.
         return 1
+
+    if missing:
+        # A write that would ship unsubstituted placeholders is the same
+        # could-not-decide status template-check already uses: exit 2, and no
+        # write happens, not even the confirmation prompt.
+        return 2
 
     if not args.write:
         return 0

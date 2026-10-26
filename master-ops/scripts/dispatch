@@ -7,12 +7,12 @@
 set -u
 OPS={{OPS_REPO}}
 GATE={{RUNTIME_ROOT}}/scripts/dispatch-gate
-LEDGER=~/.mogui/dispatch-ledger.jsonl
 TEMPLATE_POLICY=$OPS/model-tier-policy.json
 PROBE_BIN={{RUNTIME_ROOT}}/scripts/model-identity-probe
 ROLLOUT_PROBE_BIN={{RUNTIME_ROOT}}/scripts/model-probe-rollout
 SCRIPTS_DIR=$(cd "$(dirname "$0")" && pwd)
 COLLISION_CHECK="$SCRIPTS_DIR/dispatch-collision-check"
+HOOKS_ANSWER_BIN="$SCRIPTS_DIR/codex-hooks-review-answer"
 # Master host runtime. Resolution order, most authoritative first:
 #   1. MOGUI_MASTER_HOST_RUNTIME from the launching environment
 #   2. master_host_runtime in the instance runtime config that onboarding writes
@@ -91,6 +91,27 @@ while [ $# -gt 0 ]; do
     *) usage;;
   esac
 done
+
+# Testability seam (docs/runbooks/host-harness-inventory.md): MOGUI_STATE_DIR
+# redirects this dispatch's mutable state (ledger, delivered-contract copies)
+# off ~/.mogui without also moving $HOME, so a smoke run does not relocate
+# trust state too and fail on a dialog production never shows. Unset or empty
+# keeps today's defaults; validated here, before any other work.
+if [ -n "${MOGUI_STATE_DIR:-}" ]; then
+  case "$MOGUI_STATE_DIR" in
+    /*) [ -d "$MOGUI_STATE_DIR" ] && STATE_DIR_OK=1 || STATE_DIR_OK=0 ;;
+    *) STATE_DIR_OK=0 ;;
+  esac
+  if [ "$STATE_DIR_OK" != 1 ]; then
+    echo "✗ MOGUI_STATE_DIR must be an absolute path to an existing directory: $MOGUI_STATE_DIR" >&2
+    exit 1
+  fi
+  STATE_DIR="$MOGUI_STATE_DIR"
+else
+  STATE_DIR=~/.mogui
+fi
+LEDGER="$STATE_DIR/dispatch-ledger.jsonl"
+
 [ -z "$CONTRACT" ] || [ ! -f "$CONTRACT" ] && { echo "✗ contract file missing: $CONTRACT" >&2; exit 1; }
 [ "$CHECK_ONLY" = 0 ] && [ -z "$SPEC" ] && usage
 
@@ -136,11 +157,148 @@ print($1)
 "
 }
 
+# Body text of a "## <name>" heading, read from the local overlay first
+# (so a seat's own copy of a shared block name wins) and the shipped file
+# second. Exit 1 when neither file carries the heading.
+standing_rule_block() {
+  # Reads the same two env-var overrides the gate itself resolves
+  # (DISPATCH_STANDING_RULES / DISPATCH_STANDING_RULES_LOCAL), falling back to
+  # this install's own paths exactly as the gate does. Without this, a value
+  # inherited from the caller's shell could make the gate validate a name
+  # against a file this function never looks at, allowing a dispatch the
+  # append step then cannot find the block for.
+  local name="$1"
+  local main_file="${DISPATCH_STANDING_RULES:-$SCRIPTS_DIR/../rules/standing-rules.md}"
+  local local_file="${DISPATCH_STANDING_RULES_LOCAL:-$SCRIPTS_DIR/../config/standing-rules.overlay.md}"
+  python3 - "$name" "$local_file" "$main_file" <<'EOF'
+import sys
+
+name, local_file, main_file = sys.argv[1], sys.argv[2], sys.argv[3]
+
+
+def extract(path, heading_name):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return None
+    heading = f"## {heading_name}"
+    body = []
+    found = False
+    for line in lines:
+        if found:
+            if line.startswith("## "):
+                break
+            body.append(line)
+        elif line.strip() == heading:
+            found = True
+    if not found:
+        return None
+    while body and not body[0].strip():
+        body.pop(0)
+    while body and not body[-1].strip():
+        body.pop()
+    return "\n".join(body)
+
+
+text = extract(local_file, name)
+if text is None:
+    text = extract(main_file, name)
+if text is None:
+    sys.exit(1)
+print(text)
+EOF
+}
+
+# Resolve product_repositories (or product_repo) from the instance runtime
+# config into owner/repo slugs via each path's git remote origin, serialized
+# for dispatch-collision-check's MOGUI_PRODUCT_REPO-compatible third argument.
+# Without this, dispatch-collision-check only ever scans its hardcoded
+# default repository, missing collisions in every other configured product
+# repository.
+resolve_product_repo_arg() {
+  local paths path slug slugs=()
+  paths=$(python3 -c "
+import json
+try:
+    data = json.load(open('$INSTANCE_RUNTIME_CONFIG'))
+except Exception:
+    raise SystemExit(1)
+repos = data.get('product_repositories')
+if not isinstance(repos, list) or not repos:
+    single = data.get('product_repo')
+    repos = [single] if isinstance(single, str) and single.strip() else []
+for r in repos:
+    if isinstance(r, str) and r.strip():
+        print(r.strip())
+" 2>/dev/null) || return 1
+  [ -n "$paths" ] || return 1
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    remote_url=$(git -C "$path" remote get-url origin 2>/dev/null)
+    if [ -z "$remote_url" ]; then
+      echo "dispatch: '$path' has no git remote 'origin'; excluded from the collision scan" >&2
+      continue
+    fi
+    slug=$(printf '%s' "$remote_url" | python3 -c "
+import re, sys
+remote = sys.stdin.read().strip()
+for pattern in (
+    r'^git@github\.com:([^/]+/[^/]+?)(?:\.git)?\$',
+    r'^https://github\.com/([^/]+/[^/]+?)(?:\.git)?\$',
+    r'^ssh://git@github\.com/([^/]+/[^/]+?)(?:\.git)?\$',
+):
+    match = re.match(pattern, remote)
+    if match:
+        print(match.group(1))
+        sys.exit(0)
+sys.exit(1)
+" 2>/dev/null)
+    if [ -n "$slug" ]; then
+      slugs+=("$slug")
+    else
+      echo "dispatch: git remote 'origin' for '$path' ('$remote_url') is not a github.com URL; excluded from the collision scan" >&2
+    fi
+  done <<<"$paths"
+  [ "${#slugs[@]}" -gt 0 ] || return 1
+  python3 -c "import json,sys; print(json.dumps(sys.argv[1:]))" "${slugs[@]}"
+}
+PRODUCT_REPO_ARG=$(resolve_product_repo_arg || printf '%s' "${MOGUI_PRODUCT_REPO:-}")
+
 # model-identity-probe lives in the orchestrator and resolves its instance config
 # relative to that checkout, where the product-path guard correctly forbids the
 # master from writing. Point it at the operations copy instead, so there is one
 # file rather than two that can drift.
 export INSTANCE_RUNTIME_CONFIG="$INSTANCE_RUNTIME_CONFIG"
+
+# Points the gate at this install's own standing-rules file, and separately
+# at the instance-owned overlay beside it, instead of the gate's own
+# template-copy fallback, the same seam DISPATCH_TIER_POLICY already fills
+# for the tier policy. rules/standing-rules.md refreshes on every template
+# re-stamp; config/standing-rules.overlay.md, under the instance-owned config/
+# directory, never does.
+#
+# A missing install file used to leave DISPATCH_STANDING_RULES unset, so the
+# gate fell back to its own bundled template copy and validated a contract's
+# standing_rules names against it, while standing_rule_block's append step
+# below reads the same unset-falls-back-to-this-install-path expression and
+# finds nothing there: the gate passed a contract the append step then could
+# not deliver. Refusing here, before the gate call, keeps both reads pinned
+# to one file. A caller-supplied override is left alone and skips the check.
+# The overlay export stays unconditional: it never had a meaningful
+# template-side fallback to defer to (the template ships no overlay at all),
+# and the gate already treats a missing overlay path as "no extra names"
+# instead of an error.
+STANDING_RULES_PATH="$SCRIPTS_DIR/../rules/standing-rules.md"
+if [ -z "${DISPATCH_STANDING_RULES:-}" ]; then
+  if [ ! -f "$STANDING_RULES_PATH" ]; then
+    echo "dispatch: standing rules file missing: $STANDING_RULES_PATH" >&2
+    exit 10
+  fi
+  DISPATCH_STANDING_RULES="$STANDING_RULES_PATH"
+fi
+export DISPATCH_STANDING_RULES
+export DISPATCH_STANDING_RULES_LOCAL="$SCRIPTS_DIR/../config/standing-rules.overlay.md"
 
 # Transcript glob for a model probe, per runtime.
 #
@@ -184,12 +342,236 @@ installed_runtimes() {
   done
 }
 
+# Validates the whole unavailable_runtimes map in one pass, argv-safe (the
+# config path and the candidate list travel as sys.argv[1]/[2], never
+# interpolated into the source). Mirrors src/master_runtime/core/
+# instance_runtime_config.py's _parse_unavailable_runtimes rule for rule,
+# including key normalization, so a config the loader accepts is the same
+# one this accepts: a key strips before it is stored or compared, an unknown
+# name after stripping is refused, a key empty after stripping is refused,
+# and two keys normalizing to the same runtime are refused.
+#
+# An entry whose `until` date is strictly before today is expired: it still
+# validates, but it is left out of the returned map entirely, and this prints
+# one line on stderr naming it (owner decision 2026-10-08, replacing a
+# per-boot recurrence probe with a required expiry date). Every downstream
+# reader (unavailable_runtime_names, dispatchable_runtimes,
+# unavailable_runtime_entry, refuse_unavailable_runtime) sees an expired
+# entry exactly as it would see no entry at all, because it is simply absent
+# from this function's output. Duplicate-key detection still runs against
+# every entry regardless of expiry, so an expired entry cannot mask a
+# duplicate declared alongside it.
+#   exit 2: no file, or no `unavailable_runtimes` key, "no entries", stdout empty.
+#   exit 1: key present but malformed, one-line reason on stdout.
+#   exit 0: every entry validates, JSON {name: [since, why, until]} of the
+#           unexpired entries on stdout.
+unavailable_runtimes_payload() {
+  [ -f "$INSTANCE_RUNTIME_CONFIG" ] || return 2
+  python3 - "$INSTANCE_RUNTIME_CONFIG" "$RUNTIME_CANDIDATES" <<'EOF'
+import json
+import sys
+from datetime import date
+
+path, candidates_arg = sys.argv[1], sys.argv[2]
+candidates = set(candidates_arg.split())
+try:
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+except OSError as exc:
+    print(f"cannot read {path}: {exc}")
+    sys.exit(1)
+
+
+def reject_duplicate_members(pairs):
+    # json.loads keeps only the last of two identical member names and
+    # silently drops the first, so a duplicate (e.g. two "claude" entries)
+    # never reaches the checks below. Catch it here, for any object anywhere
+    # in the document, mirroring instance_runtime_config.py's loader.
+    seen = {}
+    for key, value in pairs:
+        if key in seen:
+            raise ValueError(f"duplicate JSON member name: {key!r}")
+        seen[key] = value
+    return seen
+
+
+try:
+    data = json.loads(text, object_pairs_hook=reject_duplicate_members)
+except Exception as exc:
+    print(f"not valid JSON: {exc}")
+    sys.exit(1)
+if not isinstance(data, dict):
+    print("root is not a JSON object")
+    sys.exit(1)
+unavail = data.get("unavailable_runtimes")
+if unavail is None:
+    sys.exit(2)
+if not isinstance(unavail, dict):
+    print("unavailable_runtimes is not an object")
+    sys.exit(1)
+
+
+def field(entry, name, key):
+    value = entry.get(key)
+    if not isinstance(value, str) or not value.strip() or "\r" in value or "\n" in value:
+        print(f"unavailable_runtimes[{name!r}].{key} must be a non-empty single-line string")
+        sys.exit(1)
+    return value.strip()
+
+
+def until_field(entry, name):
+    value = entry.get("until")
+    if not isinstance(value, str) or not value.strip():
+        print(f"unavailable_runtimes[{name!r}].until must be a non-empty single-line string")
+        sys.exit(1)
+    value = value.strip()
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError as exc:
+        print(f"unavailable_runtimes[{name!r}].until must be a YYYY-MM-DD date: {exc}")
+        sys.exit(1)
+    # date.fromisoformat also accepts compact (20261008) and week-date
+    # (2026-W41-4) forms; the round trip through isoformat() is what narrows
+    # acceptance down to the documented YYYY-MM-DD shape, mirroring
+    # instance_runtime_config.py's _parse_unavailable_runtimes.
+    if parsed.isoformat() != value:
+        print(f"unavailable_runtimes[{name!r}].until must be a YYYY-MM-DD date, got {value!r}")
+        sys.exit(1)
+    return value, parsed
+
+
+result = {}
+seen_names = set()
+for raw_name, entry in unavail.items():
+    name = raw_name.strip() if isinstance(raw_name, str) else raw_name
+    if not isinstance(name, str) or not name:
+        print(f"unavailable_runtimes[{raw_name!r}] key must be a non-empty runtime name")
+        sys.exit(1)
+    if name not in candidates:
+        print(f"unavailable_runtimes[{raw_name!r}] names a runtime outside the known candidate list: {sorted(candidates)}")
+        sys.exit(1)
+    if name in seen_names:
+        print(f"unavailable_runtimes[{raw_name!r}] duplicates another key that also normalizes to {name!r}")
+        sys.exit(1)
+    seen_names.add(name)
+    if not isinstance(entry, dict):
+        print(f"unavailable_runtimes[{raw_name!r}] must be an object with since, why, and until")
+        sys.exit(1)
+    since = field(entry, name, "since")
+    why = field(entry, name, "why")
+    until, until_date = until_field(entry, name)
+    if date.today() > until_date:
+        print(
+            f"unavailable_runtimes entry for {name} expired {until}; dispatching, re-date the entry if it fails",
+            file=sys.stderr,
+        )
+        continue
+    result[name] = [since, why, until]
+
+print(json.dumps(result))
+EOF
+}
+
+# Runs unavailable_runtimes_payload once and fails the whole process closed on
+# a malformed config, for both the explicit --runtime path and the
+# default-pick path. Must be called bare (never through $(...)): dispatchable_
+# runtimes, choose_default_runtime, and unavailable_runtime_names/_entry below
+# all read through a pipe or command substitution, where `exit` only ends
+# that subshell, so the one call that can actually stop dispatch happens here,
+# before either path runs.
+UNAVAILABLE_RUNTIMES_JSON=""
+unavailable_runtimes_guard() {
+  local reason status
+  reason=$(unavailable_runtimes_payload)
+  status=$?
+  if [ "$status" -eq 1 ]; then
+    echo "✗ invalid unavailable_runtimes in $INSTANCE_RUNTIME_CONFIG: $reason" >&2
+    exit 2
+  fi
+  [ "$status" -eq 0 ] && UNAVAILABLE_RUNTIMES_JSON=$reason
+}
+
+# Names declared unavailable in the instance runtime config and still
+# unexpired: operator-declared, not probed. Reads the map
+# unavailable_runtimes_guard already validated, passed as argv (not piped:
+# `python3 -` already reads the script itself from stdin, so a pipe into it
+# here would feed the JSON to the script reader instead of to the program).
+# An expired entry never reaches $UNAVAILABLE_RUNTIMES_JSON in the first
+# place (unavailable_runtimes_payload leaves it out), so it never appears
+# here either, including in the ledger's host-diversity audit row, which
+# reads this list.
+unavailable_runtime_names() {
+  [ -n "$UNAVAILABLE_RUNTIMES_JSON" ] || return 0
+  python3 - "$UNAVAILABLE_RUNTIMES_JSON" <<'EOF'
+import json
+import sys
+
+for name in json.loads(sys.argv[1]):
+    print(name)
+EOF
+}
+
+# installed_runtimes() minus the operator-declared, still-unexpired
+# unavailable set. The default runtime and the alternatives list are both
+# drawn from here, so an unexpired unavailable runtime is never offered as
+# either; an expired one is offered as both, same as if its entry had been
+# deleted.
+dispatchable_runtimes() {
+  local unavailable
+  unavailable=$(unavailable_runtime_names)
+  installed_runtimes | while IFS= read -r runtime; do
+    if [ -n "$unavailable" ] && printf '%s\n' "$unavailable" | grep -Fxq "$runtime"; then
+      continue
+    fi
+    printf '%s\n' "$runtime"
+  done
+}
+
+# since/why/until for one unexpired unavailable runtime, one per line,
+# argv-safe (the runtime name travels as sys.argv[1], never interpolated into
+# the source). Exit 2 means the runtime has no unexpired entry (nothing
+# declared, or its entry expired, proceed either way). The map is already
+# known-valid by the time this runs (unavailable_runtimes_guard refuses the
+# whole process first), so there is no malformed-entry case left to signal
+# here.
+unavailable_runtime_entry() {
+  local runtime="$1"
+  [ -n "$UNAVAILABLE_RUNTIMES_JSON" ] || return 2
+  python3 - "$runtime" "$UNAVAILABLE_RUNTIMES_JSON" <<'EOF'
+import json
+import sys
+
+runtime, payload = sys.argv[1], sys.argv[2]
+data = json.loads(payload)
+if runtime not in data:
+    sys.exit(2)
+since, why, until = data[runtime]
+print(since)
+print(why)
+print(until)
+EOF
+}
+
+# Refuses a runtime the operator declared unavailable and whose entry has not
+# expired, with the reason, the expiry date, and the alternatives still on
+# offer. No override flag: delete the config entry, or let it expire, to use
+# the runtime again.
+refuse_unavailable_runtime() {
+  local runtime="$1" alternatives="$2" entry since why until
+  entry=$(unavailable_runtime_entry "$runtime") || return 0
+  since=$(printf '%s\n' "$entry" | sed -n 1p)
+  why=$(printf '%s\n' "$entry" | sed -n 2p)
+  until=$(printf '%s\n' "$entry" | sed -n 3p)
+  echo "✗ runtime $runtime unavailable on this install since $since until $until: $why · alternatives: ${alternatives:-none}" >&2
+  return 1
+}
+
 join_csv() {
   python3 -c "import sys; print(', '.join([x.strip() for x in sys.stdin if x.strip()]))"
 }
 
 choose_default_runtime() {
-  installed_runtimes | while IFS= read -r runtime; do
+  dispatchable_runtimes | while IFS= read -r runtime; do
     [ "$runtime" = "$MASTER_HOST_RUNTIME" ] && continue
     echo "$runtime"
     break
@@ -201,10 +583,19 @@ choose_default_runtime() {
 # lost with every step still printing success. Extend this list the first time a
 # host shows a gate that is not here yet; a missing marker is a silent delivery
 # failure, which is the whole defect this guards (measured delivery incidents).
-HOOK_TRUST_MARKERS='^[[:space:]]*(Resume session.*|New worktree.*|Coming from Claude Code.*|Changelog.*|Select a model.*|Welcome to Claude.*|Do you trust the files.*|Sign in.*|press enter to continue.*|/login.*|Antigravity CLI requires permission.*|I trust this folder.*|trust this workspace.*|workspace trust.*|permission to access.*)[[:space:][:punct:]]*$'
+#
+# A fresh claude TUI prompt carries placeholder text next to the arrow.
+# Measured 2026-10-23, `orca terminal read --limit 40` on a fresh
+# `claude` pane:
+#   '❯\xa0Try "fix lint errors"'                      (U+00A0 after the arrow)
+#   '  claude-haiku-5 │ codex-hooks-vet-unmeasured'
+#   '  ⏵⏵ auto mode on (shift+tab to cycle) · PR #190'
+# so the unicode marker below matches that placeholder shape too, with either
+# a no-break space or regular spaces between the arrow and `Try "..."`.
+HOOK_TRUST_MARKERS='^[[:space:]]*(Resume session.*|New worktree.*|Coming from Claude Code.*|Changelog.*|Select a model.*|Welcome to Claude.*|Do you trust the files.*|Sign in.*|press enter to continue.*|/login.*|Antigravity CLI requires permission.*|I trust this folder.*|trust this workspace.*|workspace trust.*|permission to access.*|Quick safety check.*|pre-approves .* tool permissions.*)[[:space:][:punct:]]*$'
 LIMIT_MARKERS='^[[:space:]]*(rate limit|rate-limit|too many requests|quota exceeded|out of credits|credits are exhausted|usage limit reached|you.?ve hit your limit|you have reached your limit|try again after)[[:space:][:punct:]]*.*$'
 PREPARED_PROMPT_MARKERS='^[[:space:]]*(claude|codex|grok|gemini)[[:space:]]*>[[:space:]]*$'
-PREPARED_UNICODE_PROMPT_MARKERS='^[[:space:]]*(❯|›|➜)[[:space:]]*$'
+PREPARED_UNICODE_PROMPT_MARKERS=$'^[[:space:]]*(❯|›|➜)([\xc2\xa0 ]+Try "[^"]*")?[[:space:]]*$'
 
 pane_classify_text() {
   local pane="$1" state
@@ -226,12 +617,23 @@ pane_classify_text() {
 }
 
 delivery_result() {
-  # Post-injection gates take precedence over every prior state. The only
-  # positive transition is a prepared prompt becoming unknown; every other
-  # transition stays unverified.
+  # Post-injection gates take precedence over every prior state. A worker
+  # that finishes inside the window returns the pane to the same prepared
+  # prompt it started from, so the pane transition alone carries no positive
+  # signal; the dispatch record's own status fills that gap (measured
+  # 2026-10-23: three dispatches read `completed` with the pane back at a
+  # prepared prompt). Precedence: hook-trust and limit win regardless of
+  # status, then a completed dispatch is `done`, then the pane-transition
+  # fallback.
   case "$1:$2" in
-    *:hook-trust) echo hook-trust;;
-    *:limit) echo limit;;
+    *:hook-trust) echo hook-trust; return;;
+    *:limit) echo limit; return;;
+  esac
+  if [ "$3" = completed ]; then
+    echo done
+    return
+  fi
+  case "$1:$2" in
     prepared-prompt:unknown) echo agent-started;;
     *) echo unknown;;
   esac
@@ -241,6 +643,111 @@ pane_classification() {
   local pane
   pane=$(orca terminal read --terminal "$1" --limit 40 2>/dev/null || true)
   pane_classify_text "$pane"
+}
+
+# Codex has its own ready state and its own gates, neither of which the markers
+# above were written for. Measured 2026-10-01 on a peer install (codex-cli
+# 0.159.2 to 0.159.3): a bare `codex --model <id>` launch opened a model-
+# retirement migration menu with "Try new model" preselected; `terminal wait
+# --for tui-idle` called that pane ready the same as a real prompt, the
+# injected spec's first keystroke confirmed the preselected option, and the
+# pane footer silently turned from the requested model to the replacement
+# while every dispatch step still printed success. Codex's own ready state is
+# a footer line, "<model> <effort> · <path>", which a trust prompt or a menu
+# does not have: the footer decides, not a menu/prompt pattern list that a
+# future, unseen gate would just fall through. Returns 1 with a one-line
+# reason for a provider-limit phrase, an update notice, or a numbered
+# selection menu (all three read from screens seen that day); returns 2 when
+# no footer has rendered yet, so the caller can read the pane again; returns 0
+# silently once the footer's model and effort match the request.
+codex_start_screen_problem() {
+  local pane="$1" model="$2" effort="$3" state footer shown want
+  state=$(printf '%s\n' "$pane" | sed '/^[[:space:]]*$/d' | tail -n 12)
+  if printf '%s\n' "$state" | grep -Eiq "$LIMIT_MARKERS"; then
+    echo "provider limit notice"; return 1
+  fi
+  if printf '%s\n' "$state" | grep -Eiq 'update available'; then
+    echo "update notice"; return 1
+  fi
+  if printf '%s\n' "$state" | grep -Eq '^[[:space:]]*›[[:space:]]*[0-9]+\.'; then
+    echo "selection menu: $(printf '%s\n' "$state" | grep -Em1 '^[[:space:]]*›[[:space:]]*[0-9]+\.' | sed 's/^[[:space:]]*//')"
+    return 1
+  fi
+  # The model token must carry a digit (every measured model id does, e.g.
+  # "gpt-5.5"), or the keyboard-shortcut hint line codex prints below its own
+  # footer ("enter/esc confirm · ctrl+c quit") matches this same shape and is
+  # read as a footer that disagrees with the request.
+  footer=$(printf '%s\n' "$state" | grep -Eio '^[[:space:]]*[^[:space:]]*[0-9][^[:space:]]*[[:space:]]+[a-z]+[[:space:]]*·' | tail -n 1)
+  if [ -z "$footer" ]; then
+    echo "no model footer yet"; return 2
+  fi
+  shown=$(printf '%s\n' "$footer" | awk '{print tolower($1) " " tolower($2)}')
+  want=$(printf '%s %s\n' "$model" "$effort" | tr '[:upper:]' '[:lower:]')
+  if [ "$shown" != "$want" ]; then
+    echo "footer shows '$shown', requested '$want'"; return 1
+  fi
+}
+
+# Measured 2026-10-01, same install: the reasoning effort and the model-
+# migration pair codex surfaced that day. Carried as variables, not inlined,
+# because the launch flags below and the footer check above must agree on both.
+CODEX_REASONING_EFFORT=xhigh
+CODEX_MIGRATION_ACK='notice.model_migrations={"gpt-5.5"="gpt-6.1-sol"}'
+CODEX_BYPASS_FLAG=
+
+# Optional codex_reasoning_effort and codex_bypass_approvals_and_sandbox from the
+# instance runtime config. Effort list from codex-cli 0.163.0 (2026-10-17); an
+# unknown value is refused because the footer check would wait forever.
+# An unreadable config is left to unavailable_runtimes_guard, which refuses it.
+#   exit 0: effort, then bypass (1 or 0), on stdout. exit 1: one-line reason.
+codex_instance_launch_config() {
+  [ -f "$INSTANCE_RUNTIME_CONFIG" ] || { printf '%s\n0\n' "$CODEX_REASONING_EFFORT"; return 0; }
+  python3 - "$INSTANCE_RUNTIME_CONFIG" "$CODEX_REASONING_EFFORT" <<'EOF'
+import json
+import sys
+
+path, effort = sys.argv[1], sys.argv[2]
+efforts = ("minimal", "low", "medium", "high", "xhigh", "max")
+try:
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+except Exception:
+    data = {}
+if not isinstance(data, dict):
+    data = {}
+value = data.get("codex_reasoning_effort")
+if value is not None:
+    if not isinstance(value, str) or value not in efforts:
+        print(f"codex_reasoning_effort is {value!r}; expected one of {', '.join(efforts)}")
+        sys.exit(1)
+    effort = value
+bypass = data.get("codex_bypass_approvals_and_sandbox")
+if bypass is not None and not isinstance(bypass, bool):
+    print(f"codex_bypass_approvals_and_sandbox is {bypass!r}; expected true or false")
+    sys.exit(1)
+print(effort)
+print(1 if bypass else 0)
+EOF
+}
+
+# Called bare, not through $(...), so the refusal can stop dispatch. Only a
+# codex dispatch calls it, so a bad codex key never stops another runtime. The
+# bypass warning goes to stdout because stdout is this script's mechanical log;
+# the ledger keeps the choice as codex_bypass on the host-diversity audit line.
+apply_codex_instance_launch_config() {
+  local out status
+  out=$(codex_instance_launch_config)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "✗ invalid codex launch setting in $INSTANCE_RUNTIME_CONFIG: $out" >&2
+    exit 2
+  fi
+  CODEX_REASONING_EFFORT=$(printf '%s\n' "$out" | sed -n 1p)
+  if [ "$(printf '%s\n' "$out" | sed -n 2p)" = 1 ]; then
+    CODEX_BYPASS_FLAG=' --dangerously-bypass-approvals-and-sandbox'
+    echo "WARNING: codex_bypass_approvals_and_sandbox is true in $INSTANCE_RUNTIME_CONFIG;"
+    echo "         this codex worker launches with --dangerously-bypass-approvals-and-sandbox (no sandbox, no approvals)."
+  fi
 }
 
 shell_quote() {
@@ -284,6 +791,11 @@ runtime_command() {
     # disables the sandbox as well as approvals. Weakening a sandbox is not a
     # side effect to take on while fixing a delivery bug, so the safer measured
     # path stays and the operator is told when it has not run.
+    # Since 2026-10-17 that stays the default: the flag is off unless the operator
+    # opts in with codex_bypass_approvals_and_sandbox in the instance runtime config.
+    # Measured 2026-10-24 on codex-cli 0.164.0 with one unreviewed hook in a scratch
+    # CODEX_HOME: the "Hooks need review" modal shows the same with and without the
+    # flag, so a bypass launch still reaches the hooks vet in the launch loop below.
     # The model flag is separate from the approval posture above and was missing
     # here until 2026-08-05. The gate validated a model id, the tier policy
     # recorded it, and the launcher dropped it: two codex dispatches declared
@@ -292,7 +804,18 @@ runtime_command() {
     # entry was a claim, not a fact. `-m, --model <MODEL>` measured from
     # `codex --help` on 2026-08-05, per the registry rule: use the installed
     # CLI's own flags, measured, never guessed.
-    codex) echo "codex --model $model_arg";;
+    #
+    # Three more flags added 2026-10-01, all three in codex's own config
+    # reference: `model_reasoning_effort` pins the effort the start-screen
+    # check above compares the footer against, `check_for_update_on_startup
+    # =false` removes one more screen that can absorb an injection the same
+    # way the migration menu did, and `notice.model_migrations` acknowledges
+    # the one old-to-new pair measured that day. It covers that pair alone,
+    # not a future migration, which is what the footer check is for. Each is
+    # written as an inline table: the dotted form reads the dot inside the
+    # model id as a nesting separator and fails with "invalid type: map,
+    # expected a string".
+    codex) echo "codex --model $model_arg -c $(shell_quote "model_reasoning_effort=\"$CODEX_REASONING_EFFORT\"") -c check_for_update_on_startup=false -c $(shell_quote "$CODEX_MIGRATION_ACK")${CODEX_BYPASS_FLAG:-}";;
     gemini) echo "gemini";;
     opencode) echo "opencode";;
     # agy is the Gemini host; `agy models` reports gemini-* ids. Its approval flag
@@ -304,6 +827,8 @@ runtime_command() {
 }
 
 PRETRUST_BIN={{RUNTIME_ROOT}}/scripts/codex-worker-pretrust
+CURSOR_PRETRUST_BIN={{RUNTIME_ROOT}}/scripts/cursor-worker-pretrust
+CLAUDE_PRETRUST_BIN={{RUNTIME_ROOT}}/scripts/claude-worker-pretrust
 
 # The registry prescribes pre-trust for codex instead of a launch flag. RUN it
 # here rather than telling the operator to. A manual step in front of a dispatch
@@ -345,14 +870,271 @@ ensure_codex_pretrust() {
   esac
 }
 
+# Cursor Agent's launch flags (--force --trust) cover the approval/permission
+# prompt but not the first-visit workspace-trust prompt, which Cursor Agent
+# stores separately under ~/.cursor/projects (measured 2026-08-03, per the
+# charter's dispatch-gate and worker-routing-review docs). Run pre-trust here
+# for the same reason ensure_codex_pretrust does: a manual step in front of a
+# dispatch is a step that gets skipped, and an unresolved trust prompt reads
+# as idle, so the injected spec is lost while every step reports success.
+ensure_cursor_pretrust() {
+  [ "$1" = "cursor" ] || return 0
+  local wt_path="${2#path:}" out summary
+  if [ -z "$wt_path" ] || [ "${wt_path#/}" = "$wt_path" ]; then
+    echo "✗ cursor needs an absolute worktree path to pre-trust; got '${2:-<none>}'" >&2
+    echo "  Cursor Agent's --force --trust flags do not cover the first-visit workspace-trust" >&2
+    echo "  prompt, which is stored separately. Dispatch with --worktree path:<absolute-path>," >&2
+    echo "  or choose a runtime whose approval flags are measured to cover it." >&2
+    return 1
+  fi
+  if [ ! -x "$CURSOR_PRETRUST_BIN" ]; then
+    echo "✗ cursor pre-trust script not executable: $CURSOR_PRETRUST_BIN" >&2
+    return 1
+  fi
+  out=$("$CURSOR_PRETRUST_BIN" "$wt_path" 2>&1) || {
+    echo "✗ cursor pre-trust failed (exit $?)" >&2; printf '%s\n' "$out" >&2; return 1; }
+  summary=$(printf '%s\n' "$out" | grep -m1 '^Summary:' || true)
+  case "$summary" in
+    *skipped*)
+      echo "✗ cursor pre-trust reported: $summary" >&2
+      echo "  A skipped summary leaves the trust prompt in place, which is a delivery gate," >&2
+      echo "  not a warning. Resolve pre-trust or dispatch to a different runtime." >&2
+      return 1;;
+    "")
+      echo "✗ cursor pre-trust produced no Summary line — unmeasured, treating as not trusted" >&2
+      printf '%s\n' "$out" >&2; return 1;;
+    *)
+      echo "pre-trust ✓ cursor · $summary";;
+  esac
+}
+
+# Claude Code's own folder-trust dialog ("Quick safety check...") is not
+# covered by --dangerously-skip-permissions (measured 2026-10-02 on a fresh
+# worktree: the dialog opened, swallowed the injected spec, and the wrapper
+# printed delivery UNVERIFIED because HOOK_TRUST_MARKERS did not know the
+# wording yet). Run pre-trust here for the same reason the other two run it:
+# a manual step in front of a dispatch is a step that gets skipped, and an
+# unresolved trust prompt reads as idle, so the injected spec is lost while
+# every step reports success.
+ensure_claude_pretrust() {
+  [ "$1" = "claude" ] || return 0
+  local wt_path="${2#path:}" out summary
+  if [ -z "$wt_path" ] || [ "${wt_path#/}" = "$wt_path" ]; then
+    echo "✗ claude needs an absolute worktree path to pre-trust; got '${2:-<none>}'" >&2
+    echo "  claude's folder-trust dialog is not covered by --dangerously-skip-permissions," >&2
+    echo "  so an untrusted worktree will stop the worker on that dialog, which reads as idle." >&2
+    echo "  Dispatch with --worktree path:<absolute-path>, or choose a runtime whose approval" >&2
+    echo "  posture is measured to cover it." >&2
+    return 1
+  fi
+  if [ ! -x "$CLAUDE_PRETRUST_BIN" ]; then
+    echo "✗ claude pre-trust script not executable: $CLAUDE_PRETRUST_BIN" >&2
+    return 1
+  fi
+  out=$("$CLAUDE_PRETRUST_BIN" "$wt_path" 2>&1) || {
+    echo "✗ claude pre-trust failed (exit $?)" >&2; printf '%s\n' "$out" >&2; return 1; }
+  summary=$(printf '%s\n' "$out" | grep -m1 '^Summary:' || true)
+  case "$summary" in
+    "")
+      echo "✗ claude pre-trust produced no Summary line; unmeasured, treating as not trusted" >&2
+      printf '%s\n' "$out" >&2; return 1;;
+    *)
+      echo "pre-trust ✓ claude · $summary";;
+  esac
+}
+
+# Mirrors scripts/codex-worker-pretrust's own accounts-directory rule (its
+# lines 20 to 34) exactly: that script is the one place this resolution is
+# allowed to live, and it has no callable surface for just the directory
+# name, so the three lines are duplicated here. This contract leaves that
+# script unchanged.
+codex_accounts_dir() {
+  if [ -n "${CODEX_ACCOUNTS_DIR:-}" ]; then
+    printf '%s\n' "$CODEX_ACCOUNTS_DIR"
+    return
+  fi
+  case "$(uname -s 2>/dev/null || printf unknown)" in
+    Darwin) printf '%s\n' "$HOME/Library/Application Support/orca/codex-accounts";;
+    *) printf '%s\n' "$HOME/.local/share/orca/codex-accounts";;
+  esac
+}
+
+# The homes codex can start from on this host: the operator's own home, plus
+# every account seat pre-trust already enumerates, plus the dispatched
+# worktree's own `.codex/hooks.json` and, when that worktree sits under a
+# repository's `.orca/worktrees/`, that repository root's `.codex/hooks.json`
+# too. One per line; a missing accounts directory, worktree, or project
+# `.codex` directory just yields none from the glob or case match.
+#
+# Gap: a plugin ships its own hooks.json, and that file is not one of the
+# homes above. Measured read-only on this host (`codex --help`, `codex plugin
+# list --help`, `codex doctor --all`, and `find "$HOME/.codex" -iname
+# hooks.json`): codex has no `hooks` subcommand and ships no docs describing
+# where it reads plugin hook sources. The plugin hooks.json files that do
+# exist sit nested per marketplace, plugin, and installed version under
+# `.codex/plugins/cache/`, a set that grows and churns with what is
+# installed, unlike the fixed home paths above. Nothing matching that shape
+# was found, so nothing is added here; a modal triggered by a plugin hook
+# while an enumerated hooks.json elsewhere passes is still answered on faith.
+codex_hooks_homes() {
+  local accounts_dir home wt repo_root
+  printf '%s\n' "$HOME/.codex"
+  accounts_dir=$(codex_accounts_dir)
+  for home in "$accounts_dir"/*/home; do
+    [ -d "$home" ] && printf '%s\n' "$home"
+  done
+  wt="${WORKTREE#path:}"
+  case "$wt" in
+    /*)
+      printf '%s\n' "$wt/.codex"
+      case "$wt" in
+        */.orca/worktrees/*)
+          repo_root="${wt%%/.orca/worktrees/*}"
+          printf '%s\n' "$repo_root/.codex";;
+      esac;;
+  esac
+}
+
+# codex_hooks_vet <home>: <home> is a directory that may hold hooks.json.
+# Reads every hooks.<Event>[].hooks[].command string and passes only when
+# each command's absolute-path tokens exist on disk and its first word (when
+# not an absolute path and not a shell keyword or builtin) resolves on PATH.
+# Prints one line and returns 1 on the first failing command, including a
+# malformed shape at any level (event value not a list, entry not an object,
+# inner hooks not a list, hook not an object, command not a string): a file
+# this parses but cannot trust the shape of fails closed the same as a bad
+# command. A top-level hooks object that is genuinely empty passes with 0
+# command(s) checked. Prints one line and returns 2 when hooks.json is
+# missing or cannot be parsed. Silent on pass.
+codex_hooks_vet() {
+  local home="$1"
+  python3 - "$home/hooks.json" <<'PY'
+import json
+import os
+import shlex
+import shutil
+import sys
+
+path = sys.argv[1]
+BUILTINS = {"if", "then", "else", "elif", "fi", "case", "esac", "for", "while", "until", "do", "done", "[", "[[", "test", "cd", "source", ".", "exec", "eval", "export", "set", "local", "unset", "read", "echo", "printf"}
+
+try:
+    with open(path, "r", encoding="utf-8") as handle:
+        raw = handle.read()
+except FileNotFoundError:
+    print(f"hooks-vet: {path}: not found")
+    sys.exit(2)
+except OSError as error:
+    print(f"hooks-vet: {path}: {error}")
+    sys.exit(2)
+
+try:
+    document = json.loads(raw)
+except json.JSONDecodeError as error:
+    print(f"hooks-vet: {path}: cannot parse hooks.json: {error}")
+    sys.exit(2)
+
+if not isinstance(document, dict) or not isinstance(document.get("hooks"), dict):
+    print(f"hooks-vet: {path}: top level: wrong shape")
+    sys.exit(1)
+hooks = document["hooks"]
+
+checked = 0
+for event, entries in hooks.items():
+    if not isinstance(entries, list):
+        print(f"hooks-vet: {path}: {event}: wrong shape")
+        sys.exit(1)
+    for i, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            print(f"hooks-vet: {path}: {event}[{i}]: wrong shape")
+            sys.exit(1)
+        inner = entry.get("hooks", [])
+        if not isinstance(inner, list):
+            print(f"hooks-vet: {path}: {event}[{i}].hooks: wrong shape")
+            sys.exit(1)
+        for j, hook in enumerate(inner):
+            if not isinstance(hook, dict):
+                print(f"hooks-vet: {path}: {event}[{i}].hooks[{j}]: wrong shape")
+                sys.exit(1)
+            command = hook.get("command")
+            if not isinstance(command, str):
+                print(f"hooks-vet: {path}: {event}[{i}].hooks[{j}].command: wrong shape")
+                sys.exit(1)
+            try:
+                lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+                lexer.whitespace_split = True
+                lexer.commenters = ""
+                tokens = list(lexer)
+            except ValueError as error:
+                print(f"hooks-vet: {command}: unparsable: {error}")
+                sys.exit(1)
+            if not tokens:
+                continue
+            # A redirection target (">/log", "2>&1") is not a command this vet
+            # runs; punctuation_chars splits the operator from its target, so
+            # skip the existence check for a token right after one.
+            REDIRECT_OPERATOR_CHARS = set("<>&")
+            prev_token = None
+            for token in tokens:
+                is_redirect_target = (
+                    prev_token is not None
+                    and prev_token != ""
+                    and set(prev_token) <= REDIRECT_OPERATOR_CHARS
+                )
+                if not is_redirect_target and token.startswith("/") and not os.path.exists(token):
+                    print(f"hooks-vet: {command}: {token}: no such file")
+                    sys.exit(1)
+                prev_token = token
+            first = tokens[0]
+            if not first.startswith("/") and first not in BUILTINS:
+                if shutil.which(first) is None:
+                    print(f"hooks-vet: {command}: {first}: not found on PATH")
+                    sys.exit(1)
+            checked += 1
+
+print(f"hooks-vet: {path}: {checked} command(s) checked")
+sys.exit(0)
+PY
+}
+
+# Runs codex_hooks_vet over every home from codex_hooks_homes. A home with no
+# hooks.json is skipped with one printed line. A home whose hooks.json exists
+# but fails the vet (a bad command, or hooks.json itself unparsable) fails the
+# whole pass closed, which is the only outcome the 3b wiring below answers the
+# hooks-review modal on. When every home is skipped, nothing was measured, so
+# this also fails closed instead of returning the empty-loop's default 0.
+codex_hooks_vet_homes() {
+  local home hooks_json rc overall=0 measured=0
+  if [ -z "${WORKTREE#path:}" ]; then
+    echo "hooks-vet: worktree unknown on a reused pane, project hooks unmeasured; not answering the modal"
+    return 1
+  fi
+  while IFS= read -r home; do
+    hooks_json="$home/hooks.json"
+    if [ ! -f "$hooks_json" ]; then
+      echo "hooks-vet: $hooks_json: not found, skipping"
+      continue
+    fi
+    measured=$((measured + 1))
+    codex_hooks_vet "$home"
+    rc=$?
+    [ "$rc" -eq 0 ] || overall=1
+  done < <(codex_hooks_homes)
+  if [ "$measured" -eq 0 ]; then
+    echo "hooks-vet: no hooks.json measured in any codex home; the modal's source is unenumerated, not answering the modal"
+    return 1
+  fi
+  return "$overall"
+}
+
 record_host_diversity_audit() {
   [ "$CHECK_ONLY" = 1 ] && return 0
-  python3 - "$LEDGER" "$RUNTIME" "$MASTER_HOST_RUNTIME" "$INSTALLED_RUNTIMES" "$ALTERNATIVE_RUNTIMES" "$SAME_HOST_REASON" "$TASK" "$DISP" "$SHA" <<'EOF'
+  python3 - "$LEDGER" "$RUNTIME" "$MASTER_HOST_RUNTIME" "$INSTALLED_RUNTIMES" "$ALTERNATIVE_RUNTIMES" "$UNAVAILABLE_RUNTIMES" "$SAME_HOST_REASON" "$TASK" "$DISP" "$SHA" "${CODEX_BYPASS_FLAG:-}" <<'EOF'
 import json
 import sys
 import time
 
-ledger, runtime, master, installed, alternatives, reason, task, dispatch, sha = sys.argv[1:]
+ledger, runtime, master, installed, alternatives, unavailable, reason, task, dispatch, sha, bypass_flag = sys.argv[1:]
 entry = {
     "ts": time.time(),
     "kind": "host_diversity_audit",
@@ -362,14 +1144,49 @@ entry = {
     "same_host_reason": reason or None,
     "installed_runtimes": [x.strip() for x in installed.split(",") if x.strip()],
     "alternative_runtimes": [x.strip() for x in alternatives.split(",") if x.strip()],
+    "unavailable_runtimes": [x.strip() for x in unavailable.split(",") if x.strip()],
     "orchestration_task": task,
     "job_id": dispatch,
     "contract_sha": sha,
+    "codex_bypass": bool(bypass_flag),
 }
 with open(ledger, "a", encoding="utf-8") as fh:
     fh.write(json.dumps(entry, sort_keys=True, separators=(",", ":")) + "\n")
 EOF
 }
+
+record_dispatch_launched() {
+  [ "$CHECK_ONLY" = 1 ] && return 0
+  # Called with the delivery check's own verdict, not a hardcoded "pass": a
+  # dispatch whose inject landed on a hook/trust menu or provider-limit
+  # screen never reached the agent, and this event is the only place that
+  # measured non-delivery is recorded — the timeline must show it as a
+  # finding, not a green launch.
+  local outcome="$1" reason="$2"
+  python3 - "$SCRIPTS_DIR" "$DISP" "$TASK" "$TERMINAL" "$MODEL" "$outcome" "$reason" <<'EOF'
+import sys
+
+scripts_dir, dispatch_id, task_id, pane, model, outcome, reason = sys.argv[1:]
+sys.path.insert(0, scripts_dir)
+from mogui_log import emit
+
+emit(
+    "info",
+    "dispatch_launched",
+    outcome,
+    dispatch_id=dispatch_id,
+    task_id=task_id,
+    pane=pane,
+    pid="",
+    model=model,
+    reason=reason,
+)
+EOF
+}
+
+# Called bare, not through $(...): see unavailable_runtimes_guard's own
+# comment for why that is the only way its exit can reach this process.
+unavailable_runtimes_guard
 
 if [ -z "$RUNTIME" ]; then
   RUNTIME=$(choose_default_runtime)
@@ -385,7 +1202,15 @@ if [ "$MASTER_HOST_SOURCE" = fallback ]; then
 fi
 
 INSTALLED_RUNTIMES=$(installed_runtimes | join_csv)
-ALTERNATIVE_RUNTIMES=$(installed_runtimes | grep -vx "$MASTER_HOST_RUNTIME" | join_csv)
+ALTERNATIVE_RUNTIMES=$(dispatchable_runtimes | grep -vx "$MASTER_HOST_RUNTIME" | join_csv)
+UNAVAILABLE_RUNTIMES=$(unavailable_runtime_names | join_csv)
+
+# RUNTIME is final as of the block above; refuse here, before any model
+# resolution or gate check spends effort on a runtime the operator already
+# declared unusable on this install.
+refuse_unavailable_runtime "$RUNTIME" "$ALTERNATIVE_RUNTIMES" || exit 2
+
+[ "$RUNTIME" = codex ] && apply_codex_instance_launch_config
 
 # The model id and the runtime are chosen independently, so nothing stopped a
 # claude model id from being declared for a codex or grok worker. That is not a
@@ -407,33 +1232,67 @@ model_vendor() {
     *) echo unknown;;
   esac
 }
+# A host is not a vendor. `cursor-agent models` lists ids from several vendors
+# (measured 2026-08-25: gpt-5.3-codex and its variants, gpt-5.2, gpt-5.6-sol-*,
+# cursor-grok-4.6-high-fast, claude-opus-5-thinking-high, composer-2.5). Comparing a
+# model's vendor prefix against the host name refuses every real combination on such a
+# host, so this one is validated against its own list instead. Vendor-level matching is
+# also not enough here: the efficient tier opens with gpt-5.6-luna, which cursor does not
+# offer, so a vendor match would declare a model the worker can never emit. That is the
+# exact harm the mismatch check exists to prevent.
+MULTI_VENDOR_HOSTS="cursor"
+is_multi_vendor_host() { case " $MULTI_VENDOR_HOSTS " in *" $1 "*) return 0;; *) return 1;; esac; }
+host_model_ids() {
+  case "$1" in
+    cursor)
+      command -v cursor-agent >/dev/null 2>&1 || return 1
+      cursor-agent models 2>/dev/null | sed -n 's/^\([A-Za-z0-9._-][A-Za-z0-9._-]*\) - .*$/\1/p'
+      ;;
+    *) return 1;;
+  esac
+}
 # When the caller did not name a model, derive one for the chosen runtime from
 # the tier policy instead of leaving the claude-shaped default in place. No new
 # mapping is invented: the policy already lists the allowed ids, and the vendor
 # prefix already tells us which host can run each one. Prefer the efficient tier,
 # per the charter's lowest-sufficient-tier rule.
+# argv-safe: runtime and the policy path travel as sys.argv, never
+# interpolated into the source (a crafted --runtime value otherwise runs
+# Python here, the same injection class as unavailable_runtime_entry).
 default_model_for_runtime() {
-  python3 -c "
-import json,sys
-runtime='$1'
+  python3 - "$1" "$POLICY" <<'EOF' 2>/dev/null
+import json
+import sys
+
+runtime, policy_path = sys.argv[1:3]
 # Measured: agy is a Gemini host (`agy models` lists gemini-* ids).
 if runtime == 'agy': runtime = 'gemini'
+
+
 def vendor(m):
-    m=m.lower()
-    if m.startswith('claude-'): return 'claude'
-    if m.startswith(('gpt-','o3','o4','codex-')): return 'codex'
-    if m.startswith('grok-'): return 'grok'
-    if m.startswith('gemini-'): return 'gemini'
+    m = m.lower()
+    if m.startswith('claude-'):
+        return 'claude'
+    if m.startswith(('gpt-', 'o3', 'o4', 'codex-')):
+        return 'codex'
+    if m.startswith('grok-'):
+        return 'grok'
+    if m.startswith('gemini-'):
+        return 'gemini'
     return 'unknown'
+
+
 try:
-    tiers=json.load(open('$POLICY'))['tiers']
+    tiers = json.load(open(policy_path))['tiers']
 except Exception:
     sys.exit(1)
-for tier in ('efficient','top'):
-    for m in tiers.get(tier,[]):
-        if vendor(m)==runtime:
-            print(m); sys.exit(0)
-sys.exit(1)" 2>/dev/null
+for tier in ('efficient', 'top'):
+    for m in tiers.get(tier, []):
+        if vendor(m) == runtime:
+            print(m)
+            sys.exit(0)
+sys.exit(1)
+EOF
 }
 
 tier_for_model() {
@@ -469,7 +1328,26 @@ runtime_accepts_vendor() {
 }
 # This is the minimal runtime capability mapping needed for agy in this PR. A
 # complete capability table is intentionally a separate contract.
-if [ "$MODEL_VENDOR" != unknown ] && ! runtime_accepts_vendor "$RUNTIME" "$MODEL_VENDOR"; then
+if is_multi_vendor_host "$RUNTIME"; then
+  HOST_IDS=$(host_model_ids "$RUNTIME") || {
+    echo "✗ cannot ask $RUNTIME which models it offers; refusing to guess" >&2
+    echo "  A declared model this host cannot run writes a false declared_model into the" >&2
+    echo "  ledger and makes the register probe grep for a string that never appears." >&2
+    exit 2
+  }
+  if ! printf '%s\n' "$HOST_IDS" | grep -Fxq -- "$MODEL"; then
+    echo "✗ $RUNTIME does not offer model=$MODEL" >&2
+    echo "  This host runs several vendors' models, so the check is its own list rather" >&2
+    echo "  than a vendor prefix. Ids it offers that the tier policy also allows:" >&2
+    python3 -c "
+import json,sys
+ids=set(sys.stdin.read().split())
+tiers=json.load(open('$POLICY'))['tiers']
+ok=[m for t in ('efficient','top') for m in tiers.get(t,[]) if m in ids]
+print('   ', ', '.join(ok) if ok else '(none)')" <<<"$HOST_IDS" >&2
+    exit 2
+  fi
+elif [ "$MODEL_VENDOR" != unknown ] && ! runtime_accepts_vendor "$RUNTIME" "$MODEL_VENDOR"; then
   echo "✗ model/runtime mismatch · model=$MODEL (vendor $MODEL_VENDOR) runtime=$RUNTIME" >&2
   echo "  A model id from one vendor cannot run on another host. Declaring it anyway writes a" >&2
   echo "  false declared_model into the ledger and makes the register probe grep for a string" >&2
@@ -524,7 +1402,7 @@ if [ "$ALLOW" != "True" ]; then
 fi
 if [ "$CHECK_ONLY" = 1 ]; then
   [ "$TIER" = "top" ] && [ -n "$TOP_APPROVED_TEXT" ] && echo "🔓 top tier approved by owner · $TOP_APPROVED"
-  COLLISION_WARN=$("$COLLISION_CHECK" "$CONTRACT" "$LEDGER" 2>/dev/null || true)
+  COLLISION_WARN=$(MOGUI_PRODUCT_REPO="${PRODUCT_REPO_ARG:-}" "$COLLISION_CHECK" "$CONTRACT" "$LEDGER" 2>/dev/null || true)
   [ -n "$COLLISION_WARN" ] && echo "$COLLISION_WARN"
   echo "⚙ gate ✓ $TIER · $MODEL · est $((EST/1000)).$(( (EST%1000)/100 ))k · 계약 ${SHA:0:8}"
   exit 0
@@ -533,8 +1411,16 @@ fi
 # recording gate denies, Codex pretrust may have prepared a worktree that never
 # receives a worker; dispatch-gate needs an atomic reservation API to close that
 # race. This ordering still keeps dry runs, gate denials, and pretrust failures
-# from spending budget.
-ensure_codex_pretrust "$RUNTIME" "$WORKTREE" || exit 2
+# from spending budget. A reused pane (--terminal with no --worktree) launches
+# nothing, so there is no worktree to pre-trust; the post-inject hook-trust
+# check still catches a trust dialog on that pane.
+if [ -n "$TERMINAL" ] && [ -z "$WORKTREE" ]; then
+  echo "pre-trust · skipped · pane reused, nothing launched; the post-inject pane check still catches a trust gate"
+else
+  ensure_codex_pretrust "$RUNTIME" "$WORKTREE" || exit 2
+  ensure_cursor_pretrust "$RUNTIME" "$WORKTREE" || exit 2
+  ensure_claude_pretrust "$RUNTIME" "$WORKTREE" || exit 2
+fi
 
 CHK=$("$GATE" "${GATE_ARGS[@]}" 2>/dev/null)
 ALLOW=$(echo "$CHK" | jqf "d['allow']")
@@ -548,9 +1434,78 @@ fi
 # ledger. Once scripts/mogui_log.py lands it becomes an event-log.jsonl line
 # with outcome and evidence, per docs/runbooks/error-and-logging.md.
 [ "$TIER" = "top" ] && [ -n "$TOP_APPROVED_TEXT" ] && echo "🔓 top tier approved by owner · $TOP_APPROVED"
-COLLISION_WARN=$("$COLLISION_CHECK" "$CONTRACT" "$LEDGER" 2>/dev/null || true)
+COLLISION_WARN=$(MOGUI_PRODUCT_REPO="${PRODUCT_REPO_ARG:-}" "$COLLISION_CHECK" "$CONTRACT" "$LEDGER" 2>/dev/null || true)
 [ -n "$COLLISION_WARN" ] && echo "$COLLISION_WARN"
 echo "⚙ gate ✓ $TIER · $MODEL · est $((EST/1000)).$(( (EST%1000)/100 ))k · 계약 ${SHA:0:8}"
+
+# 1.5 deliver the contract, and make the delivery provable.
+#
+# Measured 2026-08-10: until this block existed, $CONTRACT reached the gate and never
+# reached the worker. Only --spec was sent. Two dispatches that day looked like worker
+# defects and were coordinator defects: one stopped at staging because it never received
+# the clause requiring a pull request, and one asked for a line the contract quoted
+# verbatim. Both were rescued by hand-delivering the text over a terminal, which made
+# that hand step load-bearing and unrecorded.
+#
+# The copy goes outside product territory on purpose. Writing into the worker's worktree
+# is currently possible only because the product-path guard does not stop bash writes,
+# and using a known hole to fix a bug is not a fix. The cost is that the contract is not
+# on the worker's own branch; that part stays open.
+#
+# The token proves the file was opened rather than that a path was printed. It lives only
+# inside the delivered copy: a token quoted in the spec could be echoed back by a worker
+# that never read anything. Derived from characters the dispatch output never shows.
+if [ -n "$CONTRACT" ]; then
+  CONTRACT_DIR="${STATE_DIR:-$HOME/.mogui}/dispatch-contracts"
+  if ! mkdir -p "$CONTRACT_DIR" 2>/dev/null; then
+    echo "✗ cannot create contract delivery directory: $CONTRACT_DIR" >&2; exit 3
+  fi
+  CONTRACT_DEST="$CONTRACT_DIR/${SHA:0:8}-$(basename "$CONTRACT")"
+  cp "$CONTRACT" "$CONTRACT_DEST" || { echo "✗ contract copy failed" >&2; exit 3; }
+  # A copy that truncated silently is worse than no copy.
+  cmp -s "$CONTRACT" "$CONTRACT_DEST" || { echo "✗ delivered contract differs from source" >&2; exit 3; }
+  READ_TOKEN="ack-${SHA:8:12}"
+  if [ -z "${SHA:8:12}" ]; then
+    echo "✗ contract sha too short to derive a read token" >&2; exit 3
+  fi
+  {
+    printf '\n---\n\n## Acknowledgement token\n\n'
+    printf 'Quote this token in your report. It exists so the coordinator can tell a worker\n'
+    printf 'that read this contract from one that only received a path.\n\n'
+    printf '    %s\n' "$READ_TOKEN"
+  } >> "$CONTRACT_DEST" || { echo "✗ cannot append read token" >&2; exit 3; }
+  SPEC="$SPEC
+
+Read your contract before doing anything. It is at this absolute path and it is the
+authority for this task, over anything in this line:
+
+    $CONTRACT_DEST
+
+It states an acknowledgement token. Quote that token in your report. A report without it
+tells the coordinator nothing about whether the contract was read."
+  echo "📄 contract delivered · $CONTRACT_DEST · read-token required"
+fi
+
+# 1.6 append standing rules the contract's front matter named.
+#
+# Reads the names from the gate's own recorded decision ($CHK, from the
+# recording check above) instead of re-parsing the contract: dispatch-gate
+# already validated every name against these same two files before allowing
+# the dispatch, so a name reaching here always resolves; a lookup failure
+# would mean the gate and this wrapper drifted apart on which files they read.
+STANDING_RULE_NAMES=$(echo "$CHK" | jqf "' '.join(d.get('front_matter', {}).get('standing_rules', []) or [])")
+if [ -n "$STANDING_RULE_NAMES" ]; then
+  for name in $STANDING_RULE_NAMES; do
+    block=$(standing_rule_block "$name") || {
+      echo "✗ standing rule block not found: $name" >&2; exit 3; }
+    SPEC="$SPEC
+
+Standing rules ($name):
+
+$block"
+  done
+  echo "📎 standing rules · $STANDING_RULE_NAMES"
+fi
 
 # 2. task-create
 TASK=$(orca orchestration task-create --spec "$SPEC" --json 2>/dev/null | jqf "d['result']['task']['id']")
@@ -567,6 +1522,71 @@ if [ -z "$TERMINAL" ]; then
   orca terminal wait --terminal "$TERMINAL" --for tui-idle --timeout-ms 60000 --json >/dev/null 2>&1
 fi
 echo "→ $TASK → $TERMINAL ($KIND)"
+
+# 3b. codex start screen, on a created pane and a reused one alike: a reused
+# pane can be sitting on a gate from a previous launch just as easily as a
+# fresh one. `terminal wait --for tui-idle` above cannot tell a ready prompt
+# from a start screen waiting on a menu; both read idle. Left as it is on
+# failure, exits 3 without injecting or registering, the same as the
+# terminal-create failure path just above.
+#
+# A "Hooks need review" menu is a start-screen gate codex can sit on like any
+# other, but it has an answer this workspace is allowed to give under
+# dispatch authority (charter §4) once the hooks it would trust are vetted:
+# codex_hooks_vet_homes reads every hook command on this host's codex homes
+# and only passes when each one resolves to something already on disk or
+# PATH. Answered at most once per dispatch, so an answer that does not
+# actually clear the menu cannot loop forever; after a real answer the loop
+# gets a fresh budget of up to three more reads. Any other selection menu, a
+# vet failure, or the answer tool's own exit 1 all fall through to the
+# existing exit-3 path. A reused pane with no `--worktree` is never
+# auto-answered: project hooks cannot be measured without a worktree, so
+# codex_hooks_vet_homes fails closed and the vet-failure branch takes over.
+if [ "$RUNTIME" = codex ]; then
+  CODEX_START_RC=2
+  HOOKS_ANSWERED=0
+  attempt=1
+  while [ "$attempt" -le 3 ]; do
+    CODEX_PANE=$(orca terminal read --terminal "$TERMINAL" --limit 40 2>/dev/null || true)
+    CODEX_START_PROBLEM=$(codex_start_screen_problem "$CODEX_PANE" "$MODEL" "$CODEX_REASONING_EFFORT")
+    CODEX_START_RC=$?
+    if [ "$CODEX_START_RC" = 1 ] && [ "$HOOKS_ANSWERED" = 0 ] \
+        && printf '%s\n' "$CODEX_PANE" | grep -q 'Hooks need review'; then
+      HOOKS_ANSWERED=1
+      if codex_hooks_vet_homes; then
+        if [ ! -f "$HOOKS_ANSWER_BIN" ] || [ ! -x "$HOOKS_ANSWER_BIN" ]; then
+          echo "✗ codex start screen · hooks-review answer tool missing or not executable at $HOOKS_ANSWER_BIN · spec NOT injected" >&2
+          exit 3
+        fi
+        HOOKS_ANSWER_OUT=$("$HOOKS_ANSWER_BIN" "$TERMINAL" 2>&1)
+        HOOKS_ANSWER_RC=$?
+        printf '%s\n' "$HOOKS_ANSWER_OUT" | head -1
+        if [ "$HOOKS_ANSWER_RC" != 0 ]; then
+          echo "✗ codex start screen · hooks-review answer did not clear the modal · spec NOT injected" >&2
+          printf '%s\n' "$HOOKS_ANSWER_OUT" >&2
+          exit 3
+        fi
+        attempt=1
+        continue
+      else
+        echo "✗ codex start screen · hooks vet failed, hooks-review modal not answered · spec NOT injected" >&2
+        exit 3
+      fi
+    fi
+    if [ "$CODEX_START_RC" = 2 ] && [ "$attempt" -lt 3 ]; then
+      sleep 3
+      attempt=$((attempt + 1))
+      continue
+    fi
+    break
+  done
+  if [ "$CODEX_START_RC" != 0 ]; then
+    echo "✗ codex start screen · $CODEX_START_PROBLEM · spec NOT injected" >&2
+    echo "  orca terminal read --terminal $TERMINAL --limit 40" >&2
+    exit 3
+  fi
+  echo "start screen ✓ codex · $MODEL $CODEX_REASONING_EFFORT"
+fi
 
 # 4. dispatch --inject
 PRE_INJECT_CLASS=$(pane_classification "$TERMINAL")
@@ -611,8 +1631,8 @@ fi
 REG=$("$GATE" --ledger "$LEDGER" register --job-id "$DISP" --contract-sha "$SHA" \
       --runtime "$RUNTIME" --tier-policy "$POLICY" \
       --probe-cmd "orca orchestration dispatch-show --task $TASK --json 2>/dev/null | grep -o $DISP | head -1" \
-      --orchestration-task "$TASK" --declared-model "$MODEL" \
-      "${MODEL_PROBE_ARGS[@]}" 2>/dev/null)
+      --orchestration-task "$TASK" --declared-model "$MODEL" --pane "$TERMINAL" \
+      "${MODEL_PROBE_ARGS[@]+"${MODEL_PROBE_ARGS[@]}"}" 2>/dev/null)
 if [ "$(echo "$REG" | jqf "d['allow']")" != "True" ]; then
   echo "✗ register $(echo "$REG" | jqf "d['reason']") · dispatch=$DISP (worker IS running — resolve register manually)"
   exit 4
@@ -653,17 +1673,37 @@ for _ in 1 2 3 4 5 6; do
   POST_INJECT_CLASS=$(pane_classification "$TERMINAL")
   [ "$POST_INJECT_CLASS" != prepared-prompt ] && break
 done
-DELIVERY_CLASS=$(delivery_result "$PRE_INJECT_CLASS" "$POST_INJECT_CLASS")
-echo "delivery pre=$PRE_INJECT_CLASS post=$POST_INJECT_CLASS class=$DELIVERY_CLASS"
+# A worker that finishes inside the window above returns the pane to the same
+# prepared prompt it started from, so the pane carries no positive signal at
+# all. The Orca dispatch record does: read its status once, here, and fold it
+# into the classification below.
+DISPATCH_STATUS=$(orca orchestration dispatch-show --task "$TASK" --json 2>/dev/null \
+  | jqf "d['result']['dispatch']['status']" 2>/dev/null)
+[ -n "$DISPATCH_STATUS" ] || DISPATCH_STATUS=unreadable
+DELIVERY_CLASS=$(delivery_result "$PRE_INJECT_CLASS" "$POST_INJECT_CLASS" "$DISPATCH_STATUS")
+echo "delivery pre=$PRE_INJECT_CLASS post=$POST_INJECT_CLASS status=$DISPATCH_STATUS class=$DELIVERY_CLASS"
+case "$DELIVERY_CLASS" in
+  agent-started|done) record_dispatch_launched pass "";;
+  hook-trust|limit) record_dispatch_launched finding "$DELIVERY_CLASS";;
+  *) record_dispatch_launched undetermined "$DELIVERY_CLASS";;
+esac
 case "$DELIVERY_CLASS" in
   hook-trust)
-    echo "✗ delivery FAILED · hook/trust gate is still present; the spec was NOT consumed"
-    echo "  Dismiss or pre-trust the gate before dispatching another task."
+    if [ "$RUNTIME" = claude ]; then
+      echo "✗ delivery FAILED · claude's folder-trust dialog is still present; the spec was NOT consumed"
+      echo "  scripts/claude-worker-pretrust should have cleared this before launch; check its Summary line."
+    else
+      echo "✗ delivery FAILED · hook/trust gate is still present; the spec was NOT consumed"
+      echo "  Dismiss or pre-trust the gate before dispatching another task."
+    fi
     exit 5;;
   limit)
     echo "✗ delivery FAILED · provider limit is present; the spec was NOT consumed"
     echo "  Wait for the provider limit to clear or use an available runtime."
     exit 5;;
+  done)
+    echo "✓ delivery ✓ worker completed inside the window (dispatch completed)"
+    exit 0;;
   agent-started)
     echo "✓ delivery ✓ agent left its prepared prompt after inject and began processing"
     echo "  Read the pane to verify the contracted work: orca terminal read --terminal $TERMINAL --limit 40";;

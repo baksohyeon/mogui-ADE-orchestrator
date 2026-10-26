@@ -1,0 +1,17 @@
+# Approval-prompt markers, one extended regular expression per line, matched case-insensitively
+# against a pane's visible text. Read by hooks/worker-block-warn.sh and worker-pane-sweep, which
+# must never carry their own copy: the two lists drifted apart on the codex hook-trust modal and
+# the sweep kept reading a blocked pane as idle for two days after the hook was fixed.
+# A prompt is prompt-shaped: numbered choices or an explicit question. The bare word "approve"
+# caught code listings on the first run, so keep markers narrower than that.
+do you want to proceed
+1\. yes
+2\. yes, and
+\[y/n\]
+\(y/n\)
+press enter to continue
+trust this (folder|workspace)
+# codex 0.154.0 hook-trust modal, measured live 2026-09-14 and 2026-09-15
+hooks need review
+trust all and continue
+press enter to confirm

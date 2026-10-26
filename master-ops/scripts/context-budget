@@ -1,0 +1,226 @@
+#!/usr/bin/env python3
+"""Report the turn-0 context payload of master sessions.
+
+The question this answers: how much context is spent BEFORE the session takes
+its first action. That cost is fixed startup surface (instruction files, skill
+and agent listings, tool schemas, hook output) and it is paid again at every
+succession and every worker dispatch.
+
+Nothing else in this workspace measures it. compaction-probe.sh measures
+recall loss across a compaction, which is a different question, and it records
+by asking the agent to self-report.
+
+Run it by hand, weekly. If turn-0 grows, something was installed.
+"""
+
+import argparse
+import glob
+import pathlib
+import json
+import os
+import re
+import statistics
+import sys
+
+def default_glob(root=None):
+    """Transcript glob for a workspace, derived rather than written down.
+
+    The host encodes a project directory by replacing every "/" with "-", so the
+    glob is a function of the path and not a fact about one machine. Hardcoding it
+    bakes in a username, which is harmless in a private repository and is a leak
+    the moment this script is promoted to the public template.
+    """
+    root = os.path.abspath(root or os.getcwd())
+    normalized = root.replace(os.sep, "/")
+    mangled = re.sub(r"[/.]", "-", normalized)
+    return os.path.expanduser(
+        "~/.claude/projects/" + mangled + "/*.jsonl"
+    )
+
+# One usage row is a complete turn-0 measurement; only growth needs a second.
+# Measured by the dz peer 2026-08-10: a headless `-p` run produces exactly one
+# row, and requiring two reported it as "no usable usage rows" — a match that
+# read as an empty session. The observation was theirs; the cause they proposed
+# was a lower bound on input_tokens, and that is not what rejected it.
+MIN_USAGE_ROWS = 1
+
+
+def payload(usage):
+    """Total context in one request: fresh input plus both cache halves."""
+    return (
+        usage.get("input_tokens", 0)
+        + usage.get("cache_read_input_tokens", 0)
+        + usage.get("cache_creation_input_tokens", 0)
+    )
+
+
+def scan(path):
+    """Return (turn0, final, turns, output_total, skipped) or None when unusable.
+
+    A synthetic record carries a usage block whose four fields are all zero.
+    Measured by the dz peer 2026-08-10: a session where the owner switched model
+    at the prompt gets such a record, and taking it as turn 0 reports 0. A real
+    request always carries some input context, so a zero total marks a record
+    that describes no request. Skipping it is the difference between reporting a
+    measurement and reporting a silence that looks like one.
+    """
+    rows = []
+    out_total = 0
+    skipped = 0
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                usage = (rec.get("message") or {}).get("usage")
+                if not usage:
+                    continue
+                total = payload(usage)
+                if total == 0:
+                    skipped += 1
+                    continue
+                rows.append(total)
+                out_total += usage.get("output_tokens", 0)
+    except OSError as err:
+        print(f"  unreadable: {path}: {err}", file=sys.stderr)
+        return None
+    if len(rows) < MIN_USAGE_ROWS:
+        return None
+    return rows[0], rows[-1], len(rows), out_total, skipped
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--glob", default=None,
+                    help="transcript glob (default: derived from --root)")
+    ap.add_argument("--root", default=None,
+                    help="workspace path whose transcripts to read (default: cwd)")
+    ap.add_argument("--json", action="store_true", help="emit JSON")
+    ap.add_argument("--limit", type=int, default=15, help="newest N sessions")
+    args = ap.parse_args()
+    if args.limit <= 0:
+        ap.error("--limit must be greater than zero")
+
+    pattern = args.glob or default_glob(args.root)
+    paths = sorted(
+        glob.glob(os.path.expanduser(pattern)),
+        key=lambda p: os.path.getmtime(p),
+        reverse=True,
+    )
+    if not paths:
+        # An empty glob and a wrong glob print the same thing unless we say which.
+        print(f"no transcripts matched: {pattern}", file=sys.stderr)
+        return 2
+
+    records = []
+    for path in paths[: args.limit]:
+        result = scan(path)
+        if result is None:
+            continue
+        turn0, final, turns, out_total, skipped = result
+        records.append(
+            {
+                "session": os.path.basename(path)[:8],
+                "turn0": turn0,
+                "final": final,
+                "growth": final - turn0,
+                "turns": turns,
+                "output": out_total,
+                "synthetic_skipped": skipped,
+            }
+        )
+
+    if not records:
+        print(f"matched {len(paths)} transcripts, none with usable usage rows",
+              file=sys.stderr)
+        return 2
+
+    if args.json:
+        print(json.dumps(records, indent=2))
+        return 0
+
+    print(f"{'session':10} {'turn0':>8} {'final':>9} {'growth':>9} "
+          f"{'turns':>6} {'output':>8} {'synth':>6}")
+    for r in records:
+        print(f"{r['session']:10} {r['turn0']:>8} {r['final']:>9} "
+              f"{r['growth']:>9} {r['turns']:>6} {r['output']:>8} "
+              f"{r['synthetic_skipped']:>6}")
+
+    turn0s = [r["turn0"] for r in records]
+    print(f"\nturn-0 payload over {len(records)} sessions: "
+          f"min {min(turn0s)}  median {statistics.median(turn0s):g}  "
+          f"max {max(turn0s)}")
+    print("turn-0 is the fixed cost. Growth is the work.")
+    return 0
+
+
+def demo():
+    """Self-check: payload arithmetic and the short-session guard."""
+    assert default_glob("/a/b").endswith("/-a-b/*.jsonl"), default_glob("/a/b")
+    assert default_glob("/x/y") != default_glob("/a/b"), "glob must follow the root"
+    assert default_glob("/a.b/c").endswith("/-a-b-c/*.jsonl"), default_glob("/a.b/c")
+    # The expanded path carries the running user by design; the source must not.
+    src = pathlib.Path(__file__).read_text()
+    needle = "/" + "Users" + "/"   # split so this check is not its own hit
+    assert needle not in src, "no absolute home path may be hardcoded"
+    assert payload({}) == 0
+    assert payload({"input_tokens": 2, "cache_read_input_tokens": 100}) == 102
+    assert payload(
+        {"input_tokens": 1, "cache_read_input_tokens": 2,
+         "cache_creation_input_tokens": 4}
+    ) == 7
+    import tempfile
+
+    with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as fh:
+        fh.write(json.dumps({"message": {"usage": {"input_tokens": 10}}}) + "\n")
+        one_row = fh.name
+    assert scan(one_row) == (10, 10, 1, 0, 0), scan(one_row)
+    # A one-shot headless run: turn 0 is real, growth is zero, not missing.
+    with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as fh:
+        fh.write(json.dumps({"message": {"usage": {
+            "input_tokens": 2, "cache_creation_input_tokens": 4733,
+            "cache_read_input_tokens": 16072, "output_tokens": 17}}}) + "\n")
+        headless = fh.name
+    assert scan(headless) == (20807, 20807, 1, 17, 0), scan(headless)
+    os.unlink(headless)
+
+    with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as fh:
+        fh.write("not json\n")
+        fh.write(json.dumps({"message": {"usage": {
+            "input_tokens": 5, "cache_read_input_tokens": 70,
+            "output_tokens": 3}}}) + "\n")
+        fh.write(json.dumps({"no_message": True}) + "\n")
+        fh.write(json.dumps({"message": {"usage": {
+            "input_tokens": 5, "cache_read_input_tokens": 200,
+            "output_tokens": 4}}}) + "\n")
+        two_rows = fh.name
+    assert scan(two_rows) == (75, 205, 2, 7, 0), scan(two_rows)
+
+    # A synthetic record carries all-zero usage and must not become turn 0.
+    with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as fh:
+        fh.write(json.dumps({"message": {"usage": {
+            "input_tokens": 0, "output_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0}}}) + "\n")
+        fh.write(json.dumps({"message": {"usage": {
+            "input_tokens": 5, "cache_read_input_tokens": 70,
+            "output_tokens": 3}}}) + "\n")
+        fh.write(json.dumps({"message": {"usage": {
+            "input_tokens": 5, "cache_read_input_tokens": 200,
+            "output_tokens": 4}}}) + "\n")
+        synth = fh.name
+    assert scan(synth) == (75, 205, 2, 7, 1), scan(synth)
+    os.unlink(synth)
+    assert scan("/nonexistent/path.jsonl") is None
+    os.unlink(one_row)
+    os.unlink(two_rows)
+    print("demo: ok")
+
+
+if __name__ == "__main__":
+    if "--demo" in sys.argv:
+        demo()
+    else:
+        sys.exit(main())

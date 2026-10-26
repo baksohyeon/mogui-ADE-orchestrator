@@ -10,7 +10,10 @@ import subprocess
 import threading
 from pathlib import Path
 
+import pytest
+
 import master_runtime.core.dispatch_gate as dispatch_gate
+import master_runtime.core.dispatch_timeline as dispatch_timeline
 from master_runtime.core.dispatch_gate import (
     DispatchGate,
     DispatchGateConfig,
@@ -329,9 +332,11 @@ def test_instance_tier_policy_example_is_loadable_version_2() -> None:
     )
     policy = dispatch_gate._load_tier_policy(example)
     assert policy.version >= 2
-    # Example ships no top cap. Top-tier approval is asked by master-ops/scripts/dispatch,
+    # Example ships no top cap and no unknown cap. Top-tier approval is asked by
+    # master-ops/scripts/dispatch; an unlisted model is not blocked on fanout,
     # while the gate treats missing caps as uncapped for every tier.
-    assert policy.cap_for("unknown") == 8
+    assert policy.fanout_caps == {}
+    assert policy.cap_for("unknown") is None
     assert policy.cap_for("top") is None
 
 
@@ -454,7 +459,10 @@ def test_unknown_model_follows_policy_setting(tmp_path: Path) -> None:
     assert deny_decision.allow is False
     assert deny_decision.reason == ReasonCode.TIER_POLICY
     assert warn_decision.allow is True
-    assert warn_decision.warnings == (ReasonCode.TIER_POLICY,)
+    assert warn_decision.warnings == (
+        ReasonCode.TIER_POLICY,
+        ReasonCode.CONTRACT_FRONT_MATTER_MISSING,
+    )
 
 
 def test_check_records_sentinel_log_completion_channel(tmp_path: Path) -> None:
@@ -570,7 +578,10 @@ def test_r2_allows_single_high_cost_runtime_with_warning(tmp_path: Path) -> None
 
     assert decision.allow is True
     assert decision.reason == ReasonCode.OK
-    assert decision.warnings == (ReasonCode.HIGH_COST_RUNTIME,)
+    assert decision.warnings == (
+        ReasonCode.CONTRACT_FRONT_MATTER_MISSING,
+        ReasonCode.HIGH_COST_RUNTIME,
+    )
 
 
 def test_check_allow_issues_dispatch_ticket_with_contract_fixture(
@@ -651,6 +662,70 @@ def test_check_rejects_invalid_runtimes_without_ticket(
         assert decision.reason == ReasonCode.INVALID_REQUEST
         assert not (case_dir / "dispatch-tickets").exists()
         assert not (case_dir.parent / "escape").exists()
+
+
+def test_runtime_allowlist_denies_unknown_runtime(tmp_path: Path) -> None:
+    contract = _contract(tmp_path, "unknown runtime")
+    gate = _gate(
+        tmp_path,
+        now=1_000,
+        tier_policy_path=_tier_policy_v2(tmp_path, runtimes=["codex", "cursor"]),
+    )
+
+    decision = gate.check(
+        DispatchRequest(
+            runtime="orca",
+            model="gpt-5.6-luna",
+            contract_path=contract,
+            est_input_chars=10_000,
+            n_agents=1,
+        )
+    )
+
+    assert decision.allow is False
+    assert decision.reason == ReasonCode.UNKNOWN_RUNTIME
+    assert "runtime=orca" in decision.message
+    assert not (tmp_path / "dispatch-tickets").exists()
+
+
+def test_runtime_allowlist_allows_known_runtime(tmp_path: Path) -> None:
+    contract = _contract(tmp_path, "known runtime")
+    gate = _gate(
+        tmp_path,
+        now=1_000,
+        tier_policy_path=_tier_policy_v2(tmp_path, runtimes=["codex", "cursor"]),
+    )
+
+    decision = gate.check(
+        DispatchRequest(
+            runtime="cursor",
+            model="gpt-5.6-luna",
+            contract_path=contract,
+            est_input_chars=10_000,
+            n_agents=1,
+        )
+    )
+
+    assert decision.allow is True
+    assert decision.reason == ReasonCode.OK
+
+
+def test_runtime_allowlist_missing_key_keeps_existing_behavior(tmp_path: Path) -> None:
+    contract = _contract(tmp_path, "runtime key omitted")
+    gate = _gate(tmp_path, now=1_000, tier_policy_path=_tier_policy_v2(tmp_path))
+
+    decision = gate.check(
+        DispatchRequest(
+            runtime="orca",
+            model="gpt-5.6-luna",
+            contract_path=contract,
+            est_input_chars=10_000,
+            n_agents=1,
+        )
+    )
+
+    assert decision.allow is True
+    assert decision.reason == ReasonCode.OK
 
 
 def test_issue_dispatch_ticket_confines_runtime_path_escape(
@@ -823,6 +898,162 @@ def test_r4_registers_verified_job_id(tmp_path: Path) -> None:
     assert _ledger_entries(tmp_path)[-1]["attempt"] == 2
 
 
+def test_register_job_with_contract_sha_refuses_when_ticket_consumed(
+    tmp_path: Path,
+) -> None:
+    """The ticket for this contract was already consumed by the first,
+    sha-less register_job call; its unlink only runs when a contract sha was
+    given (dispatch_gate.py), so the ticket file itself stays on disk. A
+    second call naming that ticket's contract sha must refuse, not crash:
+    the contract-sha-and-ticket branch of _registration_candidate built
+    `matching_pending` with no emptiness guard, unlike its two sibling
+    branches, and indexing it raised IndexError.
+    """
+
+    contract = _contract(tmp_path, "second registration with ticket consumed")
+    gate = _gate(tmp_path, now=1_000)
+    gate.check(DispatchRequest("codex", contract, est_input_chars=10_000, n_agents=1))
+
+    first = gate.register_job("job-first", lambda job_id: job_id == "job-first")
+    assert first.allow is True
+
+    second = gate.register_job(
+        "job-second",
+        lambda job_id: job_id == "job-second",
+        contract_sha=_sha256(contract),
+    )
+
+    assert second.allow is False
+    assert second.reason == ReasonCode.NO_MATCHING_TICKET
+
+
+def test_register_job_round_trips_worker_pid_and_pane_through_the_ledger(
+    tmp_path: Path,
+) -> None:
+    """worker-wait maps a dispatch id to a pid and a pane through this ledger row."""
+
+    contract = _contract(tmp_path, "worker pid and pane")
+    gate = _gate(tmp_path, now=1_000)
+    gate.check(DispatchRequest("codex", contract, est_input_chars=10_000, n_agents=1))
+
+    decision = gate.register_job(
+        "job-456",
+        lambda job_id: job_id == "job-456",
+        worker_pid="4242",
+        pane="term_abc123",
+    )
+
+    assert decision.allow is True
+    entry = _ledger_entries(tmp_path)[-1]
+    assert entry["worker_pid"] == "4242"
+    assert entry["pane"] == "term_abc123"
+
+
+def test_register_job_omits_worker_pid_and_pane_keys_when_not_given(
+    tmp_path: Path,
+) -> None:
+    """A stray `"worker_pid": null` would read as a recorded pid to worker-wait
+    (and therefore DEAD-eligible) rather than the UNKNOWN a real absence is."""
+
+    contract = _contract(tmp_path, "no pid no pane")
+    gate = _gate(tmp_path, now=1_000)
+    gate.check(DispatchRequest("codex", contract, est_input_chars=10_000, n_agents=1))
+
+    decision = gate.register_job("job-789", lambda job_id: job_id == "job-789")
+
+    assert decision.allow is True
+    entry = _ledger_entries(tmp_path)[-1]
+    assert "worker_pid" not in entry
+    assert "pane" not in entry
+
+
+def test_register_job_treats_an_empty_or_whitespace_worker_pid_as_absent(
+    tmp_path: Path,
+) -> None:
+    """A shell caller expanding an unset variable can pass `--worker-pid ""`;
+    that must not write a `worker_pid` key, or worker-wait would read a live
+    worker as DEAD (empty pid recorded, `ps -p` on it never confirms alive)."""
+
+    contract = _contract(tmp_path, "empty pid and pane")
+    gate = _gate(tmp_path, now=1_000)
+    gate.check(DispatchRequest("codex", contract, est_input_chars=10_000, n_agents=1))
+
+    decision = gate.register_job(
+        "job-empty",
+        lambda job_id: job_id == "job-empty",
+        worker_pid="   ",
+        pane="",
+    )
+
+    assert decision.allow is True
+    entry = _ledger_entries(tmp_path)[-1]
+    assert "worker_pid" not in entry
+    assert "pane" not in entry
+    # Failability: a guard that only checked `is not None` would let this
+    # whitespace-only pid through.
+    assert entry.get("worker_pid") != "   "
+
+
+def test_cli_register_accepts_worker_pid_and_pane_flags(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    contract = _contract(tmp_path, "cli worker pid and pane")
+    ledger = tmp_path / "ledger.jsonl"
+    # Patch Path.home() itself, not $HOME: the default ticket_dir the CLI falls
+    # back to (no --ticket-dir flag exists) is Path.home()/".mogui"/..., and
+    # $HOME alone does not redirect Path.home() on every platform — a stray
+    # ticket left in the real shared home directory would leak into whichever
+    # test runs next.
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
+
+    assert (
+        script["main"](
+            [
+                "--ledger",
+                str(ledger),
+                "check",
+                "--runtime",
+                "codex",
+                "--model",
+                "gpt-5.6-luna",
+                "--contract",
+                str(contract),
+                "--agents",
+                "1",
+                "--est-chars",
+                "1000",
+                "--completion-channel",
+                "sentinel-log",
+            ]
+        )
+        == 0
+    )
+
+    assert (
+        script["main"](
+            [
+                "--ledger",
+                str(ledger),
+                "register",
+                "--job-id",
+                "job-cli",
+                "--probe-cmd",
+                "printf job-cli",
+                "--worker-pid",
+                "4242",
+                "--pane",
+                "term_abc123",
+            ]
+        )
+        == 0
+    )
+    entry = _ledger_entries(tmp_path)[-1]
+    assert entry["worker_pid"] == "4242"
+    assert entry["pane"] == "term_abc123"
+
+
 def test_cli_register_with_verified_orchestration_task_records_task(
     tmp_path: Path,
     monkeypatch,
@@ -946,6 +1177,75 @@ def test_cli_register_requires_orchestration_task(
     ledger_entry = _ledger_entries(tmp_path)[-1]
     assert ledger_entry["reason"] == "ORCHESTRATION_UNVERIFIED"
     assert ledger_entry["probe_failure"] == "task_omitted"
+
+
+def test_cli_register_emits_finding_event_for_unverified_orchestration_denial(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """_deny_unverified_orchestration returns before gate.register_job ever
+    runs, so the dispatch_registered event previously only emitted on that
+    later path never fired for this denial. It must fire here too, with
+    outcome "finding"."""
+    contract = _contract(tmp_path, "orchestration denial emits a finding")
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
+    ledger = tmp_path / "ledger.jsonl"
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+    emitted: list[dict] = []
+
+    def fake_mogui_emit(level, event, outcome, **fields):
+        emitted.append({"level": level, "event": event, "outcome": outcome, **fields})
+        return {}
+
+    script["main"].__globals__["mogui_emit"] = fake_mogui_emit
+
+    assert (
+        script["main"](
+            [
+                "--ledger",
+                str(ledger),
+                "check",
+                "--runtime",
+                "codex",
+                "--model",
+                "gpt-5.6-luna",
+                "--contract",
+                str(contract),
+                "--agents",
+                "1",
+                "--est-chars",
+                "1000",
+                "--completion-channel",
+                "orchestration",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    rc = script["main"](
+        [
+            "--ledger",
+            str(ledger),
+            "register",
+            "--job-id",
+            "job-orch-denied",
+            "--probe-cmd",
+            "printf job-orch-denied",
+        ]
+    )
+    assert rc == 2
+
+    findings = [e for e in emitted if e["event"] == "dispatch_registered"]
+    assert len(findings) == 1
+    assert findings[0]["outcome"] == "finding"
+    assert findings[0]["dispatch_id"] == "job-orch-denied"
+    assert findings[0]["reason"] == "ORCHESTRATION_UNVERIFIED"
+    # Failability: a version that only emitted dispatch_registered after a
+    # successful gate.register_job call would leave `emitted` empty here,
+    # since this denial path returns long before that call.
 
 
 @skip_windows_exec_surface
@@ -1423,6 +1723,52 @@ def test_cli_check_missing_contract_without_estimate_returns_gate_denial(
     assert json.loads(ledger.read_text(encoding="utf-8"))["est_chars"] is None
 
 
+def test_cli_ledger_after_subcommand_is_rejected_and_writes_nothing(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """--ledger is declared only on the top-level parser, never on a
+    subparser (scripts/dispatch-gate). Giving it after the subcommand must
+    keep exiting 2 on argparse's own unrecognized-arguments refusal and
+    write no file in the cwd; a future change that moves --ledger onto the
+    subparsers, or that switches to parse_known_args, would instead accept
+    it and write a cwd-relative ledger that worker-wait never reads.
+    """
+
+    contract = _contract(tmp_path, "ledger after subcommand")
+    ledger = tmp_path / "ledger.jsonl"
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
+
+    with pytest.raises(SystemExit) as excinfo:
+        script["main"](
+            [
+                "check",
+                "--runtime",
+                "codex",
+                "--model",
+                "gpt-5.6-luna",
+                "--contract",
+                str(contract),
+                "--agents",
+                "1",
+                "--est-chars",
+                "1000",
+                "--completion-channel",
+                "sentinel-log",
+                "--ledger",
+                str(ledger),
+            ]
+        )
+
+    assert excinfo.value.code == 2
+    assert "unrecognized arguments" in capsys.readouterr().err
+    assert list(cwd.iterdir()) == []
+
+
 def test_register_consumes_matching_pending_dispatch_by_contract_sha(
     tmp_path: Path,
 ) -> None:
@@ -1813,7 +2159,10 @@ def test_contract_lint_warns_for_mcp_without_trust_handling(
     assert decision.allow is True
     assert decision.reason == ReasonCode.OK
     assert ReasonCode.MCP_TRUST_UNHANDLED in decision.warnings
-    assert _ledger_entries(tmp_path)[-1]["warnings"] == ["MCP_TRUST_UNHANDLED"]
+    assert _ledger_entries(tmp_path)[-1]["warnings"] == [
+        "MCP_TRUST_UNHANDLED",
+        "CONTRACT_FRONT_MATTER_MISSING",
+    ]
 
 
 def test_contract_lint_accepts_mcp_with_trust_handling(
@@ -2228,6 +2577,82 @@ def test_cli_check_creates_default_ticket_directory(tmp_path: Path) -> None:
 
 
 @skip_windows_exec_surface
+def test_cli_check_honors_mogui_state_dir_for_ticket_and_known_roots(
+    tmp_path: Path,
+) -> None:
+    """MOGUI_STATE_DIR (testability seam, docs/runbooks/host-harness-inventory.md)
+    redirects the default ticket_dir and known_roots_path off ~/.mogui: a
+    `check` run writes its ticket under the state dir, reads known-roots.json
+    from the state dir, and leaves the real (fake-HOME) ticket dir and
+    known-roots.json alone."""
+    contract = _dispatch_contract(tmp_path, runtime="codex")
+    contract_payload = json.loads(contract.read_text(encoding="utf-8"))
+    contract_payload["workspace"] = "/srv/roots/alpha/workspace/example-product"
+    contract_payload["repo"] = "/srv/roots/alpha/projects/mogui-ADE-orchestrator"
+    contract.write_text(
+        json.dumps(contract_payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    ledger = tmp_path / "cli-ledger.jsonl"
+    home = tmp_path / "home"
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    real_mogui_dir = home / ".mogui"
+    real_mogui_dir.mkdir(parents=True)
+    # The contract's paths (/srv/roots/alpha/...) sit under /srv/roots/alpha: the
+    # state-dir file allows that root, the fake-HOME file does not, so a fallback
+    # to ~/.mogui surfaces a PATH_OUTSIDE_KNOWN_ROOTS warning that this test fails on.
+    (state_dir / "known-roots.json").write_text(
+        json.dumps(["/srv/roots/alpha"]), encoding="utf-8"
+    )
+    (real_mogui_dir / "known-roots.json").write_text(
+        json.dumps(["/srv/roots/beta"]), encoding="utf-8"
+    )
+    env = os.environ.copy()
+    env["HOME"] = str(home)
+    env["MOGUI_STATE_DIR"] = str(state_dir)
+
+    result = subprocess.run(
+        [
+            str(_script()),
+            "--ledger",
+            str(ledger),
+            "check",
+            "--runtime",
+            "codex",
+            "--model",
+            "gpt-5.6-luna",
+            "--contract",
+            str(contract),
+            "--agents",
+            "2",
+            "--est-chars",
+            "24000",
+            "--completion-channel",
+            "sentinel-log",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    contract_sha = _sha256(contract)
+    state_ticket_dir = state_dir / "dispatch-tickets"
+    ticket = state_ticket_dir / f"codex-{contract_sha[:12]}.json"
+    real_ticket_dir = real_mogui_dir / "dispatch-tickets"
+
+    assert result.returncode == 0, result.stderr
+    assert state_ticket_dir.is_dir()
+    assert ticket.is_file()
+    # The real (fake-HOME) ticket dir is never created: the dispatch's state
+    # went entirely to MOGUI_STATE_DIR, never split across both.
+    assert not real_ticket_dir.exists()
+    payload = json.loads(result.stdout)
+    assert "PATH_OUTSIDE_KNOWN_ROOTS" not in payload["warnings"]
+
+
+@skip_windows_exec_surface
 def test_cli_register_ambiguous_prints_candidate_shas(tmp_path: Path) -> None:
     first_contract = _contract(tmp_path, "first cli candidate")
     second_contract = _contract(tmp_path, "second cli candidate")
@@ -2583,7 +3008,7 @@ def test_v2_unknown_model_is_capped_not_denied(tmp_path: Path) -> None:
     assert ReasonCode.TIER_POLICY not in allowed.warnings
     entry = _ledger_entries(tmp_path)[-1]
     assert entry["tier"] == "unknown"
-    assert entry["warnings"] == ["TIER_UNKNOWN_MODEL"]
+    assert entry["warnings"] == ["TIER_UNKNOWN_MODEL", "CONTRACT_FRONT_MATTER_MISSING"]
 
     denied = gate.check(
         DispatchRequest(
@@ -2675,6 +3100,20 @@ def test_v2_policy_validation_fails_closed(tmp_path: Path) -> None:
             "tiers": {"top": ["a"]},
             "fanout_caps": {"unknown": 1},
             "window_seconds": 0,
+        },
+        {
+            "version": 2,
+            "runtimes": None,
+            "tiers": {"top": ["a"]},
+            "fanout_caps": {"unknown": 1},
+            "window_seconds": 86_400,
+        },
+        {
+            "version": 2,
+            "runtimes": ["ß"],
+            "tiers": {"top": ["a"]},
+            "fanout_caps": {"unknown": 1},
+            "window_seconds": 86_400,
         },
     )
     for index, payload in enumerate(bad_payloads):
@@ -2851,8 +3290,42 @@ def test_template_policy_resolves_claude_sonnet_5_as_efficient() -> None:
     assert policy.tier_of("grok-4.5-fast") == "efficient"
     assert policy.tier_of("never-listed-anywhere") == "unknown"
     assert policy.cap_for("top") is None
-    assert policy.cap_for("unknown") == 8
+    assert policy.cap_for("unknown") is None
     assert policy.cap_for("efficient") is None
+
+
+def test_template_policy_unknown_model_is_allowed_uncapped(tmp_path: Path) -> None:
+    """The shipped template no longer caps the unknown tier (owner directive 2026-09-29).
+
+    A dispatch denied only because its model post-dates the tier table is a
+    harness error, not a policy decision. Restoring the retired
+    fanout_caps.unknown: 8 line makes this case fail on the ninth dispatch
+    with TIER_FANOUT_CAP.
+    """
+
+    from master_runtime.core.dispatch_gate import _load_tier_policy
+
+    repo_root = Path(__file__).resolve().parents[1]
+    template = repo_root / "master-ops" / "model-tier-policy.json"
+    policy = _load_tier_policy(template)
+    assert policy.fanout_caps == {}
+    assert policy.cap_for("unknown") is None
+
+    gate = _gate(tmp_path, now=1_000, tier_policy_path=template)
+    for index in range(10):
+        decision = gate.check(
+            DispatchRequest(
+                runtime="codex",
+                model="a-model-newer-than-the-tier-table",
+                contract_path=_contract(tmp_path, f"unknown model dispatch {index}"),
+                est_input_chars=1_000,
+                n_agents=1,
+            )
+        )
+        assert decision.allow is True, decision
+        assert decision.reason == ReasonCode.OK
+        assert ReasonCode.TIER_UNKNOWN_MODEL in decision.warnings
+        assert _ledger_entries(tmp_path)[-1]["tier"] == "unknown"
 
 
 def _registered(
@@ -3026,21 +3499,22 @@ def _tier_policy_v2(
     caps: dict | None = None,
     window_seconds: int = 86_400,
     name: str = "model-tier-policy-v2.json",
+    runtimes: list[str] | None = None,
 ) -> Path:
     policy = tmp_path / name
+    payload: dict[str, object] = {
+        "version": 2,
+        "tiers": {
+            "top": ["gpt-5.6-sol", "claude-opus-5"],
+            "efficient": ["gpt-5.6-luna", "claude-haiku-4-5"],
+        },
+        "fanout_caps": caps if caps is not None else {"top": 1, "unknown": 1},
+        "window_seconds": window_seconds,
+    }
+    if runtimes is not None:
+        payload["runtimes"] = runtimes
     policy.write_text(
-        json.dumps(
-            {
-                "version": 2,
-                "tiers": {
-                    "top": ["gpt-5.6-sol", "claude-opus-5"],
-                    "efficient": ["gpt-5.6-luna", "claude-haiku-4-5"],
-                },
-                "fanout_caps": caps if caps is not None else {"top": 1, "unknown": 1},
-                "window_seconds": window_seconds,
-            },
-            sort_keys=True,
-        )
+        json.dumps(payload, sort_keys=True)
         + "\n",
         encoding="utf-8",
     )
@@ -3143,3 +3617,22 @@ def test_public_probe_docs_state_exit_and_stdout_requirements() -> None:
         # fail, even if unrelated prose still contains "stdout" or "job id".
         requirement_removed = requirement.sub("", text, count=1)
         assert not requirement.search(requirement_removed)
+
+
+def test_default_ledger_path_matches_timeline_and_worker_wait_doc(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Without DISPATCH_GATE_LEDGER, the gate's default must be the same file
+    worker-wait.md documents (~/.mogui/dispatch-ledger.jsonl) and the same
+    file dispatch_timeline reads, or a direct `dispatch-gate register` run
+    silently writes a dispatch that worker-wait never sees."""
+    monkeypatch.delenv("DISPATCH_GATE_LEDGER", raising=False)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    assert dispatch_gate._default_ledger_path() == dispatch_timeline.default_ledger_path()
+    assert dispatch_gate._default_ledger_path() == tmp_path / ".mogui" / "dispatch-ledger.jsonl"
+
+
+def test_default_ledger_path_env_override_wins(tmp_path: Path, monkeypatch) -> None:
+    override = tmp_path / "custom-ledger.jsonl"
+    monkeypatch.setenv("DISPATCH_GATE_LEDGER", str(override))
+    assert dispatch_gate._default_ledger_path() == override

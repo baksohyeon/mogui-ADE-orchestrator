@@ -1,9 +1,29 @@
 """Shared constants for template-check and template-apply.
 
 Import from sibling scripts so refusal names and placeholders cannot drift.
+
+The changelog fragment name grammar below is the canonical copy. The two
+repo-root changelog scripts outside this template tree cannot import this
+module without a sys.path hack across the template boundary, so they each
+keep a string-identical duplicate instead; tests/test_changelog_release.py
+asserts the duplicates match this pattern.
 """
 
 from __future__ import annotations
+
+import re
+from datetime import date
+
+FRAGMENT_NAME_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})-[a-z0-9-]+\.md$")
+
+
+def parse_fragment_date(name: str) -> date:
+    """Return a fragment file name's date, or raise ValueError if invalid."""
+    match = FRAGMENT_NAME_RE.match(name)
+    if not match:
+        raise ValueError(f"bad fragment name: {name}")
+    return date.fromisoformat(match.group(1))
+
 
 INSTANCE_OWNED_PREFIXES = (
     "docs/lineage/",
@@ -13,19 +33,41 @@ INSTANCE_OWNED_PREFIXES = (
 )
 INSTANCE_OWNED_EXACT = frozenset(
     {
+        "AGENTS.md",
+        "CLAUDE.md",
+        "docs/MASTER-OPERATIONS.md",
+        "docs/decisions/closed-decisions-and-facts.md",
+        "docs/runbooks/boot-comparison-set.md",
         "docs/runbooks/role-state.md",
+        "docs/runbooks/succession-boot-card.md",
+        "scripts/compaction-probe.sh",
+        "scripts/harness-selfcheck.sh",
+        "workspace-card/LOCAL.md",
     }
 )
 
+# Built from split braces so neither template-apply substitution nor the
+# step 05 Verify token scan sees a literal placeholder in this file.
+def _token(name: str) -> str:
+    return "{" "{" + name + "}" "}"
+
+
 PLACEHOLDERS = (
-    "{{WORKSPACE_NAME}}",
-    "{{WORKSPACE_ROOT}}",
-    "{{OPS_REPO}}",
-    "{{MONITOR_NS}}",
-    "{{MODEL_ID}}",
-    "{{REPO_LIST}}",
-    "{{RUNTIME_ROOT}}",
-    "{{TEMPLATE_VERSION}}",
+    _token("WORKSPACE_NAME"),
+    _token("WORKSPACE_ROOT"),
+    _token("OPS_REPO"),
+    _token("MONITOR_NS"),
+    _token("MODEL_ID"),
+    _token("REPO_LIST"),
+    _token("RUNTIME_ROOT"),
+    _token("TEMPLATE_VERSION"),
+)
+
+# Copied byte-identical. Substitution would destroy PLACEHOLDERS.
+SKIP_SUBSTITUTE_PATHS = frozenset(
+    {
+        "scripts/template_common.py",
+    }
 )
 
 

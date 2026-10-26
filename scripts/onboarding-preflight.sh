@@ -28,7 +28,7 @@ seen_labels=()
 # repeated at the end with its consequence, because fifteen lines of output is
 # exactly the length at which the important line gets skimmed past.
 ESSENTIAL_LABELS=(
-  orca orchestration skills agent-cli worker-runtime bd python3
+  orca orchestration skills agent-cli agent-route worker-runtime bd python3
   gitleaks ctx redaction-extra skill-stack
 )
 essential_gaps=()
@@ -474,6 +474,55 @@ else
   pass "agent-cli" "$agent_cli resolves on PATH"
 fi
 
+# --- agent API route -------------------------------------------------------
+# Vendor "setup" commands (measured 2026-09-18: `vercel ai-gateway setup`) rewrite
+# the agent CLI's own config to point at a proxy, and the proxy may not carry the
+# lineage model at all. The failure then surfaces only as 429s. Measure the
+# route here: the config's env block and the live environment must not
+# redirect the agent unless the operator says so with
+# PREFLIGHT_ALLOW_AGENT_PROXY=1.
+if [[ "$agent_cli" == "claude" || "$agent_cli" == "claude-code" ]]; then
+  claude_settings="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/settings.json"
+  route_hits=""
+  route_unmeasured=""
+  if [[ -f "$claude_settings" ]]; then
+    if ! command -v python3 >/dev/null 2>&1; then
+      route_unmeasured="python3 is missing, so $claude_settings was not read"
+    elif ! route_hits=$(python3 - "$claude_settings" 2>/dev/null <<'PY'
+import json,sys
+try:
+    data=json.load(open(sys.argv[1]))
+    if not isinstance(data,dict): raise ValueError('top level is not a JSON object')
+    env=data.get('env') or {}
+    if not isinstance(env,dict): raise ValueError('env is not a JSON object')
+except Exception as e: print(e); sys.exit(2)
+keys=[k for k in ('ANTHROPIC_BASE_URL','ANTHROPIC_AUTH_TOKEN','ANTHROPIC_API_KEY') if str(env.get(k) or '').strip()]
+print(' '.join('settings.env.%s' % k for k in keys))
+PY
+); then
+      route_unmeasured="$claude_settings is unreadable ($route_hits)"
+      route_hits=""
+    fi
+  fi
+  for route_var in ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY; do
+    [[ -n "${!route_var:-}" ]] && route_hits="${route_hits:+$route_hits }shell.$route_var"
+  done
+  route_hits="${route_hits# }"
+  # An unread settings file is an unmeasured route, so the proxy allowance does
+  # not turn it into a PASS.
+  if [[ -n "$route_unmeasured" ]]; then
+    fail "agent-route" "route not measured: $route_unmeasured. Fix or restore the file, then rerun"
+  elif [[ -z "$route_hits" ]]; then
+    pass "agent-route" "claude uses the vendor's own endpoint and login; no proxy or token override in $claude_settings or the shell"
+  elif [[ "${PREFLIGHT_ALLOW_AGENT_PROXY:-}" == "1" ]]; then
+    pass "agent-route" "claude is routed through a proxy by operator decision (PREFLIGHT_ALLOW_AGENT_PROXY=1): $route_hits"
+  else
+    fail "agent-route" "claude is redirected away from the vendor endpoint ($route_hits); a vendor setup command likely rewrote it. Remove the override (backup first) or set PREFLIGHT_ALLOW_AGENT_PROXY=1 if intentional"
+  fi
+else
+  warn "agent-route" "route not measured for ${agent_cli:-an unset ORCA_AGENT_CLI}; this check reads the claude settings file and the shell only"
+fi
+
 # One reachable executor is enough to delegate. Requiring every listed runtime
 # blocks a host that routes all work through one of them, which is a normal
 # setup, so a missing runtime is a WARN and no runtime at all is the failure.
@@ -584,20 +633,24 @@ fi
 
 # The gate writes its ledger outside the repository. Check writability without
 # creating anything: this script must not change state before --fix.
-gate_ledger="${DISPATCH_GATE_LEDGER:-.mogui/dispatch-ledger.jsonl}"
-gate_ledger_dir=$(dirname "$gate_ledger")
-if [[ -d "$gate_ledger_dir" ]]; then
-  if [[ -w "$gate_ledger_dir" ]]; then
-    pass "gate-ledger" "dispatch ledger directory is writable: $gate_ledger_dir"
-  else
-    fail "gate-ledger" "dispatch ledger directory is not writable: $gate_ledger_dir; set DISPATCH_GATE_LEDGER to a writable path"
-  fi
+if [[ -z "${DISPATCH_GATE_LEDGER:-}" && -z "${HOME:-}" ]]; then
+  fail "gate-ledger" "HOME is unset, the gate's default ledger cannot be resolved; set DISPATCH_GATE_LEDGER or HOME"
 else
-  gate_ledger_parent=$(dirname "$gate_ledger_dir")
-  if [[ -d "$gate_ledger_parent" && -w "$gate_ledger_parent" ]]; then
-    pass "gate-ledger" "dispatch ledger directory will be created under $(cd "$gate_ledger_parent" && pwd -P)"
+  gate_ledger="${DISPATCH_GATE_LEDGER:-${HOME}/.mogui/dispatch-ledger.jsonl}"
+  gate_ledger_dir=$(dirname "$gate_ledger")
+  if [[ -d "$gate_ledger_dir" ]]; then
+    if [[ -w "$gate_ledger_dir" ]]; then
+      pass "gate-ledger" "dispatch ledger directory is writable: $gate_ledger_dir"
+    else
+      fail "gate-ledger" "dispatch ledger directory is not writable: $gate_ledger_dir; set DISPATCH_GATE_LEDGER to a writable path"
+    fi
   else
-    fail "gate-ledger" "cannot create the dispatch ledger directory under $gate_ledger_parent; set DISPATCH_GATE_LEDGER to a writable path"
+    gate_ledger_parent=$(dirname "$gate_ledger_dir")
+    if [[ -d "$gate_ledger_parent" && -w "$gate_ledger_parent" ]]; then
+      pass "gate-ledger" "dispatch ledger directory will be created under $(cd "$gate_ledger_parent" && pwd -P)"
+    else
+      fail "gate-ledger" "cannot create the dispatch ledger directory under $gate_ledger_parent; set DISPATCH_GATE_LEDGER to a writable path"
+    fi
   fi
 fi
 

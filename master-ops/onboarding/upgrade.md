@@ -8,7 +8,7 @@ Load rule: read this file only when the router's mode question answered **Upgrad
 
 ## Owner script (kind ELI5, adapt to the owner's language)
 
-Where we are: this workspace was already set up, and the book the Master reads from may be behind the current template. What we do next: measure what is missing or unknown against the template's file list, show every path that would be written and why, then wait for a clear yes before writing anything. Paths the workspace owns for itself — lineage, role state, tracker data, local config, contracts — stay untouched by name. Provide the workspace root and ops repository path when those facts are not already available.
+Where we are: this workspace was already set up, and the book the Master reads from may be behind the current template. What we do next: measure what is missing or unknown against the template's file list, show every path that would be written and why, then wait for a clear yes before writing anything. Paths the workspace owns for itself stay untouched by name: lineage, role state, operating cards, operations source of truth, closed decisions, succession card, boot comparison, self-check and compaction scripts, the session card's local extension, tracker data, local config, contracts. Provide the workspace root and ops repository path when those facts are not already available.
 
 ## Checklist
 
@@ -28,19 +28,28 @@ When the ops repository already has the script:
 
 2. **Read the report**: the report states which set it produced (`install-manifest` alone, or `template-compare` when `--template` was given). Record installed version (or "undeterminable" when `MANIFEST.json` is absent), template version, absent required paths, and unknown present paths. A missing manifest is the expected shape for pre-manifest installs — continue by content presence, do not invent a version.
 
-3. **Dry-run apply (always first)**: print the exact file list and the reason for each path. No write yet.
+3. **Dry-run apply (always first)**: print the exact file list and the reason for each path. No write yet. Pass the same eight measured `--placeholder` values as step 5; a dry run that omits them prints the missing-placeholder report and exits 2 by design, since a planned file still carries each unsupplied token.
 
 ```console
-"{{RUNTIME_ROOT}}/master-ops/scripts/template-apply" --ops "{{OPS_REPO}}" --template "{{RUNTIME_ROOT}}/master-ops"
+"{{RUNTIME_ROOT}}/master-ops/scripts/template-apply" --ops "{{OPS_REPO}}" --template "{{RUNTIME_ROOT}}/master-ops" --placeholder WORKSPACE_NAME="{{WORKSPACE_NAME}}" --placeholder WORKSPACE_ROOT="{{WORKSPACE_ROOT}}" --placeholder OPS_REPO="{{OPS_REPO}}" --placeholder MONITOR_NS="{{MONITOR_NS}}" --placeholder MODEL_ID="{{MODEL_ID}}" --placeholder REPO_LIST="{{REPO_LIST}}" --placeholder RUNTIME_ROOT="{{RUNTIME_ROOT}}" --placeholder TEMPLATE_VERSION="{{TEMPLATE_VERSION}}"
 ```
 
 4. **Owner confirmation**: show the dry-run plan in the owner's language. Require an explicit confirmation before any write. There is no silent apply and no flag that skips confirmation on any run. If the owner declines, stop and leave the report.
 
-5. **Write pass (only after confirmation)**: re-run with `--write` and type the confirmation phrase the tool demands. Placeholder substitution uses only the documented set from the router (`{{WORKSPACE_NAME}}`, `{{WORKSPACE_ROOT}}`, `{{OPS_REPO}}`, `{{MONITOR_NS}}`, `{{MODEL_ID}}`, `{{REPO_LIST}}`, `{{RUNTIME_ROOT}}`, `{{TEMPLATE_VERSION}}`). Add none. Prefer values already measured from the existing install. For example, repeat `--placeholder KEY=VALUE` for each measured value: `"{{RUNTIME_ROOT}}/master-ops/scripts/template-apply" --ops "{{OPS_REPO}}" --template "{{RUNTIME_ROOT}}/master-ops" --write --placeholder WORKSPACE_NAME="{{WORKSPACE_NAME}}" --placeholder WORKSPACE_ROOT="{{WORKSPACE_ROOT}}" --placeholder OPS_REPO="{{OPS_REPO}}" --placeholder MONITOR_NS="{{MONITOR_NS}}" --placeholder MODEL_ID="{{MODEL_ID}}" --placeholder REPO_LIST="{{REPO_LIST}}" --placeholder RUNTIME_ROOT="{{RUNTIME_ROOT}}" --placeholder TEMPLATE_VERSION="{{TEMPLATE_VERSION}}"`.
+5. **Write pass (only after confirmation)**: re-run with `--write` and type the confirmation phrase the tool demands. Placeholder substitution uses only the documented set from the router (`{{WORKSPACE_NAME}}`, `{{WORKSPACE_ROOT}}`, `{{OPS_REPO}}`, `{{MONITOR_NS}}`, `{{MODEL_ID}}`, `{{REPO_LIST}}`, `{{RUNTIME_ROOT}}`, `{{TEMPLATE_VERSION}}`). Add none. Prefer values already measured from the existing install. For example, repeat `--placeholder KEY=VALUE` for each measured value: `"{{RUNTIME_ROOT}}/master-ops/scripts/template-apply" --ops "{{OPS_REPO}}" --template "{{RUNTIME_ROOT}}/master-ops" --write --placeholder WORKSPACE_NAME="{{WORKSPACE_NAME}}" --placeholder WORKSPACE_ROOT="{{WORKSPACE_ROOT}}" --placeholder OPS_REPO="{{OPS_REPO}}" --placeholder MONITOR_NS="{{MONITOR_NS}}" --placeholder MODEL_ID="{{MODEL_ID}}" --placeholder REPO_LIST="{{REPO_LIST}}" --placeholder RUNTIME_ROOT="{{RUNTIME_ROOT}}" --placeholder TEMPLATE_VERSION="{{TEMPLATE_VERSION}}"`. The tool refuses the write, before the confirmation prompt, if any of these eight tokens remains in the substituted text of a planned, non-skipped file, including when a supplied value reintroduces it.
 
 6. **Refusals by name**: the apply step must refuse, and report as such, for:
    - `docs/lineage/`
+   - `AGENTS.md`
+   - `CLAUDE.md`
+   - `docs/MASTER-OPERATIONS.md`
+   - `docs/decisions/closed-decisions-and-facts.md`
+   - `docs/runbooks/boot-comparison-set.md`
    - `docs/runbooks/role-state.md`
+   - `docs/runbooks/succession-boot-card.md`
+   - `scripts/compaction-probe.sh`
+   - `scripts/harness-selfcheck.sh`
+   - `workspace-card/LOCAL.md`
    - `.beads/`
    - `config/`
    - `contracts/`
@@ -50,6 +59,15 @@ When the ops repository already has the script:
 
 7. **Re-check**: run `template-check` again with `--template` and confirm the report_set is `template-compare`. A clean shape is the goal; remaining unknown paths that are deliberate local additions stay listed as unknown and are not deleted.
 
+8. **Redeploy the session card**: if the write pass wrote `workspace-card/CLAUDE.md` or `workspace-card/AGENTS.md`, the copies at the workspace root are now behind, and the master keeps reading the old card. Compare each root copy to its ops copy and show the owner the difference. If a root copy carries sections of its own, move them into `{{OPS_REPO}}/workspace-card/LOCAL.md` first, because the copy replaces the root file. After an explicit confirmation, redeploy both:
+
+```console
+cp "{{OPS_REPO}}/workspace-card/CLAUDE.md" "{{WORKSPACE_ROOT}}/CLAUDE.md"
+cp "{{OPS_REPO}}/workspace-card/AGENTS.md" "{{WORKSPACE_ROOT}}/AGENTS.md"
+```
+
+If the owner declines, say that the root card is stale and that `LOCAL.md` is not read until it is redeployed.
+
 ## Report
 
-State, in the owner's language: which report set was produced, installed vs template version, how many paths were written, how many were refused as instance-owned, and how many unknown local paths remain. Then stop; Upgrade has no spawn and no further steps.
+State, in the owner's language: which report set was produced, installed vs template version, how many paths were written, how many were refused as instance-owned, how many unknown local paths remain, and whether the workspace-root card was redeployed. Then stop; Upgrade has no spawn and no further steps.

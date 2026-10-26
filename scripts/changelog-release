@@ -1,0 +1,325 @@
+#!/usr/bin/env python3
+"""Fold master-ops/changelog.d/ fragments into master-ops/CHANGELOG.md.
+
+Run this in the same step as scripts/next-version when the owner cuts a
+release. Nothing runs at merge time: a merged pull request's fragment sits in
+changelog.d/ until the next release folds it.
+
+With --roll-root, also rolls a root changelog's '## [Unreleased]' section
+into a version heading after the fold.
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+from datetime import date, datetime, timezone
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+# Canonical copy: master-ops/scripts/template_common.py FRAGMENT_NAME_RE. This
+# script cannot import that module without a sys.path hack across the
+# master-ops/ template boundary, so this copy must stay string-identical to
+# it; tests/test_changelog_release.py asserts that.
+FRAGMENT_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})-[a-z0-9-]+\.md$")
+UNRELEASED_HEADING = "## Unreleased"
+# Anchored to a whole line: CHANGELOG.md's own prose mentions "## Unreleased"
+# in backticks above the real heading, which a bare substring search would
+# match instead.
+UNRELEASED_LINE_RE = re.compile(r"^## Unreleased[ \t]*$", re.MULTILINE)
+# A root changelog (Keep a Changelog grammar) brackets its headings and links,
+# unlike master-ops/CHANGELOG.md above.
+ROOT_UNRELEASED_LINE_RE = re.compile(r"^## \[Unreleased\][ \t]*$", re.MULTILINE)
+ROOT_UNRELEASED_LINK_RE = re.compile(
+    r"^\[Unreleased\]:\s*(?P<base>.+)/compare/v(?P<prev>\d+\.\d+\.\d+)\.\.\.HEAD[ \t]*$",
+    re.MULTILINE,
+)
+VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
+
+
+def load_fragments(fragments_dir: Path) -> list[tuple[str, str, str]]:
+    """Return (date, name, body) newest first, refusing a malformed fragment."""
+    entries: list[tuple[str, str, str]] = []
+    for path in sorted(fragments_dir.glob("*.md")):
+        if path.name == "README.md":
+            continue
+        match = FRAGMENT_RE.match(path.name)
+        if not match:
+            sys.stderr.write(f"changelog-release: bad fragment name: {path.name}\n")
+            raise SystemExit(2)
+        try:
+            date.fromisoformat(match.group(1))
+        except ValueError:
+            sys.stderr.write(f"changelog-release: bad fragment name: {path.name}\n")
+            raise SystemExit(2)
+        body = path.read_text(encoding="utf-8").strip()
+        if not body:
+            sys.stderr.write(f"changelog-release: empty fragment: {path.name}\n")
+            raise SystemExit(2)
+        entries.append((match.group(1), path.name, body))
+    # Newest first by date, then by name: sort by name first so the stable
+    # date-sort that follows keeps same-date fragments in name order.
+    entries.sort(key=lambda e: e[1])
+    entries.sort(key=lambda e: e[0], reverse=True)
+    return entries
+
+
+def fold(changelog_text: str, bodies: list[str]) -> str:
+    match = UNRELEASED_LINE_RE.search(changelog_text)
+    if match is None:
+        sys.stderr.write(f"changelog-release: no '{UNRELEASED_HEADING}' heading found\n")
+        raise SystemExit(2)
+    insert_at = match.end()
+    existing = changelog_text[insert_at:].lstrip("\n")
+    block = "\n\n".join(bodies)
+    if existing:
+        block = f"{block}\n\n{existing}"
+    else:
+        block = f"{block}\n"
+    return f"{changelog_text[:insert_at]}\n\n{block}"
+
+
+def _next_heading_index(text: str, after: int) -> int:
+    """Index of the newline before the next '## ' heading line after `after`.
+
+    A '## ' line inside a fenced (```) code block is content, not a section
+    boundary. Returns -1 if no unfenced heading line follows.
+    """
+    in_fence = False
+    pos = after
+    while True:
+        newline = text.find("\n", pos)
+        if newline == -1:
+            return -1
+        line_start = newline + 1
+        line_end = text.find("\n", line_start)
+        line = text[line_start:] if line_end == -1 else text[line_start:line_end]
+        if line.strip().startswith("```"):
+            in_fence = not in_fence
+        elif not in_fence and line.startswith("## "):
+            return newline
+        pos = line_start
+
+
+def unreleased_block(text: str) -> str:
+    match = UNRELEASED_LINE_RE.search(text)
+    start = match.start()
+    next_heading = _next_heading_index(text, match.end())
+    end = next_heading if next_heading != -1 else len(text)
+    return text[start:end].rstrip("\n")
+
+
+def _build_rolled_root(path: Path, version: str, date_str: str) -> tuple[str | None, int]:
+    """Validate and build the rolled root changelog text. Writes nothing.
+
+    Returns (updated_text, 0) on success, or (None, 2) on a refusal already
+    printed to stderr.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        sys.stderr.write(f"changelog-release: cannot read {path}: {exc}\n")
+        return None, 2
+
+    heading_match = ROOT_UNRELEASED_LINE_RE.search(text)
+    if heading_match is None:
+        sys.stderr.write(f"changelog-release: no '## [Unreleased]' heading found in {path}\n")
+        return None, 2
+
+    if re.search(rf"^## \[{re.escape(version)}\]", text, re.MULTILINE):
+        sys.stderr.write(f"changelog-release: heading '## [{version}]' already exists in {path}\n")
+        return None, 2
+
+    next_heading = _next_heading_index(text, heading_match.end())
+    section_end = next_heading if next_heading != -1 else len(text)
+    section = text[heading_match.end() : section_end]
+    if not any(line.strip().startswith("- ") for line in section.splitlines()):
+        sys.stderr.write(f"changelog-release: '[Unreleased]' section in {path} has no entry line\n")
+        return None, 2
+
+    link_match = ROOT_UNRELEASED_LINK_RE.search(text)
+    if link_match is None:
+        sys.stderr.write(f"changelog-release: no '[Unreleased]' link line found in {path}\n")
+        return None, 2
+
+    base = link_match.group("base")
+    prev = link_match.group("prev")
+
+    new_heading = f"## [{version}] - {date_str}"
+    updated = (
+        text[: heading_match.start()]
+        + f"## [Unreleased]\n\n{new_heading}"
+        + text[heading_match.end() :]
+    )
+    new_links = (
+        f"[Unreleased]: {base}/compare/v{version}...HEAD\n"
+        f"[{version}]: {base}/compare/v{prev}...v{version}"
+    )
+    updated = ROOT_UNRELEASED_LINK_RE.sub(lambda _m: new_links, updated, count=1)
+    return updated, 0
+
+
+def _print_root_preview(updated: str, version: str, date_str: str) -> None:
+    new_heading = f"## [{version}] - {date_str}"
+    head_start = updated.index(new_heading) + len(new_heading)
+    head_end = _next_heading_index(updated, head_start)
+    print(updated[: head_end if head_end != -1 else len(updated)])
+
+
+def _write_rolled_root(path: Path, updated: str) -> int:
+    """Write the already-validated rolled root text. This is the last step of
+    a roll: by the time it runs, master-ops/CHANGELOG.md is already folded and
+    its changelog.d/ fragments are already deleted."""
+    try:
+        path.write_text(updated, encoding="utf-8")
+    except OSError as exc:
+        sys.stderr.write(
+            f"changelog-release: cannot write {path}: {exc}\n"
+            "changelog-release: master-ops/CHANGELOG.md is already folded and its "
+            "changelog.d/ fragments are already deleted; redo the root roll by hand\n"
+        )
+        return 2
+    return 0
+
+
+def _validate_args(args: argparse.Namespace) -> int | None:
+    """Validate option shape and coupling before any filesystem write."""
+    if args.roll_root and not args.version:
+        sys.stderr.write("changelog-release: --roll-root requires --version\n")
+        return 2
+    if args.version and not args.roll_root:
+        sys.stderr.write("changelog-release: --version requires --roll-root\n")
+        return 2
+    if args.date and not args.roll_root:
+        sys.stderr.write("changelog-release: --date requires --roll-root\n")
+        return 2
+    if args.version is not None and not VERSION_RE.match(args.version):
+        sys.stderr.write(f"changelog-release: bad --version: {args.version}\n")
+        return 2
+    if args.date is not None:
+        try:
+            if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", args.date):
+                raise ValueError(args.date)
+            date.fromisoformat(args.date)
+        except ValueError:
+            sys.stderr.write(f"changelog-release: bad --date: {args.date}\n")
+            return 2
+    return None
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--root",
+        type=Path,
+        default=REPO_ROOT,
+        help="Repo root containing master-ops/ (default: this repo)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the resulting Unreleased block; change nothing",
+    )
+    parser.add_argument(
+        "--roll-root",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Root changelog to roll '## [Unreleased]' into a version heading (requires --version)",
+    )
+    parser.add_argument(
+        "--version",
+        default=None,
+        metavar="X.Y.Z",
+        help="Version heading to cut with --roll-root",
+    )
+    parser.add_argument(
+        "--date",
+        default=None,
+        metavar="YYYY-MM-DD",
+        help="Release date for --roll-root (default: today, UTC)",
+    )
+    args = parser.parse_args(argv)
+
+    error = _validate_args(args)
+    if error is not None:
+        return error
+
+    # Compute both results before writing anything: a refused root roll must
+    # leave the fold and its fragments untouched, so the root roll is
+    # validated and built here, before the fold is even read.
+    root_update: str | None = None
+    if args.roll_root:
+        date_str = args.date or datetime.now(timezone.utc).date().isoformat()
+        root_update, error = _build_rolled_root(args.roll_root, args.version, date_str)
+        if error:
+            return error
+
+    fragments_dir = args.root / "master-ops" / "changelog.d"
+    changelog = args.root / "master-ops" / "CHANGELOG.md"
+
+    def _finish_roll(dry_run: bool) -> int:
+        if not args.roll_root:
+            return 0
+        if dry_run:
+            _print_root_preview(root_update, args.version, date_str)
+            return 0
+        return _write_rolled_root(args.roll_root, root_update)
+
+    if not fragments_dir.is_dir():
+        print("0 fragments")
+        return _finish_roll(args.dry_run)
+
+    entries = load_fragments(fragments_dir)
+    if not entries:
+        print("0 fragments")
+        return _finish_roll(args.dry_run)
+
+    try:
+        changelog_text = changelog.read_text(encoding="utf-8")
+    except OSError as exc:
+        sys.stderr.write(f"changelog-release: cannot read {changelog}: {exc}\n")
+        return 2
+
+    if UNRELEASED_LINE_RE.search(changelog_text) is None:
+        sys.stderr.write(f"changelog-release: no '{UNRELEASED_HEADING}' heading found\n")
+        return 2
+
+    # Recoverable step: a fragment whose body is already present verbatim
+    # under the Unreleased heading survived from an interrupted prior run
+    # (changelog written, then this fragment's deletion failed). Delete it
+    # without folding its body again. The body must match a whole paragraph
+    # block (padded on both sides), not merely overlap a larger one: a plain
+    # substring test would false-positive on a new fragment whose body is a
+    # substring of unrelated existing text and silently drop it.
+    unreleased_now = unreleased_block(changelog_text)
+    padded_unreleased = f"\n\n{unreleased_now}\n\n"
+
+    def _already_present(body: str) -> bool:
+        return f"\n\n{body}\n\n" in padded_unreleased
+
+    to_fold = [e for e in entries if not _already_present(e[2])]
+    already_folded = [e[1] for e in entries if _already_present(e[2])]
+
+    updated = fold(changelog_text, [body for _, _, body in to_fold]) if to_fold else changelog_text
+
+    if args.dry_run:
+        if args.roll_root:
+            return _finish_roll(dry_run=True)
+        print(unreleased_block(updated))
+        return 0
+
+    if to_fold:
+        changelog.write_text(updated, encoding="utf-8")
+    for _, name, _ in entries:
+        (fragments_dir / name).unlink()
+    for name in already_folded:
+        print(f"{name}: already folded")
+    if to_fold:
+        print(f"{len(to_fold)} fragments")
+    return _finish_roll(dry_run=False)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

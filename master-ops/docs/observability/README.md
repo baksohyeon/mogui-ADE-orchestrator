@@ -15,10 +15,10 @@ neither replaces the others, and each answers a different observability question
 | Genre | Directory | Captures | Cadence |
 |---|---|---|---|
 | Blame | `docs/blame/` | Structured incident observation record: what was observed, what was not observed, and where observation was promoted to cause too early | Only when an incident trigger is met |
-| Retro | `docs/retro/` | Judgment, misjudgment, near misses, temptations resisted | Track milestones, incidents, succession, on request |
+| postmortem | `docs/postmortem/` | Junior-facing diagnosis record: what was observed, which hypotheses were held and how each was tested, why the fix was chosen, what stayed unverified; also the judgment and misjudgment layer retro carried | After a debugging incident, at succession, on request (replaces `retro` by owner decision, 2026-09-14) |
 | Travelog | `docs/travelog/` | Where the master went, what it actually ran, what came back | Append per generation, as events happen |
 
-Blame has a narrow job that neither retro nor travelog can do: it recovers the
+Blame has a narrow job that neither postmortem nor travelog can do: it recovers the
 evidence layer a raw session can blur during self-report, including what was not
 checked and where a causal claim outran observation. Its strict format is there for
 measurement quality, not for punishment. Use the filename format
@@ -43,9 +43,10 @@ Rejected candidates (not adopted as triggers):
 - Product repository `main` reach outside dispatch path: rejected because the 2026-08-03 evidence set for this track did not confirm a direct main-path breach event.
 - "Wrote a guard and broke it the same day" as standalone trigger: rejected because it is too broad and mostly a duplicate symptom of the stronger evidence-quality triggers above.
 
-Retro is the one that earns its cost. It answers why a decision took the shape it
-did, which nothing else records. Travelog answers what happened, and a workspace
-that keeps a verbatim session transcript will find it redundant.
+Postmortem is the one that earns its cost. It answers why a diagnosis took the shape
+it did, including judgment and misjudgment at each fork, which nothing else records.
+Travelog answers what happened, and a workspace that keeps a verbatim session
+transcript will find it redundant.
 
 The workspace that authors this template also ran two further genres, a
 plain-language digest and a turn-level harness dissection. Both are dropped
@@ -106,3 +107,18 @@ record which hooks fired, which tools ran in what order, and where the owner int
 They cannot record what actually happened inside the model or what its "real motive" was.
 No document genre can. Blurring that line is the failure mode this legend exists to
 prevent.
+
+blame is deliberately not a postmortem. Both are blameless in intent, but they answer
+different questions with different structure: postmortem is the diagnosis narrative for a
+junior reader; blame is the stricter measurement surface for observation-vs-causality
+discipline.
+
+So the two genres are not interchangeable. `docs/postmortem/` is the reflective,
+systemic read, and when agent fault appears there, skill §11 routes the structured
+self-observation to `blame-agent`.
+
+Do not fold blame into postmortem. If you relax the evidence discipline to "make one
+document," you lose the measurement lane exactly where incidents need it most.
+
+Name collision note (gstack `/retro`) is closed as of 2026-09-14. The template now uses
+`docs/postmortem/` with generator `skills/postmortem`.

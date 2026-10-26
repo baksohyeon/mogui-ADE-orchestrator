@@ -1,0 +1,520 @@
+"""scripts/changelog-release: fold changelog.d/ fragments into CHANGELOG.md."""
+
+from __future__ import annotations
+
+import importlib.util
+import subprocess
+import sys
+from datetime import date
+from importlib.machinery import SourceFileLoader
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SCRIPT = REPO_ROOT / "scripts" / "changelog-release"
+
+
+def _load_script_module(name: str, path: Path = SCRIPT):
+    loader = SourceFileLoader(name, str(path))
+    spec = importlib.util.spec_from_loader(name, loader)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    loader.exec_module(module)
+    return module
+
+CHANGELOG_BODY = (
+    "# fixture changelog\n\n## Unreleased\n\nOld entry that was already there.\n\n"
+    "## v0.1.0\n\nFirst release.\n"
+)
+
+
+def _run(root: Path, *extra: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, str(SCRIPT), "--root", str(root), *extra],
+        capture_output=True,
+        text=True,
+    )
+
+
+def _seed(root: Path, fragments: dict[str, str]) -> None:
+    master_ops = root / "master-ops"
+    changelog_d = master_ops / "changelog.d"
+    changelog_d.mkdir(parents=True)
+    (master_ops / "CHANGELOG.md").write_text(CHANGELOG_BODY, encoding="utf-8")
+    for name, body in fragments.items():
+        (changelog_d / name).write_text(body, encoding="utf-8")
+
+
+def test_fold_order_three_fragments_two_dates(tmp_path: Path):
+    _seed(
+        tmp_path,
+        {
+            "2026-01-02-second.md": "Second thing (2026-01-02):\n\n- did second\n",
+            "2026-01-01-alpha.md": "Alpha on day one (2026-01-01):\n\n- did alpha\n",
+            "2026-01-01-beta.md": "Beta on day one (2026-01-01):\n\n- did beta\n",
+        },
+    )
+    result = _run(tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "3 fragments"
+
+    changelog = (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8")
+    second_at = changelog.find("Second thing")
+    alpha_at = changelog.find("Alpha on day one")
+    beta_at = changelog.find("Beta on day one")
+    old_at = changelog.find("Old entry that was already there.")
+    # Newest date first; same-date fragments in name order; old content stays last.
+    assert 0 <= second_at < alpha_at < beta_at < old_at
+
+    changelog_d = tmp_path / "master-ops" / "changelog.d"
+    assert list(changelog_d.glob("*.md")) == []
+
+    second_result = _run(tmp_path)
+    assert second_result.returncode == 0
+    assert second_result.stdout.strip() == "0 fragments"
+
+
+def test_release_day_fragment_added_after_fold_rolls_into_next_cut(tmp_path: Path):
+    """A release commit's fold runs, then that same commit also bumps
+    TEMPLATE-VERSION and MANIFEST.json, both outside changelog.d/ and
+    CHANGELOG.md, so changelog-fragment-check requires it to add its own
+    fragment too. That fragment is added after this cut's fold already ran,
+    so it cannot be in this cut by construction, and must come out whole
+    next time: a fold that deletes every fragment it finds, including one
+    dated the release day, would drop it instead of carrying it over.
+    """
+    _seed(tmp_path, {"2026-01-01-alpha.md": "Alpha (2026-01-01):\n\n- did alpha\n"})
+    first = _run(tmp_path)
+    assert first.returncode == 0, first.stderr
+    assert first.stdout.strip() == "1 fragments"
+
+    changelog_d = tmp_path / "master-ops" / "changelog.d"
+    assert list(changelog_d.glob("*.md")) == []
+
+    release_day = date.today().isoformat()
+    release_fragment = changelog_d / f"{release_day}-release-v0-1-0.md"
+    release_fragment.write_text(
+        f"Release v0.1.0 ({release_day}):\n\n- bump TEMPLATE-VERSION and MANIFEST.json\n",
+        encoding="utf-8",
+    )
+
+    after_first_fold = (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert "Release v0.1.0" not in after_first_fold
+
+    second = _run(tmp_path)
+    assert second.returncode == 0, second.stderr
+    assert second.stdout.strip() == "1 fragments"
+    assert not release_fragment.exists()
+
+    after_second_fold = (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert "Release v0.1.0" in after_second_fold
+
+
+def test_empty_directory_prints_zero_and_touches_nothing(tmp_path: Path):
+    _seed(tmp_path, {})
+    before = (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8")
+    result = _run(tmp_path)
+    assert result.returncode == 0
+    assert result.stdout.strip() == "0 fragments"
+    after = (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert before == after
+
+
+def test_malformed_name_refused(tmp_path: Path):
+    _seed(tmp_path, {"NotDated.md": "Some body.\n"})
+    before = (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8")
+    result = _run(tmp_path)
+    assert result.returncode == 2
+    assert "NotDated.md" in result.stderr
+    after = (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert before == after
+
+
+def test_empty_fragment_body_refused(tmp_path: Path):
+    _seed(tmp_path, {"2026-01-01-empty.md": "   \n"})
+    before = (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8")
+    result = _run(tmp_path)
+    assert result.returncode == 2
+    assert "2026-01-01-empty.md" in result.stderr
+    after = (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert before == after
+
+
+def test_impossible_date_refused(tmp_path: Path):
+    _seed(tmp_path, {"2026-02-30-alpha.md": "Alpha (2026-02-30):\n\n- did alpha\n"})
+    before = (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8")
+    result = _run(tmp_path)
+    assert result.returncode == 2
+    assert "2026-02-30-alpha.md" in result.stderr
+    after = (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert before == after
+
+
+def test_missing_changelog_reports_clean_error(tmp_path: Path):
+    _seed(tmp_path, {"2026-01-01-alpha.md": "Alpha (2026-01-01):\n\n- did alpha\n"})
+    (tmp_path / "master-ops" / "CHANGELOG.md").unlink()
+    result = _run(tmp_path)
+    assert result.returncode == 2
+    assert "changelog-release" in result.stderr
+    assert "CHANGELOG.md" in result.stderr
+
+
+def test_dry_run_preview_not_truncated_by_fenced_heading(tmp_path: Path):
+    _seed(
+        tmp_path,
+        {
+            "2026-01-01-alpha.md": (
+                "Alpha (2026-01-01):\n\n```\n## not a real heading\n```\n\n- did alpha\n"
+            )
+        },
+    )
+    result = _run(tmp_path, "--dry-run")
+    assert result.returncode == 0, result.stderr
+    assert "Alpha (2026-01-01)" in result.stdout
+    assert "not a real heading" in result.stdout
+    assert "Old entry that was already there." in result.stdout
+    assert "First release." not in result.stdout
+
+
+def test_rerun_after_failed_deletion_reports_already_folded(tmp_path: Path):
+    # Simulate the state left by an interrupted first run: the changelog was
+    # written but this fragment's deletion failed, so it is still on disk
+    # with a body that already appears under Unreleased.
+    body = "Alpha (2026-01-01):\n\n- did alpha\n"
+    changelog_body = (
+        "# fixture changelog\n\n## Unreleased\n\n"
+        f"{body}\nOld entry that was already there.\n\n## v0.1.0\n\nFirst release.\n"
+    )
+    master_ops = tmp_path / "master-ops"
+    changelog_d = master_ops / "changelog.d"
+    changelog_d.mkdir(parents=True)
+    (master_ops / "CHANGELOG.md").write_text(changelog_body, encoding="utf-8")
+    (changelog_d / "2026-01-01-alpha.md").write_text(body, encoding="utf-8")
+
+    before = (master_ops / "CHANGELOG.md").read_text(encoding="utf-8")
+    result = _run(tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert "2026-01-01-alpha.md: already folded" in result.stdout
+    after = (master_ops / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert before == after
+    assert list(changelog_d.glob("*.md")) == []
+
+
+def test_rerun_does_not_drop_new_fragment_overlapping_existing_text(tmp_path: Path):
+    # A new, distinct fragment whose body is a substring of unrelated existing
+    # Unreleased text must still fold: containment alone is not "already
+    # folded", only a whole matching paragraph block is.
+    changelog_body = (
+        "# fixture changelog\n\n## Unreleased\n\n"
+        "This entry mentions did alpha in passing.\n\n"
+        "Old entry that was already there.\n\n## v0.1.0\n\nFirst release.\n"
+    )
+    master_ops = tmp_path / "master-ops"
+    changelog_d = master_ops / "changelog.d"
+    changelog_d.mkdir(parents=True)
+    (master_ops / "CHANGELOG.md").write_text(changelog_body, encoding="utf-8")
+    (changelog_d / "2026-01-01-alpha.md").write_text("did alpha\n", encoding="utf-8")
+
+    result = _run(tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert "already folded" not in result.stdout
+    assert "1 fragments" in result.stdout
+
+    after = (master_ops / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert "did alpha" in after
+    assert "This entry mentions did alpha in passing." in after
+    assert list(changelog_d.glob("*.md")) == []
+
+
+def test_rerun_mixed_new_and_already_folded_fragments(tmp_path: Path):
+    already_body = "Alpha (2026-01-01):\n\n- did alpha\n"
+    new_body = "Beta (2026-01-02):\n\n- did beta\n"
+    changelog_body = (
+        "# fixture changelog\n\n## Unreleased\n\n"
+        f"{already_body}\nOld entry that was already there.\n\n## v0.1.0\n\nFirst release.\n"
+    )
+    master_ops = tmp_path / "master-ops"
+    changelog_d = master_ops / "changelog.d"
+    changelog_d.mkdir(parents=True)
+    (master_ops / "CHANGELOG.md").write_text(changelog_body, encoding="utf-8")
+    (changelog_d / "2026-01-01-alpha.md").write_text(already_body, encoding="utf-8")
+    (changelog_d / "2026-01-02-beta.md").write_text(new_body, encoding="utf-8")
+
+    result = _run(tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert "2026-01-01-alpha.md: already folded" in result.stdout
+    assert "1 fragments" in result.stdout
+
+    after = (master_ops / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert after.count("Alpha (2026-01-01)") == 1
+    assert "Beta (2026-01-02)" in after
+    assert list(changelog_d.glob("*.md")) == []
+
+
+def test_fragment_name_grammar_matches_template_common():
+    """FRAGMENT_RE here and in changelog-fragment-check must stay identical
+    to master-ops/scripts/template_common.py's canonical FRAGMENT_NAME_RE:
+    a fragment name the release script folds must be one the gate accepts
+    and template-check previews."""
+    release = _load_script_module("_changelog_release_grammar_check", SCRIPT)
+    fragment_check = _load_script_module(
+        "_changelog_fragment_check_grammar_check",
+        REPO_ROOT / "scripts" / "changelog-fragment-check",
+    )
+    template_common = _load_script_module(
+        "_template_common_grammar_check",
+        REPO_ROOT / "master-ops" / "scripts" / "template_common.py",
+    )
+
+    assert release.FRAGMENT_RE.pattern == template_common.FRAGMENT_NAME_RE.pattern
+    assert fragment_check.FRAGMENT_RE.pattern == template_common.FRAGMENT_NAME_RE.pattern
+
+
+ROOT_CHANGELOG_BODY = (
+    "# Changelog\n\n"
+    "## [Unreleased]\n\n"
+    "### Added\n\n"
+    "- Did a thing.\n\n"
+    "## [0.4.1] - 2026-08-03\n\n"
+    "### Fixed\n\n"
+    "- Fixed a thing.\n\n"
+    "[Unreleased]: https://github.com/example/repo/compare/v0.4.1...HEAD\n"
+    "[0.4.1]: https://github.com/example/repo/compare/v0.4.0...v0.4.1\n"
+)
+
+
+def _seed_root(root: Path, body: str = ROOT_CHANGELOG_BODY) -> Path:
+    changelog = root / "CHANGELOG.md"
+    changelog.write_text(body, encoding="utf-8")
+    return changelog
+
+
+def test_roll_root_happy_path(tmp_path: Path):
+    _seed(tmp_path, {})
+    changelog = _seed_root(tmp_path)
+
+    result = _run(
+        tmp_path,
+        "--roll-root",
+        str(changelog),
+        "--version",
+        "0.5.0",
+        "--date",
+        "2026-10-25",
+    )
+    assert result.returncode == 0, result.stderr
+
+    after = changelog.read_text(encoding="utf-8")
+    assert "## [Unreleased]\n\n## [0.5.0] - 2026-10-25\n\n### Added" in after
+    assert after.count("## [Unreleased]") == 1
+    assert (
+        "[Unreleased]: https://github.com/example/repo/compare/v0.5.0...HEAD\n"
+        "[0.5.0]: https://github.com/example/repo/compare/v0.4.1...v0.5.0\n"
+    ) in after
+    assert "[0.4.1]: https://github.com/example/repo/compare/v0.4.0...v0.4.1" in after
+
+
+def test_roll_root_empty_section_refused(tmp_path: Path):
+    _seed(tmp_path, {})
+    body = ROOT_CHANGELOG_BODY.replace("### Added\n\n- Did a thing.\n\n", "")
+    changelog = _seed_root(tmp_path, body)
+    before = changelog.read_text(encoding="utf-8")
+
+    result = _run(tmp_path, "--roll-root", str(changelog), "--version", "0.5.0")
+    assert result.returncode == 2
+    assert changelog.read_text(encoding="utf-8") == before
+
+
+def test_roll_root_duplicate_heading_refused(tmp_path: Path):
+    _seed(tmp_path, {})
+    changelog = _seed_root(tmp_path)
+    before = changelog.read_text(encoding="utf-8")
+
+    result = _run(tmp_path, "--roll-root", str(changelog), "--version", "0.4.1")
+    assert result.returncode == 2
+    assert changelog.read_text(encoding="utf-8") == before
+
+
+def test_roll_root_missing_link_refused(tmp_path: Path):
+    _seed(tmp_path, {})
+    body = ROOT_CHANGELOG_BODY.replace(
+        "[Unreleased]: https://github.com/example/repo/compare/v0.4.1...HEAD\n", ""
+    )
+    changelog = _seed_root(tmp_path, body)
+    before = changelog.read_text(encoding="utf-8")
+
+    result = _run(tmp_path, "--roll-root", str(changelog), "--version", "0.5.0")
+    assert result.returncode == 2
+    assert changelog.read_text(encoding="utf-8") == before
+
+
+def test_roll_root_dry_run_leaves_file_unchanged(tmp_path: Path):
+    _seed(tmp_path, {})
+    changelog = _seed_root(tmp_path)
+    before = changelog.read_text(encoding="utf-8")
+
+    result = _run(
+        tmp_path,
+        "--dry-run",
+        "--roll-root",
+        str(changelog),
+        "--version",
+        "0.5.0",
+        "--date",
+        "2026-10-25",
+    )
+    assert result.returncode == 0, result.stderr
+    assert "## [0.5.0] - 2026-10-25" in result.stdout
+    assert "## [0.4.1]" not in result.stdout
+    assert changelog.read_text(encoding="utf-8") == before
+
+
+def test_fold_only_path_unchanged_when_roll_root_absent(tmp_path: Path):
+    _seed(tmp_path, {"2026-01-01-alpha.md": "Alpha (2026-01-01):\n\n- did alpha\n"})
+    _seed_root(tmp_path)
+
+    result = _run(tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "1 fragments"
+
+    after_root = (tmp_path / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert after_root == ROOT_CHANGELOG_BODY
+
+    after = (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert "Alpha (2026-01-01)" in after
+
+
+def test_roll_root_bad_version_refused_before_any_write(tmp_path: Path):
+    _seed(tmp_path, {"2026-01-01-alpha.md": "Alpha (2026-01-01):\n\n- did alpha\n"})
+    changelog = _seed_root(tmp_path)
+    before_root = changelog.read_text(encoding="utf-8")
+    before_changelog = (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8")
+
+    result = _run(tmp_path, "--roll-root", str(changelog), "--version", "0.5")
+    assert result.returncode == 2
+    assert "--version" in result.stderr
+    assert changelog.read_text(encoding="utf-8") == before_root
+    assert (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8") == before_changelog
+    assert (tmp_path / "master-ops" / "changelog.d" / "2026-01-01-alpha.md").exists()
+
+
+def test_roll_root_bad_date_refused_before_any_write(tmp_path: Path):
+    _seed(tmp_path, {"2026-01-01-alpha.md": "Alpha (2026-01-01):\n\n- did alpha\n"})
+    changelog = _seed_root(tmp_path)
+    before_root = changelog.read_text(encoding="utf-8")
+    before_changelog = (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8")
+
+    result = _run(
+        tmp_path, "--roll-root", str(changelog), "--version", "0.5.0", "--date", "2026-13-40"
+    )
+    assert result.returncode == 2
+    assert "--date" in result.stderr
+    assert changelog.read_text(encoding="utf-8") == before_root
+    assert (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8") == before_changelog
+    assert (tmp_path / "master-ops" / "changelog.d" / "2026-01-01-alpha.md").exists()
+
+
+def test_version_without_roll_root_refused_before_any_write(tmp_path: Path):
+    _seed(tmp_path, {"2026-01-01-alpha.md": "Alpha (2026-01-01):\n\n- did alpha\n"})
+    before_changelog = (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8")
+
+    result = _run(tmp_path, "--version", "0.5.0")
+    assert result.returncode == 2
+    assert (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8") == before_changelog
+    assert (tmp_path / "master-ops" / "changelog.d" / "2026-01-01-alpha.md").exists()
+
+
+def test_date_without_roll_root_refused_before_any_write(tmp_path: Path):
+    _seed(tmp_path, {"2026-01-01-alpha.md": "Alpha (2026-01-01):\n\n- did alpha\n"})
+    before_changelog = (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8")
+
+    result = _run(tmp_path, "--date", "2026-10-25")
+    assert result.returncode == 2
+    assert (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8") == before_changelog
+    assert (tmp_path / "master-ops" / "changelog.d" / "2026-01-01-alpha.md").exists()
+
+
+def test_roll_root_write_failure_leaves_fold_done_and_fragments_gone(tmp_path: Path, capsys):
+    _seed(tmp_path, {"2026-01-01-alpha.md": "Alpha (2026-01-01):\n\n- did alpha\n"})
+    root_path = _seed_root(tmp_path)
+    module = _load_script_module("_changelog_release_write_failure_check")
+
+    # The preflight read and validation run against the real file; only
+    # afterwards does the path become a directory, so the final write is
+    # the first call that can fail on it. A directory refuses a write
+    # regardless of permission bits, unlike a read-only file, which root
+    # ignores.
+    original_build = module._build_rolled_root
+
+    def _build_then_replace_with_directory(path, version, date_str):
+        result = original_build(path, version, date_str)
+        path.unlink()
+        path.mkdir()
+        return result
+
+    module._build_rolled_root = _build_then_replace_with_directory
+
+    exit_code = module.main(
+        ["--root", str(tmp_path), "--roll-root", str(root_path), "--version", "0.5.0"]
+    )
+    stderr = capsys.readouterr().err
+
+    assert exit_code == 2
+    assert str(root_path) in stderr
+    assert "already folded" in stderr
+    assert "changelog.d/ fragments are already deleted" in stderr
+
+    after_changelog = (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert "Alpha (2026-01-01)" in after_changelog
+    assert list((tmp_path / "master-ops" / "changelog.d").glob("*.md")) == []
+
+
+def test_roll_root_compact_date_refused_before_any_write(tmp_path: Path):
+    _seed(tmp_path, {"2026-01-01-alpha.md": "Alpha (2026-01-01):\n\n- did alpha\n"})
+    changelog = _seed_root(tmp_path)
+    before_root = changelog.read_text(encoding="utf-8")
+    before_changelog = (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8")
+
+    result = _run(
+        tmp_path, "--roll-root", str(changelog), "--version", "0.5.0", "--date", "20261025"
+    )
+    assert result.returncode == 2
+    assert "--date" in result.stderr
+    assert changelog.read_text(encoding="utf-8") == before_root
+    assert (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8") == before_changelog
+    assert (tmp_path / "master-ops" / "changelog.d" / "2026-01-01-alpha.md").exists()
+
+
+def test_roll_root_week_date_refused_before_any_write(tmp_path: Path):
+    _seed(tmp_path, {"2026-01-01-alpha.md": "Alpha (2026-01-01):\n\n- did alpha\n"})
+    changelog = _seed_root(tmp_path)
+    before_root = changelog.read_text(encoding="utf-8")
+    before_changelog = (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8")
+
+    result = _run(
+        tmp_path, "--roll-root", str(changelog), "--version", "0.5.0", "--date", "2026-W43-1"
+    )
+    assert result.returncode == 2
+    assert "--date" in result.stderr
+    assert changelog.read_text(encoding="utf-8") == before_root
+    assert (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8") == before_changelog
+    assert (tmp_path / "master-ops" / "changelog.d" / "2026-01-01-alpha.md").exists()
+
+
+def test_dry_run_leaves_tree_unchanged(tmp_path: Path):
+    _seed(tmp_path, {"2026-01-01-alpha.md": "Alpha (2026-01-01):\n\n- did alpha\n"})
+    before_changelog = (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8")
+    changelog_d = tmp_path / "master-ops" / "changelog.d"
+    before_fragments = sorted(p.name for p in changelog_d.glob("*.md"))
+
+    result = _run(tmp_path, "--dry-run")
+    assert result.returncode == 0, result.stderr
+    assert "## Unreleased" in result.stdout
+    assert "Alpha (2026-01-01)" in result.stdout
+    assert "Old entry that was already there." in result.stdout
+    # The dry-run block stops before the next release heading.
+    assert "First release." not in result.stdout
+
+    after_changelog = (tmp_path / "master-ops" / "CHANGELOG.md").read_text(encoding="utf-8")
+    after_fragments = sorted(p.name for p in changelog_d.glob("*.md"))
+    assert before_changelog == after_changelog
+    assert before_fragments == after_fragments

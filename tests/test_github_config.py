@@ -93,6 +93,24 @@ def test_os_labeler_gates_on_the_bug_label():
     assert "contains(github.event.issue.labels.*.name, 'bug')" in text
 
 
+def test_assignee_follows_the_turn_step_covers_three_events():
+    text = (GITHUB_DIR / "workflows" / "labeler.yml").read_text(encoding="utf-8")
+
+    types_match = re.search(r"pull_request_target:\n\s*types:\s*\[(.*?)\]", text)
+    assert types_match, "no pull_request_target types line in labeler.yml"
+    types = {t.strip() for t in types_match.group(1).split(",")}
+    assert {"labeled", "unlabeled"} <= types
+
+    step_match = re.search(
+        r"- name: assignee follows the turn\n(.*?)(?=\n      - name:|\Z)", text, re.DOTALL
+    )
+    assert step_match, "no step named 'assignee follows the turn' in labeler.yml"
+    step_text = step_match.group(1)
+
+    for branch in ('"labeled"', '"unlabeled"', '"opened"'):
+        assert branch in step_text, f"{branch} branch missing from assignee step"
+
+
 @skip_windows_exec_surface
 def test_labels_create_help_exits_zero_without_gh():
     with tempfile.TemporaryDirectory() as empty_dir:

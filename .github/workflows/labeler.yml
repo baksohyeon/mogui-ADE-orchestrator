@@ -2,7 +2,7 @@ name: labeler
 
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
 
 concurrency:
   group: labeler-${{ github.event.pull_request.number }}
@@ -64,4 +64,65 @@ jobs:
                 issue_number: context.payload.pull_request.number,
                 labels: [size],
               });
+            }
+
+      - name: assignee follows the turn
+        env:
+          MAINTAINER_LOGIN: baksohyeon
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const maintainerLogin = process.env.MAINTAINER_LOGIN;
+            const pr = context.payload.pull_request;
+            const assignees = pr.assignees.map((assignee) => assignee.login);
+
+            async function addAssignee(login) {
+              if (assignees.includes(login)) {
+                return;
+              }
+              try {
+                await github.rest.issues.addAssignees({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pr.number,
+                  assignees: [login],
+                });
+              } catch (error) {
+                if (error.status !== 404) {
+                  throw error;
+                }
+              }
+            }
+
+            async function removeAssignee(login) {
+              if (!assignees.includes(login)) {
+                return;
+              }
+              try {
+                await github.rest.issues.removeAssignees({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pr.number,
+                  assignees: [login],
+                });
+              } catch (error) {
+                if (error.status !== 404) {
+                  throw error;
+                }
+              }
+            }
+
+            if (context.payload.action === "labeled" && context.payload.label.name === "waiting-user-response") {
+              const author = pr.user.login;
+              if (author.endsWith("[bot]")) {
+                await addAssignee(maintainerLogin);
+              } else {
+                await removeAssignee(maintainerLogin);
+                await addAssignee(author);
+              }
+            } else if (context.payload.action === "unlabeled" && context.payload.label.name === "waiting-user-response") {
+              await removeAssignee(pr.user.login);
+              await addAssignee(maintainerLogin);
+            } else if (context.payload.action === "opened" && assignees.length === 0) {
+              await addAssignee(maintainerLogin);
             }

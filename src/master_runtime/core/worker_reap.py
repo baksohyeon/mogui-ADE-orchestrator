@@ -32,6 +32,10 @@ AGENT_CLI_COMMANDS = frozenset(
 MAX_WORKER_LIST_PAGES = 20
 WORKER_LIST_PAGE_LIMIT = 100
 
+# Dropped from every subprocess env: an inherited value here would point git
+# at the caller's repository instead of the one named by -C.
+GIT_REPOSITORY_ENV_VARS = frozenset({"GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR"})
+
 
 @dataclass(frozen=True)
 class ReapRecord:
@@ -679,12 +683,22 @@ class WorkerReaper:
         self, command: list[str]
     ) -> tuple[int, str, str]:
         """Run a subprocess and return (code, stdout, stderr)."""
+        # Strip inherited git-repository env vars so every git call the reaper
+        # makes (safety checks and removal alike) resolves against the -C
+        # repository it was told to inspect, not whatever repo the caller's
+        # process happens to be sitting in.
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if key not in GIT_REPOSITORY_ENV_VARS
+        }
         try:
             result = subprocess.run(
                 command,
                 capture_output=True,
                 text=True,
                 timeout=30,
+                env=env,
             )
             return result.returncode, result.stdout, result.stderr
         except subprocess.TimeoutExpired:

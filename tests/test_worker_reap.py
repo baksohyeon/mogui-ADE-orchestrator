@@ -999,6 +999,42 @@ class WorkerReaperTests(unittest.TestCase):
             self.assertFalse(worktree.exists())
             self.assertNotIn(str(worktree.resolve()), _git(repo, "worktree", "list"))
 
+    def test_remove_worktree_ignores_inherited_git_repository_env_vars(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            other_repo = Path(tmp) / "other-repo"
+            worktree = Path(tmp) / "wt"
+            repo.mkdir()
+            other_repo.mkdir()
+            _git(repo, "init", "--initial-branch", "main")
+            _git(repo, "config", "user.email", "test@example.invalid")
+            _git(repo, "config", "user.name", "Test User")
+            _git(repo, "commit", "--allow-empty", "-m", "base")
+            _git(repo, "worktree", "add", "-b", "feature-x", str(worktree))
+            _git(other_repo, "init", "--initial-branch", "main")
+
+            # A caller whose own process has these set (another repo's -C,
+            # or a shell left over from one) must not steer the reaper onto
+            # that repo instead of the worktree it was told to remove.
+            inherited_env = {
+                "GIT_DIR": str(other_repo / ".git"),
+                "GIT_WORK_TREE": str(other_repo),
+                "GIT_COMMON_DIR": str(other_repo / ".git"),
+            }
+            previous_values = {key: os.environ.get(key) for key in inherited_env}
+            os.environ.update(inherited_env)
+            try:
+                WorkerReaper()._remove_worktree(worktree)
+            finally:
+                for key, previous in previous_values.items():
+                    if previous is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = previous
+
+            self.assertFalse(worktree.exists())
+            self.assertNotIn(str(worktree.resolve()), _git(repo, "worktree", "list"))
+
     def test_reap_leaves_clean_unmerged_worktree_with_unique_changes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = tmp

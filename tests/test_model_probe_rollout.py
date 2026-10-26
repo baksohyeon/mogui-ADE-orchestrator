@@ -10,7 +10,9 @@ contract needs bare-id stdout for the tier policy match to succeed.
 
 from __future__ import annotations
 
+import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -62,14 +64,14 @@ def test_returns_the_first_model_field_in_the_file(tmp_path: Path) -> None:
 def test_missing_file_fails_loudly() -> None:
     result = run_probe("/nonexistent/rollout.jsonl")
 
-    assert result.returncode != 0
+    assert result.returncode == 1
     assert "no rollout file" in result.stderr
 
 
 def test_missing_argument_fails_loudly() -> None:
     result = run_probe()
 
-    assert result.returncode != 0
+    assert result.returncode == 1
     assert "no rollout file" in result.stderr
 
 
@@ -124,7 +126,19 @@ def test_unreadable_file_fails_loudly_matching_the_documented_exit_code(tmp_path
     """docs/public/reference.md documents exit 1 for a missing OR unreadable
     path; an existing-but-unreadable file must take the same exit-1 path as
     a missing one instead of silently succeeding (coderabbit Minor,
-    2026-08-31: the prior pipeline's `head -1` masked a sed read failure)."""
+    2026-08-31: the prior pipeline's `head -1` masked a sed read failure).
+
+    Skipped for root and on Windows (coderabbit Major / cubic P2,
+    2026-10-26): chmod(0o000) denies nothing to root, which reads past file
+    mode bits regardless, and win32 mode bits don't gate reads either, so
+    this case measures nothing in either environment.
+    """
+
+    if sys.platform == "win32" or os.geteuid() == 0:
+        pytest.skip(
+            "chmod(0o000) does not deny reads for root or on Windows, "
+            "so this case cannot measure anything there"
+        )
 
     rollout = tmp_path / "rollout.jsonl"
     rollout.write_text('{"model":"gpt-5.6-luna"}\n', encoding="utf-8")
@@ -134,5 +148,5 @@ def test_unreadable_file_fails_loudly_matching_the_documented_exit_code(tmp_path
     finally:
         rollout.chmod(0o644)
 
-    assert result.returncode != 0
+    assert result.returncode == 1
     assert "no rollout file" in result.stderr

@@ -384,14 +384,17 @@ def strip_cd_redirections(parts):
     # dropped file descriptor, so a digit that was spaced away from its
     # operator in the source text keeps its own token and still counts as a
     # cd operand. Output operators keep their target for the write check
-    # that follows; input operators are dropped with their target
-    # discarded, since a read cannot write into a product root. Either kind
-    # is reported back via had_redirection: Bash resolves a cd segment own
+    # that follows; input operators keep their target too, now, instead of
+    # discarding it: bash still expands an input target before opening the
+    # file, so the expansion refusal that follows has to see it even though
+    # a read cannot write into a product root on its own. Either kind is
+    # reported back via had_redirection: Bash resolves a cd segment own
     # redirection before running the builtin, and aborts the cd without
     # moving if that redirection target cannot be opened, so a segment
     # carrying one is never a safe basis for advancing the simulated cwd.
     operands=[parts[0]]
-    redirect_targets=[]
+    output_targets=[]
+    input_targets=[]
     had_redirection=False
     index=1
     while index < len(parts):
@@ -404,7 +407,7 @@ def strip_cd_redirections(parts):
             continue
         if token in CD_OUTPUT_REDIRECTION_OPERATORS:
             if index + 1 < len(parts):
-                redirect_targets.append(parts[index + 1])
+                output_targets.append(parts[index + 1])
                 had_redirection=True
                 index += 2
             else:
@@ -413,6 +416,7 @@ def strip_cd_redirections(parts):
             continue
         if token in CD_INPUT_REDIRECTION_OPERATORS:
             if index + 1 < len(parts):
+                input_targets.append(parts[index + 1])
                 had_redirection=True
                 index += 2
             else:
@@ -421,7 +425,7 @@ def strip_cd_redirections(parts):
             continue
         operands.append(token)
         index += 1
-    return operands, redirect_targets, had_redirection
+    return operands, output_targets, input_targets, had_redirection
 def collect_non_option_operands(parts, start, options_with_values):
     values=set(options_with_values)
     index=start
@@ -524,14 +528,18 @@ for parts in segments:
     if not parts: continue
     name=os.path.basename(parts[0])
     if name == "cd":
-        operands, redirect_targets, had_redirection = strip_cd_redirections(parts)
+        operands, output_targets, input_targets, had_redirection = strip_cd_redirections(parts)
         if len(operands) != 2:
             print("DENY\tcd\tcd target cannot be resolved")
             raise SystemExit
-        if any(CD_REDIRECTION_TARGET_EXPANSION_RE.search(target) for target in redirect_targets):
+        # resolve() reads a cd operand literally, but bash expands it first, so an operand carrying an expansion character is refused, with or without a redirection.
+        if CD_REDIRECTION_TARGET_EXPANSION_RE.search(operands[1]):
+            print("DENY\tcd\tcd target cannot be resolved")
+            raise SystemExit
+        if any(CD_REDIRECTION_TARGET_EXPANSION_RE.search(target) for target in output_targets + input_targets):
             print("DENY\tcd\tredirection target cannot be resolved")
             raise SystemExit
-        if any(under(resolve(current_cwd, target)) for target in redirect_targets):
+        if any(under(resolve(current_cwd, target)) for target in output_targets):
             print("DENY\tcd\tshell redirection is a write")
             raise SystemExit
         target_cwd=resolve(current_cwd, operands[1])

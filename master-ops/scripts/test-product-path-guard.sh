@@ -521,6 +521,13 @@ expect_verdict block cd-redirection-target-unexpanded-dollar
 expect_allowed cd-redirection-target-expanded-literal run_bash "cd $ops > $ops/out.txt"
 expect_verdict pass cd-redirection-target-expanded-literal
 
+# A cd segment's input redirection target reaches the guard as literal text
+# too, and bash expands it the same way before opening the file, so the
+# expansion refusal applies to an input target exactly as it does to an
+# output target.
+expect_blocked cd-input-redirection-target-expansion-denied run_bash 'cd /tmp < "$(touch '"$product"'/pwned; printf /dev/null)"' "$ops"
+expect_verdict block cd-input-redirection-target-expansion-denied
+
 # An unquoted # comment must still end its line at the newline instead of
 # consuming it, or the next physical line's command silently becomes extra
 # arguments to the commented line's own command.
@@ -531,10 +538,20 @@ expect_blocked comment-swallowed-newline-hides-write run_bash "ls # note
 cp a $product/x.txt"
 expect_verdict block comment-swallowed-newline-hides-write
 
-# A cd segment's input redirection is a read, not a write, so it is dropped
-# from the operand count without a product-root check on its target.
+# A cd segment's input redirection is a read, not a write, so its target
+# skips the product-root write check even though it still goes through the
+# operand count and the expansion refusal above.
 expect_allowed cd-input-redirection-allowed run_bash "cd $ops < /dev/null && ls"
 expect_verdict pass cd-input-redirection-allowed
+
+# The cd operand itself reaches the guard as literal text, same as a
+# redirection target; resolve() cannot know where an unexpanded operand
+# sends bash, so it is refused the same way, with or without a redirection
+# on the same segment.
+expect_blocked cd-operand-expansion-with-redirection-denied run_bash 'cd "$PWD/product" >/dev/null; touch pwned.txt' "$TMP/workspace"
+expect_verdict block cd-operand-expansion-with-redirection-denied
+expect_blocked cd-operand-expansion-plain-denied run_bash 'cd $X/y && ls'
+expect_verdict block cd-operand-expansion-plain-denied
 
 # Round four: a cd segment carrying any redirection, output or input, keeps
 # the simulated cwd where it was. Bash resolves that redirection before
@@ -589,14 +606,18 @@ import pathlib, sys
 source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
 needle = (
     "    if name == \"cd\":\n"
-    "        operands, redirect_targets, had_redirection = strip_cd_redirections(parts)\n"
+    "        operands, output_targets, input_targets, had_redirection = strip_cd_redirections(parts)\n"
     "        if len(operands) != 2:\n"
     "            print(\"DENY\\tcd\\tcd target cannot be resolved\")\n"
     "            raise SystemExit\n"
-    "        if any(CD_REDIRECTION_TARGET_EXPANSION_RE.search(target) for target in redirect_targets):\n"
+    "        # resolve() reads a cd operand literally, but bash expands it first, so an operand carrying an expansion character is refused, with or without a redirection.\n"
+    "        if CD_REDIRECTION_TARGET_EXPANSION_RE.search(operands[1]):\n"
+    "            print(\"DENY\\tcd\\tcd target cannot be resolved\")\n"
+    "            raise SystemExit\n"
+    "        if any(CD_REDIRECTION_TARGET_EXPANSION_RE.search(target) for target in output_targets + input_targets):\n"
     "            print(\"DENY\\tcd\\tredirection target cannot be resolved\")\n"
     "            raise SystemExit\n"
-    "        if any(under(resolve(current_cwd, target)) for target in redirect_targets):\n"
+    "        if any(under(resolve(current_cwd, target)) for target in output_targets):\n"
     "            print(\"DENY\\tcd\\tshell redirection is a write\")\n"
     "            raise SystemExit\n"
     "        target_cwd=resolve(current_cwd, operands[1])\n"

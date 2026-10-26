@@ -101,10 +101,21 @@ def test_assignee_follows_the_turn_step_covers_three_events():
     types = {t.strip() for t in types_match.group(1).split(",")}
     assert {"labeled", "unlabeled"} <= types
 
-    step_match = re.search(
-        r"- name: assignee follows the turn\n(.*?)(?=\n      - name:|\Z)", text, re.DOTALL
+    job_match = re.search(r"\n  assignee:\n(.*?)(?=\n  \S|\Z)", text, re.DOTALL)
+    assert job_match, "no 'assignee' job in labeler.yml"
+    job_text = job_match.group(1)
+
+    concurrency_match = re.search(
+        r"concurrency:\n\s*group:\s*(.+)\n\s*cancel-in-progress:\s*(\S+)", job_text
     )
-    assert step_match, "no step named 'assignee follows the turn' in labeler.yml"
+    assert concurrency_match, "no concurrency block in the assignee job"
+    assert concurrency_match.group(1) == "assignee-${{ github.event.pull_request.number }}"
+    assert concurrency_match.group(2) == "false"
+
+    step_match = re.search(
+        r"- name: assignee follows the turn\n(.*?)(?=\n      - name:|\Z)", job_text, re.DOTALL
+    )
+    assert step_match, "no step named 'assignee follows the turn' in the assignee job"
     step_text = step_match.group(1)
 
     for expr in (

@@ -17,7 +17,7 @@ def run_pretrust(
     env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     child_env = os.environ.copy() if env is None else env.copy()
-    if env is None or "CODEX_HOME" not in env:
+    if env is None or env.get("CODEX_HOME") in (None, os.environ.get("CODEX_HOME")):
         child_env["CODEX_HOME"] = str(accounts_dir.parent / "absent-codex-home")
     return subprocess.run(
         [str(SCRIPT), worktree_path, "--accounts-dir", str(accounts_dir)],

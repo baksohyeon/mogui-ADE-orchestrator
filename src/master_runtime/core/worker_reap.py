@@ -645,18 +645,32 @@ class WorkerReaper:
     def _ignored_media(self, worktree_path: Path) -> Optional[list[str]]:
         """Ignored paths under `worktree_path` whose suffix is in
         `IGNORED_MEDIA_SUFFIXES` (case-insensitive), from `git status
-        --porcelain --ignored`'s `!! ` lines. `None` on a git failure,
-        never read as "no ignored media"."""
+        --porcelain --ignored --untracked-files=all -z`'s `!! ` records.
+        `--untracked-files=all` makes git list individual files inside an
+        ignored directory (e.g. `renders/`) instead of just the directory;
+        `-z` delimits each record with NUL instead of a trailing newline and
+        never quotes the path, so a path with a space or a non-ASCII name
+        comes through intact. `None` on a git failure, never read as "no
+        ignored media"."""
         code, stdout, _stderr = self.orca_runner(
-            ["git", "-C", str(worktree_path), "status", "--porcelain", "--ignored"]
+            [
+                "git",
+                "-C",
+                str(worktree_path),
+                "status",
+                "--porcelain",
+                "--ignored",
+                "--untracked-files=all",
+                "-z",
+            ]
         )
         if code != 0:
             return None
         return [
-            line[3:]
-            for line in stdout.splitlines()
-            if line.startswith("!! ")
-            and Path(line[3:]).suffix.lower() in IGNORED_MEDIA_SUFFIXES
+            record[3:]
+            for record in stdout.split("\0")
+            if record.startswith("!! ")
+            and Path(record[3:]).suffix.lower() in IGNORED_MEDIA_SUFFIXES
         ]
 
     def _branch_changes_included_in_origin_main(

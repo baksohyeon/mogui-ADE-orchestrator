@@ -932,7 +932,7 @@ class WorkerReaperTests(unittest.TestCase):
 
             def runner_with_ignored_media(cmd: list[str]) -> tuple[int, str, str]:
                 if "git" in cmd and "status" in cmd and "--ignored" in cmd:
-                    return 0, "!! out/render.mp4\n", ""
+                    return 0, "!! out/render.mp4\0", ""
                 return original_runner(cmd)
 
             reaper = WorkerReaper(orca_runner=runner_with_ignored_media)
@@ -945,6 +945,58 @@ class WorkerReaperTests(unittest.TestCase):
             # remove a worktree whose .gitignore covers rendered media,
             # losing that media with the worktree.
 
+    def test_reap_leaves_clean_merged_worktree_holding_media_in_ignored_directory(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_runner, removed_paths = _clean_worktree_runner(
+                tmp,
+                current_branch="main",
+                merged_branches="* main\n",
+            )
+            original_runner = fake_runner
+
+            def runner_with_ignored_media(cmd: list[str]) -> tuple[int, str, str]:
+                if "git" in cmd and "status" in cmd and "--ignored" in cmd:
+                    return 0, "!! renders/clip.mp4\0", ""
+                return original_runner(cmd)
+
+            reaper = WorkerReaper(orca_runner=runner_with_ignored_media)
+            record = reaper.reap(task_id="t1", execute=True)
+
+            self.assertEqual(removed_paths, [])
+            self.assertIn(f"worktree_left:{tmp}:ignored_media:1", record.actions_taken)
+            self.assertEqual(record.measurements["worktree_ignored_media"], 1)
+            # Failability: `--untracked-files=all` is what makes git list a
+            # file inside an ignored directory instead of collapsing it to
+            # the directory; dropping that flag loses this case silently.
+
+    def test_reap_leaves_clean_merged_worktree_holding_ignored_media_with_space(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_runner, removed_paths = _clean_worktree_runner(
+                tmp,
+                current_branch="main",
+                merged_branches="* main\n",
+            )
+            original_runner = fake_runner
+
+            def runner_with_ignored_media(cmd: list[str]) -> tuple[int, str, str]:
+                if "git" in cmd and "status" in cmd and "--ignored" in cmd:
+                    return 0, "!! out/final cut.mp4\0", ""
+                return original_runner(cmd)
+
+            reaper = WorkerReaper(orca_runner=runner_with_ignored_media)
+            record = reaper.reap(task_id="t1", execute=True)
+
+            self.assertEqual(removed_paths, [])
+            self.assertIn(f"worktree_left:{tmp}:ignored_media:1", record.actions_taken)
+            self.assertEqual(record.measurements["worktree_ignored_media"], 1)
+            # Failability: parsing `-z` output with `splitlines()` instead of
+            # a NUL split would be harmless here (no embedded newline), but a
+            # whitespace-splitting parser would cut this path at the space.
+
     def test_reap_removes_worktree_with_ignored_media_when_flag_set(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             fake_runner, removed_paths = _clean_worktree_runner(
@@ -956,7 +1008,7 @@ class WorkerReaperTests(unittest.TestCase):
 
             def runner_with_ignored_media(cmd: list[str]) -> tuple[int, str, str]:
                 if "git" in cmd and "status" in cmd and "--ignored" in cmd:
-                    return 0, "!! out/render.mp4\n", ""
+                    return 0, "!! out/render.mp4\0", ""
                 return original_runner(cmd)
 
             reaper = WorkerReaper(orca_runner=runner_with_ignored_media)
@@ -977,7 +1029,7 @@ class WorkerReaperTests(unittest.TestCase):
 
             def runner_with_ignored_pyc(cmd: list[str]) -> tuple[int, str, str]:
                 if "git" in cmd and "status" in cmd and "--ignored" in cmd:
-                    return 0, "!! module.pyc\n", ""
+                    return 0, "!! module.pyc\0", ""
                 return original_runner(cmd)
 
             reaper = WorkerReaper(orca_runner=runner_with_ignored_pyc)
@@ -1023,7 +1075,7 @@ class WorkerReaperTests(unittest.TestCase):
 
             def runner_with_ignored_media(cmd: list[str]) -> tuple[int, str, str]:
                 if "git" in cmd and "status" in cmd and "--ignored" in cmd:
-                    return 0, "!! out/render.mp4\n", ""
+                    return 0, "!! out/render.mp4\0", ""
                 return original_runner(cmd)
 
             reaper = WorkerReaper(orca_runner=runner_with_ignored_media)

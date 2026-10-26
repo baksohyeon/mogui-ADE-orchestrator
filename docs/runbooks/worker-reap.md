@@ -147,7 +147,8 @@ Output (a dry run never prints `terminal_closed` or `worktree_removed`):
       "terminal_reused_by": "",
       "agent_process": "",
       "worktree_clean": true,
-      "worktree_merged": true
+      "worktree_merged": true,
+      "worktree_ignored_media": 0
     }
   },
   "dry_run": true

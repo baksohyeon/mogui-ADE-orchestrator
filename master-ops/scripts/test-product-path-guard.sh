@@ -456,6 +456,41 @@ expect_verdict block cd-newline-second-line-into-root
 expect_blocked cd-redirection-target-into-root run_bash "cd $ops > $product/out.txt"
 expect_verdict block cd-redirection-target-into-root
 
+# Round two: a spaced digit before a redirection operator is a second cd
+# operand, not a dropped file descriptor, so from a product-root cwd it must
+# still deny instead of letting the guard's simulated cwd leave the root
+# while the real shell (which rejects this cd for the same reason) stays in
+# it.
+expect_blocked cd-spaced-digit-operand-bypass run_bash "cd $ops 2 > /dev/null; touch out.txt" "$product"
+expect_verdict block cd-spaced-digit-operand-bypass
+expect_allowed cd-attached-fd-redirection-allowed run_bash "cd $ops 2>/dev/null && ls"
+expect_verdict pass cd-attached-fd-redirection-allowed
+expect_allowed cd-attached-fd-duplication-allowed run_bash "cd $ops 2>&1 >/dev/null && ls"
+expect_verdict pass cd-attached-fd-duplication-allowed
+
+# A cd redirection target containing an unexpanded shell expansion reaches
+# the guard as literal text; Bash expands it before opening the file, so the
+# guard must deny instead of resolving the literal text as the real target.
+expect_blocked cd-redirection-target-unexpanded-dollar run_bash "cd $ops > \$DEST/out.txt"
+expect_verdict block cd-redirection-target-unexpanded-dollar
+expect_allowed cd-redirection-target-expanded-literal run_bash "cd $ops > $ops/out.txt"
+expect_verdict pass cd-redirection-target-expanded-literal
+
+# An unquoted # comment must still end its line at the newline instead of
+# consuming it, or the next physical line's command silently becomes extra
+# arguments to the commented line's own command.
+expect_allowed cd-comment-then-newline-allowed run_bash "cd $ops # note
+ls"
+expect_verdict pass cd-comment-then-newline-allowed
+expect_blocked comment-swallowed-newline-hides-write run_bash "ls # note
+cp a $product/x.txt"
+expect_verdict block comment-swallowed-newline-hides-write
+
+# A cd segment's input redirection is a read, not a write, so it is dropped
+# from the operand count without a product-root check on its target.
+expect_allowed cd-input-redirection-allowed run_bash "cd $ops < /dev/null && ls"
+expect_verdict pass cd-input-redirection-allowed
+
 CD_MUTANT_HOOK="$TMP/product-path-guard-cd-mutant.sh"
 python3 - "$HOOK" "$CD_MUTANT_HOOK" <<'PY'
 import pathlib, sys
@@ -465,6 +500,9 @@ needle = (
     "        operands, redirect_targets = strip_cd_redirections(parts)\n"
     "        if len(operands) != 2:\n"
     "            print(\"DENY\\tcd\\tcd target cannot be resolved\")\n"
+    "            raise SystemExit\n"
+    "        if any(CD_REDIRECTION_TARGET_EXPANSION_RE.search(target) for target in redirect_targets):\n"
+    "            print(\"DENY\\tcd\\tredirection target cannot be resolved\")\n"
     "            raise SystemExit\n"
     "        if any(under(resolve(current_cwd, target)) for target in redirect_targets):\n"
     "            print(\"DENY\\tcd\\tshell redirection is a write\")\n"
@@ -500,6 +538,52 @@ cd_restored_exit=$?
 [ "$cd_restored_exit" -eq 0 ] || { echo "FAIL: cd failability restored exit expected 0 got $cd_restored_exit" >&2; exit 1; }
 echo "PASS: cd failability mutant exit code $cd_mutant_exit"
 echo "PASS: cd failability restored exit code $cd_restored_exit"
+
+# Round two: a mutant that reverts just the sentinel check back to a bare
+# digit regex reproduces the fd-adjacency bug on its own, independent of the
+# rest of the cd-redirection feature the mutant above already covers.
+DIGIT_MUTANT_HOOK="$TMP/product-path-guard-digit-mutant.sh"
+python3 - "$HOOK" "$DIGIT_MUTANT_HOOK" <<'PY'
+import pathlib, sys
+source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+needle = (
+    "        if FD_SENTINEL_RE.match(token) and index + 1 < len(parts) and (\n"
+    "            parts[index + 1] in CD_OUTPUT_REDIRECTION_OPERATORS\n"
+    "            or parts[index + 1] in CD_INPUT_REDIRECTION_OPERATORS\n"
+    "        ):\n"
+    "            index += 1\n"
+    "            continue\n"
+)
+replacement = (
+    "        if re.match(r\"^[0-9]+$\", token) and index + 1 < len(parts) and (\n"
+    "            parts[index + 1] in CD_OUTPUT_REDIRECTION_OPERATORS\n"
+    "            or parts[index + 1] in CD_INPUT_REDIRECTION_OPERATORS\n"
+    "        ):\n"
+    "            index += 1\n"
+    "            continue\n"
+)
+if needle not in source:
+    raise SystemExit("digit mutant patch anchor not found")
+pathlib.Path(sys.argv[2]).write_text(source.replace(needle, replacement, 1), encoding="utf-8")
+PY
+if [ ! -f "$DIGIT_MUTANT_HOOK" ] || cmp -s "$HOOK" "$DIGIT_MUTANT_HOOK"; then
+  echo "FAIL: digit mutant not generated" >&2
+  exit 1
+fi
+chmod +x "$DIGIT_MUTANT_HOOK"
+
+(
+  expect_blocked cd-fd-adjacency-failability-mutant run_bash_hook "$DIGIT_MUTANT_HOOK" "cd $ops 2 > /dev/null && touch out.txt" "$product"
+)
+digit_mutant_exit=$?
+(
+  expect_blocked cd-fd-adjacency-failability-restored run_bash_hook "$HOOK" "cd $ops 2 > /dev/null && touch out.txt" "$product"
+)
+digit_restored_exit=$?
+[ "$digit_mutant_exit" -eq 1 ] || { echo "FAIL: cd fd-adjacency mutant exit expected 1 got $digit_mutant_exit" >&2; exit 1; }
+[ "$digit_restored_exit" -eq 0 ] || { echo "FAIL: cd fd-adjacency restored exit expected 0 got $digit_restored_exit" >&2; exit 1; }
+echo "PASS: cd fd-adjacency failability mutant exit code $digit_mutant_exit"
+echo "PASS: cd fd-adjacency failability restored exit code $digit_restored_exit"
 
 if [ ! -s "$TMP/logs/fire.jsonl" ]; then
   echo "FAIL: MOGUI_HOOK_FIRE_LOG was ignored" >&2

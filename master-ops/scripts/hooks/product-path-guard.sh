@@ -187,16 +187,24 @@ PLAIN_PATH_TARGET_EXEMPT = {"cp", "install", "ln"} | (INTERPRETER_NAMES if LEGAC
 SQ=chr(39)
 HEREDOC_OPERATOR_RE = re.compile(r"<<(?!<)(-)?\s*(?:" + SQ + r"([^" + SQ + r"]*)" + SQ + r"|\"([^\"]*)\"|\\(\S+)|([^\s<>|&;()]+))")
 def unquoted_mask(line):
+    # A comment span resets at each newline (quotes do not: bash lets a quoted
+    # string continue across physical lines), and a newline counts as a
+    # boundary before # the same way a space or tab does, so a later physical
+    # line that opens with # is still recognized on multi-line text.
     mask=[]
+    comment_mask=[]
     in_single=False
     in_double=False
     in_comment=False
     escaped=False
     prev_char=""
     for ch in line:
-        if not in_single and not in_double and not in_comment and ch == "#" and prev_char in ("", " ", "\t"):
+        if ch == "\n":
+            in_comment=False
+        if not in_single and not in_double and not in_comment and ch == "#" and prev_char in ("", " ", "\t", "\n"):
             in_comment=True
         mask.append(not in_single and not in_double and not in_comment)
+        comment_mask.append(in_comment)
         prev_char=ch
         if in_comment:
             continue
@@ -209,9 +217,16 @@ def unquoted_mask(line):
             in_single = not in_single
         elif ch == chr(34) and not in_single:
             in_double = not in_double
-    return mask
+    return mask, comment_mask
+def strip_unquoted_comments(text):
+    # The default shlex comment handling (commenters="#") discards the
+    # newline along with the rest of the commented line, which would merge
+    # the next physical line into the same segment; dropping only the
+    # comment text here keeps the newline as its own token for the lexer.
+    _, comment_mask=unquoted_mask(text)
+    return "".join(ch for ch, in_comment in zip(text, comment_mask) if not in_comment)
 def find_heredoc_operators(line):
-    mask=unquoted_mask(line)
+    mask, _=unquoted_mask(line)
     operators=[]
     for match in HEREDOC_OPERATOR_RE.finditer(line):
         start=match.start()
@@ -324,19 +339,55 @@ def redirects_into_root(value, base):
             continue
         i += 1
     return False
-CD_REDIRECTION_OPERATORS={">",">>","2>","2>>","&>",">&",">|"}
+FD_SENTINEL_RE=re.compile(r"^MOGUICDFDSENTINEL(\d+)ENDSENTINEL$")
+def mark_attached_cd_fds(text):
+    # shlex always splits a digit from an adjacent punctuation character, so
+    # "2>" and "2 >" produce the identical two-token pair (a digit token,
+    # then an operator token); marking a source-adjacent digit run with a
+    # sentinel before lexing is the only way to tell the two apart
+    # afterward, since a spaced digit keeps its own plain token and still
+    # counts as a cd operand.
+    mask, _=unquoted_mask(text)
+    out=[]
+    i=0
+    n=len(text)
+    while i < n:
+        if mask[i] and text[i].isdigit():
+            j=i
+            while j < n and mask[j] and text[j].isdigit():
+                j += 1
+            if j < n and mask[j] and text[j] in "><":
+                out.append("MOGUICDFDSENTINEL" + text[i:j] + "ENDSENTINEL")
+            else:
+                out.append(text[i:j])
+            i=j
+            continue
+        out.append(text[i])
+        i += 1
+    return "".join(out)
+CD_OUTPUT_REDIRECTION_OPERATORS={">",">>","2>","2>>","&>",">&",">|"}
+CD_INPUT_REDIRECTION_OPERATORS={"<","<&","<<<"}
+CD_REDIRECTION_TARGET_EXPANSION_RE=re.compile(r"[$`*?\[]|~(?!/)")
 def strip_cd_redirections(parts):
-    # A cd segment operand count must ignore its own redirection: the fd digit
-    # (if any) and the operator are punctuation-split from each other and from
-    # their target by the same tokenizer that splits segments, so each pair is
-    # dropped from the operand count while the target is kept for a root
-    # check by the caller.
+    # A cd segment operand count must ignore its own redirection. A sentinel
+    # from mark_attached_cd_fds, not a bare digit, is what identifies a
+    # dropped file descriptor, so a digit that was spaced away from its
+    # operator in the source text keeps its own token and still counts as a
+    # cd operand. Output operators keep their target for the write check
+    # that follows; input operators are dropped with their target
+    # discarded, since a read cannot write into a product root.
     operands=[parts[0]]
     redirect_targets=[]
     index=1
     while index < len(parts):
         token=parts[index]
-        if token in CD_REDIRECTION_OPERATORS:
+        if FD_SENTINEL_RE.match(token) and index + 1 < len(parts) and (
+            parts[index + 1] in CD_OUTPUT_REDIRECTION_OPERATORS
+            or parts[index + 1] in CD_INPUT_REDIRECTION_OPERATORS
+        ):
+            index += 1
+            continue
+        if token in CD_OUTPUT_REDIRECTION_OPERATORS:
             if index + 1 < len(parts):
                 redirect_targets.append(parts[index + 1])
                 index += 2
@@ -344,8 +395,12 @@ def strip_cd_redirections(parts):
                 operands.append(token)
                 index += 1
             continue
-        if re.match(r"^[0-9]+$", token) and index + 1 < len(parts) and parts[index + 1] in CD_REDIRECTION_OPERATORS:
-            index += 1
+        if token in CD_INPUT_REDIRECTION_OPERATORS:
+            if index + 1 < len(parts):
+                index += 2
+            else:
+                operands.append(token)
+                index += 1
             continue
         operands.append(token)
         index += 1
@@ -410,8 +465,18 @@ try:
     # A newline ends a segment the same way ; does: dropping it from the
     # lexer whitespace set (instead of adding it to punctuation_chars, which
     # shlex still swallows as whitespace) makes it surface as its own token.
-    lexer=shlex.shlex(heredoc_stripped_command, posix=True, punctuation_chars=";&|><")
+    # The default shlex comment handling would otherwise swallow a trailing
+    # comment newline together with the rest of the line, merging the next
+    # physical line into the same segment, so the comment text is stripped
+    # first and commenters is cleared so shlex cannot do that on its own. A
+    # cd segment own attached file-descriptor digit is marked with a
+    # sentinel before lexing for the same reason the newline is handled
+    # here: shlex throws the source adjacency away, so it has to be
+    # captured before lexing runs.
+    lexing_command=mark_attached_cd_fds(strip_unquoted_comments(heredoc_stripped_command))
+    lexer=shlex.shlex(lexing_command, posix=True, punctuation_chars=";&|><")
     lexer.whitespace=lexer.whitespace.replace("\n", "")
+    lexer.commenters=""
     tokens=list(lexer)
 except Exception:
     print("DENY\tunparseable\tunparseable command")
@@ -438,6 +503,9 @@ for parts in segments:
         operands, redirect_targets = strip_cd_redirections(parts)
         if len(operands) != 2:
             print("DENY\tcd\tcd target cannot be resolved")
+            raise SystemExit
+        if any(CD_REDIRECTION_TARGET_EXPANSION_RE.search(target) for target in redirect_targets):
+            print("DENY\tcd\tredirection target cannot be resolved")
             raise SystemExit
         if any(under(resolve(current_cwd, target)) for target in redirect_targets):
             print("DENY\tcd\tshell redirection is a write")

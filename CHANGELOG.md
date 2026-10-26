@@ -126,6 +126,10 @@ you build on it.
 
 ### Fixed
 
+- `scripts/codex-worker-pretrust` now includes an existing host
+  `${CODEX_HOME:-$HOME/.codex}/config.toml` alongside Orca account configs, so
+  hosts without account sandboxes still pre-trust a dispatched worktree. A
+  missing host config remains informational and is never created by the script.
 - `worker-reap` now accepts clean worktrees whose branch changes are already
   present in `origin/main` after a squash merge. The guard still leaves dirty,
   conflicting, or content-changing worktrees in place with a reason.

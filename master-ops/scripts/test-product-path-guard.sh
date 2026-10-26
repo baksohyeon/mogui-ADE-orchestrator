@@ -104,7 +104,8 @@ PY
 run_bash_default_config() {
   local command="$1"
   local working_directory="${2:-.}"
-  python3 - "$command" "$working_directory" <<'PY' 2>/dev/null | HOME="$TMP/home" MOGUI_INSTANCE_RUNTIME_CONFIG= MOGUI_INLINE_EDIT_OVERRIDE=0 MOGUI_PRODUCT_GUARD_FAIL_CLOSED=0 MOGUI_EVENT_LOG="$TMP/home/.mogui/event-log.jsonl" MOGUI_HOOK_FIRE_LOG="$TMP/logs/fire.jsonl" "$HOOK" >/dev/null 2>"$TMP/stderr"
+  local hook="${3:-$HOOK}"
+  python3 - "$command" "$working_directory" <<'PY' 2>/dev/null | HOME="$TMP/home" MOGUI_INSTANCE_RUNTIME_CONFIG= MOGUI_INLINE_EDIT_OVERRIDE=0 MOGUI_PRODUCT_GUARD_FAIL_CLOSED=0 MOGUI_EVENT_LOG="$TMP/home/.mogui/event-log.jsonl" MOGUI_HOOK_FIRE_LOG="$TMP/logs/fire.jsonl" "$hook" >/dev/null 2>"$TMP/stderr"
 import json, sys
 print(json.dumps({"tool_input": {"command": sys.argv[1], "working_directory": sys.argv[2] if len(sys.argv) > 2 else "."}}))
 PY
@@ -811,6 +812,43 @@ printf '{"master_host_runtime":"claude","product_repositories":["%s"],"product_r
 expect_blocked both-fields-malformed-legacy-blocked run_file_config "$TMP/runtime-both-malformed.json" "$ops/file.txt"
 expect_verdict block both-fields-malformed-legacy-blocked
 grep -q "cannot load product_repositories" "$TMP/stderr" || { echo "FAIL: both-fields-malformed-legacy-blocked missing load failure message" >&2; cat "$TMP/stderr" >&2; exit 1; }
+
+installed_runtime="$TMP/installed-runtime"
+installed_hook="$TMP/product-path-guard-installed.sh"
+mkdir -p "$installed_runtime/config"
+printf '{"master_host_runtime":"claude","product_repositories":["%s"]}\n' "$product" >"$installed_runtime/config/instance-runtime.json"
+sed "s|{{RUNTIME_ROOT}}|$installed_runtime|g" "$HOOK" >"$installed_hook"
+chmod +x "$installed_hook"
+expect_allowed substituted-runtime-root-default-config run_bash_default_config "ls" "$ops" "$installed_hook"
+expect_verdict pass substituted-runtime-root-default-config
+
+mutant_source="$TMP/product-path-guard-mutant-source.sh"
+mutant_installed_hook="$TMP/product-path-guard-mutant-installed.sh"
+python3 - "$HOOK" "$mutant_source" <<'PY'
+from pathlib import Path
+import sys
+
+source = Path(sys.argv[1]).read_text(encoding="utf-8")
+needle = 'if [[ "$INSTANCE_RUNTIME_CONFIG" == *"$runtime_root_token"* ]]; then'
+replacement = 'if [[ "$INSTANCE_RUNTIME_CONFIG" == *"{{RUNTIME_ROOT}}"* ]]; then'
+if source.count(needle) != 1:
+    raise SystemExit("FAIL: runtime-root sentinel mutant anchor not found exactly once")
+Path(sys.argv[2]).write_text(source.replace(needle, replacement, 1), encoding="utf-8")
+PY
+sed "s|{{RUNTIME_ROOT}}|$installed_runtime|g" "$mutant_source" >"$mutant_installed_hook"
+chmod +x "$mutant_installed_hook"
+(
+  expect_allowed failability-substituted-runtime-root-default-config run_bash_default_config "ls" "$ops" "$mutant_installed_hook"
+)
+mutant_exit=$?
+(
+  expect_allowed failability-substituted-runtime-root-default-config run_bash_default_config "ls" "$ops" "$installed_hook"
+)
+restored_exit=$?
+[ "$mutant_exit" -eq 1 ] || { echo "FAIL: failability runtime-root mutant exit expected 1 got $mutant_exit" >&2; exit 1; }
+[ "$restored_exit" -eq 0 ] || { echo "FAIL: failability runtime-root restored exit expected 0 got $restored_exit" >&2; exit 1; }
+echo "PASS: failability: substituted runtime-root mutant exit $mutant_exit, restored exit $restored_exit"
+
 expect_blocked unsubstituted-runtime-root-token run_bash_default_config "ls" "$ops"
 expect_verdict block unsubstituted-runtime-root-token
 grep -q "{""{RUNTIME_ROOT}}" "$TMP/stderr" || { echo "FAIL: unsubstituted-runtime-root-token missing token name" >&2; exit 1; }

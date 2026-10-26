@@ -139,7 +139,13 @@ def test_assignee_follows_the_turn_step_reconciles_from_current_state():
     assert "context.payload.action" not in step_text, "assignee step still reads the event action"
     assert "context.payload.label" not in step_text, "assignee step still reads the event label"
     assert "currentPr.labels" in step_text, "assignee step does not read current labels"
-    assert 'author.endsWith("[bot]")' in step_text, "assignee step lost its bot-author guard"
+
+    desired_match = re.search(r"const desired = (.+?);\n", step_text)
+    assert desired_match, "assignee step has no 'desired' assignment"
+    desired_expr = re.sub(r"\s+", " ", desired_match.group(1)).strip()
+    assert desired_expr == (
+        'waiting && !author.endsWith("[bot]") ? author : maintainerLogin'
+    ), "assignee step's 'desired' expression changed"
 
 
 @skip_windows_exec_surface

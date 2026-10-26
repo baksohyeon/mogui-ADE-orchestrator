@@ -382,7 +382,7 @@ rendered_precondition_test "$smoke" || exit 1
 artifact_test() (
   set +e
   set -u
-  local smoke="$1" fn work script_file out mutant_fn
+  local smoke="$1" fn work script_file out err mutant_fn content_lines
 
   fn=$(extract_fn "$smoke" 'print_artifact() {')
   [ -n "$fn" ] || { echo "FAIL: could not extract print_artifact" >&2; return 1; }
@@ -413,24 +413,39 @@ artifact_test() (
   run_case "$work/empty.txt" "(empty)" || return 1
   echo "ok   : print_artifact reports an empty file"
 
-  printf 'line1\nline2\nline3\nline4\nline5\nline6\nline7\n' > "$work/fixture.txt"
+  printf 'line1\nline2\nline3\nline4\nline5\nline6\n' > "$work/fixture.txt"
+
   script_file="$work/run.sh"
   {
     echo 'set -u'
     printf '%s\n' "$fn"
-    printf 'print_artifact label %q 5\n' "$work/fixture.txt"
+    printf 'print_artifact label %q\n' "$work/fixture.txt"
   } > "$script_file"
   out=$(bash "$script_file" 2>/dev/null)
   err=$(bash "$script_file" 2>&1 >/dev/null)
   [ -z "$out" ] || { echo "FAIL: print_artifact must write only to stderr, got stdout '$out'" >&2; return 1; }
+  content_lines=$(printf '%s\n' "$err" | tail -n +2 | wc -l | tr -d ' ')
+  [ "$content_lines" = 5 ] || { echo "FAIL: expected the default limit to print exactly 5 lines, got $content_lines ('$err')" >&2; return 1; }
   case "$err" in
-    *line5*) ;;
-    *) echo "FAIL: expected the 5th fixture line in stderr, got '$err'" >&2; return 1;;
+    *line6*) echo "FAIL: expected line6 to be truncated past the default 5-line cap, got '$err'" >&2; return 1;;
   esac
+  echo "ok   : print_artifact prints exactly 5 lines of a 6-line file when the third argument is omitted"
+
+  script_file="$work/run.sh"
+  {
+    echo 'set -u'
+    printf '%s\n' "$fn"
+    printf 'print_artifact label %q 2\n' "$work/fixture.txt"
+  } > "$script_file"
+  out=$(bash "$script_file" 2>/dev/null)
+  err=$(bash "$script_file" 2>&1 >/dev/null)
+  [ -z "$out" ] || { echo "FAIL: print_artifact must write only to stderr, got stdout '$out'" >&2; return 1; }
+  content_lines=$(printf '%s\n' "$err" | tail -n +2 | wc -l | tr -d ' ')
+  [ "$content_lines" = 2 ] || { echo "FAIL: expected an explicit non-default limit of 2 to print exactly 2 lines, got $content_lines ('$err')" >&2; return 1; }
   case "$err" in
-    *line6*) echo "FAIL: expected line6 to be truncated past the 5-line default cap, got '$err'" >&2; return 1;;
+    *line3*) echo "FAIL: expected line3 to be truncated past the explicit 2-line cap, got '$err'" >&2; return 1;;
   esac
-  echo "ok   : print_artifact prints only the first MAX_LINES lines of a file, to stderr"
+  echo "ok   : print_artifact honors an explicit non-default limit"
 
   mkdir -p "$work/adir"
   touch "$work/adir/marker-child"

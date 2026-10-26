@@ -105,25 +105,6 @@ normal_case_verdict() {
   esac
 }
 
-print_artifact() {
-  local label="$1" path="$2" max="${3:-5}"
-  if [ -d "$path" ]; then
-    echo "$label: $path" >&2
-    ls -la "$path" >&2
-    return 0
-  fi
-  if [ ! -e "$path" ]; then
-    echo "$label: $path (absent)" >&2
-    return 0
-  fi
-  if [ ! -s "$path" ]; then
-    echo "$label: $path (empty)" >&2
-    return 0
-  fi
-  echo "$label: $path (first $max line(s))" >&2
-  head -n "$max" "$path" >&2
-}
-
 # ---------------------------------------------------------------------------
 # Preconditions, each a separate check, exit 10 with one stderr line naming
 # the failed one.
@@ -201,6 +182,25 @@ FINAL_RC=0
 PASS_LINE=""
 SMOKE_SHA_HINT=""
 
+print_artifact() {
+  local label="$1" path="$2" max="${3:-5}"
+  if [ -d "$path" ]; then
+    echo "$label: $path" >&2
+    ls -la "$path" >&2
+    return 0
+  fi
+  if [ ! -e "$path" ]; then
+    echo "$label: $path (absent)" >&2
+    return 0
+  fi
+  if [ ! -s "$path" ]; then
+    echo "$label: $path (empty)" >&2
+    return 0
+  fi
+  echo "$label: $path (first $max line(s))" >&2
+  head -n "$max" "$path" >&2
+}
+
 cleanup() {
   local ledger_sha_after ledger_lines_after contracts_after diff added isolation_rc=0
 
@@ -225,8 +225,8 @@ cleanup() {
           else
             echo "  step=concurrent-writer (added rows do not reference this smoke's own identifiers; another seat wrote the shared ledger during this run)" >&2
           fi
-          print_artifact "ledger" "$LEDGER_FILE"
         fi
+        print_artifact "ledger" "$LEDGER_FILE"
         ;;
     esac
     case "$diff" in

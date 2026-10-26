@@ -9,13 +9,16 @@ trap 'rm -rf "$TMP"' EXIT
 
 product="$TMP/workspace/product"
 product2="$TMP/workspace/product-two"
+# Ends in a digit on purpose: distinguishes a product path whose trailing
+# character happens to be a digit from an attached file-descriptor digit.
+product_digit="$TMP/workspace/product2"
 product_legacy="$TMP/workspace/product-legacy"
 ops="$TMP/workspace/ops"
 link="$TMP/workspace/product-link"
-mkdir -p "$product" "$product2" "$product_legacy" "$ops" "$TMP/home" "$TMP/logs"
+mkdir -p "$product" "$product2" "$product_digit" "$product_legacy" "$ops" "$TMP/home" "$TMP/logs"
 ln -s "$product" "$link"
 product_real=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$product")
-printf '{"master_host_runtime":"claude","product_repositories":["%s","%s"]}\n' "$product" "$product2" >"$TMP/runtime.json"
+printf '{"master_host_runtime":"claude","product_repositories":["%s","%s","%s"]}\n' "$product" "$product2" "$product_digit" >"$TMP/runtime.json"
 # Legacy one-entry string form must stay covered by a valid fixture: the
 # array fixture above exercises only product_repositories, and the only
 # other product_repo fixture (below) is intentionally malformed.
@@ -467,6 +470,35 @@ expect_allowed cd-attached-fd-redirection-allowed run_bash "cd $ops 2>/dev/null 
 expect_verdict pass cd-attached-fd-redirection-allowed
 expect_allowed cd-attached-fd-duplication-allowed run_bash "cd $ops 2>&1 >/dev/null && ls"
 expect_verdict pass cd-attached-fd-duplication-allowed
+
+# Round three: a backslash-escaped space right before # is a literal
+# character inside the word, not an unescaped boundary, so the # that
+# follows does not start a comment and the redirection after it still
+# reaches the write check. An unescaped boundary space keeps starting a
+# real comment, which swallows the redirection along with it.
+expect_blocked escaped-space-before-hash-keeps-redirection run_bash "echo foo\ # > $product/x.txt"
+expect_verdict block escaped-space-before-hash-keeps-redirection
+expect_allowed real-comment-swallows-redirection run_bash "echo foo # > $product/x.txt"
+expect_verdict pass real-comment-swallows-redirection
+
+# Round three: a digit stuck to the end of a word is part of that word's
+# text, never a dropped file descriptor, so a product path ending in a
+# digit keeps its text and its root check across an adjacent redirection.
+# A digit separated by a space from its redirection operator is still the
+# attached-fd case this guard already classified (and from a product-root
+# cwd, any literal redirection operator is already blocked on its own,
+# unrelated to the digit analysis, so this stays blocked unchanged).
+expect_blocked product-path-trailing-digit-redirect-still-checked run_bash "git -C $product_digit>/dev/null add file"
+expect_verdict block product-path-trailing-digit-redirect-still-checked
+expect_blocked spaced-fd-digit-redirect-unchanged run_bash "echo x 2>/dev/null" "$product"
+expect_verdict block spaced-fd-digit-redirect-unchanged
+
+# Round three: the fd sentinel this guard injects must stay unique in the
+# text it marks; a sentinel-shaped literal already present in the command
+# is a collision and is denied instead of guessed at.
+expect_blocked sentinel-collision-denied run_bash "cd /outside MOGUICDFDSENTINEL2ENDSENTINEL > /dev/null; touch out.txt" "$product"
+expect_verdict block sentinel-collision-denied
+grep -q "sentinel collision" "$TMP/stderr" || { echo "FAIL: sentinel-collision-denied missing sentinel collision message" >&2; cat "$TMP/stderr" >&2; exit 1; }
 
 # A cd redirection target containing an unexpanded shell expansion reaches
 # the guard as literal text; Bash expands it before opening the file, so the

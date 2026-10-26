@@ -190,7 +190,11 @@ def unquoted_mask(line):
     # A comment span resets at each newline (quotes do not: bash lets a quoted
     # string continue across physical lines), and a newline counts as a
     # boundary before # the same way a space or tab does, so a later physical
-    # line that opens with # is still recognized on multi-line text.
+    # line that opens with # is still recognized on multi-line text. A
+    # boundary character that was itself backslash-escaped (foo\ #) is a
+    # literal part of the word, not a separator, so it cannot start a
+    # comment; prev_escaped carries that state from the character own
+    # escape handling into the next character boundary test.
     mask=[]
     comment_mask=[]
     in_single=False
@@ -198,14 +202,16 @@ def unquoted_mask(line):
     in_comment=False
     escaped=False
     prev_char=""
+    prev_escaped=False
     for ch in line:
         if ch == "\n":
             in_comment=False
-        if not in_single and not in_double and not in_comment and ch == "#" and prev_char in ("", " ", "\t", "\n"):
+        if not in_single and not in_double and not in_comment and ch == "#" and prev_char in ("", " ", "\t", "\n") and not prev_escaped:
             in_comment=True
         mask.append(not in_single and not in_double and not in_comment)
         comment_mask.append(in_comment)
         prev_char=ch
+        prev_escaped=escaped
         if in_comment:
             continue
         if escaped:
@@ -346,13 +352,17 @@ def mark_attached_cd_fds(text):
     # then an operator token); marking a source-adjacent digit run with a
     # sentinel before lexing is the only way to tell the two apart
     # afterward, since a spaced digit keeps its own plain token and still
-    # counts as a cd operand.
+    # counts as a cd operand. A digit run only qualifies as a candidate fd
+    # when it starts at a real word boundary (start of text, unquoted
+    # whitespace, or one of ; & | (); a digit stuck to the end of a word
+    # (/product2>, file2>out) is part of that word text, never a fd.
     mask, _=unquoted_mask(text)
     out=[]
     i=0
     n=len(text)
     while i < n:
-        if mask[i] and text[i].isdigit():
+        at_word_start = i == 0 or (mask[i - 1] and (text[i - 1].isspace() or text[i - 1] in ";&|("))
+        if mask[i] and text[i].isdigit() and at_word_start:
             j=i
             while j < n and mask[j] and text[j].isdigit():
                 j += 1
@@ -460,6 +470,13 @@ if heredoc_stripped_command is None:
     raise SystemExit
 if heredoc_forced_deny_name:
     print("DENY\t" + heredoc_forced_deny_name + "\topaque interpreter heredoc body may contain an unparsed write")
+    raise SystemExit
+if "MOGUICDFDSENTINEL" in heredoc_stripped_command:
+    # The sentinel mark_attached_cd_fds injects must be unique in the text it
+    # marks; if the literal token already occurs in the source, a mark would
+    # be indistinguishable from source text and the fd/operand split below
+    # would be unreliable, so this is denied instead of guessed.
+    print("DENY\tunparseable\tsentinel collision")
     raise SystemExit
 try:
     # A newline ends a segment the same way ; does: dropping it from the

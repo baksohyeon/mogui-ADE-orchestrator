@@ -9,13 +9,16 @@ trap 'rm -rf "$TMP"' EXIT
 
 product="$TMP/workspace/product"
 product2="$TMP/workspace/product-two"
+# Ends in a digit on purpose: distinguishes a product path whose trailing
+# character happens to be a digit from an attached file-descriptor digit.
+product_digit="$TMP/workspace/product2"
 product_legacy="$TMP/workspace/product-legacy"
 ops="$TMP/workspace/ops"
 link="$TMP/workspace/product-link"
-mkdir -p "$product" "$product2" "$product_legacy" "$ops" "$TMP/home" "$TMP/logs"
+mkdir -p "$product" "$product2" "$product_digit" "$product_legacy" "$ops" "$TMP/home" "$TMP/logs"
 ln -s "$product" "$link"
 product_real=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$product")
-printf '{"master_host_runtime":"claude","product_repositories":["%s","%s"]}\n' "$product" "$product2" >"$TMP/runtime.json"
+printf '{"master_host_runtime":"claude","product_repositories":["%s","%s","%s"]}\n' "$product" "$product2" "$product_digit" >"$TMP/runtime.json"
 # Legacy one-entry string form must stay covered by a valid fixture: the
 # array fixture above exercises only product_repositories, and the only
 # other product_repo fixture (below) is intentionally malformed.
@@ -49,6 +52,32 @@ run_bash() {
   local command="$1"
   local working_directory="${2:-.}"
   python3 - "$command" "$working_directory" <<'PY' | HOME="$TMP/home" MOGUI_INLINE_EDIT_OVERRIDE=0 MOGUI_PRODUCT_GUARD_FAIL_CLOSED=0 MOGUI_PRODUCT_GUARD_ALLOWLIST=/dev/null MOGUI_EVENT_LOG="$TMP/home/.mogui/event-log.jsonl" MOGUI_INSTANCE_RUNTIME_CONFIG="$TMP/runtime.json" MOGUI_HOOK_FIRE_LOG="$TMP/logs/fire.jsonl" "$HOOK" >/dev/null 2>"$TMP/stderr"
+import json, sys
+print(json.dumps({"tool_input": {"command": sys.argv[1], "working_directory": sys.argv[2] if len(sys.argv) > 2 else "."}}))
+PY
+}
+
+# Same shape as run_bash, but against a caller-chosen hook binary; needed by
+# the cd-redirection failability check below to re-run one allowed case
+# against a mutated copy of the guard.
+run_bash_hook() {
+  local hook="$1"
+  local command="$2"
+  local working_directory="${3:-.}"
+  python3 - "$command" "$working_directory" <<'PY' | HOME="$TMP/home" MOGUI_INLINE_EDIT_OVERRIDE=0 MOGUI_PRODUCT_GUARD_FAIL_CLOSED=0 MOGUI_PRODUCT_GUARD_ALLOWLIST=/dev/null MOGUI_EVENT_LOG="$TMP/home/.mogui/event-log.jsonl" MOGUI_INSTANCE_RUNTIME_CONFIG="$TMP/runtime.json" MOGUI_HOOK_FIRE_LOG="$TMP/logs/fire.jsonl" "$hook" >/dev/null 2>"$TMP/stderr"
+import json, sys
+print(json.dumps({"tool_input": {"command": sys.argv[1], "working_directory": sys.argv[2] if len(sys.argv) > 2 else "."}}))
+PY
+}
+
+# Same shape as run_bash_hook, but fail-closed; needed by the cd-redirection-
+# into-root failability check below to re-run one denied case against a
+# mutated copy of the guard under the mode the bug in question is specific to.
+run_bash_hook_strict() {
+  local hook="$1"
+  local command="$2"
+  local working_directory="${3:-.}"
+  python3 - "$command" "$working_directory" <<'PY' | HOME="$TMP/home" MOGUI_INLINE_EDIT_OVERRIDE=0 MOGUI_PRODUCT_GUARD_FAIL_CLOSED=1 MOGUI_PRODUCT_GUARD_ALLOWLIST="$TMP/allowlist.txt" MOGUI_EVENT_LOG="$TMP/home/.mogui/event-log.jsonl" MOGUI_INSTANCE_RUNTIME_CONFIG="$TMP/runtime.json" MOGUI_HOOK_FIRE_LOG="$TMP/logs/fire.jsonl" "$hook" >/dev/null 2>"$TMP/stderr"
 import json, sys
 print(json.dumps({"tool_input": {"command": sys.argv[1], "working_directory": sys.argv[2] if len(sys.argv) > 2 else "."}}))
 PY
@@ -424,6 +453,321 @@ expect_verdict block awk-pipe-getline-not-admitted
 expect_allowed awk-safe-program-passes run_bash "awk '{print \$1}' $product/in" "$ops"
 expect_verdict pass awk-safe-program-passes
 
+# Shape 4: a cd segment may carry a redirection or sit on its own physical
+# line. The operand count ignores a stripped redirection and a newline ends
+# a segment the same way ; does, so a later line's cd is checked on its own
+# merits by the existing legacy-policy and redirection-target checks.
+expect_allowed cd-redirection-then-write run_bash "cd $ops 2>/dev/null && printf ok > $ops/out.txt"
+expect_verdict pass cd-redirection-then-write
+expect_allowed cd-newline-then-write run_bash "cd $ops
+printf ok > $ops/out.txt"
+expect_verdict pass cd-newline-then-write
+expect_blocked cd-redirection-then-write-into-root run_bash "cd $ops 2>/dev/null && printf bad > $product/out.txt"
+expect_verdict block cd-redirection-then-write-into-root
+expect_blocked cd-redirection-into-root run_bash "cd $product 2>/dev/null && ls"
+expect_verdict block cd-redirection-into-root
+expect_blocked cd-newline-second-line-into-root run_bash "cd $ops
+cd $product && ls"
+expect_verdict block cd-newline-second-line-into-root
+expect_blocked cd-redirection-target-into-root run_bash "cd $ops > $product/out.txt"
+expect_verdict block cd-redirection-target-into-root
+
+# Round two: a spaced digit before a redirection operator is a second cd
+# operand, not a dropped file descriptor, so from a product-root cwd it must
+# still deny instead of letting the guard's simulated cwd leave the root
+# while the real shell (which rejects this cd for the same reason) stays in
+# it.
+expect_blocked cd-spaced-digit-operand-bypass run_bash "cd $ops 2 > /dev/null; touch out.txt" "$product"
+expect_verdict block cd-spaced-digit-operand-bypass
+expect_allowed cd-attached-fd-redirection-allowed run_bash "cd $ops 2>/dev/null && ls"
+expect_verdict pass cd-attached-fd-redirection-allowed
+expect_allowed cd-attached-fd-duplication-allowed run_bash "cd $ops 2>&1 >/dev/null && ls"
+expect_verdict pass cd-attached-fd-duplication-allowed
+
+# Round three: a backslash-escaped space right before # is a literal
+# character inside the word, not an unescaped boundary, so the # that
+# follows does not start a comment and the redirection after it still
+# reaches the write check. An unescaped boundary space keeps starting a
+# real comment, which swallows the redirection along with it.
+expect_blocked escaped-space-before-hash-keeps-redirection run_bash "echo foo\ # > $product/x.txt"
+expect_verdict block escaped-space-before-hash-keeps-redirection
+expect_allowed real-comment-swallows-redirection run_bash "echo foo # > $product/x.txt"
+expect_verdict pass real-comment-swallows-redirection
+
+# Round three: a digit stuck to the end of a word is part of that word's
+# text, never a dropped file descriptor, so a product path ending in a
+# digit keeps its text and its root check across an adjacent redirection.
+# A digit separated by a space from its redirection operator is still the
+# attached-fd case this guard already classified (and from a product-root
+# cwd, any literal redirection operator is already blocked on its own,
+# unrelated to the digit analysis, so this stays blocked unchanged).
+expect_blocked product-path-trailing-digit-redirect-still-checked run_bash "git -C $product_digit>/dev/null add file"
+expect_verdict block product-path-trailing-digit-redirect-still-checked
+expect_blocked spaced-fd-digit-redirect-unchanged run_bash "echo x 2>/dev/null" "$product"
+expect_verdict block spaced-fd-digit-redirect-unchanged
+
+# Round three: the fd sentinel this guard injects must stay unique in the
+# text it marks; a sentinel-shaped literal already present in the command
+# is a collision and is denied instead of guessed at.
+expect_blocked sentinel-collision-denied run_bash "cd /outside MOGUICDFDSENTINEL2ENDSENTINEL > /dev/null; touch out.txt" "$product"
+expect_verdict block sentinel-collision-denied
+grep -q "sentinel collision" "$TMP/stderr" || { echo "FAIL: sentinel-collision-denied missing sentinel collision message" >&2; cat "$TMP/stderr" >&2; exit 1; }
+
+# A cd redirection target containing an unexpanded shell expansion reaches
+# the guard as literal text; Bash expands it before opening the file, so the
+# guard must deny instead of resolving the literal text as the real target.
+expect_blocked cd-redirection-target-unexpanded-dollar run_bash "cd $ops > \$DEST/out.txt"
+expect_verdict block cd-redirection-target-unexpanded-dollar
+expect_allowed cd-redirection-target-expanded-literal run_bash "cd $ops > $ops/out.txt"
+expect_verdict pass cd-redirection-target-expanded-literal
+
+# A cd segment's input redirection target reaches the guard as literal text
+# too, and bash expands it the same way before opening the file, so the
+# expansion refusal applies to an input target exactly as it does to an
+# output target.
+expect_blocked cd-input-redirection-target-expansion-denied run_bash 'cd /tmp < "$(touch '"$product"'/pwned; printf /dev/null)"' "$ops"
+expect_verdict block cd-input-redirection-target-expansion-denied
+
+# An unquoted # comment must still end its line at the newline instead of
+# consuming it, or the next physical line's command silently becomes extra
+# arguments to the commented line's own command.
+expect_allowed cd-comment-then-newline-allowed run_bash "cd $ops # note
+ls"
+expect_verdict pass cd-comment-then-newline-allowed
+expect_blocked comment-swallowed-newline-hides-write run_bash "ls # note
+cp a $product/x.txt"
+expect_verdict block comment-swallowed-newline-hides-write
+
+# A cd segment's input redirection is a read, not a write, so its target
+# skips the product-root write check even though it still goes through the
+# operand count and the expansion refusal above.
+expect_allowed cd-input-redirection-allowed run_bash "cd $ops < /dev/null && ls"
+expect_verdict pass cd-input-redirection-allowed
+
+# The cd operand itself reaches the guard as literal text, same as a
+# redirection target; resolve() cannot know where an unexpanded operand
+# sends bash, so it is refused the same way, with or without a redirection
+# on the same segment.
+expect_blocked cd-operand-expansion-with-redirection-denied run_bash 'cd "$PWD/product" >/dev/null; touch pwned.txt' "$TMP/workspace"
+expect_verdict block cd-operand-expansion-with-redirection-denied
+expect_blocked cd-operand-expansion-plain-denied run_bash 'cd $X/y && ls'
+expect_verdict block cd-operand-expansion-plain-denied
+
+# Round four: a cd segment carrying any redirection, output or input, keeps
+# the simulated cwd where it was. Bash resolves that redirection before
+# running the cd builtin and aborts the cd without moving if the target
+# cannot be opened, so advancing current_cwd on that shape assumes a move
+# that may never have happened; a later relative write must still resolve
+# against the old cwd.
+expect_blocked cd-output-redirection-missing-dir-keeps-cwd run_bash "cd /tmp >/no/such/dir/x ; touch pwned.txt" "$product2"
+expect_verdict block cd-output-redirection-missing-dir-keeps-cwd
+expect_blocked cd-input-redirection-missing-file-keeps-cwd run_bash "cd /tmp </no/such/file ; touch pwned.txt" "$product2"
+expect_verdict block cd-input-redirection-missing-file-keeps-cwd
+expect_allowed cd-redirection-no-advance-still-allowed run_bash "cd $ops 2>/dev/null && ls" "$ops"
+expect_verdict pass cd-redirection-no-advance-still-allowed
+
+CD_NO_ADVANCE_MUTANT_HOOK="$TMP/product-path-guard-cd-no-advance-mutant.sh"
+python3 - "$HOOK" "$CD_NO_ADVANCE_MUTANT_HOOK" <<'PY'
+import pathlib, sys
+source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+needle = (
+    "        if not had_redirection:\n"
+    "            current_cwd=target_cwd\n"
+)
+replacement = (
+    "        current_cwd=target_cwd\n"
+)
+if needle not in source:
+    raise SystemExit("cd no-advance mutant patch anchor not found")
+pathlib.Path(sys.argv[2]).write_text(source.replace(needle, replacement, 1), encoding="utf-8")
+PY
+if [ ! -f "$CD_NO_ADVANCE_MUTANT_HOOK" ] || cmp -s "$HOOK" "$CD_NO_ADVANCE_MUTANT_HOOK"; then
+  echo "FAIL: cd no-advance mutant not generated" >&2
+  exit 1
+fi
+chmod +x "$CD_NO_ADVANCE_MUTANT_HOOK"
+
+(
+  expect_blocked cd-no-advance-failability-mutant run_bash_hook "$CD_NO_ADVANCE_MUTANT_HOOK" "cd /tmp >/no/such/dir/x ; touch pwned.txt" "$product2"
+)
+no_advance_mutant_exit=$?
+(
+  expect_blocked cd-no-advance-failability-restored run_bash_hook "$HOOK" "cd /tmp >/no/such/dir/x ; touch pwned.txt" "$product2"
+)
+no_advance_restored_exit=$?
+[ "$no_advance_mutant_exit" -eq 1 ] || { echo "FAIL: cd no-advance mutant exit expected 1 got $no_advance_mutant_exit" >&2; exit 1; }
+[ "$no_advance_restored_exit" -eq 0 ] || { echo "FAIL: cd no-advance restored exit expected 0 got $no_advance_restored_exit" >&2; exit 1; }
+echo "PASS: cd no-advance failability mutant exit code $no_advance_mutant_exit"
+echo "PASS: cd no-advance failability restored exit code $no_advance_restored_exit"
+
+CD_MUTANT_HOOK="$TMP/product-path-guard-cd-mutant.sh"
+python3 - "$HOOK" "$CD_MUTANT_HOOK" <<'PY'
+import pathlib, sys
+source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+needle = (
+    "    if name == \"cd\":\n"
+    "        operands, output_targets, input_targets, had_redirection = strip_cd_redirections(parts)\n"
+    "        if len(operands) != 2:\n"
+    "            print(\"DENY\\tcd\\tcd target cannot be resolved\")\n"
+    "            raise SystemExit\n"
+    "        # resolve() reads a cd operand literally, but bash expands it first, so an operand carrying an expansion character is refused, with or without a redirection.\n"
+    "        if CD_REDIRECTION_TARGET_EXPANSION_RE.search(operands[1]):\n"
+    "            print(\"DENY\\tcd\\tcd target cannot be resolved\")\n"
+    "            raise SystemExit\n"
+    "        if any(CD_REDIRECTION_TARGET_EXPANSION_RE.search(target) for target in output_targets + input_targets):\n"
+    "            print(\"DENY\\tcd\\tredirection target cannot be resolved\")\n"
+    "            raise SystemExit\n"
+    "        if any(under(resolve(current_cwd, target)) for target in output_targets):\n"
+    "            print(\"DENY\\tcd\\tshell redirection is a write\")\n"
+    "            raise SystemExit\n"
+    "        target_cwd=resolve(current_cwd, operands[1])\n"
+    "        if had_redirection and under(target_cwd):\n"
+    "            print(\"DENY\\tcd\\tredirection-bearing cd into a product root cannot be modeled\")\n"
+    "            raise SystemExit\n"
+    "        if os.environ[\"FAIL_CLOSED\"] != \"1\" and under(target_cwd):\n"
+    "            print(\"DENY\\tcd\\tlegacy policy blocks entering product root\")\n"
+    "            raise SystemExit\n"
+    "        if not had_redirection:\n"
+    "            current_cwd=target_cwd\n"
+)
+replacement = (
+    "    if name == \"cd\":\n"
+    "        if len(parts) != 2:\n"
+    "            print(\"DENY\\tcd\\tcd target cannot be resolved\")\n"
+    "            raise SystemExit\n"
+    "        current_cwd=resolve(current_cwd, parts[1])\n"
+    "        if os.environ[\"FAIL_CLOSED\"] != \"1\" and under(current_cwd):\n"
+    "            print(\"DENY\\tcd\\tlegacy policy blocks entering product root\")\n"
+    "            raise SystemExit\n"
+)
+if needle not in source:
+    raise SystemExit("cd mutant patch anchor not found")
+pathlib.Path(sys.argv[2]).write_text(source.replace(needle, replacement, 1), encoding="utf-8")
+PY
+if [ ! -f "$CD_MUTANT_HOOK" ] || cmp -s "$HOOK" "$CD_MUTANT_HOOK"; then
+  echo "FAIL: cd mutant not generated" >&2
+  exit 1
+fi
+chmod +x "$CD_MUTANT_HOOK"
+
+(
+  expect_allowed cd-redirection-failability-mutant run_bash_hook "$CD_MUTANT_HOOK" "cd $ops 2>/dev/null && printf ok > $ops/out.txt"
+)
+cd_mutant_exit=$?
+(
+  expect_allowed cd-redirection-failability-restored run_bash_hook "$HOOK" "cd $ops 2>/dev/null && printf ok > $ops/out.txt"
+)
+cd_restored_exit=$?
+[ "$cd_mutant_exit" -eq 1 ] || { echo "FAIL: cd failability mutant exit expected 1 got $cd_mutant_exit" >&2; exit 1; }
+[ "$cd_restored_exit" -eq 0 ] || { echo "FAIL: cd failability restored exit expected 0 got $cd_restored_exit" >&2; exit 1; }
+echo "PASS: cd failability mutant exit code $cd_mutant_exit"
+echo "PASS: cd failability restored exit code $cd_restored_exit"
+
+# Round two: a mutant that reverts just the sentinel check back to a bare
+# digit regex reproduces the fd-adjacency bug on its own, independent of the
+# rest of the cd-redirection feature the mutant above already covers.
+DIGIT_MUTANT_HOOK="$TMP/product-path-guard-digit-mutant.sh"
+python3 - "$HOOK" "$DIGIT_MUTANT_HOOK" <<'PY'
+import pathlib, sys
+source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+needle = (
+    "        if FD_SENTINEL_RE.match(token) and index + 1 < len(parts) and (\n"
+    "            parts[index + 1] in CD_OUTPUT_REDIRECTION_OPERATORS\n"
+    "            or parts[index + 1] in CD_INPUT_REDIRECTION_OPERATORS\n"
+    "        ):\n"
+    "            index += 1\n"
+    "            continue\n"
+)
+replacement = (
+    "        if re.match(r\"^[0-9]+$\", token) and index + 1 < len(parts) and (\n"
+    "            parts[index + 1] in CD_OUTPUT_REDIRECTION_OPERATORS\n"
+    "            or parts[index + 1] in CD_INPUT_REDIRECTION_OPERATORS\n"
+    "        ):\n"
+    "            index += 1\n"
+    "            continue\n"
+)
+if needle not in source:
+    raise SystemExit("digit mutant patch anchor not found")
+pathlib.Path(sys.argv[2]).write_text(source.replace(needle, replacement, 1), encoding="utf-8")
+PY
+if [ ! -f "$DIGIT_MUTANT_HOOK" ] || cmp -s "$HOOK" "$DIGIT_MUTANT_HOOK"; then
+  echo "FAIL: digit mutant not generated" >&2
+  exit 1
+fi
+chmod +x "$DIGIT_MUTANT_HOOK"
+
+(
+  expect_blocked cd-fd-adjacency-failability-mutant run_bash_hook "$DIGIT_MUTANT_HOOK" "cd $ops 2 > /dev/null" "$product"
+)
+digit_mutant_exit=$?
+(
+  expect_blocked cd-fd-adjacency-failability-restored run_bash_hook "$HOOK" "cd $ops 2 > /dev/null" "$product"
+)
+digit_restored_exit=$?
+[ "$digit_mutant_exit" -eq 1 ] || { echo "FAIL: cd fd-adjacency mutant exit expected 1 got $digit_mutant_exit" >&2; exit 1; }
+[ "$digit_restored_exit" -eq 0 ] || { echo "FAIL: cd fd-adjacency restored exit expected 0 got $digit_restored_exit" >&2; exit 1; }
+echo "PASS: cd fd-adjacency failability mutant exit code $digit_mutant_exit"
+echo "PASS: cd fd-adjacency failability restored exit code $digit_restored_exit"
+
+# Round five: legacy mode already denies any cd into a product root, with or
+# without a redirection, so a redirection-bearing cd into the root was always
+# covered there. Fail-closed mode skips that legacy check, and round four
+# left the simulated cwd outside the root on a redirection-bearing cd, so the
+# cd itself passed unmodeled while the real shell still moved in; a relative
+# write right after then resolved against the stale (outside) simulated cwd
+# instead of the real (inside) one. The new check denies that shape in every
+# mode, right where target_cwd is computed.
+printf 'touch\n' >>"$TMP/allowlist.txt"
+expect_blocked strict-cd-redirection-into-root-blocked run_bash_strict "cd $product >/dev/null ; touch pwned.txt" "$ops"
+expect_verdict block strict-cd-redirection-into-root-blocked
+grep -q "redirection-bearing cd into a product root cannot be modeled" "$TMP/stderr" || { echo "FAIL: strict-cd-redirection-into-root-blocked missing new denial message" >&2; cat "$TMP/stderr" >&2; exit 1; }
+# Same shape without a redirection is unaffected by this round: cd already
+# advances the simulated cwd into the root (fail-closed mode has no legacy
+# check to stop it), and the touch segment that follows is still denied by
+# the pre-existing write-capable check once it lands there.
+expect_blocked strict-cd-no-redirection-into-root-write-blocked run_bash_strict "cd $product ; touch pwned.txt" "$ops"
+expect_verdict block strict-cd-no-redirection-into-root-write-blocked
+expect_blocked legacy-cd-redirection-into-root-blocked run_bash "cd $product >/dev/null ; touch pwned.txt" "$ops"
+expect_verdict block legacy-cd-redirection-into-root-blocked
+
+CD_REDIRECTION_ROOT_MUTANT_HOOK="$TMP/product-path-guard-cd-redirection-root-mutant.sh"
+python3 - "$HOOK" "$CD_REDIRECTION_ROOT_MUTANT_HOOK" <<'PY'
+import pathlib, sys
+source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+needle = (
+    "        target_cwd=resolve(current_cwd, operands[1])\n"
+    "        if had_redirection and under(target_cwd):\n"
+    "            print(\"DENY\\tcd\\tredirection-bearing cd into a product root cannot be modeled\")\n"
+    "            raise SystemExit\n"
+    "        if os.environ[\"FAIL_CLOSED\"] != \"1\" and under(target_cwd):\n"
+)
+replacement = (
+    "        target_cwd=resolve(current_cwd, operands[1])\n"
+    "        if os.environ[\"FAIL_CLOSED\"] != \"1\" and under(target_cwd):\n"
+)
+if needle not in source:
+    raise SystemExit("cd redirection root mutant patch anchor not found")
+pathlib.Path(sys.argv[2]).write_text(source.replace(needle, replacement, 1), encoding="utf-8")
+PY
+if [ ! -f "$CD_REDIRECTION_ROOT_MUTANT_HOOK" ] || cmp -s "$HOOK" "$CD_REDIRECTION_ROOT_MUTANT_HOOK"; then
+  echo "FAIL: cd redirection root mutant not generated" >&2
+  exit 1
+fi
+chmod +x "$CD_REDIRECTION_ROOT_MUTANT_HOOK"
+
+(
+  expect_blocked cd-redirection-root-failability-mutant run_bash_hook_strict "$CD_REDIRECTION_ROOT_MUTANT_HOOK" "cd $product >/dev/null ; touch pwned.txt" "$ops"
+)
+redirection_root_mutant_exit=$?
+(
+  expect_blocked cd-redirection-root-failability-restored run_bash_hook_strict "$HOOK" "cd $product >/dev/null ; touch pwned.txt" "$ops"
+)
+redirection_root_restored_exit=$?
+[ "$redirection_root_mutant_exit" -eq 1 ] || { echo "FAIL: cd redirection root mutant exit expected 1 got $redirection_root_mutant_exit" >&2; exit 1; }
+[ "$redirection_root_restored_exit" -eq 0 ] || { echo "FAIL: cd redirection root restored exit expected 0 got $redirection_root_restored_exit" >&2; exit 1; }
+echo "PASS: cd redirection root failability mutant exit code $redirection_root_mutant_exit"
+echo "PASS: cd redirection root failability restored exit code $redirection_root_restored_exit"
+
 if [ ! -s "$TMP/logs/fire.jsonl" ]; then
   echo "FAIL: MOGUI_HOOK_FIRE_LOG was ignored" >&2
   exit 1
@@ -469,7 +813,7 @@ expect_verdict block both-fields-malformed-legacy-blocked
 grep -q "cannot load product_repositories" "$TMP/stderr" || { echo "FAIL: both-fields-malformed-legacy-blocked missing load failure message" >&2; cat "$TMP/stderr" >&2; exit 1; }
 expect_blocked unsubstituted-runtime-root-token run_bash_default_config "ls" "$ops"
 expect_verdict block unsubstituted-runtime-root-token
-grep -q "{{RUNTIME_ROOT}}" "$TMP/stderr" || { echo "FAIL: unsubstituted-runtime-root-token missing token name" >&2; exit 1; }
+grep -q "{""{RUNTIME_ROOT}}" "$TMP/stderr" || { echo "FAIL: unsubstituted-runtime-root-token missing token name" >&2; exit 1; }
 grep -q "MOGUI_INSTANCE_RUNTIME_CONFIG" "$TMP/stderr" || { echo "FAIL: unsubstituted-runtime-root-token missing override name" >&2; exit 1; }
 
 echo "product-path-guard regression tests passed"

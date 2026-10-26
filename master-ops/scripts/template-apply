@@ -9,7 +9,8 @@ Instance-owned paths are refused by name:
   docs/decisions/closed-decisions-and-facts.md,
   docs/runbooks/boot-comparison-set.md, docs/runbooks/role-state.md,
   docs/runbooks/succession-boot-card.md, scripts/compaction-probe.sh,
-  scripts/harness-selfcheck.sh, .beads/, config/, contracts/,
+  scripts/harness-selfcheck.sh, workspace-card/LOCAL.md, .beads/, config/,
+  contracts/,
   and anything the manifest does not claim.
 
 Per-file outcomes:
@@ -403,7 +404,7 @@ def parse_placeholder_args(items: list[str] | None) -> dict[str, str]:
             raise SystemExit(f"template-apply: expected KEY=VALUE, got {item!r}")
         key, value = item.split("=", 1)
         key = key.strip()
-        if f"{{{{{key}}}}}" not in PLACEHOLDERS:
+        if "{" * 2 + key + "}" * 2 not in PLACEHOLDERS:
             raise SystemExit(
                 f"template-apply: unknown placeholder {key!r}; "
                 f"allowed: {', '.join(p[2:-2] for p in PLACEHOLDERS)}"

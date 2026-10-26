@@ -428,9 +428,52 @@ Any bot review with `submittedAt` after `review_measured_at` must be read in ful
 before merging. A clean worker report is stale the moment a later bot review exists,
 and merging before reading that later review is a missed finding, not an accepted risk.
 
-## Grade distribution (2026-08-05)
+## 15. Front matter clause [machine-enforced]
 
-- machine-enforced: 1
+Grade basis: machine-enforced by `src/master_runtime/core/dispatch_gate.py`'s front matter
+parser and validator, backed by `tests/test_dispatch_gate_front_matter.py`.
+
+A contract may open with a typed front matter block: a first line `---`, flat
+`key: value` lines, and a closing `---`. A value is a bare scalar or a one-line list
+`[a, b, c]`. Nothing nested; no quoting syntax exists, so a quote character typed
+around a value stays in the value as literal content instead of being stripped.
+
+Keys, all at top level:
+
+- `tier` (required): must match the requested model's own tier in the tier policy.
+- `runtime` (required): must be eligible for the declared tier, then match the gate's
+  `--runtime`.
+- `repo` (required): the repository the worker writes to.
+- `budget` (optional): `[rounds=N, hours=N, cost_usd=N.N]`, recorded only.
+- `writes` (optional): path globs the worker is expected to touch, recorded only.
+- `standing_rules` (optional): a list of lowercase, hyphenated names, each
+  declared in [rules/standing-rules.md](../../rules/standing-rules.md) or
+  the seat's own `config/standing-rules.overlay.md` (which wins on a name
+  both declare); the wrapper appends each named block's text to the
+  dispatched spec.
+
+Example head:
+
+```
+---
+tier: efficient
+runtime: claude
+repo: mogui-ADE-orchestrator
+standing_rules: [headless, ack-token, placement, voice, pr-house]
+---
+```
+
+An unknown key, a malformed line, or a name neither rules file declares refuses the
+dispatch before any Orca call. A contract carrying no front matter block only warns
+this release; a later release refuses it.
+
+The verification list gains two manual lines, for a worker to check by hand rather
+than something this gate enforces: the pull request's changed files match the globs
+named in `writes`, and the worker tree holds no `.venv` or `site-packages` directory.
+
+## Grade distribution (2026-10-23, clause 15 added)
+
+- machine-enforced: 2
 - measured: 10
 - prose: 3
 

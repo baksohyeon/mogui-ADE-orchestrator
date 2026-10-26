@@ -1,6 +1,6 @@
 name: Feature request
 description: Something the harness should do and does not
-labels: ["enhancement"]
+labels: ["enhancement", "untriaged"]
 body:
   - type: textarea
     id: problem

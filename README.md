@@ -196,7 +196,7 @@ The schema has 13 required fields. Duplicate generations are rejected, and every
 
 ### Contract-gated dispatch
 
-`src/master_runtime/core/dispatch_gate.py` sits between the master and any worker dispatch. A dispatch request resolves to a `GateDecision` with a stable reason code such as `OK`, `BUDGET_EXCEEDED`, `TIER_FANOUT_CAP`, `NO_COMPLETION_CHANNEL`, `CONTRACT_UNREADABLE`, or `PATH_OUTSIDE_KNOWN_ROOTS`.
+`src/master_runtime/core/dispatch_gate.py` sits between the master and any worker dispatch. A dispatch request resolves to a `GateDecision` with a stable reason code such as `OK`, `BUDGET_EXCEEDED`, `TIER_FANOUT_CAP`, `NO_COMPLETION_CHANNEL`, `CONTRACT_UNREADABLE`, or `PATH_OUTSIDE_KNOWN_ROOTS`. A contract's optional typed front matter block adds `CONTRACT_FRONT_MATTER`, `CONTRACT_FRONT_MATTER_MISSING` (only a warning this release), `CONTRACT_TIER_MISMATCH`, `CONTRACT_RUNTIME_MISMATCH`, `RUNTIME_NOT_ELIGIBLE`, and `STANDING_RULE_UNKNOWN`.
 
 Repeated contract hashes are allowed and recorded with attempt ordinals. `register` verifies the job id against an artifact probe and measures the worker's actual model. Dry-run callers use `check --no-record`.
 

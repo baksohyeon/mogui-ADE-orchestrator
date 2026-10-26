@@ -27,6 +27,12 @@ deployed
 
 The root file is outside every git repository. Links inside the card resolve from the workspace root, not from `workspace-card/` — see [workspace-card README](../workspace-card/README.md).
 
+4. Keep the card out of product sessions. Claude Code loads every ancestor `CLAUDE.md` (and `AGENTS.md` too when Project instructions is set to read both), so a session the owner opens inside a product checkout under the root also loads the master's card. `claudeMdExcludes` has no cwd condition, so it cannot go in user settings without also hiding the card from the master. Write it per product checkout instead, in `<repo>/.claude/settings.local.json` (merge with any existing keys), listing both root files by absolute path; the master's root session still loads the card. Entries are globs, so escape any `[`, `]`, `*`, or `?` in the root path. A hand-made `settings.local.json` is not gitignored automatically; make sure the product repo ignores it so the absolute paths are never committed:
+
+```json
+{"claudeMdExcludes": ["{{WORKSPACE_ROOT}}/CLAUDE.md", "{{WORKSPACE_ROOT}}/AGENTS.md"]}
+```
+
 ## Verify
 
 Run after the fill and deploy above. Each line must exit 0; the trailing `&& echo …` prints only on success and does not mask a failed check:
@@ -44,7 +50,7 @@ match
 - The first `cmp` is the **ops repository agent instruction pair** only (root `CLAUDE.md` vs `AGENTS.md` inside `{{OPS_REPO}}`).
 - The second `cmp` sequence first checks the **canonical workspace-card pair**, then checks both deployed root copies against their matching canonical files. Never cross-compare those two pairs.
 
-Also verify no source workspace's private names were copied accidentally.
+Also verify each product checkout's `.claude/settings.local.json` lists both root card files under `claudeMdExcludes` and is git-ignored, and that no source workspace's private names were copied accidentally.
 
 ## If fail
 

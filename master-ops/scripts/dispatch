@@ -136,6 +136,59 @@ POLICY=$(resolve_tier_policy)
 
 jqf() { python3 -c "import json,sys;d=json.load(sys.stdin);print($1)"; }
 
+# Body text of a "## <name>" heading, read from the local overlay first
+# (so a seat's own copy of a shared block name wins) and the shipped file
+# second. Exit 1 when neither file carries the heading.
+standing_rule_block() {
+  # Reads the same two env-var overrides the gate itself resolves
+  # (DISPATCH_STANDING_RULES / DISPATCH_STANDING_RULES_LOCAL), falling back to
+  # this install's own paths exactly as the gate does. Without this, a value
+  # inherited from the caller's shell could make the gate validate a name
+  # against a file this function never looks at, allowing a dispatch the
+  # append step then cannot find the block for.
+  local name="$1"
+  local main_file="${DISPATCH_STANDING_RULES:-$SCRIPTS_DIR/../rules/standing-rules.md}"
+  local local_file="${DISPATCH_STANDING_RULES_LOCAL:-$SCRIPTS_DIR/../config/standing-rules.overlay.md}"
+  python3 - "$name" "$local_file" "$main_file" <<'EOF'
+import sys
+
+name, local_file, main_file = sys.argv[1], sys.argv[2], sys.argv[3]
+
+
+def extract(path, heading_name):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return None
+    heading = f"## {heading_name}"
+    body = []
+    found = False
+    for line in lines:
+        if found:
+            if line.startswith("## "):
+                break
+            body.append(line)
+        elif line.strip() == heading:
+            found = True
+    if not found:
+        return None
+    while body and not body[0].strip():
+        body.pop(0)
+    while body and not body[-1].strip():
+        body.pop()
+    return "\n".join(body)
+
+
+text = extract(local_file, name)
+if text is None:
+    text = extract(main_file, name)
+if text is None:
+    sys.exit(1)
+print(text)
+EOF
+}
+
 # Resolve product_repositories (or product_repo) from the instance runtime
 # config into owner/repo slugs via each path's git remote origin, serialized
 # for dispatch-collision-check's MOGUI_PRODUCT_REPO-compatible third argument.
@@ -196,6 +249,35 @@ PRODUCT_REPO_ARG=$(resolve_product_repo_arg || printf '%s' "${MOGUI_PRODUCT_REPO
 # master from writing. Point it at the operations copy instead, so there is one
 # file rather than two that can drift.
 export INSTANCE_RUNTIME_CONFIG="$INSTANCE_RUNTIME_CONFIG"
+
+# Points the gate at this install's own standing-rules file, and separately
+# at the instance-owned overlay beside it, instead of the gate's own
+# template-copy fallback, the same seam DISPATCH_TIER_POLICY already fills
+# for the tier policy. rules/standing-rules.md refreshes on every template
+# re-stamp; config/standing-rules.overlay.md, under the instance-owned config/
+# directory, never does.
+#
+# A missing install file used to leave DISPATCH_STANDING_RULES unset, so the
+# gate fell back to its own bundled template copy and validated a contract's
+# standing_rules names against it, while standing_rule_block's append step
+# below reads the same unset-falls-back-to-this-install-path expression and
+# finds nothing there: the gate passed a contract the append step then could
+# not deliver. Refusing here, before the gate call, keeps both reads pinned
+# to one file. A caller-supplied override is left alone and skips the check.
+# The overlay export stays unconditional: it never had a meaningful
+# template-side fallback to defer to (the template ships no overlay at all),
+# and the gate already treats a missing overlay path as "no extra names"
+# instead of an error.
+STANDING_RULES_PATH="$SCRIPTS_DIR/../rules/standing-rules.md"
+if [ -z "${DISPATCH_STANDING_RULES:-}" ]; then
+  if [ ! -f "$STANDING_RULES_PATH" ]; then
+    echo "dispatch: standing rules file missing: $STANDING_RULES_PATH" >&2
+    exit 10
+  fi
+  DISPATCH_STANDING_RULES="$STANDING_RULES_PATH"
+fi
+export DISPATCH_STANDING_RULES
+export DISPATCH_STANDING_RULES_LOCAL="$SCRIPTS_DIR/../config/standing-rules.overlay.md"
 
 # Transcript glob for a model probe, per runtime.
 #
@@ -579,6 +661,62 @@ codex_start_screen_problem() {
 # because the launch flags below and the footer check above must agree on both.
 CODEX_REASONING_EFFORT=xhigh
 CODEX_MIGRATION_ACK='notice.model_migrations={"gpt-5.5"="gpt-6.1-sol"}'
+CODEX_BYPASS_FLAG=
+
+# Optional codex_reasoning_effort and codex_bypass_approvals_and_sandbox from the
+# instance runtime config. Effort list from codex-cli 0.163.0 (2026-10-17); an
+# unknown value is refused because the footer check would wait forever.
+# An unreadable config is left to unavailable_runtimes_guard, which refuses it.
+#   exit 0: effort, then bypass (1 or 0), on stdout. exit 1: one-line reason.
+codex_instance_launch_config() {
+  [ -f "$INSTANCE_RUNTIME_CONFIG" ] || { printf '%s\n0\n' "$CODEX_REASONING_EFFORT"; return 0; }
+  python3 - "$INSTANCE_RUNTIME_CONFIG" "$CODEX_REASONING_EFFORT" <<'EOF'
+import json
+import sys
+
+path, effort = sys.argv[1], sys.argv[2]
+efforts = ("minimal", "low", "medium", "high", "xhigh", "max")
+try:
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+except Exception:
+    data = {}
+if not isinstance(data, dict):
+    data = {}
+value = data.get("codex_reasoning_effort")
+if value is not None:
+    if not isinstance(value, str) or value not in efforts:
+        print(f"codex_reasoning_effort is {value!r}; expected one of {', '.join(efforts)}")
+        sys.exit(1)
+    effort = value
+bypass = data.get("codex_bypass_approvals_and_sandbox")
+if bypass is not None and not isinstance(bypass, bool):
+    print(f"codex_bypass_approvals_and_sandbox is {bypass!r}; expected true or false")
+    sys.exit(1)
+print(effort)
+print(1 if bypass else 0)
+EOF
+}
+
+# Called bare, not through $(...), so the refusal can stop dispatch. Only a
+# codex dispatch calls it, so a bad codex key never stops another runtime. The
+# bypass warning goes to stdout because stdout is this script's mechanical log;
+# the ledger keeps the choice as codex_bypass on the host-diversity audit line.
+apply_codex_instance_launch_config() {
+  local out status
+  out=$(codex_instance_launch_config)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "✗ invalid codex launch setting in $INSTANCE_RUNTIME_CONFIG: $out" >&2
+    exit 2
+  fi
+  CODEX_REASONING_EFFORT=$(printf '%s\n' "$out" | sed -n 1p)
+  if [ "$(printf '%s\n' "$out" | sed -n 2p)" = 1 ]; then
+    CODEX_BYPASS_FLAG=' --dangerously-bypass-approvals-and-sandbox'
+    echo "WARNING: codex_bypass_approvals_and_sandbox is true in $INSTANCE_RUNTIME_CONFIG;"
+    echo "         this codex worker launches with --dangerously-bypass-approvals-and-sandbox (no sandbox, no approvals)."
+  fi
+}
 
 shell_quote() {
   python3 - "$1" <<'EOF'
@@ -621,6 +759,11 @@ runtime_command() {
     # disables the sandbox as well as approvals. Weakening a sandbox is not a
     # side effect to take on while fixing a delivery bug, so the safer measured
     # path stays and the operator is told when it has not run.
+    # Since 2026-10-17 that stays the default: the flag is off unless the operator
+    # opts in with codex_bypass_approvals_and_sandbox in the instance runtime config.
+    # Measured 2026-10-24 on codex-cli 0.164.0 with one unreviewed hook in a scratch
+    # CODEX_HOME: the "Hooks need review" modal shows the same with and without the
+    # flag, so a bypass launch still reaches the hooks vet in the launch loop below.
     # The model flag is separate from the approval posture above and was missing
     # here until 2026-08-05. The gate validated a model id, the tier policy
     # recorded it, and the launcher dropped it: two codex dispatches declared
@@ -640,7 +783,7 @@ runtime_command() {
     # written as an inline table: the dotted form reads the dot inside the
     # model id as a nesting separator and fails with "invalid type: map,
     # expected a string".
-    codex) echo "codex --model $model_arg -c $(shell_quote "model_reasoning_effort=\"$CODEX_REASONING_EFFORT\"") -c check_for_update_on_startup=false -c $(shell_quote "$CODEX_MIGRATION_ACK")";;
+    codex) echo "codex --model $model_arg -c $(shell_quote "model_reasoning_effort=\"$CODEX_REASONING_EFFORT\"") -c check_for_update_on_startup=false -c $(shell_quote "$CODEX_MIGRATION_ACK")${CODEX_BYPASS_FLAG:-}";;
     gemini) echo "gemini";;
     opencode) echo "opencode";;
     # agy is the Gemini host; `agy models` reports gemini-* ids. Its approval flag
@@ -954,12 +1097,12 @@ codex_hooks_vet_homes() {
 
 record_host_diversity_audit() {
   [ "$CHECK_ONLY" = 1 ] && return 0
-  python3 - "$LEDGER" "$RUNTIME" "$MASTER_HOST_RUNTIME" "$INSTALLED_RUNTIMES" "$ALTERNATIVE_RUNTIMES" "$UNAVAILABLE_RUNTIMES" "$SAME_HOST_REASON" "$TASK" "$DISP" "$SHA" <<'EOF'
+  python3 - "$LEDGER" "$RUNTIME" "$MASTER_HOST_RUNTIME" "$INSTALLED_RUNTIMES" "$ALTERNATIVE_RUNTIMES" "$UNAVAILABLE_RUNTIMES" "$SAME_HOST_REASON" "$TASK" "$DISP" "$SHA" "${CODEX_BYPASS_FLAG:-}" <<'EOF'
 import json
 import sys
 import time
 
-ledger, runtime, master, installed, alternatives, unavailable, reason, task, dispatch, sha = sys.argv[1:]
+ledger, runtime, master, installed, alternatives, unavailable, reason, task, dispatch, sha, bypass_flag = sys.argv[1:]
 entry = {
     "ts": time.time(),
     "kind": "host_diversity_audit",
@@ -973,6 +1116,7 @@ entry = {
     "orchestration_task": task,
     "job_id": dispatch,
     "contract_sha": sha,
+    "codex_bypass": bool(bypass_flag),
 }
 with open(ledger, "a", encoding="utf-8") as fh:
     fh.write(json.dumps(entry, sort_keys=True, separators=(",", ":")) + "\n")
@@ -1033,6 +1177,8 @@ UNAVAILABLE_RUNTIMES=$(unavailable_runtime_names | join_csv)
 # resolution or gate check spends effort on a runtime the operator already
 # declared unusable on this install.
 refuse_unavailable_runtime "$RUNTIME" "$ALTERNATIVE_RUNTIMES" || exit 2
+
+[ "$RUNTIME" = codex ] && apply_codex_instance_launch_config
 
 # The model id and the runtime are chosen independently, so nothing stopped a
 # claude model id from being declared for a codex or grok worker. That is not a
@@ -1306,6 +1452,27 @@ authority for this task, over anything in this line:
 It states an acknowledgement token. Quote that token in your report. A report without it
 tells the coordinator nothing about whether the contract was read."
   echo "📄 contract delivered · $CONTRACT_DEST · read-token required"
+fi
+
+# 1.6 append standing rules the contract's front matter named.
+#
+# Reads the names from the gate's own recorded decision ($CHK, from the
+# recording check above) instead of re-parsing the contract: dispatch-gate
+# already validated every name against these same two files before allowing
+# the dispatch, so a name reaching here always resolves; a lookup failure
+# would mean the gate and this wrapper drifted apart on which files they read.
+STANDING_RULE_NAMES=$(echo "$CHK" | jqf "' '.join(d.get('front_matter', {}).get('standing_rules', []) or [])")
+if [ -n "$STANDING_RULE_NAMES" ]; then
+  for name in $STANDING_RULE_NAMES; do
+    block=$(standing_rule_block "$name") || {
+      echo "✗ standing rule block not found: $name" >&2; exit 3; }
+    SPEC="$SPEC
+
+Standing rules ($name):
+
+$block"
+  done
+  echo "📎 standing rules · $STANDING_RULE_NAMES"
 fi
 
 # 2. task-create

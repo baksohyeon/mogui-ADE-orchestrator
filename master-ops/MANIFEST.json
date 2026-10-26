@@ -1,5 +1,5 @@
 {
-  "template_version": "v0.5.258",
+  "template_version": "v0.5.278",
   "files": [
     "AGENTS.md",
     "CLAUDE.md",
@@ -61,6 +61,7 @@
     "docs/runbooks/worker-wait.md",
     "docs/travelog/README.md",
     "model-tier-policy.json",
+    "rules/standing-rules.md",
     "scripts/approval-prompt-markers.txt",
     "scripts/codex-hooks-review-answer",
     "scripts/compaction-probe.sh",
@@ -103,6 +104,7 @@
     "scripts/test-codex-hooks-review-answer.sh",
     "scripts/test-contributing-shell-loop.sh",
     "scripts/test-conversation-redaction-scan-glob-guard.sh",
+    "scripts/test-dispatch-codex-instance-config.sh",
     "scripts/test-dispatch-runtime.sh",
     "scripts/test-dispatch-smoke.sh",
     "scripts/test-dispatch-timeline.sh",

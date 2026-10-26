@@ -99,6 +99,30 @@ reach new installations only. Existing ones are copies and do not update.
 **Capture exit codes directly.** `out=$(cmd 2>&1); rc=$?` rather than through a
 pipe, where `$?` belongs to the last command in the pipeline.
 
+## What happens to a pull request
+
+Opening one requests the repository owner as reviewer, from `.github/CODEOWNERS`.
+
+The path labeler then adds `area/*` labels for the paths changed and a
+`size/*` label for the added lines and files touched. Both run from `main`,
+so a pull request that adds or edits the labeler itself does not label
+itself. The assignee shows whose turn it is. Every run sets the assignee to
+the author while `waiting-user-response` is on and the author is not a bot,
+and to the maintainer otherwise. An assignee other than those two logins
+stays as it is.
+
+Six checks must pass before merge: `tests (ubuntu-latest)`,
+`tests (macos-latest)`, `shell-tests (ubuntu-latest)`,
+`shell-tests (macos-latest)`, `changelog-fragment`, and `redaction`. Every
+open review thread must resolve before merge, and merges squash to one
+commit on `main`.
+
+A pull request or issue with no activity for 14 days after it closes gets a
+`locked` label and its thread locks.
+
+The `risk:` label is set by a person; issue forms apply `untriaged`
+automatically to new issues.
+
 ## Scope
 
 This repository owns workspace-level orchestration: roles, succession, worker

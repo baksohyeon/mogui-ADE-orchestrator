@@ -21,6 +21,8 @@ from master_runtime.core.bootstrap import (
 
 DEFAULT_MEMORY_CAP = 15
 DEFAULT_BUDGET_CHARS = 12_000
+CwdProbe = Callable[[int], Optional[str]]
+AncestorProbe = Callable[[], Optional[int]]
 # Block is truncated, tracks first, once it exceeds this.
 SELF_BLOCK_CAP = 1_000
 # Workspace-neutral by default: the operations repository name differs per
@@ -285,9 +287,18 @@ def _audit_bd_prime(
 def _dual_line(
     session_id: Optional[str],
     probe: Optional[ProcessProbe],
+    seat_root: Optional[Path] = None,
+    cwd_probe: Optional[CwdProbe] = None,
+    ancestor_probe: Optional[AncestorProbe] = None,
 ) -> Tuple[str, List[str]]:
     try:
-        warnings = _detect_dual_instances(session_id, probe)
+        warnings = _detect_dual_instances(
+            session_id,
+            probe,
+            seat_root=seat_root,
+            cwd_probe=cwd_probe,
+            ancestor_probe=ancestor_probe,
+        )
     except Exception as exc:  # noqa: BLE001 - boot survives
         return (
             "[DUAL-INSTANCE] probe-failed (" + exc.__class__.__name__ + ")",
@@ -306,6 +317,9 @@ def run_live(
     session_id: Optional[str] = None,
     budget_chars: int = DEFAULT_BUDGET_CHARS,
     charter_pointer: Optional[str] = None,
+    seat_root: Optional[Path] = None,
+    cwd_probe: Optional[CwdProbe] = None,
+    ancestor_probe: Optional[AncestorProbe] = None,
 ) -> str:
     """Assemble the full master bootstrap block.
 
@@ -324,7 +338,13 @@ def run_live(
         alerts.extend(track_alerts)
         audit_line, audit_alerts = _audit_bd_prime(bd_runner, budget_chars)
         alerts.extend(audit_alerts)
-        dual_line, dual_alerts = _dual_line(session_id, probe)
+        dual_line, dual_alerts = _dual_line(
+            session_id,
+            probe,
+            seat_root=seat_root,
+            cwd_probe=cwd_probe,
+            ancestor_probe=ancestor_probe,
+        )
         alerts.extend(dual_alerts)
         return compose(
             role_block,

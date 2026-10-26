@@ -10,6 +10,7 @@ import pytest
 from master_runtime.core.bootstrap import (
     BootstrapConfig,
     BootstrapError,
+    _detect_dual_instances,
     bootstrap,
 )
 
@@ -112,6 +113,135 @@ def test_strict_lease_rejects_dual_instance(tmp_path: Path) -> None:
             ),
             process_probe=lambda: ps_output,
         )
+
+
+def test_seat_peer_detected_by_cwd_match(tmp_path: Path) -> None:
+    ps_output = "40400 claude --dangerously-skip-permissions\n"
+
+    warnings = _detect_dual_instances(
+        "session-abc",
+        lambda: ps_output,
+        seat_root=tmp_path,
+        cwd_probe=lambda pid: str(tmp_path),
+    )
+
+    assert warnings == ["SEAT_PEER:40400"]
+
+
+def test_seat_peer_not_flagged_for_other_cwd(tmp_path: Path) -> None:
+    ps_output = "40400 claude --dangerously-skip-permissions\n"
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+
+    warnings = _detect_dual_instances(
+        "session-abc",
+        lambda: ps_output,
+        seat_root=tmp_path,
+        cwd_probe=lambda pid: str(other),
+    )
+
+    assert warnings == []
+
+
+def test_seat_peer_excludes_claude_ancestor(tmp_path: Path) -> None:
+    ps_output = "40400 claude --dangerously-skip-permissions\n"
+
+    warnings = _detect_dual_instances(
+        "session-abc",
+        lambda: ps_output,
+        seat_root=tmp_path,
+        cwd_probe=lambda pid: str(tmp_path),
+        ancestor_probe=lambda: 40400,
+    )
+
+    assert warnings == []
+
+
+def test_seat_peer_detected_without_session_id(tmp_path: Path) -> None:
+    ps_output = "40400 claude --dangerously-skip-permissions\n"
+
+    warnings = _detect_dual_instances(
+        None,
+        lambda: ps_output,
+        seat_root=tmp_path,
+        cwd_probe=lambda pid: str(tmp_path),
+    )
+
+    assert warnings == ["SEAT_PEER:40400"]
+
+
+def test_ancestor_with_session_id_in_argv_is_excluded(tmp_path: Path) -> None:
+    ps_output = "40400 claude --resume session-abc\n"
+
+    warnings = _detect_dual_instances(
+        "session-abc",
+        lambda: ps_output,
+        seat_root=tmp_path,
+        cwd_probe=lambda pid: str(tmp_path),
+        ancestor_probe=lambda: 40400,
+    )
+
+    assert warnings == []
+
+    bootstrap(
+        BootstrapConfig(
+            charter_path=_file(tmp_path, "charter.md", "# Charter\n"),
+            session_id="session-abc",
+            strict_lease=True,
+            seat_root=tmp_path,
+        ),
+        process_probe=lambda: ps_output,
+        cwd_probe=lambda pid: str(tmp_path),
+        ancestor_probe=lambda: 40400,
+    )
+
+
+def test_dual_instance_unchanged_at_different_cwd(tmp_path: Path) -> None:
+    ps_output = "40309 claude --session-id session-abc\n"
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+
+    warnings = _detect_dual_instances(
+        "session-abc",
+        lambda: ps_output,
+        seat_root=tmp_path,
+        cwd_probe=lambda pid: str(other),
+    )
+
+    assert warnings == ["DUAL_INSTANCE:40309"]
+
+
+def test_strict_lease_rejects_seat_peer(tmp_path: Path) -> None:
+    charter = _file(tmp_path, "charter.md", "# Charter\n")
+    ps_output = "40400 claude --dangerously-skip-permissions\n"
+
+    with pytest.raises(BootstrapError, match="SEAT_PEER:40400"):
+        bootstrap(
+            BootstrapConfig(
+                charter_path=charter,
+                session_id="session-abc",
+                strict_lease=True,
+                seat_root=tmp_path,
+            ),
+            process_probe=lambda: ps_output,
+            cwd_probe=lambda pid: str(tmp_path),
+        )
+
+
+def test_seat_peer_skips_pid_when_cwd_probe_raises(tmp_path: Path) -> None:
+    ps_output = "40400 claude --dangerously-skip-permissions\n"
+
+    def raising_cwd_probe(pid: int):
+        raise OSError("cwd probe unavailable")
+
+    warnings = _detect_dual_instances(
+        "session-abc",
+        lambda: ps_output,
+        seat_root=tmp_path,
+        cwd_probe=raising_cwd_probe,
+    )
+
+    assert warnings == []
 
 
 @skip_windows_exec_surface

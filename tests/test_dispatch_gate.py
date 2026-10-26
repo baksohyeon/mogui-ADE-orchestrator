@@ -459,7 +459,10 @@ def test_unknown_model_follows_policy_setting(tmp_path: Path) -> None:
     assert deny_decision.allow is False
     assert deny_decision.reason == ReasonCode.TIER_POLICY
     assert warn_decision.allow is True
-    assert warn_decision.warnings == (ReasonCode.TIER_POLICY,)
+    assert warn_decision.warnings == (
+        ReasonCode.TIER_POLICY,
+        ReasonCode.CONTRACT_FRONT_MATTER_MISSING,
+    )
 
 
 def test_check_records_sentinel_log_completion_channel(tmp_path: Path) -> None:
@@ -575,7 +578,10 @@ def test_r2_allows_single_high_cost_runtime_with_warning(tmp_path: Path) -> None
 
     assert decision.allow is True
     assert decision.reason == ReasonCode.OK
-    assert decision.warnings == (ReasonCode.HIGH_COST_RUNTIME,)
+    assert decision.warnings == (
+        ReasonCode.CONTRACT_FRONT_MATTER_MISSING,
+        ReasonCode.HIGH_COST_RUNTIME,
+    )
 
 
 def test_check_allow_issues_dispatch_ticket_with_contract_fixture(
@@ -2153,7 +2159,10 @@ def test_contract_lint_warns_for_mcp_without_trust_handling(
     assert decision.allow is True
     assert decision.reason == ReasonCode.OK
     assert ReasonCode.MCP_TRUST_UNHANDLED in decision.warnings
-    assert _ledger_entries(tmp_path)[-1]["warnings"] == ["MCP_TRUST_UNHANDLED"]
+    assert _ledger_entries(tmp_path)[-1]["warnings"] == [
+        "MCP_TRUST_UNHANDLED",
+        "CONTRACT_FRONT_MATTER_MISSING",
+    ]
 
 
 def test_contract_lint_accepts_mcp_with_trust_handling(
@@ -2568,6 +2577,82 @@ def test_cli_check_creates_default_ticket_directory(tmp_path: Path) -> None:
 
 
 @skip_windows_exec_surface
+def test_cli_check_honors_mogui_state_dir_for_ticket_and_known_roots(
+    tmp_path: Path,
+) -> None:
+    """MOGUI_STATE_DIR (testability seam, docs/runbooks/host-harness-inventory.md)
+    redirects the default ticket_dir and known_roots_path off ~/.mogui: a
+    `check` run writes its ticket under the state dir, reads known-roots.json
+    from the state dir, and leaves the real (fake-HOME) ticket dir and
+    known-roots.json alone."""
+    contract = _dispatch_contract(tmp_path, runtime="codex")
+    contract_payload = json.loads(contract.read_text(encoding="utf-8"))
+    contract_payload["workspace"] = "/srv/roots/alpha/workspace/example-product"
+    contract_payload["repo"] = "/srv/roots/alpha/projects/mogui-ADE-orchestrator"
+    contract.write_text(
+        json.dumps(contract_payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    ledger = tmp_path / "cli-ledger.jsonl"
+    home = tmp_path / "home"
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    real_mogui_dir = home / ".mogui"
+    real_mogui_dir.mkdir(parents=True)
+    # The contract's paths (/srv/roots/alpha/...) sit under /srv/roots/alpha: the
+    # state-dir file allows that root, the fake-HOME file does not, so a fallback
+    # to ~/.mogui surfaces a PATH_OUTSIDE_KNOWN_ROOTS warning that this test fails on.
+    (state_dir / "known-roots.json").write_text(
+        json.dumps(["/srv/roots/alpha"]), encoding="utf-8"
+    )
+    (real_mogui_dir / "known-roots.json").write_text(
+        json.dumps(["/srv/roots/beta"]), encoding="utf-8"
+    )
+    env = os.environ.copy()
+    env["HOME"] = str(home)
+    env["MOGUI_STATE_DIR"] = str(state_dir)
+
+    result = subprocess.run(
+        [
+            str(_script()),
+            "--ledger",
+            str(ledger),
+            "check",
+            "--runtime",
+            "codex",
+            "--model",
+            "gpt-5.6-luna",
+            "--contract",
+            str(contract),
+            "--agents",
+            "2",
+            "--est-chars",
+            "24000",
+            "--completion-channel",
+            "sentinel-log",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    contract_sha = _sha256(contract)
+    state_ticket_dir = state_dir / "dispatch-tickets"
+    ticket = state_ticket_dir / f"codex-{contract_sha[:12]}.json"
+    real_ticket_dir = real_mogui_dir / "dispatch-tickets"
+
+    assert result.returncode == 0, result.stderr
+    assert state_ticket_dir.is_dir()
+    assert ticket.is_file()
+    # The real (fake-HOME) ticket dir is never created: the dispatch's state
+    # went entirely to MOGUI_STATE_DIR, never split across both.
+    assert not real_ticket_dir.exists()
+    payload = json.loads(result.stdout)
+    assert "PATH_OUTSIDE_KNOWN_ROOTS" not in payload["warnings"]
+
+
+@skip_windows_exec_surface
 def test_cli_register_ambiguous_prints_candidate_shas(tmp_path: Path) -> None:
     first_contract = _contract(tmp_path, "first cli candidate")
     second_contract = _contract(tmp_path, "second cli candidate")
@@ -2923,7 +3008,7 @@ def test_v2_unknown_model_is_capped_not_denied(tmp_path: Path) -> None:
     assert ReasonCode.TIER_POLICY not in allowed.warnings
     entry = _ledger_entries(tmp_path)[-1]
     assert entry["tier"] == "unknown"
-    assert entry["warnings"] == ["TIER_UNKNOWN_MODEL"]
+    assert entry["warnings"] == ["TIER_UNKNOWN_MODEL", "CONTRACT_FRONT_MATTER_MISSING"]
 
     denied = gate.check(
         DispatchRequest(

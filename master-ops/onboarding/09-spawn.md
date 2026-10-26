@@ -10,7 +10,7 @@ Load rule: read this file only when Step 8 begins. Router: [`../ONBOARDING.md`](
 
 ### Owner script (kind ELI5, adapt to the owner's language)
 
-Where we are: everything the Master needs is in place; the Herald has prepared the book, the seat, and the rules. What we decide next: whether to raise the Master now or defer. Explain in plain words: we will open one new Orca terminal in the workspace seat we recorded earlier, hand it a kickoff note, and wait until it reports its first boot went clean; the owner does not need to type anything during this. Keep the summoning frame grounded: raising the Master means creating one new verified terminal, not magic. Ask for confirmation to spawn now or defer.
+Where we are: everything the Master needs is in place; the Herald has prepared the book, the seat, and the rules. What we decide next: whether to raise the Master now or defer. Explain in plain words: we will open one new Orca terminal in the workspace seat we recorded earlier, hand it a kickoff note, and wait until it reports its first boot went clean; the owner only answers the new terminal's folder-trust prompt once. Keep the summoning frame grounded: raising the Master means creating one new verified terminal, not magic. Ask for confirmation to spawn now or defer.
 
 ### Agent-only preparation (not shown to the owner)
 
@@ -59,6 +59,8 @@ ORCA orchestration check --wait --types worker_done,escalation,question --timeou
 Require the gate `check` to return `allow: true` before spawning or attaching the worker. After the Dispatch artifact exists, run `register` with that exact orchestration Task ID before waiting for final completion evidence.
 
 Require placement verification `MATCH` or `MATCH_REISSUED`; the latter must include `handle_reissued: true` and its adopted live handle.
+
+`master-succeed spawn` launches `claude` with `--dangerously-skip-permissions`. Tell the owner before spawning: the new terminal shows a folder-trust prompt they answer once, and after that ordinary tool permission prompts are skipped, though the few actions no permission mode auto-approves can still ask. The hooks wired in step 7 still run on every call.
 
 ### Verify (Step 8)
 

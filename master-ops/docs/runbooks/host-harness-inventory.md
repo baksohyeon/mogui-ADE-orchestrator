@@ -15,6 +15,27 @@ Re-measure on host changes; this is a snapshot, not a spec.
 | Worker host diversity guard | ops `scripts/dispatch` + `~/.mogui/dispatch-ledger.jsonl` | advisory runtime collision warning, installed alternative runtime listing, and same-host audit records |
 | Harness self-check (`scripts/harness-selfcheck.sh`) | read-only verification | measures reachability of skills, hooks, and tracker; exit 0 (all reachable), 1 (gap found: skill unreachable, hook missing/unwired, tracker misresolved), 2 (settings unreadable); prevents silent wiring failures; no modifications made |
 
+Testability seam: `MOGUI_STATE_DIR`, an environment override, moves five state
+files off `~/.mogui` (the dispatch ledger, the delivered-contract copies, the
+gate's tickets, its known-roots file, and the event log). It does not move the
+scripts root (code stays where it is), any runtime's trust state, or `$HOME`
+itself; moving `$HOME` would move trust state with it, and a real-worker smoke
+run would then fail on a trust dialog that production never shows. Unset or
+empty, every one of those five defaults is exactly what it is today; set, it
+must be an absolute path to an existing directory, checked before any state
+operation, or the caller is refused with one line on stderr naming the
+variable and the value. `mogui_log.py`'s `emit()` is the fail-open exception:
+it writes that same stderr line and returns a fallback event dict instead of
+refusing.
+No script creates the directory. Production never sets this variable.
+
+The master's bounded loop over `loop-ok` tracker items
+(`scripts/loop-check`) reads a per-run progress file and the owner's stop
+file (`STOP` beside it, or `--stop-file`), and nothing else: no tracker, no
+`orca`, no `git`. State lives in one markdown file per run,
+`docs/loop/<YYYY-MM-DD>-<name>.md` in ops. See the
+[loop runbook](loop.md).
+
 Division of labor: gsd owns context-total measurement; the instance layer owns
 charter enforcement and dispatch provenance; gstack owns skill telemetry. No overlap
 measured — check before adding anything to any of these lanes.

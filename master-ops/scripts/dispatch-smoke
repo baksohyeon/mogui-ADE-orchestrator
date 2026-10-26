@@ -1,0 +1,609 @@
+#!/bin/bash
+# dispatch-smoke: a seat-run end-to-end check of scripts/dispatch's created-pane
+# path, for --runtime claude only. Drives one deterministic top-tier refusal
+# (gate layer) and one real haiku worker (orca + worker layers), under the
+# MOGUI_STATE_DIR seam (docs/runbooks/host-harness-inventory.md), and prints a
+# one-line verdict naming the layer that broke. See
+# docs/runbooks/dispatch-smoke.md for exit codes and what stays shared.
+#
+# Out of scope: the reused-pane path, codex and cursor runtimes, worker output
+# quality.
+set -u
+
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+WRAPPER="$SCRIPT_DIR/dispatch"
+START_TS=$(date +%s)
+
+usage() {
+  echo "usage: dispatch-smoke --repo PATH [--model ID] [--tier-policy FILE] [--worker-timeout SECONDS]" >&2
+  exit 1
+}
+
+REPO=""
+MODEL="claude-haiku-4-5"
+TIER_POLICY_OVERRIDE=""
+WORKER_TIMEOUT=180
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --repo) REPO=$2; shift 2;;
+    --model) MODEL=$2; shift 2;;
+    --tier-policy) TIER_POLICY_OVERRIDE=$2; shift 2;;
+    --worker-timeout) WORKER_TIMEOUT=$2; shift 2;;
+    *) usage;;
+  esac
+done
+[ -n "$REPO" ] || usage
+
+# ---------------------------------------------------------------------------
+# Pure functions. test-dispatch-smoke.sh extracts each of these by exact-line
+# range and runs it in a subshell with canned input: keep each one starting
+# with "name() {" at column 0, ending with a lone "}" at column 0, no other
+# column-0 "}" inside, arguments in, result on stdout, no globals read.
+# ---------------------------------------------------------------------------
+
+wrapper_is_rendered() {
+  local wrapper="$1"
+  ! grep -qF '{{' "$wrapper"
+}
+
+expected_token() {
+  local file="$1" sha
+  sha=$(shasum -a 256 "$file" | awk '{print $1}')
+  printf 'ack-%s\n' "${sha:8:12}"
+}
+
+isolation_diff() {
+  local ledger_sha_before="$1" ledger_sha_after="$2" \
+        contracts_before="$3" contracts_after="$4" out=""
+  [ "$ledger_sha_before" = "$ledger_sha_after" ] || out="$out ledger"
+  [ "$contracts_before" = "$contracts_after" ] || out="$out contracts"
+  printf '%s\n' "${out# }"
+}
+
+normal_case_verdict() {
+  local rc="$1" log="$2" status="${3:-}" class="" line step
+  line=$(grep -m1 '^delivery pre=.*class=' "$log" 2>/dev/null || true)
+  if [ -n "$line" ]; then
+    class=$(printf '%s\n' "$line" | sed -n 's/.*class=\([^ ]*\).*/\1/p')
+  fi
+  if [ -n "$class" ] && [ "$class" != agent-started ] && [ "$class" != done ]; then
+    # class=unknown with a dispatch record that already reads completed is
+    # the seat-smoke case this guards: the worker finished inside the window
+    # and the pane carries no signal either way. Fold both facts into one
+    # verdict instead of letting the seat read "delivery unverified" next to
+    # a dispatch-show that disagrees.
+    if [ "$class" = unknown ] && [ "$status" = completed ]; then
+      printf 'layer=delivery step=unknown worker=completed\n'
+    else
+      printf 'layer=delivery step=%s\n' "$class"
+    fi
+    return 0
+  fi
+  case "$rc" in
+    0)
+      if [ -n "$class" ]; then
+        printf 'PASS\n'
+      else
+        printf 'layer=wrapper step=0\n'
+      fi
+      ;;
+    2) printf 'layer=gate\n';;
+    3)
+      if grep -q '^✗ task-create failed' "$log"; then step=task-create
+      elif grep -q '^✗ terminal create failed' "$log"; then step=terminal-create
+      elif grep -q '^✗ dispatch failed' "$log"; then step=dispatch
+      elif grep -qE '^→ task_[0-9a-f]+ → term_[0-9a-f-]+ \(신규\)$' "$log"; then step=dispatch
+      elif grep -q '^📄 contract delivered' "$log"; then step=terminal-create
+      else step=task-create
+      fi
+      printf 'layer=orca step=%s\n' "$step"
+      ;;
+    4) printf 'layer=register\n';;
+    5) printf 'layer=delivery step=%s\n' "${class:-unknown}";;
+    *) printf 'layer=wrapper step=%s\n' "$rc";;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# Preconditions, each a separate check, exit 10 with one stderr line naming
+# the failed one.
+# ---------------------------------------------------------------------------
+
+precondition_fail() {
+  echo "✗ dispatch-smoke precondition failed: $1" >&2
+  exit 10
+}
+
+wrapper_is_rendered "$WRAPPER" || precondition_fail \
+  "$WRAPPER still carries an unrendered {{ template token; dispatch-smoke measures an instance's rendered wrapper, and the CI shell test (test-dispatch-smoke.sh) covers the template shape instead"
+
+grep -qF 'MOGUI_STATE_DIR' "$WRAPPER" || precondition_fail \
+  "$WRAPPER has no MOGUI_STATE_DIR seam; dispatch-smoke needs it to isolate the run's state"
+
+command -v claude >/dev/null 2>&1 || precondition_fail "claude is not on PATH"
+
+STATUS_JSON=$(orca status --json 2>/dev/null)
+STATUS_OK=$(printf '%s' "$STATUS_JSON" | python3 -c '
+import json, sys
+try:
+    print(json.load(sys.stdin).get("ok"))
+except Exception:
+    print(False)
+' 2>/dev/null)
+[ "$STATUS_OK" = "True" ] || precondition_fail "orca status --json did not report ok"
+
+# ---------------------------------------------------------------------------
+# Isolation setup. Everything from here on runs under MOGUI_STATE_DIR="$STATE"
+# for each wrapper invocation; $HOME is never changed.
+# ---------------------------------------------------------------------------
+
+STATE=$(mktemp -d "${TMPDIR:-/tmp}/dispatch-smoke.XXXXXX") || {
+  echo "✗ dispatch-smoke: cannot create a scratch state directory" >&2
+  exit 12
+}
+
+LEDGER_FILE="$HOME/.mogui/dispatch-ledger.jsonl"
+CONTRACTS_DIR="$HOME/.mogui/dispatch-contracts"
+
+snapshot_ledger_sha() {
+  if [ -f "$LEDGER_FILE" ]; then
+    shasum -a 256 "$LEDGER_FILE" | awk '{print $1}'
+  else
+    echo absent
+  fi
+}
+snapshot_ledger_lines() {
+  if [ -f "$LEDGER_FILE" ]; then
+    wc -l < "$LEDGER_FILE" | tr -d ' '
+  else
+    echo 0
+  fi
+}
+snapshot_contracts() {
+  if [ -d "$CONTRACTS_DIR" ]; then
+    ls -1 "$CONTRACTS_DIR" 2>/dev/null | sort
+  else
+    echo absent
+  fi
+}
+
+LEDGER_SHA_BEFORE=$(snapshot_ledger_sha)
+LEDGER_LINES_BEFORE=$(snapshot_ledger_lines)
+CONTRACTS_BEFORE=$(snapshot_contracts)
+
+TASK=""
+DISP=""
+WORKTREE_NAME=""
+WORKTREE_CREATED=0
+TAIL_PID=""
+DISPATCH_COMPLETED=0
+FINAL_RC=0
+PASS_LINE=""
+SMOKE_SHA_HINT=""
+
+print_artifact() {
+  local label="$1" path="$2" max="${3:-5}"
+  if [ -d "$path" ]; then
+    echo "$label: $path" >&2
+    ls -la "$path" >&2
+    return 0
+  fi
+  if [ ! -e "$path" ]; then
+    echo "$label: $path (absent)" >&2
+    return 0
+  fi
+  if [ ! -s "$path" ]; then
+    echo "$label: $path (empty)" >&2
+    return 0
+  fi
+  echo "$label: $path (first $max line(s))" >&2
+  head -n "$max" "$path" >&2
+}
+
+cleanup() {
+  local ledger_sha_after ledger_lines_after contracts_after diff added isolation_rc=0
+
+  ledger_sha_after=$(snapshot_ledger_sha)
+  ledger_lines_after=$(snapshot_ledger_lines)
+  contracts_after=$(snapshot_contracts)
+  diff=$(isolation_diff "$LEDGER_SHA_BEFORE" "$ledger_sha_after" "$CONTRACTS_BEFORE" "$contracts_after")
+
+  if [ -n "$diff" ]; then
+    isolation_rc=1
+    echo "isolation: $diff differs since the run started" >&2
+    case "$diff" in
+      *ledger*)
+        echo "  ledger before: sha=${LEDGER_SHA_BEFORE:0:8} lines=$LEDGER_LINES_BEFORE" >&2
+        echo "  ledger after:  sha=${ledger_sha_after:0:8} lines=$ledger_lines_after" >&2
+        if [ -f "$LEDGER_FILE" ] && [ "$ledger_lines_after" -gt "$LEDGER_LINES_BEFORE" ] 2>/dev/null; then
+          added=$(tail -n "+$((LEDGER_LINES_BEFORE + 1))" "$LEDGER_FILE")
+          echo "  added row(s):" >&2
+          printf '%s\n' "$added" >&2
+          if printf '%s\n' "$added" | grep -Eq "${SMOKE_SHA_HINT:-never-matches-empty-hint}|${TASK:-never-matches-empty-task}|${DISP:-never-matches-empty-disp}"; then
+            echo "  step=leak (an added row references this smoke's contract sha, task id, or dispatch id)" >&2
+          else
+            echo "  step=concurrent-writer (added rows do not reference this smoke's own identifiers; another seat wrote the shared ledger during this run)" >&2
+          fi
+        fi
+        print_artifact "ledger" "$LEDGER_FILE"
+        ;;
+    esac
+    case "$diff" in
+      *contracts*)
+        echo "  contracts listing before:" >&2
+        printf '%s\n' "$CONTRACTS_BEFORE" >&2
+        echo "  contracts listing after:" >&2
+        printf '%s\n' "$contracts_after" >&2
+        ;;
+    esac
+    echo "smoke FAIL layer=isolation" >&2
+  fi
+
+  if [ -n "$DISP" ] && [ "$DISPATCH_COMPLETED" != 1 ]; then
+    orca orchestration worker-stop --dispatch "$DISP" --json >/dev/null 2>&1 || true
+  fi
+  if [ "$WORKTREE_CREATED" = 1 ] && [ -n "$WORKTREE_NAME" ]; then
+    orca terminal close --worktree "name:$WORKTREE_NAME" --all --json >/dev/null 2>&1 || true
+    orca worktree rm --worktree "name:$WORKTREE_NAME" --force --json >/dev/null 2>&1 || true
+  fi
+  [ -n "$TAIL_PID" ] && kill "$TAIL_PID" 2>/dev/null
+  rm -rf "$STATE" 2>/dev/null || true
+
+  if [ "$isolation_rc" = 1 ]; then
+    exit 13
+  fi
+  if [ -n "$PASS_LINE" ]; then
+    echo "$PASS_LINE"
+  fi
+  exit "$FINAL_RC"
+}
+trap cleanup EXIT
+
+# ---------------------------------------------------------------------------
+# Helpers that mirror the wrapper's own resolution logic instead of
+# hardcoding a second path: they extract the wrapper's own OPS=/GATE= lines
+# and functions and evaluate them, so a change to the wrapper's resolution
+# order is picked up automatically.
+# ---------------------------------------------------------------------------
+
+mirror_wrapper_fn() {
+  local wrapper="$1" fn_header="$2"
+  awk -v hdr="$fn_header" '$0==hdr{f=1} f{print} f&&$0=="}"{exit}' "$wrapper"
+}
+
+resolve_tier_policy_like_wrapper() {
+  local wrapper="$1" override="$2" ops gate fn tmp out
+  if [ -n "$override" ]; then
+    printf '%s\n' "$override"
+    return 0
+  fi
+  ops=$(sed -n 's/^OPS=//p' "$wrapper" | head -1)
+  gate=$(sed -n 's/^GATE=//p' "$wrapper" | head -1)
+  fn=$(mirror_wrapper_fn "$wrapper" 'resolve_tier_policy() {')
+  tmp=$(mktemp)
+  {
+    printf 'OPS=%s\n' "$ops"
+    printf 'GATE=%s\n' "$gate"
+    printf 'TEMPLATE_POLICY=%s/model-tier-policy.json\n' "$ops"
+    echo 'TIER_POLICY_OVERRIDE=""'
+    printf '%s\n' "$fn"
+    echo 'resolve_tier_policy'
+  } > "$tmp"
+  out=$(bash "$tmp" 2>/dev/null)
+  rm -f "$tmp"
+  printf '%s\n' "$out"
+}
+
+mirrored_model_vendor() {
+  local wrapper="$1" model="$2" fn tmp out
+  fn=$(mirror_wrapper_fn "$wrapper" 'model_vendor() {')
+  tmp=$(mktemp)
+  {
+    printf '%s\n' "$fn"
+    printf 'model_vendor %q\n' "$model"
+  } > "$tmp"
+  out=$(bash "$tmp" 2>/dev/null)
+  rm -f "$tmp"
+  printf '%s\n' "$out"
+}
+
+top_model_list() {
+  python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+top = (d.get("tiers") or {}).get("top") or []
+for m in top:
+    print(m)
+' "$1" 2>/dev/null
+}
+
+# The failure case needs a top-tier id whose runtime is actually on this host,
+# since dispatch-smoke only guarantees claude on PATH. Pick the first top-tier
+# id whose mirrored vendor is claude; fall back to the tier's first id (and say
+# so in the failure-case line) if none mirrors claude. A vendor match still
+# does not rule out the operator declaring claude itself unavailable in the
+# instance runtime config; that case is classified separately below rather
+# than predicted here.
+select_top_model() {
+  local wrapper="$1" tier_policy="$2" first="" candidate vendor
+  while IFS= read -r candidate; do
+    [ -n "$candidate" ] || continue
+    [ -n "$first" ] || first="$candidate"
+    vendor=$(mirrored_model_vendor "$wrapper" "$candidate")
+    if [ "$vendor" = claude ]; then
+      printf '%s\nmatched\n' "$candidate"
+      return 0
+    fi
+  done < <(top_model_list "$tier_policy")
+  printf '%s\nfallback\n' "$first"
+}
+
+task_count() {
+  local out
+  out=$(orca orchestration task-list --json 2>/dev/null)
+  python3 -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+except Exception:
+    print("unreadable")
+    sys.exit(0)
+if not d.get("ok"):
+    print("error:" + str((d.get("error") or {}).get("code", "")))
+    sys.exit(0)
+result = d.get("result")
+if isinstance(result, list):
+    print(len(result))
+    sys.exit(0)
+if isinstance(result, dict):
+    for value in result.values():
+        if isinstance(value, list):
+            print(len(value))
+            sys.exit(0)
+print(0)
+' <<<"$out"
+}
+
+TIER_POLICY=$(resolve_tier_policy_like_wrapper "$WRAPPER" "$TIER_POLICY_OVERRIDE")
+
+# ---------------------------------------------------------------------------
+# Failure case: a top-tier model with no --top-approved. Deterministic,
+# writes nothing (dispatch's own top-tier check sits above --check-only).
+# ---------------------------------------------------------------------------
+
+SELECT_TOP=$(select_top_model "$WRAPPER" "$TIER_POLICY")
+TOP_MODEL=$(printf '%s\n' "$SELECT_TOP" | sed -n 1p)
+TOP_MATCH=$(printf '%s\n' "$SELECT_TOP" | sed -n 2p)
+TOP_RUNTIME=$(mirrored_model_vendor "$WRAPPER" "$TOP_MODEL")
+case "$TOP_RUNTIME" in
+  claude|codex|grok|gemini) ;;
+  *) TOP_RUNTIME=codex ;;
+esac
+
+FAIL_CONTRACT="$STATE/failure-contract.md"
+printf '# dispatch-smoke: deterministic top-tier refusal probe\n' > "$FAIL_CONTRACT"
+
+FAIL_LOG="$STATE/failure.log"
+BEFORE_TASK_COUNT=$(task_count)
+MOGUI_STATE_DIR="$STATE" "$WRAPPER" \
+  --model "$TOP_MODEL" --runtime "$TOP_RUNTIME" \
+  --contract "$FAIL_CONTRACT" --spec smoke --check-only \
+  --worktree "path:$STATE/never-used" --tier-policy "$TIER_POLICY" \
+  > "$FAIL_LOG" 2>&1
+FAIL_RC=$?
+AFTER_TASK_COUNT=$(task_count)
+
+TASK_COUNT_NUMERIC=1
+case "$BEFORE_TASK_COUNT" in (''|*[!0-9]*) TASK_COUNT_NUMERIC=0;; esac
+case "$AFTER_TASK_COUNT" in (''|*[!0-9]*) TASK_COUNT_NUMERIC=0;; esac
+if [ "$TASK_COUNT_NUMERIC" != 1 ]; then
+  echo "smoke FAIL layer=gate step=task-count-unreadable"
+  echo "before: $BEFORE_TASK_COUNT" >&2
+  echo "after:  $AFTER_TASK_COUNT" >&2
+  FINAL_RC=11
+  exit 0
+fi
+
+FAIL_OK=1
+[ "$FAIL_RC" = 2 ] || FAIL_OK=0
+grep -qF 'top tier needs owner approval' "$FAIL_LOG" || FAIL_OK=0
+if [ -f "$STATE/dispatch-ledger.jsonl" ] && [ -s "$STATE/dispatch-ledger.jsonl" ]; then
+  FAIL_OK=0
+fi
+[ "$BEFORE_TASK_COUNT" = "$AFTER_TASK_COUNT" ] || FAIL_OK=0
+
+# A vendor match on $TOP_RUNTIME does not guarantee the gate was reached: the
+# operator can also declare a runtime unavailable in the instance runtime
+# config, and that refusal fires before the top-tier check with its own
+# message. Classify it here under its own step name.
+if [ "$FAIL_OK" != 1 ] && grep -qE '^✗ runtime .* unavailable on this install' "$FAIL_LOG"; then
+  echo "smoke FAIL layer=gate step=runtime-unavailable"
+  echo "--- failure.log ---" >&2
+  tail -n 40 "$FAIL_LOG" >&2
+  FINAL_RC=11
+  exit 0
+fi
+
+if [ "$FAIL_OK" != 1 ]; then
+  echo "smoke FAIL layer=gate step=top-tier-refusal"
+  echo "--- failure.log ---" >&2
+  tail -n 40 "$FAIL_LOG" >&2
+  FINAL_RC=11
+  exit 0
+fi
+if [ "$TOP_MATCH" = matched ]; then
+  echo "failure case ✓ top-tier refusal confirmed · model=$TOP_MODEL runtime=$TOP_RUNTIME"
+else
+  echo "failure case ✓ top-tier refusal confirmed · model=$TOP_MODEL runtime=$TOP_RUNTIME (no top-tier id mirrors claude; used the tier's first id)"
+fi
+
+# ---------------------------------------------------------------------------
+# Normal case: an efficient-tier claude model with a scratch contract whose
+# only task is to prove the contract was read.
+# ---------------------------------------------------------------------------
+
+SCRATCH_CONTRACT="$STATE/smoke-contract.md"
+cat > "$SCRATCH_CONTRACT" <<'EOF'
+# dispatch-smoke scratch contract
+
+Write the exact bare token from this contract's "Acknowledgement token"
+section as the only content of `SMOKE.txt` at the root of your worktree.
+Do not commit. Do not push. When done, send `worker_done` with the token
+quoted in the body.
+EOF
+EXPECTED_TOKEN=$(expected_token "$SCRATCH_CONTRACT")
+
+SMOKE_RANDOM_HEX=$(head -c3 /dev/urandom 2>/dev/null | od -An -tx1 2>/dev/null | tr -d ' \n')
+[ -n "$SMOKE_RANDOM_HEX" ] || SMOKE_RANDOM_HEX=$(printf '%06x' "$(( $$ % 16777216 ))")
+WORKTREE_NAME="smoke-$(date -u +%Y%m%dT%H%M%SZ)-$SMOKE_RANDOM_HEX"
+CREATE_JSON=$(orca worktree create --repo "path:$REPO" --name "$WORKTREE_NAME" \
+  --base-branch origin/main --setup skip --no-parent --json 2>/dev/null)
+WORKTREE_PATH=$(printf '%s' "$CREATE_JSON" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    print(d["result"]["worktree"]["path"] if d.get("ok") else "")
+except Exception:
+    print("")
+' 2>/dev/null)
+
+if [ -z "$WORKTREE_PATH" ]; then
+  echo "smoke FAIL layer=orca step=worktree-create"
+  printf '%s\n' "$CREATE_JSON" >&2
+  FINAL_RC=12
+  exit 0
+fi
+WORKTREE_CREATED=1
+
+NORMAL_LOG="$STATE/smoke.log"
+: > "$NORMAL_LOG"
+MOGUI_STATE_DIR="$STATE" "$WRAPPER" \
+  --contract "$SCRATCH_CONTRACT" --spec "smoke: read the contract and do what it says" \
+  --worktree "path:$WORKTREE_PATH" --runtime claude --model "$MODEL" \
+  --same-host-reason smoke --tier-policy "$TIER_POLICY" \
+  >> "$NORMAL_LOG" 2>&1 &
+WRAPPER_PID=$!
+tail -n +1 -f "$NORMAL_LOG" &
+TAIL_PID=$!
+
+( sleep 300; kill -TERM "$WRAPPER_PID" 2>/dev/null; touch "$STATE/.timeout" ) &
+TIMER_PID=$!
+
+while kill -0 "$WRAPPER_PID" 2>/dev/null; do
+  if [ -z "$TASK" ]; then
+    TASK=$(grep -oE '^→ task_[0-9a-f]+' "$NORMAL_LOG" 2>/dev/null | head -1 | awk '{print $2}')
+  fi
+  if [ -z "$DISP" ]; then
+    DISP=$(grep -oE '^⚡ register ✓ ctx_[0-9a-f]+' "$NORMAL_LOG" 2>/dev/null | head -1 | awk '{print $4}')
+  fi
+  sleep 1
+done
+wait "$WRAPPER_PID" 2>/dev/null
+WRAPPER_RC=$?
+kill "$TIMER_PID" 2>/dev/null
+wait "$TIMER_PID" 2>/dev/null
+kill "$TAIL_PID" 2>/dev/null
+wait "$TAIL_PID" 2>/dev/null
+TAIL_PID=""
+
+[ -z "$TASK" ] && TASK=$(grep -oE '^→ task_[0-9a-f]+' "$NORMAL_LOG" | head -1 | awk '{print $2}')
+[ -z "$DISP" ] && DISP=$(grep -oE '^⚡ register ✓ ctx_[0-9a-f]+' "$NORMAL_LOG" | head -1 | awk '{print $4}')
+SMOKE_SHA_HINT=$(grep -oE '계약 [0-9a-f]{8}' "$NORMAL_LOG" | head -1 | awk '{print $2}')
+
+if [ -f "$STATE/.timeout" ]; then
+  LAST_STATUS=$(tail -n 1 "$NORMAL_LOG")
+  echo "smoke FAIL layer=timeout"
+  echo "last log line: $LAST_STATUS" >&2
+  FINAL_RC=12
+  exit 0
+fi
+
+# Same dispatch-show call the worker layer below makes, read once here so the
+# verdict can tell "delivery unverified, worker still running" apart from
+# "delivery unverified, worker already completed" instead of reporting the
+# pane transition alone.
+PRE_VERDICT_STATUS=$(orca orchestration dispatch-show --task "$TASK" --json 2>/dev/null | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    print(d["result"]["dispatch"]["status"] if d.get("ok") else "unreadable")
+except Exception:
+    print("unreadable")
+' 2>/dev/null)
+[ -n "$PRE_VERDICT_STATUS" ] || PRE_VERDICT_STATUS=unreadable
+
+VERDICT=$(normal_case_verdict "$WRAPPER_RC" "$NORMAL_LOG" "$PRE_VERDICT_STATUS")
+if [ "$VERDICT" != PASS ]; then
+  echo "smoke FAIL $VERDICT"
+  echo "--- smoke.log (tail) ---" >&2
+  tail -n 40 "$NORMAL_LOG" >&2
+  FINAL_RC=12
+  exit 0
+fi
+echo "layer 1 ✓ wrapper milestones in order"
+
+if [ ! -f "$STATE/dispatch-ledger.jsonl" ] || [ ! -s "$STATE/dispatch-ledger.jsonl" ]; then
+  echo "smoke FAIL layer=isolation step=no-scratch-ledger-row"
+  print_artifact "ledger" "$STATE/dispatch-ledger.jsonl"
+  print_artifact "state dir" "$STATE"
+  FINAL_RC=13
+  exit 0
+fi
+
+# Layer 2: worker and orchestration.
+DEADLINE=$(( $(date +%s) + WORKER_TIMEOUT ))
+LAST_DISPATCH_STATUS=""
+while :; do
+  SHOW_JSON=$(orca orchestration dispatch-show --task "$TASK" --json 2>/dev/null)
+  LAST_DISPATCH_STATUS=$(printf '%s' "$SHOW_JSON" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    print(d["result"]["dispatch"]["status"] if d.get("ok") else "unreadable")
+except Exception:
+    print("unreadable")
+' 2>/dev/null)
+  if [ "$LAST_DISPATCH_STATUS" = completed ]; then
+    DISPATCH_COMPLETED=1
+    break
+  fi
+  if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+    break
+  fi
+  sleep 5
+done
+
+if [ "$DISPATCH_COMPLETED" != 1 ]; then
+  echo "smoke FAIL layer=worker step=$LAST_DISPATCH_STATUS"
+  FINAL_RC=12
+  exit 0
+fi
+echo "layer 2 ✓ dispatch completed · task=$TASK dispatch=$DISP"
+
+# Layer 3: contract read.
+SMOKE_FILE="$WORKTREE_PATH/SMOKE.txt"
+if [ ! -f "$SMOKE_FILE" ]; then
+  echo "smoke FAIL layer=contract-read step=missing"
+  print_artifact "SMOKE.txt" "$SMOKE_FILE"
+  print_artifact "worktree root" "$WORKTREE_PATH"
+  FINAL_RC=12
+  exit 0
+fi
+ACTUAL_TOKEN=$(tr -d '[:space:]' < "$SMOKE_FILE")
+EXPECTED_TOKEN_TRIMMED=$(printf '%s' "$EXPECTED_TOKEN" | tr -d '[:space:]')
+if [ "$ACTUAL_TOKEN" != "$EXPECTED_TOKEN_TRIMMED" ]; then
+  echo "smoke FAIL layer=contract-read step=mismatch"
+  echo "expected: $EXPECTED_TOKEN_TRIMMED" >&2
+  echo "actual:   $ACTUAL_TOKEN" >&2
+  print_artifact "SMOKE.txt" "$SMOKE_FILE"
+  FINAL_RC=12
+  exit 0
+fi
+echo "layer 3 ✓ SMOKE.txt holds the read token"
+
+WRAPPER_SHA8=$(shasum -a 256 "$WRAPPER" | awk '{print substr($1,1,8)}')
+END_TS=$(date +%s)
+PASS_LINE="smoke PASS wrapper=$WRAPPER_SHA8 task=$TASK $((END_TS - START_TS))s"
+FINAL_RC=0
+exit 0

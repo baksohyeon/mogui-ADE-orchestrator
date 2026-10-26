@@ -7,7 +7,6 @@
 set -u
 OPS={{OPS_REPO}}
 GATE={{RUNTIME_ROOT}}/scripts/dispatch-gate
-LEDGER=~/.mogui/dispatch-ledger.jsonl
 TEMPLATE_POLICY=$OPS/model-tier-policy.json
 PROBE_BIN={{RUNTIME_ROOT}}/scripts/model-identity-probe
 SCRIPTS_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -91,6 +90,27 @@ while [ $# -gt 0 ]; do
     *) usage;;
   esac
 done
+
+# Testability seam (docs/runbooks/host-harness-inventory.md): MOGUI_STATE_DIR
+# redirects this dispatch's mutable state (ledger, delivered-contract copies)
+# off ~/.mogui without also moving $HOME, so a smoke run does not relocate
+# trust state too and fail on a dialog production never shows. Unset or empty
+# keeps today's defaults; validated here, before any other work.
+if [ -n "${MOGUI_STATE_DIR:-}" ]; then
+  case "$MOGUI_STATE_DIR" in
+    /*) [ -d "$MOGUI_STATE_DIR" ] && STATE_DIR_OK=1 || STATE_DIR_OK=0 ;;
+    *) STATE_DIR_OK=0 ;;
+  esac
+  if [ "$STATE_DIR_OK" != 1 ]; then
+    echo "✗ MOGUI_STATE_DIR must be an absolute path to an existing directory: $MOGUI_STATE_DIR" >&2
+    exit 1
+  fi
+  STATE_DIR="$MOGUI_STATE_DIR"
+else
+  STATE_DIR=~/.mogui
+fi
+LEDGER="$STATE_DIR/dispatch-ledger.jsonl"
+
 [ -z "$CONTRACT" ] || [ ! -f "$CONTRACT" ] && { echo "✗ contract file missing: $CONTRACT" >&2; exit 1; }
 [ "$CHECK_ONLY" = 0 ] && [ -z "$SPEC" ] && usage
 
@@ -115,6 +135,59 @@ resolve_tier_policy() {
 POLICY=$(resolve_tier_policy)
 
 jqf() { python3 -c "import json,sys;d=json.load(sys.stdin);print($1)"; }
+
+# Body text of a "## <name>" heading, read from the local overlay first
+# (so a seat's own copy of a shared block name wins) and the shipped file
+# second. Exit 1 when neither file carries the heading.
+standing_rule_block() {
+  # Reads the same two env-var overrides the gate itself resolves
+  # (DISPATCH_STANDING_RULES / DISPATCH_STANDING_RULES_LOCAL), falling back to
+  # this install's own paths exactly as the gate does. Without this, a value
+  # inherited from the caller's shell could make the gate validate a name
+  # against a file this function never looks at, allowing a dispatch the
+  # append step then cannot find the block for.
+  local name="$1"
+  local main_file="${DISPATCH_STANDING_RULES:-$SCRIPTS_DIR/../rules/standing-rules.md}"
+  local local_file="${DISPATCH_STANDING_RULES_LOCAL:-$SCRIPTS_DIR/../config/standing-rules.overlay.md}"
+  python3 - "$name" "$local_file" "$main_file" <<'EOF'
+import sys
+
+name, local_file, main_file = sys.argv[1], sys.argv[2], sys.argv[3]
+
+
+def extract(path, heading_name):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return None
+    heading = f"## {heading_name}"
+    body = []
+    found = False
+    for line in lines:
+        if found:
+            if line.startswith("## "):
+                break
+            body.append(line)
+        elif line.strip() == heading:
+            found = True
+    if not found:
+        return None
+    while body and not body[0].strip():
+        body.pop(0)
+    while body and not body[-1].strip():
+        body.pop()
+    return "\n".join(body)
+
+
+text = extract(local_file, name)
+if text is None:
+    text = extract(main_file, name)
+if text is None:
+    sys.exit(1)
+print(text)
+EOF
+}
 
 # Resolve product_repositories (or product_repo) from the instance runtime
 # config into owner/repo slugs via each path's git remote origin, serialized
@@ -176,6 +249,35 @@ PRODUCT_REPO_ARG=$(resolve_product_repo_arg || printf '%s' "${MOGUI_PRODUCT_REPO
 # master from writing. Point it at the operations copy instead, so there is one
 # file rather than two that can drift.
 export INSTANCE_RUNTIME_CONFIG="$INSTANCE_RUNTIME_CONFIG"
+
+# Points the gate at this install's own standing-rules file, and separately
+# at the instance-owned overlay beside it, instead of the gate's own
+# template-copy fallback, the same seam DISPATCH_TIER_POLICY already fills
+# for the tier policy. rules/standing-rules.md refreshes on every template
+# re-stamp; config/standing-rules.overlay.md, under the instance-owned config/
+# directory, never does.
+#
+# A missing install file used to leave DISPATCH_STANDING_RULES unset, so the
+# gate fell back to its own bundled template copy and validated a contract's
+# standing_rules names against it, while standing_rule_block's append step
+# below reads the same unset-falls-back-to-this-install-path expression and
+# finds nothing there: the gate passed a contract the append step then could
+# not deliver. Refusing here, before the gate call, keeps both reads pinned
+# to one file. A caller-supplied override is left alone and skips the check.
+# The overlay export stays unconditional: it never had a meaningful
+# template-side fallback to defer to (the template ships no overlay at all),
+# and the gate already treats a missing overlay path as "no extra names"
+# instead of an error.
+STANDING_RULES_PATH="$SCRIPTS_DIR/../rules/standing-rules.md"
+if [ -z "${DISPATCH_STANDING_RULES:-}" ]; then
+  if [ ! -f "$STANDING_RULES_PATH" ]; then
+    echo "dispatch: standing rules file missing: $STANDING_RULES_PATH" >&2
+    exit 10
+  fi
+  DISPATCH_STANDING_RULES="$STANDING_RULES_PATH"
+fi
+export DISPATCH_STANDING_RULES
+export DISPATCH_STANDING_RULES_LOCAL="$SCRIPTS_DIR/../config/standing-rules.overlay.md"
 
 # Transcript glob for a model probe, per runtime.
 #
@@ -449,10 +551,19 @@ choose_default_runtime() {
 # lost with every step still printing success. Extend this list the first time a
 # host shows a gate that is not here yet; a missing marker is a silent delivery
 # failure, which is the whole defect this guards (measured delivery incidents).
+#
+# A fresh claude TUI prompt carries placeholder text next to the arrow.
+# Measured 2026-10-23, `orca terminal read --limit 40` on a fresh
+# `claude` pane:
+#   '❯\xa0Try "fix lint errors"'                      (U+00A0 after the arrow)
+#   '  claude-haiku-5 │ codex-hooks-vet-unmeasured'
+#   '  ⏵⏵ auto mode on (shift+tab to cycle) · PR #190'
+# so the unicode marker below matches that placeholder shape too, with either
+# a no-break space or regular spaces between the arrow and `Try "..."`.
 HOOK_TRUST_MARKERS='^[[:space:]]*(Resume session.*|New worktree.*|Coming from Claude Code.*|Changelog.*|Select a model.*|Welcome to Claude.*|Do you trust the files.*|Sign in.*|press enter to continue.*|/login.*|Antigravity CLI requires permission.*|I trust this folder.*|trust this workspace.*|workspace trust.*|permission to access.*|Quick safety check.*|pre-approves .* tool permissions.*)[[:space:][:punct:]]*$'
 LIMIT_MARKERS='^[[:space:]]*(rate limit|rate-limit|too many requests|quota exceeded|out of credits|credits are exhausted|usage limit reached|you.?ve hit your limit|you have reached your limit|try again after)[[:space:][:punct:]]*.*$'
 PREPARED_PROMPT_MARKERS='^[[:space:]]*(claude|codex|grok|gemini)[[:space:]]*>[[:space:]]*$'
-PREPARED_UNICODE_PROMPT_MARKERS='^[[:space:]]*(❯|›|➜)[[:space:]]*$'
+PREPARED_UNICODE_PROMPT_MARKERS=$'^[[:space:]]*(❯|›|➜)([\xc2\xa0 ]+Try "[^"]*")?[[:space:]]*$'
 
 pane_classify_text() {
   local pane="$1" state
@@ -474,12 +585,23 @@ pane_classify_text() {
 }
 
 delivery_result() {
-  # Post-injection gates take precedence over every prior state. The only
-  # positive transition is a prepared prompt becoming unknown; every other
-  # transition stays unverified.
+  # Post-injection gates take precedence over every prior state. A worker
+  # that finishes inside the window returns the pane to the same prepared
+  # prompt it started from, so the pane transition alone carries no positive
+  # signal; the dispatch record's own status fills that gap (measured
+  # 2026-10-23: three dispatches read `completed` with the pane back at a
+  # prepared prompt). Precedence: hook-trust and limit win regardless of
+  # status, then a completed dispatch is `done`, then the pane-transition
+  # fallback.
   case "$1:$2" in
-    *:hook-trust) echo hook-trust;;
-    *:limit) echo limit;;
+    *:hook-trust) echo hook-trust; return;;
+    *:limit) echo limit; return;;
+  esac
+  if [ "$3" = completed ]; then
+    echo done
+    return
+  fi
+  case "$1:$2" in
     prepared-prompt:unknown) echo agent-started;;
     *) echo unknown;;
   esac
@@ -539,6 +661,62 @@ codex_start_screen_problem() {
 # because the launch flags below and the footer check above must agree on both.
 CODEX_REASONING_EFFORT=xhigh
 CODEX_MIGRATION_ACK='notice.model_migrations={"gpt-5.5"="gpt-6.1-sol"}'
+CODEX_BYPASS_FLAG=
+
+# Optional codex_reasoning_effort and codex_bypass_approvals_and_sandbox from the
+# instance runtime config. Effort list from codex-cli 0.163.0 (2026-10-17); an
+# unknown value is refused because the footer check would wait forever.
+# An unreadable config is left to unavailable_runtimes_guard, which refuses it.
+#   exit 0: effort, then bypass (1 or 0), on stdout. exit 1: one-line reason.
+codex_instance_launch_config() {
+  [ -f "$INSTANCE_RUNTIME_CONFIG" ] || { printf '%s\n0\n' "$CODEX_REASONING_EFFORT"; return 0; }
+  python3 - "$INSTANCE_RUNTIME_CONFIG" "$CODEX_REASONING_EFFORT" <<'EOF'
+import json
+import sys
+
+path, effort = sys.argv[1], sys.argv[2]
+efforts = ("minimal", "low", "medium", "high", "xhigh", "max")
+try:
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+except Exception:
+    data = {}
+if not isinstance(data, dict):
+    data = {}
+value = data.get("codex_reasoning_effort")
+if value is not None:
+    if not isinstance(value, str) or value not in efforts:
+        print(f"codex_reasoning_effort is {value!r}; expected one of {', '.join(efforts)}")
+        sys.exit(1)
+    effort = value
+bypass = data.get("codex_bypass_approvals_and_sandbox")
+if bypass is not None and not isinstance(bypass, bool):
+    print(f"codex_bypass_approvals_and_sandbox is {bypass!r}; expected true or false")
+    sys.exit(1)
+print(effort)
+print(1 if bypass else 0)
+EOF
+}
+
+# Called bare, not through $(...), so the refusal can stop dispatch. Only a
+# codex dispatch calls it, so a bad codex key never stops another runtime. The
+# bypass warning goes to stdout because stdout is this script's mechanical log;
+# the ledger keeps the choice as codex_bypass on the host-diversity audit line.
+apply_codex_instance_launch_config() {
+  local out status
+  out=$(codex_instance_launch_config)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "✗ invalid codex launch setting in $INSTANCE_RUNTIME_CONFIG: $out" >&2
+    exit 2
+  fi
+  CODEX_REASONING_EFFORT=$(printf '%s\n' "$out" | sed -n 1p)
+  if [ "$(printf '%s\n' "$out" | sed -n 2p)" = 1 ]; then
+    CODEX_BYPASS_FLAG=' --dangerously-bypass-approvals-and-sandbox'
+    echo "WARNING: codex_bypass_approvals_and_sandbox is true in $INSTANCE_RUNTIME_CONFIG;"
+    echo "         this codex worker launches with --dangerously-bypass-approvals-and-sandbox (no sandbox, no approvals)."
+  fi
+}
 
 shell_quote() {
   python3 - "$1" <<'EOF'
@@ -581,6 +759,11 @@ runtime_command() {
     # disables the sandbox as well as approvals. Weakening a sandbox is not a
     # side effect to take on while fixing a delivery bug, so the safer measured
     # path stays and the operator is told when it has not run.
+    # Since 2026-10-17 that stays the default: the flag is off unless the operator
+    # opts in with codex_bypass_approvals_and_sandbox in the instance runtime config.
+    # Measured 2026-10-24 on codex-cli 0.164.0 with one unreviewed hook in a scratch
+    # CODEX_HOME: the "Hooks need review" modal shows the same with and without the
+    # flag, so a bypass launch still reaches the hooks vet in the launch loop below.
     # The model flag is separate from the approval posture above and was missing
     # here until 2026-08-05. The gate validated a model id, the tier policy
     # recorded it, and the launcher dropped it: two codex dispatches declared
@@ -600,7 +783,7 @@ runtime_command() {
     # written as an inline table: the dotted form reads the dot inside the
     # model id as a nesting separator and fails with "invalid type: map,
     # expected a string".
-    codex) echo "codex --model $model_arg -c $(shell_quote "model_reasoning_effort=\"$CODEX_REASONING_EFFORT\"") -c check_for_update_on_startup=false -c $(shell_quote "$CODEX_MIGRATION_ACK")";;
+    codex) echo "codex --model $model_arg -c $(shell_quote "model_reasoning_effort=\"$CODEX_REASONING_EFFORT\"") -c check_for_update_on_startup=false -c $(shell_quote "$CODEX_MIGRATION_ACK")${CODEX_BYPASS_FLAG:-}";;
     gemini) echo "gemini";;
     opencode) echo "opencode";;
     # agy is the Gemini host; `agy models` reports gemini-* ids. Its approval flag
@@ -750,6 +933,17 @@ codex_accounts_dir() {
 # repository's `.orca/worktrees/`, that repository root's `.codex/hooks.json`
 # too. One per line; a missing accounts directory, worktree, or project
 # `.codex` directory just yields none from the glob or case match.
+#
+# Gap: a plugin ships its own hooks.json, and that file is not one of the
+# homes above. Measured read-only on this host (`codex --help`, `codex plugin
+# list --help`, `codex doctor --all`, and `find "$HOME/.codex" -iname
+# hooks.json`): codex has no `hooks` subcommand and ships no docs describing
+# where it reads plugin hook sources. The plugin hooks.json files that do
+# exist sit nested per marketplace, plugin, and installed version under
+# `.codex/plugins/cache/`, a set that grows and churns with what is
+# installed, unlike the fixed home paths above. Nothing matching that shape
+# was found, so nothing is added here; a modal triggered by a plugin hook
+# while an enumerated hooks.json elsewhere passes is still answered on faith.
 codex_hooks_homes() {
   local accounts_dir home wt repo_root
   printf '%s\n' "$HOME/.codex"
@@ -875,30 +1069,40 @@ PY
 # hooks.json is skipped with one printed line. A home whose hooks.json exists
 # but fails the vet (a bad command, or hooks.json itself unparsable) fails the
 # whole pass closed, which is the only outcome the 3b wiring below answers the
-# hooks-review modal on.
+# hooks-review modal on. When every home is skipped, nothing was measured, so
+# this also fails closed instead of returning the empty-loop's default 0.
 codex_hooks_vet_homes() {
-  local home hooks_json rc overall=0
+  local home hooks_json rc overall=0 measured=0
+  if [ -z "${WORKTREE#path:}" ]; then
+    echo "hooks-vet: worktree unknown on a reused pane, project hooks unmeasured; not answering the modal"
+    return 1
+  fi
   while IFS= read -r home; do
     hooks_json="$home/hooks.json"
     if [ ! -f "$hooks_json" ]; then
       echo "hooks-vet: $hooks_json: not found, skipping"
       continue
     fi
+    measured=$((measured + 1))
     codex_hooks_vet "$home"
     rc=$?
     [ "$rc" -eq 0 ] || overall=1
   done < <(codex_hooks_homes)
+  if [ "$measured" -eq 0 ]; then
+    echo "hooks-vet: no hooks.json measured in any codex home; the modal's source is unenumerated, not answering the modal"
+    return 1
+  fi
   return "$overall"
 }
 
 record_host_diversity_audit() {
   [ "$CHECK_ONLY" = 1 ] && return 0
-  python3 - "$LEDGER" "$RUNTIME" "$MASTER_HOST_RUNTIME" "$INSTALLED_RUNTIMES" "$ALTERNATIVE_RUNTIMES" "$UNAVAILABLE_RUNTIMES" "$SAME_HOST_REASON" "$TASK" "$DISP" "$SHA" <<'EOF'
+  python3 - "$LEDGER" "$RUNTIME" "$MASTER_HOST_RUNTIME" "$INSTALLED_RUNTIMES" "$ALTERNATIVE_RUNTIMES" "$UNAVAILABLE_RUNTIMES" "$SAME_HOST_REASON" "$TASK" "$DISP" "$SHA" "${CODEX_BYPASS_FLAG:-}" <<'EOF'
 import json
 import sys
 import time
 
-ledger, runtime, master, installed, alternatives, unavailable, reason, task, dispatch, sha = sys.argv[1:]
+ledger, runtime, master, installed, alternatives, unavailable, reason, task, dispatch, sha, bypass_flag = sys.argv[1:]
 entry = {
     "ts": time.time(),
     "kind": "host_diversity_audit",
@@ -912,6 +1116,7 @@ entry = {
     "orchestration_task": task,
     "job_id": dispatch,
     "contract_sha": sha,
+    "codex_bypass": bool(bypass_flag),
 }
 with open(ledger, "a", encoding="utf-8") as fh:
     fh.write(json.dumps(entry, sort_keys=True, separators=(",", ":")) + "\n")
@@ -972,6 +1177,8 @@ UNAVAILABLE_RUNTIMES=$(unavailable_runtime_names | join_csv)
 # resolution or gate check spends effort on a runtime the operator already
 # declared unusable on this install.
 refuse_unavailable_runtime "$RUNTIME" "$ALTERNATIVE_RUNTIMES" || exit 2
+
+[ "$RUNTIME" = codex ] && apply_codex_instance_launch_config
 
 # The model id and the runtime are chosen independently, so nothing stopped a
 # claude model id from being declared for a codex or grok worker. That is not a
@@ -1172,10 +1379,16 @@ fi
 # recording gate denies, Codex pretrust may have prepared a worktree that never
 # receives a worker; dispatch-gate needs an atomic reservation API to close that
 # race. This ordering still keeps dry runs, gate denials, and pretrust failures
-# from spending budget.
-ensure_codex_pretrust "$RUNTIME" "$WORKTREE" || exit 2
-ensure_cursor_pretrust "$RUNTIME" "$WORKTREE" || exit 2
-ensure_claude_pretrust "$RUNTIME" "$WORKTREE" || exit 2
+# from spending budget. A reused pane (--terminal with no --worktree) launches
+# nothing, so there is no worktree to pre-trust; the post-inject hook-trust
+# check still catches a trust dialog on that pane.
+if [ -n "$TERMINAL" ] && [ -z "$WORKTREE" ]; then
+  echo "pre-trust · skipped · pane reused, nothing launched; the post-inject pane check still catches a trust gate"
+else
+  ensure_codex_pretrust "$RUNTIME" "$WORKTREE" || exit 2
+  ensure_cursor_pretrust "$RUNTIME" "$WORKTREE" || exit 2
+  ensure_claude_pretrust "$RUNTIME" "$WORKTREE" || exit 2
+fi
 
 CHK=$("$GATE" "${GATE_ARGS[@]}" 2>/dev/null)
 ALLOW=$(echo "$CHK" | jqf "d['allow']")
@@ -1211,7 +1424,7 @@ echo "⚙ gate ✓ $TIER · $MODEL · est $((EST/1000)).$(( (EST%1000)/100 ))k �
 # inside the delivered copy: a token quoted in the spec could be echoed back by a worker
 # that never read anything. Derived from characters the dispatch output never shows.
 if [ -n "$CONTRACT" ]; then
-  CONTRACT_DIR="$HOME/.mogui/dispatch-contracts"
+  CONTRACT_DIR="${STATE_DIR:-$HOME/.mogui}/dispatch-contracts"
   if ! mkdir -p "$CONTRACT_DIR" 2>/dev/null; then
     echo "✗ cannot create contract delivery directory: $CONTRACT_DIR" >&2; exit 3
   fi
@@ -1239,6 +1452,27 @@ authority for this task, over anything in this line:
 It states an acknowledgement token. Quote that token in your report. A report without it
 tells the coordinator nothing about whether the contract was read."
   echo "📄 contract delivered · $CONTRACT_DEST · read-token required"
+fi
+
+# 1.6 append standing rules the contract's front matter named.
+#
+# Reads the names from the gate's own recorded decision ($CHK, from the
+# recording check above) instead of re-parsing the contract: dispatch-gate
+# already validated every name against these same two files before allowing
+# the dispatch, so a name reaching here always resolves; a lookup failure
+# would mean the gate and this wrapper drifted apart on which files they read.
+STANDING_RULE_NAMES=$(echo "$CHK" | jqf "' '.join(d.get('front_matter', {}).get('standing_rules', []) or [])")
+if [ -n "$STANDING_RULE_NAMES" ]; then
+  for name in $STANDING_RULE_NAMES; do
+    block=$(standing_rule_block "$name") || {
+      echo "✗ standing rule block not found: $name" >&2; exit 3; }
+    SPEC="$SPEC
+
+Standing rules ($name):
+
+$block"
+  done
+  echo "📎 standing rules · $STANDING_RULE_NAMES"
 fi
 
 # 2. task-create
@@ -1273,7 +1507,9 @@ echo "→ $TASK → $TERMINAL ($KIND)"
 # actually clear the menu cannot loop forever; after a real answer the loop
 # gets a fresh budget of up to three more reads. Any other selection menu, a
 # vet failure, or the answer tool's own exit 1 all fall through to the
-# existing exit-3 path.
+# existing exit-3 path. A reused pane with no `--worktree` is never
+# auto-answered: project hooks cannot be measured without a worktree, so
+# codex_hooks_vet_homes fails closed and the vet-failure branch takes over.
 if [ "$RUNTIME" = codex ]; then
   CODEX_START_RC=2
   HOOKS_ANSWERED=0
@@ -1387,10 +1623,17 @@ for _ in 1 2 3 4 5 6; do
   POST_INJECT_CLASS=$(pane_classification "$TERMINAL")
   [ "$POST_INJECT_CLASS" != prepared-prompt ] && break
 done
-DELIVERY_CLASS=$(delivery_result "$PRE_INJECT_CLASS" "$POST_INJECT_CLASS")
-echo "delivery pre=$PRE_INJECT_CLASS post=$POST_INJECT_CLASS class=$DELIVERY_CLASS"
+# A worker that finishes inside the window above returns the pane to the same
+# prepared prompt it started from, so the pane carries no positive signal at
+# all. The Orca dispatch record does: read its status once, here, and fold it
+# into the classification below.
+DISPATCH_STATUS=$(orca orchestration dispatch-show --task "$TASK" --json 2>/dev/null \
+  | jqf "d['result']['dispatch']['status']" 2>/dev/null)
+[ -n "$DISPATCH_STATUS" ] || DISPATCH_STATUS=unreadable
+DELIVERY_CLASS=$(delivery_result "$PRE_INJECT_CLASS" "$POST_INJECT_CLASS" "$DISPATCH_STATUS")
+echo "delivery pre=$PRE_INJECT_CLASS post=$POST_INJECT_CLASS status=$DISPATCH_STATUS class=$DELIVERY_CLASS"
 case "$DELIVERY_CLASS" in
-  agent-started) record_dispatch_launched pass "";;
+  agent-started|done) record_dispatch_launched pass "";;
   hook-trust|limit) record_dispatch_launched finding "$DELIVERY_CLASS";;
   *) record_dispatch_launched undetermined "$DELIVERY_CLASS";;
 esac
@@ -1408,6 +1651,9 @@ case "$DELIVERY_CLASS" in
     echo "✗ delivery FAILED · provider limit is present; the spec was NOT consumed"
     echo "  Wait for the provider limit to clear or use an available runtime."
     exit 5;;
+  done)
+    echo "✓ delivery ✓ worker completed inside the window (dispatch completed)"
+    exit 0;;
   agent-started)
     echo "✓ delivery ✓ agent left its prepared prompt after inject and began processing"
     echo "  Read the pane to verify the contracted work: orca terminal read --terminal $TERMINAL --limit 40";;

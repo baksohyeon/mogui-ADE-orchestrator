@@ -54,6 +54,20 @@ IGNORED_MEDIA_SUFFIXES = frozenset(
 MAX_WORKER_LIST_PAGES = 20
 WORKER_LIST_PAGE_LIMIT = 100
 
+# Dropped from every subprocess env: an inherited value here would point git
+# at the caller's repository (or its index/object store) instead of the one
+# named by -C.
+GIT_REPOSITORY_ENV_VARS = frozenset(
+    {
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    }
+)
+
 
 @dataclass(frozen=True)
 class ReapRecord:
@@ -712,9 +726,23 @@ class WorkerReaper:
 
     def _remove_worktree(self, worktree_path: Path) -> None:
         """Remove a worktree safely."""
-        # Use git worktree remove if it's a linked worktree
+        # Resolve the shared git dir, then remove through --git-dir. The remove
+        # must not run with the worktree as git's cwd: Windows cannot delete a
+        # process's current directory. It also must not depend on the caller's cwd.
+        # --path-format=absolute needs Git 2.31+, which this project does not
+        # require, so resolve the (possibly relative) default output ourselves
+        # against the -C directory the command ran in.
         code, stdout, stderr = self.orca_runner(
-            ["git", "worktree", "remove", str(worktree_path)]
+            ["git", "-C", str(worktree_path), "rev-parse", "--git-common-dir"]
+        )
+        raw_common_dir = stdout.rstrip("\r\n")
+        if code != 0 or not raw_common_dir:
+            raise ReapError(
+                f"Failed to resolve git common dir for {worktree_path}: {stderr}", code or 1
+            )
+        common_dir = os.path.abspath(os.path.join(str(worktree_path), raw_common_dir))
+        code, stdout, stderr = self.orca_runner(
+            ["git", f"--git-dir={common_dir}", "worktree", "remove", str(worktree_path)]
         )
         if code != 0:
             raise ReapError(f"Failed to remove worktree {worktree_path}: {stderr}", code)
@@ -738,12 +766,22 @@ class WorkerReaper:
         self, command: list[str]
     ) -> tuple[int, str, str]:
         """Run a subprocess and return (code, stdout, stderr)."""
+        # Strip inherited git-repository env vars so every git call the reaper
+        # makes (safety checks and removal alike) resolves against the -C
+        # repository it was told to inspect, not whatever repo the caller's
+        # process happens to be sitting in.
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if key not in GIT_REPOSITORY_ENV_VARS
+        }
         try:
             result = subprocess.run(
                 command,
                 capture_output=True,
                 text=True,
                 timeout=30,
+                env=env,
             )
             return result.returncode, result.stdout, result.stderr
         except subprocess.TimeoutExpired:

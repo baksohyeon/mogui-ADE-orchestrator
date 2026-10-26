@@ -20,6 +20,8 @@ you build on it.
 
 ## [Unreleased]
 
+## [0.5.278] - 2026-10-26
+
 ### Added
 
 - `scripts/changelog-release` gains `--roll-root PATH --version X.Y.Z [--date YYYY-MM-DD]`:
@@ -124,6 +126,10 @@ you build on it.
 
 ### Fixed
 
+- `scripts/codex-worker-pretrust` now includes an existing host
+  `${CODEX_HOME:-$HOME/.codex}/config.toml` alongside Orca account configs, so
+  hosts without account sandboxes still pre-trust a dispatched worktree. A
+  missing host config remains informational and is never created by the script.
 - `worker-reap` now accepts clean worktrees whose branch changes are already
   present in `origin/main` after a squash merge. The guard still leaves dirty,
   conflicting, or content-changing worktrees in place with a reason.
@@ -402,7 +408,8 @@ tests pass, 1 skipped.
 There is no CI at this tag. Tests and the redaction scanners run locally before
 a push, so a passing count in a pull request is the author's word.
 
-[Unreleased]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.278...HEAD
+[0.5.278]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.4.1...v0.5.278
 [0.4.1]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.2.0...v0.3.0

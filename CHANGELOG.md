@@ -137,6 +137,11 @@ you build on it.
   the job stays measurement-only (`continue-on-error` unchanged). Onboarding
   structure tests now read UTF-8 explicitly so Windows default encodings do not
   false-fail doc inventory checks.
+- `dispatch` no longer crashes `register` on a human diagnostic line mixed into
+  gate output, and a codex worker's model probe now scopes to its own rollout
+  and resolves its accounts directory on Linux and under `CODEX_ACCOUNTS_DIR`,
+  instead of risking a tier mismatch against a concurrent worker's rollout or
+  missing the rollout tree outright.
 
 ### Added
 

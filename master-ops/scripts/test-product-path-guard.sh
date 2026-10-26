@@ -523,13 +523,60 @@ expect_verdict block comment-swallowed-newline-hides-write
 expect_allowed cd-input-redirection-allowed run_bash "cd $ops < /dev/null && ls"
 expect_verdict pass cd-input-redirection-allowed
 
+# Round four: a cd segment carrying any redirection, output or input, keeps
+# the simulated cwd where it was. Bash resolves that redirection before
+# running the cd builtin and aborts the cd without moving if the target
+# cannot be opened, so advancing current_cwd on that shape assumes a move
+# that may never have happened; a later relative write must still resolve
+# against the old cwd.
+expect_blocked cd-output-redirection-missing-dir-keeps-cwd run_bash "cd /tmp >/no/such/dir/x ; touch pwned.txt" "$product2"
+expect_verdict block cd-output-redirection-missing-dir-keeps-cwd
+expect_blocked cd-input-redirection-missing-file-keeps-cwd run_bash "cd /tmp </no/such/file ; touch pwned.txt" "$product2"
+expect_verdict block cd-input-redirection-missing-file-keeps-cwd
+expect_allowed cd-redirection-no-advance-still-allowed run_bash "cd $ops 2>/dev/null && ls" "$ops"
+expect_verdict pass cd-redirection-no-advance-still-allowed
+
+CD_NO_ADVANCE_MUTANT_HOOK="$TMP/product-path-guard-cd-no-advance-mutant.sh"
+python3 - "$HOOK" "$CD_NO_ADVANCE_MUTANT_HOOK" <<'PY'
+import pathlib, sys
+source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+needle = (
+    "        if not had_redirection:\n"
+    "            current_cwd=target_cwd\n"
+)
+replacement = (
+    "        current_cwd=target_cwd\n"
+)
+if needle not in source:
+    raise SystemExit("cd no-advance mutant patch anchor not found")
+pathlib.Path(sys.argv[2]).write_text(source.replace(needle, replacement, 1), encoding="utf-8")
+PY
+if [ ! -f "$CD_NO_ADVANCE_MUTANT_HOOK" ] || cmp -s "$HOOK" "$CD_NO_ADVANCE_MUTANT_HOOK"; then
+  echo "FAIL: cd no-advance mutant not generated" >&2
+  exit 1
+fi
+chmod +x "$CD_NO_ADVANCE_MUTANT_HOOK"
+
+(
+  expect_blocked cd-no-advance-failability-mutant run_bash_hook "$CD_NO_ADVANCE_MUTANT_HOOK" "cd /tmp >/no/such/dir/x ; touch pwned.txt" "$product2"
+)
+no_advance_mutant_exit=$?
+(
+  expect_blocked cd-no-advance-failability-restored run_bash_hook "$HOOK" "cd /tmp >/no/such/dir/x ; touch pwned.txt" "$product2"
+)
+no_advance_restored_exit=$?
+[ "$no_advance_mutant_exit" -eq 1 ] || { echo "FAIL: cd no-advance mutant exit expected 1 got $no_advance_mutant_exit" >&2; exit 1; }
+[ "$no_advance_restored_exit" -eq 0 ] || { echo "FAIL: cd no-advance restored exit expected 0 got $no_advance_restored_exit" >&2; exit 1; }
+echo "PASS: cd no-advance failability mutant exit code $no_advance_mutant_exit"
+echo "PASS: cd no-advance failability restored exit code $no_advance_restored_exit"
+
 CD_MUTANT_HOOK="$TMP/product-path-guard-cd-mutant.sh"
 python3 - "$HOOK" "$CD_MUTANT_HOOK" <<'PY'
 import pathlib, sys
 source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
 needle = (
     "    if name == \"cd\":\n"
-    "        operands, redirect_targets = strip_cd_redirections(parts)\n"
+    "        operands, redirect_targets, had_redirection = strip_cd_redirections(parts)\n"
     "        if len(operands) != 2:\n"
     "            print(\"DENY\\tcd\\tcd target cannot be resolved\")\n"
     "            raise SystemExit\n"
@@ -539,7 +586,12 @@ needle = (
     "        if any(under(resolve(current_cwd, target)) for target in redirect_targets):\n"
     "            print(\"DENY\\tcd\\tshell redirection is a write\")\n"
     "            raise SystemExit\n"
-    "        current_cwd=resolve(current_cwd, operands[1])\n"
+    "        target_cwd=resolve(current_cwd, operands[1])\n"
+    "        if os.environ[\"FAIL_CLOSED\"] != \"1\" and under(target_cwd):\n"
+    "            print(\"DENY\\tcd\\tlegacy policy blocks entering product root\")\n"
+    "            raise SystemExit\n"
+    "        if not had_redirection:\n"
+    "            current_cwd=target_cwd\n"
 )
 replacement = (
     "    if name == \"cd\":\n"
@@ -547,6 +599,9 @@ replacement = (
     "            print(\"DENY\\tcd\\tcd target cannot be resolved\")\n"
     "            raise SystemExit\n"
     "        current_cwd=resolve(current_cwd, parts[1])\n"
+    "        if os.environ[\"FAIL_CLOSED\"] != \"1\" and under(current_cwd):\n"
+    "            print(\"DENY\\tcd\\tlegacy policy blocks entering product root\")\n"
+    "            raise SystemExit\n"
 )
 if needle not in source:
     raise SystemExit("cd mutant patch anchor not found")
@@ -605,11 +660,11 @@ fi
 chmod +x "$DIGIT_MUTANT_HOOK"
 
 (
-  expect_blocked cd-fd-adjacency-failability-mutant run_bash_hook "$DIGIT_MUTANT_HOOK" "cd $ops 2 > /dev/null && touch out.txt" "$product"
+  expect_blocked cd-fd-adjacency-failability-mutant run_bash_hook "$DIGIT_MUTANT_HOOK" "cd $ops 2 > /dev/null" "$product"
 )
 digit_mutant_exit=$?
 (
-  expect_blocked cd-fd-adjacency-failability-restored run_bash_hook "$HOOK" "cd $ops 2 > /dev/null && touch out.txt" "$product"
+  expect_blocked cd-fd-adjacency-failability-restored run_bash_hook "$HOOK" "cd $ops 2 > /dev/null" "$product"
 )
 digit_restored_exit=$?
 [ "$digit_mutant_exit" -eq 1 ] || { echo "FAIL: cd fd-adjacency mutant exit expected 1 got $digit_mutant_exit" >&2; exit 1; }

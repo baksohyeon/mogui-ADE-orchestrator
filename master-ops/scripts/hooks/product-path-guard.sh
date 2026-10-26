@@ -385,9 +385,14 @@ def strip_cd_redirections(parts):
     # operator in the source text keeps its own token and still counts as a
     # cd operand. Output operators keep their target for the write check
     # that follows; input operators are dropped with their target
-    # discarded, since a read cannot write into a product root.
+    # discarded, since a read cannot write into a product root. Either kind
+    # is reported back via had_redirection: Bash resolves a cd segment own
+    # redirection before running the builtin, and aborts the cd without
+    # moving if that redirection target cannot be opened, so a segment
+    # carrying one is never a safe basis for advancing the simulated cwd.
     operands=[parts[0]]
     redirect_targets=[]
+    had_redirection=False
     index=1
     while index < len(parts):
         token=parts[index]
@@ -400,6 +405,7 @@ def strip_cd_redirections(parts):
         if token in CD_OUTPUT_REDIRECTION_OPERATORS:
             if index + 1 < len(parts):
                 redirect_targets.append(parts[index + 1])
+                had_redirection=True
                 index += 2
             else:
                 operands.append(token)
@@ -407,6 +413,7 @@ def strip_cd_redirections(parts):
             continue
         if token in CD_INPUT_REDIRECTION_OPERATORS:
             if index + 1 < len(parts):
+                had_redirection=True
                 index += 2
             else:
                 operands.append(token)
@@ -414,7 +421,7 @@ def strip_cd_redirections(parts):
             continue
         operands.append(token)
         index += 1
-    return operands, redirect_targets
+    return operands, redirect_targets, had_redirection
 def collect_non_option_operands(parts, start, options_with_values):
     values=set(options_with_values)
     index=start
@@ -517,7 +524,7 @@ for parts in segments:
     if not parts: continue
     name=os.path.basename(parts[0])
     if name == "cd":
-        operands, redirect_targets = strip_cd_redirections(parts)
+        operands, redirect_targets, had_redirection = strip_cd_redirections(parts)
         if len(operands) != 2:
             print("DENY\tcd\tcd target cannot be resolved")
             raise SystemExit
@@ -527,10 +534,12 @@ for parts in segments:
         if any(under(resolve(current_cwd, target)) for target in redirect_targets):
             print("DENY\tcd\tshell redirection is a write")
             raise SystemExit
-        current_cwd=resolve(current_cwd, operands[1])
-        if os.environ["FAIL_CLOSED"] != "1" and under(current_cwd):
+        target_cwd=resolve(current_cwd, operands[1])
+        if os.environ["FAIL_CLOSED"] != "1" and under(target_cwd):
             print("DENY\tcd\tlegacy policy blocks entering product root")
             raise SystemExit
+        if not had_redirection:
+            current_cwd=target_cwd
         continue
     sub=""
     sub_pos=-1

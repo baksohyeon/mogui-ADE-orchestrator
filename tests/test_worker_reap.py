@@ -909,7 +909,6 @@ class WorkerReaperTests(unittest.TestCase):
                         "-C",
                         tmp_path,
                         "rev-parse",
-                        "--path-format=absolute",
                         "--git-common-dir",
                     ]
                 ],
@@ -936,6 +935,46 @@ class WorkerReaperTests(unittest.TestCase):
         with self.assertRaises(ReapError):
             WorkerReaper(orca_runner=failing_runner)._remove_worktree(Path("/tmp/wt"))
         self.assertFalse(any("remove" in cmd for cmd in commands))
+
+    def test_remove_worktree_raises_when_the_git_dir_resolves_to_an_empty_path(self) -> None:
+        commands = []
+
+        def empty_path_runner(cmd: list[str]) -> tuple[int, str, str]:
+            commands.append(cmd)
+            if "--git-common-dir" in cmd:
+                return 0, "\n", ""
+            return 0, "", ""
+
+        with self.assertRaises(ReapError):
+            WorkerReaper(orca_runner=empty_path_runner)._remove_worktree(Path("/tmp/wt"))
+        self.assertFalse(any("remove" in cmd for cmd in commands))
+
+    def test_remove_worktree_resolves_a_relative_git_common_dir(self) -> None:
+        commands = []
+        worktree_path = os.path.join("/repo", "worktrees", "wt")
+        relative_common_dir = os.path.join(".git", "worktrees", "wt")
+
+        def relative_path_runner(cmd: list[str]) -> tuple[int, str, str]:
+            commands.append(cmd)
+            if "--git-common-dir" in cmd:
+                return 0, f"{relative_common_dir}\n", ""
+            return 0, "", ""
+
+        WorkerReaper(orca_runner=relative_path_runner)._remove_worktree(
+            Path(worktree_path)
+        )
+
+        remove_commands = [
+            cmd for cmd in commands
+            if "git" in cmd and "worktree" in cmd and "remove" in cmd
+        ]
+        expected_common_dir = os.path.abspath(
+            os.path.join(worktree_path, relative_common_dir)
+        )
+        self.assertEqual(
+            remove_commands,
+            [["git", f"--git-dir={expected_common_dir}", "worktree", "remove", worktree_path]],
+        )
 
     def test_remove_worktree_works_from_a_non_repository_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

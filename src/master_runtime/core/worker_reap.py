@@ -642,21 +642,18 @@ class WorkerReaper:
         # Resolve the shared git dir, then remove through --git-dir. The remove
         # must not run with the worktree as git's cwd: Windows cannot delete a
         # process's current directory. It also must not depend on the caller's cwd.
+        # --path-format=absolute needs Git 2.31+, which this project does not
+        # require, so resolve the (possibly relative) default output ourselves
+        # against the -C directory the command ran in.
         code, stdout, stderr = self.orca_runner(
-            [
-                "git",
-                "-C",
-                str(worktree_path),
-                "rev-parse",
-                "--path-format=absolute",
-                "--git-common-dir",
-            ]
+            ["git", "-C", str(worktree_path), "rev-parse", "--git-common-dir"]
         )
-        common_dir = stdout.strip()
-        if code != 0 or not common_dir:
+        raw_common_dir = stdout.rstrip("\r\n")
+        if code != 0 or not raw_common_dir:
             raise ReapError(
                 f"Failed to resolve git common dir for {worktree_path}: {stderr}", code or 1
             )
+        common_dir = os.path.abspath(os.path.join(str(worktree_path), raw_common_dir))
         code, stdout, stderr = self.orca_runner(
             ["git", f"--git-dir={common_dir}", "worktree", "remove", str(worktree_path)]
         )

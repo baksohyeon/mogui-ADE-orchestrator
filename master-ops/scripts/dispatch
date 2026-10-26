@@ -257,15 +257,26 @@ export INSTANCE_RUNTIME_CONFIG="$INSTANCE_RUNTIME_CONFIG"
 # re-stamp; config/standing-rules.overlay.md, under the instance-owned config/
 # directory, never does.
 #
-# The main file export is conditional: unset only when it does not exist yet
-# (a checkout predating this feature), so the gate falls back on its own
-# bundled template copy, the same copy a bare CLI call with no override reads.
-# The overlay export is unconditional, since it never had a meaningful
-# template-side fallback to defer to in the first place (the template ships
-# no overlay at all) and the gate already treats a missing overlay path as
-# "no extra names" instead of an error.
+# A missing install file used to leave DISPATCH_STANDING_RULES unset, so the
+# gate fell back to its own bundled template copy and validated a contract's
+# standing_rules names against it, while standing_rule_block's append step
+# below reads the same unset-falls-back-to-this-install-path expression and
+# finds nothing there: the gate passed a contract the append step then could
+# not deliver. Refusing here, before the gate call, keeps both reads pinned
+# to one file. A caller-supplied override is left alone and skips the check.
+# The overlay export stays unconditional: it never had a meaningful
+# template-side fallback to defer to (the template ships no overlay at all),
+# and the gate already treats a missing overlay path as "no extra names"
+# instead of an error.
 STANDING_RULES_PATH="$SCRIPTS_DIR/../rules/standing-rules.md"
-[ -f "$STANDING_RULES_PATH" ] && export DISPATCH_STANDING_RULES="$STANDING_RULES_PATH"
+if [ -z "${DISPATCH_STANDING_RULES:-}" ]; then
+  if [ ! -f "$STANDING_RULES_PATH" ]; then
+    echo "dispatch: standing rules file missing: $STANDING_RULES_PATH" >&2
+    exit 10
+  fi
+  DISPATCH_STANDING_RULES="$STANDING_RULES_PATH"
+fi
+export DISPATCH_STANDING_RULES
 export DISPATCH_STANDING_RULES_LOCAL="$SCRIPTS_DIR/../config/standing-rules.overlay.md"
 
 # Transcript glob for a model probe, per runtime.

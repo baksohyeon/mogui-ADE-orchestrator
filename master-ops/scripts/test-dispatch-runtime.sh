@@ -2112,6 +2112,108 @@ EOF
 )
 codex_hooks_vet_wiring_test "$dispatch" || exit 1
 
+# --- Feature: missing standing-rules file refuses before the gate call -----
+#
+# A missing install file used to leave DISPATCH_STANDING_RULES unset, so the
+# gate validated a contract's standing_rules names against its own bundled
+# template copy while standing_rule_block's append step read nothing at the
+# same unset-falls-back-to-this-install-path expression, passing a contract
+# the append step then could not deliver. Extracts the STANDING_RULES_PATH
+# guard block and runs it in isolation against a missing file, an existing
+# one, and a caller-supplied override.
+standing_rules_missing_file_test() (
+  set +e
+  set -u
+  local dispatch="$1" work block script_file out status mutant_block mutant_file
+
+  block=$(awk '
+    /^STANDING_RULES_PATH="\$SCRIPTS_DIR\/\.\.\/rules\/standing-rules\.md"$/{f=1}
+    f{print}
+    f && /^export DISPATCH_STANDING_RULES_LOCAL="\$SCRIPTS_DIR\/\.\.\/config\/standing-rules\.overlay\.md"$/{exit}
+  ' "$dispatch")
+  [ -n "$block" ] || { echo "FAIL: could not extract the STANDING_RULES_PATH guard block" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-standing-rules-missing-test.$$"
+  mkdir -p "$work/scripts"
+  trap 'rm -rf "$work"' EXIT
+
+  write_script() {
+    local outfile="$1"
+    {
+      echo 'set -u'
+      printf 'SCRIPTS_DIR=%s\n' "$work/scripts"
+      printf '%s\n' "$block"
+      echo 'printf "DISPATCH_STANDING_RULES=%s\n" "${DISPATCH_STANDING_RULES:-}"'
+    } > "$outfile"
+  }
+
+  script_file="$work/run.sh"
+  write_script "$script_file"
+
+  # Case: missing file and unset variable exits 10 naming the path.
+  out=$(env -u DISPATCH_STANDING_RULES bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 10 ]; then
+    echo "FAIL: a missing rules file with DISPATCH_STANDING_RULES unset should exit 10, got $status" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF "standing rules file missing: $work/scripts/../rules/standing-rules.md"; then
+    echo "FAIL: the exit-10 message does not name the missing path" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : a missing rules file with DISPATCH_STANDING_RULES unset exits 10 naming the path"
+
+  # Case: an existing file exports DISPATCH_STANDING_RULES unconditionally.
+  mkdir -p "$work/rules"
+  : > "$work/rules/standing-rules.md"
+  out=$(env -u DISPATCH_STANDING_RULES bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -qF "DISPATCH_STANDING_RULES=$work/scripts/../rules/standing-rules.md"; then
+    echo "FAIL: an existing rules file should export DISPATCH_STANDING_RULES to it" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : an existing rules file exports DISPATCH_STANDING_RULES unconditionally"
+
+  # Case: a caller override is left alone even when the install file is missing.
+  rm -f "$work/rules/standing-rules.md"
+  out=$(DISPATCH_STANDING_RULES=/nonexistent/override.md bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -qF 'DISPATCH_STANDING_RULES=/nonexistent/override.md'; then
+    echo "FAIL: a caller-supplied DISPATCH_STANDING_RULES override should skip the missing-file check" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : a caller-supplied DISPATCH_STANDING_RULES override skips the missing-file check"
+
+  # Failability: drop just the exit line, leaving the echo in place so the
+  # if-body stays non-empty; the missing-file case must then stop refusing,
+  # the behaviour this fix replaces.
+  mutant_block=${block/'    exit 10
+'/''}
+  if [ "$mutant_block" = "$block" ]; then
+    echo "FAIL: exit-10 mutant did not change the source" >&2
+    return 1
+  fi
+  mutant_file="$work/run-mutant.sh"
+  {
+    echo 'set -u'
+    printf 'SCRIPTS_DIR=%s\n' "$work/scripts"
+    printf '%s\n' "$mutant_block"
+    echo 'printf "DISPATCH_STANDING_RULES=%s\n" "${DISPATCH_STANDING_RULES:-}"'
+  } > "$mutant_file"
+  out=$(env -u DISPATCH_STANDING_RULES bash "$mutant_file" 2>&1)
+  status=$?
+  if [ "$status" -eq 10 ]; then
+    echo "FAIL: failability: mutant dropping the exit-10 branch should no longer refuse, but it still exited 10" >&2
+    return 1
+  fi
+  echo "ok   : failability: dropping the exit-10 branch stops refusing a missing rules file (status=$status)"
+)
+standing_rules_missing_file_test "$dispatch" || exit 1
+
 # --- Feature: standing rules append -----------------------------------------
 #
 # A contract's front matter can name `standing_rules` blocks; dispatch-gate
@@ -2156,6 +2258,12 @@ RULES
     {
       echo 'set -u'
       printf 'SCRIPTS_DIR=%s\n' "$work/scripts"
+      # Pins both overrides to this case's own fixtures, in the subshell the
+      # extracted block already runs in, so a value inherited from the
+      # caller's environment (this test script's own wrapper might export
+      # one) never reaches standing_rule_block instead of these fixtures.
+      printf 'export DISPATCH_STANDING_RULES=%s\n' "$work/rules/standing-rules.md"
+      printf 'export DISPATCH_STANDING_RULES_LOCAL=%s\n' "$work/config/standing-rules.overlay.md"
       printf '%s\n' "$jqf_fn"
       printf '%s\n' "$block_fn"
       printf 'CHK=%s\n' "$(printf '%q' "$chat_json")"
@@ -2271,6 +2379,8 @@ RULES
   {
     echo 'set -u'
     printf 'SCRIPTS_DIR=%s\n' "$work/scripts"
+    printf 'export DISPATCH_STANDING_RULES=%s\n' "$work/rules/standing-rules.md"
+    printf 'export DISPATCH_STANDING_RULES_LOCAL=%s\n' "$work/config/standing-rules.overlay.md"
     printf '%s\n' "$jqf_fn"
     printf '%s\n' "$block_fn"
     printf 'CHK=%s\n' "$(printf '%q' '{"allow": true, "front_matter": {"standing_rules": ["headless"]}}')"
@@ -2287,4 +2397,4 @@ RULES
 )
 standing_rules_append_test "$dispatch" || exit 1
 
-echo "dispatch multi-vendor / check-only / state-dir-seam / contract-delivery / cursor-pretrust / claude-pretrust / claude-pretrust-call-site / claude-hook-trust-marker / fresh-claude-prompt-marker / delivery-result / codex-launch / codex-start-screen / codex-start-screen-wiring / codex-hooks-vet / codex-hooks-vet-wiring / standing-rules-append regression tests passed"
+echo "dispatch multi-vendor / check-only / state-dir-seam / contract-delivery / cursor-pretrust / claude-pretrust / claude-pretrust-call-site / claude-hook-trust-marker / fresh-claude-prompt-marker / delivery-result / codex-launch / codex-start-screen / codex-start-screen-wiring / codex-hooks-vet / codex-hooks-vet-wiring / standing-rules-missing-file / standing-rules-append regression tests passed"

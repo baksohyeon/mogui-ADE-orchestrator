@@ -300,19 +300,25 @@ assert_case needs_approval_does_not_spend_a_round 0 "continue round=1 pick" "$pf
 # The runbook's pick and ready-count pipelines (loop.md section 3, steps 1
 # and 3) must both skip every id already in the progress table, whatever its
 # state, so a row that already consumed its pick is never picked again and
-# the two never disagree. `bd` itself is never run here: a fixture JSON file
-# stands in for the `$bd_ready_json` snapshot step 1 captures. Both pipelines
-# are read out of loop.md itself, not retyped here, so a regression to
-# either documented command (for example, dropping the exclusion filter)
-# fails these cases instead of passing silently.
+# the two never disagree. The table carries one `picked`, one `contracted`,
+# and one `dispatched` row, and all three ids are also in the ready set, so
+# a filter that excluded only the `picked` state (matching the row's state
+# column instead of its id) would still pass if just one state were tested.
+# `bd` itself is never run here: a fixture JSON file stands in for the
+# `$bd_ready_json` snapshot step 1 captures. Both pipelines are read out of
+# loop.md itself, not retyped here, so a regression to either documented
+# command (for example, dropping the exclusion filter) fails these cases
+# instead of passing silently.
 pf="$(fixture running 3 4 0 2026-10-20T09:00:00+09:00 \
-  '1|mgm-a|picked' '2|mgm-b|contracted')"
+  '1|mgm-a|picked' '2|mgm-b|contracted' '3|mgm-z|dispatched')"
 bd_fixture="$work/bd-ready.json"
 cat >"$bd_fixture" <<'JSON'
 [
   {"id": "mgm-a", "priority": 0, "created_at": "2026-01-01T00:00:00Z"},
-  {"id": "mgm-x", "priority": 1, "created_at": "2026-01-02T00:00:00Z"},
-  {"id": "mgm-y", "priority": 2, "created_at": "2026-01-03T00:00:00Z"}
+  {"id": "mgm-b", "priority": 1, "created_at": "2026-01-01T12:00:00Z"},
+  {"id": "mgm-x", "priority": 2, "created_at": "2026-01-02T00:00:00Z"},
+  {"id": "mgm-z", "priority": 3, "created_at": "2026-01-02T12:00:00Z"},
+  {"id": "mgm-y", "priority": 4, "created_at": "2026-01-03T00:00:00Z"}
 ]
 JSON
 bd_ready_json="$(cat "$bd_fixture")"
@@ -353,10 +359,10 @@ else
   fail "failability pick_filter_excludes_table_items: want mgm-a, got '$no_filter_id'"
 fi
 no_filter_n="$(printf '%s' "$bd_ready_json" | jq -r 'length')"
-if [ "$no_filter_n" = "3" ]; then
-  ok "failability: ready_count_excludes_table_items mutant (no filter) counts 3"
+if [ "$no_filter_n" = "5" ]; then
+  ok "failability: ready_count_excludes_table_items mutant (no filter) counts 5"
 else
-  fail "failability ready_count_excludes_table_items: want 3, got '$no_filter_n'"
+  fail "failability ready_count_excludes_table_items: want 5, got '$no_filter_n'"
 fi
 
 # --- Failability: one per stop condition ----------------------------------------

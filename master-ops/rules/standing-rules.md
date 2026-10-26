@@ -28,11 +28,17 @@ branch --show-current>` next to the base sha the dispatching contract states.
 
 ## voice
 
-Everything on the pull request is written in English. The rules of
-`docs/runbooks/review-voice.md` apply to the body, the commit messages, and
-every reply, including rule 9's ban on naming a discarded option before
-asserting the kept one. No absolute home path or username appears anywhere,
-and sentences use plain punctuation, never the long dash.
+Everything on the pull request is written in English, the same voice in
+every reply and commit message. Keep the PR body current with the branch as
+it stands now. Point at the code line and include a concrete replacement a
+reviewer can take as written. Write courteous, humble, and collaborative,
+like a colleague who expects to be wrong sometimes. Fault the interface, the
+system, or the architecture, never the person or the bot that read what was
+there to be misread. State the kept option on its own, without first naming
+the one left behind. No long dash anywhere, no stock opening line that
+praises, flags, or pivots before the point lands, and no absolute home path
+or username anywhere. Full text: `docs/runbooks/review-voice.md` in the
+template checkout, a sibling of this file's own `rules/` directory.
 
 ## pr-house
 

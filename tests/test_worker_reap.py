@@ -1073,7 +1073,9 @@ class WorkerReaperTests(unittest.TestCase):
         captured_env: dict[str, str] = {}
 
         def fake_run(command, **kwargs):
-            captured_env.update(kwargs.get("env") or {})
+            # Strict key access: a call that silently drops `env=` must fail
+            # this test, not pass it vacuously against an empty dict.
+            captured_env.update(kwargs["env"])
             return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
         try:

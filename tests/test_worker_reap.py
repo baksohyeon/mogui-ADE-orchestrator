@@ -958,7 +958,9 @@ class WorkerReaperTests(unittest.TestCase):
 
             def runner_with_ignored_media(cmd: list[str]) -> tuple[int, str, str]:
                 if "git" in cmd and "status" in cmd and "--ignored" in cmd:
-                    return 0, "!! renders/clip.mp4\0", ""
+                    if "--untracked-files=all" in cmd and "-z" in cmd:
+                        return 0, "!! renders/clip.mp4\0", ""
+                    return 0, "!! renders/\n", ""
                 return original_runner(cmd)
 
             reaper = WorkerReaper(orca_runner=runner_with_ignored_media)
@@ -967,9 +969,10 @@ class WorkerReaperTests(unittest.TestCase):
             self.assertEqual(removed_paths, [])
             self.assertIn(f"worktree_left:{tmp}:ignored_media:1", record.actions_taken)
             self.assertEqual(record.measurements["worktree_ignored_media"], 1)
-            # Failability: `--untracked-files=all` is what makes git list a
-            # file inside an ignored directory instead of collapsing it to
-            # the directory; dropping that flag loses this case silently.
+            # Failability: dropping `--untracked-files=all` or `-z` in
+            # production makes the fake runner fold the match to the
+            # ignored directory itself, which carries no media suffix, so
+            # this assertion catches either flag going missing.
 
     def test_reap_leaves_clean_merged_worktree_holding_ignored_media_with_space(
         self,
@@ -984,7 +987,9 @@ class WorkerReaperTests(unittest.TestCase):
 
             def runner_with_ignored_media(cmd: list[str]) -> tuple[int, str, str]:
                 if "git" in cmd and "status" in cmd and "--ignored" in cmd:
-                    return 0, "!! out/final cut.mp4\0", ""
+                    if "--untracked-files=all" in cmd and "-z" in cmd:
+                        return 0, "!! out/final cut.mp4\0", ""
+                    return 0, "!! out/\n", ""
                 return original_runner(cmd)
 
             reaper = WorkerReaper(orca_runner=runner_with_ignored_media)
@@ -993,9 +998,11 @@ class WorkerReaperTests(unittest.TestCase):
             self.assertEqual(removed_paths, [])
             self.assertIn(f"worktree_left:{tmp}:ignored_media:1", record.actions_taken)
             self.assertEqual(record.measurements["worktree_ignored_media"], 1)
-            # Failability: parsing `-z` output with `splitlines()` instead of
-            # a NUL split would be harmless here (no embedded newline), but a
-            # whitespace-splitting parser would cut this path at the space.
+            # Failability: dropping `--untracked-files=all` or `-z` in
+            # production makes the fake runner fold the match to the
+            # ignored directory itself, which carries no media suffix, so
+            # this assertion catches either flag going missing, the same way
+            # it would miss a quoted or spaced path without the real `-z`.
 
     def test_reap_removes_worktree_with_ignored_media_when_flag_set(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

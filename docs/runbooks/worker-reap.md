@@ -73,7 +73,9 @@ The reaper checks three conditions before removing the worktree:
 2. **Current branch is included in `origin/main`** — either the checked-out branch appears in `git branch -a --merged origin/main`, or a virtual merge of `HEAD` into `origin/main` produces the same tree as `origin/main`
 3. **No ignored media**: `git status --porcelain` never lists ignored files,
    so once the first two conditions pass, the reaper also runs `git status
-   --porcelain --ignored` and checks its `!! ` paths against a suffix list:
+   --porcelain --ignored --untracked-files=all -z` (`-z` NUL-delimits the
+   output; pipe it through `tr '\0' '\n'` to read it by eye) and checks its
+   `!! ` paths against a suffix list:
    `.mp4 .webm .mov .mkv .wav .mp3 .flac .png .jpg .jpeg .gif .webp .pdf`
    (case-insensitive). A worktree whose `.gitignore` covers rendered media
    would otherwise lose that media to `git worktree remove` with no warning.

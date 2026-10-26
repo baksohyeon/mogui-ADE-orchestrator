@@ -9,17 +9,34 @@
 # denies registration with MODEL_TIER_ESCALATION even though the model id is
 # sitting in the file (measured 2026-08-13). Probing the rollout directly with
 # `grep -o '"model":"[^"]*"'` is not a fix either: it returns the whole JSON
-# fragment rather than the bare id, so the gate's tier lookup never matches a
+# fragment instead of the bare id, so the gate's tier lookup never matches a
 # policy entry (measured=`"model":"gpt-5.6-luna"` tier=unknown, same date).
 # dispatch-gate's tier lookup needs the bare id, so extract just the capture
 # group.
 #
+# Matches `"model"` with optional whitespace around the colon (coderabbit
+# Minor, 2026-08-31: `{"model": "x"}` with a space after the colon produced
+# no match), and takes the first `"model"` field with `grep -o`'s left-to-
+# right, non-overlapping match order instead of a single greedy regex,
+# whether that first field is on the first line or shares a line with a
+# second `"model"` field (cubic P2, 2026-08-31: a greedy leading `.*` landed
+# on the LAST field on a line instead of the first).
+#
 # Usage: model-probe-rollout <rollout.jsonl>
 set -eu
+set -o pipefail
 
-[ -n "${1:-}" ] && [ -f "$1" ] || {
-  echo "model-probe-rollout: no rollout file: ${1:-<empty>}" >&2
+ROLLOUT="${1:-}"
+if [ -z "$ROLLOUT" ] || [ ! -f "$ROLLOUT" ] || [ ! -r "$ROLLOUT" ]; then
+  echo "model-probe-rollout: no rollout file: ${ROLLOUT:-<empty>}" >&2
   exit 1
-}
+fi
 
-sed -n 's/.*"model":"\([^"]*\)".*/\1/p' "$1" | head -1
+# The `|| true` keeps grep's "no match" exit (1) from tripping `pipefail`:
+# a rollout with no "model" field must still print nothing and exit 0. The
+# documented contract treats empty probe stdout as model_probe_failed, never
+# a parse error, while an actually unreadable file is already caught above
+# instead of being masked by `head`.
+{ grep -oE '"model"[[:space:]]*:[[:space:]]*"[^"]*"' "$ROLLOUT" || true; } \
+  | head -1 \
+  | sed -E 's/^"model"[[:space:]]*:[[:space:]]*"//; s/"$//'

@@ -4,9 +4,9 @@ Measured 2026-08-13: a dispatch-gate invocation surfaced a human diagnostic
 line ("dispatch-gate: REASON ...") on stdout ahead of the JSON verdict line.
 The old jqf() ran `json.load(sys.stdin)` against the whole captured output and
 died with `Expecting value: line 2 column 1 (char 1)`, which killed the
-register step after the worker was already dispatched and running — the
+register step after the worker was already dispatched and running; the
 ledger was never told the job existed
-("register ... (worker IS running — resolve register manually)").
+("register ... (worker IS running: resolve register manually)").
 
 jqf() must tolerate an extra human line anywhere in the captured output and
 still recover the JSON verdict, in both the success path (JSON only) and the
@@ -70,6 +70,20 @@ def test_human_diagnostic_line_ahead_of_json_does_not_crash() -> None:
 
     assert reason.returncode == 0
     assert reason.stdout.strip() == "MODEL_TIER_ESCALATION"
+
+
+def test_human_diagnostic_line_trailing_the_json_does_not_crash() -> None:
+    """jqf() must tolerate a human line anywhere in the output, including
+    after the JSON verdict and ahead of it (cubic P3, 2026-08-31: the prior
+    test suite covered a prefix line and blank lines, with no case for a
+    trailing one, which the "last line starting with {" fix also depends on
+    recovering correctly)."""
+
+    mixed = '{"allow": true, "reason": "ok"}\ndispatch-gate: done\n'
+    result = run_jqf(mixed, "d['allow']")
+
+    assert result.returncode == 0
+    assert result.stdout.strip() == "True"
 
 
 def test_blank_lines_around_the_json_do_not_crash() -> None:

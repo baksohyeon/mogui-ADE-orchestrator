@@ -129,7 +129,7 @@ checkonly_ledger_test() (
   local dispatch="$1" work jqf_fn tier_fn block
   local gate ledger policy contract script_file status before after out mutant_block
 
-  jqf_fn=$(grep -m1 -F 'jqf() {' "$dispatch")
+  jqf_fn=$(awk '$0=="jqf() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   tier_fn=$(awk '$0=="tier_for_model() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   block=$(awk '
     $0=="TIER=$(tier_for_model \"$MODEL\" 2>/dev/null || echo unknown)"{f=1}
@@ -1183,7 +1183,7 @@ codex_start_screen_wiring_test() (
   local dispatch="$1" work jqf_fn pane_classification_fn start_fn markers wiring_block
   local menu ready script_file out status
 
-  jqf_fn=$(grep -m1 -F 'jqf() {' "$dispatch")
+  jqf_fn=$(awk '$0=="jqf() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   pane_classification_fn=$(awk '$0=="pane_classification() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   start_fn=$(awk '$0=="codex_start_screen_problem() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   markers=$(grep -E '^(LIMIT_MARKERS|HOOK_TRUST_MARKERS|PREPARED_PROMPT_MARKERS|PREPARED_UNICODE_PROMPT_MARKERS)=' "$dispatch")
@@ -1627,7 +1627,7 @@ codex_hooks_vet_wiring_test() (
   local menu ready script_file out status mutant_wiring
   local mutant_homes homes_fn_saved
 
-  jqf_fn=$(grep -m1 -F 'jqf() {' "$dispatch")
+  jqf_fn=$(awk '$0=="jqf() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   pane_classification_fn=$(awk '$0=="pane_classification() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   start_fn=$(awk '$0=="codex_start_screen_problem() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   markers=$(grep -E '^(LIMIT_MARKERS|HOOK_TRUST_MARKERS|PREPARED_PROMPT_MARKERS|PREPARED_UNICODE_PROMPT_MARKERS)=' "$dispatch")
@@ -2228,7 +2228,7 @@ standing_rules_append_test() (
   local dispatch="$1" work jqf_fn block_fn append_block script_file
   local out status mutant_block
 
-  jqf_fn=$(grep -m1 -F 'jqf() {' "$dispatch")
+  jqf_fn=$(awk '$0=="jqf() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   block_fn=$(awk '$0=="standing_rule_block() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   append_block=$(awk '
     /^STANDING_RULE_NAMES=\$\(echo "\$CHK" \| jqf/{f=1}

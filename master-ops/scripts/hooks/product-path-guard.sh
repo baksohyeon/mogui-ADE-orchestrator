@@ -535,6 +535,9 @@ for parts in segments:
             print("DENY\tcd\tshell redirection is a write")
             raise SystemExit
         target_cwd=resolve(current_cwd, operands[1])
+        if had_redirection and under(target_cwd):
+            print("DENY\tcd\tredirection-bearing cd into a product root cannot be modeled")
+            raise SystemExit
         if os.environ["FAIL_CLOSED"] != "1" and under(target_cwd):
             print("DENY\tcd\tlegacy policy blocks entering product root")
             raise SystemExit

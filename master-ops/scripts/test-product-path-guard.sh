@@ -70,6 +70,19 @@ print(json.dumps({"tool_input": {"command": sys.argv[1], "working_directory": sy
 PY
 }
 
+# Same shape as run_bash_hook, but fail-closed; needed by the cd-redirection-
+# into-root failability check below to re-run one denied case against a
+# mutated copy of the guard under the mode the bug in question is specific to.
+run_bash_hook_strict() {
+  local hook="$1"
+  local command="$2"
+  local working_directory="${3:-.}"
+  python3 - "$command" "$working_directory" <<'PY' | HOME="$TMP/home" MOGUI_INLINE_EDIT_OVERRIDE=0 MOGUI_PRODUCT_GUARD_FAIL_CLOSED=1 MOGUI_PRODUCT_GUARD_ALLOWLIST="$TMP/allowlist.txt" MOGUI_EVENT_LOG="$TMP/home/.mogui/event-log.jsonl" MOGUI_INSTANCE_RUNTIME_CONFIG="$TMP/runtime.json" MOGUI_HOOK_FIRE_LOG="$TMP/logs/fire.jsonl" "$hook" >/dev/null 2>"$TMP/stderr"
+import json, sys
+print(json.dumps({"tool_input": {"command": sys.argv[1], "working_directory": sys.argv[2] if len(sys.argv) > 2 else "."}}))
+PY
+}
+
 run_bash_strict() {
   local command="$1"
   local working_directory="${2:-.}"
@@ -587,6 +600,9 @@ needle = (
     "            print(\"DENY\\tcd\\tshell redirection is a write\")\n"
     "            raise SystemExit\n"
     "        target_cwd=resolve(current_cwd, operands[1])\n"
+    "        if had_redirection and under(target_cwd):\n"
+    "            print(\"DENY\\tcd\\tredirection-bearing cd into a product root cannot be modeled\")\n"
+    "            raise SystemExit\n"
     "        if os.environ[\"FAIL_CLOSED\"] != \"1\" and under(target_cwd):\n"
     "            print(\"DENY\\tcd\\tlegacy policy blocks entering product root\")\n"
     "            raise SystemExit\n"
@@ -671,6 +687,65 @@ digit_restored_exit=$?
 [ "$digit_restored_exit" -eq 0 ] || { echo "FAIL: cd fd-adjacency restored exit expected 0 got $digit_restored_exit" >&2; exit 1; }
 echo "PASS: cd fd-adjacency failability mutant exit code $digit_mutant_exit"
 echo "PASS: cd fd-adjacency failability restored exit code $digit_restored_exit"
+
+# Round five: legacy mode already denies any cd into a product root, with or
+# without a redirection, so a redirection-bearing cd into the root was always
+# covered there. Fail-closed mode skips that legacy check, and round four
+# left the simulated cwd outside the root on a redirection-bearing cd, so the
+# cd itself passed unmodeled while the real shell still moved in; a relative
+# write right after then resolved against the stale (outside) simulated cwd
+# instead of the real (inside) one. The new check denies that shape in every
+# mode, right where target_cwd is computed.
+printf 'touch\n' >>"$TMP/allowlist.txt"
+expect_blocked strict-cd-redirection-into-root-blocked run_bash_strict "cd $product >/dev/null ; touch pwned.txt" "$ops"
+expect_verdict block strict-cd-redirection-into-root-blocked
+grep -q "redirection-bearing cd into a product root cannot be modeled" "$TMP/stderr" || { echo "FAIL: strict-cd-redirection-into-root-blocked missing new denial message" >&2; cat "$TMP/stderr" >&2; exit 1; }
+# Same shape without a redirection is unaffected by this round: cd already
+# advances the simulated cwd into the root (fail-closed mode has no legacy
+# check to stop it), and the touch segment that follows is still denied by
+# the pre-existing write-capable check once it lands there.
+expect_blocked strict-cd-no-redirection-into-root-write-blocked run_bash_strict "cd $product ; touch pwned.txt" "$ops"
+expect_verdict block strict-cd-no-redirection-into-root-write-blocked
+expect_blocked legacy-cd-redirection-into-root-blocked run_bash "cd $product >/dev/null ; touch pwned.txt" "$ops"
+expect_verdict block legacy-cd-redirection-into-root-blocked
+
+CD_REDIRECTION_ROOT_MUTANT_HOOK="$TMP/product-path-guard-cd-redirection-root-mutant.sh"
+python3 - "$HOOK" "$CD_REDIRECTION_ROOT_MUTANT_HOOK" <<'PY'
+import pathlib, sys
+source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+needle = (
+    "        target_cwd=resolve(current_cwd, operands[1])\n"
+    "        if had_redirection and under(target_cwd):\n"
+    "            print(\"DENY\\tcd\\tredirection-bearing cd into a product root cannot be modeled\")\n"
+    "            raise SystemExit\n"
+    "        if os.environ[\"FAIL_CLOSED\"] != \"1\" and under(target_cwd):\n"
+)
+replacement = (
+    "        target_cwd=resolve(current_cwd, operands[1])\n"
+    "        if os.environ[\"FAIL_CLOSED\"] != \"1\" and under(target_cwd):\n"
+)
+if needle not in source:
+    raise SystemExit("cd redirection root mutant patch anchor not found")
+pathlib.Path(sys.argv[2]).write_text(source.replace(needle, replacement, 1), encoding="utf-8")
+PY
+if [ ! -f "$CD_REDIRECTION_ROOT_MUTANT_HOOK" ] || cmp -s "$HOOK" "$CD_REDIRECTION_ROOT_MUTANT_HOOK"; then
+  echo "FAIL: cd redirection root mutant not generated" >&2
+  exit 1
+fi
+chmod +x "$CD_REDIRECTION_ROOT_MUTANT_HOOK"
+
+(
+  expect_blocked cd-redirection-root-failability-mutant run_bash_hook_strict "$CD_REDIRECTION_ROOT_MUTANT_HOOK" "cd $product >/dev/null ; touch pwned.txt" "$ops"
+)
+redirection_root_mutant_exit=$?
+(
+  expect_blocked cd-redirection-root-failability-restored run_bash_hook_strict "$HOOK" "cd $product >/dev/null ; touch pwned.txt" "$ops"
+)
+redirection_root_restored_exit=$?
+[ "$redirection_root_mutant_exit" -eq 1 ] || { echo "FAIL: cd redirection root mutant exit expected 1 got $redirection_root_mutant_exit" >&2; exit 1; }
+[ "$redirection_root_restored_exit" -eq 0 ] || { echo "FAIL: cd redirection root restored exit expected 0 got $redirection_root_restored_exit" >&2; exit 1; }
+echo "PASS: cd redirection root failability mutant exit code $redirection_root_mutant_exit"
+echo "PASS: cd redirection root failability restored exit code $redirection_root_restored_exit"
 
 if [ ! -s "$TMP/logs/fire.jsonl" ]; then
   echo "FAIL: MOGUI_HOOK_FIRE_LOG was ignored" >&2

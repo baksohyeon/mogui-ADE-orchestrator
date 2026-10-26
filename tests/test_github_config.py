@@ -107,8 +107,13 @@ def test_assignee_follows_the_turn_step_covers_three_events():
     assert step_match, "no step named 'assignee follows the turn' in labeler.yml"
     step_text = step_match.group(1)
 
-    for branch in ('"labeled"', '"unlabeled"', '"opened"'):
-        assert branch in step_text, f"{branch} branch missing from assignee step"
+    for expr in (
+        'context.payload.action === "labeled"',
+        'context.payload.action === "unlabeled"',
+        'context.payload.action === "opened"',
+        'context.payload.label.name === "waiting-user-response"',
+    ):
+        assert expr in step_text, f"{expr!r} missing from assignee step"
 
 
 @skip_windows_exec_surface

@@ -74,10 +74,15 @@ jobs:
           script: |
             const maintainerLogin = process.env.MAINTAINER_LOGIN;
             const pr = context.payload.pull_request;
-            const assignees = pr.assignees.map((assignee) => assignee.login);
+            const { data: currentPr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+            });
+            const assignees = new Set(currentPr.assignees.map((assignee) => assignee.login));
 
             async function addAssignee(login) {
-              if (assignees.includes(login)) {
+              if (assignees.has(login)) {
                 return;
               }
               try {
@@ -87,6 +92,7 @@ jobs:
                   issue_number: pr.number,
                   assignees: [login],
                 });
+                assignees.add(login);
               } catch (error) {
                 if (error.status !== 404) {
                   throw error;
@@ -95,7 +101,7 @@ jobs:
             }
 
             async function removeAssignee(login) {
-              if (!assignees.includes(login)) {
+              if (!assignees.has(login)) {
                 return;
               }
               try {
@@ -105,6 +111,7 @@ jobs:
                   issue_number: pr.number,
                   assignees: [login],
                 });
+                assignees.delete(login);
               } catch (error) {
                 if (error.status !== 404) {
                   throw error;
@@ -123,6 +130,6 @@ jobs:
             } else if (context.payload.action === "unlabeled" && context.payload.label.name === "waiting-user-response") {
               await removeAssignee(pr.user.login);
               await addAssignee(maintainerLogin);
-            } else if (context.payload.action === "opened" && assignees.length === 0) {
+            } else if (context.payload.action === "opened" && assignees.size === 0) {
               await addAssignee(maintainerLogin);
             }

@@ -107,7 +107,9 @@ The path labeler then adds `area/*` labels for the paths changed and a
 `size/*` label for the added lines and files touched. Both run from `main`,
 so a pull request that adds or edits the labeler itself does not label
 itself. The assignee shows whose turn it is: the author while
-`waiting-user-response` is on, the maintainer otherwise.
+`waiting-user-response` is on, the maintainer otherwise. A bot author keeps
+the maintainer assigned instead, and a pull request opened with an assignee
+already set is left as it is.
 
 Six checks must pass before merge: `tests (ubuntu-latest)`,
 `tests (macos-latest)`, `shell-tests (ubuntu-latest)`,

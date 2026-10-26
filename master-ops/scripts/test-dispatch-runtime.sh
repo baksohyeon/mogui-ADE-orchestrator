@@ -2127,9 +2127,9 @@ standing_rules_missing_file_test() (
   local dispatch="$1" work block script_file out status mutant_block mutant_file
 
   block=$(awk '
-    $0=="STANDING_RULES_PATH=\"\$SCRIPTS_DIR/../rules/standing-rules.md\""{f=1}
+    /^STANDING_RULES_PATH="\$SCRIPTS_DIR\/\.\.\/rules\/standing-rules\.md"$/{f=1}
     f{print}
-    f && $0=="export DISPATCH_STANDING_RULES_LOCAL=\"\$SCRIPTS_DIR/../config/standing-rules.overlay.md\""{exit}
+    f && /^export DISPATCH_STANDING_RULES_LOCAL="\$SCRIPTS_DIR\/\.\.\/config\/standing-rules\.overlay\.md"$/{exit}
   ' "$dispatch")
   [ -n "$block" ] || { echo "FAIL: could not extract the STANDING_RULES_PATH guard block" >&2; return 1; }
 
@@ -2150,20 +2150,20 @@ standing_rules_missing_file_test() (
   script_file="$work/run.sh"
   write_script "$script_file"
 
-  # Case: missing file and unset variable exits 2 naming the path.
+  # Case: missing file and unset variable exits 10 naming the path.
   out=$(env -u DISPATCH_STANDING_RULES bash "$script_file" 2>&1)
   status=$?
-  if [ "$status" -ne 2 ]; then
-    echo "FAIL: a missing rules file with DISPATCH_STANDING_RULES unset should exit 2, got $status" >&2
+  if [ "$status" -ne 10 ]; then
+    echo "FAIL: a missing rules file with DISPATCH_STANDING_RULES unset should exit 10, got $status" >&2
     printf '%s\n' "$out" >&2
     return 1
   fi
   if ! printf '%s\n' "$out" | grep -qF "standing rules file missing: $work/scripts/../rules/standing-rules.md"; then
-    echo "FAIL: the exit-2 message does not name the missing path" >&2
+    echo "FAIL: the exit-10 message does not name the missing path" >&2
     printf '%s\n' "$out" >&2
     return 1
   fi
-  echo "ok   : a missing rules file with DISPATCH_STANDING_RULES unset exits 2 naming the path"
+  echo "ok   : a missing rules file with DISPATCH_STANDING_RULES unset exits 10 naming the path"
 
   # Case: an existing file exports DISPATCH_STANDING_RULES unconditionally.
   mkdir -p "$work/rules"
@@ -2191,10 +2191,10 @@ standing_rules_missing_file_test() (
   # Failability: drop just the exit line, leaving the echo in place so the
   # if-body stays non-empty; the missing-file case must then stop refusing,
   # the behaviour this fix replaces.
-  mutant_block=${block/'    exit 2
+  mutant_block=${block/'    exit 10
 '/''}
   if [ "$mutant_block" = "$block" ]; then
-    echo "FAIL: exit-2 mutant did not change the source" >&2
+    echo "FAIL: exit-10 mutant did not change the source" >&2
     return 1
   fi
   mutant_file="$work/run-mutant.sh"
@@ -2206,11 +2206,11 @@ standing_rules_missing_file_test() (
   } > "$mutant_file"
   out=$(env -u DISPATCH_STANDING_RULES bash "$mutant_file" 2>&1)
   status=$?
-  if [ "$status" -eq 2 ]; then
-    echo "FAIL: failability: mutant dropping the exit-2 branch should no longer refuse, but it still exited 2" >&2
+  if [ "$status" -eq 10 ]; then
+    echo "FAIL: failability: mutant dropping the exit-10 branch should no longer refuse, but it still exited 10" >&2
     return 1
   fi
-  echo "ok   : failability: dropping the exit-2 branch stops refusing a missing rules file (status=$status)"
+  echo "ok   : failability: dropping the exit-10 branch stops refusing a missing rules file (status=$status)"
 )
 standing_rules_missing_file_test "$dispatch" || exit 1
 

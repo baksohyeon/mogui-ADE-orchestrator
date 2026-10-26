@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from collections.abc import Callable
 from pathlib import Path
+from unittest import mock
 
 from master_runtime.core.worker_reap import (
     AGENT_CLI_COMMANDS,
@@ -917,11 +918,21 @@ class WorkerReaperTests(unittest.TestCase):
                 cmd for cmd in commands
                 if "git" in cmd and "worktree" in cmd and "remove" in cmd
             ]
-            self.assertEqual(
-                remove_commands,
-                [["git", f"--git-dir={FAKE_GIT_COMMON_DIR}", "worktree", "remove", tmp_path]],
+            self.assertEqual(len(remove_commands), 1)
+            remove_command = remove_commands[0]
+            self.assertTrue(remove_command[1].startswith("--git-dir="))
+            # FAKE_GIT_COMMON_DIR is a POSIX literal; os.path.abspath joins it
+            # onto tmp_path the same way the code does, so the expectation
+            # lands on whatever separator this platform actually produces.
+            expected_git_dir = os.path.abspath(
+                os.path.join(tmp_path, FAKE_GIT_COMMON_DIR)
             )
-            self.assertNotIn("-C", remove_commands[0])
+            self.assertEqual(
+                os.path.normcase(os.path.normpath(remove_command[1][len("--git-dir="):])),
+                os.path.normcase(os.path.normpath(expected_git_dir)),
+            )
+            self.assertEqual(remove_command[2:], ["worktree", "remove", tmp_path])
+            self.assertNotIn("-C", remove_command)
 
     def test_remove_worktree_raises_when_the_git_dir_cannot_be_resolved(self) -> None:
         commands = []
@@ -968,12 +979,25 @@ class WorkerReaperTests(unittest.TestCase):
             cmd for cmd in commands
             if "git" in cmd and "worktree" in cmd and "remove" in cmd
         ]
+        self.assertEqual(len(remove_commands), 1)
+        remove_command = remove_commands[0]
+        self.assertTrue(remove_command[1].startswith("--git-dir="))
+        # The code joins str(Path(worktree_path)) (platform-normalized), not
+        # the raw worktree_path string, so build the expectation the same way
+        # and normalize both sides before comparing.
         expected_common_dir = os.path.abspath(
-            os.path.join(worktree_path, relative_common_dir)
+            os.path.join(str(Path(worktree_path)), relative_common_dir)
         )
         self.assertEqual(
-            remove_commands,
-            [["git", f"--git-dir={expected_common_dir}", "worktree", "remove", worktree_path]],
+            os.path.normcase(os.path.normpath(remove_command[1][len("--git-dir="):])),
+            os.path.normcase(os.path.normpath(expected_common_dir)),
+        )
+        self.assertEqual(remove_command[0], "git")
+        self.assertEqual(remove_command[2], "worktree")
+        self.assertEqual(remove_command[3], "remove")
+        self.assertEqual(
+            os.path.normcase(os.path.normpath(remove_command[4])),
+            os.path.normcase(os.path.normpath(worktree_path)),
         )
 
     def test_remove_worktree_works_from_a_non_repository_directory(self) -> None:
@@ -1034,6 +1058,36 @@ class WorkerReaperTests(unittest.TestCase):
 
             self.assertFalse(worktree.exists())
             self.assertNotIn(str(worktree.resolve()), _git(repo, "worktree", "list"))
+
+    def test_run_subprocess_strips_git_index_and_object_env_vars(self) -> None:
+        # An inherited index or object-store path would make a git call
+        # read/write the caller's repository state instead of the one named
+        # by -C, the same hazard GIT_DIR/GIT_WORK_TREE/GIT_COMMON_DIR cover.
+        inherited_env = {
+            "GIT_INDEX_FILE": "/tmp/other-repo/.git/index",
+            "GIT_OBJECT_DIRECTORY": "/tmp/other-repo/.git/objects",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES": "/tmp/other-repo/.git/objects-alt",
+        }
+        previous_values = {key: os.environ.get(key) for key in inherited_env}
+        os.environ.update(inherited_env)
+        captured_env: dict[str, str] = {}
+
+        def fake_run(command, **kwargs):
+            captured_env.update(kwargs.get("env") or {})
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+        try:
+            with mock.patch("master_runtime.core.worker_reap.subprocess.run", fake_run):
+                WorkerReaper()._run_subprocess(["git", "status"])
+        finally:
+            for key, previous in previous_values.items():
+                if previous is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = previous
+
+        for key in inherited_env:
+            self.assertNotIn(key, captured_env)
 
     def test_reap_leaves_clean_unmerged_worktree_with_unique_changes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

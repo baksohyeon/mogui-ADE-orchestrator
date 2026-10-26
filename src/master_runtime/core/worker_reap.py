@@ -55,8 +55,18 @@ MAX_WORKER_LIST_PAGES = 20
 WORKER_LIST_PAGE_LIMIT = 100
 
 # Dropped from every subprocess env: an inherited value here would point git
-# at the caller's repository instead of the one named by -C.
-GIT_REPOSITORY_ENV_VARS = frozenset({"GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR"})
+# at the caller's repository (or its index/object store) instead of the one
+# named by -C.
+GIT_REPOSITORY_ENV_VARS = frozenset(
+    {
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    }
+)
 
 
 @dataclass(frozen=True)

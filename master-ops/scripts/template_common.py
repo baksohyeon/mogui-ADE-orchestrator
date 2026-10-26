@@ -42,6 +42,7 @@ INSTANCE_OWNED_EXACT = frozenset(
         "docs/runbooks/succession-boot-card.md",
         "scripts/compaction-probe.sh",
         "scripts/harness-selfcheck.sh",
+        "workspace-card/LOCAL.md",
     }
 )
 

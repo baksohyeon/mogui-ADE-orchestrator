@@ -4,10 +4,6 @@ on:
   pull_request_target:
     types: [opened, synchronize, reopened, labeled, unlabeled]
 
-concurrency:
-  group: labeler-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
-
 permissions: {}
 
 jobs:
@@ -16,6 +12,9 @@ jobs:
     permissions:
       pull-requests: write
       contents: read
+    concurrency:
+      group: labeler-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     steps:
       - uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13 # v7.0.0
         with:
@@ -70,7 +69,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
-      contents: read
+      issues: write
     concurrency:
       group: assignee-${{ github.event.pull_request.number }}
       cancel-in-progress: false
@@ -89,6 +88,11 @@ jobs:
               pull_number: pr.number,
             });
             const assignees = new Set(currentPr.assignees.map((assignee) => assignee.login));
+            const labels = currentPr.labels.map((label) => label.name);
+            const author = currentPr.user.login;
+            const waiting = labels.includes("waiting-user-response");
+            const desired = waiting && !author.endsWith("[bot]") ? author : maintainerLogin;
+            const other = desired === maintainerLogin ? author : maintainerLogin;
 
             async function addAssignee(login) {
               if (assignees.has(login)) {
@@ -128,17 +132,7 @@ jobs:
               }
             }
 
-            if (context.payload.action === "labeled" && context.payload.label.name === "waiting-user-response") {
-              const author = pr.user.login;
-              if (author.endsWith("[bot]")) {
-                await addAssignee(maintainerLogin);
-              } else {
-                await removeAssignee(maintainerLogin);
-                await addAssignee(author);
-              }
-            } else if (context.payload.action === "unlabeled" && context.payload.label.name === "waiting-user-response") {
-              await removeAssignee(pr.user.login);
-              await addAssignee(maintainerLogin);
-            } else if (context.payload.action === "opened" && assignees.size === 0) {
-              await addAssignee(maintainerLogin);
+            await addAssignee(desired);
+            if (other !== desired) {
+              await removeAssignee(other);
             }

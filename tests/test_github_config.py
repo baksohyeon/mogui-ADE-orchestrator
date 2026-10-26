@@ -93,7 +93,7 @@ def test_os_labeler_gates_on_the_bug_label():
     assert "contains(github.event.issue.labels.*.name, 'bug')" in text
 
 
-def test_assignee_follows_the_turn_step_covers_three_events():
+def test_assignee_follows_the_turn_step_reconciles_from_current_state():
     text = (GITHUB_DIR / "workflows" / "labeler.yml").read_text(encoding="utf-8")
 
     types_match = re.search(r"pull_request_target:\n\s*types:\s*\[(.*?)\]", text)
@@ -101,9 +101,27 @@ def test_assignee_follows_the_turn_step_covers_three_events():
     types = {t.strip() for t in types_match.group(1).split(",")}
     assert {"labeled", "unlabeled"} <= types
 
+    assert not re.search(r"^concurrency:", text, re.MULTILINE), "workflow-level concurrency key present"
+
+    label_job_match = re.search(r"\n  label:\n(.*?)(?=\n  \S|\Z)", text, re.DOTALL)
+    assert label_job_match, "no 'label' job in labeler.yml"
+    label_concurrency_match = re.search(
+        r"concurrency:\n\s*group:\s*(.+)\n\s*cancel-in-progress:\s*(\S+)", label_job_match.group(1)
+    )
+    assert label_concurrency_match, "no concurrency block in the label job"
+    assert label_concurrency_match.group(1) == "labeler-${{ github.event.pull_request.number }}"
+    assert label_concurrency_match.group(2) == "true"
+
     job_match = re.search(r"\n  assignee:\n(.*?)(?=\n  \S|\Z)", text, re.DOTALL)
     assert job_match, "no 'assignee' job in labeler.yml"
     job_text = job_match.group(1)
+
+    permissions_match = re.search(r"permissions:\n((?:[ \t]+\S.*\n?)*)", job_text)
+    assert permissions_match, "no permissions block in the assignee job"
+    permissions_text = permissions_match.group(1)
+    assert "pull-requests: write" in permissions_text
+    assert "issues: write" in permissions_text
+    assert "contents" not in permissions_text
 
     concurrency_match = re.search(
         r"concurrency:\n\s*group:\s*(.+)\n\s*cancel-in-progress:\s*(\S+)", job_text
@@ -118,13 +136,10 @@ def test_assignee_follows_the_turn_step_covers_three_events():
     assert step_match, "no step named 'assignee follows the turn' in the assignee job"
     step_text = step_match.group(1)
 
-    for expr in (
-        'context.payload.action === "labeled"',
-        'context.payload.action === "unlabeled"',
-        'context.payload.action === "opened"',
-        'context.payload.label.name === "waiting-user-response"',
-    ):
-        assert expr in step_text, f"{expr!r} missing from assignee step"
+    assert "context.payload.action" not in step_text, "assignee step still reads the event action"
+    assert "context.payload.label" not in step_text, "assignee step still reads the event label"
+    assert "currentPr.labels" in step_text, "assignee step does not read current labels"
+    assert 'author.endsWith("[bot]")' in step_text, "assignee step lost its bot-author guard"
 
 
 @skip_windows_exec_surface

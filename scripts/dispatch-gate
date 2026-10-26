@@ -565,6 +565,8 @@ def _print_decision(decision: GateDecision) -> None:
         payload["message"] = decision.message
     if decision.tier_override is not None:
         payload["tier_override"] = decision.tier_override
+    if decision.front_matter is not None:
+        payload["front_matter"] = decision.front_matter
     print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
 
 

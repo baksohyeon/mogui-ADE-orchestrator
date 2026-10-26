@@ -94,6 +94,12 @@ regex = '''https?://[A-Za-z0-9._-]*slack\.com/'''
 id = "internal_host"
 description = "Internal or corp hostname"
 regex = '''\b[A-Za-z0-9._-]+\.(internal|corp|local)\b'''
+  [rules.allowlist]
+  # Claude Code's per-checkout settings file, not a host.
+  regexTarget = "match"
+  regexes = [
+    '''^settings\.local$''',
+  ]
 
 [allowlist]
 # A line naming a placeholder is documentation, not exposure. Carried over from

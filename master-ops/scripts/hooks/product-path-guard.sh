@@ -74,9 +74,9 @@ PY
 # exclusively to event-log.jsonl through mg_emit.
 trap record_fire EXIT
 
-if [[ "$INSTANCE_RUNTIME_CONFIG" == *"{{RUNTIME_ROOT}}"* ]]; then
+if [[ "$INSTANCE_RUNTIME_CONFIG" == *"{""{RUNTIME_ROOT}}"* ]]; then
   VERDICT="block"
-  echo "[product-path-guard] BLOCKED: unsubstituted {{RUNTIME_ROOT}} token in INSTANCE_RUNTIME_CONFIG; set MOGUI_INSTANCE_RUNTIME_CONFIG to a real runtime config path" >&2
+  echo "[product-path-guard] BLOCKED: unsubstituted {""{RUNTIME_ROOT}} token in INSTANCE_RUNTIME_CONFIG; set MOGUI_INSTANCE_RUNTIME_CONFIG to a real runtime config path" >&2
   exit 2
 fi
 
@@ -187,17 +187,31 @@ PLAIN_PATH_TARGET_EXEMPT = {"cp", "install", "ln"} | (INTERPRETER_NAMES if LEGAC
 SQ=chr(39)
 HEREDOC_OPERATOR_RE = re.compile(r"<<(?!<)(-)?\s*(?:" + SQ + r"([^" + SQ + r"]*)" + SQ + r"|\"([^\"]*)\"|\\(\S+)|([^\s<>|&;()]+))")
 def unquoted_mask(line):
+    # A comment span resets at each newline (quotes do not: bash lets a quoted
+    # string continue across physical lines), and a newline counts as a
+    # boundary before # the same way a space or tab does, so a later physical
+    # line that opens with # is still recognized on multi-line text. A
+    # boundary character that was itself backslash-escaped (foo\ #) is a
+    # literal part of the word, not a separator, so it cannot start a
+    # comment; prev_escaped carries that state from the character own
+    # escape handling into the next character boundary test.
     mask=[]
+    comment_mask=[]
     in_single=False
     in_double=False
     in_comment=False
     escaped=False
     prev_char=""
+    prev_escaped=False
     for ch in line:
-        if not in_single and not in_double and not in_comment and ch == "#" and prev_char in ("", " ", "\t"):
+        if ch == "\n":
+            in_comment=False
+        if not in_single and not in_double and not in_comment and ch == "#" and prev_char in ("", " ", "\t", "\n") and not prev_escaped:
             in_comment=True
         mask.append(not in_single and not in_double and not in_comment)
+        comment_mask.append(in_comment)
         prev_char=ch
+        prev_escaped=escaped
         if in_comment:
             continue
         if escaped:
@@ -209,9 +223,16 @@ def unquoted_mask(line):
             in_single = not in_single
         elif ch == chr(34) and not in_single:
             in_double = not in_double
-    return mask
+    return mask, comment_mask
+def strip_unquoted_comments(text):
+    # The default shlex comment handling (commenters="#") discards the
+    # newline along with the rest of the commented line, which would merge
+    # the next physical line into the same segment; dropping only the
+    # comment text here keeps the newline as its own token for the lexer.
+    _, comment_mask=unquoted_mask(text)
+    return "".join(ch for ch, in_comment in zip(text, comment_mask) if not in_comment)
 def find_heredoc_operators(line):
-    mask=unquoted_mask(line)
+    mask, _=unquoted_mask(line)
     operators=[]
     for match in HEREDOC_OPERATOR_RE.finditer(line):
         start=match.start()
@@ -324,6 +345,87 @@ def redirects_into_root(value, base):
             continue
         i += 1
     return False
+FD_SENTINEL_RE=re.compile(r"^MOGUICDFDSENTINEL(\d+)ENDSENTINEL$")
+def mark_attached_cd_fds(text):
+    # shlex always splits a digit from an adjacent punctuation character, so
+    # "2>" and "2 >" produce the identical two-token pair (a digit token,
+    # then an operator token); marking a source-adjacent digit run with a
+    # sentinel before lexing is the only way to tell the two apart
+    # afterward, since a spaced digit keeps its own plain token and still
+    # counts as a cd operand. A digit run only qualifies as a candidate fd
+    # when it starts at a real word boundary (start of text, unquoted
+    # whitespace, or one of ; & | (); a digit stuck to the end of a word
+    # (/product2>, file2>out) is part of that word text, never a fd.
+    mask, _=unquoted_mask(text)
+    out=[]
+    i=0
+    n=len(text)
+    while i < n:
+        at_word_start = i == 0 or (mask[i - 1] and (text[i - 1].isspace() or text[i - 1] in ";&|("))
+        if mask[i] and text[i].isdigit() and at_word_start:
+            j=i
+            while j < n and mask[j] and text[j].isdigit():
+                j += 1
+            if j < n and mask[j] and text[j] in "><":
+                out.append("MOGUICDFDSENTINEL" + text[i:j] + "ENDSENTINEL")
+            else:
+                out.append(text[i:j])
+            i=j
+            continue
+        out.append(text[i])
+        i += 1
+    return "".join(out)
+CD_OUTPUT_REDIRECTION_OPERATORS={">",">>","2>","2>>","&>",">&",">|"}
+CD_INPUT_REDIRECTION_OPERATORS={"<","<&","<<<"}
+CD_REDIRECTION_TARGET_EXPANSION_RE=re.compile(r"[$`*?\[]|~(?!/)")
+def strip_cd_redirections(parts):
+    # A cd segment operand count must ignore its own redirection. A sentinel
+    # from mark_attached_cd_fds, not a bare digit, is what identifies a
+    # dropped file descriptor, so a digit that was spaced away from its
+    # operator in the source text keeps its own token and still counts as a
+    # cd operand. Output operators keep their target for the write check
+    # that follows; input operators keep their target too, now, instead of
+    # discarding it: bash still expands an input target before opening the
+    # file, so the expansion refusal that follows has to see it even though
+    # a read cannot write into a product root on its own. Either kind is
+    # reported back via had_redirection: Bash resolves a cd segment own
+    # redirection before running the builtin, and aborts the cd without
+    # moving if that redirection target cannot be opened, so a segment
+    # carrying one is never a safe basis for advancing the simulated cwd.
+    operands=[parts[0]]
+    output_targets=[]
+    input_targets=[]
+    had_redirection=False
+    index=1
+    while index < len(parts):
+        token=parts[index]
+        if FD_SENTINEL_RE.match(token) and index + 1 < len(parts) and (
+            parts[index + 1] in CD_OUTPUT_REDIRECTION_OPERATORS
+            or parts[index + 1] in CD_INPUT_REDIRECTION_OPERATORS
+        ):
+            index += 1
+            continue
+        if token in CD_OUTPUT_REDIRECTION_OPERATORS:
+            if index + 1 < len(parts):
+                output_targets.append(parts[index + 1])
+                had_redirection=True
+                index += 2
+            else:
+                operands.append(token)
+                index += 1
+            continue
+        if token in CD_INPUT_REDIRECTION_OPERATORS:
+            if index + 1 < len(parts):
+                input_targets.append(parts[index + 1])
+                had_redirection=True
+                index += 2
+            else:
+                operands.append(token)
+                index += 1
+            continue
+        operands.append(token)
+        index += 1
+    return operands, output_targets, input_targets, had_redirection
 def collect_non_option_operands(parts, start, options_with_values):
     values=set(options_with_values)
     index=start
@@ -380,14 +482,36 @@ if heredoc_stripped_command is None:
 if heredoc_forced_deny_name:
     print("DENY\t" + heredoc_forced_deny_name + "\topaque interpreter heredoc body may contain an unparsed write")
     raise SystemExit
+if "MOGUICDFDSENTINEL" in heredoc_stripped_command:
+    # The sentinel mark_attached_cd_fds injects must be unique in the text it
+    # marks; if the literal token already occurs in the source, a mark would
+    # be indistinguishable from source text and the fd/operand split below
+    # would be unreliable, so this is denied instead of guessed.
+    print("DENY\tunparseable\tsentinel collision")
+    raise SystemExit
 try:
-    tokens=list(shlex.shlex(heredoc_stripped_command, posix=True, punctuation_chars=";&|><"))
+    # A newline ends a segment the same way ; does: dropping it from the
+    # lexer whitespace set (instead of adding it to punctuation_chars, which
+    # shlex still swallows as whitespace) makes it surface as its own token.
+    # The default shlex comment handling would otherwise swallow a trailing
+    # comment newline together with the rest of the line, merging the next
+    # physical line into the same segment, so the comment text is stripped
+    # first and commenters is cleared so shlex cannot do that on its own. A
+    # cd segment own attached file-descriptor digit is marked with a
+    # sentinel before lexing for the same reason the newline is handled
+    # here: shlex throws the source adjacency away, so it has to be
+    # captured before lexing runs.
+    lexing_command=mark_attached_cd_fds(strip_unquoted_comments(heredoc_stripped_command))
+    lexer=shlex.shlex(lexing_command, posix=True, punctuation_chars=";&|><")
+    lexer.whitespace=lexer.whitespace.replace("\n", "")
+    lexer.commenters=""
+    tokens=list(lexer)
 except Exception:
     print("DENY\tunparseable\tunparseable command")
     raise SystemExit
 segments=[]; current=[]
 for token in tokens:
-    if token in {";","&&","||","|","&"}:
+    if token in {";","&&","||","|","&","\n"}:
         if current: segments.append(current)
         current=[]
     else: current.append(token)
@@ -404,13 +528,29 @@ for parts in segments:
     if not parts: continue
     name=os.path.basename(parts[0])
     if name == "cd":
-        if len(parts) != 2:
+        operands, output_targets, input_targets, had_redirection = strip_cd_redirections(parts)
+        if len(operands) != 2:
             print("DENY\tcd\tcd target cannot be resolved")
             raise SystemExit
-        current_cwd=resolve(current_cwd, parts[1])
-        if os.environ["FAIL_CLOSED"] != "1" and under(current_cwd):
+        # resolve() reads a cd operand literally, but bash expands it first, so an operand carrying an expansion character is refused, with or without a redirection.
+        if CD_REDIRECTION_TARGET_EXPANSION_RE.search(operands[1]):
+            print("DENY\tcd\tcd target cannot be resolved")
+            raise SystemExit
+        if any(CD_REDIRECTION_TARGET_EXPANSION_RE.search(target) for target in output_targets + input_targets):
+            print("DENY\tcd\tredirection target cannot be resolved")
+            raise SystemExit
+        if any(under(resolve(current_cwd, target)) for target in output_targets):
+            print("DENY\tcd\tshell redirection is a write")
+            raise SystemExit
+        target_cwd=resolve(current_cwd, operands[1])
+        if had_redirection and under(target_cwd):
+            print("DENY\tcd\tredirection-bearing cd into a product root cannot be modeled")
+            raise SystemExit
+        if os.environ["FAIL_CLOSED"] != "1" and under(target_cwd):
             print("DENY\tcd\tlegacy policy blocks entering product root")
             raise SystemExit
+        if not had_redirection:
+            current_cwd=target_cwd
         continue
     sub=""
     sub_pos=-1

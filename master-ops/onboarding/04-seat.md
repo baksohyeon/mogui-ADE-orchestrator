@@ -4,7 +4,7 @@ Load rule: read this file only when Step 3.5 begins. Router: [`../ONBOARDING.md`
 
 **Position and action:** Step 3.5 begins after Step 3: register `{{WORKSPACE_ROOT}}` and the already-Git `{{OPS_REPO}}` with Orca, then seat the master terminal at the workspace level: the folder workspace of `{{WORKSPACE_ROOT}}`. In a single-repository workspace, `{{WORKSPACE_ROOT}}` is the selected parent folder for that repository, not the repository's product worktree.
 
-**Why/caution:** The master coordinates every repository, so its seat is the workspace-level workspace, never one repository's worktree inside a multi-repository workspace. A master seated in a repository worktree binds correctly (cwd, hooks, session files) yet hangs under that one repository in the owner's sidebar and occupies a seat shaped for a worker; exactly this shipped as a measured misplacement on 2026-08-03. The folder route is verified from the CLI with the `id:folder:<uuid>` selector form: precheck listing, terminal create, and spawn placement match all pass (measured 2026-08-03). Bare `folder:<uuid>` is accepted by `terminal create` but rejected by `terminal list` (a measured subcommand asymmetry), and `path:` selectors are rejected by the placement comparison, so the durable record must use the `id:` prefixed form, which every consumer accepts. [docs/public/orca-concepts.md](../../docs/public/orca-concepts.md) holds the object model.
+**Why/caution:** The master coordinates every repository, so its seat is the workspace-level workspace, never one repository's worktree inside a multi-repository workspace. A master seated in a repository worktree binds correctly (cwd, hooks, session files) yet hangs under that one repository in the owner's sidebar and occupies a seat shaped for a worker; exactly this shipped as a measured misplacement on 2026-08-03. The folder route is verified from the CLI with the `id:folder:<uuid>` selector form: precheck listing, terminal create, and spawn placement match all pass (measured 2026-08-03). Orca 1.4.224 reports the same seat as `<repoId>::<path>` instead, and `id:<repoId>::<path>` passes the same checks; see Run below. Bare `folder:<uuid>` is accepted by `terminal create` but rejected by `terminal list` (a measured subcommand asymmetry), and `path:` selectors are rejected by the placement comparison, so the durable record must use the `id:` prefixed form, which every consumer accepts. [docs/public/orca-concepts.md](../../docs/public/orca-concepts.md) holds the object model.
 
 ## Owner script (kind ELI5, adapt to the owner's language)
 
@@ -32,12 +32,23 @@ $ ORCA repo add --path "{{OPS_REPO}}" --json
 $ ORCA terminal show --terminal <terminal handle> --json
 ```
 
-Capture the returned selector only when the terminal metadata proves the workspace-level seat: a folder workspace reports `worktreeId` as `folder:<uuid>` with an empty `worktreePath`, and that emptiness is the expected shape, so judge by `worktreeId`. Before continuing, persist a durable placement result in an ops-repository file containing the selector in `id:` prefixed form, `{{WORKSPACE_ROOT}}`, and the `terminal show` proof; do not rely on conversation state, and do not treat the temporary terminal's handle as durable, because handles are scoped to the app runtime and die with restarts. The durable identity is the selector. After persisting, ask the user to close the temporary seat-check terminal (or close it yourself if it is yours). The tracker step initializes the issue tracker independently and does not require a second placement copy; it may record a pointer to this result. Do not substitute a filesystem path for the measured selector, and do not infer the seat from a shell's cwd.
+Capture the returned selector only when the terminal metadata proves the workspace-level seat. The folder workspace's shape depends on the Orca build: older builds report `worktreeId` as `folder:<uuid>` with an empty `worktreePath` (the `folder:` prefix is the proof; the empty path is expected), and Orca 1.4.224 reports `<repoId>::<path>` where `<path>` and `worktreePath` are `{{WORKSPACE_ROOT}}`, not a repository checkout; persist whichever `worktreeId` you measured with the `id:` prefix (`id:<repoId>::<path>` passed terminal list and master-succeed placement as `MATCH` on 1.4.224). Before continuing, persist a durable placement result in an ops-repository file containing the selector in `id:` prefixed form, `{{WORKSPACE_ROOT}}`, and the `terminal show` proof; do not rely on conversation state, and do not treat the temporary terminal's handle as durable, because handles are scoped to the app runtime and die with restarts. The durable identity is the selector. After persisting, ask the user to close the temporary seat-check terminal (or close it yourself if it is yours). The tracker step initializes the issue tracker independently and does not require a second placement copy; it may record a pointer to this result. Do not substitute a filesystem path for the measured selector, and do not infer the seat from a shell's cwd.
+
+### Worktree base outside the root
+
+Orca creates worker worktrees under its workspace directory (`workspaceDir`, default `~/orca/workspaces`). When that directory sits inside `{{WORKSPACE_ROOT}}`, every worker worktree is a descendant of the root and its agent loads the root session card as an ancestor instruction file: workers inherit the master's card. Read the directory in Orca Settings > General > Workspace directory and test it against the root. If it is inside, move the base outside the root for every registered repository workers branch from, using the setup id from `ORCA project setups --json`:
+
+```console
+$ ORCA project setup-update --setup <setup id> --worktree-base-path <dir outside the root>
+```
+
+With `nestWorkspaces` on, Orca appends the repository name, so worktrees land in `<dir>/<repo>`; judge the effective path, not the flag value. This is per repository; the app-wide default changes only in that Settings field, so tell the owner instead of editing it for them.
 
 ## Verify
 
 - the full open-measure-close sequence was explained before any temporary terminal was requested
 - `orca repo add --path "{{OPS_REPO}}" --json` succeeds or confirms the ops repository is already registered (worker worktrees are created from this registration)
+- the effective worker worktree base of every registered repository is outside `{{WORKSPACE_ROOT}}`
 - `terminal show` measured the terminal metadata
 - the selector points at the workspace-level seat, never an individual repository product worktree
 - the durable placement result exists in `id:` prefixed selector form before founding spawn
@@ -45,6 +56,6 @@ Capture the returned selector only when the terminal metadata proves the workspa
 
 ## If fail
 
-- `terminal list` rejects the captured selector: the record is probably in the bare `folder:<uuid>` form — re-capture and persist the `id:` prefixed form, which every consumer accepts (the subcommand asymmetry above is measured behavior, not an error to work around).
+- `terminal list` rejects the captured selector: the record is probably missing the `id:` prefix (for example bare `folder:<uuid>`) — re-capture and persist the `id:` prefixed form, which every consumer accepts (the subcommand asymmetry above is measured behavior, not an error to work around).
 - The placement comparison rejects the selector: it is probably a `path:` form or a filesystem path — never substitute a path for the measured selector; re-run `terminal show` and capture `worktreeId`.
 - The terminal metadata shows a repository worktree instead of the workspace-level seat: the owner opened the temporary terminal in the wrong place; explain, ask them to open it in the folder workspace, and measure again.

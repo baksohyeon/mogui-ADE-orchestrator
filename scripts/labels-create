@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# labels-create: replay this repository's label set onto another repo.
+#
+# Labels do not travel with "Use this template": a new install starts with
+# only GitHub's nine defaults. Run this once against the new repository to
+# catch it up.
+#
+# Usage: scripts/labels-create <owner/repo>
+set -euo pipefail
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  printf 'usage: scripts/labels-create <owner/repo>\n'
+  printf 'Replays this repository'"'"'s label set onto another repo.\n'
+  exit 0
+fi
+
+if (( $# != 1 )); then
+  printf 'usage: scripts/labels-create <owner/repo>\n' >&2
+  exit 2
+fi
+repo="$1"
+
+while IFS=$'\t' read -r name color description; do
+  [ -z "$name" ] && continue
+  gh label create "$name" --repo "$repo" --color "$color" --description "$description" --force
+done <<'LABELS'
+area/ci	0052cc	Workflows and repository configuration under .github/
+area/dispatch	0052cc	Dispatch wrapper, worker launch, delivery classes
+area/docs	0052cc	Runbooks, charter, README
+area/gate	0052cc	Dispatch gate, tier policy, ledger
+area/loop	0052cc	Loop harness and runbook
+area/onboarding	0052cc	Onboarding steps, preflight, bootstrap
+area/template-apply	0052cc	Template rendering, placeholders, manifest
+bug	d73a4a	Something isn't working
+dependencies	0366d6	Dependency updates; Dependabot applies this label itself
+documentation	0075ca	Improvements or additions to documentation
+duplicate	cfd3d7	This issue or pull request already exists
+enhancement	a2eeef	New feature or request
+good first issue	7057ff	Good for newcomers
+has_repro	0E8A16	Conclusive reproduction exists (a test, script, or CLI transcript under tests/)
+help wanted	008672	Extra attention is needed
+invalid	e4e669	This doesn't seem right
+locked	eeeeee	Conversation locked after 14 days of inactivity
+os:linux	aaaaaa	Issues affecting Linux
+os:macos	aaaaaa	Issues affecting macOS
+os:windows	aaaaaa	Issues affecting Windows
+pending_repro	BFDADC	Reproduction attempted, still pending conclusive evidence
+question	d876e3	Further information is requested
+risk:high	D93F0B	High risk change
+risk:low	0E8A16	Low risk change
+risk:medium	FBCA04	Medium risk change
+size/l	A14C05	Large PR (2500 added lines or fewer, 50 files or fewer)
+size/m	7F7203	Medium PR (600 added lines or fewer, 25 files or fewer)
+size/s	5D9801	Small PR (150 added lines or fewer, 10 files or fewer)
+size/xl	C32607	Extra large PR (more than 2500 added lines or more than 50 files)
+size/xs	3CBF00	Extra small PR (25 added lines or fewer, 1 file)
+untriaged	61b8ec	Not yet looked at by a maintainer
+upstream	d4c5f9	Belongs to an upstream tool: Orca, Claude Code, Codex CLI, or another dependency
+waiting-user-response	aaaaaa	Waiting on the reporter or the author
+wip	5153c1	Actively being worked on
+wontfix	ffffff	This will not be worked on
+LABELS

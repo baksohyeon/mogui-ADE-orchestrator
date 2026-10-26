@@ -10,6 +10,10 @@
 #   scripts/redaction-scan.sh --staged        # index / staged only
 #   scripts/redaction-scan.sh --range A..B    # files changed in a range, and those commits' messages
 #   scripts/redaction-scan.sh --commit-messages A..B   # message scan in any mode
+#   scripts/redaction-scan.sh --repo-root PATH         # scan PATH's repository instead of this one
+#   REDACTION_REPO_ROOT=PATH scripts/redaction-scan.sh # same, when a flag cannot be passed
+#   An empty REDACTION_REPO_ROOT is treated as unset (today's behaviour); an empty
+#   or missing --repo-root operand is a usage error (exit 2).
 #   scripts/redaction-scan.sh --help
 #
 # Exit: 0 clean, 1 findings, 2 cannot decide (missing tool, missing required rules, usage)
@@ -30,9 +34,15 @@
 # finding, or config/gitleaks.toml for a whole class.
 set -euo pipefail
 
+# Inherited GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_COMMON_DIR,
+# GIT_OBJECT_DIRECTORY, or GIT_ALTERNATE_OBJECT_DIRECTORIES would make every git
+# call below use the caller's repository, or its object store, instead of the
+# resolved target's.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR \
+  GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-cd "${REPO_ROOT}"
 
 BASE_CONFIG="${REPO_ROOT}/config/gitleaks.toml"
 LEGACY_ALLOWLIST="${REDACTION_ALLOWLIST:-${SCRIPT_DIR}/redaction-allowlist.txt}"
@@ -41,13 +51,14 @@ RANGE=""
 COMMIT_RANGE=""
 VERBOSE=0
 REQUIRE_EXTRA="${REDACTION_REQUIRE_EXTRA:-0}"
+TARGET_ROOT_INPUT="${REDACTION_REPO_ROOT:-}"
 COMMIT_MESSAGES_SCANNED="not-scanned"
 EXTRA_RULE_COUNT=0
 EXTRA_UNUSABLE=0
 EXTRA_CONSIDERED=0
 
 usage() {
-  sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,34p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 while [[ $# -gt 0 ]]; do
@@ -74,12 +85,43 @@ while [[ $# -gt 0 ]]; do
       LEGACY_ALLOWLIST="${2:-}"
       shift 2
       ;;
+    --repo-root)
+      if [[ -z "${2:-}" ]]; then
+        echo "redaction-scan: --repo-root requires a path" >&2
+        exit 2
+      fi
+      TARGET_ROOT_INPUT="${2}"
+      shift 2
+      ;;
     --require-extra) REQUIRE_EXTRA=1; shift ;;
     -v|--verbose) VERBOSE=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "redaction-scan: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+
+# The target to scan: this script's own repository unless told otherwise. The
+# gitleaks config (config/gitleaks.toml) stays anchored to REPO_ROOT, since that
+# is the scanner's own policy and the target cannot be expected to carry it.
+TARGET_ROOT="${REPO_ROOT}"
+if [[ -n "${TARGET_ROOT_INPUT}" ]]; then
+  if ! TARGET_ROOT="$(git -C "${TARGET_ROOT_INPUT}" rev-parse --show-toplevel 2>/dev/null)"; then
+    echo "redaction-scan: --repo-root (or REDACTION_REPO_ROOT) is not inside a git work tree: ${TARGET_ROOT_INPUT}" >&2
+    exit 2
+  fi
+fi
+
+# A relative REDACTION_EXTRA_PATTERNS or --allowlist value is what the caller
+# typed at the invocation directory, not at REPO_ROOT or TARGET_ROOT: resolve
+# both before the cd below changes what a relative path would mean.
+INVOCATION_PWD="${PWD}"
+if [[ -n "${REDACTION_EXTRA_PATTERNS:-}" && "${REDACTION_EXTRA_PATTERNS}" != /* ]]; then
+  REDACTION_EXTRA_PATTERNS="${INVOCATION_PWD}/${REDACTION_EXTRA_PATTERNS}"
+fi
+if [[ "${LEGACY_ALLOWLIST}" != /* ]]; then
+  LEGACY_ALLOWLIST="${INVOCATION_PWD}/${LEGACY_ALLOWLIST}"
+fi
+cd "${TARGET_ROOT}"
 
 if ! command -v gitleaks >/dev/null 2>&1; then
   echo "redaction-scan: FAIL — gitleaks is not on PATH; install it (brew install gitleaks) or see https://gitleaks.io" >&2
@@ -294,6 +336,13 @@ scan_commit_messages() {
   # which is why this loop exists.
   local range="$1"
   local count=0 sha
+  local sha_list="${WORK_DIR}/commits-to-scan"
+  local list_rc=0
+  git log --format=%H "${range}" > "${sha_list}" 2>/dev/null || list_rc=$?
+  if [[ "${list_rc}" -ne 0 ]]; then
+    echo "redaction-scan: FAIL: cannot list commits for range=${range} (git exit ${list_rc})" >&2
+    exit 2
+  fi
   while IFS= read -r sha; do
     [[ -z "${sha}" ]] && continue
     report_index=$((report_index + 1))
@@ -323,7 +372,7 @@ with open(path, "w", encoding="utf-8") as handle:
 PY
     fi
     count=$((count + 1))
-  done < <(git log --format=%H "${range}" 2>/dev/null || true)
+  done < "${sha_list}"
   COMMIT_MESSAGES_SCANNED="${count}"
 }
 
@@ -334,12 +383,20 @@ if [[ -n "${COMMIT_RANGE}" ]]; then
   scan_commit_messages "${COMMIT_RANGE}"
 fi
 
+FILES_LIST="${WORK_DIR}/files-to-scan"
+list_rc=0
+list_scan_files > "${FILES_LIST}" || list_rc=$?
+if [[ "${list_rc}" -ne 0 ]]; then
+  echo "redaction-scan: FAIL: cannot list files for mode=${MODE} (git exit ${list_rc})" >&2
+  exit 2
+fi
+
 file_count=0
 while IFS= read -r -d '' path; do
   [[ -z "${path}" ]] && continue
   file_count=$((file_count + 1))
   scan_path "${path}"
-done < <(list_scan_files)
+done < "${FILES_LIST}"
 
 FINDINGS_FILE="${WORK_DIR}/findings.txt"
 python3 - "${REPORTS}" "${FINDINGS_FILE}" > /dev/null <<'PY'
@@ -384,15 +441,15 @@ PY
 FINDINGS="$(wc -l < "${FINDINGS_FILE}" | tr -d ' ')"
 
 if [[ "${VERBOSE}" -eq 1 ]]; then
-  echo "redaction-scan: mode=${MODE} range=${RANGE:-none} files=${file_count} commit-messages=${COMMIT_MESSAGES_SCANNED} org-rules=${EXTRA_RULE_COUNT} config=$(basename "${CONFIG}") engine=$(gitleaks version 2>/dev/null | head -1)"
+  echo "redaction-scan: mode=${MODE} range=${RANGE:-none} files=${file_count} commit-messages=${COMMIT_MESSAGES_SCANNED} org-rules=${EXTRA_RULE_COUNT} config=$(basename "${CONFIG}") engine=$(gitleaks version 2>/dev/null | head -1) root=${TARGET_ROOT}"
 fi
 
 if [[ "${FINDINGS}" -gt 0 ]]; then
-  echo "redaction-scan: FAIL — ${FINDINGS} finding(s) (fail-closed)" >&2
+  echo "redaction-scan: FAIL: ${FINDINGS} finding(s) (fail-closed, root=${TARGET_ROOT})" >&2
   cat "${FINDINGS_FILE}" >&2
   echo "redaction-scan: fix, or exempt with a .gitleaksignore fingerprint, then re-run." >&2
   exit 1
 fi
 
-echo "redaction-scan: OK — 0 findings (mode=${MODE}, files=${file_count}, commit-messages=${COMMIT_MESSAGES_SCANNED}, org-rules=${EXTRA_RULE_COUNT})"
+echo "redaction-scan: OK: 0 findings (mode=${MODE}, files=${file_count}, commit-messages=${COMMIT_MESSAGES_SCANNED}, org-rules=${EXTRA_RULE_COUNT}, root=${TARGET_ROOT})"
 exit 0

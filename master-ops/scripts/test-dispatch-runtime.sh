@@ -839,6 +839,148 @@ claude_hook_trust_marker_test() (
 )
 claude_hook_trust_marker_test "$dispatch" || exit 1
 
+# --- Feature: fresh claude TUI prompt classifies as prepared-prompt --------
+#
+# 2026-10-23: a fresh `claude` pane's arrow line carries placeholder text
+# ("Try \"...\"") next to the arrow instead of a bare arrow, so
+# PREPARED_UNICODE_PROMPT_MARKERS read it as unknown before and after inject,
+# and a worker that finished inside the delivery window never registered as
+# delivered. Extracts pane_classify_text and the four marker variables, then
+# runs the function against the five measured pane lines.
+fresh_claude_prompt_marker_test() (
+  set +e
+  set -u
+  local dispatch="$1" markers classify_fn script_file pane out status mutant_markers work
+
+  markers=$(grep -E '^(LIMIT_MARKERS|HOOK_TRUST_MARKERS|PREPARED_PROMPT_MARKERS|PREPARED_UNICODE_PROMPT_MARKERS)=' "$dispatch")
+  classify_fn=$(awk '$0=="pane_classify_text() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+
+  [ "$(printf '%s\n' "$markers" | grep -c .)" = 4 ] || { echo "FAIL: could not extract all four marker variables" >&2; return 1; }
+  [ -n "$classify_fn" ] || { echo "FAIL: could not extract pane_classify_text" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-fresh-claude-prompt-test.$$"
+  mkdir -p "$work"
+  trap 'rm -rf "$work"' EXIT
+
+  pane=$(printf '%s\n%s\n%s\n%s\n%s' \
+    '──────────────────────────────────────────────────────────────────────────────────────────────────────────────' \
+    $'\xe2\x9d\xaf\xc2\xa0Try "fix lint errors"' \
+    '──────────────────────────────────────────────────────────────────────────────────────────────────────────────' \
+    '  claude-haiku-5 │ codex-hooks-vet-unmeasured' \
+    '  ⏵⏵ auto mode on (shift+tab to cycle) · PR #190')
+
+  write_script() {
+    local outfile="$1" markers_body="$2"
+    {
+      echo 'set -u'
+      printf '%s\n' "$markers_body"
+      printf '%s\n' "$classify_fn"
+      printf 'pane_classify_text %s\n' "$(printf '%q' "$pane")"
+    } > "$outfile"
+  }
+
+  script_file="$work/run.sh"
+  write_script "$script_file" "$markers"
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] || [ "$out" != "prepared-prompt" ]; then
+    echo "FAIL: a fresh claude TUI prompt pane should classify as prepared-prompt, got '$out' (status=$status)" >&2
+    return 1
+  fi
+  echo "ok   : a fresh claude TUI prompt's placeholder arrow line classifies as prepared-prompt"
+
+  # Failability: restoring the bare-arrow-only pattern (dropping the added
+  # placeholder alternation) must misclassify the same pane as unknown.
+  mutant_markers=${markers/'([\xc2\xa0 ]+Try "[^"]*")?'/}
+  if [ "$mutant_markers" = "$markers" ]; then
+    echo "FAIL: unicode-marker mutant did not change the source" >&2
+    return 1
+  fi
+  write_script "$script_file" "$mutant_markers"
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ] && [ "$out" = "prepared-prompt" ]; then
+    echo "FAIL: failability: mutant restoring the bare-arrow-only pattern should have misclassified the pane" >&2
+    return 1
+  fi
+  echo "ok   : failability: restoring the bare-arrow-only pattern misclassifies the fresh prompt pane (got '$out')"
+)
+fresh_claude_prompt_marker_test "$dispatch" || exit 1
+
+# --- Feature: delivery_result folds the dispatch status in --------------------
+#
+# 2026-10-18: a haiku worker completed in 17s and returned the pane to the
+# same prepared prompt it started from, so the pane transition alone read
+# unknown while the dispatch record already said completed. Extracts
+# delivery_result and runs it against the three status-aware cases: a
+# completed dispatch becomes done, hook-trust still wins over a completed
+# status, and an unreadable status leaves the existing pane-transition
+# fallback untouched.
+delivery_result_test() (
+  set +e
+  set -u
+  local dispatch="$1" fn work script_file out status mutant_fn
+
+  fn=$(awk '$0=="delivery_result() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  [ -n "$fn" ] || { echo "FAIL: could not extract delivery_result" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-delivery-result-test.$$"
+  mkdir -p "$work"
+  trap 'rm -rf "$work"' EXIT
+
+  run_case() {  # pre post status want
+    local body="$1" pre="$2" post="$3" dstatus="$4" want="$5" out
+    script_file="$work/run.sh"
+    {
+      echo 'set -u'
+      printf '%s\n' "$body"
+      printf 'delivery_result %q %q %q\n' "$pre" "$post" "$dstatus"
+    } > "$script_file"
+    out=$(bash "$script_file" 2>&1)
+    if [ "$out" != "$want" ]; then
+      echo "FAIL: delivery_result $pre $post $dstatus gave '$out', want '$want'" >&2
+      return 1
+    fi
+  }
+
+  run_case "$fn" prepared-prompt prepared-prompt completed done || return 1
+  echo "ok   : delivery_result · a completed dispatch with the pane still on a prepared prompt reads done"
+
+  run_case "$fn" prepared-prompt hook-trust completed hook-trust || return 1
+  echo "ok   : delivery_result · hook-trust after inject still wins over a completed dispatch status"
+
+  run_case "$fn" prepared-prompt limit completed limit || return 1
+  echo "ok   : delivery_result · limit after inject still wins over a completed dispatch status"
+
+  run_case "$fn" prepared-prompt unknown unreadable agent-started || return 1
+  echo "ok   : delivery_result · an unreadable dispatch status leaves the prepared-prompt-to-unknown transition reading agent-started"
+
+  # Failability: drop the completed-status branch; the first case above must
+  # then stop reading done.
+  mutant_fn=${fn/'  if [ "$3" = completed ]; then
+    echo done
+    return
+  fi
+'/''}
+  if [ "$mutant_fn" = "$fn" ]; then
+    echo "FAIL: completed-status mutant did not change the source" >&2
+    return 1
+  fi
+  script_file="$work/run.sh"
+  {
+    echo 'set -u'
+    printf '%s\n' "$mutant_fn"
+    printf 'delivery_result %q %q %q\n' prepared-prompt prepared-prompt completed
+  } > "$script_file"
+  out=$(bash "$script_file" 2>&1)
+  if [ "$out" = done ]; then
+    echo "FAIL: failability: mutant dropping the completed-status check should have stopped reporting done" >&2
+    return 1
+  fi
+  echo "ok   : failability: dropping the completed-status check stops the completed-dispatch case from reading done (got '$out')"
+)
+delivery_result_test "$dispatch" || exit 1
+
 # --- Feature: codex launch flags ---------------------------------------------
 #
 # 2026-10-01: a bare `codex --model <id>` opened a model-retirement migration
@@ -1868,7 +2010,73 @@ EOF
     printf '%s\n' "$wt_out" >&2
     return 1
   fi
-  echo "ok   : codex_hooks_vet_homes returns 0 with WORKTREE set and the same passing fixtures"
+  if printf '%s\n' "$wt_out" | grep -Fq 'no hooks.json measured'; then
+    echo "FAIL: one_home_measured: a passing measured home should not print the no-hooks.json-measured line" >&2
+    printf '%s\n' "$wt_out" >&2
+    return 1
+  fi
+  echo "ok   : one_home_measured: codex_hooks_vet_homes returns 0 with WORKTREE set and one passing measured home, no unmeasured line"
+
+  # all_homes_missing: every enumerated home (the fixture $HOME's .codex and
+  # the worktree's own .codex) lacks hooks.json, so nothing is measured. The
+  # count-zero guard must fail closed instead of returning the empty loop's
+  # default 0.
+  mkdir -p "$work/fakehome-none/.codex" "$work/fixture-worktree-none"
+  vet_homes_script="$work/vet-homes-all-missing.sh"
+  {
+    echo 'set -u'
+    printf '%s\n' "$accounts_fn"
+    printf '%s\n' "$homes_fn"
+    printf '%s\n' "$vet_fn"
+    printf '%s\n' "$vet_homes_fn"
+    printf 'HOME=%s\n' "$work/fakehome-none"
+    printf 'CODEX_ACCOUNTS_DIR=%s\n' "$work/no-accounts-dir"
+    printf 'WORKTREE=path:%s\n' "$work/fixture-worktree-none"
+    echo 'codex_hooks_vet_homes'
+    echo 'echo RC=$?'
+  } > "$vet_homes_script"
+  all_missing_out=$(bash "$vet_homes_script" 2>&1)
+  all_missing_status=$?
+  if [ "$all_missing_status" -ne 0 ] || ! printf '%s\n' "$all_missing_out" | grep -q '^RC=1$'; then
+    echo "FAIL: all_homes_missing: codex_hooks_vet_homes should return 1 when no home has a hooks.json" >&2
+    printf '%s\n' "$all_missing_out" >&2
+    return 1
+  fi
+  printf '%s\n' "$all_missing_out" | grep -Fq "hooks-vet: no hooks.json measured in any codex home; the modal's source is unenumerated, not answering the modal" \
+    || { echo "FAIL: all_homes_missing: did not print the no-hooks.json-measured line" >&2; printf '%s\n' "$all_missing_out" >&2; return 1; }
+  echo "ok   : all_homes_missing: codex_hooks_vet_homes returns 1 and prints the unmeasured line when no home has a hooks.json"
+
+  # Failability: with the zero-count guard removed by sed into a temp copy of
+  # vet_homes_fn, the all_homes_missing case must fail: the empty loop's
+  # default overall=0 would answer the modal on faith.
+  zero_count_start=$(printf '%s\n' "$vet_homes_fn" | grep -Fn 'if [ "$measured" -eq 0 ]; then' | head -1 | cut -d: -f1)
+  zero_count_end=$(printf '%s\n' "$vet_homes_fn" | awk -v start="$zero_count_start" 'NR>=start && /^  fi$/{print NR; exit}')
+  [ -n "$zero_count_start" ] && [ -n "$zero_count_end" ] || { echo "FAIL: could not locate the zero-count guard to mutate" >&2; return 1; }
+  mutant_vet_homes_fn=$(printf '%s\n' "$vet_homes_fn" | sed "${zero_count_start},${zero_count_end}d")
+  if [ "$mutant_vet_homes_fn" = "$vet_homes_fn" ]; then
+    echo "FAIL: zero-count-guard mutant did not change the source" >&2
+    return 1
+  fi
+  vet_homes_script="$work/vet-homes-all-missing-mutant.sh"
+  {
+    echo 'set -u'
+    printf '%s\n' "$accounts_fn"
+    printf '%s\n' "$homes_fn"
+    printf '%s\n' "$vet_fn"
+    printf '%s\n' "$mutant_vet_homes_fn"
+    printf 'HOME=%s\n' "$work/fakehome-none"
+    printf 'CODEX_ACCOUNTS_DIR=%s\n' "$work/no-accounts-dir"
+    printf 'WORKTREE=path:%s\n' "$work/fixture-worktree-none"
+    echo 'codex_hooks_vet_homes'
+    echo 'echo RC=$?'
+  } > "$vet_homes_script"
+  mutant_out=$(bash "$vet_homes_script" 2>&1)
+  if ! printf '%s\n' "$mutant_out" | grep -q '^RC=0$'; then
+    echo "FAIL: failability: removing the zero-count guard should make the all_homes_missing run return 0, but it didn't" >&2
+    printf '%s\n' "$mutant_out" >&2
+    return 1
+  fi
+  echo "ok   : failability: removing the zero-count guard makes the all_homes_missing run return 0"
 
   # failability: a mutant that removes the empty-worktree guard treats an
   # empty WORKTREE the same as a real one and returns 0.
@@ -1904,4 +2112,289 @@ EOF
 )
 codex_hooks_vet_wiring_test "$dispatch" || exit 1
 
-echo "dispatch multi-vendor / check-only / state-dir-seam / contract-delivery / cursor-pretrust / claude-pretrust / claude-pretrust-call-site / claude-hook-trust-marker / codex-launch / codex-start-screen / codex-start-screen-wiring / codex-hooks-vet / codex-hooks-vet-wiring regression tests passed"
+# --- Feature: missing standing-rules file refuses before the gate call -----
+#
+# A missing install file used to leave DISPATCH_STANDING_RULES unset, so the
+# gate validated a contract's standing_rules names against its own bundled
+# template copy while standing_rule_block's append step read nothing at the
+# same unset-falls-back-to-this-install-path expression, passing a contract
+# the append step then could not deliver. Extracts the STANDING_RULES_PATH
+# guard block and runs it in isolation against a missing file, an existing
+# one, and a caller-supplied override.
+standing_rules_missing_file_test() (
+  set +e
+  set -u
+  local dispatch="$1" work block script_file out status mutant_block mutant_file
+
+  block=$(awk '
+    /^STANDING_RULES_PATH="\$SCRIPTS_DIR\/\.\.\/rules\/standing-rules\.md"$/{f=1}
+    f{print}
+    f && /^export DISPATCH_STANDING_RULES_LOCAL="\$SCRIPTS_DIR\/\.\.\/config\/standing-rules\.overlay\.md"$/{exit}
+  ' "$dispatch")
+  [ -n "$block" ] || { echo "FAIL: could not extract the STANDING_RULES_PATH guard block" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-standing-rules-missing-test.$$"
+  mkdir -p "$work/scripts"
+  trap 'rm -rf "$work"' EXIT
+
+  write_script() {
+    local outfile="$1"
+    {
+      echo 'set -u'
+      printf 'SCRIPTS_DIR=%s\n' "$work/scripts"
+      printf '%s\n' "$block"
+      echo 'printf "DISPATCH_STANDING_RULES=%s\n" "${DISPATCH_STANDING_RULES:-}"'
+    } > "$outfile"
+  }
+
+  script_file="$work/run.sh"
+  write_script "$script_file"
+
+  # Case: missing file and unset variable exits 10 naming the path.
+  out=$(env -u DISPATCH_STANDING_RULES bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 10 ]; then
+    echo "FAIL: a missing rules file with DISPATCH_STANDING_RULES unset should exit 10, got $status" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF "standing rules file missing: $work/scripts/../rules/standing-rules.md"; then
+    echo "FAIL: the exit-10 message does not name the missing path" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : a missing rules file with DISPATCH_STANDING_RULES unset exits 10 naming the path"
+
+  # Case: an existing file exports DISPATCH_STANDING_RULES unconditionally.
+  mkdir -p "$work/rules"
+  : > "$work/rules/standing-rules.md"
+  out=$(env -u DISPATCH_STANDING_RULES bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -qF "DISPATCH_STANDING_RULES=$work/scripts/../rules/standing-rules.md"; then
+    echo "FAIL: an existing rules file should export DISPATCH_STANDING_RULES to it" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : an existing rules file exports DISPATCH_STANDING_RULES unconditionally"
+
+  # Case: a caller override is left alone even when the install file is missing.
+  rm -f "$work/rules/standing-rules.md"
+  out=$(DISPATCH_STANDING_RULES=/nonexistent/override.md bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -qF 'DISPATCH_STANDING_RULES=/nonexistent/override.md'; then
+    echo "FAIL: a caller-supplied DISPATCH_STANDING_RULES override should skip the missing-file check" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : a caller-supplied DISPATCH_STANDING_RULES override skips the missing-file check"
+
+  # Failability: drop just the exit line, leaving the echo in place so the
+  # if-body stays non-empty; the missing-file case must then stop refusing,
+  # the behaviour this fix replaces.
+  mutant_block=${block/'    exit 10
+'/''}
+  if [ "$mutant_block" = "$block" ]; then
+    echo "FAIL: exit-10 mutant did not change the source" >&2
+    return 1
+  fi
+  mutant_file="$work/run-mutant.sh"
+  {
+    echo 'set -u'
+    printf 'SCRIPTS_DIR=%s\n' "$work/scripts"
+    printf '%s\n' "$mutant_block"
+    echo 'printf "DISPATCH_STANDING_RULES=%s\n" "${DISPATCH_STANDING_RULES:-}"'
+  } > "$mutant_file"
+  out=$(env -u DISPATCH_STANDING_RULES bash "$mutant_file" 2>&1)
+  status=$?
+  if [ "$status" -eq 10 ]; then
+    echo "FAIL: failability: mutant dropping the exit-10 branch should no longer refuse, but it still exited 10" >&2
+    return 1
+  fi
+  echo "ok   : failability: dropping the exit-10 branch stops refusing a missing rules file (status=$status)"
+)
+standing_rules_missing_file_test "$dispatch" || exit 1
+
+# --- Feature: standing rules append -----------------------------------------
+#
+# A contract's front matter can name `standing_rules` blocks; dispatch-gate
+# validates and echoes them back on `$CHK` under `front_matter.standing_rules`,
+# and this wrapper reads that field (never re-parsing the contract) to append
+# each named block's text to the dispatched spec. Extracts jqf,
+# standing_rule_block, and the STANDING_RULE_NAMES/append block, then runs
+# them against fixture standing-rules.md/.local.md files and a fake `$CHK`.
+standing_rules_append_test() (
+  set +e
+  set -u
+  local dispatch="$1" work jqf_fn block_fn append_block script_file
+  local out status mutant_block
+
+  jqf_fn=$(grep -m1 -F 'jqf() {' "$dispatch")
+  block_fn=$(awk '$0=="standing_rule_block() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  append_block=$(awk '
+    /^STANDING_RULE_NAMES=\$\(echo "\$CHK" \| jqf/{f=1}
+    f{print}
+    f && /^fi$/{exit}
+  ' "$dispatch")
+
+  [ -n "$jqf_fn" ] || { echo "FAIL: could not extract jqf" >&2; return 1; }
+  [ -n "$block_fn" ] || { echo "FAIL: could not extract standing_rule_block" >&2; return 1; }
+  [ -n "$append_block" ] || { echo "FAIL: could not extract the STANDING_RULE_NAMES append block" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-standing-rules-test.$$"
+  mkdir -p "$work/rules" "$work/scripts"
+  trap 'rm -rf "$work"' EXIT
+  cat > "$work/rules/standing-rules.md" <<'RULES'
+## headless
+
+headless body text.
+
+## ack-token
+
+ack-token body text.
+RULES
+
+  write_script() {
+    local outfile="$1" chat_json="$2"
+    {
+      echo 'set -u'
+      printf 'SCRIPTS_DIR=%s\n' "$work/scripts"
+      # Pins both overrides to this case's own fixtures, in the subshell the
+      # extracted block already runs in, so a value inherited from the
+      # caller's environment (this test script's own wrapper might export
+      # one) never reaches standing_rule_block instead of these fixtures.
+      printf 'export DISPATCH_STANDING_RULES=%s\n' "$work/rules/standing-rules.md"
+      printf 'export DISPATCH_STANDING_RULES_LOCAL=%s\n' "$work/config/standing-rules.overlay.md"
+      printf '%s\n' "$jqf_fn"
+      printf '%s\n' "$block_fn"
+      printf 'CHK=%s\n' "$(printf '%q' "$chat_json")"
+      echo 'SPEC="original spec"'
+      printf '%s\n' "$append_block"
+      echo 'printf "SPEC_TAIL::%s\n" "$SPEC"'
+    } > "$outfile"
+  }
+
+  script_file="$work/run.sh"
+  write_script "$script_file" '{"allow": true, "front_matter": {"standing_rules": ["headless", "ack-token"]}}'
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: standing-rules append block exited non-zero" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF 'headless body text.'; then
+    echo "FAIL: appended spec is missing the headless block text" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF 'ack-token body text.'; then
+    echo "FAIL: appended spec is missing the ack-token block text" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF 'Standing rules (headless):'; then
+    echo "FAIL: appended spec is missing the Standing rules (headless): label" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF '📎 standing rules · headless ack-token'; then
+    echo "FAIL: dispatch did not print the standing-rules milestone line" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : standing_rules: [headless, ack-token] appends both block texts and prints the milestone line"
+
+  # Case: an empty list appends nothing and prints no milestone line.
+  write_script "$script_file" '{"allow": true, "front_matter": {"standing_rules": []}}'
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: an empty standing_rules list should not fail the append block" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if printf '%s\n' "$out" | grep -qF '📎 standing rules'; then
+    echo "FAIL: an empty standing_rules list should not print the milestone line" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF 'SPEC_TAIL::original spec'; then
+    echo "FAIL: an empty standing_rules list should leave SPEC unchanged" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : an empty standing_rules list appends nothing and prints no milestone line"
+
+  # Case: an overlay entry sharing a name with the shipped file wins.
+  mkdir -p "$work/config"
+  cat > "$work/config/standing-rules.overlay.md" <<'RULES'
+## headless
+
+seat overlay headless text.
+RULES
+  write_script "$script_file" '{"allow": true, "front_matter": {"standing_rules": ["headless"]}}'
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: an overlay-shadowed name should not fail the append block" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF 'seat overlay headless text.'; then
+    echo "FAIL: the overlay's own text should win over the shipped file's text for a shared name" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if printf '%s\n' "$out" | grep -qF 'headless body text.'; then
+    echo "FAIL: the shipped file's text should not appear when the overlay names the same block" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : an overlay entry sharing a name with the shipped file wins"
+  rm -f "$work/config/standing-rules.overlay.md"
+
+  # Case: a name neither file declares exits 3 and names the block.
+  write_script "$script_file" '{"allow": true, "front_matter": {"standing_rules": ["nonexistent"]}}'
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 3 ]; then
+    echo "FAIL: a standing_rules name neither file declares should exit 3, got $status" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF 'standing rule block not found: nonexistent'; then
+    echo "FAIL: the exit-3 case should name the missing block" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : a standing_rules name neither file declares exits 3 and names the block"
+
+  # Failability: drop the milestone echo; the first case above must then stop
+  # printing it, proving the assertion actually exercises the real line.
+  mutant_block=${append_block/'  echo "📎 standing rules · $STANDING_RULE_NAMES"'/'  :'}
+  if [ "$mutant_block" = "$append_block" ]; then
+    echo "FAIL: milestone-echo mutant did not change the source" >&2
+    return 1
+  fi
+  {
+    echo 'set -u'
+    printf 'SCRIPTS_DIR=%s\n' "$work/scripts"
+    printf 'export DISPATCH_STANDING_RULES=%s\n' "$work/rules/standing-rules.md"
+    printf 'export DISPATCH_STANDING_RULES_LOCAL=%s\n' "$work/config/standing-rules.overlay.md"
+    printf '%s\n' "$jqf_fn"
+    printf '%s\n' "$block_fn"
+    printf 'CHK=%s\n' "$(printf '%q' '{"allow": true, "front_matter": {"standing_rules": ["headless"]}}')"
+    echo 'SPEC="original spec"'
+    printf '%s\n' "$mutant_block"
+    echo 'printf "SPEC_TAIL::%s\n" "$SPEC"'
+  } > "$script_file"
+  out=$(bash "$script_file" 2>&1)
+  if printf '%s\n' "$out" | grep -qF '📎 standing rules'; then
+    echo "FAIL: failability: dropping the milestone echo should have stopped printing it, but it still appeared" >&2
+    return 1
+  fi
+  echo "ok   : failability: dropping the milestone echo makes the milestone-line assertion fail"
+)
+standing_rules_append_test "$dispatch" || exit 1
+
+echo "dispatch multi-vendor / check-only / state-dir-seam / contract-delivery / cursor-pretrust / claude-pretrust / claude-pretrust-call-site / claude-hook-trust-marker / fresh-claude-prompt-marker / delivery-result / codex-launch / codex-start-screen / codex-start-screen-wiring / codex-hooks-vet / codex-hooks-vet-wiring / standing-rules-missing-file / standing-rules-append regression tests passed"

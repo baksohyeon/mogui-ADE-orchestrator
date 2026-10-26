@@ -378,4 +378,87 @@ rendered_precondition_test() (
 )
 rendered_precondition_test "$smoke" || exit 1
 
+# --- Feature: print_artifact (artifact print before cleanup removes it) ----
+artifact_test() (
+  set +e
+  set -u
+  local smoke="$1" fn work script_file out mutant_fn
+
+  fn=$(extract_fn "$smoke" 'print_artifact() {')
+  [ -n "$fn" ] || { echo "FAIL: could not extract print_artifact" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-smoke-artifact-test.$$"
+  mkdir -p "$work"
+  trap 'rm -rf "$work"' EXIT
+
+  run_case() {  # path  want-stderr-substring
+    local path="$1" want="$2" err
+    script_file="$work/run.sh"
+    {
+      echo 'set -u'
+      printf '%s\n' "$fn"
+      printf 'print_artifact label %q\n' "$path"
+    } > "$script_file"
+    err=$(bash "$script_file" 2>&1 >/dev/null)
+    case "$err" in
+      *"$want"*) ;;
+      *) echo "FAIL: expected stderr to contain '$want', got '$err'" >&2; return 1;;
+    esac
+  }
+
+  run_case "$work/absent.txt" "(absent)" || return 1
+  echo "ok   : print_artifact reports an absent path"
+
+  : > "$work/empty.txt"
+  run_case "$work/empty.txt" "(empty)" || return 1
+  echo "ok   : print_artifact reports an empty file"
+
+  printf 'line1\nline2\nline3\nline4\nline5\nline6\nline7\n' > "$work/fixture.txt"
+  script_file="$work/run.sh"
+  {
+    echo 'set -u'
+    printf '%s\n' "$fn"
+    printf 'print_artifact label %q 5\n' "$work/fixture.txt"
+  } > "$script_file"
+  out=$(bash "$script_file" 2>/dev/null)
+  err=$(bash "$script_file" 2>&1 >/dev/null)
+  [ -z "$out" ] || { echo "FAIL: print_artifact must write only to stderr, got stdout '$out'" >&2; return 1; }
+  case "$err" in
+    *line5*) ;;
+    *) echo "FAIL: expected the 5th fixture line in stderr, got '$err'" >&2; return 1;;
+  esac
+  case "$err" in
+    *line6*) echo "FAIL: expected line6 to be truncated past the 5-line default cap, got '$err'" >&2; return 1;;
+  esac
+  echo "ok   : print_artifact prints only the first MAX_LINES lines of a file, to stderr"
+
+  mkdir -p "$work/adir"
+  touch "$work/adir/marker-child"
+  run_case "$work/adir" "marker-child" || return 1
+  echo "ok   : print_artifact prints an ls -la listing for a directory"
+
+  # Failability: rename the "absent" literal; a missing path then goes
+  # unreported as absent.
+  mutant_fn=${fn/'(absent)'/'(nevermatches)'}
+  if [ "$mutant_fn" = "$fn" ]; then
+    echo "FAIL: absent-literal mutant did not change the source" >&2
+    return 1
+  fi
+  script_file="$work/run.sh"
+  {
+    echo 'set -u'
+    printf '%s\n' "$mutant_fn"
+    printf 'print_artifact label %q\n' "$work/absent.txt"
+  } > "$script_file"
+  err=$(bash "$script_file" 2>&1 >/dev/null)
+  case "$err" in
+    *"(absent)"*)
+      echo "FAIL: failability: mutant renaming the absent literal should have stopped reporting (absent)" >&2
+      return 1
+      ;;
+  esac
+  echo "ok   : failability: renaming the absent literal stops an absent path from reporting (absent) (got '$err')"
+)
+artifact_test "$smoke" || exit 1
+
 echo "dispatch-smoke pure-function regression tests passed"

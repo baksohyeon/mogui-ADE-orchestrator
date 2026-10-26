@@ -55,9 +55,10 @@ What a failing run prints depends on the failure path:
 | 12, wrapper exit 5 (or any exit with `class=` other than `agent-started` or `done`) | delivery | the delivery `class` (`hook-trust`, `limit`, `unknown`, ...) | `orca terminal read --terminal <handle> --limit 40` on the worktree's pane |
 | 12, other nonzero | wrapper | the wrapper's own exit code | the printed `smoke.log` tail on stderr |
 | 12, layer-2 timeout | worker | the last `dispatch-show` status seen | `orca orchestration dispatch-show --task <task> --json`; the worker's own home event log |
-| 12, layer-3 mismatch | contract-read | `missing` or `mismatch` | `<worktree>/SMOKE.txt` directly |
-| 13 | isolation | `leak` or `concurrent-writer` | the added ledger row(s) or contract copy name(s) printed to stderr |
-| 13 | isolation | `no-scratch-ledger-row` | the scratch state directory's `dispatch-ledger.jsonl`, which should hold the smoke dispatch's register row |
+| 12, layer-3 missing | contract-read | `missing` | the `SMOKE.txt` and `worktree root` labels printed to stderr |
+| 12, layer-3 mismatch | contract-read | `mismatch` | the `SMOKE.txt` label printed to stderr |
+| 13 | isolation | `leak` or `concurrent-writer` | the added ledger row(s) or contract copy name(s) printed to stderr, plus the `ledger` label's own print |
+| 13 | isolation | `no-scratch-ledger-row` | the `ledger` and `state dir` labels printed to stderr |
 
 ## Exit codes
 

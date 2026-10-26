@@ -142,6 +142,11 @@ you build on it.
   and resolves its accounts directory on Linux and under `CODEX_ACCOUNTS_DIR`,
   instead of risking a tier mismatch against a concurrent worker's rollout or
   missing the rollout tree outright.
+- `dispatch`'s codex model probe now selects this worker's rollout by
+  existence instead of mtime: codex appends to the same rollout file for a
+  pane's whole session, so a worker already running before the dispatch
+  started kept winning the old mtime-based selection the moment it wrote
+  anything after that dispatch began.
 
 ### Added
 

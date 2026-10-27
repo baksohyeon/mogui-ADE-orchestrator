@@ -18,6 +18,9 @@ link="$TMP/workspace/product-link"
 mkdir -p "$product" "$product2" "$product_digit" "$product_legacy" "$ops" "$TMP/home" "$TMP/logs"
 ln -s "$product" "$link"
 product_real=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$product")
+# HOME is pinned to $TMP/home for every run_bash_hook* call below, so a
+# symlink here is what makes ~/product resolve to the product fixture.
+ln -s "$product_real" "$TMP/home/product"
 printf '{"master_host_runtime":"claude","product_repositories":["%s","%s","%s"]}\n' "$product" "$product2" "$product_digit" >"$TMP/runtime.json"
 # Legacy one-entry string form must stay covered by a valid fixture: the
 # array fixture above exercises only product_repositories, and the only
@@ -1046,9 +1049,15 @@ heredoc3_cases() {
   local escaped_heredoc="ls \\<<EOF${LF}touch $product/h3.txt${LF}EOF"
   local even_backslash_heredoc="ls \\\\<<EOF${LF}touch $product/h3.txt${LF}EOF"
   local body_continuation="\$\\${LF}(touch $product_real/h3.txt)"
+  # Distinct from body_continuation: same backslash-newline opener
+  # reformation, but naming the symlinked root spelling instead of the
+  # realpath one, so the two continuation cases are not the same assertion
+  # under two names.
+  local body_continuation_symlink="\$\\${LF}(touch $link/h3.txt)"
   local body_no_root="today \$(date)"
   local body_param="\${X:-\$HOME}"
-  local runner mode kind body
+  local root_parent="$TMP/workspace"
+  local runner mode kind body spelling root_body root_cwd
   for runner in run_bash_hook run_bash_hook_strict; do
     mode=${runner#run_bash_hook}; mode=${mode:-_legacy}
     expect_blocked "continuation-ansic$mode" "$runner" "$hook" "$continuation" "$ops"
@@ -1066,10 +1075,26 @@ heredoc3_cases() {
     done
     expect_blocked "unquoted-heredoc-continuation$mode" "$runner" "$hook" "ls <<EOF${LF}${body_continuation}${LF}EOF" "$ops"
     grep -q "heredoc body expansion" "$TMP/stderr" || { echo "FAIL: unquoted-heredoc-continuation$mode missing heredoc body expansion reason" >&2; exit 1; }
-    expect_blocked "unquoted-heredoc-continuation-abs-root$mode" "$runner" "$hook" "ls <<EOF${LF}${body_continuation}${LF}EOF" "$ops"
+    expect_blocked "unquoted-heredoc-continuation-abs-root$mode" "$runner" "$hook" "ls <<EOF${LF}${body_continuation_symlink}${LF}EOF" "$ops"
     grep -q "heredoc body expansion" "$TMP/stderr" || { echo "FAIL: unquoted-heredoc-continuation-abs-root$mode missing heredoc body expansion reason" >&2; exit 1; }
     expect_blocked "unquoted-heredoc-cmdsubst-cwd-in-root$mode" "$runner" "$hook" "ls <<EOF${LF}\$(touch h3.txt)${LF}EOF" "$product_real"
     grep -q "heredoc body expansion" "$TMP/stderr" || { echo "FAIL: unquoted-heredoc-cmdsubst-cwd-in-root$mode missing heredoc body expansion reason" >&2; exit 1; }
+    # A root test against the raw body text sees only the config's exact
+    # realpath spelling. A symlinked spelling, ~/product, a bare relative
+    # product/x with cwd beside the root, and ../product/x from a sibling
+    # directory all resolve into the product root without that spelling
+    # ever appearing, so each is its own case here.
+    for spelling in symlink tilde relative relative-dot dotdot; do
+      case "$spelling" in
+        symlink)       root_body="\$(touch $link/root-spelling.txt)";             root_cwd="$ops" ;;
+        tilde)         root_body="\$(touch ~/product/root-spelling.txt)";         root_cwd="$ops" ;;
+        relative)      root_body="\$(touch product/root-spelling.txt)";           root_cwd="$root_parent" ;;
+        relative-dot)  root_body="\$(touch ./product/root-spelling.txt)";         root_cwd="$root_parent" ;;
+        dotdot)        root_body="\$(touch ../product/root-spelling.txt)";        root_cwd="$ops" ;;
+      esac
+      expect_blocked "unquoted-heredoc-root-$spelling-spelling$mode" "$runner" "$hook" "ls <<EOF${LF}${root_body}${LF}EOF" "$root_cwd"
+      grep -q "heredoc body expansion" "$TMP/stderr" || { echo "FAIL: unquoted-heredoc-root-$spelling-spelling$mode missing heredoc body expansion reason" >&2; exit 1; }
+    done
     if [ "$mode" = "_legacy" ]; then
       expect_allowed "unquoted-heredoc-no-root$mode" "$runner" "$hook" "ls <<EOF${LF}${body_no_root}${LF}EOF" "$ops"
     else
@@ -1137,5 +1162,13 @@ heredoc3_mutant every-unquoted-body-denied \
 heredoc3_mutant no-body-continuation \
   '.join(body_lines).replace("\\\n", "")' \
   '.join(body_lines)'
+# Restoring the substring test (what both call sites used before this round)
+# must fail the symlink, tilde, relative, and dotdot spellings above: none of
+# them contain the configured realpath string, so a substring test admits
+# every one of them again.
+heredoc3_mutant root-substring-only \
+  "def body_targets_root(value, base):" \
+  "def body_targets_root(value, base):
+    return any(root in value for root in roots)"
 
 echo "product-path-guard regression tests passed"

@@ -42,17 +42,22 @@ product-root, and redirect-into-root scrutiny already applied to an
 interpreter-fed heredoc body below, and is also denied when the hook's own
 working directory is itself under a product root, since a relative write
 that scrutiny cannot see would still land inside it; otherwise it is
-admitted. A quoted delimiter (`<<'EOF'`, `<<"EOF"`, `<<\EOF`) keeps the body
+admitted. The legacy-mode root test resolves a body token's path spelling
+(an absolute path, a symlinked spelling, `~/...`, `$HOME/...`, a `./`- or
+`../`-relative spelling, or a bare relative spelling with a slash) against
+the hook's working directory instead of matching the configured root's exact
+realpath string, so a spelling that never contains that string still denies.
+A quoted delimiter (`<<'EOF'`, `<<"EOF"`, `<<\EOF`) keeps the body
 literal and it is stripped as before.
 
 The operator's own line keeps its tokens: a redirect into a product root on
 that line (`cat > <root>/file <<'EOF'`) still denies. When the operator line
 is a bare interpreter invocation with no `-c` — `bash <<'EOF'`, `python3
 <<'EOF'` — the heredoc body is the whole script, exactly as opaque as a `-c`
-body, so it gets the same scrutiny before being stripped: a `cd`, a root
-substring anywhere in the body, or a redirect into the root denies the
-command outright (`opaque interpreter heredoc body may contain an unparsed
-write`), applied regardless of mode. The interpreter need not be the line's
+body, so it gets the same scrutiny before being stripped: a `cd`, the same
+path-spelling resolution the legacy-mode unquoted heredoc body uses, or a
+redirect into the root denies the command outright (`opaque interpreter
+heredoc body may contain an unparsed write`), applied regardless of mode. The interpreter need not be the line's
 first token: the operator line is segmented on `;`/`&&`/`||`/`|`/`&`, the
 same way the main parser segments a whole command, so `true && bash
 <<'EOF'`, `cd /tmp; python3 <<EOF`, and `echo x | sh <<EOF` all get scrutiny

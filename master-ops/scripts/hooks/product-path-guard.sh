@@ -331,7 +331,7 @@ def strip_heredocs(text):
                     # the root.
                     if not LEGACY_MODE or (
                         contains_cd_token(body_text)
-                        or any(root in body_text for root in roots)
+                        or body_targets_root(body_text, cwd)
                         or redirects_into_root(body_text, cwd)
                         or under(cwd)
                     ):
@@ -345,7 +345,7 @@ def strip_heredocs(text):
                 if opaque_interpreter_segments:
                     if (
                         contains_cd_token(body_text)
-                        or any(root in body_text for root in roots)
+                        or body_targets_root(body_text, cwd)
                         or redirects_into_root(body_text, cwd)
                     ):
                         forced_deny_name=opaque_interpreter_segments[0]
@@ -378,6 +378,31 @@ def redirects_into_root(value, base):
             i += 2
             continue
         i += 1
+    return False
+PATH_TOKEN_SPLIT_RE=re.compile(r"[\s()`;&|<>\"=]+|" + SQ)
+HOME_VAR_RE=re.compile(r"\$\{HOME\}|\$HOME(?![A-Za-z0-9_])")
+def expand_home_var(value):
+    home=os.environ.get("HOME")
+    return HOME_VAR_RE.sub(home, value) if home else value
+def body_targets_root(value, base):
+    # A root test against the raw body text matches only the configured
+    # realpath spelling: a symlinked spelling, ~/product, a relative
+    # product/x beside the root, and ../product/x from a sibling directory
+    # all slip past a substring test even though they resolve into a
+    # product root. Splitting the body into path-shaped tokens and
+    # resolving each one against cwd the way redirects_into_root already
+    # does for a redirect target catches every spelling the same way.
+    for token in PATH_TOKEN_SPLIT_RE.split(value):
+        if not token:
+            continue
+        # A bare relative spelling (product/x, no dot prefix) carries no
+        # path-opener prefix at all; the slash inside it is what marks it
+        # as path-shaped. A token with neither an opener nor a slash (today,
+        # date) is left alone so a harmless word is never resolved and
+        # compared against a root.
+        looks_path_shaped = token.startswith(("/", "~", "./", "../", "$HOME")) or "/" in token
+        if looks_path_shaped and under(resolve(base, expand_home_var(token))):
+            return True
     return False
 FD_SENTINEL_RE=re.compile(r"^MOGUICDFDSENTINEL(\d+)ENDSENTINEL$")
 def mark_unquoted_newlines(text):

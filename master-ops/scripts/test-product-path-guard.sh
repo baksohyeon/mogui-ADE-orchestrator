@@ -13,15 +13,19 @@ product2="$TMP/workspace/product-two"
 # character happens to be a digit from an attached file-descriptor digit.
 product_digit="$TMP/workspace/product2"
 product_legacy="$TMP/workspace/product-legacy"
+# Name carries a space on purpose: a quoted whitespace-tokenization fixture
+# needs a root whose own realpath spelling has an internal space.
+product_space="$TMP/workspace/product repo"
 ops="$TMP/workspace/ops"
 link="$TMP/workspace/product-link"
-mkdir -p "$product" "$product2" "$product_digit" "$product_legacy" "$ops" "$TMP/home" "$TMP/logs"
+mkdir -p "$product" "$product2" "$product_digit" "$product_legacy" "$product_space" "$ops" "$TMP/home" "$TMP/logs"
 ln -s "$product" "$link"
 product_real=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$product")
+product_space_real=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$product_space")
 # HOME is pinned to $TMP/home for every run_bash_hook* call below, so a
 # symlink here is what makes ~/product resolve to the product fixture.
 ln -s "$product_real" "$TMP/home/product"
-printf '{"master_host_runtime":"claude","product_repositories":["%s","%s","%s"]}\n' "$product" "$product2" "$product_digit" >"$TMP/runtime.json"
+printf '{"master_host_runtime":"claude","product_repositories":["%s","%s","%s","%s"]}\n' "$product" "$product2" "$product_digit" "$product_space" >"$TMP/runtime.json"
 # Legacy one-entry string form must stay covered by a valid fixture: the
 # array fixture above exercises only product_repositories, and the only
 # other product_repo fixture (below) is intentionally malformed.
@@ -1083,14 +1087,20 @@ heredoc3_cases() {
     # realpath spelling. A symlinked spelling, ~/product, a bare relative
     # product/x with cwd beside the root, and ../product/x from a sibling
     # directory all resolve into the product root without that spelling
-    # ever appearing, so each is its own case here.
-    for spelling in symlink tilde relative relative-dot dotdot; do
+    # ever appearing, so each is its own case here. The quoted-space pair
+    # covers the opposite failure: a root name with its own internal space
+    # does contain the configured spelling, but the plain whitespace
+    # tokenization used to split it into two fragments at that space before
+    # either check ever saw the whole path.
+    for spelling in symlink tilde relative relative-dot dotdot quoted-space-single quoted-space-double; do
       case "$spelling" in
-        symlink)       root_body="\$(touch $link/root-spelling.txt)";             root_cwd="$ops" ;;
-        tilde)         root_body="\$(touch ~/product/root-spelling.txt)";         root_cwd="$ops" ;;
-        relative)      root_body="\$(touch product/root-spelling.txt)";           root_cwd="$root_parent" ;;
-        relative-dot)  root_body="\$(touch ./product/root-spelling.txt)";         root_cwd="$root_parent" ;;
-        dotdot)        root_body="\$(touch ../product/root-spelling.txt)";        root_cwd="$ops" ;;
+        symlink)             root_body="\$(touch $link/root-spelling.txt)";                        root_cwd="$ops" ;;
+        tilde)               root_body="\$(touch ~/product/root-spelling.txt)";                    root_cwd="$ops" ;;
+        relative)             root_body="\$(touch product/root-spelling.txt)";                     root_cwd="$root_parent" ;;
+        relative-dot)        root_body="\$(touch ./product/root-spelling.txt)";                    root_cwd="$root_parent" ;;
+        dotdot)              root_body="\$(touch ../product/root-spelling.txt)";                   root_cwd="$ops" ;;
+        quoted-space-single) root_body="\$(touch '$product_space_real/root-spelling.txt')";        root_cwd="$ops" ;;
+        quoted-space-double) root_body="\$(touch \"$product_space_real/root-spelling.txt\")";      root_cwd="$ops" ;;
       esac
       expect_blocked "unquoted-heredoc-root-$spelling-spelling$mode" "$runner" "$hook" "ls <<EOF${LF}${root_body}${LF}EOF" "$root_cwd"
       grep -q "heredoc body expansion" "$TMP/stderr" || { echo "FAIL: unquoted-heredoc-root-$spelling-spelling$mode missing heredoc body expansion reason" >&2; exit 1; }
@@ -1109,6 +1119,22 @@ heredoc3_cases() {
   done
 }
 heredoc3_cases "$HOOK"
+# A cd earlier on the same line as the heredoc operator changes the directory
+# a relative body path resolves against, and that cd token is on the operator
+# line itself, not inside the stripped body the root/cd/redirect scrutiny
+# above inspects. In legacy mode this is now treated as unresolvable, the
+# same denial an unquoted root spelling gets, even though the body alone
+# names no product root and the hook's own recorded cwd is not under one.
+expect_blocked cd-before-heredoc-operator-cmdsubst run_bash "cd $TMP/workspace && cat <<EOF${LF}\$(touch product/x)${LF}EOF" "$ops"
+expect_verdict block cd-before-heredoc-operator-cmdsubst
+grep -q "heredoc body expansion" "$TMP/stderr" || { echo "FAIL: cd-before-heredoc-operator-cmdsubst missing heredoc body expansion reason" >&2; exit 1; }
+expect_blocked cd-before-heredoc-operator-interpreter run_bash "cd $TMP/workspace && python3 <<EOF${LF}open('product/x', 'w')${LF}EOF" "$ops"
+expect_verdict block cd-before-heredoc-operator-interpreter
+# Accepted cost of the cd-before-operator rule: an unrelated cd denies even a
+# body naming no product root at all.
+expect_blocked cd-before-heredoc-operator-unrelated-cd run_bash "cd /tmp && cat <<EOF${LF}\$(date)${LF}EOF" "$ops"
+expect_verdict block cd-before-heredoc-operator-unrelated-cd
+grep -q "heredoc body expansion" "$TMP/stderr" || { echo "FAIL: cd-before-heredoc-operator-unrelated-cd missing heredoc body expansion reason" >&2; exit 1; }
 # A heredoc body expansion denial lands in the unresolved_target event-log
 # bucket, the same one an unparseable command lands in.
 heredoc_event_log_before=$(wc -l <"$TMP/home/.mogui/event-log.jsonl")

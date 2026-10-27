@@ -249,7 +249,7 @@ def find_heredoc_operators(line):
         if backslashes % 2 == 1:
             continue
         word=next(g for g in match.groups()[1:] if g is not None)
-        operators.append((word, bool(match.group(1)), match.group(5) is not None))
+        operators.append((word, bool(match.group(1)), match.group(5) is not None, start))
     return operators
 def heredoc_bearing_interpreter_segments(line):
     try:
@@ -296,7 +296,14 @@ def strip_heredocs(text):
         if operators:
             opaque_interpreter_segments=heredoc_bearing_interpreter_segments(line)
             j=i + 1
-            for word, strip_tabs, unquoted_word in operators:
+            for word, strip_tabs, unquoted_word, op_start in operators:
+                # A cd earlier on this same line changes the directory that
+                # relative paths in the body resolve against, and the body
+                # is stripped before the segment loop below ever sees that
+                # cd token. The line text up to the operator is checked
+                # directly for one instead, the way contains_cd_token already
+                # checks a body or a -c argument for one.
+                line_prefix=line[:op_start]
                 body_lines=[]
                 terminated=False
                 while j < n:
@@ -331,6 +338,7 @@ def strip_heredocs(text):
                     # the root.
                     if not LEGACY_MODE or (
                         contains_cd_token(body_text)
+                        or contains_cd_token(line_prefix)
                         or body_targets_root(body_text, cwd)
                         or redirects_into_root(body_text, cwd)
                         or under(cwd)
@@ -345,6 +353,7 @@ def strip_heredocs(text):
                 if opaque_interpreter_segments:
                     if (
                         contains_cd_token(body_text)
+                        or contains_cd_token(line_prefix)
                         or body_targets_root(body_text, cwd)
                         or redirects_into_root(body_text, cwd)
                     ):
@@ -385,16 +394,29 @@ def expand_home_var(value):
     home=os.environ.get("HOME")
     return HOME_VAR_RE.sub(home, value) if home else value
 def body_targets_root(value, base):
-    # A root test against the raw body text matches only the configured
-    # realpath spelling: a symlinked spelling, ~/product, a relative
-    # product/x beside the root, and ../product/x from a sibling directory
-    # all slip past a substring test even though they resolve into a
-    # product root. Splitting the body into path-shaped tokens and
-    # resolving each one against cwd the way redirects_into_root already
-    # does for a redirect target catches every spelling the same way.
-    for token in PATH_TOKEN_SPLIT_RE.split(value):
-        if not token:
-            continue
+    # The configured realpath spelling appearing anywhere in the raw text is
+    # checked first: a whitespace-splitting tokenizer below can still cut a
+    # quoted path apart at an internal space before isolating it (a product
+    # root whose own name has a space in it), so this exact-string test
+    # denies that shape even though the token split missed it. It is kept
+    # alongside the token split below, not instead of it, since a symlinked
+    # spelling, ~/product, a relative product/x beside the root, and
+    # ../product/x from a sibling directory all resolve into a product root
+    # without that exact string ever appearing.
+    if any(root in value for root in roots):
+        return True
+    # Splitting the body into path-shaped tokens and resolving each one
+    # against cwd the way redirects_into_root already does for a redirect
+    # target catches every spelling the substring test above cannot. A
+    # quote-aware split (shlex, posix rules) keeps a single- or double-quoted
+    # span with an internal space as one token instead of breaking it at
+    # that space; the plain whitespace/punctuation split is a fallback for
+    # text shlex rejects as unbalanced.
+    try:
+        tokens=shlex.split(value, posix=True)
+    except Exception:
+        tokens=[token for token in PATH_TOKEN_SPLIT_RE.split(value) if token]
+    for token in tokens:
         # A bare relative spelling (product/x, no dot prefix) carries no
         # path-opener prefix at all; the slash inside it is what marks it
         # as path-shaped. A token with neither an opener nor a slash (today,

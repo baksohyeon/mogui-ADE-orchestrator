@@ -47,6 +47,9 @@ admitted. The legacy-mode root test resolves a body token's path spelling
 `../`-relative spelling, or a bare relative spelling with a slash) against
 the hook's working directory instead of matching the configured root's exact
 realpath string, so a spelling that never contains that string still denies.
+A bare directory name with no slash at all (`$(cp source product-root)` with
+the working directory beside the root) is not resolved by this test and is a
+known gap left for a later round.
 A quoted delimiter (`<<'EOF'`, `<<"EOF"`, `<<\EOF`) keeps the body
 literal and it is stripped as before.
 

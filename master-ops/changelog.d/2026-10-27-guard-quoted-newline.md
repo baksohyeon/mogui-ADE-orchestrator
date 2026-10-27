@@ -40,3 +40,21 @@ Product-path guard quoted newline (2026-10-27):
   denies. A bare directory name with no slash at all (`rm -rf product` with
   the working directory beside the root) is a known gap left for a later
   round.
+- That body-token resolution split on plain whitespace, so a product root
+  whose own name has a space in it (`$(touch '<root with a space>/x')`) was
+  cut into fragments at that space and never resolved whole, even though it
+  was quoted. The split is now quote-aware (`shlex.split`, falling back to
+  the previous whitespace split when it raises), and the exact-root
+  substring test is checked first and kept alongside the token split rather
+  than replaced by it, so a spelling the tokenizer still cannot cleanly
+  isolate is caught the same way.
+- A `cd` earlier on the same line as the heredoc operator changes the
+  directory a relative body path resolves against, but that `cd` sits on the
+  operator's own line, outside the stripped body the root/`cd`/redirect
+  scrutiny inspects, so it passed unscrutinized. In legacy mode a `cd`
+  anywhere before the operator on that line is now treated the same as one
+  found inside the body itself and denies with `heredoc body expansion`,
+  applied to both the unquoted-body-expansion check and the interpreter-fed
+  heredoc scrutiny. Upgrade cost: a `cd` to a directory with no relation to
+  any product root, on the same line as an otherwise benign heredoc, now
+  denies too (`cd /tmp && cat <<EOF` with a `$(date)` body).

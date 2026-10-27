@@ -28,11 +28,19 @@ command is still treated as unparseable, exactly as before this change.
 
 An operator preceded by an odd run of backslashes (`ls \<<EOF`) is not a
 heredoc: bash reads an escaped `<` as a literal plus an input redirection, so
-the following lines stay commands. When the delimiter is unquoted (`<<EOF`),
-bash expands the body, so a body containing `$(`, a backtick, or `${` is
-denied as unparseable (`heredoc body expansion`) instead of stripped; the
-guard does not evaluate it. A quoted delimiter (`<<'EOF'`, `<<"EOF"`,
-`<<\EOF`) keeps the body literal and it is stripped as before.
+the following lines stay commands. A backslash-newline line continuation
+inside the body is removed first, matching bash's own removal, so a `$(` or
+backtick split across two lines by one still triggers the check below. When
+the delimiter is unquoted (`<<EOF`), bash expands the body, so a body
+containing `$(` or a backtick is denied as unparseable (`heredoc body
+expansion`) instead of stripped; the guard does not evaluate it. A bare
+`${...}` parameter expansion runs no code, so it does not trigger this check
+on its own. In fail-closed mode (`MOGUI_PRODUCT_GUARD_FAIL_CLOSED=1`) that
+denial is unconditional; in legacy mode the body instead gets the same `cd`,
+product-root, and redirect-into-root scrutiny already applied to an
+interpreter-fed heredoc body below, admitted unless that scrutiny finds a
+write. A quoted delimiter (`<<'EOF'`, `<<"EOF"`, `<<\EOF`) keeps the body
+literal and it is stripped as before.
 
 The operator's own line keeps its tokens: a redirect into a product root on
 that line (`cat > <root>/file <<'EOF'`) still denies. When the operator line

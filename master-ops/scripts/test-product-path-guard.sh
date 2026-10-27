@@ -1024,13 +1024,20 @@ ansic_mutant raw-too \
   "if has_ansi_c_quote_opener(heredoc_stripped_command):" \
   "if has_ansi_c_quote_opener(command) or has_ansi_c_quote_opener(heredoc_stripped_command):"
 
-# Three more lexer divergences, each blocked in both modes:
+# Three more lexer divergences:
 # - a line continuation between $ and its quote ($\<LF>'...'): bash removes
 #   the backslash newline before reading quotes, so the opener re-forms;
+#   blocked in both modes.
 # - an escaped heredoc operator (ls \<<EOF): bash reads a literal < and an
-#   input redirection, so the next lines are commands, not a heredoc body;
-# - an unquoted-delimiter heredoc body with $(, a backtick, or ${: bash
-#   expands it, so it is denied as unparseable instead of stripped as data.
+#   input redirection, so the next lines run as ordinary commands instead of
+#   a heredoc body; blocked in both modes.
+# - an unquoted-delimiter heredoc body with $( or a backtick: bash expands
+#   it, so it is denied as unparseable instead of stripped as data. A line
+#   continuation inside the body is removed first, matching bash's own
+#   removal. A bare ${...} alone runs no code and does not trigger this on
+#   its own. Under FAIL_CLOSED the opener denies outright; in legacy mode it
+#   is admitted unless the same root/cd/redirect scrutiny applied to an
+#   interpreter-fed heredoc body finds a write.
 # A quoted delimiter keeps its body literal, and a plain body still passes;
 # after an even run of backslashes the operator is real, so its body is data.
 heredoc3_cases() {
@@ -1038,6 +1045,9 @@ heredoc3_cases() {
   local continuation="ls \$\\${LF}${SQ}\\${SQ}${SQ}${LF}touch $product/h3.txt${LF}#${SQ}"
   local escaped_heredoc="ls \\<<EOF${LF}touch $product/h3.txt${LF}EOF"
   local even_backslash_heredoc="ls \\\\<<EOF${LF}touch $product/h3.txt${LF}EOF"
+  local body_continuation="\$\\${LF}(touch $product_real/h3.txt)"
+  local body_no_root="today \$(date)"
+  local body_param="\${X:-\$HOME}"
   local runner mode kind body
   for runner in run_bash_hook run_bash_hook_strict; do
     mode=${runner#run_bash_hook}; mode=${mode:-_legacy}
@@ -1045,15 +1055,23 @@ heredoc3_cases() {
     grep -q "ansi-c quote" "$TMP/stderr" || { echo "FAIL: continuation-ansic$mode missing ansi-c quote reason" >&2; exit 1; }
     expect_blocked "escaped-heredoc-operator$mode" "$runner" "$hook" "$escaped_heredoc" "$ops"
     expect_allowed "even-backslash-heredoc-operator$mode" "$runner" "$hook" "$even_backslash_heredoc" "$ops"
-    for kind in cmdsubst backtick param; do
+    for kind in cmdsubst backtick; do
       case "$kind" in
-        cmdsubst) body="\$(touch $product/h3.txt)" ;;
-        backtick) body="\`touch $product/h3.txt\`" ;;
-        param) body="\${X:=\$(touch $product/h3.txt)}" ;;
+        cmdsubst) body="\$(touch $product_real/h3.txt)" ;;
+        backtick) body="\`touch $product_real/h3.txt\`" ;;
       esac
       expect_blocked "unquoted-heredoc-$kind$mode" "$runner" "$hook" "ls <<EOF${LF}${body}${LF}EOF" "$ops"
       grep -q "heredoc body expansion" "$TMP/stderr" || { echo "FAIL: unquoted-heredoc-$kind$mode missing heredoc body expansion reason" >&2; exit 1; }
     done
+    expect_blocked "unquoted-heredoc-continuation$mode" "$runner" "$hook" "ls <<EOF${LF}${body_continuation}${LF}EOF" "$ops"
+    grep -q "heredoc body expansion" "$TMP/stderr" || { echo "FAIL: unquoted-heredoc-continuation$mode missing heredoc body expansion reason" >&2; exit 1; }
+    if [ "$mode" = "_legacy" ]; then
+      expect_allowed "unquoted-heredoc-no-root$mode" "$runner" "$hook" "ls <<EOF${LF}${body_no_root}${LF}EOF" "$ops"
+    else
+      expect_blocked "unquoted-heredoc-no-root$mode" "$runner" "$hook" "ls <<EOF${LF}${body_no_root}${LF}EOF" "$ops"
+      grep -q "heredoc body expansion" "$TMP/stderr" || { echo "FAIL: unquoted-heredoc-no-root$mode missing heredoc body expansion reason" >&2; exit 1; }
+    fi
+    expect_allowed "unquoted-heredoc-param$mode" "$runner" "$hook" "ls <<EOF${LF}${body_param}${LF}EOF" "$ops"
     expect_allowed "single-quoted-heredoc-cmdsubst$mode" "$runner" "$hook" "ls <<${SQ}EOF${SQ}${LF}\$(touch $product/h3.txt)${LF}EOF" "$ops"
     expect_allowed "double-quoted-heredoc-cmdsubst$mode" "$runner" "$hook" "ls <<\"EOF\"${LF}\$(touch $product/h3.txt)${LF}EOF" "$ops"
     expect_allowed "backslash-heredoc-cmdsubst$mode" "$runner" "$hook" "ls <<\\EOF${LF}\$(touch $product/h3.txt)${LF}EOF" "$ops"
@@ -1061,6 +1079,18 @@ heredoc3_cases() {
   done
 }
 heredoc3_cases "$HOOK"
+# A heredoc body expansion denial lands in the unresolved_target event-log
+# bucket, the same one an unparseable command lands in.
+heredoc_event_log_before=$(wc -l <"$TMP/home/.mogui/event-log.jsonl")
+run_bash_hook "$HOOK" "ls <<EOF${LF}\$(touch $product_real/h3.txt)${LF}EOF" "$ops"
+python3 - "$TMP/home/.mogui/event-log.jsonl" "$heredoc_event_log_before" <<'PY'
+import json, sys
+path, before = sys.argv[1], int(sys.argv[2])
+record = json.loads(open(path, encoding="utf-8").readlines()[before])
+if record.get("reason") != "unresolved_target":
+    raise SystemExit(f"FAIL: heredoc body expansion event-log reason was {record.get('reason')!r}, expected unresolved_target")
+PY
+echo "PASS: heredoc-body-expansion-event-log-reason"
 # Each mutant reverts or overshoots one fix and must fail the set above.
 heredoc3_mutant() {
   local name="$1" needle="$2" replacement="$3" mutant="$TMP/product-path-guard-heredoc3-$1-mutant.sh" rc
@@ -1097,7 +1127,7 @@ heredoc3_mutant quoted-delimiter-checked \
   "if unquoted_word and (" \
   "if True and ("
 heredoc3_mutant every-unquoted-body-denied \
-  "if unquoted_word and (\"\$(\" in body_text or \"\`\" in body_text or \"\${\" in body_text):" \
+  "if unquoted_word and (\"\$(\" in body_text or \"\`\" in body_text):" \
   "if unquoted_word:"
 
 echo "product-path-guard regression tests passed"

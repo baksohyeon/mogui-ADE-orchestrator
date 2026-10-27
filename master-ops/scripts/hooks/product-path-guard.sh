@@ -310,13 +310,25 @@ def strip_heredocs(text):
                 if not terminated:
                     return None, None
                 # With an unquoted delimiter bash expands the body, so a
-                # command substitution or parameter expansion there runs as
-                # code. The body is not evaluated here; any such opener in it
-                # denies the command as unparseable. A quoted delimiter
-                # (quotes or a backslash on the word) keeps the body literal.
-                body_text="\n".join(body_lines)
-                if unquoted_word and ("$(" in body_text or "`" in body_text or "${" in body_text):
-                    return None, "heredoc body expansion"
+                # command substitution there runs as code. A bare parameter
+                # expansion alone runs no code, so "${" is not checked here.
+                # A quoted delimiter (quotes or a backslash on the word)
+                # keeps the body literal. A backslash-newline line
+                # continuation in the body is removed first, matching the
+                # removal bash itself does, so an opener split across two
+                # lines still triggers the check.
+                body_text="\n".join(body_lines).replace("\\\n", "")
+                if unquoted_word and ("$(" in body_text or "`" in body_text):
+                    # Under FAIL_CLOSED this denies outright. In legacy mode
+                    # the opener gets the same root/cd/redirect scrutiny
+                    # already applied to an interpreter-fed heredoc body
+                    # below, admitted unless that scrutiny finds a write.
+                    if not LEGACY_MODE or (
+                        contains_cd_token(body_text)
+                        or any(root in body_text for root in roots)
+                        or redirects_into_root(body_text, cwd)
+                    ):
+                        return None, "heredoc body expansion"
                 # A heredoc feeding an interpreter stdin is as opaque as a -c
                 # body (no -c means the heredoc itself is the script), so it
                 # gets the same root/cd/redirect scrutiny before being admitted.
@@ -324,7 +336,6 @@ def strip_heredocs(text):
                 # bash <<EOF, cd /tmp; python3 <<EOF), so every segment on the
                 # line that itself carries a heredoc redirect is checked.
                 if opaque_interpreter_segments:
-                    body_text="\n".join(body_lines)
                     if (
                         contains_cd_token(body_text)
                         or any(root in body_text for root in roots)
@@ -394,14 +405,14 @@ def mark_unquoted_newlines(text):
     return "".join(out)
 def has_ansi_c_quote_opener(text):
     # bash reads a dollar sign right before a single quote as the start of
-    # ANSI-C quoting, where a backslash-quote is an escaped quote rather than
-    # the end of the string. unquoted_mask,
+    # ANSI-C quoting: a backslash-quote there is an escaped quote and does
+    # not end the string. unquoted_mask,
     # mark_unquoted_newlines and shlex all read the same text as plain single
     # quoting, so from that point their quote state no longer matches bash.
     # The guard does not model ANSI-C quoting; an unescaped $ right before a
     # quote, outside single quotes, double quotes, and comments, denies the
-    # command as unparseable instead. Quote state is tracked rather than
-    # matching the two characters anywhere, because the same pair closes many
+    # command as unparseable. Quote state limits the match to an unquoted
+    # occurrence of the pair, because the same pair also closes many
     # ordinary single-quoted patterns such as a regex ending in $. Inside
     # double quotes bash reads both characters literally. A comment starts at an
     # unquoted, unescaped # at the start of a word, the bash rule, so an
@@ -598,10 +609,10 @@ if "MOGUICDFDSENTINEL" in heredoc_stripped_command:
     print("DENY\tunparseable\tsentinel collision")
     raise SystemExit
 if has_ansi_c_quote_opener(heredoc_stripped_command):
-    # The stripped text is checked, not the raw command: a heredoc body is
-    # data to bash, so an opener there is not a quote, and an apostrophe in
-    # a body would otherwise open a single-quoted span that hides a later
-    # opener on a real command line.
+    # Checking the stripped text avoids scanning the raw command, where a
+    # heredoc body is just data to bash: an opener inside it is not a real
+    # quote, and an apostrophe there could otherwise open a single-quoted
+    # span that hides a later opener on a real command line.
     print("DENY\tunparseable\tansi-c quote")
     raise SystemExit
 try:
@@ -952,7 +963,7 @@ command_class=${result#*$'\t'}
 command_class=${command_class%%$'\t'*}
 reason=${result#*$'\t'*$'\t'}
 if [ "$decision" = DENY ]; then
-  if [ "$reason" = "unparseable command" ] || [ "$reason" = "cd target cannot be resolved" ]; then
+  if [ "$reason" = "unparseable command" ] || [ "$reason" = "cd target cannot be resolved" ] || [ "$reason" = "heredoc body expansion" ] || [ "$reason" = "ansi-c quote" ]; then
     blocked "$reason" "$command_class" unresolved_target
   fi
   blocked "$reason" "$command_class" guarded_target

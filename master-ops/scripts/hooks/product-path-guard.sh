@@ -311,22 +311,29 @@ def strip_heredocs(text):
                     return None, None
                 # With an unquoted delimiter bash expands the body, so a
                 # command substitution there runs as code. A bare parameter
-                # expansion alone runs no code, so "${" is not checked here.
+                # expansion alone runs no code, so "${" is not checked here,
+                # except a "@P}" transformation, which runs prompt expansion
+                # on the variable value and so can run code the same way.
                 # A quoted delimiter (quotes or a backslash on the word)
                 # keeps the body literal. A backslash-newline line
                 # continuation in the body is removed first, matching the
                 # removal bash itself does, so an opener split across two
                 # lines still triggers the check.
                 body_text="\n".join(body_lines).replace("\\\n", "")
-                if unquoted_word and ("$(" in body_text or "`" in body_text):
+                if unquoted_word and ("$(" in body_text or "`" in body_text or "@P}" in body_text):
                     # Under FAIL_CLOSED this denies outright. In legacy mode
                     # the opener gets the same root/cd/redirect scrutiny
                     # already applied to an interpreter-fed heredoc body
-                    # below, admitted unless that scrutiny finds a write.
+                    # below, admitted unless that scrutiny finds a write. A
+                    # cwd already inside a product root denies it too, since
+                    # a relative write the body checks cannot see (no root
+                    # substring, no redirect token) would still land inside
+                    # the root.
                     if not LEGACY_MODE or (
                         contains_cd_token(body_text)
                         or any(root in body_text for root in roots)
                         or redirects_into_root(body_text, cwd)
+                        or under(cwd)
                     ):
                         return None, "heredoc body expansion"
                 # A heredoc feeding an interpreter stdin is as opaque as a -c

@@ -1055,16 +1055,21 @@ heredoc3_cases() {
     grep -q "ansi-c quote" "$TMP/stderr" || { echo "FAIL: continuation-ansic$mode missing ansi-c quote reason" >&2; exit 1; }
     expect_blocked "escaped-heredoc-operator$mode" "$runner" "$hook" "$escaped_heredoc" "$ops"
     expect_allowed "even-backslash-heredoc-operator$mode" "$runner" "$hook" "$even_backslash_heredoc" "$ops"
-    for kind in cmdsubst backtick; do
+    for kind in cmdsubst backtick paramtransform; do
       case "$kind" in
         cmdsubst) body="\$(touch $product_real/h3.txt)" ;;
         backtick) body="\`touch $product_real/h3.txt\`" ;;
+        paramtransform) body="\${x@P} touch $product_real/h3.txt" ;;
       esac
       expect_blocked "unquoted-heredoc-$kind$mode" "$runner" "$hook" "ls <<EOF${LF}${body}${LF}EOF" "$ops"
       grep -q "heredoc body expansion" "$TMP/stderr" || { echo "FAIL: unquoted-heredoc-$kind$mode missing heredoc body expansion reason" >&2; exit 1; }
     done
     expect_blocked "unquoted-heredoc-continuation$mode" "$runner" "$hook" "ls <<EOF${LF}${body_continuation}${LF}EOF" "$ops"
     grep -q "heredoc body expansion" "$TMP/stderr" || { echo "FAIL: unquoted-heredoc-continuation$mode missing heredoc body expansion reason" >&2; exit 1; }
+    expect_blocked "unquoted-heredoc-continuation-abs-root$mode" "$runner" "$hook" "ls <<EOF${LF}${body_continuation}${LF}EOF" "$ops"
+    grep -q "heredoc body expansion" "$TMP/stderr" || { echo "FAIL: unquoted-heredoc-continuation-abs-root$mode missing heredoc body expansion reason" >&2; exit 1; }
+    expect_blocked "unquoted-heredoc-cmdsubst-cwd-in-root$mode" "$runner" "$hook" "ls <<EOF${LF}\$(touch h3.txt)${LF}EOF" "$product_real"
+    grep -q "heredoc body expansion" "$TMP/stderr" || { echo "FAIL: unquoted-heredoc-cmdsubst-cwd-in-root$mode missing heredoc body expansion reason" >&2; exit 1; }
     if [ "$mode" = "_legacy" ]; then
       expect_allowed "unquoted-heredoc-no-root$mode" "$runner" "$hook" "ls <<EOF${LF}${body_no_root}${LF}EOF" "$ops"
     else
@@ -1083,7 +1088,7 @@ heredoc3_cases "$HOOK"
 # bucket, the same one an unparseable command lands in.
 heredoc_event_log_before=$(wc -l <"$TMP/home/.mogui/event-log.jsonl")
 run_bash_hook "$HOOK" "ls <<EOF${LF}\$(touch $product_real/h3.txt)${LF}EOF" "$ops"
-python3 - "$TMP/home/.mogui/event-log.jsonl" "$heredoc_event_log_before" <<'PY'
+python3 - "$TMP/home/.mogui/event-log.jsonl" "$heredoc_event_log_before" <<'PY' || { echo "FAIL: heredoc body expansion event-log reason" >&2; exit 1; }
 import json, sys
 path, before = sys.argv[1], int(sys.argv[2])
 record = json.loads(open(path, encoding="utf-8").readlines()[before])
@@ -1127,7 +1132,10 @@ heredoc3_mutant quoted-delimiter-checked \
   "if unquoted_word and (" \
   "if True and ("
 heredoc3_mutant every-unquoted-body-denied \
-  "if unquoted_word and (\"\$(\" in body_text or \"\`\" in body_text):" \
+  "if unquoted_word and (\"\$(\" in body_text or \"\`\" in body_text or \"@P}\" in body_text):" \
   "if unquoted_word:"
+heredoc3_mutant no-body-continuation \
+  '.join(body_lines).replace("\\\n", "")' \
+  '.join(body_lines)'
 
 echo "product-path-guard regression tests passed"

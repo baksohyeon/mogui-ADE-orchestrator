@@ -14,14 +14,17 @@ Product-path guard quoted newline (2026-10-27):
   continuation between `$` and its quote no longer hides the ANSI-C opener;
   an escaped heredoc operator (`ls \<<EOF`) no longer strips the following
   command lines as a body; and an unquoted-delimiter heredoc body is denied
-  as unparseable when it contains `$(` or a backtick, because bash expands
-  them into code. A bare `${...}` parameter expansion runs no code and is
-  no longer denied on its own. A line continuation inside the body is
+  as unparseable under `FAIL_CLOSED=1` when it contains `$(`, a backtick, or
+  a `${...@P}` prompt-expansion transformation, because bash expands them
+  into code. A bare `${...}` parameter expansion without `@P` runs no code
+  and is not denied on its own. A line continuation inside the body is
   removed before this check, matching bash's own line-continuation removal.
-  Under `FAIL_CLOSED=1` a `$(` or backtick opener is always blocked; otherwise
-  the body gets the same product-root, `cd`, and redirection scrutiny
-  already applied to an interpreter-fed heredoc body, so a benign opener
-  such as `$(date)` is admitted. Upgrade cost: a legacy-mode body that hides
-  a product-root write behind obfuscation the shared scrutiny does not yet
-  model can still pass; tightening that later means extending the shared
-  scrutiny function, not this check.
+  In legacy mode (the default) that body is instead admitted only when it
+  names no product root and the shell's own working directory is not
+  already inside one; the same `cd`, redirection-into-root, and product-root
+  scrutiny already applied to an interpreter-fed heredoc body decides it, so
+  a benign opener such as `$(date)` still passes outside a product root.
+  Upgrade cost: a legacy-mode body that hides a product-root write behind
+  obfuscation the shared scrutiny does not yet model can still pass;
+  tightening that later means extending the shared scrutiny function, not
+  this check.

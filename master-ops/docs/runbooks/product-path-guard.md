@@ -32,14 +32,17 @@ the following lines stay commands. A backslash-newline line continuation
 inside the body is removed first, matching bash's own removal, so a `$(` or
 backtick split across two lines by one still triggers the check below. When
 the delimiter is unquoted (`<<EOF`), bash expands the body, so a body
-containing `$(` or a backtick is denied as unparseable (`heredoc body
-expansion`) instead of stripped; the guard does not evaluate it. A bare
-`${...}` parameter expansion runs no code, so it does not trigger this check
-on its own. In fail-closed mode (`MOGUI_PRODUCT_GUARD_FAIL_CLOSED=1`) that
-denial is unconditional; in legacy mode the body instead gets the same `cd`,
+containing `$(`, a backtick, or a `${...@P}` prompt-expansion transformation
+is denied as unparseable (`heredoc body expansion`) instead of stripped; the
+guard does not evaluate it. A bare `${...}` parameter expansion without
+`@P` runs no code, so it does not trigger this check on its own. Under
+`MOGUI_PRODUCT_GUARD_FAIL_CLOSED=1` that check is unconditional; in legacy
+mode the body instead gets the same `cd`,
 product-root, and redirect-into-root scrutiny already applied to an
-interpreter-fed heredoc body below, admitted unless that scrutiny finds a
-write. A quoted delimiter (`<<'EOF'`, `<<"EOF"`, `<<\EOF`) keeps the body
+interpreter-fed heredoc body below, and is also denied when the hook's own
+working directory is itself under a product root, since a relative write
+that scrutiny cannot see would still land inside it; otherwise it is
+admitted. A quoted delimiter (`<<'EOF'`, `<<"EOF"`, `<<\EOF`) keeps the body
 literal and it is stripped as before.
 
 The operator's own line keeps its tokens: a redirect into a product root on

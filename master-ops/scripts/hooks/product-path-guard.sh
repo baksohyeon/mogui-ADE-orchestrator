@@ -347,6 +347,36 @@ def redirects_into_root(value, base):
         i += 1
     return False
 FD_SENTINEL_RE=re.compile(r"^MOGUICDFDSENTINEL(\d+)ENDSENTINEL$")
+def mark_unquoted_newlines(text):
+    # An unquoted, unescaped newline ends a command, so it becomes " ; " (the
+    # spaces keep it from fusing with a neighbouring && or |). A backslash
+    # newline outside single quotes is a line continuation that bash removes,
+    # so it is dropped. A newline inside quotes stays part of its word.
+    out=[]
+    in_single=False
+    in_double=False
+    i=0
+    n=len(text)
+    while i < n:
+        ch=text[i]
+        if ch == "\\" and not in_single:
+            if i + 1 < n and text[i + 1] == "\n":
+                i += 2
+                continue
+            out.append(text[i:i + 2])
+            i += 2
+            continue
+        if ch == SQ and not in_double:
+            in_single=not in_single
+        elif ch == chr(34) and not in_single:
+            in_double=not in_double
+        elif ch == "\n" and not in_single and not in_double:
+            out.append(" ; ")
+            i += 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
 def mark_attached_cd_fds(text):
     # shlex always splits a digit from an adjacent punctuation character, so
     # "2>" and "2 >" produce the identical two-token pair (a digit token,
@@ -491,9 +521,10 @@ if "MOGUICDFDSENTINEL" in heredoc_stripped_command:
     print("DENY\tunparseable\tsentinel collision")
     raise SystemExit
 try:
-    # A newline ends a segment the same way ; does: dropping it from the
-    # lexer whitespace set (instead of adding it to punctuation_chars, which
-    # shlex still swallows as whitespace) makes it surface as its own token.
+    # A newline ends a segment the same way ; does, but only an unquoted,
+    # unescaped one: shlex strips quotes, so a quoted newline argument would
+    # come out as the same "\n" token, and mark_unquoted_newlines turns each
+    # real separator into ";" while quote state is still known.
     # The default shlex comment handling would otherwise swallow a trailing
     # comment newline together with the rest of the line, merging the next
     # physical line into the same segment, so the comment text is stripped
@@ -502,9 +533,8 @@ try:
     # sentinel before lexing for the same reason the newline is handled
     # here: shlex throws the source adjacency away, so it has to be
     # captured before lexing runs.
-    lexing_command=mark_attached_cd_fds(strip_unquoted_comments(heredoc_stripped_command))
+    lexing_command=mark_attached_cd_fds(mark_unquoted_newlines(strip_unquoted_comments(heredoc_stripped_command)))
     lexer=shlex.shlex(lexing_command, posix=True, punctuation_chars=";&|><")
-    lexer.whitespace=lexer.whitespace.replace("\n", "")
     lexer.commenters=""
     tokens=list(lexer)
 except Exception:
@@ -512,7 +542,7 @@ except Exception:
     raise SystemExit
 segments=[]; current=[]
 for token in tokens:
-    if token in {";","&&","||","|","&","\n"}:
+    if token in {";","&&","||","|","&"}:
         if current: segments.append(current)
         current=[]
     else: current.append(token)

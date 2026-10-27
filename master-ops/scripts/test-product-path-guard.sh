@@ -769,6 +769,82 @@ redirection_root_restored_exit=$?
 echo "PASS: cd redirection root failability mutant exit code $redirection_root_mutant_exit"
 echo "PASS: cd redirection root failability restored exit code $redirection_root_restored_exit"
 
+# Shape 5: only an unquoted, unescaped newline separates commands. shlex
+# strips quotes, so a quoted newline argument used to come out as the same
+# token as a real separator and split `touch` from its product path; a
+# backslash newline is a line continuation bash removes. Each case runs in
+# both modes, then against a mutant copy of the guard that must fail it.
+NL=$'\n'
+make_newline_mutant() {
+  local out="$1"
+  shift
+  python3 - "$HOOK" "$out" "$@" <<'PY'
+import pathlib, sys
+source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+pairs = sys.argv[3:]
+for needle, replacement in zip(pairs[0::2], pairs[1::2]):
+    if source.count(needle) != 1:
+        raise SystemExit("newline mutant anchor not found exactly once: " + needle)
+    source = source.replace(needle, replacement, 1)
+pathlib.Path(sys.argv[2]).write_text(source, encoding="utf-8")
+PY
+  chmod +x "$out"
+}
+# Mutant: the pre-fix lexer, where every newline token separates.
+NL_TOKEN_MUTANT_HOOK="$TMP/product-path-guard-newline-token-mutant.sh"
+make_newline_mutant "$NL_TOKEN_MUTANT_HOOK" \
+  '            out.append(" ; ")' '            out.append(ch)' \
+  'segments=[]; current=[]
+for token in tokens:
+    if token in {";","&&","||","|","&"}:' 'segments=[]; current=[]
+for token in tokens:
+    if token in {";","&&","||","|","&","\n"}:' \
+  '    lexer.commenters=""' '    lexer.commenters=""
+    lexer.whitespace=lexer.whitespace.replace("\n", "")'
+# Mutant: a backslash newline is kept instead of removed as a continuation.
+NL_CONT_MUTANT_HOOK="$TMP/product-path-guard-newline-continuation-mutant.sh"
+make_newline_mutant "$NL_CONT_MUTANT_HOOK" 'if i + 1 < n and text[i + 1] == "\n":' 'if False:'
+# Mutant: an unquoted newline no longer separates.
+NL_SEP_MUTANT_HOOK="$TMP/product-path-guard-newline-separator-mutant.sh"
+make_newline_mutant "$NL_SEP_MUTANT_HOOK" '            out.append(" ; ")' '            out.append(" ")'
+# Mutant: an over-correction that refuses any quoted newline.
+NL_DENY_MUTANT_HOOK="$TMP/product-path-guard-newline-deny-mutant.sh"
+make_newline_mutant "$NL_DENY_MUTANT_HOOK" '        out.append(ch)
+        i += 1
+    return "".join(out)
+def mark_attached_cd_fds' '        if ch == "\n":
+            raise ValueError("quoted newline")
+        out.append(ch)
+        i += 1
+    return "".join(out)
+def mark_attached_cd_fds'
+
+expect_newline_case() {
+  local want="$1" label="$2" command="$3" mutant="$4" mutant_exit
+  if [ "$want" = block ]; then
+    expect_blocked "$label" run_bash "$command" "$ops"
+    expect_verdict block "$label"
+    expect_blocked "$label-fail-closed" run_bash_strict "$command" "$ops"
+    expect_verdict block "$label-fail-closed"
+    ( expect_blocked "$label-mutant" run_bash_hook "$mutant" "$command" "$ops" ) >/dev/null 2>&1
+    mutant_exit=$?
+  else
+    expect_allowed "$label" run_bash "$command" "$ops"
+    expect_verdict pass "$label"
+    expect_allowed "$label-fail-closed" run_bash_strict "$command" "$ops"
+    expect_verdict pass "$label-fail-closed"
+    ( expect_allowed "$label-mutant" run_bash_hook "$mutant" "$command" "$ops" ) >/dev/null 2>&1
+    mutant_exit=$?
+  fi
+  [ "$mutant_exit" -eq 1 ] || { echo "FAIL: $label mutant exit expected 1 got $mutant_exit" >&2; exit 1; }
+  echo "PASS: $label failability mutant exit code $mutant_exit"
+}
+expect_newline_case block single-quoted-newline-then-product-write "touch '$NL' $product/nl-single" "$NL_TOKEN_MUTANT_HOOK"
+expect_newline_case block double-quoted-newline-then-product-write "touch \"$NL\" $product/nl-double" "$NL_TOKEN_MUTANT_HOOK"
+expect_newline_case block backslash-newline-continuation-product-write "touch \\$NL$product/nl-continued" "$NL_CONT_MUTANT_HOOK"
+expect_newline_case block unquoted-newline-then-product-write "true${NL}touch $product/nl-separate" "$NL_SEP_MUTANT_HOOK"
+expect_newline_case allow quoted-newline-harmless-argument "echo '$NL' done" "$NL_DENY_MUTANT_HOOK"
+
 if [ ! -s "$TMP/logs/fire.jsonl" ]; then
   echo "FAIL: MOGUI_HOOK_FIRE_LOG was ignored" >&2
   exit 1

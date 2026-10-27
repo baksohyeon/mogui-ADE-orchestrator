@@ -26,6 +26,14 @@ Bash still executes it) and does not require whitespace before `<<`
 heredoc and is untouched. If a heredoc's terminator is never found, the
 command is still treated as unparseable, exactly as before this change.
 
+An operator preceded by an odd run of backslashes (`ls \<<EOF`) is not a
+heredoc: bash reads an escaped `<` as a literal plus an input redirection, so
+the following lines stay commands. When the delimiter is unquoted (`<<EOF`),
+bash expands the body, so a body containing `$(`, a backtick, or `${` is
+denied as unparseable (`heredoc body expansion`) instead of stripped; the
+guard does not evaluate it. A quoted delimiter (`<<'EOF'`, `<<"EOF"`,
+`<<\EOF`) keeps the body literal and it is stripped as before.
+
 The operator's own line keeps its tokens: a redirect into a product root on
 that line (`cat > <root>/file <<'EOF'`) still denies. When the operator line
 is a bare interpreter invocation with no `-c` — `bash <<'EOF'`, `python3

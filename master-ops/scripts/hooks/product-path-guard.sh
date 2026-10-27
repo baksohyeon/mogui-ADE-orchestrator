@@ -241,8 +241,15 @@ def find_heredoc_operators(line):
             continue
         if start < len(mask) and not mask[start]:
             continue
+        # unquoted_mask marks a backslash-escaped character as unquoted, but
+        # bash reads an escaped < as a literal (ls \<<EOF is ls with a literal
+        # < and an input redirection from EOF), so an odd run of backslashes
+        # right before the operator means it is not a heredoc.
+        backslashes=len(line[:start]) - len(line[:start].rstrip("\\"))
+        if backslashes % 2 == 1:
+            continue
         word=next(g for g in match.groups()[1:] if g is not None)
-        operators.append((word, bool(match.group(1))))
+        operators.append((word, bool(match.group(1)), match.group(5) is not None))
     return operators
 def heredoc_bearing_interpreter_segments(line):
     try:
@@ -289,7 +296,7 @@ def strip_heredocs(text):
         if operators:
             opaque_interpreter_segments=heredoc_bearing_interpreter_segments(line)
             j=i + 1
-            for word, strip_tabs in operators:
+            for word, strip_tabs, unquoted_word in operators:
                 body_lines=[]
                 terminated=False
                 while j < n:
@@ -302,6 +309,14 @@ def strip_heredocs(text):
                     body_lines.append(raw_line)
                 if not terminated:
                     return None, None
+                # With an unquoted delimiter bash expands the body, so a
+                # command substitution or parameter expansion there runs as
+                # code. The body is not evaluated here; any such opener in it
+                # denies the command as unparseable. A quoted delimiter
+                # (quotes or a backslash on the word) keeps the body literal.
+                body_text="\n".join(body_lines)
+                if unquoted_word and ("$(" in body_text or "`" in body_text or "${" in body_text):
+                    return None, "heredoc body expansion"
                 # A heredoc feeding an interpreter stdin is as opaque as a -c
                 # body (no -c means the heredoc itself is the script), so it
                 # gets the same root/cd/redirect scrutiny before being admitted.
@@ -391,7 +406,10 @@ def has_ansi_c_quote_opener(text):
     # double quotes bash reads both characters literally. A comment starts at an
     # unquoted, unescaped # at the start of a word, the bash rule, so an
     # apostrophe inside a comment cannot open a span that hides a later
-    # opener.
+    # opener. A backslash newline outside single quotes and comments is a
+    # line continuation that bash removes before reading quotes, the rule
+    # mark_unquoted_newlines applies, so it is skipped here without touching
+    # prev and a $ split from its quote by one still forms an opener.
     in_single=False
     in_double=False
     in_comment=False
@@ -414,8 +432,14 @@ def has_ansi_c_quote_opener(text):
         was_escaped=escaped
         if escaped:
             escaped=False
+            if ch == "\n":
+                prev=before_backslash
+                prev_escaped=before_backslash_escaped
+                continue
         elif ch == "\\":
             escaped=True
+            before_backslash=prev
+            before_backslash_escaped=prev_escaped
         elif ch == SQ:
             if in_double:
                 pass
@@ -561,7 +585,7 @@ def has_install_directory_mode(option_tokens):
     return False
 heredoc_stripped_command, heredoc_forced_deny_name=strip_heredocs(command)
 if heredoc_stripped_command is None:
-    print("DENY\tunparseable\tunparseable command")
+    print("DENY\tunparseable\t" + (heredoc_forced_deny_name or "unparseable command"))
     raise SystemExit
 if heredoc_forced_deny_name:
     print("DENY\t" + heredoc_forced_deny_name + "\topaque interpreter heredoc body may contain an unparsed write")

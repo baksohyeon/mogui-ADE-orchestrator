@@ -1024,4 +1024,80 @@ ansic_mutant raw-too \
   "if has_ansi_c_quote_opener(heredoc_stripped_command):" \
   "if has_ansi_c_quote_opener(command) or has_ansi_c_quote_opener(heredoc_stripped_command):"
 
+# Three more lexer divergences, each blocked in both modes:
+# - a line continuation between $ and its quote ($\<LF>'...'): bash removes
+#   the backslash newline before reading quotes, so the opener re-forms;
+# - an escaped heredoc operator (ls \<<EOF): bash reads a literal < and an
+#   input redirection, so the next lines are commands, not a heredoc body;
+# - an unquoted-delimiter heredoc body with $(, a backtick, or ${: bash
+#   expands it, so it is denied as unparseable instead of stripped as data.
+# A quoted delimiter keeps its body literal, and a plain body still passes;
+# after an even run of backslashes the operator is real, so its body is data.
+heredoc3_cases() {
+  local hook="$1"
+  local continuation="ls \$\\${LF}${SQ}\\${SQ}${SQ}${LF}touch $product/h3.txt${LF}#${SQ}"
+  local escaped_heredoc="ls \\<<EOF${LF}touch $product/h3.txt${LF}EOF"
+  local even_backslash_heredoc="ls \\\\<<EOF${LF}touch $product/h3.txt${LF}EOF"
+  local runner mode kind body
+  for runner in run_bash_hook run_bash_hook_strict; do
+    mode=${runner#run_bash_hook}; mode=${mode:-_legacy}
+    expect_blocked "continuation-ansic$mode" "$runner" "$hook" "$continuation" "$ops"
+    grep -q "ansi-c quote" "$TMP/stderr" || { echo "FAIL: continuation-ansic$mode missing ansi-c quote reason" >&2; exit 1; }
+    expect_blocked "escaped-heredoc-operator$mode" "$runner" "$hook" "$escaped_heredoc" "$ops"
+    expect_allowed "even-backslash-heredoc-operator$mode" "$runner" "$hook" "$even_backslash_heredoc" "$ops"
+    for kind in cmdsubst backtick param; do
+      case "$kind" in
+        cmdsubst) body="\$(touch $product/h3.txt)" ;;
+        backtick) body="\`touch $product/h3.txt\`" ;;
+        param) body="\${X:=\$(touch $product/h3.txt)}" ;;
+      esac
+      expect_blocked "unquoted-heredoc-$kind$mode" "$runner" "$hook" "ls <<EOF${LF}${body}${LF}EOF" "$ops"
+      grep -q "heredoc body expansion" "$TMP/stderr" || { echo "FAIL: unquoted-heredoc-$kind$mode missing heredoc body expansion reason" >&2; exit 1; }
+    done
+    expect_allowed "single-quoted-heredoc-cmdsubst$mode" "$runner" "$hook" "ls <<${SQ}EOF${SQ}${LF}\$(touch $product/h3.txt)${LF}EOF" "$ops"
+    expect_allowed "double-quoted-heredoc-cmdsubst$mode" "$runner" "$hook" "ls <<\"EOF\"${LF}\$(touch $product/h3.txt)${LF}EOF" "$ops"
+    expect_allowed "backslash-heredoc-cmdsubst$mode" "$runner" "$hook" "ls <<\\EOF${LF}\$(touch $product/h3.txt)${LF}EOF" "$ops"
+    expect_allowed "plain-unquoted-heredoc$mode" "$runner" "$hook" "ls <<EOF${LF}hello \$HOME${LF}EOF" "$ops"
+  done
+}
+heredoc3_cases "$HOOK"
+# Each mutant reverts or overshoots one fix and must fail the set above.
+heredoc3_mutant() {
+  local name="$1" needle="$2" replacement="$3" mutant="$TMP/product-path-guard-heredoc3-$1-mutant.sh" rc
+  NEEDLE="$needle" REPLACEMENT="$replacement" python3 - "$HOOK" "$mutant" <<'PY'
+import os, pathlib, sys
+source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+needle = os.environ["NEEDLE"]
+if source.count(needle) != 1:
+    raise SystemExit("heredoc3 mutant patch anchor not found")
+pathlib.Path(sys.argv[2]).write_text(source.replace(needle, os.environ["REPLACEMENT"], 1), encoding="utf-8")
+PY
+  [ -f "$mutant" ] && ! cmp -s "$HOOK" "$mutant" || { echo "FAIL: heredoc3 $name mutant not generated" >&2; exit 1; }
+  chmod +x "$mutant"
+  ( heredoc3_cases "$mutant" ) >/dev/null 2>&1
+  rc=$?
+  [ "$rc" -eq 1 ] || { echo "FAIL: heredoc3 $name mutant exit expected 1 got $rc" >&2; exit 1; }
+  echo "PASS: heredoc3 $name mutant fails (exit $rc)"
+}
+heredoc3_mutant no-continuation \
+  "            if ch == \"\\n\":
+                prev=before_backslash" \
+  "            if False:
+                prev=before_backslash"
+heredoc3_mutant escaped-operator-is-heredoc \
+  "        if backslashes % 2 == 1:" \
+  "        if False:"
+heredoc3_mutant any-backslash-escapes-operator \
+  "        if backslashes % 2 == 1:" \
+  "        if backslashes:"
+heredoc3_mutant no-expansion-check \
+  "if unquoted_word and (" \
+  "if False and ("
+heredoc3_mutant quoted-delimiter-checked \
+  "if unquoted_word and (" \
+  "if True and ("
+heredoc3_mutant every-unquoted-body-denied \
+  "if unquoted_word and (\"\$(\" in body_text or \"\`\" in body_text or \"\${\" in body_text):" \
+  "if unquoted_word:"
+
 echo "product-path-guard regression tests passed"

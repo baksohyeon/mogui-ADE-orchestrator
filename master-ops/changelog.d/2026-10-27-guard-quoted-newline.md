@@ -53,8 +53,11 @@ Product-path guard quoted newline (2026-10-27):
   operator's own line, outside the stripped body the root/`cd`/redirect
   scrutiny inspects, so it passed unscrutinized. In legacy mode a `cd`
   anywhere before the operator on that line is now treated the same as one
-  found inside the body itself and denies with `heredoc body expansion`,
-  applied to both the unquoted-body-expansion check and the interpreter-fed
-  heredoc scrutiny. Upgrade cost: a `cd` to a directory with no relation to
-  any product root, on the same line as an otherwise benign heredoc, now
-  denies too (`cd /tmp && cat <<EOF` with a `$(date)` body).
+  found inside the body itself and denies in both checks: the
+  unquoted-body-expansion check reports `heredoc body expansion`, filed
+  under `unresolved_target` like the rest of that check's denials, while
+  the interpreter-fed heredoc scrutiny reports `opaque interpreter heredoc
+  body may contain an unparsed write`, filed under `guarded_target` since
+  that body may hold a real write. Upgrade cost: a `cd` to a directory with
+  no relation to any product root, on the same line as an otherwise benign
+  heredoc, now denies too (`cd /tmp && cat <<EOF` with a `$(date)` body).

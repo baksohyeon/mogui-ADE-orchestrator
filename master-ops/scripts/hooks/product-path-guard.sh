@@ -377,6 +377,59 @@ def mark_unquoted_newlines(text):
         out.append(ch)
         i += 1
     return "".join(out)
+def has_ansi_c_quote_opener(text):
+    # bash reads a dollar sign right before a single quote as the start of
+    # ANSI-C quoting, where a backslash-quote is an escaped quote rather than
+    # the end of the string. unquoted_mask,
+    # mark_unquoted_newlines and shlex all read the same text as plain single
+    # quoting, so from that point their quote state no longer matches bash.
+    # The guard does not model ANSI-C quoting; an unescaped $ right before a
+    # quote, outside single quotes, double quotes, and comments, denies the
+    # command as unparseable instead. Quote state is tracked rather than
+    # matching the two characters anywhere, because the same pair closes many
+    # ordinary single-quoted patterns such as a regex ending in $. Inside
+    # double quotes bash reads both characters literally. A comment starts at an
+    # unquoted, unescaped # at the start of a word, the bash rule, so an
+    # apostrophe inside a comment cannot open a span that hides a later
+    # opener.
+    in_single=False
+    in_double=False
+    in_comment=False
+    escaped=False
+    prev=""
+    prev_escaped=False
+    for ch in text:
+        if in_comment:
+            if ch == "\n":
+                in_comment=False
+            prev=ch
+            prev_escaped=False
+            continue
+        if in_single:
+            if ch == SQ:
+                in_single=False
+            prev=ch
+            prev_escaped=False
+            continue
+        was_escaped=escaped
+        if escaped:
+            escaped=False
+        elif ch == "\\":
+            escaped=True
+        elif ch == SQ:
+            if in_double:
+                pass
+            elif prev == "$" and not prev_escaped:
+                return True
+            else:
+                in_single=True
+        elif ch == chr(34):
+            in_double=not in_double
+        elif ch == "#" and not in_double and prev in ("", " ", "\t", "\n", ";", "&", "|", "(", ")", "<", ">") and not prev_escaped:
+            in_comment=True
+        prev=ch
+        prev_escaped=was_escaped
+    return False
 def mark_attached_cd_fds(text):
     # shlex always splits a digit from an adjacent punctuation character, so
     # "2>" and "2 >" produce the identical two-token pair (a digit token,
@@ -519,6 +572,13 @@ if "MOGUICDFDSENTINEL" in heredoc_stripped_command:
     # be indistinguishable from source text and the fd/operand split below
     # would be unreliable, so this is denied instead of guessed.
     print("DENY\tunparseable\tsentinel collision")
+    raise SystemExit
+if has_ansi_c_quote_opener(heredoc_stripped_command):
+    # The stripped text is checked, not the raw command: a heredoc body is
+    # data to bash, so an opener there is not a quote, and an apostrophe in
+    # a body would otherwise open a single-quoted span that hides a later
+    # opener on a real command line.
+    print("DENY\tunparseable\tansi-c quote")
     raise SystemExit
 try:
     # A newline ends a segment the same way ; does, but only an unquoted,

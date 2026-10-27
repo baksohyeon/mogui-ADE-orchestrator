@@ -930,4 +930,98 @@ expect_verdict block unsubstituted-runtime-root-token
 grep -q "{""{RUNTIME_ROOT}}" "$TMP/stderr" || { echo "FAIL: unsubstituted-runtime-root-token missing token name" >&2; exit 1; }
 grep -q "MOGUI_INSTANCE_RUNTIME_CONFIG" "$TMP/stderr" || { echo "FAIL: unsubstituted-runtime-root-token missing override name" >&2; exit 1; }
 
+# ANSI-C quoting: bash reads $' as an ANSI-C quote opener, where \' is an
+# escaped quote, while the pre-lexers and shlex read plain single quoting, so
+# `ls $'\''<LF>touch <product>` lexed as one harmless word while bash ran the
+# touch. The guard denies an opener outside single quotes, double quotes, and
+# comments as unparseable, the same rule as every other unparseable input: in both
+# modes and whatever the cwd or target, so even a harmless $'a' is denied.
+# Each case runs in both modes, then again against a mutant that must fail it.
+LF=$'\n'
+SQ="'"
+printf 'grep\n' >>"$TMP/allowlist.txt"
+ansic_cases() {
+  local hook="$1"
+  local repro="ls \$${SQ}\\${SQ}${SQ}${LF}touch $product/ansic.txt${LF}#${SQ}"
+  local escaped_then_newline="ls \$${SQ}\\${SQ}${SQ}${LF}touch $product/ansic.txt"
+  local harmless="ls \$${SQ}a${SQ}"
+  local comment_apostrophe="ls # don${SQ}t${LF}${repro}"
+  local heredoc_apostrophe="ls <<EOF${LF}don${SQ}t${LF}EOF${LF}${repro}"
+  local runner mode
+  for runner in run_bash_hook run_bash_hook_strict; do
+    mode=${runner#run_bash_hook}; mode=${mode:-_legacy}
+    expect_blocked "ansic-repro$mode" "$runner" "$hook" "$repro" "$ops"
+    grep -q "ansi-c quote" "$TMP/stderr" || { echo "FAIL: ansic-repro$mode missing ansi-c quote reason" >&2; exit 1; }
+    expect_blocked "ansic-escaped-then-newline$mode" "$runner" "$hook" "$escaped_then_newline" "$ops"
+    grep -q "ansi-c quote" "$TMP/stderr" || { echo "FAIL: ansic-escaped-then-newline$mode missing ansi-c quote reason" >&2; exit 1; }
+    expect_blocked "ansic-harmless-denied$mode" "$runner" "$hook" "$harmless" "$ops"
+    grep -q "ansi-c quote" "$TMP/stderr" || { echo "FAIL: ansic-harmless-denied$mode missing ansi-c quote reason" >&2; exit 1; }
+    expect_blocked "ansic-comment-apostrophe$mode" "$runner" "$hook" "$comment_apostrophe" "$ops"
+    grep -q "ansi-c quote" "$TMP/stderr" || { echo "FAIL: ansic-comment-apostrophe$mode missing ansi-c quote reason" >&2; exit 1; }
+    expect_blocked "ansic-heredoc-apostrophe$mode" "$runner" "$hook" "$heredoc_apostrophe" "$ops"
+    grep -q "ansi-c quote" "$TMP/stderr" || { echo "FAIL: ansic-heredoc-apostrophe$mode missing ansi-c quote reason" >&2; exit 1; }
+    expect_allowed "ansic-single-quoted-dollar-allowed$mode" "$runner" "$hook" "ls ${SQ}\$${SQ}" "$ops"
+    expect_allowed "ansic-regex-end-anchor-allowed$mode" "$runner" "$hook" "grep -v ${SQ}^\\s*\$${SQ} $ops/none.txt" "$ops"
+    expect_allowed "ansic-double-quoted-allowed$mode" "$runner" "$hook" "ls \"a\$${SQ}b\"" "$ops"
+    expect_allowed "ansic-escaped-dollar-allowed$mode" "$runner" "$hook" "ls \\\$${SQ}a${SQ}" "$ops"
+    expect_allowed "ansic-heredoc-body-allowed$mode" "$runner" "$hook" "ls <<${SQ}EOF${SQ}${LF}printf \$${SQ}a\\n${SQ}${LF}EOF" "$ops"
+  done
+}
+ansic_cases "$HOOK"
+# Each mutant changes one piece of the detector and must fail at least one
+# case above: no check at all (repro, escaped-then-newline, harmless), a
+# detector that never enters a single-quoted span (single-quoted $ and the
+# regex anchor), one that ignores double quotes (double-quoted), one that
+# ignores a backslash before the $ (escaped $), one that never enters a
+# comment (comment apostrophe), one that checks only the raw text (heredoc
+# apostrophe), and one that also checks the raw text (heredoc body).
+ansic_mutant() {
+  local name="$1" needle="$2" replacement="$3" mutant="$TMP/product-path-guard-ansic-$1-mutant.sh" rc
+  NEEDLE="$needle" REPLACEMENT="$replacement" python3 - "$HOOK" "$mutant" <<'PY'
+import os, pathlib, sys
+source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+needle = os.environ["NEEDLE"]
+if source.count(needle) != 1:
+    raise SystemExit("ansic mutant patch anchor not found")
+pathlib.Path(sys.argv[2]).write_text(source.replace(needle, os.environ["REPLACEMENT"], 1), encoding="utf-8")
+PY
+  [ -f "$mutant" ] && ! cmp -s "$HOOK" "$mutant" || { echo "FAIL: ansic $name mutant not generated" >&2; exit 1; }
+  chmod +x "$mutant"
+  ( ansic_cases "$mutant" ) >/dev/null 2>&1
+  rc=$?
+  [ "$rc" -eq 1 ] || { echo "FAIL: ansic $name mutant exit expected 1 got $rc" >&2; exit 1; }
+  echo "PASS: ansic $name mutant fails (exit $rc)"
+}
+ansic_mutant no-check \
+  "if has_ansi_c_quote_opener(heredoc_stripped_command):" \
+  "if False:"
+ansic_mutant no-single-span \
+  "            else:
+                in_single=True
+        elif ch == chr(34):" \
+  "            else:
+                pass
+        elif ch == chr(34):"
+ansic_mutant no-double-quote \
+  "            if in_double:
+                pass
+            elif prev == \"\$\" and not prev_escaped:" \
+  "            if False:
+                pass
+            elif prev == \"\$\" and not prev_escaped:"
+ansic_mutant no-escaped-dollar \
+  "            elif prev == \"\$\" and not prev_escaped:" \
+  "            elif prev == \"\$\":"
+ansic_mutant no-comment \
+  "\">\") and not prev_escaped:
+            in_comment=True" \
+  "\">\") and not prev_escaped:
+            pass"
+ansic_mutant raw-only \
+  "if has_ansi_c_quote_opener(heredoc_stripped_command):" \
+  "if has_ansi_c_quote_opener(command):"
+ansic_mutant raw-too \
+  "if has_ansi_c_quote_opener(heredoc_stripped_command):" \
+  "if has_ansi_c_quote_opener(command) or has_ansi_c_quote_opener(heredoc_stripped_command):"
+
 echo "product-path-guard regression tests passed"

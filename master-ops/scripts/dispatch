@@ -9,6 +9,7 @@ OPS={{OPS_REPO}}
 GATE={{RUNTIME_ROOT}}/scripts/dispatch-gate
 TEMPLATE_POLICY=$OPS/model-tier-policy.json
 PROBE_BIN={{RUNTIME_ROOT}}/scripts/model-identity-probe
+ROLLOUT_PROBE_BIN={{RUNTIME_ROOT}}/scripts/model-probe-rollout
 SCRIPTS_DIR=$(cd "$(dirname "$0")" && pwd)
 COLLISION_CHECK="$SCRIPTS_DIR/dispatch-collision-check"
 HOOKS_ANSWER_BIN="$SCRIPTS_DIR/codex-hooks-review-answer"
@@ -134,7 +135,27 @@ resolve_tier_policy() {
 
 POLICY=$(resolve_tier_policy)
 
-jqf() { python3 -c "import json,sys;d=json.load(sys.stdin);print($1)"; }
+# dispatch-gate's contract is one JSON line on stdout with human diagnostics on
+# stderr, but a caller that ever sees a human line land on stdout ahead of the
+# JSON (mixed-stream measured 2026-08-13: "dispatch-gate: REASON ..." on stdout
+# followed by the JSON on the next line) must not crash on it. That measured
+# failure killed jqf with `Expecting value: line 2 column 1 (char 1)` mid-way
+# through register, which left the worker running and unregistered; the
+# ledger was never told the job existed. Parse defensively: take the last line
+# that looks like a JSON object, whichever stream mixing produced it. A single
+# clean JSON line (the normal case) still works unchanged.
+jqf() {
+  python3 -c "
+import json, sys
+lines = [ln for ln in sys.stdin.read().splitlines() if ln.strip()]
+json_line = next((ln for ln in reversed(lines) if ln.lstrip().startswith('{')), None)
+if json_line is None:
+    print('jqf: no JSON object line in gate output', file=sys.stderr)
+    sys.exit(1)
+d = json.loads(json_line)
+print($1)
+"
+}
 
 # Body text of a "## <name>" heading, read from the local overlay first
 # (so a seat's own copy of a shared block name wins) and the shipped file
@@ -298,7 +319,89 @@ transcript_glob_for() {
       mangled=$(printf '%s' "${wt#path:}" | sed 's|[/.]|-|g')
       echo "$HOME/.claude/projects/$mangled/*.jsonl"
       ;;
+    codex)
+      # Codex (launched via Orca) keys rollout files by account and calendar
+      # date. The working directory lives inside the JSONL instead of in the
+      # path, so this glob cannot be scoped to one worker the way the claude
+      # glob above is. Report the newest rollout across every account and
+      # date anyway (labeled honestly by the PROBE_STATE it produces below,
+      # and narrowed to the one new file new_rollout_since finds for this
+      # worker); skipping the probe outright is what
+      # left MODEL_TIER_ESCALATION denying registration on model=<missing>
+      # (measured 2026-08-13) even though the real model id was on disk.
+      #
+      # codex_accounts_dir resolves the same accounts directory the rest of
+      # the script uses (CODEX_ACCOUNTS_DIR override, else an OS-specific
+      # default), instead of a hardcoded macOS-only path that left Linux and
+      # a custom accounts dir with a glob that never reaches the rollout
+      # tree (cubic P2, 2026-08-31). A literal space in that directory (the
+      # macOS default has one) is turned into a single-char glob wildcard so
+      # the pattern can be iterated with an unquoted `for f in $glob` later
+      # without needing shell-escaping tricks.
+      local base
+      base=$(codex_accounts_dir)
+      echo "${base// /?}/*/home/sessions/*/*/*/rollout-*.jsonl"
+      ;;
     *) return 1;;
+  esac
+}
+
+# Lists every file currently matching glob $1 (expanded by the caller's
+# shell via an unquoted `for ... in $1`), one path per line. Used to take a
+# before/after snapshot around this worker's launch in new_rollout_since,
+# below.
+snapshot_codex_rollouts() {
+  local glob="$1" candidate
+  for candidate in $glob; do
+    [ -e "$candidate" ] && printf '%s\n' "$candidate"
+  done
+}
+
+# The one rollout file matching glob $2 now that was absent from snapshot
+# $1 (taken by snapshot_codex_rollouts right before this worker's pane was
+# created or reused): this worker's own rollout, selected by existence
+# instead of mtime.
+#
+# An mtime-based "-nt marker" filter (coderabbit Major, 2026-10-26) keeps a
+# worker that was already running before this dispatch started: codex
+# appends to the same rollout file for its whole pane session, and every
+# append moves that file's mtime past the marker's, so the stale file reads
+# as "newer than the marker" too. Existence is stable under appends; mtime
+# is not.
+#
+# Sets CODEX_ROLLOUT to the new file and returns 0 only when there is
+# exactly one; otherwise sets CODEX_ROLLOUT="" and CODEX_ROLLOUT_REASON to
+# why, and returns 1, when none appeared (a reused pane whose worker was
+# already running, so nothing new exists to find) or more than one did
+# (another worker's rollout started in the same window, so the one
+# belonging to this worker can't be told apart). Either case leaves the
+# caller to fall back to PROBE_STATE=unavailable instead of guessing.
+#
+# Called directly, never through $(...): the caller needs both the path
+# AND the reason out of this one call, and $(...) would run the whole
+# function in a subshell, where an assignment to either variable is
+# discarded the instant the subshell exits.
+new_rollout_since() {
+  local before="$1" glob="$2" after new count
+  after=$(snapshot_codex_rollouts "$glob")
+  new=$(comm -13 <(printf '%s\n' "$before" | sort) <(printf '%s\n' "$after" | sort))
+  count=$(printf '%s\n' "$new" | grep -c .)
+  case "$count" in
+    1)
+      CODEX_ROLLOUT="$new"
+      CODEX_ROLLOUT_REASON=""
+      return 0
+      ;;
+    0)
+      CODEX_ROLLOUT=""
+      CODEX_ROLLOUT_REASON="no new rollout file appeared for this worker"
+      return 1
+      ;;
+    *)
+      CODEX_ROLLOUT=""
+      CODEX_ROLLOUT_REASON="more than one new rollout file appeared; cannot scope to this worker"
+      return 1
+      ;;
   esac
 }
 
@@ -1475,6 +1578,18 @@ $block"
   echo "📎 standing rules · $STANDING_RULE_NAMES"
 fi
 
+# Snapshot this dispatch's codex rollout candidates right before the
+# worker's pane is created or reused, so new_rollout_since (step 5, below)
+# can diff against it to find the one file that is this worker's own,
+# never one a worker that was already running had. A glob computed only
+# after launch could list a pre-existing rollout just as easily as a new
+# one; the snapshot has to come first.
+CODEX_ROLLOUT_BEFORE=""
+if [ "$RUNTIME" = codex ] && [ "$TGLOB_EXPLICIT" != 1 ] \
+    && CODEX_ROLLOUT_GLOB=$(transcript_glob_for codex "$WORKTREE"); then
+  CODEX_ROLLOUT_BEFORE=$(snapshot_codex_rollouts "$CODEX_ROLLOUT_GLOB")
+fi
+
 # 2. task-create
 TASK=$(orca orchestration task-create --spec "$SPEC" --json 2>/dev/null | jqf "d['result']['task']['id']")
 [ -z "$TASK" ] && { echo "✗ task-create failed" >&2; exit 3; }
@@ -1563,18 +1678,51 @@ DISP=$(orca orchestration dispatch --task "$TASK" --to "$TERMINAL" --inject --js
 [ -z "$DISP" ] && { echo "✗ dispatch failed" >&2; exit 3; }
 
 # 5. resolve the model probe target honestly before registering.
+CODEX_ROLLOUT=""
+CODEX_ROLLOUT_REASON=""
 if [ "$TGLOB_EXPLICIT" = 1 ]; then
   PROBE_STATE="explicit-glob"
 elif DERIVED_GLOB=$(transcript_glob_for "$RUNTIME" "$WORKTREE"); then
   TGLOB=$DERIVED_GLOB
-  PROBE_STATE="scoped-to-worktree"
+  case "$RUNTIME" in
+    codex)
+      if new_rollout_since "$CODEX_ROLLOUT_BEFORE" "$TGLOB"; then
+        PROBE_STATE="codex-new-rollout"
+      else
+        PROBE_STATE="unavailable"
+      fi
+      ;;
+    *) PROBE_STATE="scoped-to-worktree";;
+  esac
 else
   PROBE_STATE="unavailable"
 fi
 
 MODEL_PROBE_ARGS=()
 if [ "$PROBE_STATE" != unavailable ]; then
-  MODEL_PROBE_ARGS=(--model-probe-cmd "$PROBE_BIN --transcript \$(ls -t $TGLOB 2>/dev/null | head -1) | grep -o '$MODEL' | head -1")
+  if [ "$RUNTIME" = codex ]; then
+    # model-identity-probe expects claude-shaped transcripts (a "model" field
+    # adjacent to role/type == "assistant"); a codex rollout does not match
+    # that shape and measured as model=<missing> (2026-08-13), denying
+    # registration with MODEL_TIER_ESCALATION even though the model id was in
+    # the file. Raw-grepping the rollout's `"model":"..."` fragment is worse,
+    # not better: it hands the gate the whole fragment instead of the bare id
+    # (measured="model":"gpt-5.6-luna" tier=unknown, same date), so tier
+    # lookup never matches. model-probe-rollout extracts just the bare id and
+    # is the probe wired for every codex dispatch, explicit glob or derived.
+    if [ "$PROBE_STATE" = codex-new-rollout ]; then
+      # Derived glob: $CODEX_ROLLOUT was already resolved and scoped to this
+      # dispatch above, so the literal path goes straight to the probe
+      # instead of re-deferring to a fresh, unscoped `ls -t $TGLOB` here.
+      MODEL_PROBE_ARGS=(--model-probe-cmd "$ROLLOUT_PROBE_BIN \"$CODEX_ROLLOUT\"")
+    else
+      # explicit-glob: an operator-supplied --transcript-glob is a
+      # deliberate override, left unscoped by design.
+      MODEL_PROBE_ARGS=(--model-probe-cmd "$ROLLOUT_PROBE_BIN \"\$(ls -t $TGLOB 2>/dev/null | head -1)\"")
+    fi
+  else
+    MODEL_PROBE_ARGS=(--model-probe-cmd "$PROBE_BIN --transcript \$(ls -t $TGLOB 2>/dev/null | head -1) | grep -o '$MODEL' | head -1")
+  fi
 fi
 
 # 5b. register (job probe = ledger-vs-dispatch-show; model probe only when it can
@@ -1593,16 +1741,29 @@ record_host_diversity_audit
 WARN=$(echo "$REG" | jqf "','.join(d.get('warnings',[]))")
 case "$PROBE_STATE" in
   unavailable)
-    PROBE_LABEL="model=unavailable(no scoped transcript for runtime $RUNTIME — not a pass)";;
+    if [ -n "$CODEX_ROLLOUT_REASON" ]; then
+      PROBE_LABEL="model=unavailable($CODEX_ROLLOUT_REASON)"
+    else
+      PROBE_LABEL="model=unavailable(no scoped transcript for runtime $RUNTIME)"
+    fi
+    ;;
   scoped-to-worktree) PROBE_LABEL="model=transcript실측(worktree-scoped)";;
+  codex-new-rollout)
+    PROBE_LABEL="model=transcript실측(codex-new-rollout: worker-scoped, found by existence since launch)";;
   *) PROBE_LABEL="model=transcript실측(caller glob)";;
 esac
 echo "⚡ register ✓ $DISP${WARN:+ · warn:$WARN} · probe: job=원장대조 $PROBE_LABEL"
 if [ "$PROBE_STATE" = unavailable ]; then
-  echo "  The declared model $MODEL was NOT verified against the worker. This runtime stores its"
-  echo "  working directory inside the transcript rather than in the path, so no glob can scope a"
-  echo "  probe to one worker. Verify by hand before treating declared_model as measured, or pass"
-  echo "  --transcript-glob with a path you have confirmed belongs to this worker."
+  if [ -n "$CODEX_ROLLOUT_REASON" ]; then
+    echo "  The declared model $MODEL was NOT verified against the worker: $CODEX_ROLLOUT_REASON."
+    echo "  Verify by hand before treating declared_model as measured, or pass --transcript-glob"
+    echo "  with a path you have confirmed belongs to this worker."
+  else
+    echo "  The declared model $MODEL was NOT verified against the worker. This runtime stores its"
+    echo "  working directory inside the transcript instead of in the path, so no glob can scope a"
+    echo "  probe to one worker. Verify by hand before treating declared_model as measured, or pass"
+    echo "  --transcript-glob with a path you have confirmed belongs to this worker."
+  fi
 fi
 
 # 6. delivery check — register is not delivery.

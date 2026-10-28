@@ -111,9 +111,11 @@ if [[ -n "${TARGET_ROOT_INPUT}" ]]; then
   fi
 fi
 
-# A relative REDACTION_EXTRA_PATTERNS or --allowlist value is what the caller
-# typed at the invocation directory, not at REPO_ROOT or TARGET_ROOT: resolve
-# both before the cd below changes what a relative path would mean.
+# A relative REDACTION_EXTRA_PATTERNS, --allowlist, or REDACTION_PYTHON value
+# is what the caller typed at the invocation directory, not at REPO_ROOT or
+# TARGET_ROOT: resolve all three before the cd below changes what a relative
+# path would mean. A REDACTION_PYTHON with no slash is a bare command name
+# (for example python3.11) and stays as-is so it keeps resolving through PATH.
 INVOCATION_PWD="${PWD}"
 if [[ -n "${REDACTION_EXTRA_PATTERNS:-}" && "${REDACTION_EXTRA_PATTERNS}" != /* ]]; then
   REDACTION_EXTRA_PATTERNS="${INVOCATION_PWD}/${REDACTION_EXTRA_PATTERNS}"
@@ -121,12 +123,53 @@ fi
 if [[ "${LEGACY_ALLOWLIST}" != /* ]]; then
   LEGACY_ALLOWLIST="${INVOCATION_PWD}/${LEGACY_ALLOWLIST}"
 fi
+if [[ -n "${REDACTION_PYTHON:-}" && "${REDACTION_PYTHON}" == */* && "${REDACTION_PYTHON}" != /* ]]; then
+  REDACTION_PYTHON="${INVOCATION_PWD}/${REDACTION_PYTHON}"
+fi
 cd "${TARGET_ROOT}"
 
 if ! command -v gitleaks >/dev/null 2>&1; then
   echo "redaction-scan: FAIL — gitleaks is not on PATH; install it (brew install gitleaks) or see https://gitleaks.io" >&2
   exit 2
 fi
+
+# Resolve one interpreter for every heredoc call below. REDACTION_PYTHON lets
+# a caller that already knows which interpreter to use say so (a relative path
+# in it was already anchored to the invocation directory above). Absent an
+# override, fall back to python3, unless that name -- or the python fallback
+# -- resolves under WindowsApps, which opens an installer prompt instead of
+# running; the match is case-insensitive because Windows paths are.
+PYTHON="${REDACTION_PYTHON:-}"
+if [[ -z "${PYTHON}" ]]; then
+  PYTHON="python3"
+  if command -v python3 >/dev/null 2>&1; then
+    case "$(command -v python3)" in
+      */[Ww][Ii][Nn][Dd][Oo][Ww][Ss][Aa][Pp][Pp][Ss]/python3*)
+        PYTHON="python"
+        if command -v python >/dev/null 2>&1; then
+          case "$(command -v python)" in
+            */[Ww][Ii][Nn][Dd][Oo][Ww][Ss][Aa][Pp][Pp][Ss]/python*) PYTHON="" ;;
+          esac
+        fi
+        ;;
+    esac
+  else
+    PYTHON="python"
+  fi
+fi
+if [[ -z "${PYTHON}" ]]; then
+  echo "redaction-scan: FAIL - no usable python3 is on PATH (python3 and python both resolve under WindowsApps); install Python 3 or set REDACTION_PYTHON" >&2
+  exit 2
+fi
+if ! command -v "${PYTHON}" >/dev/null 2>&1; then
+  echo "redaction-scan: FAIL - ${PYTHON} is not on PATH (python3, or REDACTION_PYTHON); install Python 3 (e.g. brew install python or apt install python3)" >&2
+  exit 2
+fi
+if ! "${PYTHON}" -c 'import sys; sys.exit(0 if sys.version_info[0] >= 3 else 1)' >/dev/null 2>&1; then
+  echo "redaction-scan: FAIL - could not decide: ${PYTHON} did not run a basic Python 3 check" >&2
+  exit 2
+fi
+
 if [[ ! -f "${BASE_CONFIG}" ]]; then
   echo "redaction-scan: FAIL — missing ${BASE_CONFIG}" >&2
   exit 2
@@ -151,7 +194,7 @@ CONFIG="${BASE_CONFIG}"
 # convert anything, and the patterns stay outside version control.
 if [[ -n "${REDACTION_EXTRA_PATTERNS:-}" && -f "${REDACTION_EXTRA_PATTERNS}" ]]; then
   ORG_CONFIG="${WORK_DIR}/org.toml"
-  if python3 - "${REDACTION_EXTRA_PATTERNS}" "${BASE_CONFIG}" "${ORG_CONFIG}" > "${WORK_DIR}/counts" <<'PY'
+  if "${PYTHON}" - "${REDACTION_EXTRA_PATTERNS}" "${BASE_CONFIG}" "${ORG_CONFIG}" > "${WORK_DIR}/counts" <<'PY'
 import re
 import sys
 
@@ -236,7 +279,7 @@ if [[ "${CONFIG}" != "${BASE_CONFIG}" ]]; then
     # the translator applied and probes each rule alone through gitleaks, so
     # the rules file format lives in one shape and an id indented with a tab cannot
     # slip the net. Ids only, never patterns.
-    bad_ids=$(python3 - "${REDACTION_EXTRA_PATTERNS}" "${WORK_DIR}" <<'PY'
+    bad_ids=$("${PYTHON}" - "${REDACTION_EXTRA_PATTERNS}" "${WORK_DIR}" <<'PY'
 import subprocess
 import sys
 
@@ -358,7 +401,7 @@ scan_commit_messages() {
       exit 2
     fi
     if [[ -s "${REPORTS}/${report_index}.json" ]]; then
-      python3 - "${REPORTS}/${report_index}.json" "commit:${sha:0:12}" <<'PY'
+      "${PYTHON}" - "${REPORTS}/${report_index}.json" "commit:${sha:0:12}" <<'PY'
 import json
 import sys
 
@@ -399,7 +442,7 @@ while IFS= read -r -d '' path; do
 done < "${FILES_LIST}"
 
 FINDINGS_FILE="${WORK_DIR}/findings.txt"
-python3 - "${REPORTS}" "${FINDINGS_FILE}" > /dev/null <<'PY'
+"${PYTHON}" - "${REPORTS}" "${FINDINGS_FILE}" > /dev/null <<'PY'
 import json
 import pathlib
 import re

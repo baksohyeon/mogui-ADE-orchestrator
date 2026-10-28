@@ -1,0 +1,7 @@
+CI runs the shell tests from a rendered copy of master-ops (2026-10-29):
+
+- New `rendered-shell-tests` job in `.github/workflows/gates.yml`: renders `master-ops` with `template-apply --write` the way an operator's install does, then runs the same `scripts/test-*.sh` loop against the rendered copy, catching a test that passes unrendered in CI and fails only once `{{PLACEHOLDER}}` tokens are filled in (#186).
+- `test-dispatch-unavailable-runtime.sh`: the nine fake-gate fixtures no longer carry a literal `{{RUNTIME_ROOT}}` substring a whole-tree render would rewrite into a broken path; the one case that must reach the gate now derives the real gate path from `dispatch`'s own `GATE=` line instead (#186).
+- `test-seat-check.sh` and `test-template-currency-line.sh`: SKIP with one line when `SELFCHECK_BIN` (`scripts/harness-selfcheck.sh`, instance-owned) is absent, instead of failing on a file a template-only render never creates (#186).
+- `test-hook-verdict.sh`: the role-state "pass path" case now builds its own scratch `role-state.md` fixture instead of depending on this repository's own instance-owned `docs/runbooks/role-state.md`, which a rendered copy never has (#186).
+- `test-product-path-guard.sh`: the `unsubstituted-runtime-root-token` case SKIPs when the hook's `RUNTIME_ROOT` sentinel has already been substituted, instead of failing on the hook's correct post-render behavior (#186).

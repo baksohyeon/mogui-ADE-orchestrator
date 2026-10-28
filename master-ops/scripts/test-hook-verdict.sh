@@ -78,7 +78,19 @@ PATH="$T/bin:$PATH" MOGUI_HOOK_FIRE_LOG="$LOG" bash "$INBOX" >/dev/null 2>&1
 assert_verdict skip "orch-inbox skip path"
 
 # role-state-inject: pass on readable role-state; warn via unreadable-path mutant.
-ROLE_STATE="$S/../docs/runbooks/role-state.md"
+#
+# A scratch fixture, not the repository's own docs/runbooks/role-state.md:
+# that file is instance-owned (template_common.INSTANCE_OWNED_EXACT) and a
+# template-only render never creates one, so pointing this case at it passed
+# only in the authoring checkout and warned (file unreadable) in a rendered
+# copy: the hook was correct, the test's isolation from instance-owned
+# content was not (issue #186).
+cat > "$T/role.pass.md" <<'EOF'
+Current Role: master
+Role Lock: ENABLED
+Execution rule: Proposal -> Approval -> Execution.
+EOF
+ROLE_STATE="$T/role.pass.md"
 build_role_mutant "$ROLE" "$ROLE_STATE" "$T/role.pass.sh"
 MOGUI_HOOK_FIRE_LOG="$LOG" bash "$T/role.pass.sh" >/dev/null 2>&1
 assert_verdict pass "role-state pass path"

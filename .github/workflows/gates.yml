@@ -130,6 +130,75 @@ jobs:
           echo "passed $passed failed $failed skip-lines $skip_lines"
           [ "$failed" -eq 0 ]
 
+  rendered-shell-tests:
+    # Renders master-ops into a scratch ops install the way an operator's
+    # template-apply --write does, then runs the same scripts/test-*.sh loop
+    # against the rendered copy: a test can pass unrendered here and fail
+    # only once its {{PLACEHOLDER}} tokens are filled in, as issue #186
+    # measured on an installed instance.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.13.17"
+      - name: Print interpreter
+        run: python -VV
+      - name: Render master-ops and run its shell tests
+        shell: bash
+        run: |
+          set -u
+          shopt -s nullglob
+          tmpdir="$(mktemp -d)"
+          trap 'rm -rf "$tmpdir"' EXIT
+          ops="$tmpdir/x/ops"
+          mkdir -p "$ops"
+          echo apply | python3 master-ops/scripts/template-apply --ops "$ops" --template master-ops \
+            --placeholder WORKSPACE_NAME=x --placeholder WORKSPACE_ROOT="$tmpdir/x" \
+            --placeholder OPS_REPO="$ops" --placeholder MONITOR_NS=x --placeholder MODEL_ID=x-model \
+            --placeholder REPO_LIST=x --placeholder RUNTIME_ROOT="$ops" --placeholder TEMPLATE_VERSION=0.0.0 \
+            --write
+          git -C "$ops" init -q
+          git -C "$ops" -c user.email=rendered-shell-tests@example.invalid -c user.name=rendered-shell-tests add -A
+          git -C "$ops" -c user.email=rendered-shell-tests@example.invalid -c user.name=rendered-shell-tests \
+            commit -q -m "rendered-shell-tests scratch commit"
+          tests=("$ops"/scripts/test-*.sh)
+          if [ "${#tests[@]}" -eq 0 ]; then
+            echo "no shell tests matched $ops/scripts/test-*.sh"
+            exit 1
+          fi
+          passed=0
+          failed=0
+          skip_lines=0
+          while IFS= read -r test_file; do
+            name="$(basename "$test_file")"
+            out="$tmpdir/$name.out"
+            if bash "$test_file" >"$out" 2>&1; then
+              code=0
+              passed=$((passed + 1))
+            else
+              code=$?
+              failed=$((failed + 1))
+            fi
+            file_skip="$(grep -c 'SKIP' "$out" || true)"
+            skip_lines=$((skip_lines + file_skip))
+            echo "$name exit=$code"
+            if [ "$file_skip" -gt 0 ]; then
+              grep 'SKIP' "$out" | sed "s/^/$name: /"
+            fi
+            if [ "$code" -ne 0 ]; then
+              echo "---- $name output ----"
+              cat "$out"
+              echo "---- end $name output ----"
+            fi
+          done < <(printf '%s\n' "${tests[@]}" | LC_ALL=C sort)
+          echo "rendered: passed $passed failed $failed skip-lines $skip_lines"
+          [ "$failed" -eq 0 ]
+
   changelog-fragment:
     # pull_request only: a fragment is a per-PR requirement, not something a
     # direct push to main needs re-checked for.

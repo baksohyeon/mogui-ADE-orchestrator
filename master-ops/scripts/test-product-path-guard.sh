@@ -932,10 +932,18 @@ restored_exit=$?
 [ "$restored_exit" -eq 0 ] || { echo "FAIL: failability runtime-root restored exit expected 0 got $restored_exit" >&2; exit 1; }
 echo "PASS: failability: substituted runtime-root mutant exit $mutant_exit, restored exit $restored_exit"
 
-expect_blocked unsubstituted-runtime-root-token run_bash_default_config "ls" "$ops"
-expect_verdict block unsubstituted-runtime-root-token
-grep -q "{""{RUNTIME_ROOT}}" "$TMP/stderr" || { echo "FAIL: unsubstituted-runtime-root-token missing token name" >&2; exit 1; }
-grep -q "MOGUI_INSTANCE_RUNTIME_CONFIG" "$TMP/stderr" || { echo "FAIL: unsubstituted-runtime-root-token missing override name" >&2; exit 1; }
+# $HOOK carries this sentinel unrendered only in the authoring checkout: a
+# whole-tree render substitutes it to a real path by design (issue #186), so
+# there is no unsubstituted state left to provoke here: SKIP instead of
+# asserting, so this does not fail on the hook's own correct behavior.
+if grep -q "{""{RUNTIME_ROOT}}" "$HOOK"; then
+  expect_blocked unsubstituted-runtime-root-token run_bash_default_config "ls" "$ops"
+  expect_verdict block unsubstituted-runtime-root-token
+  grep -q "{""{RUNTIME_ROOT}}" "$TMP/stderr" || { echo "FAIL: unsubstituted-runtime-root-token missing token name" >&2; exit 1; }
+  grep -q "MOGUI_INSTANCE_RUNTIME_CONFIG" "$TMP/stderr" || { echo "FAIL: unsubstituted-runtime-root-token missing override name" >&2; exit 1; }
+else
+  echo "SKIP: unsubstituted-runtime-root-token (scripts/hooks/product-path-guard.sh has its RUNTIME_ROOT token already substituted; rendered copy, sentinel replaced by design)"
+fi
 
 # ANSI-C quoting: bash reads $' as an ANSI-C quote opener, where \' is an
 # escaped quote, while the pre-lexers and shlex read plain single quoting, so

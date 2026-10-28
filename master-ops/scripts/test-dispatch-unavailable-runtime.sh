@@ -6,17 +6,19 @@
 # before any gate work happens. A new file because test-dispatch-runtime.sh
 # is past the 1,000-line rule (CONTRIBUTING.md "When a file is full").
 #
-# dispatch carries {{RUNTIME_ROOT}} and {{OPS_REPO}} template placeholders,
-# which bash leaves as literal strings it never dereferences before the gate
-# call this suite stops short of, so the refusal case below runs the whole
-# script under a scratch PATH and HOME, with a fake dispatch-gate planted at
-# the literal GATE path so a marker it writes on invocation proves the gate
-# was never reached, instead of inferring that from a non-zero exit alone.
-# The default/alternatives cases
-# extract installed_runtimes, unavailable_runtime_names, dispatchable_runtimes,
-# and choose_default_runtime by exact-line awk range and run them in an
-# isolated subshell, the extraction convention test-dispatch-runtime.sh
-# already uses throughout.
+# dispatch's GATE line names a fixed path: a template placeholder when run
+# straight from the checkout, a real absolute path once rendered. Each case
+# below needs its fake dispatch-gate planted exactly where the dispatch under
+# test will look, in both forms, so a marker it writes on invocation proves
+# whether the gate was reached, instead of inferring that from a non-zero
+# exit alone. dispatch_with_gate() makes a scratch sibling of dispatch with
+# only its GATE= line rewritten to a path under $work; every case below runs
+# that sibling, never the original, so the fake gate's location never
+# depends on whether dispatch itself is rendered. The default/alternatives
+# cases extract installed_runtimes, unavailable_runtime_names,
+# dispatchable_runtimes, and choose_default_runtime by exact-line awk range
+# and run them in an isolated subshell, the extraction convention
+# test-dispatch-runtime.sh already uses throughout.
 set -eu
 
 dispatch=$(cd "$(dirname "$0")" && pwd)/dispatch
@@ -26,10 +28,21 @@ extract_fn() {  # fn-name
   awk -v fn="$1() {" '$0==fn{f=1} f{print} f&&$0=="}"{exit}' "$dispatch"
 }
 
+dispatch_with_gate() {  # fake-gate-path
+  # A sibling of $dispatch, not a copy under $work: dispatch derives other
+  # paths (SCRIPTS_DIR and what it builds from it) from its own location, so
+  # the copy has to keep that location to behave like the real thing.
+  local fake_gate="$1" out
+  out="$(dirname "$dispatch")/dispatch.gate-test.$$.$(od -An -N4 -tu4 /dev/urandom | tr -d ' ')"
+  awk -v g="$fake_gate" '$0 ~ /^GATE=/ { print "GATE=" g; next } { print }' "$dispatch" > "$out"
+  chmod +x "$out"
+  printf '%s' "$out"
+}
+
 # --- Case: --check-only refuses an unavailable runtime, with reason and alternatives ---
 check_only_refusal_test() (
   set +e
-  local work contract out status marker gate_dir
+  local work contract out status marker gate_dir test_dispatch
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-unavail-refusal.$$"
   mkdir -p "$work/bin"
@@ -49,15 +62,12 @@ JSON
   contract="$work/contract.md"
   echo "scratch contract" > "$contract"
 
-  # dispatch's GATE is the unexpanded template literal {{RUNTIME_ROOT}}/scripts/dispatch-gate
-  # (a relative path, since the placeholder is never filled in this template
-  # clone), so planting a fake gate there and running with $work as cwd puts a
-  # real executable where dispatch would invoke it, if it got that far. The
-  # fake gate touches a marker on invocation; its absence after the refusal is
-  # the proof the gate was never reached. A non-zero exit alone would not
-  # distinguish "refused before the gate" from "the gate ran and refused."
+  # The fake gate touches a marker on invocation; its absence after the
+  # refusal is the proof the gate was never reached. A non-zero exit alone
+  # would not distinguish "refused before the gate" from "the gate ran and
+  # refused."
   marker="$work/gate-invoked"
-  gate_dir="$work/{{RUNTIME_ROOT}}/scripts"
+  gate_dir="$work/gate"
   mkdir -p "$gate_dir"
   cat > "$gate_dir/dispatch-gate" <<BIN
 #!/bin/bash
@@ -65,10 +75,12 @@ touch "$marker"
 printf '{"allow": true, "contract_sha": "abcdef0123456789"}\n'
 BIN
   chmod +x "$gate_dir/dispatch-gate"
+  test_dispatch=$(dispatch_with_gate "$gate_dir/dispatch-gate")
+  trap 'rm -f "$test_dispatch"; rm -rf "$work"' EXIT
 
   out=$(cd "$work" && PATH="$work/bin:/usr/bin:/bin" HOME="$work/home" \
         MOGUI_INSTANCE_RUNTIME_CONFIG="$work/instance-runtime.json" \
-        bash "$dispatch" --contract "$contract" --runtime grok --check-only 2>&1)
+        bash "$test_dispatch" --contract "$contract" --runtime grok --check-only 2>&1)
   status=$?
 
   if [ "$status" -eq 0 ]; then
@@ -92,7 +104,7 @@ check_only_refusal_test || exit 1
 # --- explicit --runtime, instead of reading as "nothing declared".          ---
 malformed_entry_refusal_test() (
   set +e
-  local work contract out status marker gate_dir
+  local work contract out status marker gate_dir test_dispatch
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-unavail-malformed.$$"
   mkdir -p "$work/bin"
@@ -116,7 +128,7 @@ JSON
   echo "scratch contract" > "$contract"
 
   marker="$work/gate-invoked"
-  gate_dir="$work/{{RUNTIME_ROOT}}/scripts"
+  gate_dir="$work/gate"
   mkdir -p "$gate_dir"
   cat > "$gate_dir/dispatch-gate" <<BIN
 #!/bin/bash
@@ -124,10 +136,12 @@ touch "$marker"
 printf '{"allow": true, "contract_sha": "abcdef0123456789"}\n'
 BIN
   chmod +x "$gate_dir/dispatch-gate"
+  test_dispatch=$(dispatch_with_gate "$gate_dir/dispatch-gate")
+  trap 'rm -f "$test_dispatch"; rm -rf "$work"' EXIT
 
   out=$(cd "$work" && PATH="$work/bin:/usr/bin:/bin" HOME="$work/home" \
         MOGUI_INSTANCE_RUNTIME_CONFIG="$work/instance-runtime.json" \
-        bash "$dispatch" --contract "$contract" --runtime grok --check-only 2>&1)
+        bash "$test_dispatch" --contract "$contract" --runtime grok --check-only 2>&1)
   status=$?
 
   if [ "$status" -eq 0 ]; then
@@ -151,7 +165,7 @@ malformed_entry_refusal_test || exit 1
 # --- is refused as not installed or not listed, never executed.                ---
 injection_refusal_test() (
   set +e
-  local work contract out status marker gate_dir payload_marker runtime_payload
+  local work contract out status marker gate_dir test_dispatch payload_marker runtime_payload
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-unavail-injection.$$"
   mkdir -p "$work/bin"
@@ -173,7 +187,7 @@ JSON
   echo "scratch contract" > "$contract"
 
   marker="$work/gate-invoked"
-  gate_dir="$work/{{RUNTIME_ROOT}}/scripts"
+  gate_dir="$work/gate"
   mkdir -p "$gate_dir"
   cat > "$gate_dir/dispatch-gate" <<BIN
 #!/bin/bash
@@ -181,6 +195,8 @@ touch "$marker"
 printf '{"allow": true, "contract_sha": "abcdef0123456789"}\n'
 BIN
   chmod +x "$gate_dir/dispatch-gate"
+  test_dispatch=$(dispatch_with_gate "$gate_dir/dispatch-gate")
+  trap 'rm -f "$test_dispatch"; rm -rf "$work"' EXIT
 
   # A quote closes the Python string literal the old code embedded this value
   # into; the rest is a Python expression that, left unguarded, calls out to
@@ -190,7 +206,7 @@ BIN
 
   out=$(cd "$work" && PATH="$work/bin:/usr/bin:/bin" HOME="$work/home" \
         MOGUI_INSTANCE_RUNTIME_CONFIG="$work/instance-runtime.json" \
-        bash "$dispatch" --contract "$contract" --runtime "$runtime_payload" --check-only 2>&1)
+        bash "$test_dispatch" --contract "$contract" --runtime "$runtime_payload" --check-only 2>&1)
   status=$?
 
   if [ "$status" -eq 0 ]; then
@@ -214,7 +230,7 @@ injection_refusal_test || exit 1
 # --- with no --runtime given at all.                                       ---
 unreadable_config_default_pick_test() (
   set +e
-  local work contract out status marker gate_dir
+  local work contract out status marker gate_dir test_dispatch
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-unavail-unreadable.$$"
   mkdir -p "$work/bin"
@@ -229,7 +245,7 @@ BIN
   echo "scratch contract" > "$contract"
 
   marker="$work/gate-invoked"
-  gate_dir="$work/{{RUNTIME_ROOT}}/scripts"
+  gate_dir="$work/gate"
   mkdir -p "$gate_dir"
   cat > "$gate_dir/dispatch-gate" <<BIN
 #!/bin/bash
@@ -237,10 +253,12 @@ touch "$marker"
 printf '{"allow": true, "contract_sha": "abcdef0123456789"}\n'
 BIN
   chmod +x "$gate_dir/dispatch-gate"
+  test_dispatch=$(dispatch_with_gate "$gate_dir/dispatch-gate")
+  trap 'rm -f "$test_dispatch"; rm -rf "$work"' EXIT
 
   out=$(cd "$work" && PATH="$work/bin:/usr/bin:/bin" HOME="$work/home" \
         MOGUI_INSTANCE_RUNTIME_CONFIG="$work/instance-runtime.json" \
-        bash "$dispatch" --contract "$contract" --check-only 2>&1)
+        bash "$test_dispatch" --contract "$contract" --check-only 2>&1)
   status=$?
 
   if [ "$status" -eq 0 ]; then
@@ -264,7 +282,7 @@ unreadable_config_default_pick_test || exit 1
 # --- default pick, before the gate.                                      ---
 duplicate_member_default_pick_test() (
   set +e
-  local work contract out status marker gate_dir
+  local work contract out status marker gate_dir test_dispatch
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-unavail-dup-member.$$"
   mkdir -p "$work/bin"
@@ -284,7 +302,7 @@ BIN
   echo "scratch contract" > "$contract"
 
   marker="$work/gate-invoked"
-  gate_dir="$work/{{RUNTIME_ROOT}}/scripts"
+  gate_dir="$work/gate"
   mkdir -p "$gate_dir"
   cat > "$gate_dir/dispatch-gate" <<BIN
 #!/bin/bash
@@ -292,10 +310,12 @@ touch "$marker"
 printf '{"allow": true, "contract_sha": "abcdef0123456789"}\n'
 BIN
   chmod +x "$gate_dir/dispatch-gate"
+  test_dispatch=$(dispatch_with_gate "$gate_dir/dispatch-gate")
+  trap 'rm -f "$test_dispatch"; rm -rf "$work"' EXIT
 
   out=$(cd "$work" && PATH="$work/bin:/usr/bin:/bin" HOME="$work/home" \
         MOGUI_INSTANCE_RUNTIME_CONFIG="$work/instance-runtime.json" \
-        bash "$dispatch" --contract "$contract" --check-only 2>&1)
+        bash "$test_dispatch" --contract "$contract" --check-only 2>&1)
   status=$?
 
   if [ "$status" -eq 0 ]; then
@@ -448,7 +468,7 @@ default_and_alternatives_test || exit 1
 # --- stayed dispatchable even with the key present.                     ---
 whitespace_key_refusal_and_alternatives_test() (
   set +e
-  local work contract out status marker gate_dir
+  local work contract out status marker gate_dir test_dispatch
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-unavail-wskey.$$"
   mkdir -p "$work/bin"
@@ -469,7 +489,7 @@ JSON
   echo "scratch contract" > "$contract"
 
   marker="$work/gate-invoked"
-  gate_dir="$work/{{RUNTIME_ROOT}}/scripts"
+  gate_dir="$work/gate"
   mkdir -p "$gate_dir"
   cat > "$gate_dir/dispatch-gate" <<BIN
 #!/bin/bash
@@ -477,10 +497,12 @@ touch "$marker"
 printf '{"allow": true, "contract_sha": "abcdef0123456789"}\n'
 BIN
   chmod +x "$gate_dir/dispatch-gate"
+  test_dispatch=$(dispatch_with_gate "$gate_dir/dispatch-gate")
+  trap 'rm -f "$test_dispatch"; rm -rf "$work"' EXIT
 
   out=$(cd "$work" && PATH="$work/bin:/usr/bin:/bin" HOME="$work/home" \
         MOGUI_INSTANCE_RUNTIME_CONFIG="$work/instance-runtime.json" \
-        bash "$dispatch" --contract "$contract" --runtime grok --check-only 2>&1)
+        bash "$test_dispatch" --contract "$contract" --runtime grok --check-only 2>&1)
   status=$?
 
   if [ "$status" -eq 0 ]; then
@@ -542,11 +564,10 @@ whitespace_key_refusal_and_alternatives_test || exit 1
 # --- the same as a normal successful dispatch.                            ---
 expired_entry_dispatches_test() (
   set +e
-  local work contract out_stdout out_stderr status marker gate_dir
+  local work contract out_stdout out_stderr status marker gate_dir test_dispatch
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-unavail-expired.$$"
   mkdir -p "$work/bin"
-  trap 'rm -rf "$work"' EXIT
   cat > "$work/bin/grok" <<'BIN'
 #!/bin/bash
 exit 0
@@ -562,8 +583,9 @@ JSON
   contract="$work/contract.md"
   echo "scratch contract" > "$contract"
 
+  # The one case in this file where the gate must actually be reached.
   marker="$work/gate-invoked"
-  gate_dir="$work/{{RUNTIME_ROOT}}/scripts"
+  gate_dir="$work/gate"
   mkdir -p "$gate_dir"
   cat > "$gate_dir/dispatch-gate" <<BIN
 #!/bin/bash
@@ -571,12 +593,14 @@ touch "$marker"
 printf '{"allow": true, "contract_sha": "abcdef0123456789"}\n'
 BIN
   chmod +x "$gate_dir/dispatch-gate"
+  test_dispatch=$(dispatch_with_gate "$gate_dir/dispatch-gate")
+  trap 'rm -f "$test_dispatch"; rm -rf "$work"' EXIT
 
   out_stdout="$work/stdout"
   out_stderr="$work/stderr"
   (cd "$work" && PATH="$work/bin:/usr/bin:/bin" HOME="$work/home" \
         MOGUI_INSTANCE_RUNTIME_CONFIG="$work/instance-runtime.json" \
-        bash "$dispatch" --contract "$contract" --runtime grok --model grok-test-1 --check-only \
+        bash "$test_dispatch" --contract "$contract" --runtime grok --model grok-test-1 --check-only \
         >"$out_stdout" 2>"$out_stderr")
   status=$?
 
@@ -700,7 +724,7 @@ expired_entry_alternatives_test || exit 1
 # --- before the gate, as a malformed entry.                                 ---
 compact_date_until_malformed_test() (
   set +e
-  local work contract out status marker gate_dir
+  local work contract out status marker gate_dir test_dispatch
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-unavail-compact-date.$$"
   mkdir -p "$work/bin"
@@ -717,7 +741,7 @@ JSON
   echo "scratch contract" > "$contract"
 
   marker="$work/gate-invoked"
-  gate_dir="$work/{{RUNTIME_ROOT}}/scripts"
+  gate_dir="$work/gate"
   mkdir -p "$gate_dir"
   cat > "$gate_dir/dispatch-gate" <<BIN
 #!/bin/bash
@@ -725,10 +749,12 @@ touch "$marker"
 printf '{"allow": true, "contract_sha": "abcdef0123456789"}\n'
 BIN
   chmod +x "$gate_dir/dispatch-gate"
+  test_dispatch=$(dispatch_with_gate "$gate_dir/dispatch-gate")
+  trap 'rm -f "$test_dispatch"; rm -rf "$work"' EXIT
 
   out=$(cd "$work" && PATH="$work/bin:/usr/bin:/bin" HOME="$work/home" \
         MOGUI_INSTANCE_RUNTIME_CONFIG="$work/instance-runtime.json" \
-        bash "$dispatch" --contract "$contract" --check-only 2>&1)
+        bash "$test_dispatch" --contract "$contract" --check-only 2>&1)
   status=$?
 
   if [ "$status" -eq 0 ]; then
@@ -759,7 +785,7 @@ compact_date_until_malformed_test || exit 1
 # --- day.                                                                   ---
 same_day_until_refusal_test() (
   set +e
-  local work contract out status marker gate_dir today
+  local work contract out status marker gate_dir test_dispatch today
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-unavail-sameday.$$"
   mkdir -p "$work/bin"
@@ -781,7 +807,7 @@ JSON
   echo "scratch contract" > "$contract"
 
   marker="$work/gate-invoked"
-  gate_dir="$work/{{RUNTIME_ROOT}}/scripts"
+  gate_dir="$work/gate"
   mkdir -p "$gate_dir"
   cat > "$gate_dir/dispatch-gate" <<BIN
 #!/bin/bash
@@ -789,10 +815,12 @@ touch "$marker"
 printf '{"allow": true, "contract_sha": "abcdef0123456789"}\n'
 BIN
   chmod +x "$gate_dir/dispatch-gate"
+  test_dispatch=$(dispatch_with_gate "$gate_dir/dispatch-gate")
+  trap 'rm -f "$test_dispatch"; rm -rf "$work"' EXIT
 
   out=$(cd "$work" && PATH="$work/bin:/usr/bin:/bin" HOME="$work/home" \
         MOGUI_INSTANCE_RUNTIME_CONFIG="$work/instance-runtime.json" \
-        bash "$dispatch" --contract "$contract" --runtime grok --check-only 2>&1)
+        bash "$test_dispatch" --contract "$contract" --runtime grok --check-only 2>&1)
   status=$?
 
   if [ "$status" -eq 0 ]; then

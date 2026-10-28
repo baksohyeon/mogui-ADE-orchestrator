@@ -33,8 +33,8 @@ extract_fn() {  # fn-name
 }
 
 # Built from split pieces, the way template_common._token() builds PLACEHOLDERS,
-# so this literal never reads as a contiguous {{NAME}} substring a whole-tree
-# render would rewrite.
+# so this literal never reads as one contiguous double-brace placeholder
+# substring a whole-tree render would rewrite.
 runtime_root_token() {
   printf '%s' '{'"{RUNTIME_ROOT}}"
 }

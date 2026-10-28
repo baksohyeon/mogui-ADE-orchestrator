@@ -6,6 +6,15 @@ running the scan. These tests pin both halves of the override: a working
 interpreter is actually invoked at the call sites, and an interpreter that
 cannot run fails closed with the scanner's own undecidable wording instead of
 crashing later inside a heredoc.
+
+The first pass only proved the runnability probe and the unconditional
+findings merge honor the override. Three more call sites run under the same
+resolved interpreter but were unproven: the organization-rules translator,
+the rule-id isolator that runs when a rule crashes the RE2 engine, and the
+per-commit report normalizer. These tests add that coverage, each counting
+resolved-interpreter calls through the same shim-and-log fixture, so a bare
+python3 creeping back into any of the three branches shows up as a missing
+call instead of silently passing.
 """
 
 from __future__ import annotations
@@ -16,7 +25,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from test_redaction_scan_commit_messages import _repo_with_commits
+from test_redaction_scan_commit_messages import _git, _repo_with_commits
 
 from windows_exec_surface import skip_windows_exec_surface
 pytestmark = skip_windows_exec_surface
@@ -72,3 +81,126 @@ def test_unrunnable_redaction_python_exits_could_not_decide(tmp_path: Path) -> N
 
     assert result.returncode == 2, result.stdout + result.stderr
     assert "could not decide" in result.stderr
+
+
+def test_redaction_python_override_runs_translator_for_org_rule_finding(tmp_path: Path) -> None:
+    """A valid organization rule that catches a finding runs the translator
+    under the resolved interpreter too, not a bare python3.
+    """
+
+    repo = _repo_with_commits(tmp_path, ["plain change"])
+    (repo / "probe.txt").write_text("ZZPROBEZZ999\n", encoding="utf-8")
+    _git(repo, "add", "probe.txt")
+    _git(repo, "commit", "-q", "-m", "add probe file")
+
+    extra = tmp_path / "extra.txt"
+    extra.write_text("probe_rule|plain token|ZZPROBEZZ[0-9]+\n", encoding="utf-8")
+    log = tmp_path / "python-shim.log"
+    log.write_text("", encoding="utf-8")
+    shim = tmp_path / "python-shim.sh"
+    _write_shim(
+        shim,
+        "#!/bin/sh\n"
+        f'echo called >> "{log}"\n'
+        f'exec "{sys.executable}" "$@"\n',
+    )
+
+    env = {**os.environ, "REDACTION_PYTHON": str(shim), "REDACTION_EXTRA_PATTERNS": str(extra)}
+    env.pop("REDACTION_REQUIRE_EXTRA", None)
+    result = subprocess.run(
+        ["bash", str(repo / "scripts" / "redaction-scan.sh")],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "probe_rule" in result.stderr, result.stderr
+    # Measured on this fixture with gitleaks 8.30.1: the runnability probe,
+    # the organization-rules translator, and the unconditional findings
+    # merge. No commit range here, so the per-commit normalizer never runs.
+    assert len(log.read_text(encoding="utf-8").splitlines()) == 3
+
+
+def test_redaction_python_override_runs_rule_id_check_on_engine_crash(tmp_path: Path) -> None:
+    """An organization rule that crashes the RE2 engine isolates the bad rule
+    id under the resolved interpreter too, not a bare python3.
+    """
+
+    repo = _repo_with_commits(tmp_path, ["one commit"])
+    extra = tmp_path / "extra.txt"
+    extra.write_text(
+        "good_rule|plain token|ZZPROBEZZ[0-9]+\n"
+        "bad_lookbehind|regex only python accepts|(?<![A-Za-z0-9_])probe(?![A-Za-z0-9_])\n",
+        encoding="utf-8",
+    )
+    log = tmp_path / "python-shim.log"
+    log.write_text("", encoding="utf-8")
+    shim = tmp_path / "python-shim.sh"
+    _write_shim(
+        shim,
+        "#!/bin/sh\n"
+        f'echo called >> "{log}"\n'
+        f'exec "{sys.executable}" "$@"\n',
+    )
+
+    env = {**os.environ, "REDACTION_PYTHON": str(shim), "REDACTION_EXTRA_PATTERNS": str(extra)}
+    env.pop("REDACTION_REQUIRE_EXTRA", None)
+    result = subprocess.run(
+        ["bash", str(repo / "scripts" / "redaction-scan.sh")],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "bad_lookbehind" in result.stderr, result.stderr
+    assert "good_rule" not in result.stderr.split("RE2:")[1], result.stderr
+    # Measured on this fixture with gitleaks 8.30.1: the engine crash exits
+    # before the findings merge runs, so this is the probe, the translator,
+    # and the rule-id isolator only, three calls.
+    assert len(log.read_text(encoding="utf-8").splitlines()) == 3
+
+
+def test_redaction_python_override_runs_per_commit_normalizer(tmp_path: Path) -> None:
+    """A commit-range scan runs the per-commit report normalizer under the
+    resolved interpreter too, not a bare python3.
+    """
+
+    leak = "AKIA" + "2QJZ7NVXH4KDPLMB"
+    repo = _repo_with_commits(tmp_path, ["clean first", f"add key {leak} by mistake"])
+    log = tmp_path / "python-shim.log"
+    log.write_text("", encoding="utf-8")
+    shim = tmp_path / "python-shim.sh"
+    _write_shim(
+        shim,
+        "#!/bin/sh\n"
+        f'echo called >> "{log}"\n'
+        f'exec "{sys.executable}" "$@"\n',
+    )
+
+    env = {**os.environ, "REDACTION_PYTHON": str(shim)}
+    env.pop("REDACTION_EXTRA_PATTERNS", None)
+    env.pop("REDACTION_REQUIRE_EXTRA", None)
+    result = subprocess.run(
+        ["bash", str(repo / "scripts" / "redaction-scan.sh"), "--range", "HEAD~2..HEAD"],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    output = result.stdout + result.stderr
+    assert result.returncode != 0, output
+    assert "commit:" in output, output
+    assert "aws_access_key" in output, output
+    # gitleaks writes a report for every commit in the range, clean or not
+    # (a zero-finding report is still a non-empty file), so the normalizer
+    # runs once per commit here: the probe, two per-commit calls, and the
+    # merge. Measured on this fixture with gitleaks 8.30.1.
+    assert len(log.read_text(encoding="utf-8").splitlines()) == 4

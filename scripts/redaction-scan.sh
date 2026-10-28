@@ -111,15 +111,20 @@ if [[ -n "${TARGET_ROOT_INPUT}" ]]; then
   fi
 fi
 
-# A relative REDACTION_EXTRA_PATTERNS or --allowlist value is what the caller
-# typed at the invocation directory, not at REPO_ROOT or TARGET_ROOT: resolve
-# both before the cd below changes what a relative path would mean.
+# A relative REDACTION_EXTRA_PATTERNS, --allowlist, or REDACTION_PYTHON value
+# is what the caller typed at the invocation directory, not at REPO_ROOT or
+# TARGET_ROOT: resolve all three before the cd below changes what a relative
+# path would mean. A REDACTION_PYTHON with no slash is a bare command name
+# (for example python3.11) and stays as-is so it keeps resolving through PATH.
 INVOCATION_PWD="${PWD}"
 if [[ -n "${REDACTION_EXTRA_PATTERNS:-}" && "${REDACTION_EXTRA_PATTERNS}" != /* ]]; then
   REDACTION_EXTRA_PATTERNS="${INVOCATION_PWD}/${REDACTION_EXTRA_PATTERNS}"
 fi
 if [[ "${LEGACY_ALLOWLIST}" != /* ]]; then
   LEGACY_ALLOWLIST="${INVOCATION_PWD}/${LEGACY_ALLOWLIST}"
+fi
+if [[ -n "${REDACTION_PYTHON:-}" && "${REDACTION_PYTHON}" == */* && "${REDACTION_PYTHON}" != /* ]]; then
+  REDACTION_PYTHON="${INVOCATION_PWD}/${REDACTION_PYTHON}"
 fi
 cd "${TARGET_ROOT}"
 
@@ -129,19 +134,32 @@ if ! command -v gitleaks >/dev/null 2>&1; then
 fi
 
 # Resolve one interpreter for every heredoc call below. REDACTION_PYTHON lets
-# a caller that already knows which interpreter to use say so; otherwise fall
-# back to python3, unless that name resolves to the Windows Store stub, which
-# opens an installer prompt instead of running.
+# a caller that already knows which interpreter to use say so (a relative path
+# in it was already anchored to the invocation directory above). Absent an
+# override, fall back to python3, unless that name -- or the python fallback
+# -- resolves under WindowsApps, which opens an installer prompt instead of
+# running; the match is case-insensitive because Windows paths are.
 PYTHON="${REDACTION_PYTHON:-}"
 if [[ -z "${PYTHON}" ]]; then
   PYTHON="python3"
   if command -v python3 >/dev/null 2>&1; then
     case "$(command -v python3)" in
-      */WindowsApps/python3*) PYTHON="python" ;;
+      */[Ww][Ii][Nn][Dd][Oo][Ww][Ss][Aa][Pp][Pp][Ss]/python3*)
+        PYTHON="python"
+        if command -v python >/dev/null 2>&1; then
+          case "$(command -v python)" in
+            */[Ww][Ii][Nn][Dd][Oo][Ww][Ss][Aa][Pp][Pp][Ss]/python*) PYTHON="" ;;
+          esac
+        fi
+        ;;
     esac
   else
     PYTHON="python"
   fi
+fi
+if [[ -z "${PYTHON}" ]]; then
+  echo "redaction-scan: FAIL - no usable python3 is on PATH (python3 and python both resolve under WindowsApps); install Python 3 or set REDACTION_PYTHON" >&2
+  exit 2
 fi
 if ! command -v "${PYTHON}" >/dev/null 2>&1; then
   echo "redaction-scan: FAIL - ${PYTHON} is not on PATH (python3, or REDACTION_PYTHON); install Python 3 (e.g. brew install python or apt install python3)" >&2

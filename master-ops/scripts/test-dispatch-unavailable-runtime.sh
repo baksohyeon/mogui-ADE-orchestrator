@@ -6,13 +6,19 @@
 # before any gate work happens. A new file because test-dispatch-runtime.sh
 # is past the 1,000-line rule (CONTRIBUTING.md "When a file is full").
 #
-# dispatch carries {{RUNTIME_ROOT}} and {{OPS_REPO}} template placeholders,
-# which bash leaves as literal strings it never dereferences before the gate
-# call this suite stops short of, so the refusal case below runs the whole
-# script under a scratch PATH and HOME, with a fake dispatch-gate planted at
-# the literal GATE path so a marker it writes on invocation proves the gate
-# was never reached, instead of inferring that from a non-zero exit alone.
-# The default/alternatives cases
+# dispatch carries its RUNTIME_ROOT and OPS_REPO template placeholders
+# unrendered when run straight from the checkout, which bash leaves as literal
+# strings it never dereferences before the gate call this suite stops short
+# of, so the refusal case below runs the whole script under a scratch PATH
+# and HOME, with a fake dispatch-gate planted at the literal GATE path so a
+# marker it writes on invocation proves the gate was never reached, instead
+# of inferring that from a non-zero exit alone. In a fully rendered copy that
+# same GATE line resolves to a real absolute path instead, so each case below
+# derives where to plant its fake gate from the token itself (built split, so
+# a whole-tree render leaves this file's own occurrences unrendered the way
+# #185 kept test-dispatch-smoke.sh's fixture unrendered; see
+# template_common._token()) or, for the one case that must reach the gate,
+# from dispatch's own GATE= line. The default/alternatives cases
 # extract installed_runtimes, unavailable_runtime_names, dispatchable_runtimes,
 # and choose_default_runtime by exact-line awk range and run them in an
 # isolated subshell, the extraction convention test-dispatch-runtime.sh
@@ -24,6 +30,13 @@ dispatch=${1:-$dispatch}
 
 extract_fn() {  # fn-name
   awk -v fn="$1() {" '$0==fn{f=1} f{print} f&&$0=="}"{exit}' "$dispatch"
+}
+
+# Built from split pieces, the way template_common._token() builds PLACEHOLDERS,
+# so this literal never reads as a contiguous {{NAME}} substring a whole-tree
+# render would rewrite.
+runtime_root_token() {
+  printf '%s' '{'"{RUNTIME_ROOT}}"
 }
 
 # --- Case: --check-only refuses an unavailable runtime, with reason and alternatives ---
@@ -49,7 +62,7 @@ JSON
   contract="$work/contract.md"
   echo "scratch contract" > "$contract"
 
-  # dispatch's GATE is the unexpanded template literal {{RUNTIME_ROOT}}/scripts/dispatch-gate
+  # dispatch's GATE is the unexpanded RUNTIME_ROOT token plus /scripts/dispatch-gate
   # (a relative path, since the placeholder is never filled in this template
   # clone), so planting a fake gate there and running with $work as cwd puts a
   # real executable where dispatch would invoke it, if it got that far. The
@@ -57,7 +70,7 @@ JSON
   # the proof the gate was never reached. A non-zero exit alone would not
   # distinguish "refused before the gate" from "the gate ran and refused."
   marker="$work/gate-invoked"
-  gate_dir="$work/{{RUNTIME_ROOT}}/scripts"
+  gate_dir="$work/$(runtime_root_token)/scripts"
   mkdir -p "$gate_dir"
   cat > "$gate_dir/dispatch-gate" <<BIN
 #!/bin/bash
@@ -116,7 +129,7 @@ JSON
   echo "scratch contract" > "$contract"
 
   marker="$work/gate-invoked"
-  gate_dir="$work/{{RUNTIME_ROOT}}/scripts"
+  gate_dir="$work/$(runtime_root_token)/scripts"
   mkdir -p "$gate_dir"
   cat > "$gate_dir/dispatch-gate" <<BIN
 #!/bin/bash
@@ -173,7 +186,7 @@ JSON
   echo "scratch contract" > "$contract"
 
   marker="$work/gate-invoked"
-  gate_dir="$work/{{RUNTIME_ROOT}}/scripts"
+  gate_dir="$work/$(runtime_root_token)/scripts"
   mkdir -p "$gate_dir"
   cat > "$gate_dir/dispatch-gate" <<BIN
 #!/bin/bash
@@ -229,7 +242,7 @@ BIN
   echo "scratch contract" > "$contract"
 
   marker="$work/gate-invoked"
-  gate_dir="$work/{{RUNTIME_ROOT}}/scripts"
+  gate_dir="$work/$(runtime_root_token)/scripts"
   mkdir -p "$gate_dir"
   cat > "$gate_dir/dispatch-gate" <<BIN
 #!/bin/bash
@@ -284,7 +297,7 @@ BIN
   echo "scratch contract" > "$contract"
 
   marker="$work/gate-invoked"
-  gate_dir="$work/{{RUNTIME_ROOT}}/scripts"
+  gate_dir="$work/$(runtime_root_token)/scripts"
   mkdir -p "$gate_dir"
   cat > "$gate_dir/dispatch-gate" <<BIN
 #!/bin/bash
@@ -469,7 +482,7 @@ JSON
   echo "scratch contract" > "$contract"
 
   marker="$work/gate-invoked"
-  gate_dir="$work/{{RUNTIME_ROOT}}/scripts"
+  gate_dir="$work/$(runtime_root_token)/scripts"
   mkdir -p "$gate_dir"
   cat > "$gate_dir/dispatch-gate" <<BIN
 #!/bin/bash
@@ -542,11 +555,11 @@ whitespace_key_refusal_and_alternatives_test || exit 1
 # --- the same as a normal successful dispatch.                            ---
 expired_entry_dispatches_test() (
   set +e
-  local work contract out_stdout out_stderr status marker gate_dir
+  local work contract out_stdout out_stderr status marker
+  local gate_value gate_path gate_dir gate_backup gate_outside_work
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-unavail-expired.$$"
   mkdir -p "$work/bin"
-  trap 'rm -rf "$work"' EXIT
   cat > "$work/bin/grok" <<'BIN'
 #!/bin/bash
 exit 0
@@ -562,15 +575,40 @@ JSON
   contract="$work/contract.md"
   echo "scratch contract" > "$contract"
 
+  # This is the one case in this file where the gate must actually be
+  # reached, so the fake gate has to land exactly where $dispatch's own GATE=
+  # line resolves: a path relative to $work when $dispatch is unrendered (the
+  # literal RUNTIME_ROOT token), an absolute path outside $work when it has
+  # been rendered. The absolute case can coincide with the real
+  # scripts/dispatch-gate of a fully rendered tree, so any file already there
+  # is backed up and restored on exit instead of being left overwritten.
   marker="$work/gate-invoked"
-  gate_dir="$work/{{RUNTIME_ROOT}}/scripts"
+  gate_value=$(sed -n 's/^GATE=//p' "$dispatch" | head -n1)
+  case "$gate_value" in
+    /*) gate_path="$gate_value"; gate_outside_work=1 ;;
+    *)  gate_path="$work/$gate_value"; gate_outside_work="" ;;
+  esac
+  gate_dir=$(dirname "$gate_path")
+  gate_backup=""
+  if [ -n "$gate_outside_work" ] && [ -e "$gate_path" ]; then
+    gate_backup="$work/dispatch-gate.orig-backup"
+    cp "$gate_path" "$gate_backup"
+  fi
+  trap '
+    if [ -n "$gate_backup" ]; then
+      cp "$gate_backup" "$gate_path"
+    elif [ -n "$gate_outside_work" ]; then
+      rm -f "$gate_path"
+    fi
+    rm -rf "$work"
+  ' EXIT
   mkdir -p "$gate_dir"
-  cat > "$gate_dir/dispatch-gate" <<BIN
+  cat > "$gate_path" <<BIN
 #!/bin/bash
 touch "$marker"
 printf '{"allow": true, "contract_sha": "abcdef0123456789"}\n'
 BIN
-  chmod +x "$gate_dir/dispatch-gate"
+  chmod +x "$gate_path"
 
   out_stdout="$work/stdout"
   out_stderr="$work/stderr"
@@ -717,7 +755,7 @@ JSON
   echo "scratch contract" > "$contract"
 
   marker="$work/gate-invoked"
-  gate_dir="$work/{{RUNTIME_ROOT}}/scripts"
+  gate_dir="$work/$(runtime_root_token)/scripts"
   mkdir -p "$gate_dir"
   cat > "$gate_dir/dispatch-gate" <<BIN
 #!/bin/bash
@@ -781,7 +819,7 @@ JSON
   echo "scratch contract" > "$contract"
 
   marker="$work/gate-invoked"
-  gate_dir="$work/{{RUNTIME_ROOT}}/scripts"
+  gate_dir="$work/$(runtime_root_token)/scripts"
   mkdir -p "$gate_dir"
   cat > "$gate_dir/dispatch-gate" <<BIN
 #!/bin/bash

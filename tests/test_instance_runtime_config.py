@@ -34,6 +34,17 @@ def _write_config(path: Path, payload: dict) -> Path:
     return path
 
 
+def _abs_repo_path(name: str) -> str:
+    """Build a path absolute under os.path.isabs on POSIX and on Windows.
+
+    A bare POSIX-style path such as "/repo-one" is rooted but has no drive,
+    so ntpath.isabs (what os.path.isabs is on Windows) stopped treating it
+    as absolute under Python 3.13. os.path.abspath anchors it to the
+    platform's own root instead.
+    """
+    return os.path.abspath(os.sep + name)
+
+
 def test_example_file_is_valid_json_with_documented_keys() -> None:
     payload = json.loads(EXAMPLE.read_text(encoding="utf-8"))
     assert "master_host_runtime" in payload
@@ -61,18 +72,19 @@ def test_env_overrides_file_for_master_host_runtime(tmp_path: Path) -> None:
 
 
 def test_file_value_used_when_env_absent(tmp_path: Path) -> None:
+    product_repo = _abs_repo_path("product")
     config_path = _write_config(
         tmp_path / "instance-runtime.json",
         {
             "master_host_runtime": "grok",
             "transcript_globs": {"grok": "/tmp/grok/*.jsonl"},
-            "product_repo": "/tmp/product",
+            "product_repo": product_repo,
         },
     )
     loaded = load_instance_runtime_config(config_path, environ={})
     assert loaded.require_master_host_runtime() == "grok"
     assert loaded.require_transcript_glob("grok") == "/tmp/grok/*.jsonl"
-    assert loaded.require_product_repositories() == ("/tmp/product",)
+    assert loaded.require_product_repositories() == (product_repo,)
 
 
 def test_missing_file_and_env_is_honest_unconfigured(tmp_path: Path) -> None:
@@ -106,42 +118,47 @@ def test_product_repo_env_overrides_file(tmp_path: Path) -> None:
         tmp_path / "instance-runtime.json",
         {"product_repo": "/from-file"},
     )
+    from_env = _abs_repo_path("from-env")
     loaded = load_instance_runtime_config(
         config_path,
-        environ={PRODUCT_REPO_ENV: "/from-env"},
+        environ={PRODUCT_REPO_ENV: from_env},
     )
-    assert loaded.require_product_repositories() == ("/from-env",)
+    assert loaded.require_product_repositories() == (from_env,)
 
 
 def test_product_repositories_array_is_canonical(tmp_path: Path) -> None:
+    repo_one = _abs_repo_path("repo-one")
+    repo_two = _abs_repo_path("repo-two")
     config_path = _write_config(
         tmp_path / "instance-runtime.json",
-        {"product_repositories": ["/repo-one", "/repo-two"]},
+        {"product_repositories": [repo_one, repo_two]},
     )
     loaded = load_instance_runtime_config(config_path, environ={})
-    assert loaded.require_product_repositories() == ("/repo-one", "/repo-two")
+    assert loaded.require_product_repositories() == (repo_one, repo_two)
     assert loaded.warnings == ()
 
 
 def test_product_repo_string_is_one_entry_form(tmp_path: Path) -> None:
+    solo_repo = _abs_repo_path("solo-repo")
     config_path = _write_config(
         tmp_path / "instance-runtime.json",
-        {"product_repo": "/solo-repo"},
+        {"product_repo": solo_repo},
     )
     loaded = load_instance_runtime_config(config_path, environ={})
-    assert loaded.require_product_repositories() == ("/solo-repo",)
+    assert loaded.require_product_repositories() == (solo_repo,)
 
 
 def test_product_repositories_wins_over_product_repo_with_warning(tmp_path: Path) -> None:
+    repo_one = _abs_repo_path("repo-one")
     config_path = _write_config(
         tmp_path / "instance-runtime.json",
         {
-            "product_repositories": ["/repo-one"],
+            "product_repositories": [repo_one],
             "product_repo": "/legacy-repo",
         },
     )
     loaded = load_instance_runtime_config(config_path, environ={})
-    assert loaded.require_product_repositories() == ("/repo-one",)
+    assert loaded.require_product_repositories() == (repo_one,)
     assert len(loaded.warnings) == 1
     assert "product_repositories" in loaded.warnings[0]
     assert "product_repo" in loaded.warnings[0]
@@ -175,12 +192,13 @@ def test_product_repo_relative_path_is_malformed(tmp_path: Path) -> None:
 
 
 def test_malformed_product_repo_does_not_block_valid_array(tmp_path: Path) -> None:
+    repo_one = _abs_repo_path("repo-one")
     config_path = _write_config(
         tmp_path / "instance-runtime.json",
-        {"product_repositories": ["/repo-one"], "product_repo": 123},
+        {"product_repositories": [repo_one], "product_repo": 123},
     )
     loaded = load_instance_runtime_config(config_path, environ={})
-    assert loaded.require_product_repositories() == ("/repo-one",)
+    assert loaded.require_product_repositories() == (repo_one,)
     assert len(loaded.warnings) == 1
 
 

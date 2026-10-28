@@ -13,6 +13,13 @@ cd "$(dirname "$0")/.."
 
 SELFCHECK_BIN="${SELFCHECK_BIN:-./scripts/harness-selfcheck.sh}"
 
+# harness-selfcheck.sh is instance-owned (template_common.INSTANCE_OWNED_EXACT):
+# a rendered template-only copy never has one, so there is nothing to measure.
+if [ ! -f "$SELFCHECK_BIN" ]; then
+  echo "SKIP: $SELFCHECK_BIN not found (instance-owned, not part of a template-only checkout)"
+  exit 0
+fi
+
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 

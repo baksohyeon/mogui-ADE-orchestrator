@@ -29,7 +29,9 @@ you build on it.
   covers ubuntu and macOS only. A `Print interpreter` step after each one puts
   `python -VV` in both Python test-job logs (`tests`, `shell-tests`). `.python-version` at the
   repository root carries the same pin for local use, and the README prerequisites sentence names
-  the workflow as the source of truth.
+  the workflow as the source of truth. The pin also surfaced a Windows-only fixture assumption in
+  `tests/test_instance_runtime_config.py`: six absolute-path fixtures assumed POSIX paths, which
+  `ntpath.isabs` stopped treating as absolute under 3.13, and this round fixes them (#209).
 
 ## [0.5.278] - 2026-10-26
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Regression test for issue #207: the workspace card pair must open with the
-# scope sentence (who the card addresses), not a bare "You are the ops
-# master" claim that a dispatched worker or another workspace's session
-# would read as its own role.
+# Regression test for issue #207: the workspace card pair's first sentence
+# after the title must be the scope sentence (who the card addresses). The
+# old opener, "You are the ops master of this workspace.", let a dispatched
+# worker or another workspace's session read it as its own role.
 set -u
 
 cd "$(dirname "$0")/.."
@@ -31,13 +31,13 @@ for card in "$CLAUDE_CARD" "$AGENTS_CARD"; do
 
   opener="$(first_paragraph_line "$card")"
   case "$opener" in
-    "You are the ops master"*)
-      echo "FAIL - $card still opens with the bare master claim: $opener"
-      fail=$((fail + 1))
+    "$SCOPE_SENTENCE"*)
+      echo "ok   - $card opens with the scope sentence"
+      pass=$((pass + 1))
       ;;
     *)
-      echo "ok   - $card does not open with the bare master claim"
-      pass=$((pass + 1))
+      echo "FAIL - $card does not open with the scope sentence: $opener"
+      fail=$((fail + 1))
       ;;
   esac
 done

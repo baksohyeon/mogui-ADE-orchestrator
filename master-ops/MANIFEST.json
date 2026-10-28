@@ -123,6 +123,7 @@
     "scripts/test-worker-block-warn.sh",
     "scripts/test-worker-pane-sweep.sh",
     "scripts/test-worker-wait.sh",
+    "scripts/test-workspace-card-scope.sh",
     "scripts/worker-pane-sweep",
     "scripts/worker-wait",
     "scripts/workstream-render.sh",

@@ -20,6 +20,15 @@ you build on it.
 
 ## [Unreleased]
 
+### Changed
+
+- `gates.yml` pins both `actions/setup-python` steps to CPython 3.13.17 on all three runners
+  instead of a floating `"3.12"`, which let each runner's preinstalled patch diverge (3.12.15 on
+  ubuntu, 3.12.10 on macOS and Windows). A `Print interpreter` step after each one puts
+  `python -VV` in both Python test-job logs (`tests`, `shell-tests`). `.python-version` at the
+  repository root carries the same pin for local use, and the README prerequisites sentence names
+  the workflow as the source of truth.
+
 ## [0.5.278] - 2026-10-26
 
 ### Added

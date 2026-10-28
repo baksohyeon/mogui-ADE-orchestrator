@@ -20,8 +20,14 @@ cd "$(dirname "$0")/.."
 SELFCHECK_BIN="${SELFCHECK_BIN:-./scripts/harness-selfcheck.sh}"
 
 # harness-selfcheck.sh is instance-owned (template_common.INSTANCE_OWNED_EXACT):
-# a rendered template-only copy never has one, so there is nothing to measure.
+# a rendered template-only copy never has one, so there is nothing to measure
+# at the default path. An explicit override that is still missing is a typo
+# or a stale binary, not that case, and fails loudly instead of skipping.
 if [ ! -f "$SELFCHECK_BIN" ]; then
+  if [ "$SELFCHECK_BIN" != "./scripts/harness-selfcheck.sh" ]; then
+    echo "FAIL: SELFCHECK_BIN=$SELFCHECK_BIN not found" >&2
+    exit 1
+  fi
   echo "SKIP: $SELFCHECK_BIN not found (instance-owned, not part of a template-only checkout)"
   exit 0
 fi

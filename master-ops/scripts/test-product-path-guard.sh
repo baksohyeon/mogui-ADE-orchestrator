@@ -13,12 +13,19 @@ product2="$TMP/workspace/product-two"
 # character happens to be a digit from an attached file-descriptor digit.
 product_digit="$TMP/workspace/product2"
 product_legacy="$TMP/workspace/product-legacy"
+# Name carries a space on purpose: a quoted whitespace-tokenization fixture
+# needs a root whose own realpath spelling has an internal space.
+product_space="$TMP/workspace/product repo"
 ops="$TMP/workspace/ops"
 link="$TMP/workspace/product-link"
-mkdir -p "$product" "$product2" "$product_digit" "$product_legacy" "$ops" "$TMP/home" "$TMP/logs"
+mkdir -p "$product" "$product2" "$product_digit" "$product_legacy" "$product_space" "$ops" "$TMP/home" "$TMP/logs"
 ln -s "$product" "$link"
 product_real=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$product")
-printf '{"master_host_runtime":"claude","product_repositories":["%s","%s","%s"]}\n' "$product" "$product2" "$product_digit" >"$TMP/runtime.json"
+product_space_real=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$product_space")
+# HOME is pinned to $TMP/home for every run_bash_hook* call below, so a
+# symlink here is what makes ~/product resolve to the product fixture.
+ln -s "$product_real" "$TMP/home/product"
+printf '{"master_host_runtime":"claude","product_repositories":["%s","%s","%s","%s"]}\n' "$product" "$product2" "$product_digit" "$product_space" >"$TMP/runtime.json"
 # Legacy one-entry string form must stay covered by a valid fixture: the
 # array fixture above exercises only product_repositories, and the only
 # other product_repo fixture (below) is intentionally malformed.
@@ -769,6 +776,82 @@ redirection_root_restored_exit=$?
 echo "PASS: cd redirection root failability mutant exit code $redirection_root_mutant_exit"
 echo "PASS: cd redirection root failability restored exit code $redirection_root_restored_exit"
 
+# Shape 5: only an unquoted, unescaped newline separates commands. shlex
+# strips quotes, so a quoted newline argument used to come out as the same
+# token as a real separator and split `touch` from its product path; a
+# backslash newline is a line continuation bash removes. Each case runs in
+# both modes, then against a mutant copy of the guard that must fail it.
+NL=$'\n'
+make_newline_mutant() {
+  local out="$1"
+  shift
+  python3 - "$HOOK" "$out" "$@" <<'PY'
+import pathlib, sys
+source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+pairs = sys.argv[3:]
+for needle, replacement in zip(pairs[0::2], pairs[1::2]):
+    if source.count(needle) != 1:
+        raise SystemExit("newline mutant anchor not found exactly once: " + needle)
+    source = source.replace(needle, replacement, 1)
+pathlib.Path(sys.argv[2]).write_text(source, encoding="utf-8")
+PY
+  chmod +x "$out"
+}
+# Mutant: the pre-fix lexer, where every newline token separates.
+NL_TOKEN_MUTANT_HOOK="$TMP/product-path-guard-newline-token-mutant.sh"
+make_newline_mutant "$NL_TOKEN_MUTANT_HOOK" \
+  '            out.append(" ; ")' '            out.append(ch)' \
+  'segments=[]; current=[]
+for token in tokens:
+    if token in {";","&&","||","|","&"}:' 'segments=[]; current=[]
+for token in tokens:
+    if token in {";","&&","||","|","&","\n"}:' \
+  '    lexer.commenters=""' '    lexer.commenters=""
+    lexer.whitespace=lexer.whitespace.replace("\n", "")'
+# Mutant: a backslash newline is kept instead of removed as a continuation.
+NL_CONT_MUTANT_HOOK="$TMP/product-path-guard-newline-continuation-mutant.sh"
+make_newline_mutant "$NL_CONT_MUTANT_HOOK" 'if i + 1 < n and text[i + 1] == "\n":' 'if False:'
+# Mutant: an unquoted newline no longer separates.
+NL_SEP_MUTANT_HOOK="$TMP/product-path-guard-newline-separator-mutant.sh"
+make_newline_mutant "$NL_SEP_MUTANT_HOOK" '            out.append(" ; ")' '            out.append(" ")'
+# Mutant: an over-correction that refuses any quoted newline.
+NL_DENY_MUTANT_HOOK="$TMP/product-path-guard-newline-deny-mutant.sh"
+make_newline_mutant "$NL_DENY_MUTANT_HOOK" '        out.append(ch)
+        i += 1
+    return "".join(out)
+def mark_attached_cd_fds' '        if ch == "\n":
+            raise ValueError("quoted newline")
+        out.append(ch)
+        i += 1
+    return "".join(out)
+def mark_attached_cd_fds'
+
+expect_newline_case() {
+  local want="$1" label="$2" command="$3" mutant="$4" mutant_exit
+  if [ "$want" = block ]; then
+    expect_blocked "$label" run_bash "$command" "$ops"
+    expect_verdict block "$label"
+    expect_blocked "$label-fail-closed" run_bash_strict "$command" "$ops"
+    expect_verdict block "$label-fail-closed"
+    ( expect_blocked "$label-mutant" run_bash_hook "$mutant" "$command" "$ops" ) >/dev/null 2>&1
+    mutant_exit=$?
+  else
+    expect_allowed "$label" run_bash "$command" "$ops"
+    expect_verdict pass "$label"
+    expect_allowed "$label-fail-closed" run_bash_strict "$command" "$ops"
+    expect_verdict pass "$label-fail-closed"
+    ( expect_allowed "$label-mutant" run_bash_hook "$mutant" "$command" "$ops" ) >/dev/null 2>&1
+    mutant_exit=$?
+  fi
+  [ "$mutant_exit" -eq 1 ] || { echo "FAIL: $label mutant exit expected 1 got $mutant_exit" >&2; exit 1; }
+  echo "PASS: $label failability mutant exit code $mutant_exit"
+}
+expect_newline_case block single-quoted-newline-then-product-write "touch '$NL' $product/nl-single" "$NL_TOKEN_MUTANT_HOOK"
+expect_newline_case block double-quoted-newline-then-product-write "touch \"$NL\" $product/nl-double" "$NL_TOKEN_MUTANT_HOOK"
+expect_newline_case block backslash-newline-continuation-product-write "touch \\$NL$product/nl-continued" "$NL_CONT_MUTANT_HOOK"
+expect_newline_case block unquoted-newline-then-product-write "true${NL}touch $product/nl-separate" "$NL_SEP_MUTANT_HOOK"
+expect_newline_case allow quoted-newline-harmless-argument "echo '$NL' done" "$NL_DENY_MUTANT_HOOK"
+
 if [ ! -s "$TMP/logs/fire.jsonl" ]; then
   echo "FAIL: MOGUI_HOOK_FIRE_LOG was ignored" >&2
   exit 1
@@ -853,5 +936,265 @@ expect_blocked unsubstituted-runtime-root-token run_bash_default_config "ls" "$o
 expect_verdict block unsubstituted-runtime-root-token
 grep -q "{""{RUNTIME_ROOT}}" "$TMP/stderr" || { echo "FAIL: unsubstituted-runtime-root-token missing token name" >&2; exit 1; }
 grep -q "MOGUI_INSTANCE_RUNTIME_CONFIG" "$TMP/stderr" || { echo "FAIL: unsubstituted-runtime-root-token missing override name" >&2; exit 1; }
+
+# ANSI-C quoting: bash reads $' as an ANSI-C quote opener, where \' is an
+# escaped quote, while the pre-lexers and shlex read plain single quoting, so
+# `ls $'\''<LF>touch <product>` lexed as one harmless word while bash ran the
+# touch. The guard denies an opener outside single quotes, double quotes, and
+# comments as unparseable, the same rule as every other unparseable input: in both
+# modes and whatever the cwd or target, so even a harmless $'a' is denied.
+# Each case runs in both modes, then again against a mutant that must fail it.
+LF=$'\n'
+SQ="'"
+printf 'grep\n' >>"$TMP/allowlist.txt"
+ansic_cases() {
+  local hook="$1"
+  local repro="ls \$${SQ}\\${SQ}${SQ}${LF}touch $product/ansic.txt${LF}#${SQ}"
+  local escaped_then_newline="ls \$${SQ}\\${SQ}${SQ}${LF}touch $product/ansic.txt"
+  local harmless="ls \$${SQ}a${SQ}"
+  local comment_apostrophe="ls # don${SQ}t${LF}${repro}"
+  local heredoc_apostrophe="ls <<EOF${LF}don${SQ}t${LF}EOF${LF}${repro}"
+  local runner mode
+  for runner in run_bash_hook run_bash_hook_strict; do
+    mode=${runner#run_bash_hook}; mode=${mode:-_legacy}
+    expect_blocked "ansic-repro$mode" "$runner" "$hook" "$repro" "$ops"
+    grep -q "ansi-c quote" "$TMP/stderr" || { echo "FAIL: ansic-repro$mode missing ansi-c quote reason" >&2; exit 1; }
+    expect_blocked "ansic-escaped-then-newline$mode" "$runner" "$hook" "$escaped_then_newline" "$ops"
+    grep -q "ansi-c quote" "$TMP/stderr" || { echo "FAIL: ansic-escaped-then-newline$mode missing ansi-c quote reason" >&2; exit 1; }
+    expect_blocked "ansic-harmless-denied$mode" "$runner" "$hook" "$harmless" "$ops"
+    grep -q "ansi-c quote" "$TMP/stderr" || { echo "FAIL: ansic-harmless-denied$mode missing ansi-c quote reason" >&2; exit 1; }
+    expect_blocked "ansic-comment-apostrophe$mode" "$runner" "$hook" "$comment_apostrophe" "$ops"
+    grep -q "ansi-c quote" "$TMP/stderr" || { echo "FAIL: ansic-comment-apostrophe$mode missing ansi-c quote reason" >&2; exit 1; }
+    expect_blocked "ansic-heredoc-apostrophe$mode" "$runner" "$hook" "$heredoc_apostrophe" "$ops"
+    grep -q "ansi-c quote" "$TMP/stderr" || { echo "FAIL: ansic-heredoc-apostrophe$mode missing ansi-c quote reason" >&2; exit 1; }
+    expect_allowed "ansic-single-quoted-dollar-allowed$mode" "$runner" "$hook" "ls ${SQ}\$${SQ}" "$ops"
+    expect_allowed "ansic-regex-end-anchor-allowed$mode" "$runner" "$hook" "grep -v ${SQ}^\\s*\$${SQ} $ops/none.txt" "$ops"
+    expect_allowed "ansic-double-quoted-allowed$mode" "$runner" "$hook" "ls \"a\$${SQ}b\"" "$ops"
+    expect_allowed "ansic-escaped-dollar-allowed$mode" "$runner" "$hook" "ls \\\$${SQ}a${SQ}" "$ops"
+    expect_allowed "ansic-heredoc-body-allowed$mode" "$runner" "$hook" "ls <<${SQ}EOF${SQ}${LF}printf \$${SQ}a\\n${SQ}${LF}EOF" "$ops"
+  done
+}
+ansic_cases "$HOOK"
+# Each mutant changes one piece of the detector and must fail at least one
+# case above: no check at all (repro, escaped-then-newline, harmless), a
+# detector that never enters a single-quoted span (single-quoted $ and the
+# regex anchor), one that ignores double quotes (double-quoted), one that
+# ignores a backslash before the $ (escaped $), one that never enters a
+# comment (comment apostrophe), one that checks only the raw text (heredoc
+# apostrophe), and one that also checks the raw text (heredoc body).
+ansic_mutant() {
+  local name="$1" needle="$2" replacement="$3" mutant="$TMP/product-path-guard-ansic-$1-mutant.sh" rc
+  NEEDLE="$needle" REPLACEMENT="$replacement" python3 - "$HOOK" "$mutant" <<'PY'
+import os, pathlib, sys
+source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+needle = os.environ["NEEDLE"]
+if source.count(needle) != 1:
+    raise SystemExit("ansic mutant patch anchor not found")
+pathlib.Path(sys.argv[2]).write_text(source.replace(needle, os.environ["REPLACEMENT"], 1), encoding="utf-8")
+PY
+  [ -f "$mutant" ] && ! cmp -s "$HOOK" "$mutant" || { echo "FAIL: ansic $name mutant not generated" >&2; exit 1; }
+  chmod +x "$mutant"
+  ( ansic_cases "$mutant" ) >/dev/null 2>&1
+  rc=$?
+  [ "$rc" -eq 1 ] || { echo "FAIL: ansic $name mutant exit expected 1 got $rc" >&2; exit 1; }
+  echo "PASS: ansic $name mutant fails (exit $rc)"
+}
+ansic_mutant no-check \
+  "if has_ansi_c_quote_opener(heredoc_stripped_command):" \
+  "if False:"
+ansic_mutant no-single-span \
+  "            else:
+                in_single=True
+        elif ch == chr(34):" \
+  "            else:
+                pass
+        elif ch == chr(34):"
+ansic_mutant no-double-quote \
+  "            if in_double:
+                pass
+            elif prev == \"\$\" and not prev_escaped:" \
+  "            if False:
+                pass
+            elif prev == \"\$\" and not prev_escaped:"
+ansic_mutant no-escaped-dollar \
+  "            elif prev == \"\$\" and not prev_escaped:" \
+  "            elif prev == \"\$\":"
+ansic_mutant no-comment \
+  "\">\") and not prev_escaped:
+            in_comment=True" \
+  "\">\") and not prev_escaped:
+            pass"
+ansic_mutant raw-only \
+  "if has_ansi_c_quote_opener(heredoc_stripped_command):" \
+  "if has_ansi_c_quote_opener(command):"
+ansic_mutant raw-too \
+  "if has_ansi_c_quote_opener(heredoc_stripped_command):" \
+  "if has_ansi_c_quote_opener(command) or has_ansi_c_quote_opener(heredoc_stripped_command):"
+
+# Three more lexer divergences:
+# - a line continuation between $ and its quote ($\<LF>'...'): bash removes
+#   the backslash newline before reading quotes, so the opener re-forms;
+#   blocked in both modes.
+# - an escaped heredoc operator (ls \<<EOF): bash reads a literal < and an
+#   input redirection, so the next lines run as ordinary commands instead of
+#   a heredoc body; blocked in both modes.
+# - an unquoted-delimiter heredoc body with $( or a backtick: bash expands
+#   it, so it is denied as unparseable instead of stripped as data. A line
+#   continuation inside the body is removed first, matching bash's own
+#   removal. A bare ${...} alone runs no code and does not trigger this on
+#   its own. Under FAIL_CLOSED the opener denies outright; in legacy mode it
+#   is admitted unless the same root/cd/redirect scrutiny applied to an
+#   interpreter-fed heredoc body finds a write.
+# A quoted delimiter keeps its body literal, and a plain body still passes;
+# after an even run of backslashes the operator is real, so its body is data.
+heredoc3_cases() {
+  local hook="$1"
+  local continuation="ls \$\\${LF}${SQ}\\${SQ}${SQ}${LF}touch $product/h3.txt${LF}#${SQ}"
+  local escaped_heredoc="ls \\<<EOF${LF}touch $product/h3.txt${LF}EOF"
+  local even_backslash_heredoc="ls \\\\<<EOF${LF}touch $product/h3.txt${LF}EOF"
+  local body_continuation="\$\\${LF}(touch $product_real/h3.txt)"
+  # Distinct from body_continuation: same backslash-newline opener
+  # reformation, but naming the symlinked root spelling instead of the
+  # realpath one, so the two continuation cases are not the same assertion
+  # under two names.
+  local body_continuation_symlink="\$\\${LF}(touch $link/h3.txt)"
+  local body_no_root="today \$(date)"
+  local body_param="\${X:-\$HOME}"
+  local root_parent="$TMP/workspace"
+  local runner mode kind body spelling root_body root_cwd
+  for runner in run_bash_hook run_bash_hook_strict; do
+    mode=${runner#run_bash_hook}; mode=${mode:-_legacy}
+    expect_blocked "continuation-ansic$mode" "$runner" "$hook" "$continuation" "$ops"
+    grep -q "ansi-c quote" "$TMP/stderr" || { echo "FAIL: continuation-ansic$mode missing ansi-c quote reason" >&2; exit 1; }
+    expect_blocked "escaped-heredoc-operator$mode" "$runner" "$hook" "$escaped_heredoc" "$ops"
+    expect_allowed "even-backslash-heredoc-operator$mode" "$runner" "$hook" "$even_backslash_heredoc" "$ops"
+    for kind in cmdsubst backtick paramtransform; do
+      case "$kind" in
+        cmdsubst) body="\$(touch $product_real/h3.txt)" ;;
+        backtick) body="\`touch $product_real/h3.txt\`" ;;
+        paramtransform) body="\${x@P} touch $product_real/h3.txt" ;;
+      esac
+      expect_blocked "unquoted-heredoc-$kind$mode" "$runner" "$hook" "ls <<EOF${LF}${body}${LF}EOF" "$ops"
+      grep -q "heredoc body expansion" "$TMP/stderr" || { echo "FAIL: unquoted-heredoc-$kind$mode missing heredoc body expansion reason" >&2; exit 1; }
+    done
+    expect_blocked "unquoted-heredoc-continuation$mode" "$runner" "$hook" "ls <<EOF${LF}${body_continuation}${LF}EOF" "$ops"
+    grep -q "heredoc body expansion" "$TMP/stderr" || { echo "FAIL: unquoted-heredoc-continuation$mode missing heredoc body expansion reason" >&2; exit 1; }
+    expect_blocked "unquoted-heredoc-continuation-abs-root$mode" "$runner" "$hook" "ls <<EOF${LF}${body_continuation_symlink}${LF}EOF" "$ops"
+    grep -q "heredoc body expansion" "$TMP/stderr" || { echo "FAIL: unquoted-heredoc-continuation-abs-root$mode missing heredoc body expansion reason" >&2; exit 1; }
+    expect_blocked "unquoted-heredoc-cmdsubst-cwd-in-root$mode" "$runner" "$hook" "ls <<EOF${LF}\$(touch h3.txt)${LF}EOF" "$product_real"
+    grep -q "heredoc body expansion" "$TMP/stderr" || { echo "FAIL: unquoted-heredoc-cmdsubst-cwd-in-root$mode missing heredoc body expansion reason" >&2; exit 1; }
+    # A root test against the raw body text sees only the config's exact
+    # realpath spelling. A symlinked spelling, ~/product, a bare relative
+    # product/x with cwd beside the root, and ../product/x from a sibling
+    # directory all resolve into the product root without that spelling
+    # ever appearing, so each is its own case here. The quoted-space pair
+    # covers the opposite failure: a root name with its own internal space
+    # does contain the configured spelling, but the plain whitespace
+    # tokenization used to split it into two fragments at that space before
+    # either check ever saw the whole path.
+    for spelling in symlink tilde relative relative-dot dotdot quoted-space-single quoted-space-double; do
+      case "$spelling" in
+        symlink)             root_body="\$(touch $link/root-spelling.txt)";                        root_cwd="$ops" ;;
+        tilde)               root_body="\$(touch ~/product/root-spelling.txt)";                    root_cwd="$ops" ;;
+        relative)             root_body="\$(touch product/root-spelling.txt)";                     root_cwd="$root_parent" ;;
+        relative-dot)        root_body="\$(touch ./product/root-spelling.txt)";                    root_cwd="$root_parent" ;;
+        dotdot)              root_body="\$(touch ../product/root-spelling.txt)";                   root_cwd="$ops" ;;
+        quoted-space-single) root_body="\$(touch '$product_space_real/root-spelling.txt')";        root_cwd="$ops" ;;
+        quoted-space-double) root_body="\$(touch \"$product_space_real/root-spelling.txt\")";      root_cwd="$ops" ;;
+      esac
+      expect_blocked "unquoted-heredoc-root-$spelling-spelling$mode" "$runner" "$hook" "ls <<EOF${LF}${root_body}${LF}EOF" "$root_cwd"
+      grep -q "heredoc body expansion" "$TMP/stderr" || { echo "FAIL: unquoted-heredoc-root-$spelling-spelling$mode missing heredoc body expansion reason" >&2; exit 1; }
+    done
+    if [ "$mode" = "_legacy" ]; then
+      expect_allowed "unquoted-heredoc-no-root$mode" "$runner" "$hook" "ls <<EOF${LF}${body_no_root}${LF}EOF" "$ops"
+    else
+      expect_blocked "unquoted-heredoc-no-root$mode" "$runner" "$hook" "ls <<EOF${LF}${body_no_root}${LF}EOF" "$ops"
+      grep -q "heredoc body expansion" "$TMP/stderr" || { echo "FAIL: unquoted-heredoc-no-root$mode missing heredoc body expansion reason" >&2; exit 1; }
+    fi
+    expect_allowed "unquoted-heredoc-param$mode" "$runner" "$hook" "ls <<EOF${LF}${body_param}${LF}EOF" "$ops"
+    expect_allowed "single-quoted-heredoc-cmdsubst$mode" "$runner" "$hook" "ls <<${SQ}EOF${SQ}${LF}\$(touch $product/h3.txt)${LF}EOF" "$ops"
+    expect_allowed "double-quoted-heredoc-cmdsubst$mode" "$runner" "$hook" "ls <<\"EOF\"${LF}\$(touch $product/h3.txt)${LF}EOF" "$ops"
+    expect_allowed "backslash-heredoc-cmdsubst$mode" "$runner" "$hook" "ls <<\\EOF${LF}\$(touch $product/h3.txt)${LF}EOF" "$ops"
+    expect_allowed "plain-unquoted-heredoc$mode" "$runner" "$hook" "ls <<EOF${LF}hello \$HOME${LF}EOF" "$ops"
+  done
+}
+heredoc3_cases "$HOOK"
+# A cd earlier on the same line as the heredoc operator changes the directory
+# a relative body path resolves against, and that cd token is on the operator
+# line itself, not inside the stripped body the root/cd/redirect scrutiny
+# above inspects. In legacy mode this is now treated as unresolvable, the
+# same denial an unquoted root spelling gets, even though the body alone
+# names no product root and the hook's own recorded cwd is not under one.
+expect_blocked cd-before-heredoc-operator-cmdsubst run_bash "cd $TMP/workspace && cat <<EOF${LF}\$(touch product/x)${LF}EOF" "$ops"
+expect_verdict block cd-before-heredoc-operator-cmdsubst
+grep -q "heredoc body expansion" "$TMP/stderr" || { echo "FAIL: cd-before-heredoc-operator-cmdsubst missing heredoc body expansion reason" >&2; exit 1; }
+expect_blocked cd-before-heredoc-operator-interpreter run_bash "cd $TMP/workspace && python3 <<EOF${LF}open('product/x', 'w')${LF}EOF" "$ops"
+expect_verdict block cd-before-heredoc-operator-interpreter
+# Accepted cost of the cd-before-operator rule: an unrelated cd denies even a
+# body naming no product root at all.
+expect_blocked cd-before-heredoc-operator-unrelated-cd run_bash "cd /tmp && cat <<EOF${LF}\$(date)${LF}EOF" "$ops"
+expect_verdict block cd-before-heredoc-operator-unrelated-cd
+grep -q "heredoc body expansion" "$TMP/stderr" || { echo "FAIL: cd-before-heredoc-operator-unrelated-cd missing heredoc body expansion reason" >&2; exit 1; }
+# A heredoc body expansion denial lands in the unresolved_target event-log
+# bucket, the same one an unparseable command lands in.
+heredoc_event_log_before=$(wc -l <"$TMP/home/.mogui/event-log.jsonl")
+run_bash_hook "$HOOK" "ls <<EOF${LF}\$(touch $product_real/h3.txt)${LF}EOF" "$ops"
+python3 - "$TMP/home/.mogui/event-log.jsonl" "$heredoc_event_log_before" <<'PY' || { echo "FAIL: heredoc body expansion event-log reason" >&2; exit 1; }
+import json, sys
+path, before = sys.argv[1], int(sys.argv[2])
+record = json.loads(open(path, encoding="utf-8").readlines()[before])
+if record.get("reason") != "unresolved_target":
+    raise SystemExit(f"FAIL: heredoc body expansion event-log reason was {record.get('reason')!r}, expected unresolved_target")
+PY
+echo "PASS: heredoc-body-expansion-event-log-reason"
+# Each mutant reverts or overshoots one fix and must fail the set above.
+heredoc3_mutant() {
+  local name="$1" needle="$2" replacement="$3" mutant="$TMP/product-path-guard-heredoc3-$1-mutant.sh" rc
+  NEEDLE="$needle" REPLACEMENT="$replacement" python3 - "$HOOK" "$mutant" <<'PY'
+import os, pathlib, sys
+source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+needle = os.environ["NEEDLE"]
+if source.count(needle) != 1:
+    raise SystemExit("heredoc3 mutant patch anchor not found")
+pathlib.Path(sys.argv[2]).write_text(source.replace(needle, os.environ["REPLACEMENT"], 1), encoding="utf-8")
+PY
+  [ -f "$mutant" ] && ! cmp -s "$HOOK" "$mutant" || { echo "FAIL: heredoc3 $name mutant not generated" >&2; exit 1; }
+  chmod +x "$mutant"
+  ( heredoc3_cases "$mutant" ) >/dev/null 2>&1
+  rc=$?
+  [ "$rc" -eq 1 ] || { echo "FAIL: heredoc3 $name mutant exit expected 1 got $rc" >&2; exit 1; }
+  echo "PASS: heredoc3 $name mutant fails (exit $rc)"
+}
+heredoc3_mutant no-continuation \
+  "            if ch == \"\\n\":
+                prev=before_backslash" \
+  "            if False:
+                prev=before_backslash"
+heredoc3_mutant escaped-operator-is-heredoc \
+  "        if backslashes % 2 == 1:" \
+  "        if False:"
+heredoc3_mutant any-backslash-escapes-operator \
+  "        if backslashes % 2 == 1:" \
+  "        if backslashes:"
+heredoc3_mutant no-expansion-check \
+  "if unquoted_word and (" \
+  "if False and ("
+heredoc3_mutant quoted-delimiter-checked \
+  "if unquoted_word and (" \
+  "if True and ("
+heredoc3_mutant every-unquoted-body-denied \
+  "if unquoted_word and (\"\$(\" in body_text or \"\`\" in body_text or \"@P}\" in body_text):" \
+  "if unquoted_word:"
+heredoc3_mutant no-body-continuation \
+  '.join(body_lines).replace("\\\n", "")' \
+  '.join(body_lines)'
+# Restoring the substring test (what both call sites used before this round)
+# must fail the symlink, tilde, relative, and dotdot spellings above: none of
+# them contain the configured realpath string, so a substring test admits
+# every one of them again.
+heredoc3_mutant root-substring-only \
+  "def body_targets_root(value, base):" \
+  "def body_targets_root(value, base):
+    return any(root in value for root in roots)"
 
 echo "product-path-guard regression tests passed"

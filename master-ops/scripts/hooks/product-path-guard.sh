@@ -241,8 +241,15 @@ def find_heredoc_operators(line):
             continue
         if start < len(mask) and not mask[start]:
             continue
+        # unquoted_mask marks a backslash-escaped character as unquoted, but
+        # bash reads an escaped < as a literal (ls \<<EOF is ls with a literal
+        # < and an input redirection from EOF), so an odd run of backslashes
+        # right before the operator means it is not a heredoc.
+        backslashes=len(line[:start]) - len(line[:start].rstrip("\\"))
+        if backslashes % 2 == 1:
+            continue
         word=next(g for g in match.groups()[1:] if g is not None)
-        operators.append((word, bool(match.group(1))))
+        operators.append((word, bool(match.group(1)), match.group(5) is not None, start))
     return operators
 def heredoc_bearing_interpreter_segments(line):
     try:
@@ -289,7 +296,14 @@ def strip_heredocs(text):
         if operators:
             opaque_interpreter_segments=heredoc_bearing_interpreter_segments(line)
             j=i + 1
-            for word, strip_tabs in operators:
+            for word, strip_tabs, unquoted_word, op_start in operators:
+                # A cd earlier on this same line changes the directory that
+                # relative paths in the body resolve against, and the body
+                # is stripped before the segment loop below ever sees that
+                # cd token. The line text up to the operator is checked
+                # directly for one instead, the way contains_cd_token already
+                # checks a body or a -c argument for one.
+                line_prefix=line[:op_start]
                 body_lines=[]
                 terminated=False
                 while j < n:
@@ -302,6 +316,34 @@ def strip_heredocs(text):
                     body_lines.append(raw_line)
                 if not terminated:
                     return None, None
+                # With an unquoted delimiter bash expands the body, so a
+                # command substitution there runs as code. A bare parameter
+                # expansion alone runs no code, so "${" is not checked here,
+                # except a "@P}" transformation, which runs prompt expansion
+                # on the variable value and so can run code the same way.
+                # A quoted delimiter (quotes or a backslash on the word)
+                # keeps the body literal. A backslash-newline line
+                # continuation in the body is removed first, matching the
+                # removal bash itself does, so an opener split across two
+                # lines still triggers the check.
+                body_text="\n".join(body_lines).replace("\\\n", "")
+                if unquoted_word and ("$(" in body_text or "`" in body_text or "@P}" in body_text):
+                    # Under FAIL_CLOSED this denies outright. In legacy mode
+                    # the opener gets the same root/cd/redirect scrutiny
+                    # already applied to an interpreter-fed heredoc body
+                    # below, admitted unless that scrutiny finds a write. A
+                    # cwd already inside a product root denies it too, since
+                    # a relative write the body checks cannot see (no root
+                    # substring, no redirect token) would still land inside
+                    # the root.
+                    if not LEGACY_MODE or (
+                        contains_cd_token(body_text)
+                        or contains_cd_token(line_prefix)
+                        or body_targets_root(body_text, cwd)
+                        or redirects_into_root(body_text, cwd)
+                        or under(cwd)
+                    ):
+                        return None, "heredoc body expansion"
                 # A heredoc feeding an interpreter stdin is as opaque as a -c
                 # body (no -c means the heredoc itself is the script), so it
                 # gets the same root/cd/redirect scrutiny before being admitted.
@@ -309,10 +351,10 @@ def strip_heredocs(text):
                 # bash <<EOF, cd /tmp; python3 <<EOF), so every segment on the
                 # line that itself carries a heredoc redirect is checked.
                 if opaque_interpreter_segments:
-                    body_text="\n".join(body_lines)
                     if (
                         contains_cd_token(body_text)
-                        or any(root in body_text for root in roots)
+                        or contains_cd_token(line_prefix)
+                        or body_targets_root(body_text, cwd)
                         or redirects_into_root(body_text, cwd)
                     ):
                         forced_deny_name=opaque_interpreter_segments[0]
@@ -346,7 +388,137 @@ def redirects_into_root(value, base):
             continue
         i += 1
     return False
+PATH_TOKEN_SPLIT_RE=re.compile(r"[\s()`;&|<>\"=]+|" + SQ)
+HOME_VAR_RE=re.compile(r"\$\{HOME\}|\$HOME(?![A-Za-z0-9_])")
+def expand_home_var(value):
+    home=os.environ.get("HOME")
+    return HOME_VAR_RE.sub(home, value) if home else value
+def body_targets_root(value, base):
+    # The configured realpath spelling appearing anywhere in the raw text is
+    # checked first: a whitespace-splitting tokenizer below can still cut a
+    # quoted path apart at an internal space before isolating it (a product
+    # root whose own name has a space in it), so this exact-string test
+    # denies that shape even though the token split missed it. It is kept
+    # alongside the token split below, not instead of it, since a symlinked
+    # spelling, ~/product, a relative product/x beside the root, and
+    # ../product/x from a sibling directory all resolve into a product root
+    # without that exact string ever appearing.
+    if any(root in value for root in roots):
+        return True
+    # Splitting the body into path-shaped tokens and resolving each one
+    # against cwd the way redirects_into_root already does for a redirect
+    # target catches every spelling the substring test above cannot. A
+    # quote-aware split (shlex, posix rules) keeps a single- or double-quoted
+    # span with an internal space as one token instead of breaking it at
+    # that space; the plain whitespace/punctuation split is a fallback for
+    # text shlex rejects as unbalanced.
+    try:
+        tokens=shlex.split(value, posix=True)
+    except Exception:
+        tokens=[token for token in PATH_TOKEN_SPLIT_RE.split(value) if token]
+    for token in tokens:
+        # A bare relative spelling (product/x, no dot prefix) carries no
+        # path-opener prefix at all; the slash inside it is what marks it
+        # as path-shaped. A token with neither an opener nor a slash (today,
+        # date) is left alone so a harmless word is never resolved and
+        # compared against a root.
+        looks_path_shaped = token.startswith(("/", "~", "./", "../", "$HOME")) or "/" in token
+        if looks_path_shaped and under(resolve(base, expand_home_var(token))):
+            return True
+    return False
 FD_SENTINEL_RE=re.compile(r"^MOGUICDFDSENTINEL(\d+)ENDSENTINEL$")
+def mark_unquoted_newlines(text):
+    # An unquoted, unescaped newline ends a command, so it becomes " ; " (the
+    # spaces keep it from fusing with a neighbouring && or |). A backslash
+    # newline outside single quotes is a line continuation that bash removes,
+    # so it is dropped. A newline inside quotes stays part of its word.
+    out=[]
+    in_single=False
+    in_double=False
+    i=0
+    n=len(text)
+    while i < n:
+        ch=text[i]
+        if ch == "\\" and not in_single:
+            if i + 1 < n and text[i + 1] == "\n":
+                i += 2
+                continue
+            out.append(text[i:i + 2])
+            i += 2
+            continue
+        if ch == SQ and not in_double:
+            in_single=not in_single
+        elif ch == chr(34) and not in_single:
+            in_double=not in_double
+        elif ch == "\n" and not in_single and not in_double:
+            out.append(" ; ")
+            i += 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+def has_ansi_c_quote_opener(text):
+    # bash reads a dollar sign right before a single quote as the start of
+    # ANSI-C quoting: a backslash-quote there is an escaped quote and does
+    # not end the string. unquoted_mask,
+    # mark_unquoted_newlines and shlex all read the same text as plain single
+    # quoting, so from that point their quote state no longer matches bash.
+    # The guard does not model ANSI-C quoting; an unescaped $ right before a
+    # quote, outside single quotes, double quotes, and comments, denies the
+    # command as unparseable. Quote state limits the match to an unquoted
+    # occurrence of the pair, because the same pair also closes many
+    # ordinary single-quoted patterns such as a regex ending in $. Inside
+    # double quotes bash reads both characters literally. A comment starts at an
+    # unquoted, unescaped # at the start of a word, the bash rule, so an
+    # apostrophe inside a comment cannot open a span that hides a later
+    # opener. A backslash newline outside single quotes and comments is a
+    # line continuation that bash removes before reading quotes, the rule
+    # mark_unquoted_newlines applies, so it is skipped here without touching
+    # prev and a $ split from its quote by one still forms an opener.
+    in_single=False
+    in_double=False
+    in_comment=False
+    escaped=False
+    prev=""
+    prev_escaped=False
+    for ch in text:
+        if in_comment:
+            if ch == "\n":
+                in_comment=False
+            prev=ch
+            prev_escaped=False
+            continue
+        if in_single:
+            if ch == SQ:
+                in_single=False
+            prev=ch
+            prev_escaped=False
+            continue
+        was_escaped=escaped
+        if escaped:
+            escaped=False
+            if ch == "\n":
+                prev=before_backslash
+                prev_escaped=before_backslash_escaped
+                continue
+        elif ch == "\\":
+            escaped=True
+            before_backslash=prev
+            before_backslash_escaped=prev_escaped
+        elif ch == SQ:
+            if in_double:
+                pass
+            elif prev == "$" and not prev_escaped:
+                return True
+            else:
+                in_single=True
+        elif ch == chr(34):
+            in_double=not in_double
+        elif ch == "#" and not in_double and prev in ("", " ", "\t", "\n", ";", "&", "|", "(", ")", "<", ">") and not prev_escaped:
+            in_comment=True
+        prev=ch
+        prev_escaped=was_escaped
+    return False
 def mark_attached_cd_fds(text):
     # shlex always splits a digit from an adjacent punctuation character, so
     # "2>" and "2 >" produce the identical two-token pair (a digit token,
@@ -478,7 +650,7 @@ def has_install_directory_mode(option_tokens):
     return False
 heredoc_stripped_command, heredoc_forced_deny_name=strip_heredocs(command)
 if heredoc_stripped_command is None:
-    print("DENY\tunparseable\tunparseable command")
+    print("DENY\tunparseable\t" + (heredoc_forced_deny_name or "unparseable command"))
     raise SystemExit
 if heredoc_forced_deny_name:
     print("DENY\t" + heredoc_forced_deny_name + "\topaque interpreter heredoc body may contain an unparsed write")
@@ -490,10 +662,18 @@ if "MOGUICDFDSENTINEL" in heredoc_stripped_command:
     # would be unreliable, so this is denied instead of guessed.
     print("DENY\tunparseable\tsentinel collision")
     raise SystemExit
+if has_ansi_c_quote_opener(heredoc_stripped_command):
+    # Checking the stripped text avoids scanning the raw command, where a
+    # heredoc body is just data to bash: an opener inside it is not a real
+    # quote, and an apostrophe there could otherwise open a single-quoted
+    # span that hides a later opener on a real command line.
+    print("DENY\tunparseable\tansi-c quote")
+    raise SystemExit
 try:
-    # A newline ends a segment the same way ; does: dropping it from the
-    # lexer whitespace set (instead of adding it to punctuation_chars, which
-    # shlex still swallows as whitespace) makes it surface as its own token.
+    # A newline ends a segment the same way ; does, but only an unquoted,
+    # unescaped one: shlex strips quotes, so a quoted newline argument would
+    # come out as the same "\n" token, and mark_unquoted_newlines turns each
+    # real separator into ";" while quote state is still known.
     # The default shlex comment handling would otherwise swallow a trailing
     # comment newline together with the rest of the line, merging the next
     # physical line into the same segment, so the comment text is stripped
@@ -502,9 +682,8 @@ try:
     # sentinel before lexing for the same reason the newline is handled
     # here: shlex throws the source adjacency away, so it has to be
     # captured before lexing runs.
-    lexing_command=mark_attached_cd_fds(strip_unquoted_comments(heredoc_stripped_command))
+    lexing_command=mark_attached_cd_fds(mark_unquoted_newlines(strip_unquoted_comments(heredoc_stripped_command)))
     lexer=shlex.shlex(lexing_command, posix=True, punctuation_chars=";&|><")
-    lexer.whitespace=lexer.whitespace.replace("\n", "")
     lexer.commenters=""
     tokens=list(lexer)
 except Exception:
@@ -512,7 +691,7 @@ except Exception:
     raise SystemExit
 segments=[]; current=[]
 for token in tokens:
-    if token in {";","&&","||","|","&","\n"}:
+    if token in {";","&&","||","|","&"}:
         if current: segments.append(current)
         current=[]
     else: current.append(token)
@@ -838,7 +1017,7 @@ command_class=${result#*$'\t'}
 command_class=${command_class%%$'\t'*}
 reason=${result#*$'\t'*$'\t'}
 if [ "$decision" = DENY ]; then
-  if [ "$reason" = "unparseable command" ] || [ "$reason" = "cd target cannot be resolved" ]; then
+  if [ "$reason" = "unparseable command" ] || [ "$reason" = "cd target cannot be resolved" ] || [ "$reason" = "heredoc body expansion" ] || [ "$reason" = "ansi-c quote" ]; then
     blocked "$reason" "$command_class" unresolved_target
   fi
   blocked "$reason" "$command_class" guarded_target

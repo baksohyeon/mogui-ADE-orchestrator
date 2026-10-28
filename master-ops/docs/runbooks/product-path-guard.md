@@ -26,14 +26,41 @@ Bash still executes it) and does not require whitespace before `<<`
 heredoc and is untouched. If a heredoc's terminator is never found, the
 command is still treated as unparseable, exactly as before this change.
 
+An operator preceded by an odd run of backslashes (`ls \<<EOF`) is not a
+heredoc: bash reads an escaped `<` as a literal plus an input redirection, so
+the following lines stay commands. A backslash-newline line continuation
+inside the body is removed first, matching bash's own removal, so a `$(` or
+backtick split across two lines by one still triggers the check below. When
+the delimiter is unquoted (`<<EOF`), bash expands the body, so a body
+containing `$(`, a backtick, or a `${...@P}` prompt-expansion transformation
+is denied as unparseable (`heredoc body expansion`) instead of stripped; the
+guard does not evaluate it. A bare `${...}` parameter expansion without
+`@P` runs no code, so it does not trigger this check on its own. Under
+`MOGUI_PRODUCT_GUARD_FAIL_CLOSED=1` that check is unconditional; in legacy
+mode the body instead gets the same `cd`,
+product-root, and redirect-into-root scrutiny already applied to an
+interpreter-fed heredoc body below, and is also denied when the hook's own
+working directory is itself under a product root, since a relative write
+that scrutiny cannot see would still land inside it; otherwise it is
+admitted. The legacy-mode root test resolves a body token's path spelling
+(an absolute path, a symlinked spelling, `~/...`, `$HOME/...`, a `./`- or
+`../`-relative spelling, or a bare relative spelling with a slash) against
+the hook's working directory instead of matching the configured root's exact
+realpath string, so a spelling that never contains that string still denies.
+A bare directory name with no slash at all (`$(cp source product-root)` with
+the working directory beside the root) is not resolved by this test and is a
+known gap left for a later round.
+A quoted delimiter (`<<'EOF'`, `<<"EOF"`, `<<\EOF`) keeps the body
+literal and it is stripped as before.
+
 The operator's own line keeps its tokens: a redirect into a product root on
 that line (`cat > <root>/file <<'EOF'`) still denies. When the operator line
 is a bare interpreter invocation with no `-c` — `bash <<'EOF'`, `python3
 <<'EOF'` — the heredoc body is the whole script, exactly as opaque as a `-c`
-body, so it gets the same scrutiny before being stripped: a `cd`, a root
-substring anywhere in the body, or a redirect into the root denies the
-command outright (`opaque interpreter heredoc body may contain an unparsed
-write`), applied regardless of mode. The interpreter need not be the line's
+body, so it gets the same scrutiny before being stripped: a `cd`, the same
+path-spelling resolution the legacy-mode unquoted heredoc body uses, or a
+redirect into the root denies the command outright (`opaque interpreter
+heredoc body may contain an unparsed write`), applied regardless of mode. The interpreter need not be the line's
 first token: the operator line is segmented on `;`/`&&`/`||`/`|`/`&`, the
 same way the main parser segments a whole command, so `true && bash
 <<'EOF'`, `cd /tmp; python3 <<EOF`, and `echo x | sh <<EOF` all get scrutiny

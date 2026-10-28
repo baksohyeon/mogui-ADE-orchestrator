@@ -236,7 +236,7 @@ Two principles shape the layout:
 
 To use the system, follow [Getting Started](docs/public/getting-started.md). This section is for changing the harness itself.
 
-Prerequisites: Python 3.11 or newer for the test suite. CI currently runs the test gate on `ubuntu-latest`, `macos-latest`, and `windows-latest` with Python 3.12; the Windows leg is measurement-only. The runtime is stdlib-only. A tool that needs a more capable interpreter locates one itself at runtime, and the [Reference](docs/public/reference.md) table states each tool's behavior in its own row. Contributors can select Python through `uv`, `pyenv`, or the system developer tools.
+Prerequisites: Python 3.11 or newer for the test suite. CI runs the test gate on `ubuntu-latest`, `macos-latest`, and `windows-latest`, all pinned to Python 3.13.17 by `python-version` in `.github/workflows/gates.yml`; keep the root `.python-version` in sync with that value by hand, since CI does not read it. All three legs are required checks. The runtime is stdlib-only. A tool that needs a more capable interpreter locates one itself at runtime, and the [Reference](docs/public/reference.md) table states each tool's behavior in its own row. Contributors can select Python through `uv`, `pyenv`, or the system developer tools.
 
 All CLI entry points live in `scripts/` and are self-contained:
 

@@ -20,6 +20,19 @@ you build on it.
 
 ## [Unreleased]
 
+### Changed
+
+- `gates.yml` pins both `actions/setup-python` steps to CPython 3.13.17, replacing a floating
+  `"3.12"` that let each runner's preinstalled patch diverge (3.12.15 on ubuntu, 3.12.10 on macOS
+  and Windows). The `tests` job covers all three runners, though its Windows leg is
+  measurement-only and non-blocking, with new failures the pin surfaced there (#209); `shell-tests`
+  covers ubuntu and macOS only. A `Print interpreter` step after each one puts
+  `python -VV` in both Python test-job logs (`tests`, `shell-tests`). `.python-version` at the
+  repository root carries the same pin for local use, and the README prerequisites sentence names
+  the workflow as the source of truth. The pin also surfaced a Windows-only fixture assumption in
+  `tests/test_instance_runtime_config.py`: six absolute-path fixtures assumed POSIX paths, which
+  `ntpath.isabs` stopped treating as absolute under 3.13, and this round fixes them (#209).
+
 ## [0.5.278] - 2026-10-26
 
 ### Added

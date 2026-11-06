@@ -157,6 +157,23 @@ print($1)
 "
 }
 
+# Reads one normalized key (task_id, terminal_handle, dispatch_id, or
+# dispatch_status; see scripts/lib/orca_json.py) from raw orca
+# --json stdout on stdin, old shape or 1.4.246+ shape alike. Prints the value,
+# or an empty line when the module found it under neither shape, so every
+# `orca_json_read` call site keeps its existing `[ -z "$X" ]` failure check.
+orca_json_read() {
+  local func="$1"
+  python3 -c "
+import sys
+sys.path.insert(0, '$SCRIPTS_DIR')
+from lib import orca_json
+ok, result, error = orca_json.parse_envelope(sys.stdin.read())
+value = getattr(orca_json, '$func')(result)
+print(value or '')
+"
+}
+
 # Body text of a "## <name>" heading, read from the local overlay first
 # (so a seat's own copy of a shared block name wins) and the shipped file
 # second. Exit 1 when neither file carries the heading.
@@ -1591,17 +1608,26 @@ if [ "$RUNTIME" = codex ] && [ "$TGLOB_EXPLICIT" != 1 ] \
 fi
 
 # 2. task-create
-TASK=$(orca orchestration task-create --spec "$SPEC" --json 2>/dev/null | jqf "d['result']['task']['id']")
-[ -z "$TASK" ] && { echo "✗ task-create failed" >&2; exit 3; }
+TASK_RAW=$(orca orchestration task-create --spec "$SPEC" --json 2>/dev/null)
+TASK=$(printf '%s' "$TASK_RAW" | orca_json_read task_id)
+if [ -z "$TASK" ]; then
+  echo "task-create raw response (first 200 chars): ${TASK_RAW:0:200}" >&2
+  echo "✗ task-create failed" >&2
+  exit 3
+fi
 
 # 3. terminal (reuse or create in worktree)
 KIND="재사용"
 if [ -z "$TERMINAL" ]; then
   KIND="신규"
-  TERMINAL=$(orca terminal create --worktree "$WORKTREE" \
-    --command "$(runtime_command "$RUNTIME")" --json 2>/dev/null \
-    | jqf "d['result']['terminal']['handle']")
-  [ -z "$TERMINAL" ] && { echo "✗ terminal create failed" >&2; exit 3; }
+  TERMINAL_RAW=$(orca terminal create --worktree "$WORKTREE" \
+    --command "$(runtime_command "$RUNTIME")" --json 2>/dev/null)
+  TERMINAL=$(printf '%s' "$TERMINAL_RAW" | orca_json_read terminal_handle)
+  if [ -z "$TERMINAL" ]; then
+    echo "terminal create raw response (first 200 chars): ${TERMINAL_RAW:0:200}" >&2
+    echo "✗ terminal create failed" >&2
+    exit 3
+  fi
   orca terminal wait --terminal "$TERMINAL" --for tui-idle --timeout-ms 60000 --json >/dev/null 2>&1
 fi
 echo "→ $TASK → $TERMINAL ($KIND)"
@@ -1673,9 +1699,13 @@ fi
 
 # 4. dispatch --inject
 PRE_INJECT_CLASS=$(pane_classification "$TERMINAL")
-DISP=$(orca orchestration dispatch --task "$TASK" --to "$TERMINAL" --inject --json 2>/dev/null \
-       | jqf "d['result']['dispatch']['id']")
-[ -z "$DISP" ] && { echo "✗ dispatch failed" >&2; exit 3; }
+DISP_RAW=$(orca orchestration dispatch --task "$TASK" --to "$TERMINAL" --inject --json 2>/dev/null)
+DISP=$(printf '%s' "$DISP_RAW" | orca_json_read dispatch_id)
+if [ -z "$DISP" ]; then
+  echo "dispatch raw response (first 200 chars): ${DISP_RAW:0:200}" >&2
+  echo "✗ dispatch failed" >&2
+  exit 3
+fi
 
 # 5. resolve the model probe target honestly before registering.
 CODEX_ROLLOUT=""
@@ -1788,9 +1818,12 @@ done
 # prepared prompt it started from, so the pane carries no positive signal at
 # all. The Orca dispatch record does: read its status once, here, and fold it
 # into the classification below.
-DISPATCH_STATUS=$(orca orchestration dispatch-show --task "$TASK" --json 2>/dev/null \
-  | jqf "d['result']['dispatch']['status']" 2>/dev/null)
-[ -n "$DISPATCH_STATUS" ] || DISPATCH_STATUS=unreadable
+DISPATCH_SHOW_RAW=$(orca orchestration dispatch-show --task "$TASK" --json 2>/dev/null)
+DISPATCH_STATUS=$(printf '%s' "$DISPATCH_SHOW_RAW" | orca_json_read dispatch_status 2>/dev/null)
+if [ -z "$DISPATCH_STATUS" ]; then
+  echo "dispatch-show raw response (first 200 chars): ${DISPATCH_SHOW_RAW:0:200}" >&2
+  DISPATCH_STATUS=unreadable
+fi
 DELIVERY_CLASS=$(delivery_result "$PRE_INJECT_CLASS" "$POST_INJECT_CLASS" "$DISPATCH_STATUS")
 echo "delivery pre=$PRE_INJECT_CLASS post=$POST_INJECT_CLASS status=$DISPATCH_STATUS class=$DELIVERY_CLASS"
 case "$DELIVERY_CLASS" in

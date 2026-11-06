@@ -72,6 +72,8 @@ Importable two ways, both used in this tree:
 # as a PEP 420 namespace package, and an unrelated `lib` package elsewhere
 # on sys.path can shadow or merge with it. This is how worker-wait does it.
 import importlib.util
+from pathlib import Path
+scripts_dir = Path(__file__).resolve().parent
 path = scripts_dir / "lib" / "orca_json.py"
 spec = importlib.util.spec_from_file_location("orca_json", path)
 orca_json = importlib.util.module_from_spec(spec)

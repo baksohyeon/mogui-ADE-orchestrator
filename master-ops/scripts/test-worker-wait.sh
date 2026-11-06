@@ -14,6 +14,14 @@ ok() { echo "  ok:   $*"; }
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
+# worker-wait resolves `lib/orca_json.py` and `mogui_log.py` relative to its
+# own file location (docs/runbooks/orca-json.md); every sed-mutated copy of
+# the script below is written directly into $work, so stage both siblings
+# there once, up front, instead of per mutant.
+cp "$ROOT/scripts/mogui_log.py" "$work/mogui_log.py"
+mkdir -p "$work/lib"
+cp "$ROOT/scripts/lib/orca_json.py" "$work/lib/orca_json.py"
+
 # --- fixtures: one DEAD dispatch (pid recorded, not alive) -------------------
 cat > "$work/worker_list.json" <<'JSON'
 {"ok":true,"result":{"workers":[{"dispatchId":"ctx_dead0001","dispatchStatus":"dispatched","agentTerminalHandle":"term_dead-pane"}],"page":{"hasMore":false}}}
@@ -133,6 +141,146 @@ else
   fail "restored: unmutated script should still exit 2 on a held lock"
 fi
 rm -f "$work/home/.mogui/worker-wait/run_lock_test.lock"
+
+# --- Case 3: 1.4.246+ worker-list shape (outcome/terminal/nextCursor) -------
+# reads the same DEAD verdict as Case 1's old-shape fixture, routed through
+# lib/orca_json.py instead of a shape-specific reader here.
+cat > "$work/worker_list_new.json" <<'JSON'
+{"ok":true,"result":{"workers":[{"dispatchId":"ctx_dead0002","taskId":"task_dead0002","outcome":"in_progress","terminal":"term_dead-pane-2"}],"nextCursor":""}}
+JSON
+cat > "$work/terminal_list_new.json" <<'JSON'
+{"ok":true,"result":{"terminals":[{"handle":"term_dead-pane-2","lastOutputAt":1}]}}
+JSON
+cat > "$work/orca-new-shape" <<EOF
+#!/usr/bin/env bash
+case "\$1 \$2" in
+  "orchestration worker-list") cat "$work/worker_list_new.json" ;;
+  "terminal list")
+    if printf '%s\n' "\$@" | grep -q -- '--json'; then cat "$work/terminal_list_new.json"
+    else echo "term_dead-pane-2 pane"; fi
+    ;;
+  "terminal read") echo "" ;;
+  *) echo "{}" ;;
+esac
+EOF
+chmod +x "$work/orca-new-shape"
+cat > "$work/ledger_new.jsonl" <<'EOF'
+{"job_id": "ctx_dead0002", "worker_pid": "9999", "pane": "term_dead-pane-2"}
+EOF
+
+run_once_new_shape() {
+  PATH="$work/new-shape-bin:$PATH" HOME="$work/home" "$1" --once --json --run run_x --ledger "$work/ledger_new.jsonl" 2>&1
+}
+mkdir -p "$work/new-shape-bin"
+cp "$work/orca-new-shape" "$work/new-shape-bin/orca"
+cp "$work/ps" "$work/new-shape-bin/ps"
+
+out=$(run_once_new_shape "$SCRIPT"); rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'ctx_dead0002' && printf '%s' "$out" | grep -q '"DEAD"'; then
+  ok "new-shape worker-list (outcome/terminal/nextCursor): DEAD verdict read through lib/orca_json.py"
+else
+  fail "new-shape worker-list: expected a DEAD row for ctx_dead0002, got exit $rc: $out"
+fi
+
+# Failability: a worker-wait + lib/orca_json.py pair that reads only the old
+# path must not see this dispatch at all (no `outcome` reader -> never
+# "in_progress" -> never added to the dispatched rows -> no row, no DEAD).
+mutant_dir="$work/mutant-old-path-only"
+mkdir -p "$mutant_dir/lib"
+cp "$ROOT/scripts/mogui_log.py" "$mutant_dir/mogui_log.py"
+sed 's/raw_status = worker.get("outcome")/raw_status = None  # mutated: old path only/' \
+  "$ROOT/scripts/lib/orca_json.py" > "$mutant_dir/lib/orca_json.py"
+cp "$SCRIPT" "$mutant_dir/worker-wait"
+chmod +x "$mutant_dir/worker-wait"
+if cmp -s "$ROOT/scripts/lib/orca_json.py" "$mutant_dir/lib/orca_json.py"; then
+  fail "failability: new-shape worker-list sed pattern did not match lib/orca_json.py"
+fi
+mutant_out=$(run_once_new_shape "$mutant_dir/worker-wait"); mutant_rc=$?
+if [ "$mutant_rc" -eq 0 ] && ! printf '%s' "$mutant_out" | grep -q 'ctx_dead0002'; then
+  ok "failability: old-path-only lib/orca_json.py drops the new-shape dispatch entirely"
+else
+  fail "failability: old-path-only mutant should have dropped ctx_dead0002, got exit $mutant_rc: $mutant_out"
+fi
+
+# --- Case 4: `check --wait` with no deliveryId (1.4.246+ dropped it; a -------
+# consuming check marks the batch handled server-side and `--ack` is a
+# no-op) must not print the old "no deliveryId to ack" warning, and must
+# still carry the prior ack forward unchanged (an old-shape ack still
+# pending behind this heartbeat must not be silenced).
+check_no_delivery_id() {
+  # $1: path to a worker-wait to test (real script or a mutant copy).
+  python3 - "$1" <<'PYEOF'
+import importlib.machinery
+import importlib.util
+import io
+import sys
+from contextlib import redirect_stderr
+from unittest import mock
+
+script_path = sys.argv[1]
+loader = importlib.machinery.SourceFileLoader("worker_wait_under_test", script_path)
+spec = importlib.util.spec_from_loader("worker_wait_under_test", loader)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+
+
+class FakeProc:
+    def __init__(self, stdout):
+        self.stdout = stdout
+        self.stderr = ""
+        self.returncode = 0
+
+
+heartbeat_no_delivery = '{"ok":true,"result":{"messages":[{"type":"heartbeat"}]}}'
+with mock.patch.object(mod.subprocess, "run", return_value=FakeProc(heartbeat_no_delivery)):
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        batch, ack = mod._wait_for_message("run_x", "stale_ack")
+stderr_out = buf.getvalue()
+passed = batch is None and ack == "stale_ack" and "no deliveryId to ack" not in stderr_out
+print("PASS" if passed else f"FAIL batch={batch!r} ack={ack!r} stderr={stderr_out!r}")
+PYEOF
+}
+
+result=$(check_no_delivery_id "$SCRIPT")
+if [ "$result" = "PASS" ]; then
+  ok "check --wait with no deliveryId: treated as handled, no stale-ack warning"
+else
+  fail "check --wait with no deliveryId: $result"
+fi
+
+mutant_ack="$work/worker-wait-mutant-ack-warn"
+python3 - "$SCRIPT" "$mutant_ack" <<'PYEOF'
+import sys
+
+src_path, dst_path = sys.argv[1], sys.argv[2]
+src = open(src_path, encoding="utf-8").read()
+anchor = (
+    "            # heartbeat must not be silenced.\n"
+    "            return None, ack\n"
+)
+replacement = (
+    "            # heartbeat must not be silenced.\n"
+    '            print("worker-wait: heartbeat batch had no deliveryId to ack; '
+    'treating as quiet", file=sys.stderr)\n'
+    "            return None, ack\n"
+)
+if anchor not in src:
+    print("mutation anchor not found", file=sys.stderr)
+    sys.exit(1)
+with open(dst_path, "w", encoding="utf-8") as f:
+    f.write(src.replace(anchor, replacement, 1))
+PYEOF
+if [ ! -s "$mutant_ack" ] || cmp -s "$SCRIPT" "$mutant_ack"; then
+  fail "failability: ack-warning mutation anchor did not match the script"
+fi
+chmod +x "$mutant_ack"
+mutant_result=$(check_no_delivery_id "$mutant_ack")
+if [ "$mutant_result" != "PASS" ]; then
+  ok "failability: reintroducing the old stale-ack warning fails this case ($mutant_result)"
+else
+  fail "failability: ack-warning mutant did not change the observed behavior"
+fi
 
 [ "$FAILED" -eq 0 ] && { echo "worker-wait: all checks passed"; exit 0; }
 echo "worker-wait: FAILED"

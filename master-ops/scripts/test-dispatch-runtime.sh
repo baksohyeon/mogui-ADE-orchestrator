@@ -1180,22 +1180,31 @@ codex_start_screen_test "$dispatch" || exit 1
 codex_start_screen_wiring_test() (
   set +e
   set -u
-  local dispatch="$1" work jqf_fn pane_classification_fn start_fn markers wiring_block
+  local dispatch="$1" work jqf_fn pane_classification_fn start_fn orca_json_read_fn markers wiring_block
   local menu ready script_file out status
 
   jqf_fn=$(awk '$0=="jqf() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   pane_classification_fn=$(awk '$0=="pane_classification() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   start_fn=$(awk '$0=="codex_start_screen_problem() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  orca_json_read_fn=$(awk '$0=="orca_json_read() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   markers=$(grep -E '^(LIMIT_MARKERS|HOOK_TRUST_MARKERS|PREPARED_PROMPT_MARKERS|PREPARED_UNICODE_PROMPT_MARKERS)=' "$dispatch")
+  # The block to extract now spans two `if`s: the codex start-screen gate,
+  # then (since the dispatch --inject reader moved behind orca_json_read) a
+  # second `if [ -z "$DISP" ]; then ... fi` whose own body contains the
+  # "dispatch failed" line this used to stop right after. Stopping there
+  # left the extracted text with an unclosed `if`; stop at the next bare
+  # `fi` instead, which closes that second block.
   wiring_block=$(awk '
     $0=="if [ \"$RUNTIME\" = codex ]; then"{f=1}
     f{print}
-    f && /dispatch failed/{exit}
+    f && seen && $0=="fi"{exit}
+    f && /dispatch failed/{seen=1}
   ' "$dispatch")
 
   [ -n "$jqf_fn" ] || { echo "FAIL: could not extract jqf" >&2; return 1; }
   [ -n "$pane_classification_fn" ] || { echo "FAIL: could not extract pane_classification" >&2; return 1; }
   [ -n "$start_fn" ] || { echo "FAIL: could not extract codex_start_screen_problem" >&2; return 1; }
+  [ -n "$orca_json_read_fn" ] || { echo "FAIL: could not extract orca_json_read" >&2; return 1; }
   [ -n "$wiring_block" ] || { echo "FAIL: could not extract the codex start-screen wiring block" >&2; return 1; }
   printf '%s\n' "$wiring_block" | grep -Fq 'codex_start_screen_problem' || { echo "FAIL: extracted block does not call codex_start_screen_problem" >&2; return 1; }
   printf '%s\n' "$wiring_block" | grep -Fq 'orca orchestration dispatch' || { echo "FAIL: extracted block does not reach the inject call" >&2; return 1; }
@@ -1226,7 +1235,13 @@ BIN
       echo 'set -u'
       printf 'export FAKE_MARKER=%s\n' "$work/injected"
       printf 'export FAKE_PANE_FILE=%s\n' "$work/pane.txt"
+      # orca_json_read shells out to python3 with `$SCRIPTS_DIR` on
+      # sys.path (see scripts/lib/orca_json.py); set it to the real
+      # scripts directory so that import finds the real module instead of
+      # whatever happens to sit beside this generated scratch script.
+      printf 'SCRIPTS_DIR=%s\n' "$(dirname "$dispatch")"
       printf '%s\n' "$jqf_fn"
+      printf '%s\n' "$orca_json_read_fn"
       printf '%s\n' "$markers"
       printf '%s\n' "$pane_classification_fn"
       printf '%s\n' "$start_fn"
@@ -1622,7 +1637,7 @@ hooks_answer_bin_path_test "$dispatch" || exit 1
 codex_hooks_vet_wiring_test() (
   set +e
   set -u
-  local dispatch="$1" work jqf_fn pane_classification_fn start_fn markers wiring_block
+  local dispatch="$1" work jqf_fn pane_classification_fn start_fn orca_json_read_fn markers wiring_block
   local vet_fn homes_fn accounts_fn vet_homes_fn hooks_answer_var
   local menu ready script_file out status mutant_wiring
   local mutant_homes homes_fn_saved
@@ -1630,21 +1645,30 @@ codex_hooks_vet_wiring_test() (
   jqf_fn=$(awk '$0=="jqf() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   pane_classification_fn=$(awk '$0=="pane_classification() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   start_fn=$(awk '$0=="codex_start_screen_problem() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  orca_json_read_fn=$(awk '$0=="orca_json_read() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   markers=$(grep -E '^(LIMIT_MARKERS|HOOK_TRUST_MARKERS|PREPARED_PROMPT_MARKERS|PREPARED_UNICODE_PROMPT_MARKERS)=' "$dispatch")
   accounts_fn=$(awk '$0=="codex_accounts_dir() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   homes_fn=$(awk '$0=="codex_hooks_homes() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   vet_fn=$(awk '$0=="codex_hooks_vet() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   vet_homes_fn=$(awk '$0=="codex_hooks_vet_homes() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   hooks_answer_var=$(grep -E '^HOOKS_ANSWER_BIN=' "$dispatch")
+  # The block to extract now spans two `if`s: the codex start-screen gate,
+  # then (since the dispatch --inject reader moved behind orca_json_read) a
+  # second `if [ -z "$DISP" ]; then ... fi` whose own body contains the
+  # "dispatch failed" line this used to stop right after. Stopping there
+  # left the extracted text with an unclosed `if`; stop at the next bare
+  # `fi` instead, which closes that second block.
   wiring_block=$(awk '
     $0=="if [ \"$RUNTIME\" = codex ]; then"{f=1}
     f{print}
-    f && /dispatch failed/{exit}
+    f && seen && $0=="fi"{exit}
+    f && /dispatch failed/{seen=1}
   ' "$dispatch")
 
   [ -n "$jqf_fn" ] || { echo "FAIL: could not extract jqf" >&2; return 1; }
   [ -n "$pane_classification_fn" ] || { echo "FAIL: could not extract pane_classification" >&2; return 1; }
   [ -n "$start_fn" ] || { echo "FAIL: could not extract codex_start_screen_problem" >&2; return 1; }
+  [ -n "$orca_json_read_fn" ] || { echo "FAIL: could not extract orca_json_read" >&2; return 1; }
   [ -n "$accounts_fn" ] || { echo "FAIL: could not extract codex_accounts_dir" >&2; return 1; }
   [ -n "$homes_fn" ] || { echo "FAIL: could not extract codex_hooks_homes" >&2; return 1; }
   [ -n "$vet_fn" ] || { echo "FAIL: could not extract codex_hooks_vet" >&2; return 1; }
@@ -1711,7 +1735,13 @@ BIN
       printf 'export FAKE_READ_COUNT=%s\n' "$work/read-count"
       printf 'export FAKE_PANE_FILE=%s\n' "$work/pane.txt"
       printf 'export FAKE_READY_PANE_FILE=%s\n' "$work/ready.txt"
+      # orca_json_read shells out to python3 with `$SCRIPTS_DIR` on
+      # sys.path (see scripts/lib/orca_json.py); set it to the real
+      # scripts directory so that import finds the real module instead of
+      # whatever happens to sit beside this generated scratch script.
+      printf 'SCRIPTS_DIR=%s\n' "$(dirname "$dispatch")"
       printf '%s\n' "$jqf_fn"
+      printf '%s\n' "$orca_json_read_fn"
       printf '%s\n' "$markers"
       printf '%s\n' "$pane_classification_fn"
       printf '%s\n' "$start_fn"

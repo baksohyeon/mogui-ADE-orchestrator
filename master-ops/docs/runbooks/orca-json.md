@@ -5,9 +5,17 @@ orchestration` and `orca terminal` commands. From orca 1.4.246 (2026-11-02)
 those commands answer with different keys, with no deprecation notice; every
 reader that used a one-off key path or a hand-rolled `jqf` expression failed
 silent (an empty string or `None`, never an error) the moment the shape
-changed under it. The rule going forward: **every reader of orca JSON goes
-through this module; a new key goes into the module and its test, nowhere
-else.**
+changed under it. The rule going forward: **every reader of a field this
+module normalizes goes through it; a new key goes into the module and its
+test, nowhere else.**
+
+Not yet migrated, so still exposed to the next shape change: `scripts/spawn-test`'s
+coordinator-run detection (greps for the old `"run": {` shape directly) and
+`scripts/dispatch-smoke`'s two `dispatch-show` reads (`d["result"]["dispatch"]["status"]`,
+old path only). `worker-wait`'s `_terminal_list` (`terminal list --json`'s
+`terminals[].handle`) and its `_last_non_keepalive` envelope parser (which
+filters `check --wait`'s interleaved keepalive documents, a different job
+from `parse_envelope`'s shape handling) are also outside the module.
 
 ## Measured shapes
 
@@ -59,21 +67,27 @@ before depending on a specific precedence between `terminalHandle` and
 Importable two ways, both used in this tree:
 
 ```python
-# from a Python script beside it (dispatch's jqf-style helper is bash; this
-# is how worker-wait does it)
-import sys
-sys.path.insert(0, "<scripts-dir>")
-from lib import orca_json
+# from a Python script beside it: load the file directly, not via
+# `from lib import orca_json`. `lib/` has no `__init__.py`, so it resolves
+# as a PEP 420 namespace package, and an unrelated `lib` package elsewhere
+# on sys.path can shadow or merge with it. This is how worker-wait does it.
+import importlib.util
+path = scripts_dir / "lib" / "orca_json.py"
+spec = importlib.util.spec_from_file_location("orca_json", path)
+orca_json = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(orca_json)
 ```
 
 ```sh
-# from a one-liner, same seam
+# from a one-liner (dispatch's orca_json_read helper): pass the path
+# through argv, not by interpolating it into the Python source. A checkout
+# path can contain a quote character, which would break the string literal.
 python3 -c "
 import sys
-sys.path.insert(0, '<scripts-dir>')
+sys.path.insert(0, sys.argv[1])
 from lib import orca_json
 print(orca_json.task_id({'taskId': 'task_x'}))
-"
+" "<scripts-dir>"
 ```
 
 ## Callers
@@ -88,7 +102,8 @@ print(orca_json.task_id({'taskId': 'task_x'}))
   `check`/ack handling in `_wait_for_message` / `_flush_ack` all route
   through the module. `_worker_list`'s "still dispatched" filter checks
   `status == "in_progress"` (the module's normalized value), not the old
-  shape's literal `"dispatched"`.
+  shape's literal `"dispatched"`. `_terminal_list` (`terminal list --json`)
+  does not; see "Not yet migrated" above.
 
 ## Tests
 
@@ -110,6 +125,7 @@ print(orca_json.task_id({'taskId': 'task_x'}))
 
 A new orca version changing one of these keys again means: add the new path
 to the relevant function in `scripts/lib/orca_json.py`, add its fixture to
-`scripts/test-orca-json.sh`, and update the measured-shapes table above.
-Nothing outside the module should ever read `result["..."]` for one of these
-commands directly again.
+`scripts/test-orca-json.sh`, and update the measured-shapes table above. For
+a field this module already normalizes, nothing outside it should read
+`result["..."]` directly; migrating the "Not yet migrated" callers above
+onto the module is separate, tracked work.

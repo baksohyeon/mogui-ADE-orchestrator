@@ -40,8 +40,11 @@ print(datetime.datetime.fromtimestamp(os.path.getmtime(sys.argv[1])).isoformat(t
       orca_line="$orca_line, changed since $orca_prev_version"
     fi
   fi
-  mkdir -p "$HOME/.mogui" 2>/dev/null
-  printf '%s\n' "$orca_version" > "$orca_version_state" 2>/dev/null
+  # Best-effort: an unwritable $HOME must not trip `set -e` and abort this
+  # script before it reports the remaining checks below.
+  if mkdir -p "$HOME/.mogui" 2>/dev/null; then
+    printf '%s\n' "$orca_version" > "$orca_version_state" 2>/dev/null || true
+  fi
   echo "$orca_line"
 else
   echo "Orca: undeterminable (orca binary not found on PATH)"

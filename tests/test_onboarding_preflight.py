@@ -687,7 +687,7 @@ def test_agent_route_fails_without_python_and_the_run_finishes(
     shim.mkdir()
     for system_dir in (Path("/usr/bin"), Path("/bin")):
         for tool in system_dir.iterdir():
-            if tool.name.startswith("python") or (shim / tool.name).exists():
+            if tool.name.startswith("python") or os.path.lexists(shim / tool.name):
                 continue
             (shim / tool.name).symlink_to(tool)
     env["PATH"] = f"{tmp_path / 'bin'}:{shim}"

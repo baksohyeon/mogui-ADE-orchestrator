@@ -13,6 +13,7 @@ no src/ tree, so this cannot import master_runtime like the ops repo's own scrip
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import shutil
@@ -32,6 +33,22 @@ except ImportError:
     # must not block the wait loop over a logging dependency.
     def mogui_emit(*args, **kwargs):  # noqa: D401
         return None
+
+
+def _load_orca_json():
+    # Load the exact file by path instead of `from lib import orca_json`:
+    # `lib/` has no `__init__.py`, so it resolves as a PEP 420 namespace
+    # package, and an unrelated `lib` package earlier on `sys.path` (a real
+    # case in this file's own in-process test harness) can shadow or merge
+    # with it. A direct file load never touches that resolution.
+    path = _SCRIPTS_DIR / "lib" / "orca_json.py"
+    spec = importlib.util.spec_from_file_location("orca_json", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+orca_json = _load_orca_json()
 
 DEFAULT_STALL_MINUTES = 10
 DEFAULT_CHECK_TIMEOUT_MS = 60_000
@@ -215,19 +232,18 @@ def _wait_for_message(run_id: str, ack: str | None) -> tuple[dict | None, str | 
     payload = result["result"]
     if payload.get("timedOut"):
         return None, ack
-    messages = payload.get("messages") or []
-    delivery_id = payload.get("deliveryId")
+    messages = orca_json.messages(payload)
+    delivery_id = orca_json.delivery_id(payload)
     if messages and all(
         isinstance(m, dict) and m.get("type") == "heartbeat" for m in messages
     ):
         if not delivery_id:
-            # Nothing to ack, and zeroing out an already-valid `ack` here
-            # would silence `--ack` on every future call, letting orca
-            # replay this same heartbeat forever instead of blocking.
-            print(
-                "worker-wait: heartbeat batch had no deliveryId to ack; treating as quiet",
-                file=sys.stderr,
-            )
+            # 1.4.246+ dropped deliveryId entirely: a consuming `check` marks
+            # the batch handled server-side and `--ack` is a no-op, so a
+            # missing deliveryId is no longer a warning-worthy anomaly (see
+            # docs/runbooks/orca-json.md). The prior `ack` still carries
+            # forward unchanged: an old-shape ack still pending behind this
+            # heartbeat must not be silenced.
             return None, ack
         return None, delivery_id
     if not messages and not delivery_id:
@@ -304,8 +320,8 @@ def _flush_ack(run_id: str, delivery_id: str) -> dict | None:
             )
             return None
         payload = result["result"]
-        messages = payload.get("messages") or []
-        next_delivery_id = payload.get("deliveryId")
+        messages = orca_json.messages(payload)
+        next_delivery_id = orca_json.delivery_id(payload)
         if not messages:
             return None
         if all(isinstance(m, dict) and m.get("type") == "heartbeat" for m in messages):
@@ -370,9 +386,9 @@ def _accounting_pass(
     rows: list[dict] = []
     seen_panes: set[str] = set()
     for entry in dispatched:
-        dispatch_id = entry["dispatchId"]
+        dispatch_id = entry["dispatch_id"]
         recorded = ledger_index.get(dispatch_id, {})
-        pane = recorded.get("pane") or entry.get("agentTerminalHandle")
+        pane = recorded.get("pane") or entry.get("terminal")
         pid = recorded.get("pid")
         if pane:
             seen_panes.add(pane)
@@ -399,7 +415,7 @@ def _accounting_pass(
         if handle in seen_panes:
             continue
         status = handle_status.get(handle)
-        if status and status != "dispatched":
+        if status and status != "in_progress":
             task_id = handle_task_id.get(handle)
             row = {
                 "dispatch_id": None,
@@ -507,7 +523,7 @@ def _emit_wait_wake(batch: dict) -> None:
         "wait_wake",
         "pass",
         message_type=types,
-        message_id=str(batch.get("deliveryId") or ""),
+        message_id=str(orca_json.delivery_id(batch) or ""),
     )
 
 
@@ -562,11 +578,11 @@ def _compute_verdict(
 def _worker_list(
     run_id: str,
 ) -> tuple[list[dict], dict[str, str], dict[str, str]]:
-    """Dispatched entries for the Run, a handle -> latest dispatchStatus map,
-    and a handle -> taskId map (every row seen, not just dispatched ones —
-    an OPEN_PANE row's `--reap` call needs the task id of whichever dispatch
-    last claimed that pane, which is exactly the row this handle's status
-    came from)."""
+    """Dispatched entries for the Run (normalized rows, see
+    `lib.orca_json.workers`), a handle -> latest status map, and a handle ->
+    taskId map. Every row is seen, not just dispatched ones: an OPEN_PANE
+    row's `--reap` call needs the task id of whichever dispatch last claimed
+    that pane, which is exactly the row this handle's status came from."""
 
     dispatched: list[dict] = []
     handle_status: dict[str, str] = {}
@@ -591,19 +607,17 @@ def _worker_list(
                 "orca orchestration worker-list failed or returned malformed JSON"
             )
         result = payload.get("result", {})
-        workers = result.get("workers") or []
-        for worker in workers:
-            handle = worker.get("agentTerminalHandle")
-            status = worker.get("dispatchStatus")
+        for worker in orca_json.workers(result):
+            handle = worker["terminal"]
+            status = worker["status"]
             if handle:
                 handle_status[handle] = status
-                task_id = worker.get("taskId") or worker.get("task_id")
+                task_id = worker["task_id"]
                 handle_task_id[handle] = str(task_id) if task_id else ""
-            if status == "dispatched":
+            if status == "in_progress":
                 dispatched.append(worker)
-        page = result.get("page") or {}
-        cursor = page.get("nextCursor")
-        if not page.get("hasMore") or not cursor:
+        cursor = orca_json.next_cursor(result)
+        if not cursor:
             break
     return dispatched, handle_status, handle_task_id
 
@@ -712,8 +726,7 @@ def _orca_json(argv: list[str]) -> dict | None:
 def _resolve_bound_run() -> str | None:
     payload = _orca_json(["orca", "orchestration", "run-current", "--json"])
     result = payload.get("result", {}) if payload else {}
-    run = result.get("run")
-    return run.get("id") if isinstance(run, dict) else None
+    return orca_json.run_id(result)
 
 
 def _state_dir() -> Path:

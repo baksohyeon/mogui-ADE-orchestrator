@@ -19,6 +19,38 @@ TEMPLATE_CHECK="$OPS_DIR/scripts/template-check"
 
 exit_code=0
 
+# --- Orca version/install check ---
+# `orca --version` plus its binary's last-modified time, with a note when the
+# version changed since the previous run of this script, a cheap drift
+# signal for the orchestration JSON shape this seat's readers (dispatch,
+# worker-wait) depend on (docs/runbooks/orca-json.md): orca 1.4.246 changed
+# those keys with no deprecation notice, and every prior reader failed silent.
+ORCA_BIN="$(command -v orca 2>/dev/null || true)"
+if [ -n "$ORCA_BIN" ]; then
+  orca_version=$(orca --version 2>/dev/null || echo "undeterminable")
+  orca_mtime=$(python3 -c "
+import datetime, os, sys
+print(datetime.datetime.fromtimestamp(os.path.getmtime(sys.argv[1])).isoformat(timespec='seconds'))
+" "$ORCA_BIN" 2>/dev/null || echo "undeterminable")
+  orca_version_state="$HOME/.mogui/orca-version.txt"
+  orca_line="Orca: $orca_version (last install $orca_mtime)"
+  if [ -f "$orca_version_state" ]; then
+    orca_prev_version=$(cat "$orca_version_state" 2>/dev/null || true)
+    if [ -n "$orca_prev_version" ] && [ "$orca_prev_version" != "$orca_version" ]; then
+      orca_line="$orca_line, changed since $orca_prev_version"
+    fi
+  fi
+  # Best-effort: an unwritable $HOME must not trip `set -e` and abort this
+  # script before it reports the remaining checks below.
+  if mkdir -p "$HOME/.mogui" 2>/dev/null; then
+    printf '%s\n' "$orca_version" > "$orca_version_state" 2>/dev/null || true
+  fi
+  echo "$orca_line"
+else
+  echo "Orca: undeterminable (orca binary not found on PATH)"
+  exit_code=1
+fi
+
 # --- Seat's template-adoption check ---
 # Ported from the seat's harness-selfcheck.sh (owner direction 2026-09-23): a
 # generated operations repository stamps the template version it was created
@@ -188,7 +220,7 @@ for skill_name in $skill_dirs; do
   # Check if skill exists at discovery path and has SKILL.md entry file.
   # The wiring may be a symlink or directory (host-dependent); test for reachability.
   if [ -d "$discovery_path" ] && [ -f "$discovery_path/SKILL.md" ]; then
-    ((skill_reachable++))
+    skill_reachable=$((skill_reachable + 1))
   else
     skill_unreachable="$skill_unreachable $skill_name"
     exit_code=1
@@ -236,7 +268,7 @@ for cmd in $wired_hooks; do
 
   if [ -n "$script_path" ]; then
     if [ -f "$script_path" ] && [ -x "$script_path" ]; then
-      ((hook_wired++))
+      hook_wired=$((hook_wired + 1))
     else
       hook_missing="$hook_missing $(basename "$script_path")"
       exit_code=1

@@ -13,6 +13,7 @@ no src/ tree, so this cannot import master_runtime like the ops repo's own scrip
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import shutil
@@ -33,7 +34,21 @@ except ImportError:
     def mogui_emit(*args, **kwargs):  # noqa: D401
         return None
 
-from lib import orca_json  # noqa: E402
+
+def _load_orca_json():
+    # Load the exact file by path instead of `from lib import orca_json`:
+    # `lib/` has no `__init__.py`, so it resolves as a PEP 420 namespace
+    # package, and an unrelated `lib` package earlier on `sys.path` (a real
+    # case in this file's own in-process test harness) can shadow or merge
+    # with it. A direct file load never touches that resolution.
+    path = _SCRIPTS_DIR / "lib" / "orca_json.py"
+    spec = importlib.util.spec_from_file_location("orca_json", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+orca_json = _load_orca_json()
 
 DEFAULT_STALL_MINUTES = 10
 DEFAULT_CHECK_TIMEOUT_MS = 60_000

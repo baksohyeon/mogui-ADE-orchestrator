@@ -166,12 +166,12 @@ orca_json_read() {
   local func="$1"
   python3 -c "
 import sys
-sys.path.insert(0, '$SCRIPTS_DIR')
+sys.path.insert(0, sys.argv[1])
 from lib import orca_json
 ok, result, error = orca_json.parse_envelope(sys.stdin.read())
-value = getattr(orca_json, '$func')(result)
+value = getattr(orca_json, sys.argv[2])(result)
 print(value or '')
-"
+" "$SCRIPTS_DIR" "$func"
 }
 
 # Body text of a "## <name>" heading, read from the local overlay first

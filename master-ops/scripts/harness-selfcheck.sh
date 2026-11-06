@@ -220,7 +220,7 @@ for skill_name in $skill_dirs; do
   # Check if skill exists at discovery path and has SKILL.md entry file.
   # The wiring may be a symlink or directory (host-dependent); test for reachability.
   if [ -d "$discovery_path" ] && [ -f "$discovery_path/SKILL.md" ]; then
-    ((skill_reachable++))
+    skill_reachable=$((skill_reachable + 1))
   else
     skill_unreachable="$skill_unreachable $skill_name"
     exit_code=1
@@ -268,7 +268,7 @@ for cmd in $wired_hooks; do
 
   if [ -n "$script_path" ]; then
     if [ -f "$script_path" ] && [ -x "$script_path" ]; then
-      ((hook_wired++))
+      hook_wired=$((hook_wired + 1))
     else
       hook_missing="$hook_missing $(basename "$script_path")"
       exit_code=1

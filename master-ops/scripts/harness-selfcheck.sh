@@ -19,6 +19,35 @@ TEMPLATE_CHECK="$OPS_DIR/scripts/template-check"
 
 exit_code=0
 
+# --- Orca version/install check ---
+# `orca --version` plus its binary's last-modified time, with a note when the
+# version changed since the previous run of this script, a cheap drift
+# signal for the orchestration JSON shape this seat's readers (dispatch,
+# worker-wait) depend on (docs/runbooks/orca-json.md): orca 1.4.246 changed
+# those keys with no deprecation notice, and every prior reader failed silent.
+ORCA_BIN="$(command -v orca 2>/dev/null || true)"
+if [ -n "$ORCA_BIN" ]; then
+  orca_version=$(orca --version 2>/dev/null || echo "undeterminable")
+  orca_mtime=$(python3 -c "
+import datetime, os, sys
+print(datetime.datetime.fromtimestamp(os.path.getmtime(sys.argv[1])).isoformat(timespec='seconds'))
+" "$ORCA_BIN" 2>/dev/null || echo "undeterminable")
+  orca_version_state="$HOME/.mogui/orca-version.txt"
+  orca_line="Orca: $orca_version (last install $orca_mtime)"
+  if [ -f "$orca_version_state" ]; then
+    orca_prev_version=$(cat "$orca_version_state" 2>/dev/null || true)
+    if [ -n "$orca_prev_version" ] && [ "$orca_prev_version" != "$orca_version" ]; then
+      orca_line="$orca_line, changed since $orca_prev_version"
+    fi
+  fi
+  mkdir -p "$HOME/.mogui" 2>/dev/null
+  printf '%s\n' "$orca_version" > "$orca_version_state" 2>/dev/null
+  echo "$orca_line"
+else
+  echo "Orca: undeterminable (orca binary not found on PATH)"
+  exit_code=1
+fi
+
 # --- Seat's template-adoption check ---
 # Ported from the seat's harness-selfcheck.sh (owner direction 2026-09-23): a
 # generated operations repository stamps the template version it was created

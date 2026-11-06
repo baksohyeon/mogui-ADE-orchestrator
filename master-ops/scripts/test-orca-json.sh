@@ -125,7 +125,11 @@ check("parse_envelope", "two-documents-last-wins", got, (True, {"b": 2}, None))
 PYEOF
 }
 
-out=$(run_checks "$MODULE")
+out=$(run_checks "$MODULE"); rc=$?
+if [ "$rc" -ne 0 ]; then
+  fail "run_checks crashed against the real module (rc=$rc); see stderr above"
+fi
+[ -n "$out" ] || fail "run_checks against the real module printed no check lines"
 while IFS= read -r line; do
   [ -z "$line" ] && continue
   case "$line" in
@@ -182,15 +186,27 @@ PYEOF
 if [ ! -s "$mutant" ]; then
   fail "could not build the old-path-only mutant; see stderr above"
 else
-  mutant_out=$(run_checks "$mutant")
-  while IFS= read -r line; do
-    case "$line" in
-      task_id:new:PASS|run_id:new:PASS|terminal_handle:new-terminalHandle:PASS|terminal_handle:new-handle:PASS|dispatch_id:new:PASS|dispatch_status:new:PASS|workers:new:PASS|next_cursor:new-more:PASS)
-        fail "failability: old-path-only mutant should not pass $line"
-        ;;
-    esac
-  done <<< "$mutant_out"
-  ok "failability: old-path-only mutant breaks every new-shape case (see FAIL lines above if not)"
+  mutant_out=$(run_checks "$mutant"); mutant_rc=$?
+  if [ "$mutant_rc" -ne 0 ]; then
+    fail "failability: old-path-only mutant crashed instead of failing its checks (rc=$mutant_rc); see stderr above"
+  else
+    all_expected_failed=1
+    for expected in task_id:new run_id:new terminal_handle:new-terminalHandle \
+      terminal_handle:new-handle dispatch_id:new dispatch_status:new \
+      workers:new next_cursor:new-more
+    do
+      if ! printf '%s\n' "$mutant_out" | grep -q "^${expected}:FAIL"; then
+        fail "failability: old-path-only mutant did not report $expected as FAIL"
+        all_expected_failed=0
+      fi
+    done
+    if ! printf '%s\n' "$mutant_out" | grep -q '^task_id:old:PASS'; then
+      fail "failability: old-path-only mutant broke an old-shape case that should still pass"
+      all_expected_failed=0
+    fi
+    [ "$all_expected_failed" -eq 1 ] && \
+      ok "failability: old-path-only mutant fails every new-shape case and keeps old-shape cases passing"
+  fi
 fi
 
 [ "$FAILED" -eq 0 ] && { echo "orca-json: all checks passed"; exit 0; }

@@ -1239,7 +1239,7 @@ BIN
       # sys.path (see scripts/lib/orca_json.py); set it to the real
       # scripts directory so that import finds the real module instead of
       # whatever happens to sit beside this generated scratch script.
-      printf 'SCRIPTS_DIR=%s\n' "$(dirname "$dispatch")"
+      printf 'SCRIPTS_DIR=%q\n' "$(dirname "$dispatch")"
       printf '%s\n' "$jqf_fn"
       printf '%s\n' "$orca_json_read_fn"
       printf '%s\n' "$markers"
@@ -1739,7 +1739,7 @@ BIN
       # sys.path (see scripts/lib/orca_json.py); set it to the real
       # scripts directory so that import finds the real module instead of
       # whatever happens to sit beside this generated scratch script.
-      printf 'SCRIPTS_DIR=%s\n' "$(dirname "$dispatch")"
+      printf 'SCRIPTS_DIR=%q\n' "$(dirname "$dispatch")"
       printf '%s\n' "$jqf_fn"
       printf '%s\n' "$orca_json_read_fn"
       printf '%s\n' "$markers"

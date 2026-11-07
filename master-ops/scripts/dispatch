@@ -28,6 +28,11 @@ HOOKS_ANSWER_BIN="$SCRIPTS_DIR/codex-hooks-review-answer"
 # even though onboarding step 01 verifies its existence.
 DEFAULT_MASTER_HOST_RUNTIME=codex
 INSTANCE_RUNTIME_CONFIG=${MOGUI_INSTANCE_RUNTIME_CONFIG:-$SCRIPTS_DIR/../config/instance-runtime.json}
+DISPATCH_FROM_TERMINAL=${DISPATCH_FROM_TERMINAL:-}
+DISPATCH_FROM_ARGS=()
+if [ -n "$DISPATCH_FROM_TERMINAL" ]; then
+  DISPATCH_FROM_ARGS=(--from "$DISPATCH_FROM_TERMINAL")
+fi
 
 measured_master_host_runtime() {
   [ -f "$INSTANCE_RUNTIME_CONFIG" ] || return 1
@@ -60,6 +65,7 @@ usage() {
   echo "                [--est-chars N] [--transcript-glob GLOB] [--check-only]"
   echo "  --transcript-glob: worker transcript location for the model probe"
   echo "                     (default: derived for claude from --worktree when possible)"
+  echo "  DISPATCH_FROM_TERMINAL=<handle>: sender terminal for callers that have no ORCA_TERMINAL_HANDLE (launchd, cron)"
   exit 1
 }
 
@@ -1608,7 +1614,7 @@ if [ "$RUNTIME" = codex ] && [ "$TGLOB_EXPLICIT" != 1 ] \
 fi
 
 # 2. task-create
-TASK_RAW=$(orca orchestration task-create --spec "$SPEC" --json 2>/dev/null)
+TASK_RAW=$(orca orchestration task-create "${DISPATCH_FROM_ARGS[@]+"${DISPATCH_FROM_ARGS[@]}"}" --spec "$SPEC" --json 2>/dev/null)
 TASK=$(printf '%s' "$TASK_RAW" | orca_json_read task_id)
 if [ -z "$TASK" ]; then
   echo "task-create raw response (first 200 chars): ${TASK_RAW:0:200}" >&2
@@ -1699,7 +1705,7 @@ fi
 
 # 4. dispatch --inject
 PRE_INJECT_CLASS=$(pane_classification "$TERMINAL")
-DISP_RAW=$(orca orchestration dispatch --task "$TASK" --to "$TERMINAL" --inject --json 2>/dev/null)
+DISP_RAW=$(orca orchestration dispatch "${DISPATCH_FROM_ARGS[@]+"${DISPATCH_FROM_ARGS[@]}"}" --task "$TASK" --to "$TERMINAL" --inject --json 2>/dev/null)
 DISP=$(printf '%s' "$DISP_RAW" | orca_json_read dispatch_id)
 if [ -z "$DISP" ]; then
   echo "dispatch raw response (first 200 chars): ${DISP_RAW:0:200}" >&2

@@ -51,7 +51,7 @@ An installation without these host-level layers still runs the template mechanic
 
 ## Adoption Notes From Workspace History
 
-From the 2026-08-24 contract addendum measurements (`unmeasured` in this checkout; reported at `dionz-ops/docs/reference/blog-claims-ledger.md` commit `3c9f133`): the file records five single-tool adoption criteria and explicitly states that fame/first impression were not criteria; `ponytail` appears zero times there.
+From the 2026-08-24 contract addendum measurements (`unmeasured` in this checkout; reported in the peer seat's operations repository at `docs/reference/blog-claims-ledger.md`): the file records five single-tool adoption criteria and explicitly states that fame/first impression were not criteria; `ponytail` appears zero times there.
 Observed implication: those five criteria evaluate tools one at a time and do not expose combination utility, so this workspace added a practical sixth question: what one adopted tool covers that another adopted tool fails at.
 This is documented as an observation from this workspace's adoption history, not a ratified universal rule.
 

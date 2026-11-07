@@ -46,11 +46,13 @@ reporting the last released tag, so that value names the release it came from an
 not the exact body it received. When the difference matters, record the commit the
 installation was taken from alongside the tag.
 
+## Unreleased
+
 ## v0.5.288
 
 One reader for orca orchestration JSON, old and 1.4.246+ shapes (2026-11-07, measured against orca 1.4.249):
 
-- New `scripts/lib/orca_json.py`: `task_id`, `run_id`, `terminal_handle`, `dispatch_id`, `dispatch_status`, `delivery_id`, `messages`, `workers`, `next_cursor`, and `parse_envelope`, each reading the pre-1.4.246 key path first and the 1.4.246+ path second. The migrated shape-varying readers in `dispatch` and `worker-wait` now route through here instead of a one-off `jqf` expression or a direct `.get()` chain, so a future change to one of these normalized fields touches this module and its test, nowhere else. `terminal list` and `check`'s streaming envelope (`worker-wait`'s `_terminal_list`/`_last_non_keepalive`) are not migrated; see `docs/runbooks/orca-json.md`.
+- New `scripts/lib/orca_json.py`: `task_id`, `run_id`, `terminal_handle`, `dispatch_id`, `dispatch_status`, `delivery_id`, `messages`, `workers`, `next_cursor`, and `parse_envelope`. The shape-varying readers (`task_id`, `run_id`, `terminal_handle`, `dispatch_id`, `dispatch_status`, `workers`, `next_cursor`) read the pre-1.4.246 key path first and the 1.4.246+ path second; `delivery_id` reads the one key that exists before 1.4.246 and returns None after, `messages` uses the same key in both shapes, and `parse_envelope` decodes the envelope. Not migrated in this release: `scripts/spawn-test` still reads `result.run.id`, and `scripts/dispatch-smoke` still reads `result.dispatch.status`; on 1.4.246+ those reads return no value (see `docs/runbooks/orca-json.md`). The migrated shape-varying readers in `dispatch` and `worker-wait` now route through here instead of a one-off `jqf` expression or a direct `.get()` chain, so a future change to one of these normalized fields touches this module and its test, nowhere else. `terminal list` and `check`'s streaming envelope (`worker-wait`'s `_terminal_list`/`_last_non_keepalive`) are not migrated; see `docs/runbooks/orca-json.md`.
 - `scripts/dispatch`: the four `jqf` readers for `task-create`, `terminal create`, `dispatch --inject`, and `dispatch-show` now call the module; an empty read prints the first 200 characters of the raw response to stderr before the existing failure line, so the next shape change is visible instead of silent.
 - `scripts/worker-wait`: `_resolve_bound_run`, `_worker_list`'s accounting, and the `check`/ack delivery handling in `_wait_for_message` and `_flush_ack` now route through the module. A worker row's "still active" status (old `dispatchStatus: dispatched`, new `outcome: in_progress`) normalizes to `in_progress` either way. A heartbeat batch with no `deliveryId` (always true on 1.4.246+, which dropped the field) no longer prints a warning: `--ack` is a no-op there and a consuming `check` already marks the batch handled. The prior `ack` still carries forward unchanged, so it is not discarded.
 - `scripts/harness-selfcheck.sh`: new `Orca: <version> (last install <mtime>)` line, appending `changed since <old>` when `~/.mogui/orca-version.txt` recorded a different version on the previous run.
@@ -136,9 +138,9 @@ Product-path guard quoted newline (2026-10-27):
   heredoc, now denies too (`cd /tmp && cat <<EOF` with a `$(date)` body).
 
 `master-ops/scripts/dispatch` scopes a codex worker's model probe to its own rollout instead of the
-newest rollout across every account and date: a marker file timestamps this dispatch's own start,
-and `select_scoped_codex_rollout` only considers rollouts no older than that marker, falling back to
-`PROBE_STATE=unavailable` instead of guessing when none match. The codex rollout glob now resolves
+newest rollout across every account and date: the script snapshots the rollout files before the worker launches and
+selects the one file that appears afterward, reporting `PROBE_STATE=unavailable` instead of guessing when
+no new file appears or more than one does. The codex rollout glob now resolves
 its accounts directory through `codex_accounts_dir` (the `CODEX_ACCOUNTS_DIR` override, then an
 OS-specific default) instead of a hardcoded macOS path, so it also reaches the rollout tree on Linux.
 

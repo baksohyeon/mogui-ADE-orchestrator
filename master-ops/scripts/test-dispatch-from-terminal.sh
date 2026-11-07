@@ -45,6 +45,17 @@ else
   printf 'absent\n' >> "$ORCA_ENV_LOG"
 fi
 case "$1:$2" in
+  orchestration:task-create|orchestration:dispatch) ;;
+  *)
+    for arg in "$@"; do
+      if [ "$arg" = --from ]; then
+        printf '%s\n' "$*" >> "$ORCA_BAD_CALL"
+        exit 1
+      fi
+    done
+    ;;
+esac
+case "$1:$2" in
   orchestration:task-create) printf '{"ok":true,"result":{"taskId":"task_test"}}\n' ;;
   orchestration:dispatch) printf '{"ok":true,"result":{"dispatchId":"ctx_test"}}\n' ;;
   orchestration:dispatch-show) printf '{"ok":true,"result":{"status":"completed"}}\n' ;;
@@ -53,16 +64,24 @@ case "$1:$2" in
 esac
 EOF
 chmod +x "$fake_bin/orca"
+cat > "$fake_bin/sleep" <<'EOF'
+#!/bin/bash
+exit 0
+EOF
+chmod +x "$fake_bin/sleep"
 
 run_case() {
   local label="$1" target="$2" with_sender="$3"
-  local log="$work/$label.log" env_log="$work/$label.env" out status task_line dispatch_line prefix
+  local log="$work/$label.log" env_log="$work/$label.env" bad_call="$work/$label.bad"
+  local out status task_line dispatch_line prefix
   local expected_task expected_dispatch
   : > "$log"
   : > "$env_log"
+  : > "$bad_call"
   local -a env_args
   env_args=(env -i PATH="$fake_bin:$PATH" HOME="$tmp_home"
-    ORCA_LOG="$log" ORCA_ENV_LOG="$env_log" MOGUI_STATE_DIR="$state"
+    ORCA_LOG="$log" ORCA_ENV_LOG="$env_log" ORCA_BAD_CALL="$bad_call"
+    MOGUI_STATE_DIR="$state"
     DISPATCH_STANDING_RULES="$rules")
   if [ "$with_sender" = 1 ]; then
     env_args+=(DISPATCH_FROM_TERMINAL=term_test)
@@ -109,6 +128,10 @@ run_case() {
   fi
   if grep -qv '^absent$' "$env_log"; then
     echo "FAIL: $label inherited ORCA_TERMINAL_HANDLE"
+    return 1
+  fi
+  if [ -s "$bad_call" ]; then
+    echo "FAIL: $label passed --from to a non-target orca call"
     return 1
   fi
   echo "PASS: $label"

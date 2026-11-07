@@ -20,6 +20,8 @@ you build on it.
 
 ## [Unreleased]
 
+## [0.5.288] - 2026-11-07
+
 ### Changed
 
 - `gates.yml` pins both `actions/setup-python` steps to CPython 3.13.17, replacing a floating
@@ -421,7 +423,8 @@ tests pass, 1 skipped.
 There is no CI at this tag. Tests and the redaction scanners run locally before
 a push, so a passing count in a pull request is the author's word.
 
-[Unreleased]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.278...HEAD
+[Unreleased]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.288...HEAD
+[0.5.288]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.278...v0.5.288
 [0.5.278]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.4.1...v0.5.278
 [0.4.1]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.3.0...v0.4.0

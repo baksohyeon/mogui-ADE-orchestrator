@@ -46,7 +46,118 @@ reporting the last released tag, so that value names the release it came from an
 not the exact body it received. When the difference matters, record the commit the
 installation was taken from alongside the tag.
 
-## Unreleased
+## v0.5.288
+
+One reader for orca orchestration JSON, old and 1.4.246+ shapes (2026-11-07, measured against orca 1.4.249):
+
+- New `scripts/lib/orca_json.py`: `task_id`, `run_id`, `terminal_handle`, `dispatch_id`, `dispatch_status`, `delivery_id`, `messages`, `workers`, `next_cursor`, and `parse_envelope`, each reading the pre-1.4.246 key path first and the 1.4.246+ path second. The migrated shape-varying readers in `dispatch` and `worker-wait` now route through here instead of a one-off `jqf` expression or a direct `.get()` chain, so a future change to one of these normalized fields touches this module and its test, nowhere else. `terminal list` and `check`'s streaming envelope (`worker-wait`'s `_terminal_list`/`_last_non_keepalive`) are not migrated; see `docs/runbooks/orca-json.md`.
+- `scripts/dispatch`: the four `jqf` readers for `task-create`, `terminal create`, `dispatch --inject`, and `dispatch-show` now call the module; an empty read prints the first 200 characters of the raw response to stderr before the existing failure line, so the next shape change is visible instead of silent.
+- `scripts/worker-wait`: `_resolve_bound_run`, `_worker_list`'s accounting, and the `check`/ack delivery handling in `_wait_for_message` and `_flush_ack` now route through the module. A worker row's "still active" status (old `dispatchStatus: dispatched`, new `outcome: in_progress`) normalizes to `in_progress` either way. A heartbeat batch with no `deliveryId` (always true on 1.4.246+, which dropped the field) no longer prints a warning: `--ack` is a no-op there and a consuming `check` already marks the batch handled. The prior `ack` still carries forward unchanged, so it is not discarded.
+- `scripts/harness-selfcheck.sh`: new `Orca: <version> (last install <mtime>)` line, appending `changed since <old>` when `~/.mogui/orca-version.txt` recorded a different version on the previous run.
+- `scripts/test-orca-json.sh`: one fixture per shape per module function, plus `parse_envelope`'s trailing-human-line and multi-document cases, each new-shape/new-only case re-run against a mutant that reads only the old path to prove it can fail.
+- `scripts/test-worker-wait.sh`: one new-shape `worker-list` fixture (DEAD verdict via `outcome`/`terminal`/`nextCursor`) and one `check`-without-`deliveryId` case, each with its own old-path-only mutant. The existing sed-mutant cases for `worker-wait` now stage `lib/orca_json.py` and `mogui_log.py` alongside the mutated copy, since the script now hard-depends on its `lib/` sibling.
+- The `terminal create` / `dispatch --inject` new-shape key names (`terminalHandle` or `handle` for the terminal reader) come from a peer seat's report, not an independent re-measurement in this change: `orca orchestration task-create`/`task-update` real calls are blocked for a dispatched worker (`worker_cannot_coordinate_own_run`), and creating a real worker terminal was judged out of scope for this change's blast radius. `run-current` and `worker-list` were measured directly against a live orca 1.4.249.
+- `scripts/test-dispatch-runtime.sh`: the codex start-screen wiring tests extract `dispatch`'s shell functions by awk range; the new `orca_json_read` call inside `dispatch` added a second `if` block the old range stopped inside, leaving an unclosed `if` and a syntax error in the generated scratch script. Both wiring tests now extract `orca_json_read` alongside the others and stop the range at the next bare `fi`.
+
+CI runs the shell tests from a rendered copy of master-ops (2026-10-29):
+
+- New `rendered-shell-tests` job in `.github/workflows/gates.yml`: renders `master-ops` with `template-apply --write` the way an operator's install does, then runs the same `scripts/test-*.sh` loop against the rendered copy, catching a test that passes unrendered in CI and fails only once `{{PLACEHOLDER}}` tokens are filled in (#186).
+- `test-dispatch-unavailable-runtime.sh`: the nine fake-gate fixtures no longer carry a literal `{{RUNTIME_ROOT}}` substring a whole-tree render would rewrite into a broken path; the one case that must reach the gate now derives the real gate path from `dispatch`'s own `GATE=` line instead (#186).
+- `test-seat-check.sh` and `test-template-currency-line.sh`: SKIP with one line when `SELFCHECK_BIN` (`scripts/harness-selfcheck.sh`, instance-owned) is absent, instead of failing on a file a template-only render never creates (#186).
+- `test-hook-verdict.sh`: the role-state "pass path" case now builds its own scratch `role-state.md` fixture instead of depending on this repository's own instance-owned `docs/runbooks/role-state.md`, which a rendered copy never has (#186).
+- `test-product-path-guard.sh`: the `unsubstituted-runtime-root-token` case SKIPs when the hook's `RUNTIME_ROOT` sentinel has already been substituted, instead of failing on the hook's correct post-render behavior (#186).
+
+Workspace card scope sentence (2026-10-28):
+
+- In the generated `workspace-card/CLAUDE.md` and `workspace-card/AGENTS.md`, replace the opening line `You are the ops master of this workspace.` with a scope sentence naming the appointed master and its dispatched workers, so a session that already holds another role does not read the card and claim the master role (#207).
+
+Product-path guard quoted newline (2026-10-27):
+
+- Treat only an unquoted, unescaped newline as a command separator in the
+  product-path guard. A newline inside single or double quotes stays part of
+  its word, so `touch '<LF>' <product path>` is blocked instead of being split
+  into two harmless-looking segments; a backslash newline is removed as a line
+  continuation, as bash does.
+- Deny a Bash command that contains an ANSI-C quote opener (`$'`, an
+  unescaped `$` right before `'`, outside single quotes, double quotes, and
+  comments) as unparseable in both modes, because bash reads `\'` inside it as
+  an escaped quote and the guard's lexers do not, so `echo $'\''<LF>touch
+  <product path><LF>#'` was allowed while bash ran the touch.
+- Close three more lexer divergences in the product-path guard: a line
+  continuation between `$` and its quote no longer hides the ANSI-C opener;
+  an escaped heredoc operator (`ls \<<EOF`) no longer strips the following
+  command lines as a body; and an unquoted-delimiter heredoc body is denied
+  under `FAIL_CLOSED=1` when it contains `$(`, a backtick, or a `${...@P}`
+  prompt-expansion transformation, because bash expands them into code. The
+  deny reason recorded is `heredoc body expansion`, filed in the event log
+  under the same `unresolved_target` bucket an unparseable command lands in.
+  A bare `${...}` parameter expansion without `@P` runs no code and is not
+  denied on its own. A line continuation inside the body is removed before
+  this check, matching bash's own line-continuation removal. In legacy mode
+  (the default) that body is instead admitted only when it names no product
+  root and the shell's own working directory is not already inside one; the
+  same `cd`, redirection-into-root, and product-root scrutiny already
+  applied to an interpreter-fed heredoc body decides it, so a benign opener
+  such as `$(date)` still passes outside a product root.
+  Upgrade cost: a legacy-mode body that hides a product-root write behind
+  obfuscation the shared scrutiny does not yet model can still pass;
+  tightening that later means extending the shared scrutiny function, not
+  this check.
+- The legacy-mode product-root scrutiny above tested the body text for the
+  configured root's exact realpath string, so a symlinked spelling, `~/...`,
+  a `./`- or `../`-relative spelling, or a bare relative spelling with a
+  slash all resolved into the root without that string ever appearing and
+  were admitted. It now resolves each such body token against the shell's
+  working directory and checks the result, the way the redirection-into-root
+  check already does for a redirect target, so every one of those spellings
+  denies. A bare directory name with no slash at all (`rm -rf product` with
+  the working directory beside the root) is a known gap left for a later
+  round.
+- That body-token resolution split on plain whitespace, so a product root
+  whose own name has a space in it (`$(touch '<root with a space>/x')`) was
+  cut into fragments at that space and never resolved whole, even though it
+  was quoted. The split is now quote-aware (`shlex.split`, falling back to
+  the previous whitespace split when it raises), and the exact-root
+  substring test is checked first and kept alongside the token split rather
+  than replaced by it, so a spelling the tokenizer still cannot cleanly
+  isolate is caught the same way.
+- A `cd` earlier on the same line as the heredoc operator changes the
+  directory a relative body path resolves against, but that `cd` sits on the
+  operator's own line, outside the stripped body the root/`cd`/redirect
+  scrutiny inspects, so it passed unscrutinized. In legacy mode a `cd`
+  anywhere before the operator on that line is now treated the same as one
+  found inside the body itself and denies in both checks: the
+  unquoted-body-expansion check reports `heredoc body expansion`, filed
+  under `unresolved_target` like the rest of that check's denials, while
+  the interpreter-fed heredoc scrutiny reports `opaque interpreter heredoc
+  body may contain an unparsed write`, filed under `guarded_target` since
+  that body may hold a real write. Upgrade cost: a `cd` to a directory with
+  no relation to any product root, on the same line as an otherwise benign
+  heredoc, now denies too (`cd /tmp && cat <<EOF` with a `$(date)` body).
+
+`master-ops/scripts/dispatch` scopes a codex worker's model probe to its own rollout instead of the
+newest rollout across every account and date: a marker file timestamps this dispatch's own start,
+and `select_scoped_codex_rollout` only considers rollouts no older than that marker, falling back to
+`PROBE_STATE=unavailable` instead of guessing when none match. The codex rollout glob now resolves
+its accounts directory through `codex_accounts_dir` (the `CODEX_ACCOUNTS_DIR` override, then an
+OS-specific default) instead of a hardcoded macOS path, so it also reaches the rollout tree on Linux.
+
+`scripts/model-probe-rollout` tolerates whitespace around the `"model"` field's colon and takes the
+first `"model"` field on a line with `grep -o`'s left-to-right match order instead of a greedy regex
+that landed on the last one; an unreadable rollout file now takes the same exit-1 path as a missing
+one.
+
+`master-ops/scripts/test-dispatch-runtime.sh` extracts the `jqf()` helper with the same brace-matching
+`awk` already used for `tier_for_model()`, since `jqf()` is no longer a single physical line.
+
+Guard sentinel and Task retry corrections (2026-10-13):
+
+- Keep the product-path guard's unsubstituted `{{RUNTIME_ROOT}}` sentinel out
+  of template replacement, so an installed hook accepts its default runtime
+  config path instead of blocking every tool call.
+- Document Orca 1.4.224's coordinator-worktree Task binding, the
+  `terminal_worktree_mismatch` from cross-worktree `worker-start` retries, and
+  the `dispatch --inject` recovery path.
 
 ## v0.5.278
 

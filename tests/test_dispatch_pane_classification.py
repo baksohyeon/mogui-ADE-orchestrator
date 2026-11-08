@@ -23,7 +23,7 @@ def _classifier() -> str:
         for line in source.splitlines()
         if re.match(
             r"^(HOOK_TRUST_MARKERS|LIMIT_MARKERS|PREPARED_PROMPT_MARKERS|"
-            r"PREPARED_UNICODE_PROMPT_MARKERS)=",
+            r"PREPARED_UNICODE_PROMPT_MARKERS|WORKING_MARKERS)=",
             line,
         )
     )

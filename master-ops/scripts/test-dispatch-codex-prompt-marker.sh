@@ -74,15 +74,6 @@ pane_with_working=$(printf '%s\n%s\n%s\n%s' \
   '  GPT-6-Astra high · ~/worktree' \
   '  ? for shortcuts                                                                      ⚠ 4 warnings · f2 to view')
 
-write_script "$script_file" "$markers"
-out=$(bash "$script_file" 2>&1 <<'EOF'
-set -u
-' + markers + '
-' + classify_fn + '
-pane_classify_text $(printf '%q' "$pane_with_working")
-EOF
-)
-# Need to run this properly - let me use a different approach
 {
   echo 'set -u'
   printf '%s\n' "$markers"

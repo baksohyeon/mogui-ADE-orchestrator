@@ -48,6 +48,20 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+## v0.5.294
+
+Release v0.5.294 (2026-11-08): master-ops/TEMPLATE-VERSION and master-ops/MANIFEST.json move to v0.5.294 alongside the changelog fold, and the root CHANGELOG.md rolls its Unreleased section into 0.5.294.
+
+Fixed: `PREPARED_UNICODE_PROMPT_MARKERS` now recognizes the codex CLI's "Ask Codex to do anything" prepared-prompt placeholder, so codex dispatches no longer read as `UNVERIFIED`.
+
+Fixed: `README.md` now says the public explainer walks through twenty-seven mechanisms, three walkthroughs, and eight concept notes, matching what is measured on the explainer's own `main`.
+
+Fixed: `docs/internal/release-runbook.md` section 3 now exports `REDACTION_EXTRA_PATTERNS` before the release gates run and explains where `redaction-inventory`'s exit 2 comes from and why a generic-only `redaction-scan.sh` run is not a clean pass.
+
+Fixed: `DISPATCH_FROM_TERMINAL` now passes `--from` on orchestration `task-create` and `dispatch` calls.
+
+The skill-composition guide now refers to the peer seat's operations repository generically while omitting the unlocatable commit hash.
+
 ## v0.5.288
 
 One reader for orca orchestration JSON, old and 1.4.246+ shapes (2026-11-07, measured against orca 1.4.249):

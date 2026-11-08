@@ -20,6 +20,14 @@ you build on it.
 
 ## [Unreleased]
 
+## [0.5.294] - 2026-11-08
+
+### Changed
+
+- The README links the public explainer and states its counts (#223, #225).
+- Release runbook section 3 exports the organization rules file before the gates and explains redaction-inventory exit 2 (#225).
+- The pane-classifier tests cover the codex prepared-prompt placeholder (#224).
+
 ## [0.5.288] - 2026-11-07
 
 ### Changed
@@ -423,7 +431,8 @@ tests pass, 1 skipped.
 There is no CI at this tag. Tests and the redaction scanners run locally before
 a push, so a passing count in a pull request is the author's word.
 
-[Unreleased]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.288...HEAD
+[Unreleased]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.294...HEAD
+[0.5.294]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.288...v0.5.294
 [0.5.288]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.278...v0.5.288
 [0.5.278]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.4.1...v0.5.278
 [0.4.1]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.4.0...v0.4.1

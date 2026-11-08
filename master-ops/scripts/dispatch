@@ -1666,7 +1666,7 @@ echo "→ $TASK → $TERMINAL ($KIND)"
 # and only passes when each one resolves to something already on disk or
 # PATH. Answered at most once per dispatch, so an answer that does not
 # actually clear the menu cannot loop forever; after a real answer the loop
-# gets a fresh budget of up to three more reads. Any other selection menu, a
+# gets a fresh budget of up to five more reads. Any other selection menu, a
 # vet failure, or the answer tool's own exit 1 all fall through to the
 # existing exit-3 path. A reused pane with no `--worktree` is never
 # auto-answered: project hooks cannot be measured without a worktree, so

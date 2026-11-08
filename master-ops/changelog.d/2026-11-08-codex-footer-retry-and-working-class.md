@@ -1,0 +1,2 @@
+- Codex dispatch now retries with up to five reads when the footer's reasoning effort is still applying, instead of failing immediately on the first read. The retry budget increased from three, spaced three seconds apart, giving a slow footer repaint up to twelve seconds to complete.
+- Dispatch delivery now recognizes when a pane shows a running turn by matching "esc to interrupt" or "esc:cancel" in the status line, and reports `class=agent-started` for that state. Previously, a turn running in the pane would remain classified as `prepared-prompt` until the turn completed.

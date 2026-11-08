@@ -104,8 +104,8 @@ expect "effort high changes the launch line and accepts a 'high' footer" "$high
 footer-rc=0" "$got"
 got=$(run_case "$read_fn" "$apply_fn" '{"codex_reasoning_effort": "high"}' "$xhigh_pane")
 expect "effort high rejects an 'xhigh' footer" "$high
-footer shows 'gpt-5.5 xhigh', requested 'gpt-5.5 high'
-footer-rc=1" "$got"
+effort not applied yet: 'xhigh'
+footer-rc=2" "$got"
 mutant=$(mutate "$read_fn" '    effort = value' '    pass')
 got=$(run_case "$mutant" "$apply_fn" '{"codex_reasoning_effort": "high"}' "$high_pane")
 [ "$got" != "$high

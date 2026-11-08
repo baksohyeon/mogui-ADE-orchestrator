@@ -23,7 +23,7 @@ def _classifier() -> str:
         for line in source.splitlines()
         if re.match(
             r"^(HOOK_TRUST_MARKERS|LIMIT_MARKERS|PREPARED_PROMPT_MARKERS|"
-            r"PREPARED_UNICODE_PROMPT_MARKERS)=",
+            r"PREPARED_UNICODE_PROMPT_MARKERS|WORKING_MARKERS)=",
             line,
         )
     )
@@ -80,6 +80,11 @@ def test_limit_markers_are_their_own_class() -> None:
     assert classify("Rate limit reached") == "limit"
 
 
+def test_working_class_detects_running_turn() -> None:
+    assert classify("• Working (4s • esc to interrupt)") == "working"
+    assert classify("esc:cancel") == "working"
+
+
 def test_prepared_agent_prompt_is_delivery_evidence() -> None:
     assert classify("codex> ") == "prepared-prompt"
     assert classify("❯ ") == "prepared-prompt"
@@ -90,6 +95,29 @@ def test_fresh_codex_prompt_placeholder_is_delivery_evidence() -> None:
         classify('› Ask Codex to do anything\n  GPT-6-Astra high · ~/worktree')
         == "prepared-prompt"
     )
+
+
+def test_codex_pane_with_working_marker() -> None:
+    pane_with_working = (
+        "• Working (4s • esc to interrupt)\n"
+        "› Ask Codex to do anything\n"
+        "  GPT-6-Astra high · ~/worktree\n"
+        "  ? for shortcuts                                   ⚠ 4 warnings · f2 to view"
+    )
+    assert classify(pane_with_working) == "working"
+
+
+def test_codex_pane_without_working_marker() -> None:
+    pane_without_working = (
+        "› Ask Codex to do anything\n"
+        "  GPT-6-Astra high · ~/worktree\n"
+        "  ? for shortcuts                                   ⚠ 4 warnings · f2 to view"
+    )
+    assert classify(pane_without_working) == "prepared-prompt"
+
+
+def test_bare_working_text_without_esc_marker() -> None:
+    assert classify("the working directory is set") == "unknown"
 
 
 def test_unclassified_pane_is_not_a_delivery_pass() -> None:
@@ -107,6 +135,12 @@ def test_hook_class_wins_when_multiple_gate_markers_are_visible() -> None:
 def test_unchanged_prompt_is_unverified_and_prompt_consumption_is_started() -> None:
     assert transition("codex> ", "codex> ") == "unknown"
     assert transition("codex> ", "working") == "agent-started"
+
+
+def test_working_transitions_to_agent_started() -> None:
+    assert transition("codex> ", "• Working (4s • esc to interrupt)") == "agent-started"
+    assert transition("worker emitted 128 bytes", "esc:cancel") == "agent-started"
+    assert transition("esc:cancel", "esc:cancel") == "unknown"
 
 
 def test_post_injection_gate_transitions_are_confirmed_failures() -> None:

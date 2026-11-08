@@ -689,7 +689,7 @@ choose_default_runtime() {
 HOOK_TRUST_MARKERS='^[[:space:]]*(Resume session.*|New worktree.*|Coming from Claude Code.*|Changelog.*|Select a model.*|Welcome to Claude.*|Do you trust the files.*|Sign in.*|press enter to continue.*|/login.*|Antigravity CLI requires permission.*|I trust this folder.*|trust this workspace.*|workspace trust.*|permission to access.*|Quick safety check.*|pre-approves .* tool permissions.*)[[:space:][:punct:]]*$'
 LIMIT_MARKERS='^[[:space:]]*(rate limit|rate-limit|too many requests|quota exceeded|out of credits|credits are exhausted|usage limit reached|you.?ve hit your limit|you have reached your limit|try again after)[[:space:][:punct:]]*.*$'
 PREPARED_PROMPT_MARKERS='^[[:space:]]*(claude|codex|grok|gemini)[[:space:]]*>[[:space:]]*$'
-PREPARED_UNICODE_PROMPT_MARKERS=$'^[[:space:]]*(❯|›|➜)([\xc2\xa0 ]+Try "[^"]*")?[[:space:]]*$'
+PREPARED_UNICODE_PROMPT_MARKERS=$'^[[:space:]]*(❯|›|➜)([\xc2\xa0 ]+Try "[^"]*")?([\xc2\xa0 ]+Ask Codex to do anything)?[[:space:]]*$'
 
 pane_classify_text() {
   local pane="$1" state

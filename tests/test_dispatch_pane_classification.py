@@ -85,6 +85,13 @@ def test_prepared_agent_prompt_is_delivery_evidence() -> None:
     assert classify("❯ ") == "prepared-prompt"
 
 
+def test_fresh_codex_prompt_placeholder_is_delivery_evidence() -> None:
+    assert (
+        classify('› Ask Codex to do anything\n  GPT-6-Astra high · ~/worktree')
+        == "prepared-prompt"
+    )
+
+
 def test_unclassified_pane_is_not_a_delivery_pass() -> None:
     assert classify("worker emitted 128 bytes") == "unknown"
     assert classify("ordinary output ➜") == "unknown"

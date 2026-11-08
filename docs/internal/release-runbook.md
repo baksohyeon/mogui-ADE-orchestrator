@@ -34,6 +34,8 @@ The scanners read tracked content, so an unstaged new file is invisible.
 
 ```console
 set -e
+# organization rules file; see docs/internal/tooling/redaction-scan.md
+export REDACTION_EXTRA_PATTERNS=~/.config/redaction-extra.txt
 PYTHONPATH=src uv run pytest tests -q
 bash master-ops/scripts/test-tool-naming.sh
 ./scripts/redaction-scan.sh
@@ -42,8 +44,13 @@ rc=0
 if [ "$rc" -ne 0 ]; then [ "$rc" -eq 1 ] || exit "$rc"; fi
 ```
 
-`redaction-inventory` exit 1 is the normal triage state. Exit 2 means cannot
-decide and should block a release cut until resolved.
+`redaction-inventory` exit 1 is the normal triage state. Exit 2 means the tool
+could not decide, most often because no rules file was loaded or the directory
+is not a git repository, and it blocks the release cut until the tool returns
+0 or 1. A `redaction-scan.sh` run that prints the organization-rules warning
+covered only generic patterns and is not a clean pass; see
+[Organization-specific rules](tooling/redaction-scan.md#organization-specific-rules-redaction_extra_patterns)
+for where the rules file comes from.
 
 ## 4) Finalize release metadata
 

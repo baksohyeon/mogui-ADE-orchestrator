@@ -138,9 +138,9 @@ def test_unchanged_prompt_is_unverified_and_prompt_consumption_is_started() -> N
 
 
 def test_working_transitions_to_agent_started() -> None:
-    assert transition("prepared-prompt", "working") == "agent-started"
-    assert transition("unknown", "working") == "agent-started"
-    assert transition("working", "working") == "unknown"
+    assert transition("codex> ", "• Working (4s • esc to interrupt)") == "agent-started"
+    assert transition("worker emitted 128 bytes", "esc:cancel") == "agent-started"
+    assert transition("esc:cancel", "esc:cancel") == "unknown"
 
 
 def test_post_injection_gate_transitions_are_confirmed_failures() -> None:

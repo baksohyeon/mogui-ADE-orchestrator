@@ -80,6 +80,11 @@ def test_limit_markers_are_their_own_class() -> None:
     assert classify("Rate limit reached") == "limit"
 
 
+def test_working_class_detects_running_turn() -> None:
+    assert classify("• Working (4s • esc to interrupt)") == "working"
+    assert classify("esc:cancel") == "working"
+
+
 def test_prepared_agent_prompt_is_delivery_evidence() -> None:
     assert classify("codex> ") == "prepared-prompt"
     assert classify("❯ ") == "prepared-prompt"
@@ -90,6 +95,29 @@ def test_fresh_codex_prompt_placeholder_is_delivery_evidence() -> None:
         classify('› Ask Codex to do anything\n  GPT-6-Astra high · ~/worktree')
         == "prepared-prompt"
     )
+
+
+def test_codex_pane_with_working_marker() -> None:
+    pane_with_working = (
+        "• Working (4s • esc to interrupt)\n"
+        "› Ask Codex to do anything\n"
+        "  GPT-6-Astra high · ~/worktree\n"
+        "  ? for shortcuts                                   ⚠ 4 warnings · f2 to view"
+    )
+    assert classify(pane_with_working) == "working"
+
+
+def test_codex_pane_without_working_marker() -> None:
+    pane_without_working = (
+        "› Ask Codex to do anything\n"
+        "  GPT-6-Astra high · ~/worktree\n"
+        "  ? for shortcuts                                   ⚠ 4 warnings · f2 to view"
+    )
+    assert classify(pane_without_working) == "prepared-prompt"
+
+
+def test_bare_working_text_without_esc_marker() -> None:
+    assert classify("the working directory is set") == "unknown"
 
 
 def test_unclassified_pane_is_not_a_delivery_pass() -> None:

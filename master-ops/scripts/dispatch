@@ -688,6 +688,7 @@ choose_default_runtime() {
 # a no-break space or regular spaces between the arrow and `Try "..."`.
 HOOK_TRUST_MARKERS='^[[:space:]]*(Resume session.*|New worktree.*|Coming from Claude Code.*|Changelog.*|Select a model.*|Welcome to Claude.*|Do you trust the files.*|Sign in.*|press enter to continue.*|/login.*|Antigravity CLI requires permission.*|I trust this folder.*|trust this workspace.*|workspace trust.*|permission to access.*|Quick safety check.*|pre-approves .* tool permissions.*)[[:space:][:punct:]]*$'
 LIMIT_MARKERS='^[[:space:]]*(rate limit|rate-limit|too many requests|quota exceeded|out of credits|credits are exhausted|usage limit reached|you.?ve hit your limit|you have reached your limit|try again after)[[:space:][:punct:]]*.*$'
+WORKING_MARKERS='(esc to interrupt|esc:cancel)'
 PREPARED_PROMPT_MARKERS='^[[:space:]]*(claude|codex|grok|gemini)[[:space:]]*>[[:space:]]*$'
 PREPARED_UNICODE_PROMPT_MARKERS=$'^[[:space:]]*(❯|›|➜)([\xc2\xa0 ]+Try "[^"]*")?([\xc2\xa0 ]+Ask Codex to do anything)?[[:space:]]*$'
 
@@ -702,6 +703,10 @@ pane_classify_text() {
     echo hook-trust
   elif printf '%s\n' "$state" | grep -Eiq "$LIMIT_MARKERS"; then
     echo limit
+  elif printf '%s\n' "$state" | grep -Eiq "$WORKING_MARKERS"; then
+    # Measured in worker-pane-sweep line 63: "esc to interrupt" is the line
+    # every measured TUI prints under its status while a turn runs
+    echo working
   elif printf '%s\n' "$state" | grep -Eq "$PREPARED_PROMPT_MARKERS" \
       || printf '%s\n' "$state" | grep -Eq "$PREPARED_UNICODE_PROMPT_MARKERS"; then
     echo prepared-prompt
@@ -729,6 +734,7 @@ delivery_result() {
   fi
   case "$1:$2" in
     prepared-prompt:unknown) echo agent-started;;
+    *:working) echo agent-started;;
     *) echo unknown;;
   esac
 }
@@ -778,6 +784,13 @@ codex_start_screen_problem() {
   shown=$(printf '%s\n' "$footer" | awk '{print tolower($1) " " tolower($2)}')
   want=$(printf '%s %s\n' "$model" "$effort" | tr '[:upper:]' '[:lower:]')
   if [ "$shown" != "$want" ]; then
+    # If only effort differs (model tokens match), return 2 so the caller retries
+    shown_model=$(printf '%s\n' "$shown" | awk '{print $1}')
+    want_model=$(printf '%s\n' "$want" | awk '{print $1}')
+    if [ "$shown_model" = "$want_model" ]; then
+      echo "effort not applied yet: '$(printf '%s\n' "$shown" | awk '{print $2}')'"
+      return 2
+    fi
     echo "footer shows '$shown', requested '$want'"; return 1
   fi
 }
@@ -1661,7 +1674,7 @@ if [ "$RUNTIME" = codex ]; then
   CODEX_START_RC=2
   HOOKS_ANSWERED=0
   attempt=1
-  while [ "$attempt" -le 3 ]; do
+  while [ "$attempt" -le 5 ]; do
     CODEX_PANE=$(orca terminal read --terminal "$TERMINAL" --limit 40 2>/dev/null || true)
     CODEX_START_PROBLEM=$(codex_start_screen_problem "$CODEX_PANE" "$MODEL" "$CODEX_REASONING_EFFORT")
     CODEX_START_RC=$?
@@ -1688,7 +1701,7 @@ if [ "$RUNTIME" = codex ]; then
         exit 3
       fi
     fi
-    if [ "$CODEX_START_RC" = 2 ] && [ "$attempt" -lt 3 ]; then
+    if [ "$CODEX_START_RC" = 2 ] && [ "$attempt" -lt 5 ]; then
       sleep 3
       attempt=$((attempt + 1))
       continue

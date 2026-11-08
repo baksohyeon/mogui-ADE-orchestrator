@@ -16,10 +16,10 @@ set -u
 dispatch=$(cd "$(dirname "$0")" && pwd)/dispatch
 dispatch=${1:-$dispatch}
 
-markers=$(grep -E '^(LIMIT_MARKERS|HOOK_TRUST_MARKERS|PREPARED_PROMPT_MARKERS|PREPARED_UNICODE_PROMPT_MARKERS)=' "$dispatch")
+markers=$(grep -E '^(LIMIT_MARKERS|HOOK_TRUST_MARKERS|PREPARED_PROMPT_MARKERS|PREPARED_UNICODE_PROMPT_MARKERS|WORKING_MARKERS)=' "$dispatch")
 classify_fn=$(awk '$0=="pane_classify_text() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
 
-[ "$(printf '%s\n' "$markers" | grep -c .)" = 4 ] || { echo "FAIL: could not extract all four marker variables" >&2; exit 1; }
+[ "$(printf '%s\n' "$markers" | grep -c .)" = 5 ] || { echo "FAIL: could not extract all five marker variables" >&2; exit 1; }
 [ -n "$classify_fn" ] || { echo "FAIL: could not extract pane_classify_text" >&2; exit 1; }
 
 work="${TMPDIR:-/tmp}/mogui-dispatch-codex-prompt-marker.$$"
@@ -66,5 +66,72 @@ if [ "$status" -ne 0 ] || [ "$out" != "unknown" ]; then
   exit 1
 fi
 echo "ok   : failability: dropping the codex placeholder misclassifies the fresh prompt pane as unknown"
+
+# Test: working class detection
+pane_with_working=$(printf '%s\n%s\n%s\n%s' \
+  '• Working (4s • esc to interrupt)' \
+  '› Ask Codex to do anything' \
+  '  GPT-6-Astra high · ~/worktree' \
+  '  ? for shortcuts                                                                      ⚠ 4 warnings · f2 to view')
+
+write_script "$script_file" "$markers"
+out=$(bash "$script_file" 2>&1 <<'EOF'
+set -u
+' + markers + '
+' + classify_fn + '
+pane_classify_text $(printf '%q' "$pane_with_working")
+EOF
+)
+# Need to run this properly - let me use a different approach
+{
+  echo 'set -u'
+  printf '%s\n' "$markers"
+  printf '%s\n' "$classify_fn"
+  printf 'pane_classify_text %s\n' "$(printf '%q' "$pane_with_working")"
+} > "$script_file"
+out=$(bash "$script_file" 2>&1)
+status=$?
+if [ "$status" -ne 0 ] || [ "$out" != "working" ]; then
+  echo "FAIL: pane with 'esc to interrupt' should classify as working, got '$out' (status=$status)" >&2
+  exit 1
+fi
+echo "ok   : pane with 'esc to interrupt' classifies as working"
+
+# Test: prepared-prompt without working marker
+pane_without_working=$(printf '%s\n%s\n%s' \
+  '› Ask Codex to do anything' \
+  '  GPT-6-Astra high · ~/worktree' \
+  '  ? for shortcuts                                                                      ⚠ 4 warnings · f2 to view')
+
+{
+  echo 'set -u'
+  printf '%s\n' "$markers"
+  printf '%s\n' "$classify_fn"
+  printf 'pane_classify_text %s\n' "$(printf '%q' "$pane_without_working")"
+} > "$script_file"
+out=$(bash "$script_file" 2>&1)
+status=$?
+if [ "$status" -ne 0 ] || [ "$out" != "prepared-prompt" ]; then
+  echo "FAIL: pane without working marker should classify as prepared-prompt, got '$out' (status=$status)" >&2
+  exit 1
+fi
+echo "ok   : pane without working marker classifies as prepared-prompt"
+
+# Test: bare "working" text without esc marker
+bare_working=$(printf '%s\n' 'the working directory is set')
+
+{
+  echo 'set -u'
+  printf '%s\n' "$markers"
+  printf '%s\n' "$classify_fn"
+  printf 'pane_classify_text %s\n' "$(printf '%q' "$bare_working")"
+} > "$script_file"
+out=$(bash "$script_file" 2>&1)
+status=$?
+if [ "$status" -ne 0 ] || [ "$out" != "unknown" ]; then
+  echo "FAIL: bare 'working' text should classify as unknown, got '$out' (status=$status)" >&2
+  exit 1
+fi
+echo "ok   : bare 'working' text classifies as unknown"
 
 echo "dispatch codex prepared-prompt marker regression tests passed"

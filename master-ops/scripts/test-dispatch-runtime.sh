@@ -772,17 +772,17 @@ pretrust_pane_reuse_skip_test "$dispatch" || exit 1
 # 2026-10-02: claude's "Quick safety check..." folder-trust dialog had no
 # marker, so an untrusted worktree's dialog read as an unrecognized pane
 # instead of the hook-trust class that stops a dispatch before it reports a
-# false success. Extracts pane_classify_text and the four marker variables,
+# false success. Extracts pane_classify_text and the marker variables,
 # then runs the function against a captured dialog pane.
 claude_hook_trust_marker_test() (
   set +e
   set -u
   local dispatch="$1" markers classify_fn script_file pane out status mutant_markers work
 
-  markers=$(grep -E '^(LIMIT_MARKERS|HOOK_TRUST_MARKERS|PREPARED_PROMPT_MARKERS|PREPARED_UNICODE_PROMPT_MARKERS)=' "$dispatch")
+  markers=$(grep -E '^(LIMIT_MARKERS|HOOK_TRUST_MARKERS|PREPARED_PROMPT_MARKERS|PREPARED_UNICODE_PROMPT_MARKERS|WORKING_MARKERS)=' "$dispatch")
   classify_fn=$(awk '$0=="pane_classify_text() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
 
-  [ "$(printf '%s\n' "$markers" | grep -c .)" = 4 ] || { echo "FAIL: could not extract all four marker variables" >&2; return 1; }
+  [ "$(printf '%s\n' "$markers" | grep -c .)" = 5 ] || { echo "FAIL: could not extract all five marker variables" >&2; return 1; }
   [ -n "$classify_fn" ] || { echo "FAIL: could not extract pane_classify_text" >&2; return 1; }
   printf '%s\n' "$markers" | grep -Fq 'Quick safety check' || { echo "FAIL: HOOK_TRUST_MARKERS does not carry the claude folder-trust wording" >&2; return 1; }
 
@@ -845,17 +845,17 @@ claude_hook_trust_marker_test "$dispatch" || exit 1
 # ("Try \"...\"") next to the arrow instead of a bare arrow, so
 # PREPARED_UNICODE_PROMPT_MARKERS read it as unknown before and after inject,
 # and a worker that finished inside the delivery window never registered as
-# delivered. Extracts pane_classify_text and the four marker variables, then
+# delivered. Extracts pane_classify_text and the marker variables, then
 # runs the function against the five measured pane lines.
 fresh_claude_prompt_marker_test() (
   set +e
   set -u
   local dispatch="$1" markers classify_fn script_file pane out status mutant_markers work
 
-  markers=$(grep -E '^(LIMIT_MARKERS|HOOK_TRUST_MARKERS|PREPARED_PROMPT_MARKERS|PREPARED_UNICODE_PROMPT_MARKERS)=' "$dispatch")
+  markers=$(grep -E '^(LIMIT_MARKERS|HOOK_TRUST_MARKERS|PREPARED_PROMPT_MARKERS|PREPARED_UNICODE_PROMPT_MARKERS|WORKING_MARKERS)=' "$dispatch")
   classify_fn=$(awk '$0=="pane_classify_text() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
 
-  [ "$(printf '%s\n' "$markers" | grep -c .)" = 4 ] || { echo "FAIL: could not extract all four marker variables" >&2; return 1; }
+  [ "$(printf '%s\n' "$markers" | grep -c .)" = 5 ] || { echo "FAIL: could not extract all five marker variables" >&2; return 1; }
   [ -n "$classify_fn" ] || { echo "FAIL: could not extract pane_classify_text" >&2; return 1; }
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-fresh-claude-prompt-test.$$"
@@ -1096,6 +1096,10 @@ $ready"
 › 1. Try new model
   2. Use existing model
   enter/esc confirm · ctrl+c quit'
+  effort_not_ready='› Ask Codex to do anything
+  GPT-5.5 default · ~/worktree'
+  model_mismatch='› Ask Codex to do anything
+  GPT-5.4 xhigh · ~/worktree'
 
   assert_case() {  # label  want-rc  want-substring  pane
     local label="$1" want_rc="$2" want_sub="$3" pane="$4" out rc
@@ -1119,6 +1123,8 @@ $ready" || return 1
   assert_case limit "1" "provider limit notice" "$limit" || return 1
   assert_case menu "1" "Try new model" "$menu" || return 1
   assert_case no-footer "2" "no model footer yet" "" || return 1
+  assert_case effort-not-ready "2" "effort not applied yet" "$effort_not_ready" || return 1
+  assert_case model-mismatch "1" "requested 'gpt-5.5 xhigh'" "$model_mismatch" || return 1
 
   mutate_line() {  # unique-substring-of-target-line  replacement-line
     local needle="$1" repl="$2" line out="" replaced=0
@@ -1166,6 +1172,9 @@ EOF
   failability_case footer-mismatch-compare '[ "$shown" != "$want" ]' \
     '  if [ "$shown" = "$want" ]; then' \
     "$mismatched" "1" || return 1
+  failability_case effort-only-branch '[ "$shown_model" = "$want_model" ]' \
+    '  if [ "$shown_model" != "$want_model" ]; then' \
+    "$effort_not_ready" "2" || return 1
 )
 codex_start_screen_test "$dispatch" || exit 1
 
@@ -1306,6 +1315,17 @@ BIN
   echo "ok   : failability: disabling the gate conditional injects on a migration-menu pane (status=$status, injected=$([ -f "$work/injected" ] && echo yes || echo no))"
 )
 codex_start_screen_wiring_test "$dispatch" || exit 1
+
+# --- Feature: codex start-screen retry budget is five ---
+#
+# Verify the retry budget constant in step 3b is 5.
+if grep -q 'while \[ "$attempt" -le 5 \]' "$dispatch" && \
+   grep -q '\[ "$attempt" -lt 5 \]' "$dispatch"; then
+  echo "ok   : retry budget constant is 5"
+else
+  echo "FAIL: retry budget constant is not 5" >&2
+  exit 1
+fi
 
 # --- Feature: codex_hooks_vet -------------------------------------------------
 #

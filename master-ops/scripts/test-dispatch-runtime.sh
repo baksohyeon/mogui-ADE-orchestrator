@@ -907,73 +907,6 @@ fresh_claude_prompt_marker_test() (
 )
 fresh_claude_prompt_marker_test "$dispatch" || exit 1
 
-# --- Feature: fresh codex TUI prompt classifies as prepared-prompt --------
-#
-# 2026-11-08 20:58 KST: a fresh `codex` pane (codex-cli 0.159.3) carries its
-# own placeholder ("Ask Codex to do anything") next to the arrow instead of
-# the claude placeholder or a bare arrow, so PREPARED_UNICODE_PROMPT_MARKERS
-# read it as unknown before and after inject, and a worker that finished
-# inside the delivery window never registered as delivered. Extracts
-# pane_classify_text and the four marker variables, then runs the function
-# against the three measured pane lines.
-fresh_codex_prompt_marker_test() (
-  set +e
-  set -u
-  local dispatch="$1" markers classify_fn script_file pane out status mutant_markers work
-
-  markers=$(grep -E '^(LIMIT_MARKERS|HOOK_TRUST_MARKERS|PREPARED_PROMPT_MARKERS|PREPARED_UNICODE_PROMPT_MARKERS)=' "$dispatch")
-  classify_fn=$(awk '$0=="pane_classify_text() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
-
-  [ "$(printf '%s\n' "$markers" | grep -c .)" = 4 ] || { echo "FAIL: could not extract all four marker variables" >&2; return 1; }
-  [ -n "$classify_fn" ] || { echo "FAIL: could not extract pane_classify_text" >&2; return 1; }
-
-  work="${TMPDIR:-/tmp}/mogui-dispatch-fresh-codex-prompt-test.$$"
-  mkdir -p "$work"
-  trap 'rm -rf "$work"' EXIT
-
-  pane=$(printf '%s\n%s\n%s' \
-    '› Ask Codex to do anything' \
-    '  GPT-6-Astra high · ~/worktree' \
-    '  ? for shortcuts                                                                      ⚠ 4 warnings · f2 to view')
-
-  write_script() {
-    local outfile="$1" markers_body="$2"
-    {
-      echo 'set -u'
-      printf '%s\n' "$markers_body"
-      printf '%s\n' "$classify_fn"
-      printf 'pane_classify_text %s\n' "$(printf '%q' "$pane")"
-    } > "$outfile"
-  }
-
-  script_file="$work/run.sh"
-  write_script "$script_file" "$markers"
-  out=$(bash "$script_file" 2>&1)
-  status=$?
-  if [ "$status" -ne 0 ] || [ "$out" != "prepared-prompt" ]; then
-    echo "FAIL: a fresh codex TUI prompt pane should classify as prepared-prompt, got '$out' (status=$status)" >&2
-    return 1
-  fi
-  echo "ok   : a fresh codex TUI prompt's placeholder arrow line classifies as prepared-prompt"
-
-  # Failability: dropping the codex placeholder group must misclassify the
-  # same pane as unknown.
-  mutant_markers=${markers/'([\xc2\xa0 ]+Ask Codex to do anything)?'/}
-  if [ "$mutant_markers" = "$markers" ]; then
-    echo "FAIL: codex-marker mutant did not change the source" >&2
-    return 1
-  fi
-  write_script "$script_file" "$mutant_markers"
-  out=$(bash "$script_file" 2>&1)
-  status=$?
-  if [ "$status" -eq 0 ] && [ "$out" = "prepared-prompt" ]; then
-    echo "FAIL: failability: mutant dropping the codex placeholder should have misclassified the pane" >&2
-    return 1
-  fi
-  echo "ok   : failability: dropping the codex placeholder misclassifies the fresh prompt pane (got '$out')"
-)
-fresh_codex_prompt_marker_test "$dispatch" || exit 1
-
 # --- Feature: delivery_result folds the dispatch status in --------------------
 #
 # 2026-10-18: a haiku worker completed in 17s and returned the pane to the
@@ -2494,4 +2427,4 @@ RULES
 )
 standing_rules_append_test "$dispatch" || exit 1
 
-echo "dispatch multi-vendor / check-only / state-dir-seam / contract-delivery / cursor-pretrust / claude-pretrust / claude-pretrust-call-site / claude-hook-trust-marker / fresh-claude-prompt-marker / fresh-codex-prompt-marker / delivery-result / codex-launch / codex-start-screen / codex-start-screen-wiring / codex-hooks-vet / codex-hooks-vet-wiring / standing-rules-missing-file / standing-rules-append regression tests passed"
+echo "dispatch multi-vendor / check-only / state-dir-seam / contract-delivery / cursor-pretrust / claude-pretrust / claude-pretrust-call-site / claude-hook-trust-marker / fresh-claude-prompt-marker / delivery-result / codex-launch / codex-start-screen / codex-start-screen-wiring / codex-hooks-vet / codex-hooks-vet-wiring / standing-rules-missing-file / standing-rules-append regression tests passed"

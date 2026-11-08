@@ -125,4 +125,42 @@ if [ "$status" -ne 0 ] || [ "$out" != "unknown" ]; then
 fi
 echo "ok   : bare 'working' text classifies as unknown"
 
+# Test: esc to interrupt outside parentheses
+esc_outside_parens=$(printf '%s\n' 'the contract says "esc to interrupt" twice')
+
+{
+  echo 'set -u'
+  printf '%s\n' "$markers"
+  printf '%s\n' "$classify_fn"
+  printf 'pane_classify_text %s\n' "$(printf '%q' "$esc_outside_parens")"
+} > "$script_file"
+out=$(bash "$script_file" 2>&1)
+status=$?
+if [ "$status" -ne 0 ] || [ "$out" != "unknown" ]; then
+  echo "FAIL: 'esc to interrupt' outside parentheses should classify as unknown, got '$out' (status=$status)" >&2
+  exit 1
+fi
+echo "ok   : 'esc to interrupt' outside parentheses classifies as unknown"
+
+# Test: esc:cancel at line start
+esc_cancel_working=$(printf '%s\n%s\n%s\n%s' \
+  'esc:cancel' \
+  '› Ask Codex to do anything' \
+  '  GPT-6-Astra high · ~/worktree' \
+  '  ? for shortcuts                                                                      ⚠ 4 warnings · f2 to view')
+
+{
+  echo 'set -u'
+  printf '%s\n' "$markers"
+  printf '%s\n' "$classify_fn"
+  printf 'pane_classify_text %s\n' "$(printf '%q' "$esc_cancel_working")"
+} > "$script_file"
+out=$(bash "$script_file" 2>&1)
+status=$?
+if [ "$status" -ne 0 ] || [ "$out" != "working" ]; then
+  echo "FAIL: line starting with 'esc:cancel' should classify as working, got '$out' (status=$status)" >&2
+  exit 1
+fi
+echo "ok   : line starting with 'esc:cancel' classifies as working"
+
 echo "dispatch codex prepared-prompt marker regression tests passed"

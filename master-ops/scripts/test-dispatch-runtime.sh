@@ -955,6 +955,15 @@ delivery_result_test() (
   run_case "$fn" prepared-prompt unknown unreadable agent-started || return 1
   echo "ok   : delivery_result · an unreadable dispatch status leaves the prepared-prompt-to-unknown transition reading agent-started"
 
+  run_case "$fn" prepared-prompt working unreadable agent-started || return 1
+  echo "ok   : delivery_result · prepared-prompt:working transition maps to agent-started"
+
+  run_case "$fn" unknown working unreadable agent-started || return 1
+  echo "ok   : delivery_result · unknown:working transition maps to agent-started"
+
+  run_case "$fn" working working unreadable unknown || return 1
+  echo "ok   : delivery_result · working:working transition maps to unknown"
+
   # Failability: drop the completed-status branch; the first case above must
   # then stop reading done.
   mutant_fn=${fn/'  if [ "$3" = completed ]; then

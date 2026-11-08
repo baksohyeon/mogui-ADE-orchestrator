@@ -137,6 +137,12 @@ def test_unchanged_prompt_is_unverified_and_prompt_consumption_is_started() -> N
     assert transition("codex> ", "working") == "agent-started"
 
 
+def test_working_transitions_to_agent_started() -> None:
+    assert transition("prepared-prompt", "working") == "agent-started"
+    assert transition("unknown", "working") == "agent-started"
+    assert transition("working", "working") == "unknown"
+
+
 def test_post_injection_gate_transitions_are_confirmed_failures() -> None:
     assert transition("codex> ", "Do you trust the files in this folder?") == "hook-trust"
     assert transition("codex> ", "Rate limit reached") == "limit"

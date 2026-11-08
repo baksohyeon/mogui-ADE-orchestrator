@@ -20,6 +20,12 @@ you build on it.
 
 ## [Unreleased]
 
+## [0.5.296] - 2026-11-09
+
+### Changed
+
+- The pane-classifier tests cover the `working` class, its scrollback guard, and the `working:working` transition (#227).
+
 ## [0.5.294] - 2026-11-08
 
 ### Changed
@@ -431,7 +437,8 @@ tests pass, 1 skipped.
 There is no CI at this tag. Tests and the redaction scanners run locally before
 a push, so a passing count in a pull request is the author's word.
 
-[Unreleased]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.294...HEAD
+[Unreleased]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.296...HEAD
+[0.5.296]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.294...v0.5.296
 [0.5.294]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.288...v0.5.294
 [0.5.288]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.278...v0.5.288
 [0.5.278]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.4.1...v0.5.278

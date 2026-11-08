@@ -48,6 +48,13 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+## v0.5.296
+
+Release v0.5.296 (2026-11-09): master-ops/TEMPLATE-VERSION and master-ops/MANIFEST.json move to v0.5.296 alongside the changelog fold, and the root CHANGELOG.md rolls its Unreleased section into 0.5.296.
+
+- Codex dispatch now retries with up to five reads when the footer's reasoning effort is still applying, instead of failing immediately on the first read. The retry budget increased from three, spaced three seconds apart, giving a slow footer repaint up to twelve seconds to complete.
+- Dispatch delivery now recognizes when a pane shows a running turn by matching "esc to interrupt" or "esc:cancel" in the status line, and reports `class=agent-started` for that state. Previously, a turn running in the pane would remain classified as `prepared-prompt` until the turn completed.
+
 ## v0.5.294
 
 Release v0.5.294 (2026-11-08): master-ops/TEMPLATE-VERSION and master-ops/MANIFEST.json move to v0.5.294 alongside the changelog fold, and the root CHANGELOG.md rolls its Unreleased section into 0.5.294.

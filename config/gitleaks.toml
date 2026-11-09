@@ -101,11 +101,10 @@ regex = '''\b[A-Za-z0-9._-]+\.(internal|corp|local)\b'''
     '''^settings\.local$''',
   ]
 
-[allowlist]
-# A line naming a placeholder is documentation, not exposure. Carried over from
-# the previous scanner because the documentation depends on it.
-# Measured, not assumed: `stopwords` did not excuse these and `regexes` does,
-# so the placeholder list is expressed as case-insensitive line regexes.
+[[allowlists]]
+# Placeholder text used in documentation or test fixtures. `regexTarget =
+# "line"` exempts the entire line, so these entries should match only true
+# placeholders, never real secrets that happen to be on the same line.
 regexTarget = "line"
 regexes = [
   '''(?i)example\.com''',
@@ -141,4 +140,18 @@ paths = [
   '''__pycache__/''',
   '''\.pyc$''',
   '''\.orca/''',
+]
+
+[[allowlists]]
+# Read-proof acknowledgement tokens (ack-<12 hex>) get their own `[[allowlists]]`
+# entry with `regexTarget = "match"`, which compares the regex against the
+# matched secret text only, never the whole line. A line-scoped entry would
+# clear any other secret typed on the same line as a token; this one cannot.
+# They prove a worker opened its delivered contract; carry no secret; the
+# standing rule still keeps them out of commits. The token shape is key-like
+# to gitleaks but carries no secret.
+description = "read-proof acknowledgement token (ack-<12 hex>) is not a secret"
+regexTarget = "match"
+regexes = [
+  '''\back-[0-9a-f]{12}\b''',
 ]

@@ -471,7 +471,26 @@ The verification list gains two manual lines, for a worker to check by hand rath
 than something this gate enforces: the pull request's changed files match the globs
 named in `writes`, and the worker tree holds no `.venv` or `site-packages` directory.
 
-## Grade distribution (2026-10-23, clause 15 added)
+## 16. Read-proof token clause [measured]
+
+Grade basis: measured on the authoring instance 2026-11-09; contract
+`54cdc905-2026-11-09-template-read-token-not-a-secret.md` allowlisted the token
+shape and measured its behavior in two test cases.
+
+A worker's read-proof token proves the worker opened its delivered contract. The
+token is an acknowledgement string printed by the wrapper, twelve hex characters,
+and is typed bare in the completion message under the standing rule `ack-token`.
+Committing it no longer fails the redaction gate: the token shape `ack-<12 hex>`
+is globally allowlisted in `config/gitleaks.toml` as a non-secret, and the reason
+is documented in the allowlist entry and in this clause.
+
+The standing rule remains: type the token in the completion message only, never
+in a commit, pull request body, or review reply. A committed token proves nothing
+about reading the contract — it only proves the worker committed it. The purpose
+of the token is to verify the delivery path worked, not to verify the worker read
+or understood the contract. The gate's closure is measured, not assumed.
+
+## Grade distribution (2026-10-23, clause 15 added; 2026-11-09, clause 16 added)
 
 - machine-enforced: 2
 - measured: 10

@@ -494,5 +494,5 @@ if [[ "${FINDINGS}" -gt 0 ]]; then
   exit 1
 fi
 
-echo "redaction-scan: OK: 0 findings (mode=${MODE}, files=${file_count}, commit-messages=${COMMIT_MESSAGES_SCANNED}, org-rules=${EXTRA_RULE_COUNT}, root=${TARGET_ROOT})"
+echo "redaction-scan: OK: 0 findings (mode=${MODE}, files=${file_count}, commit-messages=${COMMIT_MESSAGES_SCANNED}, org-rules=${EXTRA_RULE_COUNT}, read-proof-tokens ack-<12 hex> are allowlisted, root=${TARGET_ROOT})"
 exit 0

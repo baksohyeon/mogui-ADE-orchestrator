@@ -106,6 +106,10 @@ regex = '''\b[A-Za-z0-9._-]+\.(internal|corp|local)\b'''
 # the previous scanner because the documentation depends on it.
 # Measured, not assumed: `stopwords` did not excuse these and `regexes` does,
 # so the placeholder list is expressed as case-insensitive line regexes.
+#
+# Read-proof acknowledgement tokens (ack-<12 hex>) are allowlisted because they
+# prove a worker opened its delivered contract and are typed in the completion message only,
+# not committed. The token shape is key-like to gitleaks but carries no secret.
 regexTarget = "line"
 regexes = [
   '''(?i)example\.com''',
@@ -129,6 +133,7 @@ regexes = [
   '''(?i)AKIAIOSFODNN7EXAMPLE''',
   '''(?i)not\-a\-real''',
   '''(?i)sample\ only''',
+  '''\back-[0-9a-f]{12}\b''',
 ]
 paths = [
   # Files whose whole purpose is to carry patterns.

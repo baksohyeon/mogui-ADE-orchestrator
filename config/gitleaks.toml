@@ -24,11 +24,6 @@ regex = '''BEGIN (RSA |OPENSSH |EC |DSA )?PRIVATE KEY'''
 id = "aws_access_key"
 description = "AWS access key id"
 regex = '''AKIA[0-9A-Z]{16}'''
-  [rules.allowlist]
-  regexTarget = "match"
-  regexes = [
-    '''\back-[0-9a-f]{12}\b''',
-  ]
 
 [[rules]]
 id = "github_token"
@@ -106,16 +101,10 @@ regex = '''\b[A-Za-z0-9._-]+\.(internal|corp|local)\b'''
     '''^settings\.local$''',
   ]
 
-[allowlist]
+[[allowlists]]
 # Placeholder text used in documentation or test fixtures. `regexTarget =
 # "line"` exempts the entire line, so these entries should match only true
 # placeholders, never real secrets that happen to be on the same line.
-#
-# Read-proof acknowledgement tokens (ack-<12 hex>) are scoped to match
-# (not line) via rule-level allowlists so they do not suppress unrelated
-# secrets on the same line. They prove a worker opened its delivered contract
-# and carry no secret; the standing rule keeps them out of commits. The token
-# shape is key-like to gitleaks but carries no secret.
 regexTarget = "line"
 regexes = [
   '''(?i)example\.com''',
@@ -139,7 +128,6 @@ regexes = [
   '''(?i)AKIAIOSFODNN7EXAMPLE''',
   '''(?i)not\-a\-real''',
   '''(?i)sample\ only''',
-  '''\back-[0-9a-f]{12}\b''',
 ]
 paths = [
   # Files whose whole purpose is to carry patterns.
@@ -152,4 +140,18 @@ paths = [
   '''__pycache__/''',
   '''\.pyc$''',
   '''\.orca/''',
+]
+
+[[allowlists]]
+# Read-proof acknowledgement tokens (ack-<12 hex>) get their own `[[allowlists]]`
+# entry with `regexTarget = "match"`, which compares the regex against the
+# matched secret text only, never the whole line. A line-scoped entry would
+# clear any other secret typed on the same line as a token; this one cannot.
+# They prove a worker opened its delivered contract; carry no secret; the
+# standing rule still keeps them out of commits. The token shape is key-like
+# to gitleaks but carries no secret.
+description = "read-proof acknowledgement token (ack-<12 hex>) is not a secret"
+regexTarget = "match"
+regexes = [
+  '''\back-[0-9a-f]{12}\b''',
 ]

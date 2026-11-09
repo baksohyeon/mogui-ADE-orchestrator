@@ -473,9 +473,10 @@ named in `writes`, and the worker tree holds no `.venv` or `site-packages` direc
 
 ## 16. Read-proof token clause [measured]
 
-Grade basis: measured on the authoring instance 2026-11-09; contract
-`54cdc905-2026-11-09-template-read-token-not-a-secret.md` allowlisted the token
-shape and measured its behavior in two test cases.
+Grade basis: measured on the authoring instance 2026-11-09; dispatch contract
+`54cdc905-2026-11-09-template-read-token-not-a-secret.md`, delivered outside this
+repository so no relative path resolves to it, allowlisted the token shape and
+measured its behavior in two test cases.
 
 A worker's read-proof token proves the worker opened its delivered contract. The
 token is an acknowledgement string appended by the wrapper to the delivered

@@ -1014,3 +1014,150 @@ def test_onboarding_docs_name_template_root_and_placeholder_flags():
     assert '"{{RUNTIME_ROOT}}/master-ops/scripts/template-check"' in reverify
     assert "do not guess a sibling directory" in reverify
     assert "The ops-side" in upgrade and "{{REPO_LIST}}" in upgrade
+
+
+def _load_template_apply():
+    loader = importlib.machinery.SourceFileLoader("template_apply_by_data", str(TEMPLATE_APPLY))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _scratch_template(root: Path, manifest: dict) -> Path:
+    template = root / "template"
+    for rel in manifest["files"]:
+        (template / rel).parent.mkdir(parents=True, exist_ok=True)
+        (template / rel).write_text(f"template:{rel}\n", encoding="utf-8")
+    (template / "MANIFEST.json").write_text(json.dumps(manifest), encoding="utf-8")
+    return template
+
+
+def test_template_apply_skips_instance_owned_by_manifest_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+):
+    module = _load_template_apply()
+    # Empty the built-in list: any skip below can only come from the manifest.
+    common = sys.modules["template_common"]
+    monkeypatch.setattr(common, "INSTANCE_OWNED_PREFIXES", ())
+    monkeypatch.setattr(common, "INSTANCE_OWNED_EXACT", frozenset())
+    template = _scratch_template(
+        tmp_path,
+        {
+            "template_version": "v0.0.0",
+            "files": ["notes/owned.md", "kept.md", "AGENTS.md"],
+            "instance_owned": ["notes/", "kept.md"],
+        },
+    )
+    ops = tmp_path / "ops"
+    (ops / "notes").mkdir(parents=True)
+    (ops / "notes" / "owned.md").write_text("mine\n", encoding="utf-8")
+
+    code = module.main(["--ops", str(ops), "--template", str(template), "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    actions = {a["path"]: a for a in payload["actions"]}
+    assert code == 0
+    for rel in ("notes/owned.md", "kept.md"):
+        assert actions[rel]["action"] == "skipped-as-instance-owned", rel
+        assert actions[rel]["reason"].endswith("(manifest)"), actions[rel]
+    # Not in the manifest's list, and the built-in list is empty: it applies.
+    assert actions["AGENTS.md"]["action"] == "planned"
+
+    code = module.main(
+        ["--ops", str(ops), "--template", str(template), "--write", "--confirm-input", "apply"]
+    )
+    capsys.readouterr()
+    assert code == 0
+    assert (ops / "notes" / "owned.md").read_text(encoding="utf-8") == "mine\n"
+    assert not (ops / "kept.md").exists()
+    assert (ops / "AGENTS.md").read_text(encoding="utf-8") == "template:AGENTS.md\n"
+
+
+def test_template_apply_falls_back_to_built_in_list_without_the_key(tmp_path: Path):
+    template = _scratch_template(
+        tmp_path, {"template_version": "v0.0.0", "files": ["AGENTS.md", "plain.md"]}
+    )
+    ops = tmp_path / "ops"
+    ops.mkdir()
+    result = _run(
+        [sys.executable, str(TEMPLATE_APPLY), "--ops", str(ops), "--template", str(template), "--json"]
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    actions = {a["path"]: a for a in json.loads(result.stdout)["actions"]}
+    assert actions["AGENTS.md"]["action"] == "skipped-as-instance-owned"
+    assert actions["AGENTS.md"]["reason"].endswith("(built-in list)")
+    assert actions["plain.md"]["action"] == "planned"
+
+
+def test_template_apply_and_check_refuse_malformed_instance_owned(tmp_path: Path):
+    template = _scratch_template(
+        tmp_path, {"template_version": "v0.0.0", "files": ["a.md"], "instance_owned": "notes/"}
+    )
+    ops = tmp_path / "ops"
+    ops.mkdir()
+    apply = _run([sys.executable, str(TEMPLATE_APPLY), "--ops", str(ops), "--template", str(template)])
+    assert apply.returncode == 2
+    assert "instance_owned" in apply.stderr
+    shutil.copy2(template / "MANIFEST.json", ops / "MANIFEST.json")
+    check = _run([sys.executable, str(TEMPLATE_CHECK), "--ops", str(ops), "--json"])
+    assert check.returncode == 2
+    assert json.loads(check.stdout)["manifest_status"] == "malformed"
+
+
+def test_template_check_reports_instance_owned_apart_from_required_and_unknown(tmp_path: Path):
+    ops = tmp_path / "ops"
+    ops.mkdir()
+    # AGENTS.md is claimed and instance-owned; leave it absent.
+    _seed_ops_from_manifest(ops, drop=["AGENTS.md"])
+    record = ops / "docs" / "blame" / "BLAME-2026-11-09-example.md"
+    record.parent.mkdir(parents=True)
+    record.write_text("an install's own record\n", encoding="utf-8")
+
+    for extra in ([], ["--template", str(SKELETON)]):
+        result = _run([sys.executable, str(TEMPLATE_CHECK), "--ops", str(ops), "--json", *extra])
+        report = json.loads(result.stdout)
+        assert "AGENTS.md" not in report["absent_required"], extra
+        assert report["absent_required"] == [], extra
+        rel = "docs/blame/BLAME-2026-11-09-example.md"
+        assert rel in report["instance_owned"], extra
+        assert rel not in report["unknown_present"], extra
+    assert result.returncode == 0, result.stdout
+
+    human = _run([sys.executable, str(TEMPLATE_CHECK), "--ops", str(ops)])
+    assert "instance_owned: " in human.stdout
+
+
+def test_template_check_reads_instance_owned_from_install_manifest(tmp_path: Path):
+    ops = tmp_path / "ops"
+    (ops / "notes").mkdir(parents=True)
+    (ops / "notes" / "mine.md").write_text("x\n", encoding="utf-8")
+    (ops / "MANIFEST.json").write_text(
+        json.dumps(
+            {"template_version": "v0.0.0", "files": ["notes/gone.md"], "instance_owned": ["notes/"]}
+        ),
+        encoding="utf-8",
+    )
+    result = _run([sys.executable, str(TEMPLATE_CHECK), "--ops", str(ops), "--json"])
+    report = json.loads(result.stdout)
+    assert result.returncode == 0, result.stdout
+    assert report["absent_required"] == []
+    assert report["unknown_present"] == []
+    assert report["instance_owned"] == ["notes/mine.md"]
+
+
+@pytest.mark.parametrize(
+    "entry", ["./config/", "config//", "a//b", "a\\b", "", ".", "a/./b", "../x", "/abs", "/"]
+)
+def test_instance_owned_rejects_non_normalized_entries(entry: str):
+    sys.path.insert(0, str(SKELETON / "scripts"))
+    try:
+        import template_manifest
+    finally:
+        sys.path.pop(0)
+    with pytest.raises(ValueError, match="normalized"):
+        template_manifest.instance_owned_entries({"files": [], "instance_owned": [entry]})
+    entries, source = template_manifest.instance_owned_entries(
+        {"files": [], "instance_owned": ["config/", "docs/blame/", "AGENTS.md"]}
+    )
+    assert source == "manifest" and entries == ("config/", "docs/blame/", "AGENTS.md")

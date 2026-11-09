@@ -4,14 +4,10 @@
 Always dry-runs first: prints the exact file list and the reason for each entry.
 A write pass requires an interactive confirmation phrase. There is no --yes.
 
-Instance-owned paths are refused by name:
-  docs/lineage/, AGENTS.md, CLAUDE.md, docs/MASTER-OPERATIONS.md,
-  docs/decisions/closed-decisions-and-facts.md,
-  docs/runbooks/boot-comparison-set.md, docs/runbooks/role-state.md,
-  docs/runbooks/succession-boot-card.md, scripts/compaction-probe.sh,
-  scripts/harness-selfcheck.sh, workspace-card/LOCAL.md, .beads/, config/,
-  contracts/,
-  and anything the manifest does not claim.
+Instance-owned paths are refused by name. The list comes from the template
+manifest's `instance_owned` key; a manifest written before that key existed
+falls back to the built-in list in template_common.py (see
+template_manifest.py). Anything the manifest does not claim is refused too.
 
 Per-file outcomes:
   planned | written
@@ -39,8 +35,8 @@ if str(_SCRIPT_DIR) not in sys.path:
 from template_common import (  # noqa: E402
     PLACEHOLDERS,
     SKIP_SUBSTITUTE_PATHS,
-    is_instance_owned,
 )
+from template_manifest import instance_owned_predicate  # noqa: E402
 
 CONFIRM_PHRASE = "apply"
 
@@ -103,6 +99,7 @@ def load_manifest(path: Path) -> dict:
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict) or not isinstance(data.get("files"), list):
         raise ValueError("manifest missing files list")
+    instance_owned_predicate(data)  # raises ValueError on a malformed key
     return data
 
 
@@ -170,6 +167,7 @@ def plan_actions(
     """Build the per-path plan. extra_targets are attempted writes outside the
     manifest — used only to prove refusal in tests; normal runs pass None."""
     claimed_raw = list(manifest["files"])
+    is_instance_owned, source = instance_owned_predicate(manifest)
     actions: list[dict] = []
     claimed: set[str] = set()
 
@@ -202,7 +200,7 @@ def plan_actions(
                 {
                     "path": rel,
                     "action": "skipped-as-instance-owned",
-                    "reason": "instance-owned by name",
+                    "reason": f"instance-owned by name ({source})",
                 }
             )
             continue
@@ -253,7 +251,9 @@ def plan_actions(
                 {
                     "path": rel,
                     "action": "skipped-as-instance-owned",
-                    "reason": f"destination resolves to instance-owned path {effective}",
+                    "reason": (
+                        f"destination resolves to instance-owned path {effective} ({source})"
+                    ),
                 }
             )
             continue
@@ -285,7 +285,7 @@ def plan_actions(
                 {
                     "path": rel,
                     "action": "skipped-as-instance-owned",
-                    "reason": "instance-owned by name",
+                    "reason": f"instance-owned by name ({source})",
                 }
             )
         elif rel not in claimed:
@@ -309,7 +309,9 @@ def apply_planned(
     ops_root: Path,
     actions: list[dict],
     values: dict[str, str],
+    manifest: dict | None = None,
 ) -> list[dict]:
+    is_instance_owned, _ = instance_owned_predicate(manifest)
     # Preflight every planned source before the first write so a missing file
     # mid-pass does not leave a half-applied install.
     planned = [a for a in actions if a["action"] == "planned"]
@@ -571,7 +573,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
-        results = apply_planned(template_root, ops_root, actions, values)
+        results = apply_planned(template_root, ops_root, actions, values, manifest)
     except (OSError, RuntimeError, UnicodeDecodeError) as exc:
         sys.stderr.write(f"template-apply: write aborted: {exc}\n")
         return 2

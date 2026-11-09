@@ -53,9 +53,10 @@ When the ops repository already has the script:
    - `.beads/`
    - `config/`
    - `contracts/`
+   - `docs/blame/` (this one from the manifest only, not the built-in list)
    - anything the manifest does not claim
 
-   Per-file outcomes are one of: planned, written, skipped-as-instance-owned, refused-not-in-manifest, error-invalid-path, error-missing-template-file. Dry-run prints `planned` for each template-layer path that would write; any `error-*` outcome fails the plan (nonzero exit) before confirmation.
+   Per-file outcomes are one of: planned, written, skipped-as-instance-owned, refused-not-in-manifest, error-invalid-path, error-missing-template-file. Dry-run prints `planned` for each template-layer path that would write; any `error-*` outcome fails the plan (nonzero exit) before confirmation. The `skipped-as-instance-owned` list comes from the template manifest's `instance_owned` key, and each skip's reason says `(manifest)`; a manifest written before that key existed falls back to the built-in list in `scripts/template_common.py`, and the reason says `(built-in list)`.
 
 7. **Re-check**: run `template-check` again with `--template` and confirm the report_set is `template-compare`. A clean shape is the goal; remaining unknown paths that are deliberate local additions stay listed as unknown and are not deleted.
 

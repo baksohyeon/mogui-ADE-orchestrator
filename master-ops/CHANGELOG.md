@@ -48,6 +48,25 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+## v0.5.301
+
+Release v0.5.301 (2026-11-09): master-ops/TEMPLATE-VERSION and master-ops/MANIFEST.json move to v0.5.301 alongside the changelog fold, and the root CHANGELOG.md rolls its Unreleased section into 0.5.301.
+
+- The template no longer ships incident records. The twelve `docs/blame/BLAME-2026-08-*.md` files were one workspace's records and now live with the seat that wrote them; `docs/blame/` keeps a README on the template side that explains the genre, and an install's own records are instance-owned.
+- `MANIFEST.json` gains an `instance_owned` key: path prefixes and exact paths that `template-apply` and `template-check` treat as instance-owned. Files under an instance-owned prefix are left out of `files`; exact paths stay in `files` and are skipped on Upgrade. `scripts/generate-manifest --check` fails if a `files` entry falls under a prefix. `template-apply` and `template-check` read the key, and fall back to the built-in list in `scripts/template_common.py` for a manifest written before it existed.
+- `template-check` reports instance-owned paths present on the install under a new `instance_owned` key, except `.beads/` contents, which it does not walk (tracker internals). An instance-owned path is never `absent_required` and never `unknown_present`, so an install that has not yet written one of its own records no longer reports drift.
+- The redaction gate no longer fails when a worker's acknowledgement token (`ack-<12 hex>`) appears in a committed file. The token shape is globally allowlisted in `config/gitleaks.toml` with the regex `\back-[0-9a-f]{12}\b` and is documented as a non-secret because it carries no sensitive data. Fixes: redaction gate false-positive on read-proof tokens (measured 2026-11-09).
+- The standing rule `ack-token` remains: type the token in the completion message only, never in a commit, pull request body, or review reply. A committed token proves nothing about reading the contract. The test `master-ops/scripts/test-redaction-read-token.sh` measures the gate behavior with two fixtures: one read token (must pass) and one fake AWS key (must fail).
+- Dispatch delivery now asks Orca first whether the injected prompt started a turn: the `dispatch --inject --json` reply's `prompt.stages`, then, unless the pane was already running a turn, up to five one-second reads of `orchestration worker-show --full` for `projection.stage.activity: working`. When Orca reports a turn, the pane text loop is skipped and the class is normally `agent-started`; `done`, `hook-trust`, and `limit` keep their precedence. Otherwise the pane loop decides as before. The delivery line ends in `source=orca:turn_started`, `source=pane-read`, or `source=dispatch:completed` when the dispatch record already reads `completed`, and the `dispatch_launched` event records the same value as `delivery_source`.
+
+- Fixed: five `pytest` cases that only failed inside an Orca worktree. `bootstrap()`'s dual-instance
+  check seats on `os.getcwd()` when no `seat_root` is given, so a real `claude` process parked at the
+  same cwd, routine when a worktree holds more than one agent, reported a false `SEAT_PEER`. The
+  `master-bootstrap`/`master-recover` CLIs have no way to pass `seat_root`, so an optional
+  `MOGUI_SEAT_ROOT` env var override (same name `mogui_log.py` already reads for the same question)
+  lets a caller opt the live cwd out without changing the unset-var default. A `MOGUI_SEAT_ROOT` that
+  does not resolve to an existing directory raises `BootstrapError`.
+
 ## v0.5.296
 
 Release v0.5.296 (2026-11-09): master-ops/TEMPLATE-VERSION and master-ops/MANIFEST.json move to v0.5.296 alongside the changelog fold, and the root CHANGELOG.md rolls its Unreleased section into 0.5.296.

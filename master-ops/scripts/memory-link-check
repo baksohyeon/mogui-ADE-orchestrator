@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Sort missing `[[name]]` memory links into typo, tracker-key, not-yet-written.
+"""Sort missing `[[name]]` memory links into typo, tracker-key,
+not-yet-written, and invalid.
 
 A master's memory is one markdown file per fact plus an index `MEMORY.md`.
 Files point at each other with `[[name]]`, where `name` is another file's
@@ -23,28 +24,44 @@ import sys
 from pathlib import Path
 
 LINK_RE = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]*)?\]\]")
-FENCE_RE = re.compile(r"^\s*(```+|~~~+)")
-INLINE_CODE_RE = re.compile(r"``[^`\n]*?``|`[^`\n]*?`")
+FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
+INLINE_CODE_RE = re.compile(r"``.*?``|`.*?`", re.DOTALL)
+
+
+class MemoryLinkCheckError(Exception):
+    """A fatal, already-file-named error; the caller turns this into exit 2."""
 
 
 def strip_fenced_code(text: str) -> str:
-    """Drop lines inside ``` or ~~~ fences so a link shown as an example is
-    not collected as a real one."""
+    """Drop lines inside a fenced code block, so a link shown as an example
+    is not collected as a real one. A fence only closes on a line that
+    reuses its opening character and is at least as long, matching the
+    CommonMark fenced-code rule, so a ``` block is not closed by a ~~~
+    line or a shorter run of the same character."""
     out = []
-    fenced = False
+    opening: str | None = None
     for line in text.splitlines():
-        if FENCE_RE.match(line):
-            fenced = not fenced
-            continue
-        if not fenced:
+        match = FENCE_RE.match(line)
+        if opening is None:
+            if match:
+                opening = match.group(1)
+                continue
             out.append(line)
+            continue
+        if match and match.group(1)[0] == opening[0] and len(match.group(1)) >= len(opening):
+            opening = None
     return "\n".join(out)
 
 
 def strip_inline_code(text: str) -> str:
-    """Drop single- or double-backtick code spans so a link named inside
-    one, such as a TOML `[[table]]` name, is not collected as a real one."""
-    return "\n".join(INLINE_CODE_RE.sub("", line) for line in text.splitlines())
+    """Drop single- or double-backtick code spans, matched over the whole
+    text so a span may cross a newline, so a link named inside one, such
+    as a TOML `[[table]]` name, is not collected as a real one. The
+    double-backtick branch is tried first, so a double-backtick span may
+    itself contain single backticks and closes only on the next double
+    backtick. A span with no closing delimiter anywhere in the rest of
+    the text has nothing to match and is left as prose."""
+    return INLINE_CODE_RE.sub("", text)
 
 
 def levenshtein(a: str, b: str) -> int:
@@ -65,11 +82,17 @@ def levenshtein(a: str, b: str) -> int:
 
 
 def collect_links(memory_dir: Path) -> dict[str, list[str]]:
-    """Return {link name: sorted file names it appears in}."""
+    """Return {link name: sorted file names it appears in}. A directory
+    that happens to match *.md is not a memory file and is skipped; it
+    can still surface through invalid_link_reason if something links to
+    it as if it were one."""
     links: dict[str, set[str]] = {}
-    for path in sorted(memory_dir.glob("*.md")):
-        body = strip_fenced_code(path.read_text(encoding="utf-8"))
-        body = strip_inline_code(body)
+    for path in sorted(p for p in memory_dir.glob("*.md") if p.is_file()):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            raise MemoryLinkCheckError(f"cannot read {path}: {exc}") from exc
+        body = strip_inline_code(strip_fenced_code(text))
         for match in LINK_RE.finditer(body):
             name = match.group(1).strip()
             if not name:
@@ -81,19 +104,48 @@ def collect_links(memory_dir: Path) -> dict[str, list[str]]:
 def read_keys(spec: str | None) -> set[str]:
     if spec is None:
         return set()
-    text = sys.stdin.read() if spec == "-" else Path(spec).read_text(encoding="utf-8")
+    try:
+        text = sys.stdin.read() if spec == "-" else Path(spec).read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise MemoryLinkCheckError(f"cannot read --bd-keys {spec}: {exc}") from exc
     return {line.strip() for line in text.splitlines() if line.strip()}
 
 
-def closest_stem(name: str, stems: list[str], max_distance: int) -> tuple[str, int] | None:
-    best: tuple[str, int] | None = None
-    for stem in stems:
+def closest_matches(
+    name: str, stems: list[str], max_distance: int
+) -> tuple[list[str], int] | None:
+    """Return (tied stem names, distance) for the closest existing file
+    stem(s) within max_distance, or None. Stems are compared in sorted
+    order so a tie is reported the same names in the same order every
+    run, and every stem sharing the best distance is reported, not just
+    the first one found."""
+    best_distance: int | None = None
+    best_stems: list[str] = []
+    for stem in sorted(stems):
         d = levenshtein(name, stem)
         if d == 0 or d > max_distance:
             continue
-        if best is None or d < best[1]:
-            best = (stem, d)
-    return best
+        if best_distance is None or d < best_distance:
+            best_distance = d
+            best_stems = [stem]
+        elif d == best_distance:
+            best_stems.append(stem)
+    if best_distance is None:
+        return None
+    return best_stems, best_distance
+
+
+def invalid_link_reason(name: str, memory_dir: Path) -> str | None:
+    """None when name is a safe, ordinary link target; otherwise a short
+    reason it can never resolve to a plain file in memory_dir. A name with
+    a path separator is rejected before it ever reaches the filesystem, so
+    it cannot be used to read or report on anything outside memory_dir."""
+    if "/" in name or "\\" in name:
+        return "contains a path separator"
+    target = memory_dir / f"{name}.md"
+    if target.exists() and not target.is_file():
+        return "target exists but is not a regular file"
+    return None
 
 
 def sort_missing(
@@ -101,37 +153,50 @@ def sort_missing(
     memory_dir: Path,
     bd_keys: set[str],
     max_distance: int,
-) -> tuple[dict[str, tuple[str, int]], dict[str, None], list[str]]:
-    """Return (typo, tracker_key, not_yet_written) over missing names only."""
-    stems = [p.stem for p in memory_dir.glob("*.md")]
-    typo: dict[str, tuple[str, int]] = {}
+) -> tuple[dict[str, tuple[list[str], int]], dict[str, None], list[str], dict[str, str]]:
+    """Return (typo, tracker_key, not_yet_written, invalid).
+
+    A name in --bd-keys is classified tracker-key before the typo check:
+    an explicit key list is given input, and it outranks a guessed
+    near-miss against an unrelated file name.
+    """
+    stems = [p.stem for p in memory_dir.glob("*.md") if p.is_file()]
+    typo: dict[str, tuple[list[str], int]] = {}
     tracker_key: dict[str, None] = {}
     not_yet_written: list[str] = []
+    invalid: dict[str, str] = {}
     for name in sorted(links):
-        if (memory_dir / f"{name}.md").exists():
+        reason = invalid_link_reason(name, memory_dir)
+        if reason is not None:
+            invalid[name] = reason
             continue
-        match = closest_stem(name, stems, max_distance)
-        if match is not None:
-            typo[name] = match
+        if (memory_dir / f"{name}.md").exists():
             continue
         if name in bd_keys:
             tracker_key[name] = None
             continue
+        match = closest_matches(name, stems, max_distance)
+        if match is not None:
+            typo[name] = match
+            continue
         not_yet_written.append(name)
-    return typo, tracker_key, not_yet_written
+    return typo, tracker_key, not_yet_written, invalid
 
 
 def render(
     links: dict[str, list[str]],
-    typo: dict[str, tuple[str, int]],
+    typo: dict[str, tuple[list[str], int]],
     tracker_key: dict[str, None],
     not_yet_written: list[str],
+    invalid: dict[str, str],
 ) -> str:
     lines = []
     lines.append(f"typo ({len(typo)})")
-    for name, (stem, distance) in typo.items():
+    for name, (stems, distance) in typo.items():
         files = ", ".join(links[name])
-        lines.append(f"  {name} -> {stem} (distance {distance})  [{files}]")
+        target = " or ".join(stems)
+        tie = ", tie" if len(stems) > 1 else ""
+        lines.append(f"  {name} -> {target} (distance {distance}{tie})  [{files}]")
     lines.append(f"tracker-key ({len(tracker_key)})")
     for name in tracker_key:
         files = ", ".join(links[name])
@@ -140,6 +205,10 @@ def render(
     for name in not_yet_written:
         files = ", ".join(links[name])
         lines.append(f"  {name}  [{files}]")
+    lines.append(f"invalid ({len(invalid)})")
+    for name, reason in invalid.items():
+        files = ", ".join(links[name])
+        lines.append(f"  {name}: {reason}  [{files}]")
     return "\n".join(lines) + "\n"
 
 
@@ -163,17 +232,17 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         bd_keys = read_keys(args.bd_keys)
-    except OSError as exc:
-        sys.stderr.write(f"memory-link-check: cannot read --bd-keys: {exc}\n")
+        links = collect_links(args.memory_dir)
+    except MemoryLinkCheckError as exc:
+        sys.stderr.write(f"memory-link-check: {exc}\n")
         return 2
 
-    links = collect_links(args.memory_dir)
-    typo, tracker_key, not_yet_written = sort_missing(
+    typo, tracker_key, not_yet_written, invalid = sort_missing(
         links, args.memory_dir, bd_keys, args.max_distance
     )
-    sys.stdout.write(render(links, typo, tracker_key, not_yet_written))
+    sys.stdout.write(render(links, typo, tracker_key, not_yet_written, invalid))
 
-    if typo:
+    if typo or invalid:
         return 1
     if args.strict_tracker_keys and tracker_key:
         return 1

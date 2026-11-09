@@ -1,14 +1,12 @@
 # Memory `[[name]]` Link Check
 
-`scripts/memory-link-check` finds every `[[name]]` link in a memory
-directory's `*.md` files whose target file does not exist, and sorts each
-missing name into a group that says why it is missing. A missing name is
-allowed by design (it marks something worth writing later); only a
-near-miss on an existing file name is a defect. A `[[name]]` inside a
-fenced block or an inline code span, such as a TOML `[[table]]` name, is
-not collected at all.
+`scripts/memory-link-check` sorts every missing `[[name]]` memory link by
+why it is missing: a missing name is allowed by design. By default only
+`typo` and `invalid` fail; `tracker-key` fails too under
+`--strict-tracker-keys`. A `[[name]]` inside a fenced block or an inline
+code span (for example a TOML `[[table]]` name) is not collected.
 
-Run it before committing a memory mirror into an operations repository, or by hand against the live memory directory.
+Run before committing a memory mirror, or by hand on the live directory.
 
 ## Usage
 
@@ -16,24 +14,26 @@ Run it before committing a memory mirror into an operations repository, or by ha
 scripts/memory-link-check --memory-dir memory/ --bd-keys tracker-keys.txt
 ```
 
-`--bd-keys` (optional) takes a file of tracker memory keys, one per line
-(`-` for stdin). `--max-distance` sets the Levenshtein distance counted as
-a typo (default 2).
+`--bd-keys` (optional): tracker memory keys, one per line, `-` for stdin.
+`--max-distance`: Levenshtein distance counted as a typo (default 2).
 
-## Groups
+## Groups, checked in this order
 
-- `typo`: an existing file's name is close enough (within `--max-distance`)
-  that this is probably a misspelling. Fix the link.
-- `tracker-key`: the name is in `--bd-keys`, naming a short rule kept in
-  the tracker's own memory store. Point the link at that key's detail
-  document if it has one; otherwise leave it.
-- `not-yet-written`: a name reserved for something not written yet. Leave
-  it alone.
+- `invalid`: a path separator in the name, or an existing target that is
+  not a regular file. Never resolves to a plain file; fix the link.
+- `tracker-key`: the name is in `--bd-keys`. Checked before `typo`: an
+  explicit key outranks a guessed near-miss. Point the link at the key's
+  detail document, or leave it.
+- `typo`: within `--max-distance` of an existing file name. A tie between
+  two equally close names is reported as a tie, not dropped. Fix the link.
+- `not-yet-written`: none of the above. Leave it alone.
 
 ## Exit codes
 
-- `0`: `typo` is empty, regardless of the other two groups unless
-  `--strict-tracker-keys` is set and `tracker-key` is non-empty too.
-- `1`: `typo` is non-empty, or `--strict-tracker-keys` was passed and
-  `tracker-key` is non-empty.
-- `2`: usage or runtime error, for example a non-directory `--memory-dir`.
+- `0`: `typo` and `invalid` are empty, and `tracker-key` is empty or
+  `--strict-tracker-keys` was not passed.
+- `1`: `typo` or `invalid` is non-empty, or `--strict-tracker-keys` was
+  passed with a non-empty `tracker-key`.
+- `2`: a usage error (non-directory `--memory-dir`, negative
+  `--max-distance`), or a memory file or `--bd-keys` source that cannot be
+  read or is not valid UTF-8; the error names the file.

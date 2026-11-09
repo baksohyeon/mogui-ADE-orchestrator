@@ -1024,7 +1024,7 @@ echo "$1 $2" >> "$FAKE_CALLS"
 case "$1 $2" in
   "terminal read") printf '%s\n' "$FAKE_PANE";;
   "orchestration worker-show") printf '%s\n' "$FAKE_WORKER_SHOW";;
-  "orchestration dispatch-show") printf '{"ok":true,"result":{"dispatch":{"status":"dispatched"}}}\n';;
+  "orchestration dispatch-show") printf '{"ok":true,"result":{"dispatch":{"status":"%s"}}}\n' "${FAKE_DSTATUS:-dispatched}";;
   *) exit 1;;
 esac
 BIN
@@ -1035,14 +1035,15 @@ BIN
   unsupported='{"ok":true,"result":{"dispatch":{"id":"ctx_fake"},"injected":true,"prompt":{"stages":["input_accepted"],"provider":"unsupported","observation":"unsupported"}}}'
   working='{"ok":true,"result":{"projection":{"stage":{"worker":"unsupervised","dispatch":"dispatched","detail":null,"activity":"working"}}}}'
   idle='{"ok":true,"result":{"projection":{"stage":{"worker":"unsupervised","dispatch":"dispatched","detail":null,"activity":"unknown"}}}}'
+  done_activity='{"ok":true,"result":{"projection":{"stage":{"worker":"unsupervised","dispatch":"completed","detail":null,"activity":"done"}}}}'
 
-  run_case() {  # functions inject_json worker_show_json pane [pre_inject_class]
+  run_case() {  # functions inject_json worker_show_json pane [pre_inject_class] [dispatch_status]
     script_file="$work/run.sh"
     : > "$work/calls"
     {
       echo 'set -u'
       printf 'SCRIPTS_DIR=%q\n' "$(dirname "$dispatch")"
-      printf 'export FAKE_CALLS=%q FAKE_WORKER_SHOW=%q FAKE_PANE=%q\n' "$work/calls" "$3" "$4"
+      printf 'export FAKE_CALLS=%q FAKE_WORKER_SHOW=%q FAKE_PANE=%q FAKE_DSTATUS=%q\n' "$work/calls" "$3" "$4" "${6:-dispatched}"
       printf '%s\n' "$markers"
       printf '%s\n' "$1"
       echo 'record_dispatch_launched() { echo "FIRELOG outcome=$1 source=$3"; }'
@@ -1082,6 +1083,29 @@ BIN
     return 1
   fi
   echo "ok   : orca turn signal · no Orca turn signal falls back to the pane loop, source=pane-read"
+
+  # worker-show `done` follows the pane and can be left over from an earlier
+  # turn, so it is not a turn signal: the pane loop still decides.
+  run_case "$fns" "$unsupported" "$done_activity" "❯ "
+  if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^delivery .*source=pane-read$' \
+      || printf '%s\n' "$out" | grep -q 'source=orca:turn_started' \
+      || ! grep -q 'worker-show' "$work/calls" || ! grep -q 'terminal read' "$work/calls"; then
+    echo "FAIL: worker-show activity=done should fall back to the pane loop with source=pane-read (status=$status)" >&2
+    printf '%s\n' "$out" >&2; cat "$work/calls" >&2
+    return 1
+  fi
+  echo "ok   : orca turn signal · worker-show activity=done is not a turn signal, falls back to source=pane-read"
+
+  # A dispatch record that already reads completed decides `done` ahead of
+  # Orca's turn signal, so the line and the fire log name that record.
+  run_case "$fns" "$supported" "$idle" "❯ " prepared-prompt completed
+  if ! printf '%s\n' "$out" | grep -q '^delivery .*class=done source=dispatch:completed$' \
+      || ! printf '%s\n' "$out" | grep -q '^FIRELOG outcome=pass source=dispatch:completed$'; then
+    echo "FAIL: a completed dispatch should read class=done source=dispatch:completed on the line and in the fire log" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : orca turn signal · a completed dispatch reads class=done source=dispatch:completed, line and fire log agree"
 
   # A reused pane already mid-turn: worker-show's activity follows the pane,
   # so its `working` belongs to the old turn and must not decide.

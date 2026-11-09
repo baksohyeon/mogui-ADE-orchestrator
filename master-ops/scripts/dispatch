@@ -1896,6 +1896,13 @@ if [ -z "$DISPATCH_STATUS" ]; then
   DISPATCH_STATUS=unreadable
 fi
 DELIVERY_CLASS=$(delivery_result "$PRE_INJECT_CLASS" "$POST_INJECT_CLASS" "$DISPATCH_STATUS" "$ORCA_STAGE")
+# `done` comes from the dispatch record, ahead of both signals above, so the
+# line and the event name that record as the source. hook-trust and limit
+# need no override: they only come from a pane read, which already reads
+# source=pane-read.
+if [ "$DELIVERY_CLASS" = done ]; then
+  DELIVERY_SOURCE=dispatch:completed
+fi
 echo "delivery pre=$PRE_INJECT_CLASS post=$POST_INJECT_CLASS status=$DISPATCH_STATUS class=$DELIVERY_CLASS source=$DELIVERY_SOURCE"
 case "$DELIVERY_CLASS" in
   agent-started|done) record_dispatch_launched pass "" "$DELIVERY_SOURCE";;

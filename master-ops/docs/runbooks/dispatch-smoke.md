@@ -62,18 +62,23 @@ What a failing run prints depends on the failure path:
 
 ### Which source decided delivery
 
-The wrapper's delivery line ends in `source=`, naming which of two signals
-decided the class. `source=orca:turn_started` means Orca itself reported that
+The wrapper's delivery line ends in `source=`, naming the signal that decided
+the class. The precedence is: `hook-trust` and `limit` from a pane read first,
+then `done` from a dispatch record that already reads `completed`
+(`source=dispatch:completed`), then Orca's turn signal, then the pane
+transition. `source=orca:turn_started` means Orca itself reported that
 the injected prompt started a turn: either the `dispatch --inject --json`
 reply carried `prompt.stages` with `turn_started` under
 `observation: "supported"`, or `orchestration worker-show --dispatch <id>
 --json --full` read `projection.stage.activity` as `working` within five
 one-second polls. That poll is skipped when the pane already read `working`
 before the inject, since the activity follows the pane and could belong to an
-earlier turn. The pane reading loop is skipped in that case and the
-line reads `post=skipped`. `source=pane-read` means Orca gave no turn signal
-(`input_accepted` only, `unsupported`, or no key), so the pane text loop
-decided exactly as it did before. The `dispatch_launched` event carries the
+earlier turn. Only that poll is skipped: the pane reading loop still runs, so
+that case reads `source=pane-read` with whatever `post=` the loop found. When
+Orca does report a turn, the pane reading loop is skipped and the line reads
+`post=skipped`. `source=pane-read` means Orca gave no turn signal
+(`input_accepted` only, `unsupported`, `activity` other than `working`, or no
+key), so the pane text loop decided exactly as it did before. The `dispatch_launched` event carries the
 same value as `delivery_source`, so the two paths can be counted from the
 event log.
 

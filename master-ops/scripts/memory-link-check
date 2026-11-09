@@ -1,0 +1,176 @@
+#!/usr/bin/env python3
+"""Sort missing `[[name]]` memory links into typo, tracker-key, not-yet-written.
+
+A master's memory is one markdown file per fact plus an index `MEMORY.md`.
+Files point at each other with `[[name]]`, where `name` is another file's
+stem, and a name with no file yet is allowed on purpose: it marks something
+worth writing later. That also means a plain "file missing" check cannot
+tell a typo from a deliberate placeholder, so this groups every missing
+name instead of just listing it.
+
+Run it on the directory of `*.md` memory files:
+
+    scripts/memory-link-check --memory-dir memory/
+
+See docs/runbooks/memory-link-check.md for what each group means.
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+from pathlib import Path
+
+LINK_RE = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]*)?\]\]")
+FENCE_RE = re.compile(r"^\s*(```+|~~~+)")
+
+
+def strip_fenced_code(text: str) -> str:
+    """Drop lines inside ``` or ~~~ fences so a link shown as an example is
+    not collected as a real one."""
+    out = []
+    fenced = False
+    for line in text.splitlines():
+        if FENCE_RE.match(line):
+            fenced = not fenced
+            continue
+        if not fenced:
+            out.append(line)
+    return "\n".join(out)
+
+
+def levenshtein(a: str, b: str) -> int:
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i] + [0] * len(b)
+        for j, cb in enumerate(b, 1):
+            cost = 0 if ca == cb else 1
+            cur[j] = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost)
+        prev = cur
+    return prev[-1]
+
+
+def collect_links(memory_dir: Path) -> dict[str, list[str]]:
+    """Return {link name: sorted file names it appears in}."""
+    links: dict[str, set[str]] = {}
+    for path in sorted(memory_dir.glob("*.md")):
+        body = strip_fenced_code(path.read_text(encoding="utf-8"))
+        for match in LINK_RE.finditer(body):
+            name = match.group(1).strip()
+            if not name:
+                continue
+            links.setdefault(name, set()).add(path.name)
+    return {name: sorted(files) for name, files in links.items()}
+
+
+def read_keys(spec: str | None) -> set[str]:
+    if spec is None:
+        return set()
+    text = sys.stdin.read() if spec == "-" else Path(spec).read_text(encoding="utf-8")
+    return {line.strip() for line in text.splitlines() if line.strip()}
+
+
+def closest_stem(name: str, stems: list[str], max_distance: int) -> tuple[str, int] | None:
+    best: tuple[str, int] | None = None
+    for stem in stems:
+        d = levenshtein(name, stem)
+        if d == 0 or d > max_distance:
+            continue
+        if best is None or d < best[1]:
+            best = (stem, d)
+    return best
+
+
+def sort_missing(
+    links: dict[str, list[str]],
+    memory_dir: Path,
+    bd_keys: set[str],
+    max_distance: int,
+) -> tuple[dict[str, tuple[str, int]], dict[str, None], list[str]]:
+    """Return (typo, tracker_key, not_yet_written) over missing names only."""
+    stems = [p.stem for p in memory_dir.glob("*.md")]
+    typo: dict[str, tuple[str, int]] = {}
+    tracker_key: dict[str, None] = {}
+    not_yet_written: list[str] = []
+    for name in sorted(links):
+        if (memory_dir / f"{name}.md").exists():
+            continue
+        match = closest_stem(name, stems, max_distance)
+        if match is not None:
+            typo[name] = match
+            continue
+        if name in bd_keys:
+            tracker_key[name] = None
+            continue
+        not_yet_written.append(name)
+    return typo, tracker_key, not_yet_written
+
+
+def render(
+    links: dict[str, list[str]],
+    typo: dict[str, tuple[str, int]],
+    tracker_key: dict[str, None],
+    not_yet_written: list[str],
+) -> str:
+    lines = []
+    lines.append(f"typo ({len(typo)})")
+    for name, (stem, distance) in typo.items():
+        files = ", ".join(links[name])
+        lines.append(f"  {name} -> {stem} (distance {distance})  [{files}]")
+    lines.append(f"tracker-key ({len(tracker_key)})")
+    for name in tracker_key:
+        files = ", ".join(links[name])
+        lines.append(f"  {name}  [{files}]")
+    lines.append(f"not-yet-written ({len(not_yet_written)})")
+    for name in not_yet_written:
+        files = ", ".join(links[name])
+        lines.append(f"  {name}  [{files}]")
+    return "\n".join(lines) + "\n"
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--memory-dir", required=True, type=Path,
+                     help="directory of *.md memory files")
+    ap.add_argument("--bd-keys", default=None,
+                     help="file of tracker memory keys, one per line; - for stdin")
+    ap.add_argument("--max-distance", type=int, default=2,
+                     help="max Levenshtein distance counted as a typo (default 2)")
+    ap.add_argument("--strict-tracker-keys", action="store_true",
+                     help="also fail (exit 1) when the tracker-key group is non-empty")
+    args = ap.parse_args(argv)
+
+    if args.max_distance < 0:
+        ap.error("--max-distance must be >= 0")
+    if not args.memory_dir.is_dir():
+        sys.stderr.write(f"memory-link-check: not a directory: {args.memory_dir}\n")
+        return 2
+
+    try:
+        bd_keys = read_keys(args.bd_keys)
+    except OSError as exc:
+        sys.stderr.write(f"memory-link-check: cannot read --bd-keys: {exc}\n")
+        return 2
+
+    links = collect_links(args.memory_dir)
+    typo, tracker_key, not_yet_written = sort_missing(
+        links, args.memory_dir, bd_keys, args.max_distance
+    )
+    sys.stdout.write(render(links, typo, tracker_key, not_yet_written))
+
+    if typo:
+        return 1
+    if args.strict_tracker_keys and tracker_key:
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

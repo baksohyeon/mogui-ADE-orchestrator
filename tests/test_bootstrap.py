@@ -23,9 +23,10 @@ Unlock: explicit user instruction only
 ```"""
 
 
-def test_parses_role_state_from_handoff(tmp_path: Path) -> None:
+def test_parses_role_state_from_handoff(tmp_path: Path, monkeypatch) -> None:
     charter = _file(tmp_path, "charter.md", "# Charter\n\n- Architecture\n")
     handoff = _file(tmp_path, "handoff.md", "## Role State\n\n" + ROLE_STATE_BLOCK + "\n")
+    monkeypatch.setenv("MOGUI_SEAT_ROOT", str(tmp_path / "isolated-seat"))
 
     result = bootstrap(BootstrapConfig(charter_path=charter, handoff_path=handoff))
 
@@ -68,8 +69,9 @@ def test_truncates_charter_to_budget_with_marker(tmp_path: Path) -> None:
     assert "BUDGET_TRUNCATED:L0" in result.warnings
 
 
-def test_missing_handoff_warns_and_returns_l0_only(tmp_path: Path) -> None:
+def test_missing_handoff_warns_and_returns_l0_only(tmp_path: Path, monkeypatch) -> None:
     charter = _file(tmp_path, "charter.md", "# Charter\n")
+    monkeypatch.setenv("MOGUI_SEAT_ROOT", str(tmp_path / "isolated-seat"))
 
     result = bootstrap(
         BootstrapConfig(charter_path=charter, handoff_path=tmp_path / "missing.md")
@@ -245,9 +247,55 @@ def test_seat_peer_skips_pid_when_cwd_probe_raises(tmp_path: Path) -> None:
 
 
 @skip_windows_exec_surface
-def test_cli_json_outputs_role_state(tmp_path: Path) -> None:
+def test_mogui_seat_root_overrides_cwd_against_a_real_peer(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The original hypothesis was a directory walk-up leaking an enclosing
+    checkout's own files. Reproducing with a real decoy `claude` process
+    showed the actual leak instead: with no explicit `seat_root`,
+    `_detect_dual_instances` seats on `os.getcwd()`, so any other real
+    `claude` process parked at that same cwd -- routine under Orca, where a
+    worktree such as `<outer>/.orca/worktrees/<inner>` often holds more than
+    one agent -- reports a false SEAT_PEER. Callers that cannot pass
+    `seat_root` directly, such as the `master-bootstrap`/`master-recover`
+    CLIs, have no seam for that until now: `MOGUI_SEAT_ROOT` (bootstrap.py's
+    `_resolve_seat_root`, the same env var `mogui_log.py` already reads for
+    the same "which directory is the seat" question) lets them opt out
+    without changing the unset-var default.
+    """
+    outer = tmp_path / "outer"
+    inner = outer / ".orca" / "worktrees" / "inner"
+    inner.mkdir(parents=True)
+    isolated_seat = tmp_path / "isolated-seat"
+    charter = _file(tmp_path, "charter.md", "# Charter\n")
+
+    # A real process, not a mock: argv[0] "claude" so `_is_claude_command`
+    # matches, cwd `inner` so it collides with the worktree root exactly as
+    # a sibling agent would.
+    decoy = subprocess.Popen(["claude", "5"], executable="/bin/sleep", cwd=str(inner))
+    try:
+        monkeypatch.chdir(inner)
+
+        # Sanity: with no override, the live peer is flagged. This is the
+        # measured production leak, not a mock standing in for it.
+        result = bootstrap(BootstrapConfig(charter_path=charter))
+        assert any(w.startswith("SEAT_PEER:") for w in result.warnings)
+
+        # The fix: an explicit seat elsewhere is honored over the live cwd,
+        # so the same real peer no longer matches.
+        monkeypatch.setenv("MOGUI_SEAT_ROOT", str(isolated_seat))
+        result = bootstrap(BootstrapConfig(charter_path=charter))
+        assert result.warnings == []
+    finally:
+        decoy.terminate()
+        decoy.wait(timeout=5)
+
+
+@skip_windows_exec_surface
+def test_cli_json_outputs_role_state(tmp_path: Path, monkeypatch) -> None:
     charter = _file(tmp_path, "charter.md", "# Charter\n")
     handoff = _file(tmp_path, "handoff.md", "## Role State\n\n" + ROLE_STATE_BLOCK + "\n")
+    monkeypatch.setenv("MOGUI_SEAT_ROOT", str(tmp_path / "isolated-seat"))
 
     result = subprocess.run(
         [

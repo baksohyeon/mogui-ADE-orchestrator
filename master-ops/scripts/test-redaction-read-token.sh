@@ -3,12 +3,13 @@
 # while real AWS keys still fail. Both assertions are measured.
 #
 # scripts/redaction-scan.sh lives at the host repository's root, outside
-# master-ops/, so a template-rendered copy never receives it: only the
-# authoring checkout, two levels above this script's own location, has it.
-# redaction-scan.sh also refuses to run without gitleaks on PATH (exit 2), so
-# a runner that lacks it has nothing to measure either. This file SKIPs for
-# both, the same convention test-contributing-shell-loop.sh and
-# test-dispatch-timeline.sh use for a missing prerequisite.
+# the template skeleton this script ships in, so a rendered copy never
+# receives it: only the authoring checkout, two levels above this script's
+# own location, has it. redaction-scan.sh also refuses to run without
+# gitleaks on PATH (exit 2), so a runner that lacks it has nothing to
+# measure either. This file SKIPs for both, the same convention
+# test-contributing-shell-loop.sh and test-dispatch-timeline.sh use for a
+# missing prerequisite.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

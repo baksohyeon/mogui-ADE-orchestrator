@@ -26,7 +26,9 @@ retirements file does.
 Instance-owned paths (the manifest's `instance_owned` key, or the built-in list
 in template_common.py for a manifest without it) are never `absent_required`
 and never `unknown_present`. Those present on the install are reported under
-`instance_owned`, which never fails the check.
+`instance_owned`, which never fails the check. `.git/` and `.beads/` are not
+walked at all (tracker and VCS internals), so `.beads/` contents never appear
+under `instance_owned` even though the manifest lists `.beads/`.
 """
 
 from __future__ import annotations

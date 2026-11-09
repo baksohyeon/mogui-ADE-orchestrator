@@ -18,15 +18,20 @@ MANIFEST_SOURCE = "manifest"
 FALLBACK_SOURCE = "built-in list"
 
 
+def _is_normalized(entry: object) -> bool:
+    """A relative posix path with no empty, "." or ".." segment; a trailing "/" marks a prefix."""
+    if not isinstance(entry, str) or not entry or "\\" in entry or entry.startswith("/"):
+        return False
+    body = entry[:-1] if entry.endswith("/") else entry
+    return all(part not in ("", ".", "..") for part in body.split("/"))
+
+
 def instance_owned_entries(manifest: dict | None) -> tuple[tuple[str, ...], str]:
     """Return (entries, source). Raise ValueError on a malformed key."""
     if isinstance(manifest, dict) and "instance_owned" in manifest:
         entries = manifest["instance_owned"]
-        if not isinstance(entries, list) or not all(
-            isinstance(e, str) and e and not e.startswith("/") and ".." not in e.split("/")
-            for e in entries
-        ):
-            raise ValueError("manifest instance_owned is not a list of relative paths")
+        if not isinstance(entries, list) or not all(_is_normalized(e) for e in entries):
+            raise ValueError("manifest instance_owned is not a list of normalized relative paths")
         return tuple(entries), MANIFEST_SOURCE
     fallback = (
         *template_common.INSTANCE_OWNED_PREFIXES,

@@ -235,10 +235,17 @@ def main(argv: list[str] | None = None) -> int:
         except json.JSONDecodeError as exc:
             sys.stderr.write(f"generate-manifest: committed manifest malformed JSON: {exc}\n")
             return 1
+        existing_files = (
+            existing_data.get("files") if isinstance(existing_data, dict) else None
+        )
+        if not isinstance(existing_files, list):
+            sys.stderr.write(
+                "generate-manifest: MANIFEST.json is stale; files is not a list; "
+                "run scripts/generate-manifest\n"
+            )
+            return 1
         claimed = [
-            p
-            for p in (existing_data.get("files") or [] if isinstance(existing_data, dict) else [])
-            if isinstance(p, str) and under_instance_owned_prefix(p)
+            p for p in existing_files if isinstance(p, str) and under_instance_owned_prefix(p)
         ]
         if claimed:
             sys.stderr.write(

@@ -1144,3 +1144,20 @@ def test_template_check_reads_instance_owned_from_install_manifest(tmp_path: Pat
     assert report["absent_required"] == []
     assert report["unknown_present"] == []
     assert report["instance_owned"] == ["notes/mine.md"]
+
+
+@pytest.mark.parametrize(
+    "entry", ["./config/", "config//", "a//b", "a\\b", "", ".", "a/./b", "../x", "/abs", "/"]
+)
+def test_instance_owned_rejects_non_normalized_entries(entry: str):
+    sys.path.insert(0, str(SKELETON / "scripts"))
+    try:
+        import template_manifest
+    finally:
+        sys.path.pop(0)
+    with pytest.raises(ValueError, match="normalized"):
+        template_manifest.instance_owned_entries({"files": [], "instance_owned": [entry]})
+    entries, source = template_manifest.instance_owned_entries(
+        {"files": [], "instance_owned": ["config/", "docs/blame/", "AGENTS.md"]}
+    )
+    assert source == "manifest" and entries == ("config/", "docs/blame/", "AGENTS.md")

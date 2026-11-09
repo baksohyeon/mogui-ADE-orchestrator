@@ -188,7 +188,9 @@ def test_manifest_writes_instance_owned_and_leaves_blame_records_out():
     assert not list((SKELETON / "docs" / "blame").glob("BLAME-*.md"))
 
 
-def test_instance_owned_seed_matches_the_built_in_fallback():
+def test_instance_owned_seed_is_the_built_in_fallback_plus_docs_blame():
+    # docs/blame/ is the one seed entry the fallback lacks: a manifest without
+    # the key predates this change and still claims the records itself.
     sys.path.insert(0, str(SKELETON / "scripts"))
     try:
         import template_common
@@ -239,3 +241,20 @@ def test_check_fails_when_files_claims_an_instance_owned_path(tmp_path: Path):
     assert check.returncode == 1
     assert "claims instance-owned paths" in check.stderr
     assert "docs/blame/BLAME-2026-01-01-x.md" in check.stderr
+
+
+def test_check_reports_non_list_files_as_stale(tmp_path: Path):
+    skeleton = tmp_path / "master-ops"
+    skeleton.mkdir()
+    (skeleton / "TEMPLATE-VERSION").write_text("v0.0.0\n", encoding="utf-8")
+    (skeleton / "MANIFEST.json").write_text(
+        json.dumps({"template_version": "v0.0.0", "files": 1}), encoding="utf-8"
+    )
+    check = subprocess.run(
+        [sys.executable, str(GENERATOR), "--skeleton", str(skeleton), "--check"],
+        capture_output=True,
+        text=True,
+    )
+    assert check.returncode == 1
+    assert "files is not a list" in check.stderr
+    assert "Traceback" not in check.stderr

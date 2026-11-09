@@ -117,4 +117,23 @@ else
 fi
 rm -rf "$mem"
 
+# Case 9: a [[name]] inside a single- or double-backtick inline code span
+# (such as a TOML `[[table]]` name) is not collected; the same name written
+# in plain prose, with no backticks, still is.
+mem="$(mktemp -d)"
+printf 'A TOML array-of-tables name as a code span: `[[allowlists]]`.\n' >"$mem/a.md"
+printf 'Double backticks too: ``[[allowlists]]``.\n' >>"$mem/a.md"
+printf 'In prose, not a code span: [[future-topic]].\n' >>"$mem/a.md"
+out=$("$SCRIPT" --memory-dir "$mem" 2>&1); rc=$?
+expect 0 "$rc" "inline-code-span name does not become a typo or any group" "$out"
+expect_contains "$out" "not-yet-written (1)" "only the prose link is collected"
+expect_contains "$out" "future-topic" "the prose link's name is reported"
+if contains "$out" "allowlists"; then
+  echo "  FAIL: an inline-code-span link must not be collected: $out"
+  F=1
+else
+  echo "  ok:   inline-code-span link ignored (single and double backtick)"
+fi
+rm -rf "$mem"
+
 [ "$F" -eq 0 ] && exit 0 || exit 1

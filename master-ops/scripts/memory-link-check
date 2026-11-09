@@ -24,6 +24,7 @@ from pathlib import Path
 
 LINK_RE = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]*)?\]\]")
 FENCE_RE = re.compile(r"^\s*(```+|~~~+)")
+INLINE_CODE_RE = re.compile(r"``[^`\n]*?``|`[^`\n]*?`")
 
 
 def strip_fenced_code(text: str) -> str:
@@ -38,6 +39,12 @@ def strip_fenced_code(text: str) -> str:
         if not fenced:
             out.append(line)
     return "\n".join(out)
+
+
+def strip_inline_code(text: str) -> str:
+    """Drop single- or double-backtick code spans so a link named inside
+    one, such as a TOML `[[table]]` name, is not collected as a real one."""
+    return "\n".join(INLINE_CODE_RE.sub("", line) for line in text.splitlines())
 
 
 def levenshtein(a: str, b: str) -> int:
@@ -62,6 +69,7 @@ def collect_links(memory_dir: Path) -> dict[str, list[str]]:
     links: dict[str, set[str]] = {}
     for path in sorted(memory_dir.glob("*.md")):
         body = strip_fenced_code(path.read_text(encoding="utf-8"))
+        body = strip_inline_code(body)
         for match in LINK_RE.finditer(body):
             name = match.group(1).strip()
             if not name:

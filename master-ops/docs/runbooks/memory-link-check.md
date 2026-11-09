@@ -4,21 +4,21 @@
 directory's `*.md` files whose target file does not exist, and sorts each
 missing name into a group that says why it is missing. A missing name is
 allowed by design (it marks something worth writing later); only a
-near-miss on an existing file name is a defect.
+near-miss on an existing file name is a defect. A `[[name]]` inside a
+fenced block or an inline code span, such as a TOML `[[table]]` name, is
+not collected at all.
 
-Run it before committing a memory mirror into an operations repository, or
-by hand against the live memory directory.
+Run it before committing a memory mirror into an operations repository, or by hand against the live memory directory.
 
 ## Usage
 
 ```bash
-scripts/memory-link-check --memory-dir memory/
 scripts/memory-link-check --memory-dir memory/ --bd-keys tracker-keys.txt
 ```
 
-`--bd-keys` takes a file of tracker memory keys, one per line (`-` for
-stdin). `--max-distance` sets the Levenshtein distance counted as a typo
-(default 2).
+`--bd-keys` (optional) takes a file of tracker memory keys, one per line
+(`-` for stdin). `--max-distance` sets the Levenshtein distance counted as
+a typo (default 2).
 
 ## Groups
 
@@ -32,8 +32,8 @@ stdin). `--max-distance` sets the Levenshtein distance counted as a typo
 
 ## Exit codes
 
-- `0`: `typo` is empty (and, without `--strict-tracker-keys`, regardless of
-  the other two groups).
+- `0`: `typo` is empty, regardless of the other two groups unless
+  `--strict-tracker-keys` is set and `tracker-key` is non-empty too.
 - `1`: `typo` is non-empty, or `--strict-tracker-keys` was passed and
   `tracker-key` is non-empty.
 - `2`: usage or runtime error, for example a non-directory `--memory-dir`.

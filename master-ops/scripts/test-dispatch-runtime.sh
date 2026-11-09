@@ -990,6 +990,154 @@ delivery_result_test() (
 )
 delivery_result_test "$dispatch" || exit 1
 
+# --- Feature: Orca's turn signal decides delivery before the pane is read -----
+#
+# 2026-11-09: every dispatch that night printed `delivery UNVERIFIED` while the
+# worker was in fact running, because the pane-text loop was the only signal.
+# Orca answers the same question itself: `dispatch --inject --json` carries
+# `prompt.stages`, and `worker-show --full` carries `projection.stage.activity`.
+# Extracts the step-6 block with the functions it calls and runs it against a
+# fake `orca` on PATH (and a no-op `sleep`), in three cases: the inject JSON
+# reports turn_started, only worker-show reports it (the shape measured on
+# orca 1.4.253), and neither does, so the pane loop decides as before.
+orca_turn_signal_test() (
+  set +e
+  set -u
+  local dispatch="$1" work fn name block markers script_file out status mutant_fns fns=""
+
+  for name in orca_json_read pane_classify_text pane_classification delivery_result orca_turn_stage; do
+    fn=$(awk -v h="$name() {" '$0==h{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+    [ -n "$fn" ] || { echo "FAIL: could not extract $name" >&2; return 1; }
+    fns="$fns$fn"$'\n'
+  done
+  markers=$(grep -E '^(LIMIT_MARKERS|HOOK_TRUST_MARKERS|PREPARED_PROMPT_MARKERS|PREPARED_UNICODE_PROMPT_MARKERS|WORKING_MARKERS|ORCA_TURN_POLLS)=' "$dispatch")
+  block=$(sed -n '/^# 6\. delivery check/,$p' "$dispatch")
+  [ -n "$block" ] || { echo "FAIL: could not extract the step-6 delivery block" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-orca-turn-signal-test.$$"
+  mkdir -p "$work/bin"
+  trap 'rm -rf "$work"' EXIT
+
+  cat > "$work/bin/orca" <<'BIN'
+#!/bin/bash
+echo "$1 $2" >> "$FAKE_CALLS"
+case "$1 $2" in
+  "terminal read") printf '%s\n' "$FAKE_PANE";;
+  "orchestration worker-show") printf '%s\n' "$FAKE_WORKER_SHOW";;
+  "orchestration dispatch-show") printf '{"ok":true,"result":{"dispatch":{"status":"%s"}}}\n' "${FAKE_DSTATUS:-dispatched}";;
+  *) exit 1;;
+esac
+BIN
+  printf '#!/bin/sh\nexit 0\n' > "$work/bin/sleep"
+  chmod +x "$work/bin/orca" "$work/bin/sleep"
+
+  supported='{"ok":true,"result":{"dispatch":{"id":"ctx_fake"},"injected":true,"prompt":{"stages":["input_accepted","turn_started"],"provider":"claude","observation":"supported"}}}'
+  unsupported='{"ok":true,"result":{"dispatch":{"id":"ctx_fake"},"injected":true,"prompt":{"stages":["input_accepted"],"provider":"unsupported","observation":"unsupported"}}}'
+  working='{"ok":true,"result":{"projection":{"stage":{"worker":"unsupervised","dispatch":"dispatched","detail":null,"activity":"working"}}}}'
+  idle='{"ok":true,"result":{"projection":{"stage":{"worker":"unsupervised","dispatch":"dispatched","detail":null,"activity":"unknown"}}}}'
+  done_activity='{"ok":true,"result":{"projection":{"stage":{"worker":"unsupervised","dispatch":"completed","detail":null,"activity":"done"}}}}'
+
+  run_case() {  # functions inject_json worker_show_json pane [pre_inject_class] [dispatch_status]
+    script_file="$work/run.sh"
+    : > "$work/calls"
+    {
+      echo 'set -u'
+      printf 'SCRIPTS_DIR=%q\n' "$(dirname "$dispatch")"
+      printf 'export FAKE_CALLS=%q FAKE_WORKER_SHOW=%q FAKE_PANE=%q FAKE_DSTATUS=%q\n' "$work/calls" "$3" "$4" "${6:-dispatched}"
+      printf '%s\n' "$markers"
+      printf '%s\n' "$1"
+      echo 'record_dispatch_launched() { echo "FIRELOG outcome=$1 source=$3"; }'
+      echo 'TERMINAL=term_fake TASK=task_fake DISP=ctx_fake RUNTIME=claude'
+      printf 'PRE_INJECT_CLASS=%q\n' "${5:-prepared-prompt}"
+      printf 'DISP_RAW=%q\n' "$2"
+      printf '%s\n' "$block"
+    } > "$script_file"
+    out=$(PATH="$work/bin:$PATH" bash "$script_file" 2>&1)
+    status=$?
+  }
+
+  run_case "$fns" "$supported" "$idle" "❯ "
+  if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^delivery .*class=agent-started source=orca:turn_started$' \
+      || ! printf '%s\n' "$out" | grep -q '^FIRELOG outcome=pass source=orca:turn_started$' \
+      || grep -q 'terminal read' "$work/calls"; then
+    echo "FAIL: an inject JSON reporting turn_started should read agent-started from Orca without reading the pane (status=$status)" >&2
+    printf '%s\n' "$out" >&2; cat "$work/calls" >&2
+    return 1
+  fi
+  echo "ok   : orca turn signal · inject JSON turn_started reads class=agent-started source=orca:turn_started, pane never read"
+
+  run_case "$fns" "$unsupported" "$working" "❯ "
+  if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^delivery .*class=agent-started source=orca:turn_started$' \
+      || grep -q 'terminal read' "$work/calls"; then
+    echo "FAIL: an unsupported inject with worker-show activity=working should read agent-started from Orca (status=$status)" >&2
+    printf '%s\n' "$out" >&2; cat "$work/calls" >&2
+    return 1
+  fi
+  echo "ok   : orca turn signal · unsupported inject plus worker-show activity=working reads source=orca:turn_started"
+
+  run_case "$fns" "$unsupported" "$idle" "  • Working (4s • esc to interrupt)"
+  if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^delivery pre=prepared-prompt post=working .*class=agent-started source=pane-read$' \
+      || ! printf '%s\n' "$out" | grep -q '^FIRELOG outcome=pass source=pane-read$'; then
+    echo "FAIL: with no Orca turn signal the pane loop should decide and name source=pane-read (status=$status)" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : orca turn signal · no Orca turn signal falls back to the pane loop, source=pane-read"
+
+  # worker-show `done` follows the pane and can be left over from an earlier
+  # turn, so it is not a turn signal: the pane loop still decides.
+  run_case "$fns" "$unsupported" "$done_activity" "❯ "
+  if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^delivery .*source=pane-read$' \
+      || printf '%s\n' "$out" | grep -q 'source=orca:turn_started' \
+      || ! grep -q 'worker-show' "$work/calls" || ! grep -q 'terminal read' "$work/calls"; then
+    echo "FAIL: worker-show activity=done should fall back to the pane loop with source=pane-read (status=$status)" >&2
+    printf '%s\n' "$out" >&2; cat "$work/calls" >&2
+    return 1
+  fi
+  echo "ok   : orca turn signal · worker-show activity=done is not a turn signal, falls back to source=pane-read"
+
+  # A dispatch record that already reads completed decides `done` ahead of
+  # Orca's turn signal, so the line and the fire log name that record.
+  run_case "$fns" "$supported" "$idle" "❯ " prepared-prompt completed
+  if ! printf '%s\n' "$out" | grep -q '^delivery .*class=done source=dispatch:completed$' \
+      || ! printf '%s\n' "$out" | grep -q '^FIRELOG outcome=pass source=dispatch:completed$'; then
+    echo "FAIL: a completed dispatch should read class=done source=dispatch:completed on the line and in the fire log" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : orca turn signal · a completed dispatch reads class=done source=dispatch:completed, line and fire log agree"
+
+  # A reused pane already mid-turn: worker-show's activity follows the pane,
+  # so its `working` belongs to the old turn and must not decide.
+  run_case "$fns" "$unsupported" "$working" "  • Working (4s • esc to interrupt)" working
+  if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^delivery pre=working post=working .*class=unknown source=pane-read$' \
+      || grep -q 'worker-show' "$work/calls"; then
+    echo "FAIL: a pane already working before inject should skip worker-show and read unknown from the pane loop (status=$status)" >&2
+    printf '%s\n' "$out" >&2; cat "$work/calls" >&2
+    return 1
+  fi
+  echo "ok   : orca turn signal · a pane already working before inject skips worker-show and reads class=unknown source=pane-read"
+
+  # Failability: drop delivery_result's turn_started branch; the first case
+  # must then stop reading agent-started, since the pane was never read.
+  mutant_fns=${fns/'  if [ "${4:-}" = turn_started ]; then
+    echo agent-started
+    return
+  fi
+'/''}
+  if [ "$mutant_fns" = "$fns" ]; then
+    echo "FAIL: turn_started-branch mutant did not change the source" >&2
+    return 1
+  fi
+  run_case "$mutant_fns" "$supported" "$idle" "❯ "
+  if printf '%s\n' "$out" | grep -q 'class=agent-started'; then
+    echo "FAIL: failability: dropping the turn_started branch should stop the Orca case from reading agent-started" >&2
+    return 1
+  fi
+  echo "ok   : failability: dropping delivery_result's turn_started branch stops the Orca case from reading agent-started"
+)
+orca_turn_signal_test "$dispatch" || exit 1
+
 # --- Feature: codex launch flags ---------------------------------------------
 #
 # 2026-10-01: a bare `codex --model <id>` opened a model-retirement migration

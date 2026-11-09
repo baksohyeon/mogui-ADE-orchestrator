@@ -7,11 +7,14 @@
 # here runs the committed ruleset only. The full scan with organization rules
 # still runs locally before a push.
 #
-# gitleaks is installed in both jobs, not only the redaction one: the test
-# suite exercises redaction-scan.sh for real (measured on the first run of this
-# workflow — four commit message scan tests failed on a runner without it).
-# The install block is duplicated across jobs because Actions YAML has no
-# anchors across jobs and a composite action is more machinery than two copies.
+# gitleaks is installed in every job that calls redaction-scan.sh (tests,
+# shell-tests, rendered-shell-tests, redaction), not only the redaction one:
+# test-redaction-read-token.sh exercises redaction-scan.sh for real (measured
+# on the first run of this workflow — four commit message scan tests failed
+# on a runner without it), and shell-tests/rendered-shell-tests would
+# otherwise SKIP that test silently. The install block is duplicated across
+# jobs because Actions YAML has no anchors across jobs and a composite action
+# is more machinery than a few copies.
 name: gates
 
 permissions:
@@ -93,6 +96,18 @@ jobs:
           python-version: "3.13.17"
       - name: Print interpreter
         run: python -VV
+      - name: Install gitleaks (pinned, checksum verified)
+        shell: bash
+        run: |
+          case "$(uname -s)-$(uname -m)" in
+            Linux-x86_64) f=gitleaks_8.30.1_linux_x64.tar.gz;    sum=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb ;;
+            Darwin-arm64) f=gitleaks_8.30.1_darwin_arm64.tar.gz; sum=b40ab0ae55c505963e365f271a8d3846efbc170aa17f2607f13df610a9aeb6a5 ;;
+            *) echo "unmapped runner: $(uname -s)-$(uname -m)"; exit 1 ;;
+          esac
+          curl -sSfL -o gitleaks.tgz "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/$f"
+          echo "$sum  gitleaks.tgz" | shasum -a 256 -c -
+          tar -xzf gitleaks.tgz gitleaks
+          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
       - name: Run promoted shell tests
         shell: bash
         run: |
@@ -148,6 +163,18 @@ jobs:
           python-version: "3.13.17"
       - name: Print interpreter
         run: python -VV
+      - name: Install gitleaks (pinned, checksum verified)
+        shell: bash
+        run: |
+          case "$(uname -s)-$(uname -m)" in
+            Linux-x86_64) f=gitleaks_8.30.1_linux_x64.tar.gz;    sum=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb ;;
+            Darwin-arm64) f=gitleaks_8.30.1_darwin_arm64.tar.gz; sum=b40ab0ae55c505963e365f271a8d3846efbc170aa17f2607f13df610a9aeb6a5 ;;
+            *) echo "unmapped runner: $(uname -s)-$(uname -m)"; exit 1 ;;
+          esac
+          curl -sSfL -o gitleaks.tgz "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/$f"
+          echo "$sum  gitleaks.tgz" | shasum -a 256 -c -
+          tar -xzf gitleaks.tgz gitleaks
+          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
       - name: Render master-ops and run its shell tests
         shell: bash
         run: |

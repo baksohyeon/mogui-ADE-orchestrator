@@ -9,7 +9,7 @@
 set -u
 
 if ! command -v gitleaks >/dev/null 2>&1; then
-  echo "SKIP: gitleaks not on PATH; install it (brew install gitleaks) or see https://gitleaks.io"
+  echo "SKIP: gitleaks not on PATH; this test did not run (install it with brew install gitleaks, or see https://gitleaks.io)"
   exit 0
 fi
 

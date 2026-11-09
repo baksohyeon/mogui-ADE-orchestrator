@@ -24,6 +24,11 @@ regex = '''BEGIN (RSA |OPENSSH |EC |DSA )?PRIVATE KEY'''
 id = "aws_access_key"
 description = "AWS access key id"
 regex = '''AKIA[0-9A-Z]{16}'''
+  [rules.allowlist]
+  regexTarget = "match"
+  regexes = [
+    '''\back-[0-9a-f]{12}\b''',
+  ]
 
 [[rules]]
 id = "github_token"
@@ -102,14 +107,15 @@ regex = '''\b[A-Za-z0-9._-]+\.(internal|corp|local)\b'''
   ]
 
 [allowlist]
-# A line naming a placeholder is documentation, not exposure. Carried over from
-# the previous scanner because the documentation depends on it.
-# Measured, not assumed: `stopwords` did not excuse these and `regexes` does,
-# so the placeholder list is expressed as case-insensitive line regexes.
+# Placeholder text used in documentation or test fixtures. `regexTarget =
+# "line"` exempts the entire line, so these entries should match only true
+# placeholders, never real secrets that happen to be on the same line.
 #
-# Read-proof acknowledgement tokens (ack-<12 hex>) are allowlisted because they
-# prove a worker opened its delivered contract and are typed in the completion message only,
-# not committed. The token shape is key-like to gitleaks but carries no secret.
+# Read-proof acknowledgement tokens (ack-<12 hex>) are scoped to match
+# (not line) via rule-level allowlists so they do not suppress unrelated
+# secrets on the same line. They prove a worker opened its delivered contract
+# and carry no secret; the standing rule keeps them out of commits. The token
+# shape is key-like to gitleaks but carries no secret.
 regexTarget = "line"
 regexes = [
   '''(?i)example\.com''',

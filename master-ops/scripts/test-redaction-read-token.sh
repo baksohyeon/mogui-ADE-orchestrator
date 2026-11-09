@@ -27,7 +27,7 @@ git config user.name "Test User"
 # Commit 1: A file with a read-proof token (should pass)
 git commit --allow-empty -m "Initial commit"
 TOKEN_FILE="token-file.txt"
-echo "read_token: ack-c6ddceda30d4" > "${TOKEN_FILE}"
+echo "read_token: ack-0123456789ab" > "${TOKEN_FILE}"
 git add "${TOKEN_FILE}"
 git commit -m "Add read-proof token"
 
@@ -40,7 +40,7 @@ git commit -m "Add AWS key fixture"
 
 # Run the redaction scan on the range of new commits
 # The scan should find 1 finding (the AWS key) and not flag the read token
-SCAN_OUTPUT=$("${SCAN}" --repo-root "${SCRATCH}" --range HEAD~1..HEAD 2>&1)
+SCAN_OUTPUT=$("${SCAN}" --repo-root "${SCRATCH}" --range HEAD~2..HEAD 2>&1)
 SCAN_EXIT=$?
 
 # Check the exit code and output
@@ -55,7 +55,7 @@ if [ "${SCAN_EXIT}" -eq 1 ]; then
   fi
 
   # Verify that the read token was NOT flagged
-  if printf '%s\n' "${SCAN_OUTPUT}" | grep -q "ack-c6ddceda30d4"; then
+  if printf '%s\n' "${SCAN_OUTPUT}" | grep -q "ack-0123456789ab"; then
     fail "read-proof token was flagged when it should be allowlisted"
     echo "       got: $SCAN_OUTPUT"
   else

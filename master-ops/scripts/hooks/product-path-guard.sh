@@ -5,6 +5,10 @@
 # subcommands) but does not parse opaque script bodies, shell expansions, or
 # every command-specific path flag.
 # Legacy mode admits opaque interpreter -c commands outside product root, while fail-closed mode denies unallowlisted interpreter commands regardless of cwd.
+# Worker mode (MOGUI_WORKER_WRITE_ROOT set to an absolute path, wired by
+# dispatch through a per-task --settings file) flips the guarded territory:
+# everything outside that one root is guarded, and product_repositories is not
+# read. See docs/runbooks/product-path-guard.md "Worker mode".
 set -u
 
 VERDICT="pass"
@@ -73,6 +77,21 @@ PY
 # Preserve the legacy hook-fire schema and coverage signal; decision details go
 # exclusively to event-log.jsonl through mg_emit.
 trap record_fire EXIT
+
+WORKER_ROOT=""
+if [ -n "${MOGUI_WORKER_WRITE_ROOT:-}" ]; then
+  case "$MOGUI_WORKER_WRITE_ROOT" in
+    /*) WORKER_ROOT=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$MOGUI_WORKER_WRITE_ROOT") ;;
+  esac
+  if [ -z "$WORKER_ROOT" ]; then
+    VERDICT="block"
+    printf '[product-path-guard] BLOCKED: MOGUI_WORKER_WRITE_ROOT must be an absolute path; got %s\n' "$MOGUI_WORKER_WRITE_ROOT" >&2
+    exit 2
+  fi
+  # Worker mode never reads the runtime config, so an unsubstituted path in
+  # it (this template checkout) must not block a worker.
+  INSTANCE_RUNTIME_CONFIG="unused in worker mode"
+fi
 
 runtime_root_token="{""{RUNTIME_ROOT}}"
 if [[ "$INSTANCE_RUNTIME_CONFIG" == *"$runtime_root_token"* ]]; then
@@ -154,7 +173,11 @@ input=$(cat)
 if ! printf '%s' "$input" | python3 -c 'import json,sys; payload=json.load(sys.stdin); tool=payload.get("tool_input") if isinstance(payload, dict) else None; raise SystemExit(0 if isinstance(payload, dict) and isinstance(tool, dict) else 1)' >/dev/null 2>&1; then
   blocked "invalid hook input" ""
 fi
-repos=$(load_product_repositories) || blocked "cannot load product_repositories from $INSTANCE_RUNTIME_CONFIG" ""
+if [ -n "$WORKER_ROOT" ]; then
+  repos="$WORKER_ROOT"
+else
+  repos=$(load_product_repositories) || blocked "cannot load product_repositories from $INSTANCE_RUNTIME_CONFIG" ""
+fi
 repo_array=()
 while IFS= read -r repo_line; do
   [ -n "$repo_line" ] && repo_array+=("$repo_line")
@@ -163,6 +186,10 @@ done <<<"$repos"
 file_path=$(printf '%s' "$input" | python3 -c 'import json,sys; tool=json.load(sys.stdin)["tool_input"]; print(tool.get("file_path") or tool.get("notebook_path") or "")' 2>/dev/null) || blocked "invalid hook input" ""
 if [ -n "$file_path" ]; then
   target=$(python3 -c 'import os,sys; print(os.path.realpath(os.path.expanduser(sys.argv[1])))' "$file_path") || blocked "cannot resolve file target" ""
+  if [ -n "$WORKER_ROOT" ]; then
+    [ "$(is_under_any "$target" "$WORKER_ROOT")" = yes ] && { mg_emit info product_path_guard pass file_tool file_tool inside file; exit 0; }
+    blocked "$target is outside this worker's write root $WORKER_ROOT; write only inside the worktree" "file-tool" guarded_target
+  fi
   [ "$(is_under_any "$target" "${repo_array[@]}")" = yes ] || { mg_emit info product_path_guard pass file_tool file_tool outside file; exit 0; }
   if [ "${MOGUI_INLINE_EDIT_OVERRIDE:-0}" = 1 ]; then
     VERDICT="override"
@@ -175,14 +202,25 @@ fi
 command=$(printf '%s' "$input" | python3 -c 'import json,sys; print(json.load(sys.stdin)["tool_input"].get("command", ""))' 2>/dev/null) || blocked "invalid hook input" ""
 [ -n "$command" ] || { mg_emit info product_path_guard pass empty_command; exit 0; }
 
-result=$(PRODUCT_ROOTS="$repos" ALLOWLIST="$ALLOWLIST" FAIL_CLOSED="$FAIL_CLOSED" python3 -c '
-import json, os, re, shlex, sys
+result=$(PRODUCT_ROOTS="$repos" WORKER_MODE="${WORKER_ROOT:+1}" ALLOWLIST="$ALLOWLIST" FAIL_CLOSED="$FAIL_CLOSED" python3 -c '
+import atexit, json, os, re, shlex, sys
 payload=json.load(sys.stdin)
 tool=payload.get("tool_input", {})
 command=tool.get("command", "")
 cwd=os.path.realpath(os.path.expanduser(tool.get("working_directory") or payload.get("cwd") or os.getcwd()))
 roots=[os.path.realpath(os.path.expanduser(line)) for line in os.environ["PRODUCT_ROOTS"].splitlines() if line.strip()]
 LEGACY_MODE = os.environ["FAIL_CLOSED"] != "1"
+# Worker mode: roots holds the one write root, and under() answers "is this
+# guarded", which there means outside that root. /dev/ stays writable so
+# 2>/dev/null is not a denial. The raw substring heuristics below exist to
+# catch a mentioned product path; in worker mode a mention of the root is the
+# normal case, so mentions_root() is off there and only resolved paths count.
+WORKER_MODE = os.environ.get("WORKER_MODE") == "1"
+guarded_hits=[]
+if WORKER_MODE:
+    atexit.register(lambda: guarded_hits and print("OUTSIDE\t" + guarded_hits[-1]))
+def mentions_root(text):
+    return not WORKER_MODE and any(root in text for root in roots)
 INTERPRETER_NAMES = {"bash", "sh", "dash", "ksh", "zsh", "python", "python3", "perl", "ruby", "node"}
 PLAIN_PATH_TARGET_EXEMPT = {"cp", "install", "ln"} | (INTERPRETER_NAMES if LEGACY_MODE else set())
 SQ=chr(39)
@@ -367,7 +405,13 @@ def resolve(base, value):
     return os.path.realpath(value if os.path.isabs(value) else os.path.join(base, value))
 def under(value):
     value=os.path.realpath(os.path.expanduser(value))
-    return any(value == root or value.startswith(root + os.sep) for root in roots)
+    inside=any(value == root or value.startswith(root + os.sep) for root in roots)
+    if not WORKER_MODE:
+        return inside
+    if inside or value.startswith("/dev/"):
+        return False
+    guarded_hits.append(value)
+    return True
 def contains_cd_token(value):
     return re.search(r"(^|[\s;&|()])cd([\s;&|()]|$)", value) is not None
 def redirects_into_root(value, base):
@@ -403,7 +447,7 @@ def body_targets_root(value, base):
     # spelling, ~/product, a relative product/x beside the root, and
     # ../product/x from a sibling directory all resolve into a product root
     # without that exact string ever appearing.
-    if any(root in value for root in roots):
+    if mentions_root(value):
         return True
     # Splitting the body into path-shaped tokens and resolving each one
     # against cwd the way redirects_into_root already does for a redirect
@@ -797,21 +841,21 @@ for parts in segments:
                         prev_token=token
                         continue
                     is_write_shape = (
-                        (prev_token in ("-o", "--output") and any(root in token for root in roots))
-                        or (token.startswith("--output=") and any(root in token.split("=", 1)[1] for root in roots))
-                        or (">" in token and any(root in token.split(">", 1)[1] for root in roots))
+                        (prev_token in ("-o", "--output") and mentions_root(token))
+                        or (token.startswith("--output=") and mentions_root(token.split("=", 1)[1]))
+                        or (">" in token and mentions_root(token.split(">", 1)[1]))
                     )
                     if is_write_shape:
                         root_token_in_args=True
                         break
                     prev_token=token
             else:
-                root_token_in_args = any(any(root in token for root in roots) for token in parts[1:])
+                root_token_in_args = any(mentions_root(token) for token in parts[1:])
             legacy_dash_c_body_denied=False
             if bare_dash_c and LEGACY_MODE and not under(current_cwd):
                 legacy_dash_c_body_denied = (
                     contains_cd_token(dash_c_body)
-                    or any(root in dash_c_body for root in roots)
+                    or mentions_root(dash_c_body)
                     or redirects_into_root(dash_c_body, current_cwd)
                 )
             if root_token_in_args or legacy_dash_c_body_denied or (
@@ -833,7 +877,7 @@ for parts in segments:
             target_hits.append(resolve(current_cwd, token.split("=", 1)[1]))
     git_dir_touches=bool(git_dir and under(git_dir))
     touches=under(target) or git_dir_touches or any(under(x) for x in target_hits)
-    if "-exec" in parts and any(root in " ".join(parts) for root in roots):
+    if "-exec" in parts and mentions_root(" ".join(parts)):
         touches=True
     option_tokens=parts[1 : parts.index("--")] if "--" in parts[1:] else parts[1:]
     apply_option_tokens=option_tokens
@@ -1012,6 +1056,12 @@ parser_status=$?
 if [ "$parser_status" -ne 0 ]; then
   blocked "cannot safely parse Bash command" "" unresolved_target
 fi
+# Worker mode appends one OUTSIDE<TAB>path line: the last resolved path the
+# parser found outside the write root, so the denial can name it.
+outside_path=""
+case "$result" in
+  *$'\n'OUTSIDE$'\t'*) outside_path=${result##*$'\n'OUTSIDE$'\t'}; result=${result%%$'\n'OUTSIDE$'\t'*};;
+esac
 decision=${result%%$'\t'*}
 command_class=${result#*$'\t'}
 command_class=${command_class%%$'\t'*}
@@ -1019,6 +1069,9 @@ reason=${result#*$'\t'*$'\t'}
 if [ "$decision" = DENY ]; then
   if [ "$reason" = "unparseable command" ] || [ "$reason" = "cd target cannot be resolved" ] || [ "$reason" = "heredoc body expansion" ] || [ "$reason" = "ansi-c quote" ]; then
     blocked "$reason" "$command_class" unresolved_target
+  fi
+  if [ -n "$WORKER_ROOT" ]; then
+    reason="$reason: ${outside_path:-a target} is outside this worker's write root $WORKER_ROOT"
   fi
   blocked "$reason" "$command_class" guarded_target
 fi

@@ -784,6 +784,8 @@ claude_hook_trust_marker_test() (
 
   [ "$(printf '%s\n' "$markers" | grep -c .)" = 5 ] || { echo "FAIL: could not extract all five marker variables" >&2; return 1; }
   [ -n "$classify_fn" ] || { echo "FAIL: could not extract pane_classify_text" >&2; return 1; }
+  # pane_classify_text reads approval-prompt-markers.txt beside dispatch.
+  markers="$markers"$'\n'"SCRIPTS_DIR=$(printf '%q' "$(dirname "$dispatch")")"
   printf '%s\n' "$markers" | grep -Fq 'Quick safety check' || { echo "FAIL: HOOK_TRUST_MARKERS does not carry the claude folder-trust wording" >&2; return 1; }
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-claude-hook-trust-test.$$"
@@ -857,6 +859,8 @@ fresh_claude_prompt_marker_test() (
 
   [ "$(printf '%s\n' "$markers" | grep -c .)" = 5 ] || { echo "FAIL: could not extract all five marker variables" >&2; return 1; }
   [ -n "$classify_fn" ] || { echo "FAIL: could not extract pane_classify_text" >&2; return 1; }
+  # pane_classify_text reads approval-prompt-markers.txt beside dispatch.
+  markers="$markers"$'\n'"SCRIPTS_DIR=$(printf '%q' "$(dirname "$dispatch")")"
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-fresh-claude-prompt-test.$$"
   mkdir -p "$work"
@@ -1084,6 +1088,22 @@ BIN
   fi
   echo "ok   : orca turn signal · no Orca turn signal falls back to the pane loop, source=pane-read"
 
+  # An approval prompt on the pane is its own class (mgm-4ez layer 2), read
+  # from the shared approval-prompt-markers.txt, and the wrapper names the
+  # pane and the sweep that clears it.
+  run_case "$fns" "$unsupported" "$idle" "Do you want to proceed?
+❯ 1. Yes
+  2. No"
+  if [ "$status" -ne 5 ] || ! printf '%s\n' "$out" | grep -q '^delivery pre=prepared-prompt post=approval .*class=approval source=pane-read$' \
+      || ! printf '%s\n' "$out" | grep -q '^FIRELOG outcome=finding source=pane-read$' \
+      || ! printf '%s\n' "$out" | grep -q '^  pane: term_fake$' \
+      || ! printf '%s\n' "$out" | grep -q 'worker-pane-sweep'; then
+    echo "FAIL: an approval prompt on the pane should read class=approval, exit 5, and name the pane and the sweep (status=$status)" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : orca turn signal · an approval prompt reads class=approval, names the pane and worker-pane-sweep, exit 5"
+
   # worker-show `done` follows the pane and can be left over from an earlier
   # turn, so it is not a turn signal: the pane loop still decides.
   run_case "$fns" "$unsupported" "$done_activity" "❯ "
@@ -1174,7 +1194,7 @@ codex_launch_flags_test() (
     } > "$outfile"
   }
 
-  want='codex --model gpt-5.5 -c '"'"'model_reasoning_effort="xhigh"'"'"' -c check_for_update_on_startup=false -c '"'"'notice.model_migrations={"gpt-5.5"="gpt-6.1-sol"}'"'"''
+  want='codex --model gpt-5.5 -c '"'"'model_reasoning_effort="xhigh"'"'"' -c check_for_update_on_startup=false -c '"'"'notice.model_migrations={"gpt-5.5"="gpt-6.1-sol"}'"'"' -s workspace-write'
 
   script_file="$work/run.sh"
   write_script "$script_file" "$runtime_command_fn"
@@ -1185,7 +1205,7 @@ codex_launch_flags_test() (
     echo "  want '$want'" >&2
     return 1
   fi
-  echo "ok   : codex launch carries --model, reasoning effort, update-check off, and the migration ack · rc=0"
+  echo "ok   : codex launch carries --model, reasoning effort, update-check off, the migration ack, and -s workspace-write · rc=0"
 
   # Failability: dropping check_for_update_on_startup=false must break the exact-string match.
   mutant_fn=${runtime_command_fn/' -c check_for_update_on_startup=false'/}
@@ -1203,6 +1223,81 @@ codex_launch_flags_test() (
   echo "ok   : failability: dropping check_for_update_on_startup=false breaks the exact-string match (mutant rc=$status)"
 )
 codex_launch_flags_test "$dispatch" || exit 1
+
+# --- Feature: one write root per claude worker (mgm-mk1) ---------------------
+#
+# A claude worker launched by runtime_command carried no settings of its own,
+# so product-path-guard never ran in it. Extracts write_worker_settings,
+# shell_quote, and runtime_command; checks the settings file lands under the
+# state directory (never the worktree), carries the two PreToolUse matchers
+# running the guard in worker mode with the worktree as root, and that the
+# claude launch line passes it through --settings. A relative worktree fails.
+worker_settings_test() (
+  set +e
+  set -u
+  local dispatch="$1" work fns="" name fn out status file launch
+  for name in shell_quote runtime_command write_worker_settings; do
+    fn=$(awk -v h="$name() {" '$0==h{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+    [ -n "$fn" ] || { echo "FAIL: could not extract $name" >&2; return 1; }
+    fns="$fns$fn"$'\n'
+  done
+  work="${TMPDIR:-/tmp}/mogui-dispatch-worker-settings-test.$$"
+  mkdir -p "$work/state" "$work/worktree"
+  trap 'rm -rf "$work"' EXIT
+  write_run() {  # worktree
+    {
+      echo 'set -u'
+      printf 'SCRIPTS_DIR=%q STATE_DIR=%q MODEL=claude-opus-5-5\n' "$(dirname "$dispatch")" "$work/state"
+      printf '%s\n' "$fns"
+      printf 'file=$(write_worker_settings task_fake %q) || exit 3\n' "$1"
+      echo 'echo "FILE=$file"'
+      echo 'CLAUDE_SETTINGS_FLAG=" --settings $(shell_quote "$file")"'
+      echo 'echo "LAUNCH=$(runtime_command claude)"'
+    } > "$work/run.sh"
+  }
+  write_run "$work/worktree"
+  out=$(bash "$work/run.sh" 2>&1)
+  status=$?
+  file=$(printf '%s\n' "$out" | sed -n 's/^FILE=//p')
+  launch=$(printf '%s\n' "$out" | sed -n 's/^LAUNCH=//p')
+  if [ "$status" -ne 0 ] || [ "$file" != "$work/state/worker-settings/task_fake.json" ] || [ ! -f "$file" ]; then
+    echo "FAIL: write_worker_settings should write state/worker-settings/<task>.json (status=$status)" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if ! python3 - "$file" "$work/worktree" "$(dirname "$dispatch")/hooks/product-path-guard.sh" <<'PY'
+import json, shlex, sys
+path, root, hook = sys.argv[1:]
+entries = json.load(open(path, encoding="utf-8"))["hooks"]["PreToolUse"]
+assert [e["matcher"] for e in entries] == ["Edit|Write|NotebookEdit", "Bash"], entries
+for entry in entries:
+    words = shlex.split(entry["hooks"][0]["command"])
+    assert words[0] == "MOGUI_WORKER_WRITE_ROOT=" + root, words
+    assert words[-1] == hook, words
+PY
+  then
+    echo "FAIL: worker settings must carry both matchers running the guard with the worktree as root" >&2
+    cat "$file" >&2
+    return 1
+  fi
+  case "$launch" in
+    "claude --model claude-opus-5-5 --dangerously-skip-permissions --settings $file") ;;
+    *) echo "FAIL: claude launch line should pass the worker settings through --settings, got '$launch'" >&2; return 1;;
+  esac
+  echo "ok   : worker settings · file under the state dir, two guard matchers rooted at the worktree, claude launch passes --settings"
+
+  write_run relative/worktree
+  bash "$work/run.sh" >/dev/null 2>&1
+  status=$?
+  [ "$status" -eq 3 ] || { echo "FAIL: a relative worktree path should fail the settings write (status=$status)" >&2; return 1; }
+  echo "ok   : worker settings · a relative worktree path fails closed"
+
+  # Wiring: step 3 writes the file and sets the flag before the terminal is created.
+  awk '/^# 3\. terminal/{f=1} f&&/write_worker_settings "\$TASK"/{w=NR} f&&/CLAUDE_SETTINGS_FLAG=/{c=NR} f&&/orca terminal create/{t=NR; exit} END{exit !(w && c && t && w < t && c < t)}' "$dispatch" \
+    || { echo "FAIL: step 3 must call write_worker_settings and set CLAUDE_SETTINGS_FLAG before orca terminal create" >&2; return 1; }
+  echo "ok   : worker settings · step 3 writes the file and sets the flag before terminal create"
+)
+worker_settings_test "$dispatch" || exit 1
 
 # --- Feature: codex start-screen check before inject -------------------------
 #
@@ -2604,4 +2699,4 @@ RULES
 )
 standing_rules_append_test "$dispatch" || exit 1
 
-echo "dispatch multi-vendor / check-only / state-dir-seam / contract-delivery / cursor-pretrust / claude-pretrust / claude-pretrust-call-site / claude-hook-trust-marker / fresh-claude-prompt-marker / delivery-result / codex-launch / codex-start-screen / codex-start-screen-wiring / codex-hooks-vet / codex-hooks-vet-wiring / standing-rules-missing-file / standing-rules-append regression tests passed"
+echo "dispatch multi-vendor / check-only / state-dir-seam / contract-delivery / cursor-pretrust / claude-pretrust / claude-pretrust-call-site / claude-hook-trust-marker / fresh-claude-prompt-marker / delivery-result / codex-launch / worker-settings / codex-start-screen / codex-start-screen-wiring / codex-hooks-vet / codex-hooks-vet-wiring / standing-rules-missing-file / standing-rules-append regression tests passed"

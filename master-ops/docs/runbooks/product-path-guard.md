@@ -132,11 +132,62 @@ non-flag argument is `-` or resolves outside every product root.
 `git branch` invocation (creating, deleting, renaming a branch) is still a
 write and is unaffected by this addition.
 
+## Worker mode
+
+A dispatched worker is guarded by the same hook with the territory flipped.
+When `MOGUI_WORKER_WRITE_ROOT` is set to an absolute path, everything outside
+that root is guarded and `product_repositories` is not read (a worker's
+worktree sits under a product root by design, and worker mode does not need
+the runtime config at all). A file-tool write whose target resolves outside
+the root is denied. A Bash command whose best-effort parse shows a write
+target outside the root is denied, with the same legacy read-only admissions
+master mode has: `cat`, `git -C <master checkout> status`, and the rest of
+that list still pass against a path outside the root, while
+`git -C <master checkout> reset --hard` does not. `/dev/` paths stay writable
+so `2>/dev/null` is not a denial. The denial text names the root and the
+offending path. A relative or empty-after-resolution root fails closed.
+
+What it leaves out, by design or as a known gap:
+
+- `cd` to a directory outside the root is denied by the existing legacy rule
+  for entering guarded territory; reach another checkout with `git -C`
+  instead. `cd` back into the root is admitted, so a worker whose shell cwd
+  drifted outside can recover.
+- The raw root-substring heuristics are off in worker mode, since mentioning
+  the root is the normal case there. An opaque interpreter body
+  (`python3 -c "open('/elsewhere', 'w')"`) is therefore admitted unless it
+  carries a redirect or `cd` the parser can see; this is best effort, like
+  every Bash parse in this hook.
+- Temporary files outside the worktree (a host scratchpad, `/tmp`) are
+  outside the root and denied. A worker keeps its temporary files inside its
+  worktree, untracked.
+
+### How a worker gets it
+
+`scripts/dispatch` writes one settings file per claude dispatch at
+`~/.mogui/worker-settings/<task-id>.json` (under `MOGUI_STATE_DIR` when that
+seam is set), never inside the worktree and never committed, and launches the
+worker with `claude ... --settings <that file>`. The file carries two
+`PreToolUse` matchers, `Edit|Write|NotebookEdit` and `Bash`, each running
+this hook as `MOGUI_WORKER_WRITE_ROOT=<worktree> MOGUI_RUNTIME_HINT=claude
+<scripts>/hooks/product-path-guard.sh`. It holds the worktree path and the
+hook path only: no pane handle, no token, no secret. A reused pane (`--terminal`
+without a new launch) gets no file, since nothing is launched. No cleanup
+path removes the file today: `worker-reap` lives in `src/` and was outside
+this change, so the files accumulate one per claude dispatch until a later
+round adds removal there.
+
+codex gets its write root from its own sandbox instead: without
+`codex_bypass_approvals_and_sandbox`, the launch pins `-s workspace-write`
+(measured 2026-11-09; see charter 04 "Worker Launch Approval Posture").
+
 ## Testing
 
 `scripts/test-product-path-guard.sh` covers a pass/deny pair per shape above,
 plus dedicated cases for `git blame`, `git worktree list`, `git fetch`,
-`git branch --show-current`, and `git branch <name>` staying denied.
+`git branch --show-current`, and `git branch <name>` staying denied, and a
+worker-mode block: a file-tool write and a Bash redirection inside the root
+pass, the same two outside the root deny and name the root and the path.
 
 ## Further Reading
 

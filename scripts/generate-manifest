@@ -46,16 +46,40 @@ EXCLUDE_DIRS = frozenset(
     }
 )
 
+# Paths the template never claims, written to the manifest's `instance_owned`
+# key for template-apply and template-check. Prefixes end in "/"; files under
+# one are excluded from `files`. Exact paths stay in `files` so Founding still
+# seeds them, and template-apply skips them on Upgrade. This duplicates the
+# fallback list in master-ops/scripts/template_common.py plus docs/blame/;
+# tests/test_generate_manifest.py asserts the two stay in step.
+INSTANCE_OWNED = (
+    ".beads/",
+    "config/",
+    "contracts/",
+    "docs/blame/",
+    "docs/lineage/",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "docs/MASTER-OPERATIONS.md",
+    "docs/decisions/closed-decisions-and-facts.md",
+    "docs/runbooks/boot-comparison-set.md",
+    "docs/runbooks/role-state.md",
+    "docs/runbooks/succession-boot-card.md",
+    "scripts/compaction-probe.sh",
+    "scripts/harness-selfcheck.sh",
+    "workspace-card/LOCAL.md",
+)
+INSTANCE_OWNED_PREFIXES = tuple(e for e in INSTANCE_OWNED if e.endswith("/"))
+
+
+def under_instance_owned_prefix(rel: str) -> bool:
+    return any(rel == p.rstrip("/") or rel.startswith(p) for p in INSTANCE_OWNED_PREFIXES)
+
+
 # Frame hygiene: installed files must not teach ADE-frame paths or bake in the
 # authoring ops repository name (design defects ② and ③).
 AUTHORING_OPS_NAME = "mogui-master-ops"
 FRAME_PATH_NEEDLE = "master-ops/"
-# Historical incident records preserve measured names and paths as evidence.
-# They are not procedure instructions; scrubbing them destroys the record.
-HYGIENE_EXEMPT_PREFIXES = (
-    "docs/blame/",
-)
-
 
 def iter_install_paths(skeleton: Path) -> list[str]:
     paths: list[str] = []
@@ -64,7 +88,7 @@ def iter_install_paths(skeleton: Path) -> list[str]:
             continue
         rel = path.relative_to(skeleton).as_posix()
         parts = rel.split("/")
-        if rel in EXCLUDE_FILES or any(
+        if rel in EXCLUDE_FILES or under_instance_owned_prefix(rel) or any(
             rel == excluded or rel.startswith(excluded + "/")
             for excluded in EXCLUDE_DIRS
         ):
@@ -104,8 +128,6 @@ def check_frame_hygiene(skeleton: Path, install_paths: list[str]) -> list[str]:
     author_bytes = AUTHORING_OPS_NAME.encode("utf-8")
     defects: list[str] = []
     for rel in install_paths:
-        if any(rel == p.rstrip("/") or rel.startswith(p) for p in HYGIENE_EXEMPT_PREFIXES):
-            continue
         if rel == "MANIFEST.json":
             # Generated after the walk; may not exist yet on first run.
             path = skeleton / rel
@@ -142,6 +164,7 @@ def build_manifest(skeleton: Path) -> dict:
     return {
         "template_version": version,
         "files": files,
+        "instance_owned": list(INSTANCE_OWNED),
     }
 
 
@@ -211,6 +234,24 @@ def main(argv: list[str] | None = None) -> int:
             existing_data = json.loads(existing_text)
         except json.JSONDecodeError as exc:
             sys.stderr.write(f"generate-manifest: committed manifest malformed JSON: {exc}\n")
+            return 1
+        existing_files = (
+            existing_data.get("files") if isinstance(existing_data, dict) else None
+        )
+        if not isinstance(existing_files, list):
+            sys.stderr.write(
+                "generate-manifest: MANIFEST.json is stale; files is not a list; "
+                "run scripts/generate-manifest\n"
+            )
+            return 1
+        claimed = [
+            p for p in existing_files if isinstance(p, str) and under_instance_owned_prefix(p)
+        ]
+        if claimed:
+            sys.stderr.write(
+                "generate-manifest: MANIFEST.json claims instance-owned paths: "
+                f"{claimed}\n"
+            )
             return 1
         if existing_data != manifest:
             sys.stderr.write(

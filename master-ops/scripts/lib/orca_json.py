@@ -65,6 +65,46 @@ def dispatch_status(result: dict | None) -> str | None:
     return result.get("status")
 
 
+# `projection.stage.activity` value that means a turn is running. Measured on
+# orca 1.4.253 (2026-11-09), `worker-show --full` on a claude worker: `working`
+# from about one second after the inject until the turn ended. `done` is left
+# out on purpose: it follows the pane, so it can be left over from an earlier
+# turn, and a worker that finished fast already reads `completed` on its own
+# dispatch record.
+_TURN_ACTIVITIES = {"working"}
+
+
+def turn_stage(result: dict | None) -> str | None:
+    """Orca's own answer to "did the injected prompt start a turn", read from
+    any of three shapes:
+
+    - `dispatch --inject --json`: `result.prompt.{stages, observation}`
+    - `terminal send --json`: `result.send.prompt.{stages, observation}`
+    - `worker-show --json --full`: `result.projection.stage.activity`
+
+    Returns `turn_started`, `input_accepted`, `unsupported` (Orca said it
+    could not observe the prompt), or `None` when no shape is present.
+    """
+    if not isinstance(result, dict):
+        return None
+    projection = result.get("projection")
+    stage = projection.get("stage") if isinstance(projection, dict) else None
+    if isinstance(stage, dict) and stage.get("activity") in _TURN_ACTIVITIES:
+        return "turn_started"
+    send = result.get("send")
+    prompt = send.get("prompt") if isinstance(send, dict) else result.get("prompt")
+    if not isinstance(prompt, dict):
+        return None
+    if prompt.get("observation") != "supported":
+        return "unsupported"
+    stages = prompt.get("stages") or []
+    if "turn_started" in stages:
+        return "turn_started"
+    if "input_accepted" in stages:
+        return "input_accepted"
+    return None
+
+
 def delivery_id(result: dict | None) -> str | None:
     """`None` on both the old shape's unacked batch and the whole of
     1.4.246+, which dropped `deliveryId`: a consuming `check` there marks the

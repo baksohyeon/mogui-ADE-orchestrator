@@ -26,7 +26,7 @@ the emitter supplies them; `wait_wake` records a delivery ID, and an
 | Event | Emitted by | When |
 |---|---|---|
 | `dispatch_registered` | `scripts/dispatch-gate register` | After every register call, allow or deny |
-| `dispatch_launched` | `scripts/dispatch` | After a successful register, with dispatch id, task id, pane, pid (usually empty — `dispatch` creates the worker's terminal through an RPC, not a local process), and model |
+| `dispatch_launched` | `scripts/dispatch` | After a successful register, with dispatch id, task id, pane, pid (usually empty, since `dispatch` creates the worker's terminal through an RPC, not a local process), model, and `delivery_source` (`orca:turn_started` or `pane-read`, see `dispatch-smoke.md`) |
 | `wait_verdict` | `scripts/worker-wait` | Once per actionable row (`DEAD`, `STALL`, `OPEN_PANE`) in an accounting pass |
 | `wait_wake` | `scripts/worker-wait` | Once per non-heartbeat delivery the wait loop receives, with the message type(s) and delivery id |
 | `reaped` | `scripts/worker-reap` | After a real (non-dry-run) reap, with `actions_taken` |

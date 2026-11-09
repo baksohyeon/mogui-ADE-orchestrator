@@ -163,8 +163,8 @@ print($1)
 "
 }
 
-# Reads one normalized key (task_id, terminal_handle, dispatch_id, or
-# dispatch_status; see scripts/lib/orca_json.py) from raw orca
+# Reads one normalized key (task_id, terminal_handle, dispatch_id,
+# dispatch_status, or turn_stage; see scripts/lib/orca_json.py) from raw orca
 # --json stdout on stdin, old shape or 1.4.246+ shape alike. Prints the value,
 # or an empty line when the module found it under neither shape, so every
 # `orca_json_read` call site keeps its existing `[ -z "$X" ]` failure check.
@@ -722,14 +722,18 @@ delivery_result() {
   # signal; the dispatch record's own status fills that gap (measured
   # 2026-10-23: three dispatches read `completed` with the pane back at a
   # prepared prompt). Precedence: hook-trust and limit win regardless of
-  # status, then a completed dispatch is `done`, then the pane-transition
-  # fallback.
+  # status, then a completed dispatch is `done`, then Orca's own turn signal
+  # ($4, see orca_turn_stage), then the pane-transition fallback.
   case "$1:$2" in
     *:hook-trust) echo hook-trust; return;;
     *:limit) echo limit; return;;
   esac
   if [ "$3" = completed ]; then
     echo done
+    return
+  fi
+  if [ "${4:-}" = turn_started ]; then
+    echo agent-started
     return
   fi
   case "$1:$2" in
@@ -744,6 +748,41 @@ pane_classification() {
   local pane
   pane=$(orca terminal read --terminal "$1" --limit 40 2>/dev/null || true)
   pane_classify_text "$pane"
+}
+
+# Orca's own answer to "did the injected prompt start a turn", asked before
+# any pane text is read. $1 is the raw `dispatch --inject --json` output, $2
+# the dispatch id. Measured on orca 1.4.253 (2026-11-09): that inject JSON
+# carries `prompt.stages` but returns before the turn begins, so it reads
+# `input_accepted` at best and `observation: "unsupported"` on most claude
+# panes; `worker-show --full` on the same dispatch read `activity: "working"`
+# from about one second after the inject, on those same panes. That activity
+# follows the pane, not this one request, so $3 (the pre-inject pane class)
+# turns the poll off when the pane was already running a turn: a reused
+# pane's old turn must not read as this prompt's. Prints `turn_started` on the
+# first positive read, otherwise the inject's own stage (or `absent`), which
+# leaves the pane reading loop to decide.
+ORCA_TURN_POLLS=5
+orca_turn_stage() {
+  local inject_stage poll_stage _
+  inject_stage=$(printf '%s' "$1" | orca_json_read turn_stage)
+  if [ "$inject_stage" = turn_started ]; then
+    echo turn_started
+    return
+  fi
+  if [ "${3:-}" = working ]; then
+    echo "${inject_stage:-absent}"
+    return
+  fi
+  for _ in $(seq 1 "$ORCA_TURN_POLLS"); do
+    poll_stage=$(orca orchestration worker-show --dispatch "$2" --json --full 2>/dev/null | orca_json_read turn_stage)
+    if [ "$poll_stage" = turn_started ]; then
+      echo turn_started
+      return
+    fi
+    sleep 1
+  done
+  echo "${inject_stage:-absent}"
 }
 
 # Codex has its own ready state and its own gates, neither of which the markers
@@ -1270,11 +1309,11 @@ record_dispatch_launched() {
   # screen never reached the agent, and this event is the only place that
   # measured non-delivery is recorded — the timeline must show it as a
   # finding, not a green launch.
-  local outcome="$1" reason="$2"
-  python3 - "$SCRIPTS_DIR" "$DISP" "$TASK" "$TERMINAL" "$MODEL" "$outcome" "$reason" <<'EOF'
+  local outcome="$1" reason="$2" delivery_source="${3:-pane-read}"
+  python3 - "$SCRIPTS_DIR" "$DISP" "$TASK" "$TERMINAL" "$MODEL" "$outcome" "$reason" "$delivery_source" <<'EOF'
 import sys
 
-scripts_dir, dispatch_id, task_id, pane, model, outcome, reason = sys.argv[1:]
+scripts_dir, dispatch_id, task_id, pane, model, outcome, reason, delivery_source = sys.argv[1:]
 sys.path.insert(0, scripts_dir)
 from mogui_log import emit
 
@@ -1288,6 +1327,7 @@ emit(
     pid="",
     model=model,
     reason=reason,
+    delivery_source=delivery_source,
 )
 EOF
 }
@@ -1828,12 +1868,23 @@ fi
 # Do not "fix" this by sending the spec again. Sending text into a hook/trust
 # menu exits the pane. Classify the pane transition and report each class
 # explicitly; output bytes or output-clock changes are not delivery evidence.
-POST_INJECT_CLASS=unknown
-for _ in 1 2 3 4 5 6; do
-  sleep 5
-  POST_INJECT_CLASS=$(pane_classification "$TERMINAL")
-  [ "$POST_INJECT_CLASS" != prepared-prompt ] && break
-done
+#
+# Orca's own turn signal decides first (orca_turn_stage). When it reports
+# turn_started the pane reading loop is skipped; any other answer leaves the
+# loop to decide exactly as before. The delivery line and the fire log both
+# name which source decided.
+ORCA_STAGE=$(orca_turn_stage "$DISP_RAW" "$DISP" "$PRE_INJECT_CLASS")
+POST_INJECT_CLASS=skipped
+DELIVERY_SOURCE=orca:turn_started
+if [ "$ORCA_STAGE" != turn_started ]; then
+  DELIVERY_SOURCE=pane-read
+  POST_INJECT_CLASS=unknown
+  for _ in 1 2 3 4 5 6; do
+    sleep 5
+    POST_INJECT_CLASS=$(pane_classification "$TERMINAL")
+    [ "$POST_INJECT_CLASS" != prepared-prompt ] && break
+  done
+fi
 # A worker that finishes inside the window above returns the pane to the same
 # prepared prompt it started from, so the pane carries no positive signal at
 # all. The Orca dispatch record does: read its status once, here, and fold it
@@ -1844,12 +1895,12 @@ if [ -z "$DISPATCH_STATUS" ]; then
   echo "dispatch-show raw response (first 200 chars): ${DISPATCH_SHOW_RAW:0:200}" >&2
   DISPATCH_STATUS=unreadable
 fi
-DELIVERY_CLASS=$(delivery_result "$PRE_INJECT_CLASS" "$POST_INJECT_CLASS" "$DISPATCH_STATUS")
-echo "delivery pre=$PRE_INJECT_CLASS post=$POST_INJECT_CLASS status=$DISPATCH_STATUS class=$DELIVERY_CLASS"
+DELIVERY_CLASS=$(delivery_result "$PRE_INJECT_CLASS" "$POST_INJECT_CLASS" "$DISPATCH_STATUS" "$ORCA_STAGE")
+echo "delivery pre=$PRE_INJECT_CLASS post=$POST_INJECT_CLASS status=$DISPATCH_STATUS class=$DELIVERY_CLASS source=$DELIVERY_SOURCE"
 case "$DELIVERY_CLASS" in
-  agent-started|done) record_dispatch_launched pass "";;
-  hook-trust|limit) record_dispatch_launched finding "$DELIVERY_CLASS";;
-  *) record_dispatch_launched undetermined "$DELIVERY_CLASS";;
+  agent-started|done) record_dispatch_launched pass "" "$DELIVERY_SOURCE";;
+  hook-trust|limit) record_dispatch_launched finding "$DELIVERY_CLASS" "$DELIVERY_SOURCE";;
+  *) record_dispatch_launched undetermined "$DELIVERY_CLASS" "$DELIVERY_SOURCE";;
 esac
 case "$DELIVERY_CLASS" in
   hook-trust)
@@ -1869,7 +1920,11 @@ case "$DELIVERY_CLASS" in
     echo "✓ delivery ✓ worker completed inside the window (dispatch completed)"
     exit 0;;
   agent-started)
-    echo "✓ delivery ✓ agent left its prepared prompt after inject and began processing"
+    if [ "$DELIVERY_SOURCE" = orca:turn_started ]; then
+      echo "✓ delivery ✓ Orca reported the injected prompt started a turn"
+    else
+      echo "✓ delivery ✓ agent left its prepared prompt after inject and began processing"
+    fi
     echo "  Read the pane to verify the contracted work: orca terminal read --terminal $TERMINAL --limit 40";;
   *)
     echo "⚠ delivery UNVERIFIED · pane is not a recognized prepared prompt"

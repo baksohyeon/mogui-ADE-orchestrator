@@ -20,6 +20,18 @@ you build on it.
 
 ## [Unreleased]
 
+## [0.5.301] - 2026-11-09
+
+### Changed
+
+- `scripts/generate-manifest` writes an `instance_owned` key, and `--check` fails when a `files` entry falls under one of its prefixes (#230).
+- The redaction gate allowlists the read-proof token shape `ack-<12 hex>` by match, and the CI shell-test jobs install gitleaks so the redaction tests run (#229).
+
+### Fixed
+
+- `bootstrap()` honors `MOGUI_SEAT_ROOT` for the dual-instance seat check, so a second agent parked at the same directory no longer reports a false peer (#232).
+- Tests cover the Orca turn-stage reader that dispatch delivery asks before reading the pane (#231).
+
 ## [0.5.296] - 2026-11-09
 
 ### Changed
@@ -437,7 +449,8 @@ tests pass, 1 skipped.
 There is no CI at this tag. Tests and the redaction scanners run locally before
 a push, so a passing count in a pull request is the author's word.
 
-[Unreleased]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.296...HEAD
+[Unreleased]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.301...HEAD
+[0.5.301]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.296...v0.5.301
 [0.5.296]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.294...v0.5.296
 [0.5.294]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.288...v0.5.294
 [0.5.288]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.278...v0.5.288

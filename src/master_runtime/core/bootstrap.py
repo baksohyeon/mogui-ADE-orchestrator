@@ -13,6 +13,7 @@ from typing import Callable, List, Optional, Tuple, Union
 DEFAULT_BUDGET_CHARS = 24_000
 TRUNCATION_MARKER = "\n[TRUNCATED:BOOTSTRAP_BUDGET_EXCEEDED]"
 L1_TRUNCATION_MARKER = "\n[TRUNCATED:L1_BUDGET_EXCEEDED]"
+SEAT_ROOT_ENV_VAR = "MOGUI_SEAT_ROOT"
 VALID_ROLES = frozenset(
     (
         "Architecture",
@@ -243,9 +244,7 @@ def _detect_dual_instances(
         excluded_pids.add(ancestor_pid)
 
     resolve_cwd = cwd_probe or _default_cwd_probe
-    seat_root_real = os.path.realpath(
-        str(seat_root) if seat_root is not None else os.getcwd()
-    )
+    seat_root_real = _resolve_seat_root(seat_root)
 
     warnings: List[str] = []
     for line in output.splitlines():
@@ -271,6 +270,26 @@ def _detect_dual_instances(
         if os.path.realpath(cwd) == seat_root_real:
             warnings.append("SEAT_PEER:" + str(pid))
     return warnings
+
+
+def _resolve_seat_root(seat_root: Optional[Union[str, Path]]) -> str:
+    """An explicit `seat_root` wins; otherwise `MOGUI_SEAT_ROOT` (the same
+    env var `mogui_log.py` reads to tell a master seat from a worker) lets a
+    caller that cannot pass `seat_root` directly, such as the `master-bootstrap`
+    CLI, override the ambient `cwd` without changing production default
+    behavior. Unset, this is unchanged: `os.getcwd()`.
+    """
+    if seat_root is not None:
+        return os.path.realpath(str(seat_root))
+    override = os.environ.get(SEAT_ROOT_ENV_VAR)
+    if override:
+        resolved = os.path.realpath(os.path.expanduser(override))
+        if not os.path.isdir(resolved):
+            raise BootstrapError(
+                SEAT_ROOT_ENV_VAR + " is not an existing directory: " + override
+            )
+        return resolved
+    return os.path.realpath(os.getcwd())
 
 
 def _default_process_probe() -> str:

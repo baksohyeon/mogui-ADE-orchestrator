@@ -6,7 +6,7 @@ Files point at each other with `[[name]]`, where `name` is another file's
 stem, and a name with no file yet is allowed on purpose: it marks something
 worth writing later. That also means a plain "file missing" check cannot
 tell a typo from a deliberate placeholder, so this groups every missing
-name instead of just listing it.
+name by why it is missing.
 
 Run it on the directory of `*.md` memory files:
 

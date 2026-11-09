@@ -2,7 +2,7 @@
 
 `scripts/memory-link-check` finds every `[[name]]` link in a memory
 directory's `*.md` files whose target file does not exist, and sorts each
-missing name into a group instead of just listing it. A missing name is
+missing name into a group that says why it is missing. A missing name is
 allowed by design (it marks something worth writing later); only a
 near-miss on an existing file name is a defect.
 
@@ -24,11 +24,11 @@ stdin). `--max-distance` sets the Levenshtein distance counted as a typo
 
 - `typo`: an existing file's name is close enough (within `--max-distance`)
   that this is probably a misspelling. Fix the link.
-- `tracker-key`: the name is in `--bd-keys` — a short rule kept in the
-  tracker's own memory store, not a file. Point the link at that key's
-  detail document if it has one; otherwise leave it.
-- `not-yet-written`: neither of the above — reserved for something not
-  written yet. Leave it alone.
+- `tracker-key`: the name is in `--bd-keys`, naming a short rule kept in
+  the tracker's own memory store. Point the link at that key's detail
+  document if it has one; otherwise leave it.
+- `not-yet-written`: a name reserved for something not written yet. Leave
+  it alone.
 
 ## Exit codes
 

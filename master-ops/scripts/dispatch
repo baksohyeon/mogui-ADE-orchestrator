@@ -13,6 +13,14 @@ ROLLOUT_PROBE_BIN={{RUNTIME_ROOT}}/scripts/model-probe-rollout
 SCRIPTS_DIR=$(cd "$(dirname "$0")" && pwd)
 COLLISION_CHECK="$SCRIPTS_DIR/dispatch-collision-check"
 HOOKS_ANSWER_BIN="$SCRIPTS_DIR/codex-hooks-review-answer"
+# pane_classify_text reads this file on every pane read. A missing, unreadable,
+# or marker-less file would silently drop the approval class, so it stops here.
+APPROVAL_MARKERS_FILE="$SCRIPTS_DIR/approval-prompt-markers.txt"
+if ! grep -qvE '^[[:space:]]*(#|$)' "$APPROVAL_MARKERS_FILE" 2>/dev/null; then
+  echo "✗ approval marker file is unreadable or holds no marker: $APPROVAL_MARKERS_FILE" >&2
+  echo "  pane_classify_text cannot classify an approval prompt without it; restore the file before dispatching." >&2
+  exit 1
+fi
 # Master host runtime. Resolution order, most authoritative first:
 #   1. MOGUI_MASTER_HOST_RUNTIME from the launching environment
 #   2. master_host_runtime in the instance runtime config that onboarding writes
@@ -686,23 +694,30 @@ choose_default_runtime() {
 #   '  ⏵⏵ auto mode on (shift+tab to cycle) · PR #190'
 # so the unicode marker below matches that placeholder shape too, with either
 # a no-break space or regular spaces between the arrow and `Try "..."`.
-HOOK_TRUST_MARKERS='^[[:space:]]*(Resume session.*|New worktree.*|Coming from Claude Code.*|Changelog.*|Select a model.*|Welcome to Claude.*|Do you trust the files.*|Sign in.*|press enter to continue.*|/login.*|Antigravity CLI requires permission.*|I trust this folder.*|trust this workspace.*|workspace trust.*|permission to access.*|Quick safety check.*|pre-approves .* tool permissions.*)[[:space:][:punct:]]*$'
+HOOK_TRUST_MARKERS='^[[:space:]]*(Resume session.*|New worktree.*|Coming from Claude Code.*|Changelog.*|Select a model.*|Welcome to Claude.*|Do you trust the files.*|Sign in.*|press enter to continue.*|/login.*|Antigravity CLI requires permission.*|I trust this folder.*|trust this workspace.*|workspace trust.*|permission to access.*|Quick safety check.*|pre-approves .* tool permissions.*|Hooks need review.*)[[:space:][:punct:]]*$'
 LIMIT_MARKERS='^[[:space:]]*(rate limit|rate-limit|too many requests|quota exceeded|out of credits|credits are exhausted|usage limit reached|you.?ve hit your limit|you have reached your limit|try again after)[[:space:][:punct:]]*.*$'
 WORKING_MARKERS='(\([^()]*esc to interrupt\)|^esc:cancel)'
 PREPARED_PROMPT_MARKERS='^[[:space:]]*(claude|codex|grok|gemini)[[:space:]]*>[[:space:]]*$'
 PREPARED_UNICODE_PROMPT_MARKERS=$'^[[:space:]]*(❯|›|➜)([\xc2\xa0 ]+Try "[^"]*")?([\xc2\xa0 ]+Ask Codex to do anything)?[[:space:]]*$'
 
 pane_classify_text() {
-  local pane="$1" state
+  local pane="$1" state approval_re
   # `terminal read` retains task text and prior output. Use the retained recent
   # state area and line-prefix matching for this dispatch contract. A gate
   # phrase at the start of a task-text or agent-output line can still be
   # misclassified; marker precision is tracked separately in mgm-hww.
   state=$(printf '%s\n' "$pane" | tail -n 8)
+  # Approval markers come from the one file worker-pane-sweep and
+  # hooks/worker-block-warn.sh read, built the sweep's way; never a copy here.
+  # hook-trust is checked first: codex's "Hooks need review" modal also
+  # matches that file and belongs to the hook-trust class.
+  approval_re=$(grep -vE '^[[:space:]]*(#|$)' "$SCRIPTS_DIR/approval-prompt-markers.txt" 2>/dev/null | paste -sd'|' -)
   if printf '%s\n' "$state" | grep -Eiq "$HOOK_TRUST_MARKERS"; then
     echo hook-trust
   elif printf '%s\n' "$state" | grep -Eiq "$LIMIT_MARKERS"; then
     echo limit
+  elif [ -n "$approval_re" ] && printf '%s\n' "$state" | grep -Eiq "$approval_re"; then
+    echo approval
   elif printf '%s\n' "$state" | grep -Eiq "$WORKING_MARKERS"; then
     # Measured in worker-pane-sweep line 63: "esc to interrupt" is the line
     # every measured TUI prints under its status while a turn runs
@@ -721,12 +736,13 @@ delivery_result() {
   # prompt it started from, so the pane transition alone carries no positive
   # signal; the dispatch record's own status fills that gap (measured
   # 2026-10-23: three dispatches read `completed` with the pane back at a
-  # prepared prompt). Precedence: hook-trust and limit win regardless of
+  # prepared prompt). Precedence: hook-trust, limit, and approval win regardless of
   # status, then a completed dispatch is `done`, then Orca's own turn signal
   # ($4, see orca_turn_stage), then the pane-transition fallback.
   case "$1:$2" in
     *:hook-trust) echo hook-trust; return;;
     *:limit) echo limit; return;;
+    *:approval) echo approval; return;;
   esac
   if [ "$3" = completed ]; then
     echo done
@@ -918,7 +934,9 @@ runtime_command() {
     # the selected model (claude-sonnet)" and never began work, while the gate
     # had already passed the correct id. Only the dated haiku id survived the
     # strip, which is why the default kept working and every override died.
-    claude) echo "claude --model $model_arg --dangerously-skip-permissions";;
+    # CLAUDE_SETTINGS_FLAG carries the per-task worker settings written by
+    # write_worker_settings (step 3): one write root, enforced by the guard.
+    claude) echo "claude --model $model_arg --dangerously-skip-permissions${CLAUDE_SETTINGS_FLAG:-}";;
     # Non-interactive approval flags, so a first visit to a worktree cannot stop
     # a worker on a trust prompt. Every flag below was measured from that CLI's
     # own --help on 2026-08-05, per the registry rule in MASTER-OPERATIONS
@@ -943,6 +961,11 @@ runtime_command() {
     # Measured 2026-10-24 on codex-cli 0.164.0 with one unreviewed hook in a scratch
     # CODEX_HOME: the "Hooks need review" modal shows the same with and without the
     # flag, so a bypass launch still reaches the hooks vet in the launch loop below.
+    # Without the bypass flag the launch pins `-s workspace-write` (listed by
+    # `codex --help`). Measured 2026-11-09 on codex-cli 0.167.0 from an Orca
+    # pane: with no -s flag the pane's /status read "danger-full-access" (the
+    # host and account config set it) and `touch` into the enclosing repository
+    # root succeeded, so the default sandbox gave a worker no write root at all.
     # The model flag is separate from the approval posture above and was missing
     # here until 2026-08-05. The gate validated a model id, the tier policy
     # recorded it, and the launcher dropped it: two codex dispatches declared
@@ -962,7 +985,7 @@ runtime_command() {
     # written as an inline table: the dotted form reads the dot inside the
     # model id as a nesting separator and fails with "invalid type: map,
     # expected a string".
-    codex) echo "codex --model $model_arg -c $(shell_quote "model_reasoning_effort=\"$CODEX_REASONING_EFFORT\"") -c check_for_update_on_startup=false -c $(shell_quote "$CODEX_MIGRATION_ACK")${CODEX_BYPASS_FLAG:-}";;
+    codex) echo "codex --model $model_arg -c $(shell_quote "model_reasoning_effort=\"$CODEX_REASONING_EFFORT\"") -c check_for_update_on_startup=false -c $(shell_quote "$CODEX_MIGRATION_ACK")${CODEX_BYPASS_FLAG:- -s workspace-write}";;
     gemini) echo "gemini";;
     opencode) echo "opencode";;
     # agy is the Gemini host; `agy models` reports gemini-* ids. Its approval flag
@@ -971,6 +994,45 @@ runtime_command() {
     agy) echo "agy --model $model_arg --dangerously-skip-permissions";;
     *) echo "$1";;
   esac
+}
+
+# One write root per claude worker (mgm-mk1). Measured 2026-08-06 and again
+# 2026-11-09: product-path-guard ran only in the master's own host settings, so
+# a worker launched by runtime_command carried no guard and could write into
+# the master checkout through an absolute path. `claude --help` lists
+# `--settings <file-or-json>` (additional settings for that session), so each
+# claude worker gets a small settings file of its own, outside the worktree,
+# whose two PreToolUse matchers run the guard in worker mode with the worktree
+# as the only write root. The file holds the worktree path and the hook path,
+# nothing else: no pane handle, no token. No cleanup path removes it today
+# (worker-reap lives in src/, outside this change); it is left in place. A
+# reused pane (--terminal) cannot take it; see step 3.
+# $1 task id, $2 absolute worktree path. Prints the file path.
+write_worker_settings() {
+  local task="$1" root="$2" dir file hook="$SCRIPTS_DIR/hooks/product-path-guard.sh"
+  case "$root" in
+    /*) ;;
+    *) echo "✗ claude worker needs an absolute worktree path for its write root; got '${root:-<none>}'" >&2; return 1;;
+  esac
+  [ -x "$hook" ] || { echo "✗ product-path-guard not executable: $hook" >&2; return 1; }
+  dir="$STATE_DIR/worker-settings"
+  file="$dir/$task.json"
+  mkdir -p "$dir" || { echo "✗ cannot create worker settings directory: $dir" >&2; return 1; }
+  python3 - "$file" "$root" "$hook" <<'EOF' || { echo "✗ cannot write worker settings: $file" >&2; return 1; }
+import json, shlex, sys
+
+path, root, hook = sys.argv[1:]
+command = "MOGUI_WORKER_WRITE_ROOT=" + shlex.quote(root) + " MOGUI_RUNTIME_HINT=claude " + shlex.quote(hook)
+guard = [{"type": "command", "command": command}]
+settings = {"hooks": {"PreToolUse": [
+    {"matcher": "Edit|Write|NotebookEdit", "hooks": guard},
+    {"matcher": "Bash", "hooks": guard},
+]}}
+with open(path, "w", encoding="utf-8") as fh:
+    json.dump(settings, fh, indent=2)
+    fh.write("\n")
+EOF
+  printf '%s\n' "$file"
 }
 
 PRETRUST_BIN={{RUNTIME_ROOT}}/scripts/codex-worker-pretrust
@@ -1680,6 +1742,11 @@ fi
 KIND="재사용"
 if [ -z "$TERMINAL" ]; then
   KIND="신규"
+  if [ "$RUNTIME" = claude ]; then
+    WORKER_SETTINGS=$(write_worker_settings "$TASK" "${WORKTREE#path:}") || exit 3
+    CLAUDE_SETTINGS_FLAG=" --settings $(shell_quote "$WORKER_SETTINGS")"
+    echo "write root ✓ claude · guard settings worker-settings/$TASK.json"
+  fi
   TERMINAL_RAW=$(orca terminal create --worktree "$WORKTREE" \
     --command "$(runtime_command "$RUNTIME")" --json 2>/dev/null)
   TERMINAL=$(printf '%s' "$TERMINAL_RAW" | orca_json_read terminal_handle)
@@ -1689,6 +1756,14 @@ if [ -z "$TERMINAL" ]; then
     exit 3
   fi
   orca terminal wait --terminal "$TERMINAL" --for tui-idle --timeout-ms 60000 --json >/dev/null 2>&1
+elif [ "$RUNTIME" = claude ]; then
+  # A reused pane's claude is already running, so --settings cannot reach it,
+  # and rewriting the settings file it launched with does not either: measured
+  # 2026-11-10 on claude 2.1.319, a pane launched with a worker settings file
+  # kept refusing writes against its launch-time root after that same file was
+  # repointed at a new root. No file is written here; nothing could read it.
+  echo "write root: not enforced on a reused pane"
+  echo "  a running claude keeps the hooks it launched with; dispatch to a new pane (no --terminal) for this task's write root"
 fi
 echo "→ $TASK → $TERMINAL ($KIND)"
 
@@ -1906,7 +1981,7 @@ fi
 echo "delivery pre=$PRE_INJECT_CLASS post=$POST_INJECT_CLASS status=$DISPATCH_STATUS class=$DELIVERY_CLASS source=$DELIVERY_SOURCE"
 case "$DELIVERY_CLASS" in
   agent-started|done) record_dispatch_launched pass "" "$DELIVERY_SOURCE";;
-  hook-trust|limit) record_dispatch_launched finding "$DELIVERY_CLASS" "$DELIVERY_SOURCE";;
+  hook-trust|limit|approval) record_dispatch_launched finding "$DELIVERY_CLASS" "$DELIVERY_SOURCE";;
   *) record_dispatch_launched undetermined "$DELIVERY_CLASS" "$DELIVERY_SOURCE";;
 esac
 case "$DELIVERY_CLASS" in
@@ -1922,6 +1997,11 @@ case "$DELIVERY_CLASS" in
   limit)
     echo "✗ delivery FAILED · provider limit is present; the spec was NOT consumed"
     echo "  Wait for the provider limit to clear or use an available runtime."
+    exit 5;;
+  approval)
+    echo "✗ delivery BLOCKED · the pane is waiting on an approval prompt; the worker cannot continue until it is cleared"
+    echo "  pane: $TERMINAL"
+    echo "  Classify and clear it in scope (charter 04): $SCRIPTS_DIR/worker-pane-sweep, then orca terminal read --terminal $TERMINAL --limit 40"
     exit 5;;
   done)
     echo "✓ delivery ✓ worker completed inside the window (dispatch completed)"

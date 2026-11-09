@@ -65,6 +65,8 @@ FIRST ACTION (report these three, and no absolute path):
 - branch:               `git branch --show-current`
 ```
 
+The worktree is the worker's only write root. Never compose a path outside the worktree from a directory listing, regardless of the start-of-session verdict.
+
 The placement report is a verdict, not a path. A worker's contract may name the exact
 workspace it must enter; the outward report uses the boolean above so a public record
 cannot disclose a machine path.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import os
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -35,7 +36,9 @@ def _classifier() -> str:
         r"delivery_result\(\) \{.*?^\}", source, flags=re.MULTILINE | re.DOTALL
     )
     assert delivery, "dispatch delivery transition function is missing"
+    scripts_dir = shlex.quote(str(SCRIPT.parent))
     return (
+        f"SCRIPTS_DIR={scripts_dir}\n"
         f"{assignments}\n{function.group(0)}\n{delivery.group(0)}\n"
         "if [ \"${CLASSIFY_ONLY:-1}\" = 1 ]; then pane_classify_text \"$1\"; "
         "else delivery_result \"$(pane_classify_text \"$1\")\" "
@@ -126,6 +129,45 @@ def test_unclassified_pane_is_not_a_delivery_pass() -> None:
     assert classify("spec mentions provider rate limit") == "unknown"
     assert classify('assert classify("Rate limit reached") == "limit"') == "unknown"
     assert classify("context window 40% used\ncodex> ") == "prepared-prompt"
+
+
+def test_numbered_yes_no_prompt_is_approval() -> None:
+    pane = (
+        "Bash command\n"
+        "  rm -rf \"$TARGET\"\n"
+        "Dangerous rm operation on statically-unresolvable target\n"
+        "Do you want to proceed?\n"
+        "\u276f 1. Yes\n"
+        "  2. No"
+    )
+    assert classify(pane) == "approval"
+
+
+def test_y_n_prompt_is_approval() -> None:
+    assert classify("Overwrite existing file? [y/N]") == "approval"
+    assert classify("Continue (y/n)") == "approval"
+
+
+def test_codex_hook_trust_modal_is_hook_trust_not_approval() -> None:
+    modal = (
+        "Hooks need review\n"
+        "4 hooks are new or changed\n"
+        "\u203a 1. Review hooks\n"
+        "  2. Trust all and continue\n"
+        "  3. Continue without trusting"
+    )
+    assert classify(modal) == "hook-trust"
+
+
+def test_approval_after_inject_is_a_gate_regardless_of_pre_state() -> None:
+    assert transition("codex> ", "Do you want to proceed?\n\u276f 1. Yes") == "approval"
+    assert transition("esc:cancel", "Allow this? [y/n]") == "approval"
+
+
+def test_classifier_reads_the_shared_marker_file() -> None:
+    source = SCRIPT.read_text(encoding="utf-8")
+    assert '"$SCRIPTS_DIR/approval-prompt-markers.txt"' in source
+    assert "do you want to proceed" not in source.lower()
 
 
 def test_hook_class_wins_when_multiple_gate_markers_are_visible() -> None:

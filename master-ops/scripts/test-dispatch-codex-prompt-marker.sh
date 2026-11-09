@@ -21,6 +21,8 @@ classify_fn=$(awk '$0=="pane_classify_text() {"{f=1} f{print} f&&$0=="}"{exit}' 
 
 [ "$(printf '%s\n' "$markers" | grep -c .)" = 5 ] || { echo "FAIL: could not extract all five marker variables" >&2; exit 1; }
 [ -n "$classify_fn" ] || { echo "FAIL: could not extract pane_classify_text" >&2; exit 1; }
+# pane_classify_text reads approval-prompt-markers.txt beside dispatch.
+markers="$markers"$'\n'"SCRIPTS_DIR=$(printf '%q' "$(dirname "$dispatch")")"
 
 work="${TMPDIR:-/tmp}/mogui-dispatch-codex-prompt-marker.$$"
 mkdir -p "$work"

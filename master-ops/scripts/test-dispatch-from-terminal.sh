@@ -18,6 +18,8 @@ mkdir -p "$fixture/scripts/lib" "$fixture/rules" "$fake_bin" "$tmp_home" "$state
 cp "$dispatch" "$fixture/scripts/dispatch"
 cp "$(dirname "$dispatch")/lib/orca_json.py" "$fixture/scripts/lib/orca_json.py"
 cp "$(dirname "$dispatch")/mogui_log.py" "$fixture/scripts/mogui_log.py"
+# dispatch stops at startup without the shared approval marker file.
+cp "$(dirname "$dispatch")/approval-prompt-markers.txt" "$fixture/scripts/approval-prompt-markers.txt"
 printf '\n' > "$rules"
 printf '{"tiers":{"efficient":[],"top":[]}}\n' > "$policy"
 printf '# test contract\n' > "$contract"

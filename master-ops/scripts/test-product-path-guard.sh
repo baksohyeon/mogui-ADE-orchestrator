@@ -1205,4 +1205,61 @@ heredoc3_mutant root-substring-only \
   "def body_targets_root(value, base):
     return any(root in value for root in roots)"
 
+# --- Worker mode (mgm-mk1) ----------------------------------------------------
+# MOGUI_WORKER_WRITE_ROOT gives one worker one write root. The runtime config
+# points at a missing file on purpose: worker mode must not read it, and a
+# worker's worktree sits under a product root by design.
+worker_root="$product/.orca/worktrees/worker-one"
+mkdir -p "$worker_root"
+
+run_worker() {  # kind(file|bash) value [working_directory]
+  python3 - "$1" "$2" "${3:-$worker_root}" <<'PY' | HOME="$TMP/home" MOGUI_WORKER_WRITE_ROOT="$worker_root" MOGUI_INSTANCE_RUNTIME_CONFIG="$TMP/missing-runtime.json" MOGUI_EVENT_LOG="$TMP/home/.mogui/event-log.jsonl" MOGUI_HOOK_FIRE_LOG="$TMP/logs/fire.jsonl" "$HOOK" >/dev/null 2>"$TMP/stderr"
+import json, sys
+kind, value, cwd = sys.argv[1:]
+tool = {"file_path": value} if kind == "file" else {"command": value}
+print(json.dumps({"tool_input": tool, "cwd": cwd}))
+PY
+}
+
+expect_allowed "worker mode: file-tool write inside the write root" run_worker file "$worker_root/notes.md"
+expect_blocked "worker mode: file-tool write outside the write root" run_worker file "$product/README.md"
+grep -q "$worker_root" "$TMP/stderr" && grep -q "$product_real/README.md" "$TMP/stderr" \
+  || { echo "FAIL: worker-mode file denial must name the root and the offending path" >&2; cat "$TMP/stderr" >&2; exit 1; }
+echo "PASS: worker mode: file denial names the root and the offending path"
+expect_verdict block "worker mode: outside write records a block"
+expect_allowed "worker mode: Bash redirection inside the write root" run_worker bash "echo hi > out.txt"
+expect_blocked "worker mode: Bash redirection outside the write root" run_worker bash "echo hi > $ops/stray.txt"
+grep -q "$worker_root" "$TMP/stderr" && grep -q "stray.txt" "$TMP/stderr" \
+  || { echo "FAIL: worker-mode Bash denial must name the root and the offending path" >&2; cat "$TMP/stderr" >&2; exit 1; }
+echo "PASS: worker mode: Bash denial names the root and the offending path"
+expect_allowed "worker mode: 2>/dev/null is not a write outside the root" run_worker bash "ls 2>/dev/null"
+expect_allowed "worker mode: /dev/stdout is one of the four writable devices" run_worker bash "echo hi > /dev/stdout"
+expect_allowed "worker mode: /dev/tty is one of the four writable devices" run_worker bash "echo hi > /dev/tty"
+expect_blocked "worker mode: /dev/shm is outside the write root" run_worker bash "echo hi > /dev/shm/worker-escape"
+grep -q "/dev/shm/worker-escape is outside" "$TMP/stderr" \
+  || { echo "FAIL: a /dev/shm denial must name /dev/shm/worker-escape" >&2; cat "$TMP/stderr" >&2; exit 1; }
+echo "PASS: worker mode: /dev/shm denial names the path"
+# The denial names an outside path only when the deny rests on it. Reading
+# /etc/hosts into a file inside the root is still refused (redirection on a
+# touching command), but /etc/hosts is a read operand, not the cause.
+expect_blocked "worker mode: read operand outside, redirect inside" run_worker bash "cat /etc/hosts > out.txt"
+if grep -q "is outside this worker's write root" "$TMP/stderr"; then
+  echo "FAIL: a redirection deny must not name a read operand as the outside path" >&2; cat "$TMP/stderr" >&2; exit 1
+fi
+echo "PASS: worker mode: a read operand is not named as the outside path"
+# A path that touched an earlier, admitted segment must not leak into a later
+# segment's denial.
+expect_blocked "worker mode: later segment denies on its own" run_worker bash "git -C $product status; bash -c 'echo x > $ops/z'"
+if grep -q "is outside this worker's write root" "$TMP/stderr"; then
+  echo "FAIL: an earlier segment's outside path leaked into a later segment's denial" >&2; cat "$TMP/stderr" >&2; exit 1
+fi
+echo "PASS: worker mode: no outside path carried over from an earlier segment"
+expect_allowed "worker mode: read-only git against the master checkout" run_worker bash "git -C $product status"
+expect_blocked "worker mode: mutating git against the master checkout" run_worker bash "git -C $product reset --hard"
+expect_allowed "worker mode: interpreter reading a path inside the root" run_worker bash "python3 -c \"print(open('$worker_root/notes.md').read())\""
+run_worker_relative_root() {
+  printf '{"tool_input":{"file_path":"%s"}}' "$worker_root/notes.md" | HOME="$TMP/home" MOGUI_WORKER_WRITE_ROOT=relative/path MOGUI_EVENT_LOG="$TMP/home/.mogui/event-log.jsonl" MOGUI_HOOK_FIRE_LOG="$TMP/logs/fire.jsonl" "$HOOK" >/dev/null 2>"$TMP/stderr"
+}
+expect_blocked "worker mode: a relative write root is refused" run_worker_relative_root
+
 echo "product-path-guard regression tests passed"

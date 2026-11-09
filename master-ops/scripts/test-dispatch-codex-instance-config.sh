@@ -39,9 +39,11 @@ for name in markers shell_quote_fn read_fn apply_fn runtime_command_fn start_fn;
 done
 call_site='[ "$RUNTIME" = codex ] && apply_codex_instance_launch_config'
 
-today='codex --model gpt-5.5 -c '"'"'model_reasoning_effort="xhigh"'"'"' -c check_for_update_on_startup=false -c '"'"'notice.model_migrations={"gpt-5.5"="gpt-6.1-sol"}'"'"''
+base='codex --model gpt-5.5 -c '"'"'model_reasoning_effort="xhigh"'"'"' -c check_for_update_on_startup=false -c '"'"'notice.model_migrations={"gpt-5.5"="gpt-6.1-sol"}'"'"''
+# Without the bypass flag the launch pins -s workspace-write (sandbox measured 2026-11-09).
+today="$base -s workspace-write"
 high=${today/'"xhigh"'/'"high"'}
-bypass="$today --dangerously-bypass-approvals-and-sandbox"
+bypass="$base --dangerously-bypass-approvals-and-sandbox"
 bypass_warning="WARNING: codex_bypass_approvals_and_sandbox is true in $work/instance-runtime.json;
          this codex worker launches with --dangerously-bypass-approvals-and-sandbox (no sandbox, no approvals)."
 

@@ -2,20 +2,28 @@
 # Test that read-proof tokens (ack-<12 hex>) pass the redaction scan,
 # while real AWS keys still fail. Both assertions are measured.
 #
-# redaction-scan.sh itself refuses to run without gitleaks on PATH (exit 2),
-# so a runner that lacks it has nothing to measure here: this file SKIPs
-# there instead of failing, the same convention test-contributing-shell-loop.sh
-# and test-dispatch-timeline.sh use for a missing prerequisite.
+# scripts/redaction-scan.sh lives at the host repository's root, outside
+# master-ops/, so a template-rendered copy never receives it: only the
+# authoring checkout, two levels above this script's own location, has it.
+# redaction-scan.sh also refuses to run without gitleaks on PATH (exit 2), so
+# a runner that lacks it has nothing to measure either. This file SKIPs for
+# both, the same convention test-contributing-shell-loop.sh and
+# test-dispatch-timeline.sh use for a missing prerequisite.
 set -u
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+SCAN="${REPO_ROOT}/scripts/redaction-scan.sh"
+
+if [ ! -f "${SCAN}" ]; then
+  echo "SKIP: ${SCAN} not found; this test did not run (not the authoring checkout)"
+  exit 0
+fi
 
 if ! command -v gitleaks >/dev/null 2>&1; then
   echo "SKIP: gitleaks not on PATH; this test did not run (install it with brew install gitleaks, or see https://gitleaks.io)"
   exit 0
 fi
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-SCAN="${REPO_ROOT}/scripts/redaction-scan.sh"
 
 F=0
 ok() { echo "  ok:   $*"; }

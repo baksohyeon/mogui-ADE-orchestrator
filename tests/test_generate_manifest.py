@@ -176,3 +176,66 @@ def test_changelog_fragment_not_in_manifest(tmp_path: Path):
     assert result.returncode == 0, result.stderr
     data = json.loads(result.stdout)
     assert data["files"] == ["MANIFEST.json", "ok.md"]
+
+
+def test_manifest_writes_instance_owned_and_leaves_blame_records_out():
+    data = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    assert list(data) == ["template_version", "files", "instance_owned"]
+    assert "docs/blame/" in data["instance_owned"]
+    assert not any(p.startswith("docs/blame/") for p in data["files"])
+    # The template ships the genre README, but it is not installed.
+    assert (SKELETON / "docs" / "blame" / "README.md").is_file()
+    assert not list((SKELETON / "docs" / "blame").glob("BLAME-*.md"))
+
+
+def test_instance_owned_seed_matches_the_built_in_fallback():
+    sys.path.insert(0, str(SKELETON / "scripts"))
+    try:
+        import template_common
+    finally:
+        sys.path.pop(0)
+    data = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    expected = {*template_common.INSTANCE_OWNED_PREFIXES, *template_common.INSTANCE_OWNED_EXACT}
+    assert set(data["instance_owned"]) == expected | {"docs/blame/"}
+
+
+def test_generator_excludes_files_under_instance_owned_prefix(tmp_path: Path):
+    skeleton = tmp_path / "master-ops"
+    (skeleton / "docs" / "blame").mkdir(parents=True)
+    (skeleton / "TEMPLATE-VERSION").write_text("v0.0.0\n", encoding="utf-8")
+    (skeleton / "ok.md").write_text("clean\n", encoding="utf-8")
+    (skeleton / "docs" / "blame" / "BLAME-2026-01-01-x.md").write_text("r\n", encoding="utf-8")
+    result = subprocess.run(
+        [sys.executable, str(GENERATOR), "--skeleton", str(skeleton), "--stdout"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+    assert data["files"] == ["MANIFEST.json", "ok.md"]
+    assert "docs/blame/" in data["instance_owned"]
+
+
+def test_check_fails_when_files_claims_an_instance_owned_path(tmp_path: Path):
+    skeleton = tmp_path / "master-ops"
+    skeleton.mkdir()
+    (skeleton / "TEMPLATE-VERSION").write_text("v0.0.0\n", encoding="utf-8")
+    (skeleton / "ok.md").write_text("clean\n", encoding="utf-8")
+    write = subprocess.run(
+        [sys.executable, str(GENERATOR), "--skeleton", str(skeleton)],
+        capture_output=True,
+        text=True,
+    )
+    assert write.returncode == 0, write.stderr
+    manifest = skeleton / "MANIFEST.json"
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    data["files"] = sorted([*data["files"], "docs/blame/BLAME-2026-01-01-x.md"])
+    manifest.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    check = subprocess.run(
+        [sys.executable, str(GENERATOR), "--skeleton", str(skeleton), "--check"],
+        capture_output=True,
+        text=True,
+    )
+    assert check.returncode == 1
+    assert "claims instance-owned paths" in check.stderr
+    assert "docs/blame/BLAME-2026-01-01-x.md" in check.stderr

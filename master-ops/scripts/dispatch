@@ -13,6 +13,14 @@ ROLLOUT_PROBE_BIN={{RUNTIME_ROOT}}/scripts/model-probe-rollout
 SCRIPTS_DIR=$(cd "$(dirname "$0")" && pwd)
 COLLISION_CHECK="$SCRIPTS_DIR/dispatch-collision-check"
 HOOKS_ANSWER_BIN="$SCRIPTS_DIR/codex-hooks-review-answer"
+# pane_classify_text reads this file on every pane read. A missing, unreadable,
+# or marker-less file would silently drop the approval class, so it stops here.
+APPROVAL_MARKERS_FILE="$SCRIPTS_DIR/approval-prompt-markers.txt"
+if ! grep -qvE '^[[:space:]]*(#|$)' "$APPROVAL_MARKERS_FILE" 2>/dev/null; then
+  echo "✗ approval marker file is unreadable or holds no marker: $APPROVAL_MARKERS_FILE" >&2
+  echo "  pane_classify_text cannot classify an approval prompt without it; restore the file before dispatching." >&2
+  exit 1
+fi
 # Master host runtime. Resolution order, most authoritative first:
 #   1. MOGUI_MASTER_HOST_RUNTIME from the launching environment
 #   2. master_host_runtime in the instance runtime config that onboarding writes
@@ -997,7 +1005,8 @@ runtime_command() {
 # whose two PreToolUse matchers run the guard in worker mode with the worktree
 # as the only write root. The file holds the worktree path and the hook path,
 # nothing else: no pane handle, no token. No cleanup path removes it today
-# (worker-reap lives in src/, outside this change); it is left in place.
+# (worker-reap lives in src/, outside this change); it is left in place. A
+# reused pane (--terminal) cannot take it; see step 3.
 # $1 task id, $2 absolute worktree path. Prints the file path.
 write_worker_settings() {
   local task="$1" root="$2" dir file hook="$SCRIPTS_DIR/hooks/product-path-guard.sh"
@@ -1747,6 +1756,14 @@ if [ -z "$TERMINAL" ]; then
     exit 3
   fi
   orca terminal wait --terminal "$TERMINAL" --for tui-idle --timeout-ms 60000 --json >/dev/null 2>&1
+elif [ "$RUNTIME" = claude ]; then
+  # A reused pane's claude is already running, so --settings cannot reach it,
+  # and rewriting the settings file it launched with does not either: measured
+  # 2026-11-10 on claude 2.1.319, a pane launched with a worker settings file
+  # kept refusing writes against its launch-time root after that same file was
+  # repointed at a new root. No file is written here; nothing could read it.
+  echo "write root: not enforced on a reused pane"
+  echo "  a running claude keeps the hooks it launched with; dispatch to a new pane (no --terminal) for this task's write root"
 fi
 echo "→ $TASK → $TERMINAL ($KIND)"
 

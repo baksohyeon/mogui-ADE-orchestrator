@@ -1233,6 +1233,27 @@ grep -q "$worker_root" "$TMP/stderr" && grep -q "stray.txt" "$TMP/stderr" \
   || { echo "FAIL: worker-mode Bash denial must name the root and the offending path" >&2; cat "$TMP/stderr" >&2; exit 1; }
 echo "PASS: worker mode: Bash denial names the root and the offending path"
 expect_allowed "worker mode: 2>/dev/null is not a write outside the root" run_worker bash "ls 2>/dev/null"
+expect_allowed "worker mode: /dev/stdout is one of the four writable devices" run_worker bash "echo hi > /dev/stdout"
+expect_allowed "worker mode: /dev/tty is one of the four writable devices" run_worker bash "echo hi > /dev/tty"
+expect_blocked "worker mode: /dev/shm is outside the write root" run_worker bash "echo hi > /dev/shm/worker-escape"
+grep -q "/dev/shm/worker-escape is outside" "$TMP/stderr" \
+  || { echo "FAIL: a /dev/shm denial must name /dev/shm/worker-escape" >&2; cat "$TMP/stderr" >&2; exit 1; }
+echo "PASS: worker mode: /dev/shm denial names the path"
+# The denial names an outside path only when the deny rests on it. Reading
+# /etc/hosts into a file inside the root is still refused (redirection on a
+# touching command), but /etc/hosts is a read operand, not the cause.
+expect_blocked "worker mode: read operand outside, redirect inside" run_worker bash "cat /etc/hosts > out.txt"
+if grep -q "is outside this worker's write root" "$TMP/stderr"; then
+  echo "FAIL: a redirection deny must not name a read operand as the outside path" >&2; cat "$TMP/stderr" >&2; exit 1
+fi
+echo "PASS: worker mode: a read operand is not named as the outside path"
+# A path that touched an earlier, admitted segment must not leak into a later
+# segment's denial.
+expect_blocked "worker mode: later segment denies on its own" run_worker bash "git -C $product status; bash -c 'echo x > $ops/z'"
+if grep -q "is outside this worker's write root" "$TMP/stderr"; then
+  echo "FAIL: an earlier segment's outside path leaked into a later segment's denial" >&2; cat "$TMP/stderr" >&2; exit 1
+fi
+echo "PASS: worker mode: no outside path carried over from an earlier segment"
 expect_allowed "worker mode: read-only git against the master checkout" run_worker bash "git -C $product status"
 expect_blocked "worker mode: mutating git against the master checkout" run_worker bash "git -C $product reset --hard"
 expect_allowed "worker mode: interpreter reading a path inside the root" run_worker bash "python3 -c \"print(open('$worker_root/notes.md').read())\""

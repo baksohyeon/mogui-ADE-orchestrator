@@ -143,9 +143,13 @@ the root is denied. A Bash command whose best-effort parse shows a write
 target outside the root is denied, with the same legacy read-only admissions
 master mode has: `cat`, `git -C <master checkout> status`, and the rest of
 that list still pass against a path outside the root, while
-`git -C <master checkout> reset --hard` does not. `/dev/` paths stay writable
-so `2>/dev/null` is not a denial. The denial text names the root and the
-offending path. A relative or empty-after-resolution root fails closed.
+`git -C <master checkout> reset --hard` does not. Four device files stay writable, `/dev/null`, `/dev/stdout`,
+`/dev/stderr`, and `/dev/tty` (compared resolved), so `2>/dev/null` is not a
+denial; any other `/dev` path, `/dev/shm` included, is outside the root. When
+the deny rests on a path outside the root (a write target, a redirect
+target, or the touching path of a read-only-policy deny), the denial text
+names that path and the root; otherwise it carries no path, so a read
+operand is never named as the cause. A relative or empty-after-resolution root fails closed.
 
 What it leaves out, by design or as a known gap:
 
@@ -171,8 +175,15 @@ worker with `claude ... --settings <that file>`. The file carries two
 `PreToolUse` matchers, `Edit|Write|NotebookEdit` and `Bash`, each running
 this hook as `MOGUI_WORKER_WRITE_ROOT=<worktree> MOGUI_RUNTIME_HINT=claude
 <scripts>/hooks/product-path-guard.sh`. It holds the worktree path and the
-hook path only: no pane handle, no token, no secret. A reused pane (`--terminal`
-without a new launch) gets no file, since nothing is launched. No cleanup
+hook path only: no pane handle, no token, no secret.
+
+A reused pane (`--terminal`) is not covered: its claude is already running,
+so `--settings` cannot reach it, and rewriting the file it launched with
+does not either (measured 2026-11-10 on claude 2.1.319: after the file was
+repointed at a new root, the running pane still refused writes against its
+launch-time root). `dispatch` writes no file for a reused pane and prints
+`write root: not enforced on a reused pane`; dispatch to a new pane when the
+task needs its write root. No cleanup
 path removes the file today: `worker-reap` lives in `src/` and was outside
 this change, so the files accumulate one per claude dispatch until a later
 round adds removal there.

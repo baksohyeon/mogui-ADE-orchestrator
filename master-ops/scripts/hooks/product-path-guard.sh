@@ -211,14 +211,19 @@ cwd=os.path.realpath(os.path.expanduser(tool.get("working_directory") or payload
 roots=[os.path.realpath(os.path.expanduser(line)) for line in os.environ["PRODUCT_ROOTS"].splitlines() if line.strip()]
 LEGACY_MODE = os.environ["FAIL_CLOSED"] != "1"
 # Worker mode: roots holds the one write root, and under() answers "is this
-# guarded", which there means outside that root. /dev/ stays writable so
-# 2>/dev/null is not a denial. The raw substring heuristics below exist to
-# catch a mentioned product path; in worker mode a mention of the root is the
-# normal case, so mentions_root() is off there and only resolved paths count.
+# guarded", which there means outside that root. Four device files stay
+# writable so 2>/dev/null is not a denial; any other /dev path is guarded.
+# They are compared resolved, since /dev/stdout resolves to /dev/fd/1. The raw
+# substring heuristics below exist to catch a mentioned product path; in
+# worker mode a mention of the root is the normal case, so mentions_root() is
+# off there and only resolved paths count.
 WORKER_MODE = os.environ.get("WORKER_MODE") == "1"
-guarded_hits=[]
+WRITABLE_DEVICES = {os.path.realpath(p) for p in ("/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty")}
+# The outside path a worker-mode deny rests on, set only where the deny names
+# one; printed as a trailing OUTSIDE line for the denial text.
+deny_cause=[]
 if WORKER_MODE:
-    atexit.register(lambda: guarded_hits and print("OUTSIDE\t" + guarded_hits[-1]))
+    atexit.register(lambda: deny_cause and print("OUTSIDE\t" + deny_cause[-1]))
 def mentions_root(text):
     return not WORKER_MODE and any(root in text for root in roots)
 INTERPRETER_NAMES = {"bash", "sh", "dash", "ksh", "zsh", "python", "python3", "perl", "ruby", "node"}
@@ -408,10 +413,7 @@ def under(value):
     inside=any(value == root or value.startswith(root + os.sep) for root in roots)
     if not WORKER_MODE:
         return inside
-    if inside or value.startswith("/dev/"):
-        return False
-    guarded_hits.append(value)
-    return True
+    return not inside and value not in WRITABLE_DEVICES
 def contains_cd_token(value):
     return re.search(r"(^|[\s;&|()])cd([\s;&|()]|$)", value) is not None
 def redirects_into_root(value, base):
@@ -750,6 +752,7 @@ except OSError:
     pass
 for parts in segments:
     if not parts: continue
+    deny_cause.clear()
     name=os.path.basename(parts[0])
     if name == "cd":
         operands, output_targets, input_targets, had_redirection = strip_cd_redirections(parts)
@@ -865,16 +868,21 @@ for parts in segments:
                 raise SystemExit
     last_command_class=command_class
     target_hits=[]
+    redirect_hits=[]
+    write_hits=[]
     for i,token in enumerate(parts[1:],1):
         if token in {">",">>","2>","2>>","&>",">&",">|"}:
             if i+1 >= len(parts): print("DENY\t"+command_class+"\tredirection target is missing"); raise SystemExit
             target_hits.append(resolve(current_cwd, parts[i+1]))
+            redirect_hits.append(target_hits[-1])
         elif (token.startswith("/") or token.startswith("~/")) and name not in PLAIN_PATH_TARGET_EXEMPT:
             target_hits.append(resolve(current_cwd, token))
         elif token == "--output" and i + 1 < len(parts):
             target_hits.append(resolve(current_cwd, parts[i + 1]))
+            write_hits.append(target_hits[-1])
         elif token.startswith("--output="):
             target_hits.append(resolve(current_cwd, token.split("=", 1)[1]))
+            write_hits.append(target_hits[-1])
     git_dir_touches=bool(git_dir and under(git_dir))
     touches=under(target) or git_dir_touches or any(under(x) for x in target_hits)
     if "-exec" in parts and mentions_root(" ".join(parts)):
@@ -984,9 +992,22 @@ for parts in segments:
                     write_targets.append(token)
         for value in write_targets:
             target_hits.append(resolve(current_cwd, value))
+            write_hits.append(target_hits[-1])
         touches=under(target) or git_dir_touches or any(under(x) for x in target_hits)
     if not touches:
         continue
+    if WORKER_MODE:
+        # Name a path only where the deny below rests on it: a write target for
+        # a write-capable command, a redirect target for a redirection deny, and
+        # the touching path for a read-only-policy deny. A read operand outside
+        # the root is never named as the reason for a redirection deny.
+        if write_capable:
+            candidates=redirect_hits + write_hits + ([git_dir] if git_dir_touches else []) + [target]
+        elif any(token in {">",">>","2>","2>>","&>",">&",">|"} for token in parts):
+            candidates=redirect_hits
+        else:
+            candidates=[target] + target_hits
+        deny_cause[:]=[x for x in candidates if under(x)][:1]
     if write_capable and touches:
         print("DENY\t"+command_class+"\twrite-capable argument is not admitted")
         raise SystemExit
@@ -1056,8 +1077,8 @@ parser_status=$?
 if [ "$parser_status" -ne 0 ]; then
   blocked "cannot safely parse Bash command" "" unresolved_target
 fi
-# Worker mode appends one OUTSIDE<TAB>path line: the last resolved path the
-# parser found outside the write root, so the denial can name it.
+# Worker mode appends one OUTSIDE<TAB>path line only when the deny rests on a
+# path outside the write root, so the denial names that path and no other.
 outside_path=""
 case "$result" in
   *$'\n'OUTSIDE$'\t'*) outside_path=${result##*$'\n'OUTSIDE$'\t'}; result=${result%%$'\n'OUTSIDE$'\t'*};;
@@ -1070,8 +1091,8 @@ if [ "$decision" = DENY ]; then
   if [ "$reason" = "unparseable command" ] || [ "$reason" = "cd target cannot be resolved" ] || [ "$reason" = "heredoc body expansion" ] || [ "$reason" = "ansi-c quote" ]; then
     blocked "$reason" "$command_class" unresolved_target
   fi
-  if [ -n "$WORKER_ROOT" ]; then
-    reason="$reason: ${outside_path:-a target} is outside this worker's write root $WORKER_ROOT"
+  if [ -n "$WORKER_ROOT" ] && [ -n "$outside_path" ]; then
+    reason="$reason: $outside_path is outside this worker's write root $WORKER_ROOT"
   fi
   blocked "$reason" "$command_class" guarded_target
 fi

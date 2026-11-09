@@ -62,9 +62,10 @@ in the right place, not where it is:
 FIRST ACTION (report these three, and no absolute path):
 - in_expected_worktree: yes|no   # cwd contains the `.orca/worktrees/<repo>/<slug>` segment
 - is_master_checkout:   yes|no   # yes stops the contract immediately
-  The worktree is the worker's only write root, and a path outside it is never composed from a directory listing, whatever the verdict said at start.
 - branch:               `git branch --show-current`
 ```
+
+The worktree is the worker's only write root. Never compose a path outside the worktree from a directory listing, regardless of the start-of-session verdict.
 
 The placement report is a verdict, not a path. A worker's contract may name the exact
 workspace it must enter; the outward report uses the boolean above so a public record

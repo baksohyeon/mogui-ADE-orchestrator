@@ -1296,8 +1296,99 @@ PY
   awk '/^# 3\. terminal/{f=1} f&&/write_worker_settings "\$TASK"/{w=NR} f&&/CLAUDE_SETTINGS_FLAG=/{c=NR} f&&/orca terminal create/{t=NR; exit} END{exit !(w && c && t && w < t && c < t)}' "$dispatch" \
     || { echo "FAIL: step 3 must call write_worker_settings and set CLAUDE_SETTINGS_FLAG before orca terminal create" >&2; return 1; }
   echo "ok   : worker settings · step 3 writes the file and sets the flag before terminal create"
+
+  # Step 3 run end to end against a fake orca: a new claude pane is launched
+  # with --settings on this task's file; a reused claude pane (--terminal) gets
+  # no file and the wrapper says the write root is not enforced there.
+  local block step_fns=""
+  block=$(sed -n '/^# 3\. terminal/,/^# 3b\./p' "$dispatch")
+  [ -n "$block" ] || { echo "FAIL: could not extract the step-3 terminal block" >&2; return 1; }
+  fn=$(awk -v h="orca_json_read() {" '$0==h{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  step_fns="$fns$fn"
+  mkdir -p "$work/bin"
+  cat > "$work/bin/orca" <<'BIN'
+#!/bin/bash
+echo "$*" >> "$FAKE_CALLS"
+case "$1 $2" in
+  "terminal create") printf '{"ok":true,"result":{"terminal":{"handle":"term_new"}}}\n';;
+  "terminal wait") exit 0;;
+  *) exit 1;;
+esac
+BIN
+  chmod +x "$work/bin/orca"
+  run_step3() {  # terminal
+    rm -rf "$work/state/worker-settings"; : > "$work/calls"
+    {
+      echo 'set -u'
+      printf 'SCRIPTS_DIR=%q STATE_DIR=%q MODEL=claude-opus-5-5 RUNTIME=claude TASK=task_fake\n' "$(dirname "$dispatch")" "$work/state"
+      printf 'WORKTREE=%q TERMINAL=%q FAKE_CALLS=%q\n' "path:$work/worktree" "$1" "$work/calls"
+      echo 'export FAKE_CALLS'
+      printf '%s\n' "$step_fns" "$block"
+    } > "$work/step3.sh"
+    out=$(PATH="$work/bin:$PATH" bash "$work/step3.sh" 2>&1)
+    status=$?
+  }
+  run_step3 ""
+  if [ "$status" -ne 0 ] || [ ! -f "$work/state/worker-settings/task_fake.json" ] \
+      || ! grep -q -- "--settings $work/state/worker-settings/task_fake.json" "$work/calls" \
+      || printf '%s\n' "$out" | grep -q 'not enforced'; then
+    echo "FAIL: a new claude pane should be created with --settings on this task's file (status=$status)" >&2
+    printf '%s\n' "$out" >&2; cat "$work/calls" >&2
+    return 1
+  fi
+  echo "ok   : worker settings · a new claude pane launches with --settings on this task's file"
+  run_step3 term_reused
+  if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^write root: not enforced on a reused pane$' \
+      || [ -e "$work/state/worker-settings/task_fake.json" ] || grep -q 'terminal create' "$work/calls"; then
+    echo "FAIL: a reused claude pane should print 'write root: not enforced on a reused pane' and write no file (status=$status)" >&2
+    printf '%s\n' "$out" >&2; cat "$work/calls" >&2
+    return 1
+  fi
+  echo "ok   : worker settings · a reused claude pane prints 'write root: not enforced on a reused pane', no file written"
 )
 worker_settings_test "$dispatch" || exit 1
+
+# --- Feature: the approval marker file is checked at startup ----------------
+#
+# pane_classify_text reads approval-prompt-markers.txt on every pane read; a
+# missing or marker-less file used to drop the approval class silently. A copy
+# of dispatch run beside no file, then beside a comments-only file, must stop
+# with a loud error before doing anything else.
+approval_markers_startup_test() (
+  set +e
+  set -u
+  local dispatch="$1" work out status
+  work="${TMPDIR:-/tmp}/mogui-dispatch-approval-markers-test.$$"
+  mkdir -p "$work"
+  trap 'rm -rf "$work"' EXIT
+  cp "$dispatch" "$work/dispatch"
+  out=$(bash "$work/dispatch" 2>&1 </dev/null)
+  status=$?
+  if [ "$status" -ne 1 ] || ! printf '%s\n' "$out" | grep -q 'approval marker file is unreadable or holds no marker'; then
+    echo "FAIL: a missing approval marker file should stop dispatch with exit 1 and a clear error (status=$status)" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : approval markers · a missing marker file stops dispatch at startup, exit 1"
+  printf '# comments only\n\n' > "$work/approval-prompt-markers.txt"
+  out=$(bash "$work/dispatch" 2>&1 </dev/null)
+  status=$?
+  if [ "$status" -ne 1 ] || ! printf '%s\n' "$out" | grep -q 'approval marker file is unreadable or holds no marker'; then
+    echo "FAIL: a marker file with no marker should stop dispatch with exit 1 (status=$status)" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : approval markers · a marker file with no marker stops dispatch at startup, exit 1"
+  cp "$(dirname "$dispatch")/approval-prompt-markers.txt" "$work/approval-prompt-markers.txt"
+  out=$(bash "$work/dispatch" 2>&1 </dev/null)
+  if printf '%s\n' "$out" | grep -q 'approval marker file'; then
+    echo "FAIL: a readable marker file should pass the startup check" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : approval markers · the real marker file passes the startup check"
+)
+approval_markers_startup_test "$dispatch" || exit 1
 
 # --- Feature: codex start-screen check before inject -------------------------
 #
@@ -2699,4 +2790,4 @@ RULES
 )
 standing_rules_append_test "$dispatch" || exit 1
 
-echo "dispatch multi-vendor / check-only / state-dir-seam / contract-delivery / cursor-pretrust / claude-pretrust / claude-pretrust-call-site / claude-hook-trust-marker / fresh-claude-prompt-marker / delivery-result / codex-launch / worker-settings / codex-start-screen / codex-start-screen-wiring / codex-hooks-vet / codex-hooks-vet-wiring / standing-rules-missing-file / standing-rules-append regression tests passed"
+echo "dispatch multi-vendor / check-only / state-dir-seam / contract-delivery / cursor-pretrust / claude-pretrust / claude-pretrust-call-site / claude-hook-trust-marker / fresh-claude-prompt-marker / delivery-result / codex-launch / worker-settings / approval-markers / codex-start-screen / codex-start-screen-wiring / codex-hooks-vet / codex-hooks-vet-wiring / standing-rules-missing-file / standing-rules-append regression tests passed"

@@ -31,7 +31,9 @@ PS_COMMAND_OUTPUT = """33196 /bin/zsh /private/tmp/claude-501/0464cb11-aaaa-bbbb
 
 
 def test_recovery_all_steps_ok_with_active_track_checklist(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("MOGUI_SEAT_ROOT", str(tmp_path / "isolated-seat"))
+    isolated_seat = tmp_path / "isolated-seat"
+    isolated_seat.mkdir()
+    monkeypatch.setenv("MOGUI_SEAT_ROOT", str(isolated_seat))
     charter = _file(tmp_path, "charter.md", "# Charter\n")
     handoff = _file(tmp_path, "handoff.md", "## Role State\n\n" + ROLE_STATE_BLOCK + "\nBody\n")
     ledger_path = tmp_path / "workspace-ledger.jsonl"
@@ -245,7 +247,9 @@ def test_missing_ledger_path_marks_step1_skip(tmp_path: Path) -> None:
 def test_cli_outputs_valid_json(tmp_path: Path, monkeypatch) -> None:
     charter = _file(tmp_path, "charter.md", "# Charter\n")
     handoff = _file(tmp_path, "handoff.md", "## Role State\n\n" + ROLE_STATE_BLOCK + "\n")
-    monkeypatch.setenv("MOGUI_SEAT_ROOT", str(tmp_path / "isolated-seat"))
+    isolated_seat = tmp_path / "isolated-seat"
+    isolated_seat.mkdir()
+    monkeypatch.setenv("MOGUI_SEAT_ROOT", str(isolated_seat))
 
     result = subprocess.run(
         [

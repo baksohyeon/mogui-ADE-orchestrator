@@ -26,7 +26,9 @@ Unlock: explicit user instruction only
 def test_parses_role_state_from_handoff(tmp_path: Path, monkeypatch) -> None:
     charter = _file(tmp_path, "charter.md", "# Charter\n\n- Architecture\n")
     handoff = _file(tmp_path, "handoff.md", "## Role State\n\n" + ROLE_STATE_BLOCK + "\n")
-    monkeypatch.setenv("MOGUI_SEAT_ROOT", str(tmp_path / "isolated-seat"))
+    isolated_seat = tmp_path / "isolated-seat"
+    isolated_seat.mkdir()
+    monkeypatch.setenv("MOGUI_SEAT_ROOT", str(isolated_seat))
 
     result = bootstrap(BootstrapConfig(charter_path=charter, handoff_path=handoff))
 
@@ -71,7 +73,9 @@ def test_truncates_charter_to_budget_with_marker(tmp_path: Path) -> None:
 
 def test_missing_handoff_warns_and_returns_l0_only(tmp_path: Path, monkeypatch) -> None:
     charter = _file(tmp_path, "charter.md", "# Charter\n")
-    monkeypatch.setenv("MOGUI_SEAT_ROOT", str(tmp_path / "isolated-seat"))
+    isolated_seat = tmp_path / "isolated-seat"
+    isolated_seat.mkdir()
+    monkeypatch.setenv("MOGUI_SEAT_ROOT", str(isolated_seat))
 
     result = bootstrap(
         BootstrapConfig(charter_path=charter, handoff_path=tmp_path / "missing.md")
@@ -271,10 +275,12 @@ def test_mogui_seat_root_overrides_cwd_against_a_real_peer(
 
     # A real process, not a mock: argv[0] "claude" so `_is_claude_command`
     # matches, cwd `inner` so it collides with the worktree root exactly as
-    # a sibling agent would.
-    decoy = subprocess.Popen(["claude", "5"], executable="/bin/sleep", cwd=str(inner))
+    # a sibling agent would. Sleeps 60s so the two process-discovery passes
+    # below cannot outlast it and turn a real peer into a vanished one.
+    decoy = subprocess.Popen(["claude", "60"], executable="/bin/sleep", cwd=str(inner))
     try:
         monkeypatch.chdir(inner)
+        monkeypatch.delenv("MOGUI_SEAT_ROOT", raising=False)
 
         # Sanity: with no override, the live peer is flagged. This is the
         # measured production leak, not a mock standing in for it.
@@ -283,6 +289,7 @@ def test_mogui_seat_root_overrides_cwd_against_a_real_peer(
 
         # The fix: an explicit seat elsewhere is honored over the live cwd,
         # so the same real peer no longer matches.
+        isolated_seat.mkdir()
         monkeypatch.setenv("MOGUI_SEAT_ROOT", str(isolated_seat))
         result = bootstrap(BootstrapConfig(charter_path=charter))
         assert result.warnings == []
@@ -295,7 +302,9 @@ def test_mogui_seat_root_overrides_cwd_against_a_real_peer(
 def test_cli_json_outputs_role_state(tmp_path: Path, monkeypatch) -> None:
     charter = _file(tmp_path, "charter.md", "# Charter\n")
     handoff = _file(tmp_path, "handoff.md", "## Role State\n\n" + ROLE_STATE_BLOCK + "\n")
-    monkeypatch.setenv("MOGUI_SEAT_ROOT", str(tmp_path / "isolated-seat"))
+    isolated_seat = tmp_path / "isolated-seat"
+    isolated_seat.mkdir()
+    monkeypatch.setenv("MOGUI_SEAT_ROOT", str(isolated_seat))
 
     result = subprocess.run(
         [

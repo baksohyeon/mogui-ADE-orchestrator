@@ -283,7 +283,12 @@ def _resolve_seat_root(seat_root: Optional[Union[str, Path]]) -> str:
         return os.path.realpath(str(seat_root))
     override = os.environ.get(SEAT_ROOT_ENV_VAR)
     if override:
-        return os.path.realpath(os.path.expanduser(override))
+        resolved = os.path.realpath(os.path.expanduser(override))
+        if not os.path.isdir(resolved):
+            raise BootstrapError(
+                SEAT_ROOT_ENV_VAR + " is not an existing directory: " + override
+            )
+        return resolved
     return os.path.realpath(os.getcwd())
 
 

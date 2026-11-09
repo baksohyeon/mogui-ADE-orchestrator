@@ -1316,11 +1316,11 @@ case "$1 $2" in
 esac
 BIN
   chmod +x "$work/bin/orca"
-  run_step3() {  # terminal
+  run_step3() {  # terminal [state_dir]
     rm -rf "$work/state/worker-settings"; : > "$work/calls"
     {
       echo 'set -u'
-      printf 'SCRIPTS_DIR=%q STATE_DIR=%q MODEL=claude-opus-5-5 RUNTIME=claude TASK=task_fake\n' "$(dirname "$dispatch")" "$work/state"
+      printf 'SCRIPTS_DIR=%q STATE_DIR=%q MODEL=claude-opus-5-5 RUNTIME=claude TASK=task_fake\n' "$(dirname "$dispatch")" "${2:-$work/state}"
       printf 'WORKTREE=%q TERMINAL=%q FAKE_CALLS=%q\n' "path:$work/worktree" "$1" "$work/calls"
       echo 'export FAKE_CALLS'
       printf '%s\n' "$step_fns" "$block"
@@ -1345,6 +1345,18 @@ BIN
     return 1
   fi
   echo "ok   : worker settings · a reused claude pane prints 'write root: not enforced on a reused pane', no file written"
+  # A settings write that fails must stop step 3 before any pane exists, or a
+  # claude pane would launch with --settings ''. The state dir sits under a
+  # regular file, so mkdir fails even for root.
+  : > "$work/not-a-dir"
+  run_step3 "" "$work/not-a-dir/state"
+  if [ "$status" -ne 3 ] || grep -q 'terminal create' "$work/calls" \
+      || ! printf '%s\n' "$out" | grep -q 'cannot create worker settings directory'; then
+    echo "FAIL: a failed settings write should exit 3 with no terminal create (status=$status)" >&2
+    printf '%s\n' "$out" >&2; cat "$work/calls" >&2
+    return 1
+  fi
+  echo "ok   : worker settings · a failed settings write exits 3 before terminal create"
 )
 worker_settings_test "$dispatch" || exit 1
 

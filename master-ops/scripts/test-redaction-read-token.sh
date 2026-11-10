@@ -152,10 +152,10 @@ if [ "${SCAN_EXIT}" -eq 1 ]; then
     echo "       got: $SCAN_OUTPUT"
   fi
 
-  if printf '%s\n' "${SCAN_OUTPUT}" | grep -q "${ASSIGNMENT_FILE}"; then
-    ok "the token written as a quoted key assignment is still detected"
+  if printf '%s\n' "${SCAN_OUTPUT}" | grep -F "${ASSIGNMENT_FILE}" | grep -q '\[assignment_secret\]'; then
+    ok "the token written as a quoted key assignment is still detected by rule assignment_secret"
   else
-    fail "the token written as a quoted key assignment was not detected"
+    fail "the token written as a quoted key assignment was not detected by rule assignment_secret specifically"
     echo "       got: $SCAN_OUTPUT"
   fi
 else

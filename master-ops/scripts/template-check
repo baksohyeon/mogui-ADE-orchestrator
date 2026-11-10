@@ -29,6 +29,11 @@ and never `unknown_present`. Those present on the install are reported under
 `instance_owned`, which never fails the check. `.git/` and `.beads/` are not
 walked at all (tracker and VCS internals), so `.beads/` contents never appear
 under `instance_owned` even though the manifest lists `.beads/`.
+
+`config/gitleaks.toml` is itself instance-owned (the template never writes
+it), so a missing read-proof-token allowlist entry there is never an error:
+it is reported under `advisories`, which never fails the check, with the
+exact TOML block to paste.
 """
 
 from __future__ import annotations
@@ -37,6 +42,7 @@ import argparse
 import json
 import re
 import sys
+import tomllib
 from datetime import date
 from pathlib import Path
 from typing import Callable
@@ -67,6 +73,54 @@ TEMPLATE_SIDE_DIRS = frozenset(
 def _die(msg: str, code: int = 2) -> int:
     sys.stderr.write(f"template-check: {msg}\n")
     return code
+
+
+READ_TOKEN_REGEX_TARGET = "secret"
+READ_TOKEN_REGEX = r"^ack-[0-9a-f]{12}$"
+
+READ_TOKEN_ALLOWLIST_BLOCK = """\
+[[allowlists]]
+# Read-proof acknowledgement tokens (ack-<12 hex>) are not secrets; this
+# entry keeps the redaction scan from flagging them. `regexTarget = "secret"`
+# with an anchored regex clears only a secret that IS the token, never a real
+# secret that merely contains the token's shape as a substring.
+description = "read-proof acknowledgement token (ack-<12 hex>) is not a secret"
+regexTarget = "secret"
+regexes = [
+  '''^ack-[0-9a-f]{12}$''',
+]
+"""
+
+
+def gitleaks_read_token_advisories(ops_root: Path) -> list[str]:
+    """Advise (never fail) when the install's gitleaks.toml lacks the
+    read-proof-token allowlist entry: `regexTarget = "secret"` with the
+    anchored regex `^ack-[0-9a-f]{12}$` in a `[[allowlists]]` entry.
+
+    config/gitleaks.toml is seat-owned; the template never writes it, so a
+    missing entry here is advice to paste, not drift to report under
+    absent_required or unknown_present.
+    """
+    path = ops_root / "config" / "gitleaks.toml"
+    if not path.is_file():
+        return []
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return []
+    for entry in data.get("allowlists", []):
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("regexTarget") != READ_TOKEN_REGEX_TARGET:
+            continue
+        if READ_TOKEN_REGEX in entry.get("regexes", []):
+            return []
+    return [
+        "config/gitleaks.toml has no [[allowlists]] entry with "
+        f'regexTarget = "{READ_TOKEN_REGEX_TARGET}" and regex {READ_TOKEN_REGEX} '
+        "(read-proof acknowledgement tokens will be flagged as secrets). "
+        f"Paste:\n{READ_TOKEN_ALLOWLIST_BLOCK}"
+    ]
 
 
 def resolve_ops_root(ops: Path | None, script_path: Path) -> Path | None:
@@ -328,7 +382,9 @@ def build_report(
         "adoption_notes": [],
         "questions_unanswered": [],
         "invalid_paths": [],
+        "advisories": [],
     }
+    report["advisories"].extend(gitleaks_read_token_advisories(ops_root))
 
     manifest_path = ops_root / "MANIFEST.json"
     manifest, err = load_manifest(manifest_path)
@@ -491,6 +547,11 @@ def format_human(report: dict) -> str:
         lines.append("questions_unanswered:")
         for q in unanswered:
             lines.append(f"  - {q}")
+    advisories = report.get("advisories") or []
+    if advisories:
+        lines.append("advisories:")
+        for a in advisories:
+            lines.append(f"  - {a}")
     return "\n".join(lines) + "\n"
 
 

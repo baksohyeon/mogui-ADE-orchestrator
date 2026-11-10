@@ -1147,7 +1147,20 @@ def test_template_check_reads_instance_owned_from_install_manifest(tmp_path: Pat
 
 
 @pytest.mark.parametrize(
-    "entry", ["./config/", "config//", "a//b", "a\\b", "", ".", "a/./b", "../x", "/abs", "/"]
+    "entry",
+    [
+        "./config/",
+        "config//",
+        "a//b",
+        "a\\b",
+        "",
+        ".",
+        "a/./b",
+        "../x",
+        "/abs",
+        "/",
+        "a\x00b",
+    ],
 )
 def test_instance_owned_rejects_non_normalized_entries(entry: str):
     sys.path.insert(0, str(SKELETON / "scripts"))

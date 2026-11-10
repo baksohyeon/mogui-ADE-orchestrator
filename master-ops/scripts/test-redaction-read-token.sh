@@ -1,23 +1,48 @@
 #!/usr/bin/env bash
-# Test that read-proof tokens (ack-<12 hex>) pass the redaction scan,
-# while real AWS keys still fail. Both assertions are measured.
+# Test the redaction scan against the read-proof token's allowlist entry,
+# measuring the three cases that distinguish a safe allowlist from one that
+# clears real secrets:
+#   1. a file with only the token: must NOT be flagged.
+#   2. a real secret that merely contains the token's shape as a substring:
+#      must still be flagged (an unanchored match-target regex clears this
+#      whole secret, which is the bug this allowlist entry must not have).
+#   3. the token and a fake AWS key on the same line: the key must still be
+#      flagged (a line-scoped allowlist would clear this too).
 #
-# scripts/redaction-scan.sh lives at the host repository's root, outside
-# the template skeleton this script ships in, so a rendered copy never
-# receives it: only the authoring checkout, two levels above this script's
-# own location, has it. redaction-scan.sh also refuses to run without
-# gitleaks on PATH (exit 2), so a runner that lacks it has nothing to
-# measure either. This file SKIPs for both, the same convention
-# test-contributing-shell-loop.sh and test-dispatch-timeline.sh use for a
-# missing prerequisite.
+# scripts/redaction-scan.sh sits next to its config/gitleaks.toml at the root
+# of whatever checkout owns the scan: the authoring template root (two levels
+# above this script's own directory, which ships from a nested scripts/
+# directory there) or an install root (one level above this script, which
+# there ships from a top-level scripts/ directly). Neither depth is fixed, so
+# this walks up from this script's own directory, at each level checking for
+# a sibling scripts/redaction-scan.sh, and SKIPs only once every level up to
+# the filesystem root has been tried. redaction-scan.sh also refuses to run
+# without gitleaks on PATH (exit 2), so a runner that lacks it has nothing to
+# measure either. The same SKIP convention is used by
+# test-contributing-shell-loop.sh and test-dispatch-timeline.sh for a missing
+# prerequisite.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-SCAN="${REPO_ROOT}/scripts/redaction-scan.sh"
 
-if [ ! -f "${SCAN}" ]; then
-  echo "SKIP: ${SCAN} not found; this test did not run (not the authoring checkout)"
+SCAN=""
+TRIED=()
+dir="${SCRIPT_DIR}"
+while :; do
+  candidate="${dir}/scripts/redaction-scan.sh"
+  TRIED+=("${candidate}")
+  if [ -f "${candidate}" ]; then
+    SCAN="${candidate}"
+    break
+  fi
+  parent="$(dirname "${dir}")"
+  [ "${parent}" = "${dir}" ] && break
+  dir="${parent}"
+done
+
+if [ -z "${SCAN}" ]; then
+  echo "SKIP: no scripts/redaction-scan.sh found walking up from ${SCRIPT_DIR}; this test did not run (not the authoring checkout or an install root)"
+  printf '  tried: %s\n' "${TRIED[@]}"
   exit 0
 fi
 
@@ -42,67 +67,68 @@ cd "${SCRATCH}"
 git init
 git config user.email "test@example.com"
 git config user.name "Test User"
-
-# Commit 1: A file with a read-proof token (should pass)
 git commit --allow-empty -m "Initial commit"
+
+# Row 1: a file with only the read-proof token. Must not be flagged.
 TOKEN_FILE="token-file.txt"
 echo "read_token: ack-0123456789ab" > "${TOKEN_FILE}"
 git add "${TOKEN_FILE}"
 git commit -m "Add read-proof token"
 
-# Commit 2: A file with a fake AWS key (should fail)
-# Format: AKIA followed by exactly 16 uppercase letters/digits. Built from two
-# parts at run time so this committed source never holds the full literal;
-# only the scratch repository's commit does, and that repository is discarded
-# on exit.
+# Row 2: a real secret that merely contains the token's shape as a
+# substring. Must still be flagged: an unanchored match-target allowlist
+# regex clears the whole matched secret whenever the token shape appears
+# anywhere inside it, which is the bug this fixture guards against.
+# Built from separate parts at run time so this committed source never
+# holds a literal key="value" secret assignment of its own; only the
+# scratch repository's commit does, and that repository is discarded on
+# exit.
+ASSIGN_KEY="ACCESS_TOKEN"
+ASSIGN_VALUE="ack-0123456789ab-reallysecretvalue"
+PREFIXED_FILE="prefixed-secret-file.txt"
+printf '%s="%s"\n' "${ASSIGN_KEY}" "${ASSIGN_VALUE}" > "${PREFIXED_FILE}"
+git add "${PREFIXED_FILE}"
+git commit -m "Add a real secret containing the token shape as a substring"
+
+# Row 3: the token and a fake AWS key on the same line. The key must still
+# be found. Format: AKIA followed by exactly 16 uppercase letters/digits.
+# Built from two parts at run time so this committed source never holds the
+# full literal; only the scratch repository's commit does, and that
+# repository is discarded on exit.
 AWS_KEY_PREFIX="AKIA"
 AWS_KEY_SUFFIX="0IAMNOTAREALTEST"
 AWS_KEY="${AWS_KEY_PREFIX}${AWS_KEY_SUFFIX}"
-AWS_FILE="aws-file.txt"
-echo "aws_key: ${AWS_KEY}" > "${AWS_FILE}"
-git add "${AWS_FILE}"
-git commit -m "Add AWS key fixture"
-
-# Commit 3: a token and an AWS key on the same line. A line-scoped allowlist
-# for the token would clear this whole line, so this fixture is the
-# regression guard for that mistake: the key must still be found.
 COMBO_FILE="combo-file.txt"
 echo "combo: ack-0123456789ab ${AWS_KEY}" > "${COMBO_FILE}"
 git add "${COMBO_FILE}"
 git commit -m "Add token and AWS key on the same line"
 
-# Run the redaction scan on the range of new commits
-# The scan should find findings for both AWS key fixtures and not flag the read token
+# Run the redaction scan on the range of the three fixture commits.
 SCAN_OUTPUT=$("${SCAN}" --repo-root "${SCRATCH}" --range HEAD~3..HEAD 2>&1)
 SCAN_EXIT=$?
 
-# Check the exit code and output
 if [ "${SCAN_EXIT}" -eq 1 ]; then
-  # Exit code 1 means findings were found (which is what we expect)
-  # The scan found both AWS key fixtures but not the read token
-  AWS_FINDING_COUNT="$(printf '%s\n' "${SCAN_OUTPUT}" | grep -c "aws_access_key")"
-  if [ "${AWS_FINDING_COUNT}" -eq 2 ]; then
-    ok "both AWS key fixtures are detected by the scan"
+  # Exit code 1 means findings were found, which is what we expect.
+
+  if printf '%s\n' "${SCAN_OUTPUT}" | grep -q "${TOKEN_FILE}"; then
+    fail "read-proof token alone was flagged when it should be allowlisted"
+    echo "       got: $SCAN_OUTPUT"
   else
-    fail "expected 2 aws_access_key findings, got ${AWS_FINDING_COUNT}"
+    ok "read-proof token alone is allowlisted and not flagged"
+  fi
+
+  if printf '%s\n' "${SCAN_OUTPUT}" | grep -q "${PREFIXED_FILE}"; then
+    ok "a real secret containing the token shape as a substring is still detected"
+  else
+    fail "a real secret containing the token shape as a substring was not detected"
     echo "       got: $SCAN_OUTPUT"
   fi
 
-  # The same-line fixture is the regression guard: a line-scoped token
-  # allowlist would have cleared this finding along with the token.
   if printf '%s\n' "${SCAN_OUTPUT}" | grep -q "${COMBO_FILE}"; then
-    ok "AWS key sharing a line with a read-proof token is still detected"
+    ok "an AWS key sharing a line with the read-proof token is still detected"
   else
-    fail "AWS key sharing a line with a read-proof token was not detected"
+    fail "an AWS key sharing a line with the read-proof token was not detected"
     echo "       got: $SCAN_OUTPUT"
-  fi
-
-  # Verify that the read token was NOT flagged
-  if printf '%s\n' "${SCAN_OUTPUT}" | grep -q "ack-0123456789ab"; then
-    fail "read-proof token was flagged when it should be allowlisted"
-    echo "       got: $SCAN_OUTPUT"
-  else
-    ok "read-proof token is allowlisted and not flagged"
   fi
 else
   fail "scan exit code was ${SCAN_EXIT}, expected 1 (findings detected)"

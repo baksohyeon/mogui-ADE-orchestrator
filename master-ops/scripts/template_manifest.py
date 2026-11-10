@@ -22,6 +22,9 @@ def _is_normalized(entry: object) -> bool:
     """A relative posix path with no empty, "." or ".." segment; a trailing "/" marks a prefix."""
     if not isinstance(entry, str) or not entry or "\\" in entry or entry.startswith("/"):
         return False
+    # Reject null bytes the same way template-apply's normalize_rel does.
+    if "\x00" in entry:
+        return False
     body = entry[:-1] if entry.endswith("/") else entry
     return all(part not in ("", ".", "..") for part in body.split("/"))
 

@@ -268,4 +268,54 @@ else
 fi
 rm -rf "$mem"
 
+# Case 19: a fence opener/closer indented by up to three spaces is still a
+# real fence, so a [[name]] inside it stays hidden.
+mem="$(mktemp -d)"
+printf '%s\n' \
+  '   ```' \
+  '   [[ignored-inside-three-space-fence]]' \
+  '   ```' \
+  '[[real-after-three-space-fence]]' \
+  >"$mem/a.md"
+out=$("$SCRIPT" --memory-dir "$mem" 2>&1); rc=$?
+expect 0 "$rc" "a three-space-indented fence still hides its contents" "$out"
+expect_contains "$out" "not-yet-written (1)" "only the link after the fence is collected" "$out"
+expect_contains "$out" "real-after-three-space-fence" "the post-fence link is reported" "$out"
+if contains "$out" "ignored-inside-three-space-fence"; then
+  echo "  FAIL: a link inside a three-space-indented fence must not be collected: $out"
+  F=1
+else
+  echo "  ok:   link inside the three-space-indented fence stays ignored"
+fi
+rm -rf "$mem"
+
+# Case 20: a line indented by four or more spaces is a CommonMark indented
+# code block, not a fence opener, so it must not swallow the prose links
+# that follow it.
+mem="$(mktemp -d)"
+printf '%s\n' \
+  '    ```' \
+  '[[real-after-four-space-pseudo-fence]]' \
+  >"$mem/a.md"
+out=$("$SCRIPT" --memory-dir "$mem" 2>&1); rc=$?
+expect 0 "$rc" "a four-space-indented line is not treated as a fence" "$out"
+expect_contains "$out" "not-yet-written (1)" "the link after the pseudo-fence is still collected" "$out"
+expect_contains "$out" "real-after-four-space-pseudo-fence" "the link after the pseudo-fence is reported" "$out"
+rm -rf "$mem"
+
+# Case 21: a backtick fence opener whose info string itself contains a
+# backtick is not a valid CommonMark opener (only a tilde fence's info
+# string may contain a backtick); it must not hide the links that follow
+# it (cubic review on PR #239).
+mem="$(mktemp -d)"
+printf '%s\n' \
+  '``` `oops`' \
+  '[[real-after-backtick-info-fence]]' \
+  >"$mem/a.md"
+out=$("$SCRIPT" --memory-dir "$mem" 2>&1); rc=$?
+expect 0 "$rc" "a backtick-info-string opener is not treated as a fence" "$out"
+expect_contains "$out" "not-yet-written (1)" "the link after the rejected opener is still collected" "$out"
+expect_contains "$out" "real-after-backtick-info-fence" "the link after the rejected opener is reported" "$out"
+rm -rf "$mem"
+
 [ "$F" -eq 0 ] && exit 0 || exit 1

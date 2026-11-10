@@ -150,6 +150,9 @@ the deny rests on a path outside the root (a write target, a redirect
 target, or the touching path of a read-only-policy deny), the denial text
 names that path and the root; otherwise it carries no path, so a read
 operand is never named as the cause. A relative or empty-after-resolution root fails closed.
+An empty or unset `MOGUI_WORKER_WRITE_ROOT` is not this failure: it means master mode,
+not a refusal, and a newly created Claude pane gets a non-empty, absolute path; reused panes and
+other runtimes are not covered by this settings file.
 
 What it leaves out, by design or as a known gap:
 

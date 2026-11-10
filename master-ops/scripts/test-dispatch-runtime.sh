@@ -1194,7 +1194,7 @@ codex_launch_flags_test() (
     } > "$outfile"
   }
 
-  want='codex --model gpt-5.5 -c '"'"'model_reasoning_effort="xhigh"'"'"' -c check_for_update_on_startup=false -c '"'"'notice.model_migrations={"gpt-5.5"="gpt-6.1-sol"}'"'"' -s workspace-write'
+  want='codex --model gpt-5.5 -c '"'"'model_reasoning_effort="xhigh"'"'"' -c check_for_update_on_startup=false -c '"'"'notice.model_migrations={"gpt-5.5"="gpt-6.1-sol"}'"'"' -s workspace-write -c sandbox_workspace_write.network_access=true'
 
   script_file="$work/run.sh"
   write_script "$script_file" "$runtime_command_fn"
@@ -1205,7 +1205,28 @@ codex_launch_flags_test() (
     echo "  want '$want'" >&2
     return 1
   fi
-  echo "ok   : codex launch carries --model, reasoning effort, update-check off, the migration ack, and -s workspace-write · rc=0"
+  echo "ok   : codex launch carries --model, reasoning effort, update-check off, the migration ack, -s workspace-write, and sandbox_workspace_write.network_access=true · rc=0"
+
+  # Negative: with the bypass flag set, the launch must carry no network_access key
+  # (mgm-5r9a) — the bypass flag already drops the sandbox, so the key would be
+  # redundant and would mask a sandboxed worker thinking it is bypassed.
+  script_file="$work/run-bypass.sh"
+  {
+    echo 'set -u'
+    printf '%s\n' "$vars"
+    printf '%s\n' "$shell_quote_fn"
+    printf '%s\n' "$runtime_command_fn"
+    echo 'MODEL=gpt-5.5'
+    echo "CODEX_BYPASS_FLAG=' --dangerously-bypass-approvals-and-sandbox'"
+    echo 'runtime_command codex'
+  } > "$script_file"
+  got=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] || printf '%s\n' "$got" | grep -q 'network_access'; then
+    echo "FAIL: bypass-flag codex launch carries a network_access key: '$got' (status=$status)" >&2
+    return 1
+  fi
+  echo "ok   : bypass-flag codex launch carries no sandbox_workspace_write.network_access key · rc=0"
 
   # Failability: dropping check_for_update_on_startup=false must break the exact-string match.
   mutant_fn=${runtime_command_fn/' -c check_for_update_on_startup=false'/}

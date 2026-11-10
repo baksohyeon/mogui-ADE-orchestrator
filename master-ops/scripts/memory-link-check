@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 
 LINK_RE = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]*)?\]\]")
-FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+FENCE_RE = re.compile(r"^ {0,3}(`{3,}(?![^`]*`)|~{3,})")
 INLINE_CODE_RE = re.compile(r"``.*?``|`.*?`", re.DOTALL)
 
 

@@ -312,7 +312,7 @@ if printf '%s' "$no_workers_out" | grep -qi "nothing left"; then
 fi
 
 mutant_list="$work/worker-wait-mutant-empty-list"
-sed "s/if not isinstance(result, dict) or \"workers\" not in result:/if False:/" "$SCRIPT" > "$mutant_list"
+sed "s/if not isinstance(result, dict) or not isinstance(result.get(\"workers\"), list):/if False:/" "$SCRIPT" > "$mutant_list"
 if cmp -s "$SCRIPT" "$mutant_list"; then
   fail "failability: malformed-list sed pattern did not match the script"
 fi
@@ -330,6 +330,55 @@ if [ "$restored_list_rc" -ne 0 ] && printf '%s' "$restored_list_out" | grep -q "
   ok "restored: unmutated script still raises on a missing workers key"
 else
   fail "restored: unmutated script should still exit non-zero naming the missing workers key"
+fi
+
+# --- Case 6: a `workers` key present but null (not a list) is the same
+# malformed-list error, not an empty run (cubic review on PR #239).
+cat > "$work/orca-null-workers" <<'EOF'
+#!/usr/bin/env bash
+case "$1 $2" in
+  "orchestration worker-list") echo '{"ok":true,"result":{"workers":null}}' ;;
+  "terminal list")
+    if printf '%s\n' "$@" | grep -q -- '--json'; then echo '{"ok":true,"result":{"terminals":[]}}'; fi ;;
+  *) echo "{}" ;;
+esac
+EOF
+chmod +x "$work/orca-null-workers"
+mkdir -p "$work/null-workers-bin"
+cp "$work/orca-null-workers" "$work/null-workers-bin/orca"
+cp "$work/ps" "$work/null-workers-bin/ps"
+printf '{"job_id": "ctx_none2", "worker_pid": "9999", "pane": "term_none2"}\n' > "$work/ledger_null_workers.jsonl"
+
+null_workers_out=$(PATH="$work/null-workers-bin:$PATH" HOME="$work/home" "$SCRIPT" --once --json --run run_x --ledger "$work/ledger_null_workers.jsonl" 2>&1)
+null_workers_rc=$?
+if [ "$null_workers_rc" -ne 0 ] && printf '%s' "$null_workers_out" | grep -q "no 'workers' key"; then
+  ok "malformed worker-list result ({\"workers\":null}): exits non-zero naming the malformed workers value"
+else
+  fail "malformed worker-list result ({\"workers\":null}): expected a non-zero exit naming the malformed workers value, got exit $null_workers_rc: $null_workers_out"
+fi
+if printf '%s' "$null_workers_out" | grep -qi "nothing left"; then
+  fail "malformed worker-list result ({\"workers\":null}): must not be reported as nothing left to do"
+fi
+
+mutant_null="$work/worker-wait-mutant-null-list"
+sed "s/if not isinstance(result, dict) or not isinstance(result.get(\"workers\"), list):/if not isinstance(result, dict) or \"workers\" not in result:/" "$SCRIPT" > "$mutant_null"
+if cmp -s "$SCRIPT" "$mutant_null"; then
+  fail "failability: null-workers sed pattern did not match the script"
+fi
+chmod +x "$mutant_null"
+mutant_null_out=$(PATH="$work/null-workers-bin:$PATH" HOME="$work/home" "$mutant_null" --once --json --run run_x --ledger "$work/ledger_null_workers.jsonl" 2>&1)
+mutant_null_rc=$?
+if [ "$mutant_null_rc" -eq 0 ]; then
+  ok "failability: dropping the list-type check reports exit 0 again on {\"workers\":null}"
+else
+  fail "failability: null-workers mutant did not change the exit code (got $mutant_null_rc, want 0)"
+fi
+restored_null_out=$(PATH="$work/null-workers-bin:$PATH" HOME="$work/home" "$SCRIPT" --once --json --run run_x --ledger "$work/ledger_null_workers.jsonl" 2>&1)
+restored_null_rc=$?
+if [ "$restored_null_rc" -ne 0 ] && printf '%s' "$restored_null_out" | grep -q "no 'workers' key"; then
+  ok "restored: unmutated script still raises on {\"workers\":null}"
+else
+  fail "restored: unmutated script should still exit non-zero on {\"workers\":null}"
 fi
 
 [ "$FAILED" -eq 0 ] && { echo "worker-wait: all checks passed"; exit 0; }

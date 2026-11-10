@@ -303,4 +303,19 @@ expect_contains "$out" "not-yet-written (1)" "the link after the pseudo-fence is
 expect_contains "$out" "real-after-four-space-pseudo-fence" "the link after the pseudo-fence is reported" "$out"
 rm -rf "$mem"
 
+# Case 21: a backtick fence opener whose info string itself contains a
+# backtick is not a valid CommonMark opener (only a tilde fence's info
+# string may contain a backtick); it must not hide the links that follow
+# it (cubic review on PR #239).
+mem="$(mktemp -d)"
+printf '%s\n' \
+  '``` `oops`' \
+  '[[real-after-backtick-info-fence]]' \
+  >"$mem/a.md"
+out=$("$SCRIPT" --memory-dir "$mem" 2>&1); rc=$?
+expect 0 "$rc" "a backtick-info-string opener is not treated as a fence" "$out"
+expect_contains "$out" "not-yet-written (1)" "the link after the rejected opener is still collected" "$out"
+expect_contains "$out" "real-after-backtick-info-fence" "the link after the rejected opener is reported" "$out"
+rm -rf "$mem"
+
 [ "$F" -eq 0 ] && exit 0 || exit 1

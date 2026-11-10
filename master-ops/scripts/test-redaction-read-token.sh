@@ -1,13 +1,20 @@
 #!/usr/bin/env bash
 # Test the redaction scan against the read-proof token's allowlist entry,
-# measuring the three cases that distinguish a safe allowlist from one that
+# measuring the four cases that distinguish a safe allowlist from one that
 # clears real secrets:
 #   1. a file with only the token: must NOT be flagged.
 #   2. a real secret that merely contains the token's shape as a substring:
 #      must still be flagged (an unanchored match-target regex clears this
 #      whole secret, which is the bug this allowlist entry must not have).
 #   3. the token and a fake AWS key on the same line: the key must still be
-#      flagged (a line-scoped allowlist would clear this too).
+#      flagged, specifically by the aws_access_key rule (a line-scoped
+#      allowlist, or a check that accepts any finding at all, would miss
+#      a regression where the AWS key itself stops being caught).
+#   4. the token written as a quoted key assignment (access_token = "ack-...")
+#      must still be flagged: the assignment rule's secret is the whole
+#      assignment, not the bare token, so the allowlist's anchored regex
+#      does not clear it. This is intended: a token belongs only in the
+#      worker's completion message, never in a committed file.
 #
 # scripts/redaction-scan.sh sits next to its config/gitleaks.toml at the root
 # of whatever checkout owns the scan: the authoring template root (two levels
@@ -103,8 +110,22 @@ echo "combo: ack-0123456789ab ${AWS_KEY}" > "${COMBO_FILE}"
 git add "${COMBO_FILE}"
 git commit -m "Add token and AWS key on the same line"
 
-# Run the redaction scan on the range of the three fixture commits.
-SCAN_OUTPUT=$("${SCAN}" --repo-root "${SCRATCH}" --range HEAD~3..HEAD 2>&1)
+# Row 4: the token written as a quoted key assignment. Must still be
+# flagged: config/gitleaks.toml's assignment_secret rule has no capture
+# group, so the matched secret is the whole assignment, and the read-token
+# allowlist's anchored regex only clears a secret that IS the bare token.
+# Built from separate parts at run time for the same reason as row 2: this
+# committed source must never hold a literal key="value" secret assignment
+# of its own.
+ASSIGN2_KEY="access_token"
+ASSIGN2_VALUE="ack-0123456789ab"
+ASSIGNMENT_FILE="quoted-assignment-file.txt"
+printf '%s = "%s"\n' "${ASSIGN2_KEY}" "${ASSIGN2_VALUE}" > "${ASSIGNMENT_FILE}"
+git add "${ASSIGNMENT_FILE}"
+git commit -m "Add the token as a quoted key assignment"
+
+# Run the redaction scan on the range of the four fixture commits.
+SCAN_OUTPUT=$("${SCAN}" --repo-root "${SCRATCH}" --range HEAD~4..HEAD 2>&1)
 SCAN_EXIT=$?
 
 if [ "${SCAN_EXIT}" -eq 1 ]; then
@@ -124,10 +145,17 @@ if [ "${SCAN_EXIT}" -eq 1 ]; then
     echo "       got: $SCAN_OUTPUT"
   fi
 
-  if printf '%s\n' "${SCAN_OUTPUT}" | grep -q "${COMBO_FILE}"; then
-    ok "an AWS key sharing a line with the read-proof token is still detected"
+  if printf '%s\n' "${SCAN_OUTPUT}" | grep -F "${COMBO_FILE}" | grep -q '\[aws_access_key\]'; then
+    ok "an AWS key sharing a line with the read-proof token is still detected by rule aws_access_key"
   else
-    fail "an AWS key sharing a line with the read-proof token was not detected"
+    fail "an AWS key sharing a line with the read-proof token was not detected by rule aws_access_key specifically"
+    echo "       got: $SCAN_OUTPUT"
+  fi
+
+  if printf '%s\n' "${SCAN_OUTPUT}" | grep -q "${ASSIGNMENT_FILE}"; then
+    ok "the token written as a quoted key assignment is still detected"
+  else
+    fail "the token written as a quoted key assignment was not detected"
     echo "       got: $SCAN_OUTPUT"
   fi
 else

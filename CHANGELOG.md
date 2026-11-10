@@ -20,6 +20,12 @@ you build on it.
 
 ## [Unreleased]
 
+## [0.5.304] - 2026-11-10
+
+### Changed
+
+- Tests cover the dispatch pane classifier's `approval` class: numbered and `y/n` prompts classify as `approval`, the codex hook-trust modal stays `hook-trust`, an approval after the inject is a gate regardless of the pre-inject state, and the markers are read from the shared `approval-prompt-markers.txt` (#235).
+
 ## [0.5.301] - 2026-11-09
 
 ### Changed
@@ -449,7 +455,8 @@ tests pass, 1 skipped.
 There is no CI at this tag. Tests and the redaction scanners run locally before
 a push, so a passing count in a pull request is the author's word.
 
-[Unreleased]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.301...HEAD
+[Unreleased]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.304...HEAD
+[0.5.304]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.301...v0.5.304
 [0.5.301]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.296...v0.5.301
 [0.5.296]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.294...v0.5.296
 [0.5.294]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.288...v0.5.294

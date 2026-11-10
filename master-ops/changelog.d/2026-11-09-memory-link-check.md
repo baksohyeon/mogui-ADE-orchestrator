@@ -1,1 +1,0 @@
-- Added `scripts/memory-link-check`, a standard-library tool that sorts a memory directory's missing `[[name]]` links into `typo`, `tracker-key`, and `not-yet-written`, so a near-miss on an existing file fails the check while a deliberate placeholder does not. See `docs/runbooks/memory-link-check.md`.

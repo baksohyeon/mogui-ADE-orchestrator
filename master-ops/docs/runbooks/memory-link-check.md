@@ -3,8 +3,14 @@
 `scripts/memory-link-check` sorts every missing `[[name]]` memory link by
 why it is missing: a missing name is allowed by design. By default only
 `typo` and `invalid` fail; `tracker-key` fails too under
-`--strict-tracker-keys`. A `[[name]]` inside a fenced block or an inline
-code span (for example a TOML `[[table]]` name) is not collected.
+`--strict-tracker-keys`. A `[[name]]` is not collected when it sits inside
+a fenced block opened by a fence of at most three spaces' indentation and
+closed by the same fence character with at least as many backticks or
+tildes as the opener (CommonMark), or inside an inline span of one or two
+backticks, on one line or across lines (for example a TOML `[[table]]`
+name). Two shapes it does not handle: an inline span of three or more
+backticks, and a closer line with trailing text after the backtick run,
+which closes the fence here even though CommonMark requires a bare closer.
 
 Run before committing a memory mirror, or by hand on the live directory.
 

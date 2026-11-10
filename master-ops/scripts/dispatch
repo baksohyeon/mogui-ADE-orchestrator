@@ -995,7 +995,7 @@ runtime_command() {
     # written as an inline table: the dotted form reads the dot inside the
     # model id as a nesting separator and fails with "invalid type: map,
     # expected a string".
-    codex) echo "codex --model $model_arg -c $(shell_quote "model_reasoning_effort=\"$CODEX_REASONING_EFFORT\"") -c check_for_update_on_startup=false -c $(shell_quote "$CODEX_MIGRATION_ACK")${CODEX_BYPASS_FLAG:- -s workspace-write -c $(shell_quote "sandbox_workspace_write.network_access=true")}";;
+    codex) echo "codex --model $model_arg -c $(shell_quote "model_reasoning_effort=\"$CODEX_REASONING_EFFORT\"") -c check_for_update_on_startup=false -c $(shell_quote "$CODEX_MIGRATION_ACK")${CODEX_BYPASS_FLAG:- -s workspace-write -c sandbox_workspace_write.network_access=true}";;
     gemini) echo "gemini";;
     opencode) echo "opencode";;
     # agy is the Gemini host; `agy models` reports gemini-* ids. Its approval flag

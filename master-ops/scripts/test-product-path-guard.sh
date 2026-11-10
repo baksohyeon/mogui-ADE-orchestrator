@@ -1213,7 +1213,7 @@ worker_root="$product/.orca/worktrees/worker-one"
 mkdir -p "$worker_root"
 
 run_worker() {  # kind(file|bash) value [working_directory]
-  python3 - "$1" "$2" "${3:-$worker_root}" <<'PY' | HOME="$TMP/home" MOGUI_WORKER_WRITE_ROOT="$worker_root" MOGUI_INSTANCE_RUNTIME_CONFIG="$TMP/missing-runtime.json" MOGUI_EVENT_LOG="$TMP/home/.mogui/event-log.jsonl" MOGUI_HOOK_FIRE_LOG="$TMP/logs/fire.jsonl" "$HOOK" >/dev/null 2>"$TMP/stderr"
+  python3 - "$1" "$2" "${3:-$worker_root}" <<'PY' | HOME="$TMP/home" MOGUI_WORKER_WRITE_ROOT="$worker_root" MOGUI_PRODUCT_GUARD_FAIL_CLOSED=0 MOGUI_INSTANCE_RUNTIME_CONFIG="$TMP/missing-runtime.json" MOGUI_EVENT_LOG="$TMP/home/.mogui/event-log.jsonl" MOGUI_HOOK_FIRE_LOG="$TMP/logs/fire.jsonl" "$HOOK" >/dev/null 2>"$TMP/stderr"
 import json, sys
 kind, value, cwd = sys.argv[1:]
 tool = {"file_path": value} if kind == "file" else {"command": value}

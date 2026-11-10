@@ -607,6 +607,11 @@ def _worker_list(
                 "orca orchestration worker-list failed or returned malformed JSON"
             )
         result = payload.get("result", {})
+        if not isinstance(result, dict) or "workers" not in result:
+            raise WorkerListError(
+                "orca orchestration worker-list returned a result with no "
+                f"'workers' key: {result!r}"
+            )
         for worker in orca_json.workers(result):
             handle = worker["terminal"]
             status = worker["status"]

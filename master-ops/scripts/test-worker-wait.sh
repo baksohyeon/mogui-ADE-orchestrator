@@ -282,6 +282,56 @@ else
   fail "failability: ack-warning mutant did not change the observed behavior"
 fi
 
+# --- Case 5: a worker-list result with no `workers` key is a malformed-list
+# error, not a quiet "nothing left" (issue #219: `{"result":{}}` must not be
+# read as an empty run).
+cat > "$work/orca-no-workers-key" <<'EOF'
+#!/usr/bin/env bash
+case "$1 $2" in
+  "orchestration worker-list") echo '{"ok":true,"result":{}}' ;;
+  "terminal list")
+    if printf '%s\n' "$@" | grep -q -- '--json'; then echo '{"ok":true,"result":{"terminals":[]}}'; fi ;;
+  *) echo "{}" ;;
+esac
+EOF
+chmod +x "$work/orca-no-workers-key"
+mkdir -p "$work/no-workers-key-bin"
+cp "$work/orca-no-workers-key" "$work/no-workers-key-bin/orca"
+cp "$work/ps" "$work/no-workers-key-bin/ps"
+printf '{"job_id": "ctx_none", "worker_pid": "9999", "pane": "term_none"}\n' > "$work/ledger_no_workers_key.jsonl"
+
+no_workers_out=$(PATH="$work/no-workers-key-bin:$PATH" HOME="$work/home" "$SCRIPT" --once --json --run run_x --ledger "$work/ledger_no_workers_key.jsonl" 2>&1)
+no_workers_rc=$?
+if [ "$no_workers_rc" -ne 0 ] && printf '%s' "$no_workers_out" | grep -q "no 'workers' key"; then
+  ok "malformed worker-list result ({\"result\":{}}): exits non-zero naming the missing workers key"
+else
+  fail "malformed worker-list result: expected a non-zero exit naming the missing workers key, got exit $no_workers_rc: $no_workers_out"
+fi
+if printf '%s' "$no_workers_out" | grep -qi "nothing left"; then
+  fail "malformed worker-list result: must not be reported as nothing left to do"
+fi
+
+mutant_list="$work/worker-wait-mutant-empty-list"
+sed "s/if not isinstance(result, dict) or \"workers\" not in result:/if False:/" "$SCRIPT" > "$mutant_list"
+if cmp -s "$SCRIPT" "$mutant_list"; then
+  fail "failability: malformed-list sed pattern did not match the script"
+fi
+chmod +x "$mutant_list"
+mutant_list_out=$(PATH="$work/no-workers-key-bin:$PATH" HOME="$work/home" "$mutant_list" --once --json --run run_x --ledger "$work/ledger_no_workers_key.jsonl" 2>&1)
+mutant_list_rc=$?
+if [ "$mutant_list_rc" -eq 0 ]; then
+  ok "failability: dropping the malformed-list check reports exit 0 (false empty run) again"
+else
+  fail "failability: malformed-list mutant did not change the exit code (got $mutant_list_rc, want 0)"
+fi
+restored_list_out=$(PATH="$work/no-workers-key-bin:$PATH" HOME="$work/home" "$SCRIPT" --once --json --run run_x --ledger "$work/ledger_no_workers_key.jsonl" 2>&1)
+restored_list_rc=$?
+if [ "$restored_list_rc" -ne 0 ] && printf '%s' "$restored_list_out" | grep -q "no 'workers' key"; then
+  ok "restored: unmutated script still raises on a missing workers key"
+else
+  fail "restored: unmutated script should still exit non-zero naming the missing workers key"
+fi
+
 [ "$FAILED" -eq 0 ] && { echo "worker-wait: all checks passed"; exit 0; }
 echo "worker-wait: FAILED"
 exit 1

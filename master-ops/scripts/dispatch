@@ -966,6 +966,16 @@ runtime_command() {
     # pane: with no -s flag the pane's /status read "danger-full-access" (the
     # host and account config set it) and `touch` into the enclosing repository
     # root succeeded, so the default sandbox gave a worker no write root at all.
+    # Measured again 2026-11-10 (codex-cli 0.167.0, Orca 1.4.255, mgm-5r9a):
+    # with only `-s workspace-write`, the Orca CLI's socket connect for
+    # `worker_done` and `ask` failed with `runtime_access_denied` (`EPERM`),
+    # because codex's sandbox treats that Unix-socket connect as a network
+    # operation and only a human could clear codex's resulting approval
+    # prompt. Adding `-c sandbox_workspace_write.network_access=true` to the
+    # same flag restores the connect while the write sandbox stays on
+    # (`touch` outside the worktree still fails), so it stays strictly
+    # tighter than `--dangerously-bypass-approvals-and-sandbox`, which drops
+    # the sandbox entirely.
     # The model flag is separate from the approval posture above and was missing
     # here until 2026-08-05. The gate validated a model id, the tier policy
     # recorded it, and the launcher dropped it: two codex dispatches declared
@@ -985,7 +995,7 @@ runtime_command() {
     # written as an inline table: the dotted form reads the dot inside the
     # model id as a nesting separator and fails with "invalid type: map,
     # expected a string".
-    codex) echo "codex --model $model_arg -c $(shell_quote "model_reasoning_effort=\"$CODEX_REASONING_EFFORT\"") -c check_for_update_on_startup=false -c $(shell_quote "$CODEX_MIGRATION_ACK")${CODEX_BYPASS_FLAG:- -s workspace-write}";;
+    codex) echo "codex --model $model_arg -c $(shell_quote "model_reasoning_effort=\"$CODEX_REASONING_EFFORT\"") -c check_for_update_on_startup=false -c $(shell_quote "$CODEX_MIGRATION_ACK")${CODEX_BYPASS_FLAG:- -s workspace-write -c sandbox_workspace_write.network_access=true}";;
     gemini) echo "gemini";;
     opencode) echo "opencode";;
     # agy is the Gemini host; `agy models` reports gemini-* ids. Its approval flag

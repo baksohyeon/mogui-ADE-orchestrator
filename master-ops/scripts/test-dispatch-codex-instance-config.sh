@@ -40,8 +40,9 @@ done
 call_site='[ "$RUNTIME" = codex ] && apply_codex_instance_launch_config'
 
 base='codex --model gpt-5.5 -c '"'"'model_reasoning_effort="xhigh"'"'"' -c check_for_update_on_startup=false -c '"'"'notice.model_migrations={"gpt-5.5"="gpt-6.1-sol"}'"'"''
-# Without the bypass flag the launch pins -s workspace-write (sandbox measured 2026-11-09).
-today="$base -s workspace-write"
+# Without the bypass flag the launch pins -s workspace-write plus the network-access
+# config key (sandbox measured 2026-11-09, socket connect measured 2026-11-10, mgm-5r9a).
+today="$base -s workspace-write -c sandbox_workspace_write.network_access=true"
 high=${today/'"xhigh"'/'"high"'}
 bypass="$base --dangerously-bypass-approvals-and-sandbox"
 bypass_warning="WARNING: codex_bypass_approvals_and_sandbox is true in $work/instance-runtime.json;
@@ -115,8 +116,13 @@ footer-rc=0" ] || { echo "FAIL: failability: ignoring the configured effort stil
 echo "ok   : failability: ignoring the configured effort breaks the high case"
 
 # --- Case: bypass true appends the flag and warns on stdout -------------------
+got=$(run_case "$read_fn" "$apply_fn" '{"codex_bypass_approvals_and_sandbox": true}' 2>/dev/null)
 expect "bypass true warns on stdout and appends --dangerously-bypass-approvals-and-sandbox" "$bypass_warning
-$bypass" "$(run_case "$read_fn" "$apply_fn" '{"codex_bypass_approvals_and_sandbox": true}' 2>/dev/null)"
+$bypass" "$got"
+case "$got" in
+  *network_access*) echo "FAIL: bypass-flag launch line carries a sandbox_workspace_write.network_access key" >&2; exit 1;;
+esac
+echo "ok   : bypass-flag launch line carries no sandbox_workspace_write.network_access key"
 expect "bypass false keeps today's launch line" "$today" \
   "$(run_case "$read_fn" "$apply_fn" '{"codex_bypass_approvals_and_sandbox": false}')"
 mutant=$(mutate "$apply_fn" "CODEX_BYPASS_FLAG=' --dangerously-bypass-approvals-and-sandbox'" ':')

@@ -1147,7 +1147,20 @@ def test_template_check_reads_instance_owned_from_install_manifest(tmp_path: Pat
 
 
 @pytest.mark.parametrize(
-    "entry", ["./config/", "config//", "a//b", "a\\b", "", ".", "a/./b", "../x", "/abs", "/"]
+    "entry",
+    [
+        "./config/",
+        "config//",
+        "a//b",
+        "a\\b",
+        "",
+        ".",
+        "a/./b",
+        "../x",
+        "/abs",
+        "/",
+        "a\x00b",
+    ],
 )
 def test_instance_owned_rejects_non_normalized_entries(entry: str):
     sys.path.insert(0, str(SKELETON / "scripts"))
@@ -1161,3 +1174,79 @@ def test_instance_owned_rejects_non_normalized_entries(entry: str):
         {"files": [], "instance_owned": ["config/", "docs/blame/", "AGENTS.md"]}
     )
     assert source == "manifest" and entries == ("config/", "docs/blame/", "AGENTS.md")
+
+
+def _ops_with_gitleaks_toml(tmp_path: Path, toml_text: str) -> Path:
+    ops = tmp_path / "ops"
+    ops.mkdir()
+    _seed_ops_from_manifest(ops)
+    config_dir = ops / "config"
+    config_dir.mkdir(exist_ok=True)
+    (config_dir / "gitleaks.toml").write_text(toml_text, encoding="utf-8")
+    return ops
+
+
+def _advisories(ops: Path) -> list[str]:
+    result = _run([sys.executable, str(TEMPLATE_CHECK), "--ops", str(ops), "--json"])
+    assert result.returncode == 0, result.stderr + result.stdout
+    report = json.loads(result.stdout)
+    return report["advisories"]
+
+
+ANCHORED_ENTRY = """
+[[allowlists]]
+regexTarget = "secret"
+regexes = ['''^ack-[0-9a-f]{12}$''']
+"""
+
+LEGACY_ENTRY = """
+[[allowlists]]
+regexTarget = "match"
+regexes = ['''ack-[0-9a-f]{12}''']
+"""
+
+UNRELATED_ENTRY = """
+[[allowlists]]
+regexTarget = "line"
+regexes = ['''example\\.com''']
+"""
+
+
+def test_gitleaks_advisory_fires_on_legacy_entry(tmp_path: Path):
+    ops = _ops_with_gitleaks_toml(tmp_path, LEGACY_ENTRY)
+    advisories = _advisories(ops)
+    assert advisories, "legacy unanchored read-token entry must yield an advisory"
+    assert "replace" in advisories[0].lower()
+
+
+def test_gitleaks_advisory_silent_on_anchored_entry_only(tmp_path: Path):
+    ops = _ops_with_gitleaks_toml(tmp_path, ANCHORED_ENTRY)
+    assert _advisories(ops) == []
+
+
+def test_gitleaks_advisory_fires_when_legacy_and_anchored_both_present(tmp_path: Path):
+    ops = _ops_with_gitleaks_toml(tmp_path, LEGACY_ENTRY + ANCHORED_ENTRY)
+    advisories = _advisories(ops)
+    assert advisories, "a surviving legacy entry must still be flagged for replacement"
+    assert "replace" in advisories[0].lower()
+
+
+def test_gitleaks_advisory_missing_entry_with_unrelated_allowlists(tmp_path: Path):
+    ops = _ops_with_gitleaks_toml(tmp_path, UNRELATED_ENTRY)
+    advisories = _advisories(ops)
+    assert advisories, "no read-token entry at all must still advise pasting one"
+    assert "no [[allowlists]] entry" in advisories[0]
+
+
+def test_gitleaks_advisory_non_failing_on_malformed_toml(tmp_path: Path):
+    ops = _ops_with_gitleaks_toml(tmp_path, "not valid toml [[[")
+    advisories = _advisories(ops)
+    assert advisories, "malformed gitleaks.toml must still produce a non-failing advisory"
+    assert "could not be inspected" in advisories[0]
+
+
+def test_gitleaks_advisory_non_list_allowlists_does_not_crash(tmp_path: Path):
+    ops = _ops_with_gitleaks_toml(tmp_path, 'allowlists = "oops"\n')
+    advisories = _advisories(ops)
+    assert advisories, "a non-list allowlists value must be treated as no entries, not crash"
+    assert "no [[allowlists]] entry" in advisories[0]

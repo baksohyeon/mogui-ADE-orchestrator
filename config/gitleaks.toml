@@ -144,14 +144,17 @@ paths = [
 
 [[allowlists]]
 # Read-proof acknowledgement tokens (ack-<12 hex>) get their own `[[allowlists]]`
-# entry with `regexTarget = "match"`, which compares the regex against the
-# matched secret text only, never the whole line. A line-scoped entry would
-# clear any other secret typed on the same line as a token; this one cannot.
-# They prove a worker opened its delivered contract; carry no secret; the
-# standing rule still keeps them out of commits. The token shape is key-like
-# to gitleaks but carries no secret.
+# entry. `regexTarget = "secret"` compares the regex against the whole matched
+# secret value, and the regex is anchored with `^...$` so it only clears a
+# secret that IS the token, never a secret that merely contains the token's
+# shape as a substring (an unanchored match-target regex cleared
+# `ACCESS_TOKEN="ack-<12 hex>-real-secret"` entirely, measured). A line-scoped
+# entry would also clear any other secret typed on the same line as a token;
+# this one cannot do either. The token proves a worker opened its delivered
+# contract; it carries no secret, but the standing rule still keeps it out of
+# commits.
 description = "read-proof acknowledgement token (ack-<12 hex>) is not a secret"
-regexTarget = "match"
+regexTarget = "secret"
 regexes = [
-  '''\back-[0-9a-f]{12}\b''',
+  '''^ack-[0-9a-f]{12}$''',
 ]

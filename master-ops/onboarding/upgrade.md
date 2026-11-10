@@ -26,7 +26,18 @@ When the ops repository already has the script:
 "{{OPS_REPO}}/scripts/template-check" --ops "{{OPS_REPO}}" --template "{{RUNTIME_ROOT}}/master-ops"
 ```
 
-2. **Read the report**: the report states which set it produced (`install-manifest` alone, or `template-compare` when `--template` was given). Record installed version (or "undeterminable" when `MANIFEST.json` is absent), template version, absent required paths, and unknown present paths. A missing manifest is the expected shape for pre-manifest installs — continue by content presence, do not invent a version.
+2. **Read the report**: the report states which set it produced (`install-manifest` alone, or `template-compare` when `--template` was given). Record installed version (or "undeterminable" when `MANIFEST.json` is absent), template version, absent required paths, and unknown present paths. A missing manifest is the expected shape for pre-manifest installs — continue by content presence, do not invent a version. A non-empty `advisories` key never means drift and never fails the check: it is advice about a seat-owned file the template never writes. The one advisory this version ships checks the install's own `config/gitleaks.toml` for the read-proof-token allowlist entry (`regexTarget = "secret"` with the anchored regex `^ack-[0-9a-f]{12}$` in a `[[allowlists]]` entry); when that entry is missing, the advisory carries the exact TOML block to paste in by hand. When the install instead still carries a legacy entry whose regexes mention the `ack-` token shape without that anchored `secret`-target form, the advisory says to replace that legacy entry with the block below, not paste the block in beside it: the old unanchored match-target regex keeps clearing any secret that merely contains the token as a substring.
+
+```toml
+[[allowlists]]
+description = "read-proof acknowledgement token (ack-<12 hex>) is not a secret"
+regexTarget = "secret"
+regexes = [
+  '''^ack-[0-9a-f]{12}$''',
+]
+```
+
+A token written as a quoted key assignment, for example `access_token = "ack-<12 hex>"`, is flagged by the redaction scan even with this entry in place, because the assignment rule's secret is the whole assignment and not the bare token; this is intended, since a token belongs only in the worker's completion message and in no committed file.
 
 3. **Dry-run apply (always first)**: print the exact file list and the reason for each path. No write yet. Pass the same eight measured `--placeholder` values as step 5; a dry run that omits them prints the missing-placeholder report and exits 2 by design, since a planned file still carries each unsupplied token.
 

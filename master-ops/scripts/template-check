@@ -29,6 +29,11 @@ and never `unknown_present`. Those present on the install are reported under
 `instance_owned`, which never fails the check. `.git/` and `.beads/` are not
 walked at all (tracker and VCS internals), so `.beads/` contents never appear
 under `instance_owned` even though the manifest lists `.beads/`.
+
+`config/gitleaks.toml` is itself instance-owned (the template never writes
+it), so a missing read-proof-token allowlist entry there is never an error:
+it is reported under `advisories`, which never fails the check, with the
+exact TOML block to paste.
 """
 
 from __future__ import annotations
@@ -37,6 +42,7 @@ import argparse
 import json
 import re
 import sys
+import tomllib
 from datetime import date
 from pathlib import Path
 from typing import Callable
@@ -67,6 +73,96 @@ TEMPLATE_SIDE_DIRS = frozenset(
 def _die(msg: str, code: int = 2) -> int:
     sys.stderr.write(f"template-check: {msg}\n")
     return code
+
+
+READ_TOKEN_REGEX_TARGET = "secret"
+READ_TOKEN_REGEX = r"^ack-[0-9a-f]{12}$"
+
+READ_TOKEN_ALLOWLIST_BLOCK = f"""\
+[[allowlists]]
+# Read-proof acknowledgement tokens (ack-<12 hex>) are not secrets; this
+# entry keeps the redaction scan from flagging them. `regexTarget = "{READ_TOKEN_REGEX_TARGET}"`
+# with an anchored regex clears only a secret that IS the token, never a real
+# secret that merely contains the token's shape as a substring.
+description = "read-proof acknowledgement token (ack-<12 hex>) is not a secret"
+regexTarget = "{READ_TOKEN_REGEX_TARGET}"
+regexes = [
+  '''{READ_TOKEN_REGEX}''',
+]
+"""
+
+
+def _is_anchored_read_token_entry(entry: dict) -> bool:
+    if entry.get("regexTarget") != READ_TOKEN_REGEX_TARGET:
+        return False
+    regexes = entry.get("regexes")
+    return isinstance(regexes, list) and READ_TOKEN_REGEX in regexes
+
+
+def _is_legacy_read_token_entry(entry: dict) -> bool:
+    """True for an `[[allowlists]]` entry whose regexes mention the token's
+    `ack-` prefix but that is not the anchored secret-target form. Such an
+    entry (for example `regexTarget = "match"` with an unanchored regex)
+    still clears any secret that merely contains the token's shape.
+    """
+    if _is_anchored_read_token_entry(entry):
+        return False
+    regexes = entry.get("regexes")
+    if not isinstance(regexes, list):
+        return False
+    return any(isinstance(r, str) and "ack-" in r for r in regexes)
+
+
+def gitleaks_read_token_advisories(ops_root: Path) -> list[str]:
+    """Advise (never fail) about the install's gitleaks.toml read-proof-token
+    allowlist entry: `regexTarget = "secret"` with the anchored regex
+    `^ack-[0-9a-f]{12}$` in a `[[allowlists]]` entry.
+
+    config/gitleaks.toml is seat-owned; the template never writes it, so a
+    missing or legacy entry here is advice to paste or replace, not drift to
+    report under absent_required or unknown_present.
+    """
+    path = ops_root / "config" / "gitleaks.toml"
+    if not path.is_file():
+        return []
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return [
+            "config/gitleaks.toml could not be inspected for the read-proof "
+            "acknowledgement token allowlist entry (unreadable or malformed "
+            "TOML); verify by hand that it has an [[allowlists]] entry with "
+            f'regexTarget = "{READ_TOKEN_REGEX_TARGET}" and regex {READ_TOKEN_REGEX}.'
+        ]
+    allowlists = data.get("allowlists", [])
+    if not isinstance(allowlists, list):
+        allowlists = []
+    has_anchored = False
+    has_legacy = False
+    for entry in allowlists:
+        if not isinstance(entry, dict):
+            continue
+        if _is_anchored_read_token_entry(entry):
+            has_anchored = True
+        elif _is_legacy_read_token_entry(entry):
+            has_legacy = True
+    if has_legacy:
+        return [
+            "config/gitleaks.toml has a legacy read-token [[allowlists]] entry "
+            f'that is not regexTarget = "{READ_TOKEN_REGEX_TARGET}" with regex '
+            f"{READ_TOKEN_REGEX}; its unanchored match-target regex still clears "
+            "any secret that merely contains the token's shape as a substring. "
+            f"Replace that entry with the one below, do not paste this one beside it:\n"
+            f"{READ_TOKEN_ALLOWLIST_BLOCK}"
+        ]
+    if has_anchored:
+        return []
+    return [
+        "config/gitleaks.toml has no [[allowlists]] entry with "
+        f'regexTarget = "{READ_TOKEN_REGEX_TARGET}" and regex {READ_TOKEN_REGEX} '
+        "(read-proof acknowledgement tokens will be flagged as secrets). "
+        f"Paste:\n{READ_TOKEN_ALLOWLIST_BLOCK}"
+    ]
 
 
 def resolve_ops_root(ops: Path | None, script_path: Path) -> Path | None:
@@ -328,7 +424,9 @@ def build_report(
         "adoption_notes": [],
         "questions_unanswered": [],
         "invalid_paths": [],
+        "advisories": [],
     }
+    report["advisories"].extend(gitleaks_read_token_advisories(ops_root))
 
     manifest_path = ops_root / "MANIFEST.json"
     manifest, err = load_manifest(manifest_path)
@@ -491,6 +589,11 @@ def format_human(report: dict) -> str:
         lines.append("questions_unanswered:")
         for q in unanswered:
             lines.append(f"  - {q}")
+    advisories = report.get("advisories") or []
+    if advisories:
+        lines.append("advisories:")
+        for a in advisories:
+            lines.append(f"  - {a}")
     return "\n".join(lines) + "\n"
 
 

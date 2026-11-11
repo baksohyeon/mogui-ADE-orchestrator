@@ -125,6 +125,7 @@ else
   STATE_DIR=~/.mogui
 fi
 LEDGER="$STATE_DIR/dispatch-ledger.jsonl"
+LEDGER_LOCK="$STATE_DIR/dispatch-ledger.lock"
 
 [ -z "$CONTRACT" ] || [ ! -f "$CONTRACT" ] && { echo "✗ contract file missing: $CONTRACT" >&2; exit 1; }
 [ "$CHECK_ONLY" = 0 ] && [ -z "$SPEC" ] && usage
@@ -814,10 +815,12 @@ orca_turn_stage() {
 # future, unseen gate would just fall through. Returns 1 with a one-line
 # reason for a provider-limit phrase, an update notice, or a numbered
 # selection menu (all three read from screens seen that day); returns 2 when
-# no footer has rendered yet, so the caller can read the pane again; returns 0
-# silently once the footer's model and effort match the request.
+# no footer has rendered yet or an effort-only mismatch remains retryable;
+# returns 3 on the final `default` effort-only read so the caller can inject
+# and re-check after the first turn. A different non-default effort remains a
+# fatal mismatch; returns 0 silently once the footer's model and effort match.
 codex_start_screen_problem() {
-  local pane="$1" model="$2" effort="$3" state footer shown want
+  local pane="$1" model="$2" effort="$3" attempt="${4:-1}" state footer shown want
   state=$(printf '%s\n' "$pane" | sed '/^[[:space:]]*$/d' | tail -n 12)
   if printf '%s\n' "$state" | grep -Eiq "$LIMIT_MARKERS"; then
     echo "provider limit notice"; return 1
@@ -844,11 +847,51 @@ codex_start_screen_problem() {
     shown_model=$(printf '%s\n' "$shown" | awk '{print $1}')
     want_model=$(printf '%s\n' "$want" | awk '{print $1}')
     if [ "$shown_model" = "$want_model" ]; then
+      if [ "$attempt" -ge 5 ]; then
+        shown_effort=$(printf '%s\n' "$shown" | awk '{print $2}')
+        if [ "$shown_effort" = default ]; then
+          echo "effort label 'default' on start screen; re-check after first turn"
+          return 3
+        fi
+        echo "effort label '$shown_effort' on start screen; requested '$want'"
+        return 1
+      fi
       echo "effort not applied yet: '$(printf '%s\n' "$shown" | awk '{print $2}')'"
       return 2
     fi
     echo "footer shows '$shown', requested '$want'"; return 1
   fi
+}
+
+# After delivery, read the same footer shape for up to 30 seconds. A slow
+# repaint that still says `default` is a measurement gap recorded on the
+# register row; a model-token change remains a non-fatal post-delivery
+# measurement gap, while a different non-default effort remains fatal.
+codex_effort_recheck() {
+  local pane="$1" model="$2" effort="$3" state footer shown want shown_model want_model
+  state=$(printf '%s\n' "$pane" | sed '/^[[:space:]]*$/d' | tail -n 12)
+  footer=$(printf '%s\n' "$state" | grep -Eio '^[[:space:]]*[^[:space:]]*[0-9][^[:space:]]*[[:space:]]+[a-z]+[[:space:]]*·' | tail -n 1)
+  if [ -z "$footer" ]; then
+    echo "footer was not measurable after delivery; requested '$model $effort'"
+    return 1
+  fi
+  shown=$(printf '%s\n' "$footer" | awk '{print tolower($1) " " tolower($2)}')
+  want=$(printf '%s %s\n' "$model" "$effort" | tr '[:upper:]' '[:lower:]')
+  if [ "$shown" = "$want" ]; then
+    return 0
+  fi
+  shown_model=$(printf '%s\n' "$shown" | awk '{print $1}')
+  want_model=$(printf '%s\n' "$want" | awk '{print $1}')
+  if [ "$shown_model" != "$want_model" ]; then
+    echo "footer shows '$shown', requested '$want'"
+    return 2
+  fi
+  if [ "$(printf '%s\n' "$shown" | awk '{print $2}')" = default ]; then
+    echo "start screen shows '$shown'; requested '$want'"
+    return 1
+  fi
+  echo "start screen shows non-default effort '$shown'; requested '$want'"
+  return 3
 }
 
 # Measured 2026-10-01, same install: the reasoning effort and the model-
@@ -1348,12 +1391,14 @@ codex_hooks_vet_homes() {
 
 record_host_diversity_audit() {
   [ "$CHECK_ONLY" = 1 ] && return 0
-  python3 - "$LEDGER" "$RUNTIME" "$MASTER_HOST_RUNTIME" "$INSTALLED_RUNTIMES" "$ALTERNATIVE_RUNTIMES" "$UNAVAILABLE_RUNTIMES" "$SAME_HOST_REASON" "$TASK" "$DISP" "$SHA" "${CODEX_BYPASS_FLAG:-}" <<'EOF'
+  python3 - "$LEDGER" "$RUNTIME" "$MASTER_HOST_RUNTIME" "$INSTALLED_RUNTIMES" "$ALTERNATIVE_RUNTIMES" "$UNAVAILABLE_RUNTIMES" "$SAME_HOST_REASON" "$TASK" "$DISP" "$SHA" "${CODEX_BYPASS_FLAG:-}" "${LEDGER_LOCK:-$LEDGER.lock}" <<'EOF'
+import fcntl
 import json
+import os
 import sys
 import time
 
-ledger, runtime, master, installed, alternatives, unavailable, reason, task, dispatch, sha, bypass_flag = sys.argv[1:]
+ledger, runtime, master, installed, alternatives, unavailable, reason, task, dispatch, sha, bypass_flag, lock_path = sys.argv[1:]
 entry = {
     "ts": time.time(),
     "kind": "host_diversity_audit",
@@ -1369,8 +1414,73 @@ entry = {
     "contract_sha": sha,
     "codex_bypass": bool(bypass_flag),
 }
-with open(ledger, "a", encoding="utf-8") as fh:
-    fh.write(json.dumps(entry, sort_keys=True, separators=(",", ":")) + "\n")
+os.makedirs(os.path.dirname(os.path.abspath(lock_path)), exist_ok=True)
+with open(lock_path, "a", encoding="utf-8") as lock:
+    fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+    with open(ledger, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(entry, sort_keys=True, separators=(",", ":")) + "\n")
+EOF
+}
+
+record_codex_effort() {
+  [ "$CHECK_ONLY" = 1 ] && return 0
+  python3 - "$LEDGER" "$DISP" "$1" "${LEDGER_LOCK:-$LEDGER.lock}" <<'EOF'
+import fcntl
+import json
+import os
+import sys
+import tempfile
+
+ledger_path, dispatch_id, outcome, lock_path = sys.argv[1:]
+os.makedirs(os.path.dirname(os.path.abspath(lock_path)), exist_ok=True)
+with open(lock_path, "a", encoding="utf-8") as lock:
+    fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+    with open(ledger_path, encoding="utf-8") as fh:
+        lines = fh.readlines()
+
+    target = None
+    entries = []
+    for index, line in enumerate(lines):
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            entries.append(line)
+            continue
+        entries.append(entry)
+        if (
+            isinstance(entry, dict)
+            and entry.get("job_id") == dispatch_id
+            and entry.get("decision") == "ALLOW"
+        ):
+            target = index
+
+    if target is None:
+        print("codex effort ledger row not found for dispatch", file=sys.stderr)
+        sys.exit(1)
+
+    entry = entries[target]
+    if outcome == "measured":
+        entry["effort"] = "measured"
+        entry.pop("effort_unverified", None)
+    elif outcome == "unverified":
+        entry["effort_unverified"] = True
+        entry.pop("effort", None)
+    else:
+        print("unknown codex effort outcome", file=sys.stderr)
+        sys.exit(1)
+
+    parent = os.path.dirname(os.path.abspath(ledger_path)) or "."
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=parent, prefix=".dispatch-ledger-", delete=False
+    ) as fh:
+        replacement = fh.name
+        for item in entries:
+            if isinstance(item, dict):
+                fh.write(json.dumps(item, sort_keys=True, separators=(",", ":")))
+                fh.write("\n")
+            else:
+                fh.write(item)
+    os.replace(replacement, ledger_path)
 EOF
 }
 
@@ -1798,11 +1908,12 @@ echo "→ $TASK → $TERMINAL ($KIND)"
 # codex_hooks_vet_homes fails closed and the vet-failure branch takes over.
 if [ "$RUNTIME" = codex ]; then
   CODEX_START_RC=2
+  CODEX_EFFORT_RECHECK=0
   HOOKS_ANSWERED=0
   attempt=1
   while [ "$attempt" -le 5 ]; do
     CODEX_PANE=$(orca terminal read --terminal "$TERMINAL" --limit 40 2>/dev/null || true)
-    CODEX_START_PROBLEM=$(codex_start_screen_problem "$CODEX_PANE" "$MODEL" "$CODEX_REASONING_EFFORT")
+    CODEX_START_PROBLEM=$(codex_start_screen_problem "$CODEX_PANE" "$MODEL" "$CODEX_REASONING_EFFORT" "$attempt")
     CODEX_START_RC=$?
     if [ "$CODEX_START_RC" = 1 ] && [ "$HOOKS_ANSWERED" = 0 ] \
         && printf '%s\n' "$CODEX_PANE" | grep -q 'Hooks need review'; then
@@ -1834,12 +1945,17 @@ if [ "$RUNTIME" = codex ]; then
     fi
     break
   done
-  if [ "$CODEX_START_RC" != 0 ]; then
+  if [ "$CODEX_START_RC" != 0 ] && [ "$CODEX_START_RC" != 3 ]; then
     echo "✗ codex start screen · $CODEX_START_PROBLEM · spec NOT injected" >&2
     echo "  orca terminal read --terminal $TERMINAL --limit 40" >&2
     exit 3
   fi
-  echo "start screen ✓ codex · $MODEL $CODEX_REASONING_EFFORT"
+  case "$CODEX_START_RC" in
+    3)
+      CODEX_EFFORT_RECHECK=1
+      echo "start screen ✓ codex · $MODEL $CODEX_REASONING_EFFORT · effort re-check pending";;
+    *) echo "start screen ✓ codex · $MODEL $CODEX_REASONING_EFFORT";;
+  esac
 fi
 
 # 4. dispatch --inject
@@ -1900,10 +2016,30 @@ if [ "$PROBE_STATE" != unavailable ]; then
   fi
 fi
 
+# All wrapper ledger writers share this lock. The gate itself writes the register
+# row, so hold the lock while it runs and while later appends or updates run.
+ledger_locked_command() {
+  python3 - "${LEDGER_LOCK:-$LEDGER.lock}" "$@" <<'EOF'
+import fcntl
+import os
+import subprocess
+import sys
+
+lock_path, *command = sys.argv[1:]
+os.makedirs(os.path.dirname(os.path.abspath(lock_path)), exist_ok=True)
+with open(lock_path, "a", encoding="utf-8") as lock:
+    fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+    result = subprocess.run(command, capture_output=True, text=True)
+sys.stdout.write(result.stdout)
+sys.stderr.write(result.stderr)
+sys.exit(result.returncode)
+EOF
+}
+
 # 5b. register (job probe = ledger-vs-dispatch-show; model probe only when it can
 # be scoped to THIS worker — an unscoped glob confirms a model from whatever
 # session happens to be newest, which is a false pass, not a measurement)
-REG=$("$GATE" --ledger "$LEDGER" register --job-id "$DISP" --contract-sha "$SHA" \
+REG=$(ledger_locked_command "$GATE" --ledger "$LEDGER" register --job-id "$DISP" --contract-sha "$SHA" \
       --runtime "$RUNTIME" --tier-policy "$POLICY" \
       --probe-cmd "orca orchestration dispatch-show --task $TASK --json 2>/dev/null | grep -o $DISP | head -1" \
       --orchestration-task "$TASK" --declared-model "$MODEL" --pane "$TERMINAL" \
@@ -2015,15 +2151,62 @@ case "$DELIVERY_CLASS" in
     exit 5;;
   done)
     echo "✓ delivery ✓ worker completed inside the window (dispatch completed)"
-    exit 0;;
+    DELIVERY_SUCCEEDED=1;;
   agent-started)
     if [ "$DELIVERY_SOURCE" = orca:turn_started ]; then
       echo "✓ delivery ✓ Orca reported the injected prompt started a turn"
     else
       echo "✓ delivery ✓ agent left its prepared prompt after inject and began processing"
     fi
-    echo "  Read the pane to verify the contracted work: orca terminal read --terminal $TERMINAL --limit 40";;
+    echo "  Read the pane to verify the contracted work: orca terminal read --terminal $TERMINAL --limit 40"
+    DELIVERY_SUCCEEDED=1;;
   *)
     echo "⚠ delivery UNVERIFIED · pane is not a recognized prepared prompt"
     echo "  Verify before trusting the dispatch: orca terminal read --terminal $TERMINAL --limit 40";;
 esac
+
+if [ "${DELIVERY_SUCCEEDED:-0}" = 1 ] && [ "$RUNTIME" = codex ]; then
+  if [ "${CODEX_EFFORT_RECHECK:-0}" = 1 ]; then
+    CODEX_EFFORT_RECHECK_RC=1
+    CODEX_EFFORT_RECHECK_PROBLEM=""
+    for effort_attempt in 1 2 3 4 5 6 7 8 9 10; do
+      CODEX_RECHECK_PANE=$(orca terminal read --terminal "$TERMINAL" --limit 40 2>/dev/null || true)
+      CODEX_EFFORT_RECHECK_PROBLEM=$(codex_effort_recheck "$CODEX_RECHECK_PANE" "$MODEL" "$CODEX_REASONING_EFFORT")
+      CODEX_EFFORT_RECHECK_RC=$?
+      if [ "$CODEX_EFFORT_RECHECK_RC" = 0 ] || [ "$CODEX_EFFORT_RECHECK_RC" = 2 ] || [ "$CODEX_EFFORT_RECHECK_RC" = 3 ]; then
+        break
+      fi
+      [ "$effort_attempt" -lt 10 ] && sleep 3
+    done
+    case "$CODEX_EFFORT_RECHECK_RC" in
+      0)
+        record_codex_effort measured || {
+          echo "✗ codex effort outcome could not be recorded" >&2
+          exit 3
+        }
+        echo "effort ✓ codex · measured";;
+      1|2)
+        record_codex_effort unverified || {
+          echo "✗ codex effort outcome could not be recorded" >&2
+          exit 3
+        }
+        echo "⚠ codex effort unverified · $CODEX_EFFORT_RECHECK_PROBLEM" >&2;;
+      3)
+        echo "✗ codex effort re-check · $CODEX_EFFORT_RECHECK_PROBLEM" >&2
+        exit 3;;
+      *)
+        echo "✗ codex effort re-check · $CODEX_EFFORT_RECHECK_PROBLEM" >&2
+        exit 3;;
+    esac
+  else
+    record_codex_effort measured || {
+      echo "✗ codex effort outcome could not be recorded" >&2
+      exit 3
+    }
+    echo "effort ✓ codex · measured"
+  fi
+fi
+
+if [ "$DELIVERY_CLASS" = done ]; then
+  exit 0
+fi

@@ -21,7 +21,6 @@ real seat, which CI cannot do (it needs Orca and a `claude` install).
   0 with its milestones in order, the Orca dispatch for that task reaches
   `completed` within `--worker-timeout`, and the worker's `SMOKE.txt` holds
   the read token the wrapper appended to the delivered contract.
-
 Out of scope: the reused-pane path (`--terminal` with no `--worktree`), the
 codex and cursor runtimes, and worker output quality. A pass here says the
 pipe is open end to end; it says nothing about what the worker produced.

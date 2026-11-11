@@ -101,6 +101,7 @@
     "scripts/test-codex-hooks-review-answer.sh",
     "scripts/test-contributing-shell-loop.sh",
     "scripts/test-conversation-redaction-scan-glob-guard.sh",
+    "scripts/test-dispatch-codex-effort-recheck.sh",
     "scripts/test-dispatch-codex-instance-config.sh",
     "scripts/test-dispatch-codex-prompt-marker.sh",
     "scripts/test-dispatch-from-terminal.sh",

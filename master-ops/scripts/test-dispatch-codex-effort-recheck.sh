@@ -48,8 +48,8 @@ BIN
 chmod +x "$work/orca" "$work/sleep"
 
 run_case() {
-  local label="$1" start_pane="$2" recheck_pane="$3" expected_status="$4" expected_effort="$5" warning="$6"
-  local script_file="$work/$label.sh" ledger="$work/$label-ledger.jsonl" out status row
+  local label="$1" start_pane="$2" recheck_pane="$3" expected_status="$4" expected_effort="$5" warning="$6" expected_reads="$7"
+  local script_file="$work/$label.sh" ledger="$work/$label-ledger.jsonl" out status row reads
   printf '%s\n' "$start_pane" > "$work/start-pane"
   printf '%s\n' "$recheck_pane" > "$work/recheck-pane"
   printf '0\n' > "$work/count"
@@ -63,14 +63,24 @@ run_case() {
     printf '%s\n' "$markers" "$start_fn" "$recheck_fn" "$record_fn"
     printf '%s\n' "$start_block"
     echo 'DELIVERY_SUCCEEDED=1'
-    echo 'CODEX_RECHECK_PANE=$(orca terminal read --terminal "$TERMINAL" --limit 40)'
-    echo 'CODEX_EFFORT_RECHECK_PROBLEM=$(codex_effort_recheck "$CODEX_RECHECK_PANE" "$MODEL" "$CODEX_REASONING_EFFORT")'
-    echo 'CODEX_EFFORT_RECHECK_RC=$?'
-    echo 'case "$CODEX_EFFORT_RECHECK_RC" in'
-    echo '  0) record_codex_effort measured;;'
-    echo '  1) record_codex_effort unverified; echo "⚠ codex effort unverified · $CODEX_EFFORT_RECHECK_PROBLEM" >&2;;'
-    echo '  *) exit 3;;'
-    echo 'esac'
+    echo 'if [ "${CODEX_EFFORT_RECHECK:-0}" = 1 ]; then'
+    echo '  CODEX_EFFORT_RECHECK_RC=1'
+    echo '  CODEX_EFFORT_RECHECK_PROBLEM=""'
+    echo '  for effort_attempt in 1 2 3 4 5 6 7 8 9 10; do'
+    echo '    CODEX_RECHECK_PANE=$(orca terminal read --terminal "$TERMINAL" --limit 40)'
+    echo '    CODEX_EFFORT_RECHECK_PROBLEM=$(codex_effort_recheck "$CODEX_RECHECK_PANE" "$MODEL" "$CODEX_REASONING_EFFORT")'
+    echo '    CODEX_EFFORT_RECHECK_RC=$?'
+    echo '    [ "$CODEX_EFFORT_RECHECK_RC" = 0 ] || [ "$CODEX_EFFORT_RECHECK_RC" = 2 ] && break'
+    echo '    [ "$effort_attempt" -lt 10 ] && sleep 3'
+    echo '  done'
+    echo '  case "$CODEX_EFFORT_RECHECK_RC" in'
+    echo '    0) record_codex_effort measured;;'
+    echo '    1|2) record_codex_effort unverified; echo "⚠ codex effort unverified · $CODEX_EFFORT_RECHECK_PROBLEM" >&2;;'
+    echo '    *) exit 3;;'
+    echo '  esac'
+    echo 'else'
+    echo '  record_codex_effort measured'
+    echo 'fi'
     echo 'exit 0'
   } > "$script_file"
   set +e
@@ -88,14 +98,29 @@ run_case() {
     sed -n '1,120p' "$work/$label.stderr" >&2
     return 1
   fi
+  if [ "$warning" = 2 ] && ! grep -qF "footer shows 'gpt-5.4 xhigh', requested 'gpt-5.5 xhigh'" "$work/$label.stderr"; then
+    echo "FAIL: $label did not warn about the model mismatch" >&2
+    sed -n '1,120p' "$work/$label.stderr" >&2
+    return 1
+  fi
   if [ "$warning" = 0 ] && [ -s "$work/$label.stderr" ]; then
     echo "FAIL: $label unexpectedly wrote stderr" >&2
     sed -n '1,120p' "$work/$label.stderr" >&2
     return 1
   fi
   if [ "$expected_status" != 0 ]; then
+    reads=$(sed -n '1p' "$work/count")
+    if [ "$reads" != "$expected_reads" ]; then
+      echo "FAIL: $label expected $expected_reads pane reads, got $reads" >&2
+      return 1
+    fi
     echo "ok   : $label · exit=$status"
     return 0
+  fi
+  reads=$(sed -n '1p' "$work/count")
+  if [ "$reads" != "$expected_reads" ]; then
+    echo "FAIL: $label expected $expected_reads pane reads, got $reads" >&2
+    return 1
   fi
   row=$(python3 -c 'import json,sys; print(json.dumps(json.loads(open(sys.argv[1]).readline()), sort_keys=True))' "$ledger")
   case "$expected_effort" in
@@ -130,8 +155,10 @@ xhigh_pane='› Ask Codex to do anything
 wrong_model_pane='› Ask Codex to do anything
   GPT-5.4 xhigh · ~/worktree'
 
-run_case default-repaints "$default_pane" "$xhigh_pane" 0 measured 0
-run_case default-persists "$default_pane" "$default_pane" 0 unverified 1
-run_case different-model "$wrong_model_pane" "$xhigh_pane" 3 unused 2
+run_case matched-start "$xhigh_pane" "$wrong_model_pane" 0 measured 0 1
+run_case default-repaints "$default_pane" "$xhigh_pane" 0 measured 0 6
+run_case default-persists "$default_pane" "$default_pane" 0 unverified 1 15
+run_case post-delivery-model-mismatch "$default_pane" "$wrong_model_pane" 0 unverified 2 6
+run_case different-model "$wrong_model_pane" "$xhigh_pane" 3 unused 2 1
 
 echo "dispatch codex effort re-check fixture tests passed"

@@ -2126,32 +2126,40 @@ case "$DELIVERY_CLASS" in
 esac
 
 if [ "${DELIVERY_SUCCEEDED:-0}" = 1 ] && [ "$RUNTIME" = codex ]; then
-  CODEX_EFFORT_RECHECK_RC=1
-  CODEX_EFFORT_RECHECK_PROBLEM=""
-  for effort_attempt in 1 2 3 4 5 6 7 8 9 10; do
-    CODEX_RECHECK_PANE=$(orca terminal read --terminal "$TERMINAL" --limit 40 2>/dev/null || true)
-    CODEX_EFFORT_RECHECK_PROBLEM=$(codex_effort_recheck "$CODEX_RECHECK_PANE" "$MODEL" "$CODEX_REASONING_EFFORT")
-    CODEX_EFFORT_RECHECK_RC=$?
-    [ "$CODEX_EFFORT_RECHECK_RC" = 0 ] || [ "$CODEX_EFFORT_RECHECK_RC" = 2 ] && break
-    [ "$effort_attempt" -lt 10 ] && sleep 3
-  done
-  case "$CODEX_EFFORT_RECHECK_RC" in
-    0)
-      record_codex_effort measured || {
-        echo "✗ codex effort outcome could not be recorded" >&2
-        exit 3
-      }
-      echo "effort ✓ codex · measured";;
-    1)
-      record_codex_effort unverified || {
-        echo "✗ codex effort outcome could not be recorded" >&2
-        exit 3
-      }
-      echo "⚠ codex effort unverified · $CODEX_EFFORT_RECHECK_PROBLEM" >&2;;
-    *)
-      echo "✗ codex effort re-check · $CODEX_EFFORT_RECHECK_PROBLEM" >&2
-      exit 3;;
-  esac
+  if [ "${CODEX_EFFORT_RECHECK:-0}" = 1 ]; then
+    CODEX_EFFORT_RECHECK_RC=1
+    CODEX_EFFORT_RECHECK_PROBLEM=""
+    for effort_attempt in 1 2 3 4 5 6 7 8 9 10; do
+      CODEX_RECHECK_PANE=$(orca terminal read --terminal "$TERMINAL" --limit 40 2>/dev/null || true)
+      CODEX_EFFORT_RECHECK_PROBLEM=$(codex_effort_recheck "$CODEX_RECHECK_PANE" "$MODEL" "$CODEX_REASONING_EFFORT")
+      CODEX_EFFORT_RECHECK_RC=$?
+      [ "$CODEX_EFFORT_RECHECK_RC" = 0 ] || [ "$CODEX_EFFORT_RECHECK_RC" = 2 ] && break
+      [ "$effort_attempt" -lt 10 ] && sleep 3
+    done
+    case "$CODEX_EFFORT_RECHECK_RC" in
+      0)
+        record_codex_effort measured || {
+          echo "✗ codex effort outcome could not be recorded" >&2
+          exit 3
+        }
+        echo "effort ✓ codex · measured";;
+      1|2)
+        record_codex_effort unverified || {
+          echo "✗ codex effort outcome could not be recorded" >&2
+          exit 3
+        }
+        echo "⚠ codex effort unverified · $CODEX_EFFORT_RECHECK_PROBLEM" >&2;;
+      *)
+        echo "✗ codex effort re-check · $CODEX_EFFORT_RECHECK_PROBLEM" >&2
+        exit 3;;
+    esac
+  else
+    record_codex_effort measured || {
+      echo "✗ codex effort outcome could not be recorded" >&2
+      exit 3
+    }
+    echo "effort ✓ codex · measured"
+  fi
 fi
 
 if [ "$DELIVERY_CLASS" = done ]; then

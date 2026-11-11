@@ -151,12 +151,165 @@ expect 0 "$rc" "--check exits 0 on the seeded template ledger against the reposi
 out=$("$SCRIPT" --root "/nonexistent-$$-dir" 2>&1); rc=$?
 expect 2 "$rc" "missing --root exits 2" "$out"
 
-# Case 9: a malformed ledger (parts is not a list) exits 2 and names the path.
+# Case 9: a malformed ledger (parts is not a list) exits 2 and names the
+# ledger path (checked by suffix: the full $scratch path can differ after
+# symlink resolution on macOS).
 scratch="$(mktemp -d)"
 mkdir -p "$scratch/docs/evals"
 printf '{"measured_at": "2026-01-01", "parts": "nope"}\n' >"$scratch/docs/evals/evidence.json"
 out=$("$SCRIPT" --root "$scratch" 2>&1); rc=$?
 expect 2 "$rc" "a parts value that is not a list exits 2" "$out"
+expect_contains "$out" "docs/evals/evidence.json" "the error names the ledger path" "$out"
+rm -rf "$scratch"
+
+# Case 10: --check exits 1 on an untested row whose plan is not grandfathered
+# and has measure_by but no owner (the mirror image of Case 5).
+scratch="$(mktemp -d)"
+mkdir -p "$scratch/docs/evals"
+cat >"$scratch/docs/evals/evidence.json" <<'JSON'
+{"measured_at": "2026-01-01", "parts": [
+  {"key": "skills/unowned/SKILL.md", "kind": "skill", "loads": "every use", "status": "untested", "plan": "first-use review", "measure_by": "2026-12-11"}
+]}
+JSON
+out=$("$SCRIPT" --root "$scratch" --check 2>&1); rc=$?
+expect 1 "$rc" "--check exits 1 on an untested row missing owner" "$out"
+expect_contains "$out" "skills/unowned/SKILL.md" "the offending row key is named" "$out"
+expect_contains "$out" "needs owner" "the missing field is named" "$out"
+rm -rf "$scratch"
+
+# Case 11: a hook or dispatch row with no measured_tokens prints `exec`
+# instead of a disk-size estimate, and ranks after every sized row.
+scratch="$(mktemp -d)"
+mkdir -p "$scratch/skills/foo" "$scratch/docs/evals"
+printf 'x\n' >"$scratch/skills/foo/SKILL.md"
+cat >"$scratch/docs/evals/evidence.json" <<'JSON'
+{"measured_at": "2026-01-01", "parts": [
+  {"key": "skills/foo/SKILL.md", "kind": "skill", "loads": "every use", "status": "untested", "plan": "none (grandfathered)"},
+  {"key": "scripts/dispatch", "kind": "dispatch", "loads": "every dispatch", "status": "untested", "plan": "none (grandfathered)"}
+]}
+JSON
+out=$("$SCRIPT" --root "$scratch" 2>&1); rc=$?
+expect 0 "$rc" "a ledger with an unsized dispatch row still exits 0" "$out"
+foo_row=$(printf '%s\n' "$out" | grep "skills/foo/SKILL.md")
+dispatch_row=$(printf '%s\n' "$out" | grep "scripts/dispatch")
+expect_contains "$foo_row" "| 1 |" "the sized skill row ranks first" "$out"
+expect_contains "$dispatch_row" "| 2 |" "the dispatch row ranks after the sized row" "$out"
+expect_contains "$dispatch_row" "exec" "the dispatch row prints exec, not a byte-size estimate" "$out"
+rm -rf "$scratch"
+
+# Case 12: a duplicate ledger key is rejected at load (exit 2), not silently
+# resolved to whichever row happened to load last.
+scratch="$(mktemp -d)"
+mkdir -p "$scratch/docs/evals"
+cat >"$scratch/docs/evals/evidence.json" <<'JSON'
+{"measured_at": "2026-01-01", "parts": [
+  {"key": "skills/dup/SKILL.md", "kind": "skill", "loads": "every use", "status": "untested", "plan": "none (grandfathered)"},
+  {"key": "skills/dup/SKILL.md", "kind": "skill", "loads": "every use", "status": "safety", "reason": "x"}
+]}
+JSON
+out=$("$SCRIPT" --root "$scratch" --check 2>&1); rc=$?
+expect 2 "$rc" "a duplicate ledger key exits 2" "$out"
+expect_contains "$out" "skills/dup/SKILL.md" "the duplicate key is named" "$out"
+rm -rf "$scratch"
+
+# Case 13: a non-numeric measured_tokens is flagged by --check rather than
+# silently falling through to absent.
+scratch="$(mktemp -d)"
+mkdir -p "$scratch/docs/evals"
+cat >"$scratch/docs/evals/evidence.json" <<'JSON'
+{"measured_at": "2026-01-01", "parts": [
+  {"key": "hook-stdout-foo", "kind": "hook", "loads": "every session", "status": "untested", "plan": "none (grandfathered)", "measured_tokens": "500"}
+]}
+JSON
+out=$("$SCRIPT" --root "$scratch" --check 2>&1); rc=$?
+expect 1 "$rc" "a non-numeric measured_tokens fails --check" "$out"
+expect_contains "$out" "measured_tokens must be numeric" "the reason names measured_tokens" "$out"
+rm -rf "$scratch"
+
+# Case 14: a sources entry that is not a string is rejected at load (exit 2),
+# instead of raising TypeError when the table tries to join it.
+scratch="$(mktemp -d)"
+mkdir -p "$scratch/docs/evals"
+cat >"$scratch/docs/evals/evidence.json" <<'JSON'
+{"measured_at": "2026-01-01", "parts": [
+  {"key": "skills/measured/SKILL.md", "kind": "skill", "loads": "every use", "status": "helps", "sources": [1, "trial-2"]}
+]}
+JSON
+out=$("$SCRIPT" --root "$scratch" 2>&1); rc=$?
+expect 2 "$rc" "a non-string sources entry exits 2" "$out"
+rm -rf "$scratch"
+
+# Case 15: an untested row with no plan field at all needs a string plan,
+# reported before owner/measure_by are ever considered.
+scratch="$(mktemp -d)"
+mkdir -p "$scratch/docs/evals"
+cat >"$scratch/docs/evals/evidence.json" <<'JSON'
+{"measured_at": "2026-01-01", "parts": [
+  {"key": "skills/noplan/SKILL.md", "kind": "skill", "loads": "every use", "status": "untested"}
+]}
+JSON
+out=$("$SCRIPT" --root "$scratch" --check 2>&1); rc=$?
+expect 1 "$rc" "an untested row with no plan fails --check" "$out"
+expect_contains "$out" "needs a string plan" "the reason names the missing plan" "$out"
+rm -rf "$scratch"
+
+# Case 16: a measure_by that does not match YYYY-MM-DD fails --check even
+# though it is present.
+scratch="$(mktemp -d)"
+mkdir -p "$scratch/docs/evals"
+cat >"$scratch/docs/evals/evidence.json" <<'JSON'
+{"measured_at": "2026-01-01", "parts": [
+  {"key": "skills/soon/SKILL.md", "kind": "skill", "loads": "every use", "status": "untested", "plan": "first-use review", "owner": "master", "measure_by": "soon"}
+]}
+JSON
+out=$("$SCRIPT" --root "$scratch" --check 2>&1); rc=$?
+expect 1 "$rc" "a malformed measure_by fails --check" "$out"
+expect_contains "$out" "YYYY-MM-DD" "the reason names the required shape" "$out"
+rm -rf "$scratch"
+
+# Case 17: a non-string kind exits 2 with a ledger error, not an uncaught
+# TypeError from an unhashable value inside a frozenset lookup.
+scratch="$(mktemp -d)"
+mkdir -p "$scratch/docs/evals"
+cat >"$scratch/docs/evals/evidence.json" <<'JSON'
+{"measured_at": "2026-01-01", "parts": [
+  {"key": "skills/weird/SKILL.md", "kind": ["skill"], "loads": "every use", "status": "untested", "plan": "none (grandfathered)"}
+]}
+JSON
+out=$("$SCRIPT" --root "$scratch" 2>&1); rc=$?
+expect 2 "$rc" "a non-string kind exits 2, not a traceback" "$out"
+expect_contains "$out" "kind" "the error names the bad field" "$out"
+rm -rf "$scratch"
+
+# Case 18: --check discovers a docs/charter/*.md section and the two
+# AGENTS.md card twins on disk with no ledger row.
+scratch="$(mktemp -d)"
+mkdir -p "$scratch/docs/charter" "$scratch/docs/evals" "$scratch/workspace-card"
+printf '# x\n' >"$scratch/docs/charter/01-example.md"
+printf 'x\n' >"$scratch/AGENTS.md"
+printf 'x\n' >"$scratch/workspace-card/AGENTS.md"
+cat >"$scratch/docs/evals/evidence.json" <<'JSON'
+{"measured_at": "2026-01-01", "parts": []}
+JSON
+out=$("$SCRIPT" --root "$scratch" --check 2>&1); rc=$?
+expect 1 "$rc" "--check exits 1 on charter/AGENTS.md coverage gaps" "$out"
+expect_contains "$out" "docs/charter/01-example.md" "the charter section is named" "$out"
+expect_contains "$out" "workspace-card/AGENTS.md" "the workspace-card AGENTS.md twin is named" "$out"
+expect_contains "$out" "AGENTS.md" "the ops-repo AGENTS.md twin is named" "$out"
+rm -rf "$scratch"
+
+# Case 19: a pipe character in a plan, reason, or sources value is escaped
+# in the rendered table, instead of opening an extra column.
+scratch="$(mktemp -d)"
+mkdir -p "$scratch/docs/evals"
+cat >"$scratch/docs/evals/evidence.json" <<'JSON'
+{"measured_at": "2026-01-01", "parts": [
+  {"key": "scripts/hooks/pipey.sh", "kind": "hook", "loads": "every use", "status": "safety", "reason": "a|b"}
+]}
+JSON
+out=$("$SCRIPT" --root "$scratch" 2>&1); rc=$?
+expect 0 "$rc" "a pipe in a cell value still exits 0" "$out"
+expect_contains "$out" 'a\|b' "the pipe is escaped in the rendered cell" "$out"
 rm -rf "$scratch"
 
 [ "$F" -eq 0 ] && exit 0 || exit 1

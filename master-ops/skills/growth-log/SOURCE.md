@@ -19,3 +19,4 @@ The "Next time I see [signal], I will [action]" sentence, and merge-by-root-caus
 |---|---|
 | `growth-log/` files | the master's memory files and `docs/observability/` |
 | the final "If You Use Delivery Gate" section (a Stop hook) | not used; hook-injected rules are out of scope for this template |
+| frontmatter `description`'s "when a delivery gate asks what was learned" | the same Stop hook named above; this template has no counterpart trigger for it |

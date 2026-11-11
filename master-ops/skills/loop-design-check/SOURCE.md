@@ -21,3 +21,5 @@ hand-to-human condition, all in one place in a contract.
 | dispatching and waiting on a loop's workers | `scripts/dispatch` and Orca orchestration |
 | `autonomous-loops`, `continuous-agent-loop` | other ECC skills, not shipped here (they are vendor-bound to the mechanism layer) |
 | "Claude Code sub-agents" | dispatched workers |
+| "a main Claude" (loops, dispatching plan/build/judge) | a master or a dispatched worker |
+| `CLAUDE.md` (bloated, stale memory) | the workspace card, or an install's own bootstrap file in general |

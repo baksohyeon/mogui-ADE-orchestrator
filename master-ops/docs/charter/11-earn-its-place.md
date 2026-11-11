@@ -14,7 +14,9 @@ always. A result that misses one of these is a lead, not a verdict, and is liste
 
 A test records exposure (did the model actually use the part) before it records effect. A null result gets one
 "why null" pass: used? task fit? enough power and room below the ceiling? does today's model do it without the
-part? Then keep, fix the method, or cut, and say which in `docs/evals/evidence.json`.
+part? Then keep, fix the method, or cut: record the verdict as the row's `status` in `docs/evals/evidence.json`,
+with the reasoning in its `caveats`.
 
-Measure the biggest parts first: `scripts/harness-inventory` ranks every part by load per run.
+Measure the biggest parts first: `scripts/harness-inventory` ranks every part by its estimated size per load,
+not by how often it loads; each row's `loads` is shown alongside so the two can be weighed together.
 Preregister before spending: `docs/evals/README.md` holds the plan shape. A plan merges before any paid trial.

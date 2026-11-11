@@ -25,12 +25,36 @@ What else a row carries depends on `status`:
 
 - `helps` / `no-effect` / `hurts`: `sources` (a list of strings naming the trial or trials) and,
   optionally, `caveats`.
-- `untested`: `plan`, a string. `"none (grandfathered)"` means the part predates this ledger and
-  has not yet been queued for a trial. Any other plan string also needs `owner` and `measure_by`
-  (`YYYY-MM-DD`).
+- `untested`: `plan`, a string, and it is always one of two shapes: `"none (grandfathered)"`, or a
+  pointer or promise to a prereg page (the shape in the next section). `"none (grandfathered)"`
+  means the part predates this ledger and has not yet been queued for a trial; it carries no
+  `owner` or `measure_by` of its own; a grandfathered part gets both the day the master reaches it
+  in rank order, because `scripts/harness-inventory`'s table is that queue. Any other plan string
+  also needs `owner` and `measure_by` (`YYYY-MM-DD`), and a plan string that only names a review
+  style ("first-use review") without yet pointing at a prereg page is a placeholder, not a plan:
+  write the prereg page, or say when it is due, by `measure_by`.
 - `safety`: `reason`, a one-line string. A safety guard stays on its stated reason per §11; it is
   never asked to clear a fair-test bar, because it exists to stop the rare bad run that an
   averaged outcome score cannot see.
+
+### Card rows that do not actually load every session
+
+`loads` has no bucket for "opened on demand, one at a time," and a charter section is exactly
+that: `docs/MASTER-OPERATIONS.md` loads one linked `docs/charter/*.md` section per need, not the
+whole charter at session start. Those rows, and the two `AGENTS.md` twins, are still seeded as
+`loads: "every session"` for lack of a closer bucket; read it as "this card's *ceiling* is every
+session," not as a claim that it fires on every boot. A future `loads` value for on-demand parts
+would make this precise instead of approximate.
+
+### Hook and dispatch rows are `exec`, not sized from disk
+
+A hook script and a dispatch artifact such as `scripts/dispatch` are executed, not read into a
+model's context: their own file size is not a load, the way a program's source size is not the
+cost of running it. `scripts/harness-inventory` prints `exec` for every `kind: "hook"` or
+`kind: "dispatch"` row that carries no `measured_tokens`, and ranks those rows after every sized
+row rather than by their script's byte count. A hook that does put real content into context, such
+as a SessionStart hook's own stdout, is sized through `measured_tokens` instead (see below), which
+still ranks numerically like any other sized row.
 
 A row may also carry `measured_tokens` with `measured_on`, for a part a script cannot size from
 disk. `scripts/harness-inventory` prints that number verbatim, marked `*`, instead of estimating

@@ -4,15 +4,24 @@
 A part is anything docs/charter/11-earn-its-place.md says must earn its
 place: a card, a skill, a hook, a memory file, or a dispatch artifact. The
 ledger at docs/evals/evidence.json declares which parts exist and what is
-known about each one; this script never walks the filesystem looking for
-parts on its own; see docs/evals/README.md for the ledger's field shapes.
+known about each one; this script sizes a part from the ledger's own `key`
+rather than searching for it, so it never walks the filesystem looking for
+parts to size. `--check` is the exception: it globs `skills/*/SKILL.md`,
+`scripts/hooks/*.sh`, and `docs/charter/*.md`, and looks for the two fixed
+paths `workspace-card/AGENTS.md` and `AGENTS.md`, only to confirm each one
+on disk has a matching ledger row. See docs/evals/README.md for the
+ledger's field shapes.
 
 Token estimate for a part sized from disk: ascii_bytes / 4 + non_ascii_chars
 / 1.5, as an integer. This is a rough proxy (about +/-40%), not a tokenizer
 call, so it ranks parts against each other rather than pricing a budget
-exactly. A ledger row may instead carry `measured_tokens` (for a part a
-script cannot size from disk, such as a hook's stdout at a given event); that
-number is used verbatim and marked with `*` in the table.
+exactly. A hook or a dispatch artifact is executed, not read into a model's
+context, so its own file size is not a load; those two kinds print `exec`
+instead of an estimate, unless the ledger row carries `measured_tokens` (for
+example a hook's stdout at a given event, which is a real context load and
+cannot be sized from disk either way). `exec` and `absent` rows rank after
+every sized row, in ledger order. A `measured_tokens` value is used verbatim
+and marked with `*` in the table, regardless of kind.
 
 Usage:
 
@@ -29,12 +38,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
 STATUS_VALUES = frozenset({"helps", "no-effect", "hurts", "untested", "safety"})
 LOADS_VALUES = frozenset({"every session", "every prompt", "every use", "every dispatch"})
 KIND_VALUES = frozenset({"card", "skill", "hook", "memory", "dispatch", "shared"})
+EXEC_KINDS = frozenset({"hook", "dispatch"})
+MEASURE_BY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+FIXED_CARD_PATHS = ("workspace-card/AGENTS.md", "AGENTS.md")
 
 
 class LedgerError(Exception):
@@ -53,6 +66,12 @@ def estimate_tokens(path: Path) -> int:
     return int(ascii_bytes / 4 + non_ascii_chars / 1.5)
 
 
+def _require_enum(part: dict, field: str, allowed: frozenset, path: Path, i: int, key: str) -> None:
+    value = part.get(field)
+    if not isinstance(value, str) or value not in allowed:
+        raise LedgerError(f"ledger {path}: parts[{i}] ({key}) has no valid {field}")
+
+
 def load_ledger(path: Path) -> dict:
     try:
         text = path.read_text(encoding="utf-8")
@@ -64,15 +83,22 @@ def load_ledger(path: Path) -> dict:
         raise LedgerError(f"ledger {path} is not valid JSON: {exc}") from exc
     if not isinstance(data, dict) or not isinstance(data.get("parts"), list):
         raise LedgerError(f"ledger {path} is not an object with a parts list")
+    seen_keys: set[str] = set()
     for i, part in enumerate(data["parts"]):
         if not isinstance(part, dict) or not isinstance(part.get("key"), str) or not part["key"]:
             raise LedgerError(f"ledger {path}: parts[{i}] has no string key")
-        if part.get("kind") not in KIND_VALUES:
-            raise LedgerError(f"ledger {path}: parts[{i}] ({part['key']}) has no valid kind")
-        if part.get("loads") not in LOADS_VALUES:
-            raise LedgerError(f"ledger {path}: parts[{i}] ({part['key']}) has no valid loads")
-        if part.get("status") not in STATUS_VALUES:
-            raise LedgerError(f"ledger {path}: parts[{i}] ({part['key']}) has no valid status")
+        key = part["key"]
+        if key in seen_keys:
+            raise LedgerError(f"ledger {path}: duplicate key {key!r}")
+        seen_keys.add(key)
+        _require_enum(part, "kind", KIND_VALUES, path, i, key)
+        _require_enum(part, "loads", LOADS_VALUES, path, i, key)
+        _require_enum(part, "status", STATUS_VALUES, path, i, key)
+        sources = part.get("sources")
+        if sources is not None and (
+            not isinstance(sources, list) or not all(isinstance(s, str) for s in sources)
+        ):
+            raise LedgerError(f"ledger {path}: parts[{i}] ({key}) has a malformed sources list")
     return data
 
 
@@ -86,24 +112,33 @@ def plan_or_source(part: dict) -> str:
     return part.get("plan", "")
 
 
+def escape_cell(value: object) -> str:
+    return str(value).replace("|", "\\|")
+
+
 def rank_rows(root: Path, ledger: dict) -> list[dict]:
     rows = []
     for part in ledger["parts"]:
-        target = root / part["key"]
+        kind = part["kind"]
         measured = part.get("measured_tokens")
         if isinstance(measured, (int, float)) and not isinstance(measured, bool):
             tokens: int | str = int(measured)
             marked = True
-        elif target.is_file():
-            tokens = estimate_tokens(target)
+        elif kind in EXEC_KINDS:
+            tokens = "exec"
             marked = False
         else:
-            tokens = "absent"
-            marked = False
+            target = root / part["key"]
+            if target.is_file():
+                tokens = estimate_tokens(target)
+                marked = False
+            else:
+                tokens = "absent"
+                marked = False
         rows.append(
             {
                 "key": part["key"],
-                "kind": part["kind"],
+                "kind": kind,
                 "tokens": tokens,
                 "marked": marked,
                 "loads": part["loads"],
@@ -111,8 +146,9 @@ def rank_rows(root: Path, ledger: dict) -> list[dict]:
                 "plan_or_source": plan_or_source(part),
             }
         )
-    # Numeric tokens rank first, descending; "absent" rows sort last and keep
-    # their ledger order among themselves (Python's sort is stable).
+    # Numeric (sized) rows rank first, descending; `exec` and `absent` rows
+    # sort after every sized row and keep their ledger order among
+    # themselves (Python's sort is stable).
     rows.sort(key=lambda r: (not isinstance(r["tokens"], int), -(r["tokens"] if isinstance(r["tokens"], int) else 0)))
     return rows
 
@@ -125,8 +161,8 @@ def render_table(rows: list[dict]) -> str:
         tokens = row["tokens"]
         tokens_cell = f"{tokens}{'*' if row['marked'] else ''}" if isinstance(tokens, int) else str(tokens)
         lines.append(
-            f"| {i} | {row['key']} | {row['kind']} | {tokens_cell} | {row['loads']} | "
-            f"{row['status']} | {row['plan_or_source']} |"
+            f"| {i} | {escape_cell(row['key'])} | {escape_cell(row['kind'])} | {tokens_cell} | "
+            f"{escape_cell(row['loads'])} | {escape_cell(row['status'])} | {escape_cell(row['plan_or_source'])} |"
         )
     return "\n".join(lines) + "\n"
 
@@ -134,7 +170,6 @@ def render_table(rows: list[dict]) -> str:
 def check(root: Path, ledger: dict) -> list[str]:
     offenders: list[str] = []
     keys = {part["key"] for part in ledger["parts"]}
-    by_key = {part["key"]: part for part in ledger["parts"]}
 
     for skill_md in sorted((root / "skills").glob("*/SKILL.md")) if (root / "skills").is_dir() else []:
         rel = skill_md.relative_to(root).as_posix()
@@ -147,15 +182,36 @@ def check(root: Path, ledger: dict) -> list[str]:
         if rel not in keys:
             offenders.append(f"no ledger row for registered hook on disk: {rel}")
 
-    for key, part in by_key.items():
+    charter_dir = root / "docs" / "charter"
+    for charter_md in sorted(charter_dir.glob("*.md")) if charter_dir.is_dir() else []:
+        rel = charter_md.relative_to(root).as_posix()
+        if rel not in keys:
+            offenders.append(f"no ledger row for charter section on disk: {rel}")
+
+    for fixed_card in FIXED_CARD_PATHS:
+        if (root / fixed_card).is_file() and fixed_card not in keys:
+            offenders.append(f"no ledger row for card on disk: {fixed_card}")
+
+    for part in ledger["parts"]:
+        key = part["key"]
         status = part["status"]
+        measured = part.get("measured_tokens")
+        if measured is not None and not (
+            isinstance(measured, (int, float)) and not isinstance(measured, bool)
+        ):
+            offenders.append(f"{key}: measured_tokens must be numeric")
         if status == "untested":
             plan = part.get("plan")
-            if plan != "none (grandfathered)":
+            if not isinstance(plan, str) or not plan:
+                offenders.append(f"{key}: untested row needs a string plan")
+            elif plan != "none (grandfathered)":
                 if not part.get("owner"):
                     offenders.append(f"{key}: untested row with a plan needs owner")
-                if not part.get("measure_by"):
+                measure_by = part.get("measure_by")
+                if not measure_by:
                     offenders.append(f"{key}: untested row with a plan needs measure_by")
+                elif not (isinstance(measure_by, str) and MEASURE_BY_RE.fullmatch(measure_by)):
+                    offenders.append(f"{key}: measure_by must match YYYY-MM-DD")
         elif status == "safety":
             if not part.get("reason"):
                 offenders.append(f"{key}: safety row needs reason")

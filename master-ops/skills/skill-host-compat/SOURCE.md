@@ -24,4 +24,10 @@ description, metadata, license, allowed-tools`.
 | Phrase in `SKILL.md` | Vendor-neutral reading |
 |---|---|
 | `node scripts/ci/validate-skill-host-compat.js`, `/skill-host-compat` | not shipped; grep the five tokens above in shell fences when a check is needed |
-| `.agents/skills/`, `.cursor/skills/` copies | no per-host copies in this template; the canonical `skills/` text is written host-neutral from the start |
+| `.agents/skills/`, `.cursor/skills/` copies | no per-host copies in this template; these phrases stay in the canonical `skills/` text as vendored and are resolved only when a projection is built for one of those hosts, not before |
+
+The validator command (`node scripts/ci/validate-skill-host-compat.js`, and the
+`/skill-host-compat` slash form) is upstream-only: this template ships
+neither the script nor a plugin command that runs it. The manual
+equivalent is the five-token grep this file's "Why this one" section
+names, run over shell fences in a skill file before it ships.

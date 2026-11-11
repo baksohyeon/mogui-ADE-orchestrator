@@ -22,3 +22,11 @@ skill file.
 | `MEMORY.md` | the master's memory index and tracker memories |
 | "Claude uses the skill name and description" | the agent picks a skill by its name and description |
 | `/learn-eval` | the same steps followed as prose |
+| "Claude Code treats `<name>/SKILL.md` as the skill entrypoint" | the agent's own skill-discovery convention: a directory named `<name>/` holding `SKILL.md` |
+| Design Rationale's "Opus 4.6+, including the Claude 5 families" | a frontier-tier model with strong contextual judgment, whatever the install actually dispatches to |
+
+The "Global" (`~/.claude/skills`) versus "Project" (`.claude/skills`) distinction
+in Step 3 does not carry over: this template keeps one canonical `skills/`
+folder per repository, not a separate user-global location, so both save
+paths in `SKILL.md` map to that same single folder rather than to two
+different ones.

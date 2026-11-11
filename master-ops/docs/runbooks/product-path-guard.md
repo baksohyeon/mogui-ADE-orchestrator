@@ -191,9 +191,12 @@ path removes the file today: `worker-reap` lives in `src/` and was outside
 this change, so the files accumulate one per claude dispatch until a later
 round adds removal there.
 
-codex gets its write root from its own sandbox instead: without
-`codex_bypass_approvals_and_sandbox`, the launch pins `-s workspace-write`
-(measured 2026-11-09; see charter 04 "Worker Launch Approval Posture").
+Codex workers receive their write root from the workspace-write sandbox through
+`--approve-for-me` (measured 2026-11-11); `codex_bypass_approvals_and_sandbox: true`
+selects the unsandboxed bypass path. An eligible sandbox escalation under
+`--approve-for-me` is decided by the Codex automatic reviewer, not by a human;
+whether it ever approves a write outside the worktree is unmeasured; one
+observation on 2026-11-12 recorded 7 `~/.mogui` writes denied with none escalated.
 
 ## Testing
 

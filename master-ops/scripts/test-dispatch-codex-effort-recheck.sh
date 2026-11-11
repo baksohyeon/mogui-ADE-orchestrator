@@ -70,12 +70,13 @@ run_case() {
     echo '    CODEX_RECHECK_PANE=$(orca terminal read --terminal "$TERMINAL" --limit 40)'
     echo '    CODEX_EFFORT_RECHECK_PROBLEM=$(codex_effort_recheck "$CODEX_RECHECK_PANE" "$MODEL" "$CODEX_REASONING_EFFORT")'
     echo '    CODEX_EFFORT_RECHECK_RC=$?'
-    echo '    [ "$CODEX_EFFORT_RECHECK_RC" = 0 ] || [ "$CODEX_EFFORT_RECHECK_RC" = 2 ] && break'
+    echo '    if [ "$CODEX_EFFORT_RECHECK_RC" = 0 ] || [ "$CODEX_EFFORT_RECHECK_RC" = 2 ] || [ "$CODEX_EFFORT_RECHECK_RC" = 3 ]; then break; fi'
     echo '    [ "$effort_attempt" -lt 10 ] && sleep 3'
     echo '  done'
     echo '  case "$CODEX_EFFORT_RECHECK_RC" in'
     echo '    0) record_codex_effort measured;;'
     echo '    1|2) record_codex_effort unverified; echo "⚠ codex effort unverified · $CODEX_EFFORT_RECHECK_PROBLEM" >&2;;'
+    echo '    3) echo "✗ codex effort re-check · $CODEX_EFFORT_RECHECK_PROBLEM" >&2; exit 3;;'
     echo '    *) exit 3;;'
     echo '  esac'
     echo 'else'
@@ -100,6 +101,11 @@ run_case() {
   fi
   if [ "$warning" = 2 ] && ! grep -qF "footer shows 'gpt-5.4 xhigh', requested 'gpt-5.5 xhigh'" "$work/$label.stderr"; then
     echo "FAIL: $label did not warn about the model mismatch" >&2
+    sed -n '1,120p' "$work/$label.stderr" >&2
+    return 1
+  fi
+  if [ "$warning" = 3 ] && ! grep -qF "effort label 'low' on start screen; requested 'gpt-5.5 xhigh'" "$work/$label.stderr" && ! grep -qF "start screen shows non-default effort 'gpt-5.5 low'; requested 'gpt-5.5 xhigh'" "$work/$label.stderr"; then
+    echo "FAIL: $label did not reject a non-default effort mismatch" >&2
     sed -n '1,120p' "$work/$label.stderr" >&2
     return 1
   fi
@@ -154,11 +160,15 @@ xhigh_pane='› Ask Codex to do anything
   GPT-5.5 xhigh · ~/worktree'
 wrong_model_pane='› Ask Codex to do anything
   GPT-5.4 xhigh · ~/worktree'
+wrong_effort_pane='› Ask Codex to do anything
+  GPT-5.5 low · ~/worktree'
 
 run_case matched-start "$xhigh_pane" "$wrong_model_pane" 0 measured 0 1
 run_case default-repaints "$default_pane" "$xhigh_pane" 0 measured 0 6
 run_case default-persists "$default_pane" "$default_pane" 0 unverified 1 15
 run_case post-delivery-model-mismatch "$default_pane" "$wrong_model_pane" 0 unverified 2 6
+run_case post-delivery-non-default-effort "$default_pane" "$wrong_effort_pane" 3 unused 3 6
+run_case initial-non-default-effort "$wrong_effort_pane" "$xhigh_pane" 3 unused 3 5
 run_case different-model "$wrong_model_pane" "$xhigh_pane" 3 unused 2 1
 
 echo "dispatch codex effort re-check fixture tests passed"

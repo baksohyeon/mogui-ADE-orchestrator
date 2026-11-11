@@ -1,0 +1,1 @@
+- Codex dispatches tolerate a `default` effort label on the start screen, re-check the footer after delivery, and record either `effort: measured` or `effort_unverified: true` on the register row.

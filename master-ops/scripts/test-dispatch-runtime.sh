@@ -1438,6 +1438,17 @@ codex_start_screen_test() (
     bash "$script_file" "$pane"
   }
 
+  run_final_case() {  # fn-body  pane-text  final-attempt
+    local body="$1" pane="$2" attempt="$3" script_file="$work/final-case.sh"
+    {
+      echo 'set -u'
+      printf '%s\n' "$markers"
+      printf '%s\n' "$body"
+      printf 'codex_start_screen_problem "$1" gpt-5.5 xhigh %s\n' "$attempt"
+    } > "$script_file"
+    bash "$script_file" "$pane"
+  }
+
   ready='› Ask Codex to do anything
   GPT-5.5 xhigh · ~/worktree
   ? for shortcuts                                   ⚠ 1 warning · f2 to view'
@@ -1480,6 +1491,13 @@ $ready" || return 1
   assert_case no-footer "2" "no model footer yet" "" || return 1
   assert_case effort-not-ready "2" "effort not applied yet" "$effort_not_ready" || return 1
   assert_case model-mismatch "1" "requested 'gpt-5.5 xhigh'" "$model_mismatch" || return 1
+  out=$(run_final_case "$fn" "$effort_not_ready" 5)
+  rc=$?
+  if [ "$rc" != 3 ] || [ "$out" != "effort label 'default' on start screen; re-check after first turn" ]; then
+    echo "FAIL: case effort-recheck expected rc 3 and the re-check reason, got rc $rc output '$out'" >&2
+    return 1
+  fi
+  echo "ok   : case effort-recheck · rc=$rc"
 
   mutate_line() {  # unique-substring-of-target-line  replacement-line
     local needle="$1" repl="$2" line out="" replaced=0
@@ -1653,7 +1671,7 @@ BIN
   # Failability: a copy of the wiring block whose gate conditional is disabled
   # (the shape of a guard caller silently dropped from the wrapper) must
   # still inject even on a migration-menu pane.
-  mutant_wiring=${wiring_block/'if [ "$CODEX_START_RC" != 0 ]; then'/'if false; then'}
+  mutant_wiring=${wiring_block/'if [ "$CODEX_START_RC" != 0 ] && [ "$CODEX_START_RC" != 3 ]; then'/'if false; then'}
   if [ "$mutant_wiring" = "$wiring_block" ]; then
     echo "FAIL: gate-disabled mutant did not change the source" >&2
     return 1

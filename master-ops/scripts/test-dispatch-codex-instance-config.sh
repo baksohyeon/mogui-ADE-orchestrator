@@ -40,9 +40,9 @@ done
 call_site='[ "$RUNTIME" = codex ] && apply_codex_instance_launch_config'
 
 base='codex --model gpt-5.5 -c '"'"'model_reasoning_effort="xhigh"'"'"' -c check_for_update_on_startup=false -c '"'"'notice.model_migrations={"gpt-5.5"="gpt-6.1-sol"}'"'"''
-# Without the bypass flag the launch pins -s workspace-write plus the network-access
-# config key (sandbox measured 2026-11-09, socket connect measured 2026-11-10, mgm-5r9a).
-today="$base -s workspace-write -c sandbox_workspace_write.network_access=true"
+# Without the bypass flag the launch uses --approve-for-me plus the network-access
+# config key (measured 2026-11-11 on codex-cli 0.167.0, Orca 1.4.255).
+today="$base --approve-for-me -c sandbox_workspace_write.network_access=true"
 high=${today/'"xhigh"'/'"high"'}
 bypass="$base --dangerously-bypass-approvals-and-sandbox"
 bypass_warning="WARNING: codex_bypass_approvals_and_sandbox is true in $work/instance-runtime.json;
@@ -120,9 +120,9 @@ got=$(run_case "$read_fn" "$apply_fn" '{"codex_bypass_approvals_and_sandbox": tr
 expect "bypass true warns on stdout and appends --dangerously-bypass-approvals-and-sandbox" "$bypass_warning
 $bypass" "$got"
 case "$got" in
-  *network_access*) echo "FAIL: bypass-flag launch line carries a sandbox_workspace_write.network_access key" >&2; exit 1;;
+  *network_access*|*--approve-for-me*) echo "FAIL: bypass-flag launch line carries a default approval or sandbox setting" >&2; exit 1;;
 esac
-echo "ok   : bypass-flag launch line carries no sandbox_workspace_write.network_access key"
+echo "ok   : bypass-flag launch line carries no default approval or sandbox setting"
 expect "bypass false keeps today's launch line" "$today" \
   "$(run_case "$read_fn" "$apply_fn" '{"codex_bypass_approvals_and_sandbox": false}')"
 mutant=$(mutate "$apply_fn" "CODEX_BYPASS_FLAG=' --dangerously-bypass-approvals-and-sandbox'" ':')

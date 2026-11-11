@@ -11,7 +11,7 @@ runtime matches the master host, the wrapper prints a warning and continues.
 This is advisory by design: the master decides per dispatch, and the record
 exists so the trend is visible rather than to police any single call.
 
-Codex workers use `--approve-for-me` with `sandbox_workspace_write.network_access=true` by default; the configured bypass path remains available.
+Codex workers use `--approve-for-me` with `sandbox_workspace_write.network_access=true` by default. Setting `codex_bypass_approvals_and_sandbox: true` in the instance runtime config switches to `--dangerously-bypass-approvals-and-sandbox`, which disables the sandbox.
 
 Use `--same-host-reason "<text>"` when the same-host choice is deliberate. That
 prints a quieter acknowledgement instead of the warning and records the reason.

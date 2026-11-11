@@ -25,8 +25,13 @@ skill file.
 | "Claude Code treats `<name>/SKILL.md` as the skill entrypoint" | the agent's own skill-discovery convention: a directory named `<name>/` holding `SKILL.md` |
 | Design Rationale's "Opus 4.6+, including the Claude 5 families" | a frontier-tier model with strong contextual judgment, whatever the install actually dispatches to |
 
-The "Global" (`~/.claude/skills`) versus "Project" (`.claude/skills`) distinction
-in Step 3 does not carry over: this template keeps one canonical `skills/`
-folder per repository, not a separate user-global location, so both save
-paths in `SKILL.md` map to that same single folder rather than to two
-different ones.
+The "Global" (`~/.claude/skills`) versus "Project" (`.claude/skills`)
+distinction in Step 3 still carries a real decision in this template, just
+not the one `SKILL.md` names: "Global" is a pattern reusable across
+repositories, and belongs in this ops repository's own `skills/` folder,
+where it ships to every install through the template. "Project" is specific
+to one product repository, and belongs in that repository's own local
+skill location instead, which this template never reads from or writes
+into. The "ask when in doubt; never default uncertain content to Global
+persistence" guard is exactly what keeps a product-specific learning out of
+the shared `skills/` folder by mistake.

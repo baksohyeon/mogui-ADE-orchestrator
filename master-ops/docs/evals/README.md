@@ -16,7 +16,7 @@ Each entry in `parts` is one harness part:
 
 | Field | Meaning |
 |---|---|
-| `key` | The part's path relative to the template root, or a declared name for a hook's stdout (a hook's own script is sized from disk by its path; its stdout at a given event is not a file, so it gets a name instead, carried with `measured_tokens`) |
+| `key` | The part's path relative to the template root, or a declared name for a hook's stdout. A card, skill, memory, or shared part is sized from disk by its path; a hook or dispatch part is `exec` instead (see below), and a hook's stdout at a given event is not a file at all, so it gets a declared name, carried with `measured_tokens` |
 | `kind` | `card`, `skill`, `hook`, `memory`, `dispatch`, or `shared` |
 | `loads` | `every session`, `every prompt`, `every use`, or `every dispatch` |
 | `status` | `helps`, `no-effect`, `hurts`, `untested`, or `safety` |

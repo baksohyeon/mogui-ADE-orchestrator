@@ -294,8 +294,8 @@ JSON
 out=$("$SCRIPT" --root "$scratch" --check 2>&1); rc=$?
 expect 1 "$rc" "--check exits 1 on charter/AGENTS.md coverage gaps" "$out"
 expect_contains "$out" "docs/charter/01-example.md" "the charter section is named" "$out"
-expect_contains "$out" "workspace-card/AGENTS.md" "the workspace-card AGENTS.md twin is named" "$out"
-expect_contains "$out" "AGENTS.md" "the ops-repo AGENTS.md twin is named" "$out"
+expect_contains "$out" "card on disk: workspace-card/AGENTS.md" "the workspace-card AGENTS.md twin is named" "$out"
+expect_contains "$out" "card on disk: AGENTS.md" "the ops-repo AGENTS.md twin is named, not just matched as a substring of the workspace-card line" "$out"
 rm -rf "$scratch"
 
 # Case 19: a pipe character in a plan, reason, or sources value is escaped
@@ -310,6 +310,24 @@ JSON
 out=$("$SCRIPT" --root "$scratch" 2>&1); rc=$?
 expect 0 "$rc" "a pipe in a cell value still exits 0" "$out"
 expect_contains "$out" 'a\|b' "the pipe is escaped in the rendered cell" "$out"
+rm -rf "$scratch"
+
+# Case 20: a newline inside a plan, reason, or sources value is flattened
+# to a space before pipes are escaped, so an embedded newline cannot split
+# the rendered table row across physical lines.
+scratch="$(mktemp -d)"
+mkdir -p "$scratch/docs/evals"
+python3 -c "
+import json
+json.dump({'measured_at': '2026-01-01', 'parts': [
+    {'key': 'scripts/hooks/newliney.sh', 'kind': 'hook', 'loads': 'every use', 'status': 'safety', 'reason': 'a\nb'}
+]}, open('$scratch/docs/evals/evidence.json', 'w'))
+"
+out=$("$SCRIPT" --root "$scratch" 2>&1); rc=$?
+expect 0 "$rc" "a newline in a cell value still exits 0" "$out"
+row_count=$(printf '%s\n' "$out" | grep -c "newliney.sh")
+expect 1 "$row_count" "the row with an embedded newline stays on one physical line" "$out"
+expect_contains "$out" "a b" "the newline is flattened to a space" "$out"
 rm -rf "$scratch"
 
 [ "$F" -eq 0 ] && exit 0 || exit 1

@@ -113,7 +113,9 @@ def plan_or_source(part: dict) -> str:
 
 
 def escape_cell(value: object) -> str:
-    return str(value).replace("|", "\\|")
+    text = str(value).replace("\\", "\\\\")
+    text = text.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+    return text.replace("|", "\\|")
 
 
 def rank_rows(root: Path, ledger: dict) -> list[dict]:

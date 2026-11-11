@@ -10,7 +10,7 @@ Change rule: do not change this document without explicit user approval or an ac
 
 ## The Master Operations Charter
 
-The charter consists of ten sections covering the master's role, execution, and governance. Load one section at a time using the table below; sections not needed for your current task stay closed.
+The charter consists of eleven sections covering the master's role, execution, and governance. Load one section at a time using the table below; sections not needed for your current task stay closed.
 
 | Section | Topic | When to open | File |
 |---------|-------|--------------|------|
@@ -24,3 +24,4 @@ The charter consists of ten sections covering the master's role, execution, and 
 | §8 | Boot, Hooks, and Observability | Configuration or measurement | [charter/08-boot-hooks-observability.md](charter/08-boot-hooks-observability.md) — governs boot configuration, hook wiring, and observability practices |
 | §9 | Incident-Derived Rules | Understanding a safety measure | [charter/09-incident-derived-rules.md](charter/09-incident-derived-rules.md) — records rules from production incidents with measurement criteria |
 | §10 | Closed Principles Pointer | Architecture or scope questions | [charter/10-closed-principles-pointer.md](charter/10-closed-principles-pointer.md) — references closed decisions and where to find them |
+| §11 | Earn Its Place | Adding or reviewing a card section, skill, hook, memory file, or dispatch artifact | [charter/11-earn-its-place.md](charter/11-earn-its-place.md) — governs how a harness part justifies its ongoing cost, and where its measurement lives |

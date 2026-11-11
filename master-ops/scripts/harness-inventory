@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+"""Rank every harness part by its estimated token cost per run.
+
+A part is anything docs/charter/11-earn-its-place.md says must earn its
+place: a card, a skill, a hook, a memory file, or a dispatch artifact. The
+ledger at docs/evals/evidence.json declares which parts exist and what is
+known about each one; this script never walks the filesystem looking for
+parts on its own; see docs/evals/README.md for the ledger's field shapes.
+
+Token estimate for a part sized from disk: ascii_bytes / 4 + non_ascii_chars
+/ 1.5, as an integer. This is a rough proxy (about +/-40%), not a tokenizer
+call, so it ranks parts against each other rather than pricing a budget
+exactly. A ledger row may instead carry `measured_tokens` (for a part a
+script cannot size from disk, such as a hook's stdout at a given event); that
+number is used verbatim and marked with `*` in the table.
+
+Usage:
+
+    scripts/harness-inventory [--root <install root>] [--ledger <path>]
+    scripts/harness-inventory --check
+    scripts/harness-inventory --json
+
+Default root: this script lives at <root>/scripts/harness-inventory, so the
+default is its own grandparent directory. Default ledger:
+<root>/docs/evals/evidence.json.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+STATUS_VALUES = frozenset({"helps", "no-effect", "hurts", "untested", "safety"})
+LOADS_VALUES = frozenset({"every session", "every prompt", "every use", "every dispatch"})
+KIND_VALUES = frozenset({"card", "skill", "hook", "memory", "dispatch", "shared"})
+
+
+class LedgerError(Exception):
+    """A malformed ledger; the caller turns this into exit 2."""
+
+
+def default_root(script_path: Path) -> Path:
+    return script_path.resolve().parent.parent
+
+
+def estimate_tokens(path: Path) -> int:
+    data = path.read_bytes()
+    text = data.decode("utf-8", errors="replace")
+    ascii_bytes = sum(1 for b in data if b < 128)
+    non_ascii_chars = sum(1 for ch in text if ord(ch) > 127)
+    return int(ascii_bytes / 4 + non_ascii_chars / 1.5)
+
+
+def load_ledger(path: Path) -> dict:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise LedgerError(f"cannot read ledger {path}: {exc}") from exc
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise LedgerError(f"ledger {path} is not valid JSON: {exc}") from exc
+    if not isinstance(data, dict) or not isinstance(data.get("parts"), list):
+        raise LedgerError(f"ledger {path} is not an object with a parts list")
+    for i, part in enumerate(data["parts"]):
+        if not isinstance(part, dict) or not isinstance(part.get("key"), str) or not part["key"]:
+            raise LedgerError(f"ledger {path}: parts[{i}] has no string key")
+        if part.get("kind") not in KIND_VALUES:
+            raise LedgerError(f"ledger {path}: parts[{i}] ({part['key']}) has no valid kind")
+        if part.get("loads") not in LOADS_VALUES:
+            raise LedgerError(f"ledger {path}: parts[{i}] ({part['key']}) has no valid loads")
+        if part.get("status") not in STATUS_VALUES:
+            raise LedgerError(f"ledger {path}: parts[{i}] ({part['key']}) has no valid status")
+    return data
+
+
+def plan_or_source(part: dict) -> str:
+    status = part["status"]
+    if status == "safety":
+        return part.get("reason", "")
+    if status in ("helps", "no-effect", "hurts"):
+        sources = part.get("sources")
+        return "; ".join(sources) if isinstance(sources, list) else ""
+    return part.get("plan", "")
+
+
+def rank_rows(root: Path, ledger: dict) -> list[dict]:
+    rows = []
+    for part in ledger["parts"]:
+        target = root / part["key"]
+        measured = part.get("measured_tokens")
+        if isinstance(measured, (int, float)) and not isinstance(measured, bool):
+            tokens: int | str = int(measured)
+            marked = True
+        elif target.is_file():
+            tokens = estimate_tokens(target)
+            marked = False
+        else:
+            tokens = "absent"
+            marked = False
+        rows.append(
+            {
+                "key": part["key"],
+                "kind": part["kind"],
+                "tokens": tokens,
+                "marked": marked,
+                "loads": part["loads"],
+                "status": part["status"],
+                "plan_or_source": plan_or_source(part),
+            }
+        )
+    # Numeric tokens rank first, descending; "absent" rows sort last and keep
+    # their ledger order among themselves (Python's sort is stable).
+    rows.sort(key=lambda r: (not isinstance(r["tokens"], int), -(r["tokens"] if isinstance(r["tokens"], int) else 0)))
+    return rows
+
+
+def render_table(rows: list[dict]) -> str:
+    lines = ["estimate, about ±40%", ""]
+    lines.append("| rank | key | kind | tokens | loads | status | plan or source |")
+    lines.append("|---|---|---|---|---|---|---|")
+    for i, row in enumerate(rows, start=1):
+        tokens = row["tokens"]
+        tokens_cell = f"{tokens}{'*' if row['marked'] else ''}" if isinstance(tokens, int) else str(tokens)
+        lines.append(
+            f"| {i} | {row['key']} | {row['kind']} | {tokens_cell} | {row['loads']} | "
+            f"{row['status']} | {row['plan_or_source']} |"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def check(root: Path, ledger: dict) -> list[str]:
+    offenders: list[str] = []
+    keys = {part["key"] for part in ledger["parts"]}
+    by_key = {part["key"]: part for part in ledger["parts"]}
+
+    for skill_md in sorted((root / "skills").glob("*/SKILL.md")) if (root / "skills").is_dir() else []:
+        rel = skill_md.relative_to(root).as_posix()
+        if rel not in keys:
+            offenders.append(f"no ledger row for skill on disk: {rel}")
+
+    hooks_dir = root / "scripts" / "hooks"
+    for hook_script in sorted(hooks_dir.glob("*.sh")) if hooks_dir.is_dir() else []:
+        rel = hook_script.relative_to(root).as_posix()
+        if rel not in keys:
+            offenders.append(f"no ledger row for registered hook on disk: {rel}")
+
+    for key, part in by_key.items():
+        status = part["status"]
+        if status == "untested":
+            plan = part.get("plan")
+            if plan != "none (grandfathered)":
+                if not part.get("owner"):
+                    offenders.append(f"{key}: untested row with a plan needs owner")
+                if not part.get("measure_by"):
+                    offenders.append(f"{key}: untested row with a plan needs measure_by")
+        elif status == "safety":
+            if not part.get("reason"):
+                offenders.append(f"{key}: safety row needs reason")
+        elif status in ("helps", "no-effect", "hurts"):
+            sources = part.get("sources")
+            if not isinstance(sources, list) or not sources:
+                offenders.append(f"{key}: {status} row needs sources")
+    return offenders
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--root", type=Path, default=None, help="install root (default: this script's grandparent directory)")
+    ap.add_argument("--ledger", type=Path, default=None, help="ledger path (default: <root>/docs/evals/evidence.json)")
+    ap.add_argument("--check", action="store_true", help="exit 1 and name every offender; exit 0 otherwise")
+    ap.add_argument("--json", action="store_true", help="print the ranked rows as JSON instead of a table")
+    args = ap.parse_args(argv)
+
+    root = (args.root.resolve() if args.root is not None else default_root(Path(__file__)))
+    if not root.is_dir():
+        sys.stderr.write(f"harness-inventory: not a directory: {root}\n")
+        return 2
+    ledger_path = args.ledger.resolve() if args.ledger is not None else root / "docs" / "evals" / "evidence.json"
+
+    try:
+        ledger = load_ledger(ledger_path)
+    except LedgerError as exc:
+        sys.stderr.write(f"harness-inventory: {exc}\n")
+        return 2
+
+    if args.check:
+        offenders = check(root, ledger)
+        for line in offenders:
+            sys.stdout.write(f"{line}\n")
+        return 1 if offenders else 0
+
+    rows = rank_rows(root, ledger)
+    if args.json:
+        sys.stdout.write(json.dumps(rows, indent=2) + "\n")
+    else:
+        sys.stdout.write(render_table(rows))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

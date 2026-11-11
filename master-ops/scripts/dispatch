@@ -1004,7 +1004,7 @@ runtime_command() {
     # 2026-11-09 on codex-cli 0.167.0 from an Orca pane: without that sandbox,
     # /status read "danger-full-access" and a `touch` into the enclosing repository
     # root succeeded; the sandbox blocks that outside touch.
-    # Ops postmortem 2026-11-11-codex-worker-approval-prompts-need-a-human.md records 29 and 15 prompts; PR #235 and #237 set the earlier flags.
+    # The 29 and 15 prompt counts (2026-11-11, codex-cli 0.167.0, launched with `-s workspace-write` as set by PR #235 and #237) are recorded in the operating install's postmortem and in changelog.d/2026-11-12-codex-approve-for-me.md.
     # A six-step gpt-5.6-luna probe with `--approve-for-me` and `-c sandbox_workspace_write.network_access=true` produced zero prompts and DONE after 31 seconds.
     # The model flag is separate from the approval posture above and was missing
     # here until 2026-08-05. The gate validated a model id, the tier policy

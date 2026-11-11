@@ -1,0 +1,248 @@
+{
+  "measured_at": "2026-11-11",
+  "parts": [
+    {
+      "key": "workspace-card/CLAUDE.md",
+      "kind": "card",
+      "loads": "every session",
+      "status": "untested",
+      "plan": "none (grandfathered)"
+    },
+    {
+      "key": "docs/MASTER-OPERATIONS.md",
+      "kind": "card",
+      "loads": "every session",
+      "status": "untested",
+      "plan": "none (grandfathered)"
+    },
+    {
+      "key": "workspace-card/AGENTS.md",
+      "kind": "card",
+      "loads": "every session",
+      "status": "untested",
+      "plan": "none (grandfathered)"
+    },
+    {
+      "key": "AGENTS.md",
+      "kind": "card",
+      "loads": "every session",
+      "status": "untested",
+      "plan": "none (grandfathered)"
+    },
+    {
+      "key": "docs/charter/01-document-map.md",
+      "kind": "card",
+      "loads": "every session",
+      "status": "untested",
+      "plan": "none (grandfathered)"
+    },
+    {
+      "key": "docs/charter/02-role-constitution.md",
+      "kind": "card",
+      "loads": "every session",
+      "status": "untested",
+      "plan": "none (grandfathered)"
+    },
+    {
+      "key": "docs/charter/03-execution-principles.md",
+      "kind": "card",
+      "loads": "every session",
+      "status": "untested",
+      "plan": "none (grandfathered)"
+    },
+    {
+      "key": "docs/charter/04-worker-routing-review.md",
+      "kind": "card",
+      "loads": "every session",
+      "status": "untested",
+      "plan": "none (grandfathered)"
+    },
+    {
+      "key": "docs/charter/05-dispatch-gate.md",
+      "kind": "card",
+      "loads": "every session",
+      "status": "untested",
+      "plan": "none (grandfathered)"
+    },
+    {
+      "key": "docs/charter/06-succession.md",
+      "kind": "card",
+      "loads": "every session",
+      "status": "untested",
+      "plan": "none (grandfathered)"
+    },
+    {
+      "key": "docs/charter/07-records.md",
+      "kind": "card",
+      "loads": "every session",
+      "status": "untested",
+      "plan": "none (grandfathered)"
+    },
+    {
+      "key": "docs/charter/08-boot-hooks-observability.md",
+      "kind": "card",
+      "loads": "every session",
+      "status": "untested",
+      "plan": "none (grandfathered)"
+    },
+    {
+      "key": "docs/charter/09-incident-derived-rules.md",
+      "kind": "card",
+      "loads": "every session",
+      "status": "untested",
+      "plan": "none (grandfathered)"
+    },
+    {
+      "key": "docs/charter/10-closed-principles-pointer.md",
+      "kind": "card",
+      "loads": "every session",
+      "status": "untested",
+      "plan": "none (grandfathered)"
+    },
+    {
+      "key": "docs/charter/11-earn-its-place.md",
+      "kind": "card",
+      "loads": "every session",
+      "status": "untested",
+      "plan": "prereg page due by measure_by",
+      "owner": "master",
+      "measure_by": "2026-12-11"
+    },
+    {
+      "key": "skills/anti-slop/SKILL.md",
+      "kind": "skill",
+      "loads": "every use",
+      "status": "untested",
+      "plan": "none (grandfathered)"
+    },
+    {
+      "key": "skills/blame-agent/SKILL.md",
+      "kind": "skill",
+      "loads": "every use",
+      "status": "untested",
+      "plan": "none (grandfathered)"
+    },
+    {
+      "key": "skills/postmortem/SKILL.md",
+      "kind": "skill",
+      "loads": "every use",
+      "status": "untested",
+      "plan": "none (grandfathered)"
+    },
+    {
+      "key": "skills/learn-eval/SKILL.md",
+      "kind": "skill",
+      "loads": "every use",
+      "status": "untested",
+      "plan": "prereg page due by measure_by; selected by the Dionz survey of 2026-11-06",
+      "owner": "master",
+      "measure_by": "2026-12-11"
+    },
+    {
+      "key": "skills/growth-log/SKILL.md",
+      "kind": "skill",
+      "loads": "every use",
+      "status": "untested",
+      "plan": "prereg page due by measure_by; selected by the Dionz survey of 2026-11-06",
+      "owner": "master",
+      "measure_by": "2026-12-11"
+    },
+    {
+      "key": "skills/agent-security-hardening/SKILL.md",
+      "kind": "skill",
+      "loads": "every use",
+      "status": "untested",
+      "plan": "prereg page due by measure_by; selected by the Dionz survey of 2026-11-06",
+      "owner": "master",
+      "measure_by": "2026-12-11"
+    },
+    {
+      "key": "skills/skill-host-compat/SKILL.md",
+      "kind": "skill",
+      "loads": "every use",
+      "status": "untested",
+      "plan": "prereg page due by measure_by; selected by the Dionz survey of 2026-11-06",
+      "owner": "master",
+      "measure_by": "2026-12-11"
+    },
+    {
+      "key": "skills/loop-design-check/SKILL.md",
+      "kind": "skill",
+      "loads": "every use",
+      "status": "untested",
+      "plan": "prereg page due by measure_by; selected by the Dionz survey of 2026-11-06",
+      "owner": "master",
+      "measure_by": "2026-12-11"
+    },
+    {
+      "key": "scripts/hooks/bash-bare-cd-warn.sh",
+      "kind": "hook",
+      "loads": "every use",
+      "status": "untested",
+      "plan": "none (grandfathered)"
+    },
+    {
+      "key": "scripts/hooks/bash-output-size-warn.sh",
+      "kind": "hook",
+      "loads": "every use",
+      "status": "untested",
+      "plan": "none (grandfathered)"
+    },
+    {
+      "key": "scripts/hooks/bash-output-trim-warn.sh",
+      "kind": "hook",
+      "loads": "every use",
+      "status": "untested",
+      "plan": "none (grandfathered)"
+    },
+    {
+      "key": "scripts/hooks/bash-poll-warn.sh",
+      "kind": "hook",
+      "loads": "every use",
+      "status": "untested",
+      "plan": "none (grandfathered)"
+    },
+    {
+      "key": "scripts/hooks/orch-inbox-warn.sh",
+      "kind": "hook",
+      "loads": "every prompt",
+      "status": "untested",
+      "plan": "none (grandfathered)"
+    },
+    {
+      "key": "scripts/hooks/product-path-guard.sh",
+      "kind": "hook",
+      "loads": "every use",
+      "status": "safety",
+      "reason": "Blocks a master write into a product repository before it lands. It stays on this reason under charter §11: it stops the rare bad write that an averaged outcome score cannot see."
+    },
+    {
+      "key": "scripts/hooks/role-state-inject.sh",
+      "kind": "hook",
+      "loads": "every prompt",
+      "status": "untested",
+      "plan": "none (grandfathered)"
+    },
+    {
+      "key": "scripts/hooks/tracker-check.sh",
+      "kind": "hook",
+      "loads": "every session",
+      "status": "untested",
+      "plan": "none (grandfathered)"
+    },
+    {
+      "key": "scripts/hooks/worker-block-warn.sh",
+      "kind": "hook",
+      "loads": "every prompt",
+      "status": "untested",
+      "plan": "none (grandfathered)"
+    },
+    {
+      "key": "scripts/dispatch",
+      "kind": "dispatch",
+      "loads": "every dispatch",
+      "status": "untested",
+      "plan": "none (grandfathered)"
+    }
+  ]
+}

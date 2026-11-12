@@ -11,16 +11,28 @@ narrows the rules' blind spot; it does not measure exposure.
 Exit codes
   0  no uncovered candidates
   1  uncovered candidates found
-  2  cannot decide (no pattern file, not a git repository)
+  2  cannot decide (invalid profile, no pattern file, not a git repository)
 
 Usage
-  REDACTION_EXTRA_PATTERNS=~/.config/redaction-extra.txt scripts/redaction-inventory
+  scripts/redaction-inventory
+  REDACTION_PROFILE=internal scripts/redaction-inventory
   scripts/redaction-inventory --baseline .redaction-inventory-baseline
   scripts/redaction-inventory --json
 """
 
 import argparse, json, os, re, subprocess, sys
 from collections import Counter
+from pathlib import Path
+
+for _git_env in (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+):
+    os.environ.pop(_git_env, None)
 
 # Frequent generic tokens. Excluded from candidates.
 COMMON = set("""
@@ -56,7 +68,41 @@ def run(cmd):
     return p.returncode, p.stdout
 
 
-def load_rules(path):
+def resolve_path(value):
+    path = Path(os.path.expanduser(value))
+    return path if path.is_absolute() else Path.cwd() / path
+
+
+def workspace_root():
+    override = os.environ.get("REDACTION_WORKSPACE_ROOT", "")
+    if override:
+        return resolve_path(override)
+    rc, common = run(
+        ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"]
+    )
+    if rc == 0 and common.strip():
+        common_path = resolve_path(common.strip())
+        return common_path.parent.parent
+    rc, toplevel = run(["git", "rev-parse", "--show-toplevel"])
+    if rc == 0 and toplevel.strip():
+        return Path(toplevel.strip()).parent
+    return Path.cwd().parent
+
+
+def resolve_rules_path():
+    explicit = os.environ.get("REDACTION_EXTRA_PATTERNS", "")
+    if explicit:
+        return resolve_path(explicit), "env", ()
+    workspace_extra = workspace_root() / ".redaction-extra.txt"
+    legacy_extra = Path.home() / ".config" / "redaction-extra.txt"
+    if workspace_extra.is_file():
+        return workspace_extra, "workspace-root", (workspace_extra, legacy_extra)
+    if legacy_extra.is_file():
+        return legacy_extra, "legacy-home", (workspace_extra, legacy_extra)
+    return None, "none", (workspace_extra, legacy_extra)
+
+
+def load_rules(path, profile):
     """Pull the regexes out of the pattern file, and count what could not be used.
 
     A line that is malformed or whose regex does not compile used to be dropped in
@@ -64,7 +110,7 @@ def load_rules(path):
     file held: coverage narrowed while the file still looked populated. Return the
     unusable count as well so the caller can say so out loud.
     """
-    pats, unusable, considered = [], 0, 0
+    pats, unusable, considered, export_only_skipped = [], 0, 0, 0
     with open(path, encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
@@ -75,11 +121,15 @@ def load_rules(path):
             if len(parts) != 3:
                 unusable += 1
                 continue
+            rule_id, _description, regex = (part.strip() for part in parts)
+            if profile == "internal" and rule_id.startswith("workspace_"):
+                export_only_skipped += 1
+                continue
             try:
-                pats.append(re.compile(parts[2]))
+                pats.append(re.compile(regex))
             except re.error:
                 unusable += 1
-    return pats, unusable, considered
+    return pats, unusable, considered, export_only_skipped
 
 
 def load_dictionary():  # use it if present, empty set if not
@@ -127,14 +177,40 @@ def main():
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args()
 
-    path = os.environ.get("REDACTION_EXTRA_PATTERNS", "")
-    if not path or not os.path.isfile(os.path.expanduser(path)):
-        print("redaction-inventory: FAIL. REDACTION_EXTRA_PATTERNS is unset. "
-              "A blind spot cannot be measured without rules.", file=sys.stderr)
+    profile = os.environ.get("REDACTION_PROFILE") or "export"
+    if profile not in {"internal", "export"}:
+        print(
+            "redaction-inventory: REDACTION_PROFILE must be internal or export "
+            f"(received: {profile})",
+            file=sys.stderr,
+        )
         return 2
-    rules, unusable_rules, considered_rules = load_rules(os.path.expanduser(path))
-    if not rules:
-        print("redaction-inventory: FAIL. No rules could be read from the pattern file.", file=sys.stderr)
+    path, source, looked = resolve_rules_path()
+    if path is None or not path.is_file():
+        if source == "none":
+            print(
+                "redaction-inventory: FAIL. REDACTION_EXTRA_PATTERNS is unset or empty; "
+                f"looked at {looked[0]} and {looked[1]}. "
+                "A blind spot cannot be measured without rules.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"redaction-inventory: FAIL. organization rules file missing at {path} "
+                f"(org-rules-source={source}). A blind spot cannot be measured without rules.",
+                file=sys.stderr,
+            )
+        return 2
+    rules, unusable_rules, considered_rules, export_only_skipped = load_rules(
+        path, profile
+    )
+    if not rules and export_only_skipped == 0:
+        print(
+            "redaction-inventory: FAIL. No rules could be read from the pattern file "
+            f"(org-rules-source={source}, profile={profile}, "
+            f"export-only-skipped={export_only_skipped}).",
+            file=sys.stderr,
+        )
         return 2
 
     words = load_dictionary()
@@ -178,6 +254,9 @@ def main():
         print(json.dumps({"rules": len(rules),
                           "rules_unusable": unusable_rules,
                           "rules_considered": considered_rules,
+                          "export_only_skipped": export_only_skipped,
+                          "org_rules_source": source,
+                          "profile": profile,
                           "tracked_files": tracked_files,
                           "baseline": len(base),
                           "uncovered_total": total,
@@ -191,7 +270,9 @@ def main():
             if unusable_rules else ""
         )
         print(f"redaction-inventory: {len(rules)} rules / scope {scope}"
-              f" / {tracked_files} files / baseline {len(base)}{unusable_note}")
+              f" / {tracked_files} files / baseline {len(base)}"
+              f" / org-rules-source={source} / profile={profile}"
+              f" / export-only-skipped={export_only_skipped}{unusable_note}")
         if not total:
             print("redaction-inventory: OK. 0 uncovered candidates")
         else:

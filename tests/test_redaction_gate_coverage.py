@@ -228,7 +228,10 @@ def test_organization_rules_reach_the_engine(tmp_path: Path) -> None:
         cwd=repo,
         capture_output=True,
         text=True,
-        env={k: v for k, v in os.environ.items() if k != "REDACTION_EXTRA_PATTERNS"},
+        env={
+            **{k: v for k, v in os.environ.items() if k != "REDACTION_EXTRA_PATTERNS"},
+            "HOME": str(tmp_path / "test-home"),
+        },
         check=False,
     )
     assert "org_codename" not in (bare.stdout + bare.stderr)

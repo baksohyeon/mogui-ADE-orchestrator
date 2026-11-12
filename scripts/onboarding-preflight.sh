@@ -13,6 +13,11 @@ passes=0
 warnings=0
 waived=0
 
+# Keep Git discovery anchored to the repository carrying this script. An
+# inherited Git directory can point the workspace lookup at another checkout.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR \
+  GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
+
 # A required check that cannot be waived pushes the operator toward skipping the
 # whole preflight, which loses every other check with it. PREFLIGHT_WAIVE names
 # checks to downgrade from FAIL to WARN, and a waiver is always printed and
@@ -367,11 +372,60 @@ done
 # Required, not optional: REDACTION_REQUIRE_EXTRA=1 scanning exits 2 with no
 # rules loaded, and redaction-inventory exits 2 when this file is unset or
 # yields no readable rule. A missing file is a blocked publish path.
-# Honor the variable both consumers read before falling back to the default path.
-redaction_extra="${REDACTION_EXTRA_PATTERNS:-${HOME}/.config/redaction-extra.txt}"
+resolve_user_path() {
+  local value="$1"
+  local invocation_pwd="$2"
+  case "${value}" in
+    "~") printf '%s\n' "${HOME:-}" ;;
+    "~/"*) printf '%s/%s\n' "${HOME:-}" "${value#\~/}" ;;
+    /*) printf '%s\n' "${value}" ;;
+    *) printf '%s/%s\n' "${invocation_pwd}" "${value}" ;;
+  esac
+}
+
+resolve_workspace_root() {
+  local target_root="$1"
+  local invocation_pwd="$2"
+  local common_dir
+  local main_checkout
+  if [[ -n "${REDACTION_WORKSPACE_ROOT:-}" ]]; then
+    resolve_user_path "${REDACTION_WORKSPACE_ROOT}" "${invocation_pwd}"
+  elif common_dir="$(git -C "${target_root}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" \
+    && [[ -n "${common_dir}" ]]; then
+    main_checkout="$(dirname "${common_dir}")"
+    printf '%s\n' "$(dirname "${main_checkout}")"
+  else
+    printf '%s\n' "$(dirname "${target_root}")"
+  fi
+}
+
+# Both consumers use the same lookup order: explicit variable, workspace root,
+# then legacy home path. The workspace root follows the main checkout's parent
+# when Git metadata is available, with a parent-of-repository fallback.
+redaction_workspace_root=$(resolve_workspace_root "${runtime_root}" "${PWD}")
+redaction_workspace_extra="${redaction_workspace_root}/.redaction-extra.txt"
+redaction_legacy_extra="${HOME}/.config/redaction-extra.txt"
+redaction_extra_source="none"
+if [[ -n "${REDACTION_EXTRA_PATTERNS:-}" ]]; then
+  redaction_extra="${REDACTION_EXTRA_PATTERNS}"
+  redaction_extra="$(resolve_user_path "${redaction_extra}" "$(pwd -P)")"
+  redaction_extra_source="env"
+elif [[ -f "${redaction_workspace_extra}" ]]; then
+  redaction_extra="${redaction_workspace_extra}"
+  redaction_extra_source="workspace-root"
+elif [[ -f "${redaction_legacy_extra}" ]]; then
+  redaction_extra="${redaction_legacy_extra}"
+  redaction_extra_source="legacy-home"
+else
+  redaction_extra=""
+fi
 redaction_format='format: one rule per line as "id|description|regex"; blank lines and lines beginning with # are skipped; only the first two pipes separate fields, so the regex may contain "|"; the regex must compile, because redaction-inventory drops uncompilable rules without reporting them; keep the file out of version control'
 if [[ ! -f "$redaction_extra" ]]; then
-  fail "redaction-extra" "organization rules file missing: $redaction_extra; two of the three publish gates refuse to run without it; $redaction_format"
+  if [[ "${redaction_extra_source}" == "none" ]]; then
+    fail "redaction-extra" "organization rules file missing; looked at ${redaction_workspace_extra} and ${redaction_legacy_extra}; two of the three publish gates refuse to run without it; $redaction_format"
+  else
+    fail "redaction-extra" "organization rules file missing: $redaction_extra (source=${redaction_extra_source}); two of the three publish gates refuse to run without it; $redaction_format"
+  fi
 else
   # Counts only. This file's contents are what the scanner protects, so the
   # check must never print a rule, an identifier, or a match.
@@ -409,7 +463,7 @@ PY
     elif [[ "$rx_malformed" -gt 0 ]]; then
       fail "redaction-extra" "$rx_malformed of $rx_total rules in $redaction_extra are malformed or do not compile, so coverage is narrower than the file looks; $redaction_format"
     else
-      pass "redaction-extra" "$rx_valid rules load from $redaction_extra"
+      pass "redaction-extra" "$rx_valid rules load from $redaction_extra (org-rules-source=$redaction_extra_source)"
     fi
   fi
 fi

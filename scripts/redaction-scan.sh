@@ -27,6 +27,13 @@
 #
 #   Blank lines and lines beginning with # are skipped. Only the first two pipes
 #   separate fields, so a regex may contain a pipe. Every regex must compile.
+#   When REDACTION_EXTRA_PATTERNS is unset or empty, the loader checks the
+#   workspace-root .redaction-extra.txt first, then ~/.config/redaction-extra.txt.
+#   REDACTION_WORKSPACE_ROOT overrides the detected workspace root when a host's
+#   checkout layout cannot expose its main checkout location.
+#   REDACTION_PROFILE accepts internal or export and defaults to export; internal
+#   skips workspace_ rules and counts them as export-only-skipped. A non-empty
+#   value outside those choices exits 2.
 #   With REDACTION_REQUIRE_EXTRA=1, a missing or empty file exits 2 instead of
 #   scanning with generic rules only.
 #
@@ -56,9 +63,46 @@ COMMIT_MESSAGES_SCANNED="not-scanned"
 EXTRA_RULE_COUNT=0
 EXTRA_UNUSABLE=0
 EXTRA_CONSIDERED=0
+EXTRA_EXPORT_ONLY_SKIPPED=0
+EXTRA_SOURCE="none"
+REDACTION_PROFILE="${REDACTION_PROFILE:-export}"
+case "${REDACTION_PROFILE}" in
+  internal|export) ;;
+  *)
+    echo "redaction-scan: REDACTION_PROFILE must be internal or export (received: ${REDACTION_PROFILE})" >&2
+    exit 2
+    ;;
+esac
+
+resolve_user_path() {
+  local value="$1"
+  local invocation_pwd="$2"
+  case "${value}" in
+    "~") printf '%s\n' "${HOME:-}" ;;
+    "~/"*) printf '%s/%s\n' "${HOME:-}" "${value#\~/}" ;;
+    /*) printf '%s\n' "${value}" ;;
+    *) printf '%s/%s\n' "${invocation_pwd}" "${value}" ;;
+  esac
+}
+
+resolve_workspace_root() {
+  local target_root="$1"
+  local invocation_pwd="$2"
+  local common_dir
+  local main_checkout
+  if [[ -n "${REDACTION_WORKSPACE_ROOT:-}" ]]; then
+    resolve_user_path "${REDACTION_WORKSPACE_ROOT}" "${invocation_pwd}"
+  elif common_dir="$(git -C "${target_root}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" \
+    && [[ -n "${common_dir}" ]]; then
+    main_checkout="$(dirname "${common_dir}")"
+    printf '%s\n' "$(dirname "${main_checkout}")"
+  else
+    printf '%s\n' "$(dirname "${target_root}")"
+  fi
+}
 
 usage() {
-  sed -n '2,34p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,41p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 while [[ $# -gt 0 ]]; do
@@ -111,14 +155,29 @@ if [[ -n "${TARGET_ROOT_INPUT}" ]]; then
   fi
 fi
 
+INVOCATION_PWD="${PWD}"
+WORKSPACE_ROOT="$(resolve_workspace_root "${TARGET_ROOT}" "${INVOCATION_PWD}")"
+WORKSPACE_EXTRA="${WORKSPACE_ROOT}/.redaction-extra.txt"
+LEGACY_EXTRA="${HOME:-}/.config/redaction-extra.txt"
+if [[ -n "${REDACTION_EXTRA_PATTERNS:-}" ]]; then
+  EXTRA_SOURCE="env"
+elif [[ -f "${WORKSPACE_EXTRA}" ]]; then
+  REDACTION_EXTRA_PATTERNS="${WORKSPACE_EXTRA}"
+  EXTRA_SOURCE="workspace-root"
+elif [[ -f "${LEGACY_EXTRA}" ]]; then
+  REDACTION_EXTRA_PATTERNS="${LEGACY_EXTRA}"
+  EXTRA_SOURCE="legacy-home"
+else
+  REDACTION_EXTRA_PATTERNS=""
+fi
+
 # A relative REDACTION_EXTRA_PATTERNS, --allowlist, or REDACTION_PYTHON value
 # is what the caller typed at the invocation directory, not at REPO_ROOT or
 # TARGET_ROOT: resolve all three before the cd below changes what a relative
 # path would mean. A REDACTION_PYTHON with no slash is a bare command name
 # (for example python3.11) and stays as-is so it keeps resolving through PATH.
-INVOCATION_PWD="${PWD}"
 if [[ -n "${REDACTION_EXTRA_PATTERNS:-}" && "${REDACTION_EXTRA_PATTERNS}" != /* ]]; then
-  REDACTION_EXTRA_PATTERNS="${INVOCATION_PWD}/${REDACTION_EXTRA_PATTERNS}"
+  REDACTION_EXTRA_PATTERNS="$(resolve_user_path "${REDACTION_EXTRA_PATTERNS}" "${INVOCATION_PWD}")"
 fi
 if [[ "${LEGACY_ALLOWLIST}" != /* ]]; then
   LEGACY_ALLOWLIST="${INVOCATION_PWD}/${LEGACY_ALLOWLIST}"
@@ -194,12 +253,12 @@ CONFIG="${BASE_CONFIG}"
 # convert anything, and the patterns stay outside version control.
 if [[ -n "${REDACTION_EXTRA_PATTERNS:-}" && -f "${REDACTION_EXTRA_PATTERNS}" ]]; then
   ORG_CONFIG="${WORK_DIR}/org.toml"
-  if "${PYTHON}" - "${REDACTION_EXTRA_PATTERNS}" "${BASE_CONFIG}" "${ORG_CONFIG}" > "${WORK_DIR}/counts" <<'PY'
+  if "${PYTHON}" - "${REDACTION_EXTRA_PATTERNS}" "${BASE_CONFIG}" "${ORG_CONFIG}" "${REDACTION_PROFILE}" > "${WORK_DIR}/counts" <<'PY'
 import re
 import sys
 
-source, base, target = sys.argv[1], sys.argv[2], sys.argv[3]
-rules, unusable, considered = [], 0, 0
+source, base, target, profile = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+rules, unusable, considered, export_only_skipped = [], 0, 0, 0
 with open(source, encoding="utf-8") as handle:
     for line in handle:
         line = line.strip()
@@ -211,6 +270,9 @@ with open(source, encoding="utf-8") as handle:
             unusable += 1
             continue
         rule_id, description, regex = (part.strip() for part in parts)
+        if profile == "internal" and rule_id.startswith("workspace_"):
+            export_only_skipped += 1
+            continue
         try:
             re.compile(regex)
         except re.error:
@@ -237,10 +299,10 @@ native = sum(
 
 # Counts only. This file's contents are what the scan protects, so nothing from it
 # is printed here or anywhere else.
-print(f"{len(rules)} {unusable} {considered} {native}")
+print(f"{len(rules)} {unusable} {considered} {native} {export_only_skipped}")
 PY
   then
-    read -r EXTRA_RULE_COUNT EXTRA_UNUSABLE EXTRA_CONSIDERED EXTRA_NATIVE < "${WORK_DIR}/counts"
+    read -r EXTRA_RULE_COUNT EXTRA_UNUSABLE EXTRA_CONSIDERED EXTRA_NATIVE EXTRA_EXPORT_ONLY_SKIPPED < "${WORK_DIR}/counts"
   else
     echo "redaction-scan: FAIL — could not read the organization rules file" >&2
     exit 2
@@ -279,11 +341,11 @@ if [[ "${CONFIG}" != "${BASE_CONFIG}" ]]; then
     # the translator applied and probes each rule alone through gitleaks, so
     # the rules file format lives in one shape and an id indented with a tab cannot
     # slip the net. Ids only, never patterns.
-    bad_ids=$("${PYTHON}" - "${REDACTION_EXTRA_PATTERNS}" "${WORK_DIR}" <<'PY'
+    bad_ids=$("${PYTHON}" - "${REDACTION_EXTRA_PATTERNS}" "${WORK_DIR}" "${REDACTION_PROFILE}" <<'PY'
 import subprocess
 import sys
 
-source, work_dir = sys.argv[1], sys.argv[2]
+source, work_dir, profile = sys.argv[1], sys.argv[2], sys.argv[3]
 bad = []
 with open(source, encoding="utf-8") as handle:
     for line in handle:
@@ -294,6 +356,8 @@ with open(source, encoding="utf-8") as handle:
         if len(parts) != 3:
             continue
         rule_id, _description, regex = (part.strip() for part in parts)
+        if profile == "internal" and rule_id.startswith("workspace_"):
+            continue
         single = f"{work_dir}/single-rule.toml"
         with open(single, "w", encoding="utf-8") as out:
             out.write('title = "single rule probe"\n\n')
@@ -319,7 +383,11 @@ fi
 
 # A green scan must not imply coverage it does not have.
 if [[ "${EXTRA_RULE_COUNT}" -eq 0 ]]; then
-  echo "redaction-scan: WARNING — organization-specific rules not loaded (REDACTION_EXTRA_PATTERNS unset or empty); this scan covers generic patterns only" >&2
+  if [[ "${EXTRA_SOURCE}" == "none" ]]; then
+    echo "redaction-scan: WARNING - organization-specific rules not loaded (REDACTION_EXTRA_PATTERNS unset or empty; looked at ${WORKSPACE_EXTRA} and ${LEGACY_EXTRA}); this scan covers generic patterns only" >&2
+  else
+    echo "redaction-scan: WARNING - organization-specific rules not loaded (source=${EXTRA_SOURCE}, profile=${REDACTION_PROFILE}); this scan covers generic patterns only" >&2
+  fi
   if [[ "${REQUIRE_EXTRA}" == "1" ]]; then
     echo "redaction-scan: FAIL — required organization rules were not loaded" >&2
     exit 2
@@ -484,15 +552,15 @@ PY
 FINDINGS="$(wc -l < "${FINDINGS_FILE}" | tr -d ' ')"
 
 if [[ "${VERBOSE}" -eq 1 ]]; then
-  echo "redaction-scan: mode=${MODE} range=${RANGE:-none} files=${file_count} commit-messages=${COMMIT_MESSAGES_SCANNED} org-rules=${EXTRA_RULE_COUNT} config=$(basename "${CONFIG}") engine=$(gitleaks version 2>/dev/null | head -1) root=${TARGET_ROOT}"
+  echo "redaction-scan: mode=${MODE} range=${RANGE:-none} files=${file_count} commit-messages=${COMMIT_MESSAGES_SCANNED} org-rules=${EXTRA_RULE_COUNT} org-rules-source=${EXTRA_SOURCE} profile=${REDACTION_PROFILE} export-only-skipped=${EXTRA_EXPORT_ONLY_SKIPPED} config=$(basename "${CONFIG}") engine=$(gitleaks version 2>/dev/null | head -1) root=${TARGET_ROOT}"
 fi
 
 if [[ "${FINDINGS}" -gt 0 ]]; then
-  echo "redaction-scan: FAIL: ${FINDINGS} finding(s) (fail-closed, root=${TARGET_ROOT})" >&2
+  echo "redaction-scan: FAIL: ${FINDINGS} finding(s) (profile=${REDACTION_PROFILE}, fail-closed, root=${TARGET_ROOT})" >&2
   cat "${FINDINGS_FILE}" >&2
   echo "redaction-scan: fix, or exempt with a .gitleaksignore fingerprint, then re-run." >&2
   exit 1
 fi
 
-echo "redaction-scan: OK: 0 findings (mode=${MODE}, files=${file_count}, commit-messages=${COMMIT_MESSAGES_SCANNED}, org-rules=${EXTRA_RULE_COUNT}, read-proof-tokens ack-<12 hex> are allowlisted, root=${TARGET_ROOT})"
+echo "redaction-scan: OK: 0 findings (mode=${MODE}, files=${file_count}, commit-messages=${COMMIT_MESSAGES_SCANNED}, org-rules=${EXTRA_RULE_COUNT}, org-rules-source=${EXTRA_SOURCE}, profile=${REDACTION_PROFILE}, export-only-skipped=${EXTRA_EXPORT_ONLY_SKIPPED}, read-proof-tokens ack-<12 hex> are allowlisted, root=${TARGET_ROOT})"
 exit 0

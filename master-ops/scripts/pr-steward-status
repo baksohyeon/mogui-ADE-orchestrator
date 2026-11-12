@@ -211,8 +211,8 @@ gates_commands = [
     "git fetch origin main",
     "git merge --no-ff origin/main",
     "PYTHONPATH=src uv run --with pytest --no-project python3 -m pytest tests -q",
-    "REDACTION_REQUIRE_EXTRA=1 REDACTION_EXTRA_PATTERNS=~/.config/redaction-extra.txt ./scripts/redaction-scan.sh",
-    "REDACTION_REQUIRE_EXTRA=1 REDACTION_EXTRA_PATTERNS=~/.config/redaction-extra.txt ./scripts/redaction-inventory",
+    "REDACTION_PROFILE=internal REDACTION_REQUIRE_EXTRA=1 ./scripts/redaction-scan.sh",
+    "REDACTION_PROFILE=internal REDACTION_REQUIRE_EXTRA=1 ./scripts/redaction-inventory",
 ]
 
 overall_reasons = []

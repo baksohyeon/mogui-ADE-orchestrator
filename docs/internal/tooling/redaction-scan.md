@@ -30,12 +30,13 @@ A green line that does not name its scope cannot be told apart from a full audit
 
 ```console
 $ scripts/redaction-scan.sh
-redaction-scan: OK — 0 findings (mode=tracked, files=144, commit-messages=not-scanned, org-rules=10)
+redaction-scan: OK: 0 findings (mode=tracked, files=144, commit-messages=not-scanned, org-rules=10, org-rules-source=workspace-root, profile=export, export-only-skipped=0)
 ```
 
 `commit-messages=not-scanned` is the honest reading in tracked and staged modes. gitleaks does not read commit messages: a key present only in a message returns no findings while the same key in file content is found. That is measured, and it is why the message loop lives in this script.
 
 `org-rules=N` counts rules actually loaded into the run, not lines the file happens to hold.
+`org-rules-source` names whether the file came from the environment, the workspace root, or the legacy home path. `profile=export` is the safe default and loads every valid rule. `profile=internal` skips rules whose id starts with `workspace_` and reports them as `export-only-skipped=N`.
 
 ### Organization-specific rules (`REDACTION_EXTRA_PATTERNS`)
 
@@ -44,18 +45,24 @@ scanner: this repository is public, so hardcoding them would leak what the scan 
 Supply them per checkout instead.
 
 ```bash
-# keep this file out of version control
-cat > ~/.config/redaction-extra.txt <<'RULES'
+# keep this file out of version control; the workspace root is one directory above the repository
+cat > ../.redaction-extra.txt <<'RULES'
 company_acme|Company identifier acme|(?i)acme
 personal_handle|Personal handle|(?i)(?<![A-Za-z0-9_])myhandle(?![A-Za-z0-9_])
 RULES
 
-export REDACTION_EXTRA_PATTERNS=~/.config/redaction-extra.txt
+# This explicit path is optional. Without it, the scan checks the workspace
+# root file first, then ~/.config/redaction-extra.txt.
+export REDACTION_EXTRA_PATTERNS=../.redaction-extra.txt
 ```
 
 Each line is `id|description|regex`. Blank lines and `#` comments are ignored. Only the first two pipes separate fields, so a regex may contain a pipe.
 
+Both `redaction-scan.sh` and `redaction-inventory` use the same lookup order. Set `REDACTION_WORKSPACE_ROOT` when the main checkout and linked worktree layout cannot identify the workspace root. Inventory output includes `org-rules-source`, `profile`, and `export-only-skipped` so its coverage statement stays aligned with the scanner.
+
 The file is translated into a gitleaks config that extends the committed one, so this format is unchanged and no checkout converts anything. A line that is malformed, or whose regex does not compile, is skipped with a warning that counts it rather than dropped in silence.
+
+Use `REDACTION_PROFILE=internal` in the operations repository's own pre-push hook and steward gates when workspace-local rules should be excluded from those private scans. The public template and export checks use `REDACTION_PROFILE=export`, which is also the default; credentials and generic rules behave the same in both profiles.
 
 When no such rules are loaded, the scan prints a warning to stderr and still exits 0, so a
 green result means "generic patterns only" — not "fully audited". In CI or before a public
@@ -71,7 +78,7 @@ Exit codes: `0` clean, `1` findings, `2` cannot decide — `gitleaks` missing, r
 
 The scan reads repository content. It does not read pull request titles or bodies, review comments, release notes, or issue text, because none of that is in the repository. Those are also where internal names arrive most easily, since they are prose rather than code. Grep outgoing text before posting it.
 
-`scripts/redaction-inventory` answers the inverse question, which tokens no rule covers, and has no gitleaks equivalent.
+`scripts/redaction-inventory` answers the inverse question, which tokens no rule covers, and has no gitleaks equivalent. It uses the same rules lookup and profile filter as the scanner; under `internal`, `workspace_` rules are counted as `export-only-skipped` and excluded from coverage.
 
 ### What it flags
 

@@ -39,6 +39,10 @@ regexes = [
 
 A token written as a quoted key assignment, for example `access_token = "ack-<12 hex>"`, is flagged by the redaction scan even with this entry in place, because the assignment rule's secret is the whole assignment and not the bare token; this is intended, since a token belongs only in the worker's completion message and in no committed file.
 
+### 2026-11-12 redaction rules file move
+
+Include the organization rules file move to the workspace root as `.redaction-extra.txt`, the legacy symlink at `~/.config/redaction-extra.txt`, and the operations repository's own pre-push hook update in the dry-run plan. Inspect `REDACTION_EXTRA_PATTERNS` in the operator environment and hook, plus both the legacy file and any existing workspace-root file; when the explicit path is set, record the selected file, and when both default files exist and differ, pause and ask the owner to resolve the differences before replacing either file. After the owner explicitly approves these changes at step 4, move the file, leave the symlink for tools that still use the legacy location, and set `REDACTION_PROFILE=internal` in the operations repository's own pre-push hook so `workspace_` rules remain available to export checks and are skipped from the internal scan.
+
 3. **Dry-run apply (always first)**: print the exact file list and the reason for each path. No write yet. Pass the same eight measured `--placeholder` values as step 5; a dry run that omits them prints the missing-placeholder report and exits 2 by design, since a planned file still carries each unsupplied token.
 
 ```console

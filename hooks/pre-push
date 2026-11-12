@@ -11,13 +11,13 @@
 # intermediate commit and is gone from the final tree — the one real leak this
 # repository has had was exactly that shape.
 #
-# The scan honors the caller's environment: a checkout with organization rules
-# configured (REDACTION_EXTRA_PATTERNS, REDACTION_REQUIRE_EXTRA) scans with
-# them. The hook does not demand them, deliberately — this file is committed to
-# a public repository, and a contributor cannot have rules that are private to
-# the organization. The test suite also stays out: tests are the agent's job,
-# and a slow hook gets bypassed with --no-verify until it might as well not
-# exist.
+# The scan honors the caller's environment and its default lookup: a workspace
+# root or legacy home rules file is used when REDACTION_EXTRA_PATTERNS is unset,
+# while an explicit path wins. The hook does not demand rules, deliberately,
+# because this file is committed to a public repository and a contributor may
+# not have private organization rules. The test suite also stays out: tests are
+# the agent's job, and a slow hook gets bypassed with --no-verify until it might
+# as well not exist.
 set -euo pipefail
 
 repo_root=$(git rev-parse --show-toplevel)

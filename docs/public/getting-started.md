@@ -25,7 +25,7 @@ Classifications below follow `scripts/onboarding-preflight.sh` as read on this b
 | `python3` on `PATH` | `python3 --version` | FAIL: entry points are `python3` scripts. No version floor; tools that need a newer interpreter locate one themselves or skip loudly ([Reference](reference.md)). |
 | `bd` (Beads) | `command -v bd` | FAIL: `binary missing; install Beads before onboarding`. Later, `bd where` must resolve inside an ops repository; a marker without a working `bd where` is also FAIL. |
 | Orca skills `orca-cli` and `orchestration` | Confirm both skill directories resolve under your agent skills roots, or that a skills package manager lists them globally. | FAIL on `skills` when neither the on-disk artifacts nor a successful global list shows both names. |
-| Organization redaction rules file | Default path `~/.config/redaction-extra.txt`, or the path in `REDACTION_EXTRA_PATTERNS`. File must yield at least one compilable rule (three pipe-separated fields: id, description, regex). | FAIL on `redaction-extra`: two of the three publish gates refuse without a usable rules file. |
+| Organization redaction rules file | Default lookup is the workspace root `.redaction-extra.txt`, then `~/.config/redaction-extra.txt`; `REDACTION_EXTRA_PATTERNS` overrides both. File must yield at least one compilable rule (three pipe-separated fields: id, description, regex); the preflight counts `workspace_` rules regardless of profile. `REDACTION_PROFILE=export` is the default; the scanner under `internal` skips rules whose id starts with `workspace_`. | FAIL on `redaction-extra`: two of the three publish gates refuse without a usable rules file. |
 
 WARN (does not exit 1 alone; still called out when labelled essential):
 

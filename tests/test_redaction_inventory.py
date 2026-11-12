@@ -38,11 +38,22 @@ def _rules(tmp_path: Path, *lines: str, name: str = "rules.txt") -> Path:
     return path
 
 
-def _run(repo: Path, rules: Path | None, *args: str) -> subprocess.CompletedProcess:
+def _run(
+    repo: Path,
+    rules: Path | None,
+    *args: str,
+    env_extra: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess:
     env = {**os.environ}
     env.pop("REDACTION_EXTRA_PATTERNS", None)
+    env.pop("REDACTION_PROFILE", None)
+    env.pop("REDACTION_WORKSPACE_ROOT", None)
+    isolated_home = str(repo.parent / "test-home")
+    env["HOME"] = isolated_home
+    env["USERPROFILE"] = isolated_home
     if rules is not None:
         env["REDACTION_EXTRA_PATTERNS"] = str(rules)
+    env.update(env_extra or {})
     return subprocess.run(
         ["python3", str(INVENTORY), *args],
         cwd=repo,
@@ -66,6 +77,73 @@ def test_pattern_file_with_no_usable_rule_cannot_decide(tmp_path: Path) -> None:
     result = _run(repo, rules)
     assert result.returncode == 2, result.stdout + result.stderr
     assert "No rules could be read" in result.stderr
+
+
+def test_workspace_root_rules_are_the_default_lookup(tmp_path: Path) -> None:
+    repo = _git_repo(tmp_path, {"a.md": "plain prose\n"})
+    (tmp_path / ".redaction-extra.txt").write_text(GOOD_RULE + "\n", encoding="utf-8")
+
+    result = _run(repo, None)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "org-rules-source=workspace-root" in result.stdout
+    assert "profile=export" in result.stdout
+    assert "export-only-skipped=0" in result.stdout
+
+
+def test_legacy_home_rules_are_the_fallback(tmp_path: Path) -> None:
+    repo = _git_repo(tmp_path, {"a.md": "plain prose\n"})
+    home = repo.parent / "test-home"
+    (home / ".config").mkdir(parents=True)
+    (home / ".config" / "redaction-extra.txt").write_text(
+        GOOD_RULE + "\n", encoding="utf-8"
+    )
+
+    result = _run(repo, None)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "org-rules-source=legacy-home" in result.stdout
+
+
+def test_workspace_root_rules_win_over_legacy_home(tmp_path: Path) -> None:
+    repo = _git_repo(tmp_path, {"a.md": "plain prose\n"})
+    (tmp_path / ".redaction-extra.txt").write_text(GOOD_RULE + "\n", encoding="utf-8")
+    home = repo.parent / "test-home"
+    (home / ".config").mkdir(parents=True)
+    (home / ".config" / "redaction-extra.txt").write_text(
+        "legacy|legacy marker|LEGACY_MARKER\n", encoding="utf-8"
+    )
+
+    result = _run(repo, None)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "org-rules-source=workspace-root" in result.stdout
+
+
+def test_internal_profile_excludes_workspace_rules_and_counts_them(
+    tmp_path: Path,
+) -> None:
+    repo = _git_repo(tmp_path, {"a.md": "the widget-factory ships today\n"})
+    rules = _rules(tmp_path, "workspace_demo|workspace name|widget-[a-z]+")
+
+    internal = _run(repo, rules, env_extra={"REDACTION_PROFILE": "internal"})
+    export = _run(repo, rules, env_extra={"REDACTION_PROFILE": "export"})
+
+    assert internal.returncode == 1, internal.stdout + internal.stderr
+    assert "export-only-skipped=1" in internal.stdout
+    assert "profile=internal" in internal.stdout
+    assert export.returncode == 0, export.stdout + export.stderr
+    assert "export-only-skipped=0" in export.stdout
+
+
+def test_invalid_profile_fails_closed(tmp_path: Path) -> None:
+    repo = _git_repo(tmp_path, {"a.md": "plain prose\n"})
+    rules = _rules(tmp_path, GOOD_RULE)
+
+    result = _run(repo, rules, env_extra={"REDACTION_PROFILE": "private"})
+
+    assert result.returncode == 2
+    assert "REDACTION_PROFILE must be internal or export" in result.stderr
 
 
 def test_unusable_rule_lines_are_reported_not_dropped_in_silence(
@@ -135,5 +213,8 @@ def test_json_output_carries_the_scope_it_measured(tmp_path: Path) -> None:
     assert payload["rules"] == 1
     assert payload["rules_unusable"] == 1
     assert payload["rules_considered"] == 2
+    assert payload["export_only_skipped"] == 0
+    assert payload["org_rules_source"] == "env"
+    assert payload["profile"] == "export"
     assert payload["tracked_files"] == 1
     assert payload["uncovered_total"] >= 1

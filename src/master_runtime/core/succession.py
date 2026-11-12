@@ -615,7 +615,7 @@ def _recorded_seat_matches(
 
 def _recorded_workspace_selector(worktree_id: str) -> str:
     normalized = _normalize_worktree_selector(worktree_id)
-    return normalized if worktree_id.strip().startswith("id:") else "id:" + normalized
+    return "id:" + normalized
 
 
 def _session_holds_path(session: SessionInfo, seat_path: str) -> bool:

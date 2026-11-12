@@ -1008,7 +1008,7 @@ def test_spawn_successor_uses_scoped_path_listing_for_legacy_folder_id(
     scoped_fixture = _orca_json_from_terminals(
         {
             "handle": "term-current",
-            "worktreeId": "folder:legacy",
+            "worktreeId": "id:folder:legacy",
             "worktreePath": "",
             "connected": True,
             "title": "current master",

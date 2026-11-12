@@ -35,11 +35,11 @@ if ! CMD=$(printf '%s' "$INPUT" | python3 -c "import json,sys; print(json.load(s
   exit 0
 fi
 case "$CMD" in
-  *"| head"*|*"| tail"*|*"| grep"*|*"--jq"*|*"| python3"*|*"| wc"*|*"-m json.tool"*|*"| cut"*) exit 0;;
+  *"| head"*|*"| tail"*|*"--jq"*|*"| wc"*|*"grep -c"*|*"grep -q"*) exit 0;;
 esac
 case "$CMD" in
   *"gh api graphql"*|*"orca terminal list"*|*"orca terminal read"*|*"git log"*|*"git diff"*|*"git show"*|*"pytest"*|*"cat "*)
     VERDICT="warn"
-    echo "[trim-warn] 대용량 출력 가능 명령에 필터가 없다. --jq/tail/grep로 필요한 줄만 받아라 (L0 토큰 규칙)" ;;
+    echo "[trim-warn] 대용량 출력 가능 명령에 필터가 없다. --jq/head/tail/wc/grep -c/grep -q로 필요한 줄만 받아라 (L0 토큰 규칙)" ;;
 esac
 exit 0

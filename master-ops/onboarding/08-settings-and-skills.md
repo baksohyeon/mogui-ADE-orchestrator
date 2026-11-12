@@ -44,11 +44,14 @@ fragment, not a complete settings object; the exact host settings file remains
 owner-managed:
 
 ```json
+"bashOutputMaxChars": 6000,
 "PreToolUse": [
   {"matcher": "Edit|Write|NotebookEdit", "hooks": [{"type": "command", "command": "bash \"{{OPS_REPO}}/scripts/hooks/product-path-guard.sh\""}]},
   {"matcher": "Bash", "hooks": [{"type": "command", "command": "bash \"{{OPS_REPO}}/scripts/hooks/product-path-guard.sh\""}]}
 ]
 ```
+
+Set `bashOutputMaxChars` only in the master's Claude Code settings because tool output is the largest context cost of a long master session, and above 6000 characters Claude Code saves the result to a session file and sends the model its path plus a 2,000-character preview; workers do not receive this setting because their sessions are short.
 
 Record in the ops notes that harness wiring is default-on as of this install. Reuse the dependency-set approval from Step 0; if it was not asked there, ask it once here and name the `ctx` local history indexing side effect before running `--fix`. Ask a separate host-edit approval before changing host `settings.json`, hooks, or plugin configuration. If host-edit approval is declined, print the commands, record that wiring as pending, and continue only where unconfigured execution is allowed.
 

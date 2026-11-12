@@ -1,0 +1,3 @@
+The master's Claude Code settings now enforce `bashOutputMaxChars: 6000`; results above the cap are saved to a session file and represented to the model by the path and a 2,000-character preview. The trim warning hook now treats line bounds and count filters as pass cases, while `cut`, broad `grep`, `python3`, and `json.tool` no longer bypass the warning. Onboarding and observability docs describe the settings cap as enforcement and both output hooks as reminders.
+
+Verification: the focused hook test passed; the full `master-ops/scripts/test-*.sh` shell set passed with 32 of 32 scripts; `PYTHONPATH=src python3 -m pytest tests -q` recorded 978 passed, 19 subtests passed, and 7 environment-related failures.

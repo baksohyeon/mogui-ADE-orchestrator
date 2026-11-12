@@ -8,6 +8,8 @@ The fire-log (`~/.mogui/hook-fire-log.jsonl`) records when ops hooks run, where 
 
 Observational fire-log first; active canaries later and only for hooks that never appear in the log. Principle borrowed from the AHE research program: with rare events you cannot distinguish "prevented" from "never happened"; the antidote is a guard-firing log.
 
+The master's `bashOutputMaxChars: 6000` settings cap is the enforcement layer; `bash-output-trim-warn.sh` and `bash-output-size-warn.sh` are reminder layers only.
+
 ## What the Log Answers
 
 - Does a hook fire at all?

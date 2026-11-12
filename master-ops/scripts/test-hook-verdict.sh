@@ -42,12 +42,15 @@ PY
 }
 
 # bash-output-trim-warn: pass/warn/skip
-out=$(printf '{"tool_input":{"command":"git log | head -1"}}' | MOGUI_HOOK_FIRE_LOG="$LOG" bash "$TRIM" 2>&1)
+out=$(printf '{"tool_input":{"command":"git log | head -20"}}' | MOGUI_HOOK_FIRE_LOG="$LOG" bash "$TRIM" 2>&1)
 [ -z "$out" ] && ok "trim-warn pass path stays silent" || fail "trim-warn pass path printed: $out"
 assert_verdict pass "trim-warn pass path"
 out=$(printf '{"tool_input":{"command":"git diff"}}' | MOGUI_HOOK_FIRE_LOG="$LOG" bash "$TRIM" 2>&1)
 printf '%s' "$out" | grep -q '\[trim-warn\]' && ok "trim-warn warn path prints warning" || fail "trim-warn warn path missing warning"
 assert_verdict warn "trim-warn warn path"
+out=$(printf '{"tool_input":{"command":"git diff | cut -c1-200"}}' | MOGUI_HOOK_FIRE_LOG="$LOG" bash "$TRIM" 2>&1)
+printf '%s' "$out" | grep -q '\[trim-warn\]' && ok "trim-warn cut path warns" || fail "trim-warn cut path stayed silent"
+assert_verdict warn "trim-warn cut path"
 out=$(printf 'not json' | MOGUI_HOOK_FIRE_LOG="$LOG" bash "$TRIM" 2>&1)
 [ -z "$out" ] && ok "trim-warn skip path stays silent" || fail "trim-warn skip path printed: $out"
 assert_verdict skip "trim-warn skip path"

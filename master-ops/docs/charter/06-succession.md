@@ -11,7 +11,7 @@ Succession is a single clean-spawn procedure. It is triggered by explicit user i
 Clean succession procedure:
 
 1. Current master runs a promotion audit for accepted knowledge, active tracks, and open decisions.
-2. Current master spawns a clean successor with an explicit workspace selector, kickoff file, root `{{WORKSPACE_ROOT}}`, model `{{MODEL_ID}}`, and machine-readable response when the host supports it.
+2. Current master spawns a clean successor using the recorded seat path when it resolves exactly one live workspace; it passes an explicit workspace selector for recovery placement, along with the kickoff file, root `{{WORKSPACE_ROOT}}`, model `{{MODEL_ID}}`, and machine-readable response when the host supports it.
 3. Current master verifies successor liveness, leaves a one-line retirement note, and freezes.
 4. Successor boots, declares Role State, measures the actual model field, captures the placement evidence three-set, closes or retires the predecessor pane when the host supports it, and appends a concise Lineage entry.
 

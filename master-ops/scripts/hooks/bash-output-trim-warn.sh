@@ -34,40 +34,64 @@ if ! CMD=$(printf '%s' "$INPUT" | python3 -c "import json,sys; print(json.load(s
   VERDICT="skip"
   exit 0
 fi
-if ! python3 - "$CMD" <<'PY'
-import re
-import sys
+case "$CMD" in
+  *"gh api graphql"*|*"orca terminal list"*|*"orca terminal read"*|*"git log"*|*"git diff"*|*"git show"*|*"pytest"*|*"cat "*) ;;
+  *) exit 0;;
+esac
+is_bounded_stage() {
+  local stage="$1"
+  [[ "$stage" =~ (^|[[:space:]])(head|tail)([[:space:]]|$) ]] && return 0
+  [[ "$stage" == *"--jq"* ]] && return 0
+  [[ "$stage" =~ (^|[[:space:]])wc([[:space:]]|$) ]] && return 0
+  [[ "$stage" =~ (^|[[:space:]])grep[[:space:]]+-[cq]([[:space:]]|$) ]] && return 0
+  [[ "$stage" =~ (^|[[:space:]])rg[[:space:]]+(-c|--count|-q|--quiet|-l)([[:space:]]|$) ]] && return 0
+  [[ "$stage" =~ (^|[[:space:]])rg[[:space:]]+(-m[[:space:]]+[0-9]+|--max-count(=|[[:space:]]+)[0-9]+)([[:space:]]|$) ]] && return 0
+  return 1
+}
 
-command = sys.argv[1]
-large_markers = (
-    "gh api graphql",
-    "orca terminal list",
-    "orca terminal read",
-    "git log",
-    "git diff",
-    "git show",
-    "pytest",
-    "cat ",
-)
-bounded_stage = re.compile(
-    r"(?:^|\s)(?:head|tail)\b|--jq\b|(?:^|\s)wc\b|"
-    r"(?:^|\s)grep\s+-[cq](?:\s|$)|"
-    r"(?:^|\s)rg\s+(?:-c|--count|-q|--quiet|-l)(?:\s|$)|"
-    r"(?:^|\s)rg\s+(?:-m\s+\d+|--max-count(?:=|\s+)\d+)(?:\s|$)"
-)
+# Return the first simple command and the remainder split at ;, &&, or ||.
+# A single | stays in the command so the final pipeline stage can be checked.
+split_compound() {
+  local text="$1" char next i
+  for ((i = 0; i < ${#text}; i++)); do
+    char="${text:i:1}"
+    next="${text:i+1:1}"
+    if [[ "$char" == ";" ]]; then
+      SPLIT_SEGMENT="${text:0:i}"
+      SPLIT_REMAINDER="${text:i+1}"
+      return 0
+    fi
+    if [[ "$char" == "&" && "$next" == "&" ]] || [[ "$char" == "|" && "$next" == "|" ]]; then
+      SPLIT_SEGMENT="${text:0:i}"
+      SPLIT_REMAINDER="${text:i+2}"
+      return 0
+    fi
+  done
+  return 1
+}
 
-# Check each simple command in a compound command. A filter in a later
-# command must not exempt an earlier large-output command. For each large
-# command, only its final pipeline stage can bound the output.
-for segment in re.split(r";|&&|\|\|", command):
-    if not any(marker in segment for marker in large_markers):
-        continue
-    final_stage = segment.rsplit("|", 1)[-1]
-    if not bounded_stage.search(final_stage):
-        sys.exit(1)
-sys.exit(0)
-PY
-then
+has_unbounded_large_segment() {
+  local remaining="$1" segment final_stage
+  while :; do
+    if split_compound "$remaining"; then
+      segment="$SPLIT_SEGMENT"
+      remaining="$SPLIT_REMAINDER"
+    else
+      segment="$remaining"
+      remaining=""
+    fi
+    case "$segment" in
+      *"gh api graphql"*|*"orca terminal list"*|*"orca terminal read"*|*"git log"*|*"git diff"*|*"git show"*|*"pytest"*|*"cat "*)
+        final_stage="${segment##*|}"
+        is_bounded_stage "$final_stage" || return 0
+        ;;
+    esac
+    [[ -z "$remaining" ]] && break
+  done
+  return 1
+}
+
+if has_unbounded_large_segment "$CMD"; then
   VERDICT="warn"
   echo "[trim-warn] 대용량 출력 가능 명령에 필터가 없다. rg -m N/--max-count N, rg -c/--count, rg -q/--quiet, rg -l, head/tail/--jq/wc/grep -c/grep -q로 필요한 줄만 받아라 (L0 토큰 규칙)"
 fi

@@ -210,6 +210,15 @@
       "plan": "none (grandfathered)"
     },
     {
+      "key": "scripts/hooks/bd-gap-warn.sh",
+      "kind": "hook",
+      "loads": "every prompt",
+      "status": "untested",
+      "plan": "prereg page due by measure_by",
+      "owner": "master",
+      "measure_by": "2026-12-12"
+    },
+    {
       "key": "scripts/hooks/product-path-guard.sh",
       "kind": "hook",
       "loads": "every use",

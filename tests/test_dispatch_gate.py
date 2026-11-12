@@ -898,6 +898,42 @@ def test_r4_registers_verified_job_id(tmp_path: Path) -> None:
     assert _ledger_entries(tmp_path)[-1]["attempt"] == 2
 
 
+def test_register_records_tracker_card_and_reason_columns(tmp_path: Path) -> None:
+    contract = _contract(tmp_path, "verified job with tracker card")
+    gate = _gate(tmp_path, now=1_000)
+    gate.check(DispatchRequest("codex", contract, est_input_chars=10_000, n_agents=1))
+
+    decision = gate.register_job(
+        "job-card",
+        lambda job_id: job_id == "job-card",
+        card="tk-card1",
+        card_reason="",
+    )
+
+    assert decision.allow is True
+    entry = _ledger_entries(tmp_path)[-1]
+    assert entry["card"] == "tk-card1"
+    assert entry["card_reason"] == ""
+
+
+def test_register_records_explicit_no_card_reason(tmp_path: Path) -> None:
+    contract = _contract(tmp_path, "verified job without tracker card")
+    gate = _gate(tmp_path, now=1_000)
+    gate.check(DispatchRequest("codex", contract, est_input_chars=10_000, n_agents=1))
+
+    decision = gate.register_job(
+        "job-no-card",
+        lambda job_id: job_id == "job-no-card",
+        card="",
+        card_reason="tracker unavailable",
+    )
+
+    assert decision.allow is True
+    entry = _ledger_entries(tmp_path)[-1]
+    assert entry["card"] == ""
+    assert entry["card_reason"] == "tracker unavailable"
+
+
 def test_register_job_with_contract_sha_refuses_when_ticket_consumed(
     tmp_path: Path,
 ) -> None:
@@ -1045,6 +1081,8 @@ def test_cli_register_accepts_worker_pid_and_pane_flags(
                 "4242",
                 "--pane",
                 "term_abc123",
+                "--card",
+                "tk-cli1",
             ]
         )
         == 0
@@ -1052,6 +1090,93 @@ def test_cli_register_accepts_worker_pid_and_pane_flags(
     entry = _ledger_entries(tmp_path)[-1]
     assert entry["worker_pid"] == "4242"
     assert entry["pane"] == "term_abc123"
+    assert entry["card"] == "tk-cli1"
+    assert entry["card_reason"] == ""
+
+
+def test_cli_register_accepts_card_reason_without_card(tmp_path: Path, monkeypatch) -> None:
+    contract = _contract(tmp_path, "cli card reason")
+    ledger = tmp_path / "ledger.jsonl"
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
+
+    assert script["main"](
+        [
+            "--ledger",
+            str(ledger),
+            "check",
+            "--runtime",
+            "codex",
+            "--model",
+            "gpt-5.6-luna",
+            "--contract",
+            str(contract),
+            "--agents",
+            "1",
+            "--est-chars",
+            "1000",
+            "--completion-channel",
+            "sentinel-log",
+        ]
+    ) == 0
+    assert script["main"](
+        [
+            "--ledger",
+            str(ledger),
+            "register",
+            "--job-id",
+            "job-card-reason",
+            "--probe-cmd",
+            "printf job-card-reason",
+            "--card-reason",
+            "tracker unavailable",
+        ]
+    ) == 0
+    entry = _ledger_entries(tmp_path)[-1]
+    assert entry["card"] == ""
+    assert entry["card_reason"] == "tracker unavailable"
+
+
+def test_cli_register_rejects_card_and_reason_together(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
+    assert script["main"](
+        [
+            "--ledger",
+            str(tmp_path / "ledger.jsonl"),
+            "register",
+            "--job-id",
+            "job-both-card-values",
+            "--probe-cmd",
+            "printf job-both-card-values",
+            "--card",
+            "tk-card1",
+            "--card-reason",
+            "tracker unavailable",
+        ]
+    ) == 2
+
+
+def test_cli_register_rejects_empty_card_and_reason_together(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
+    assert script["main"](
+        [
+            "--ledger",
+            str(tmp_path / "ledger.jsonl"),
+            "register",
+            "--job-id",
+            "job-empty-card-values",
+            "--probe-cmd",
+            "printf job-empty-card-values",
+            "--card",
+            "",
+            "--card-reason",
+            "",
+        ]
+    ) == 2
 
 
 def test_cli_register_with_verified_orchestration_task_records_task(

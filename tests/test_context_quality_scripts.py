@@ -4,9 +4,12 @@ import datetime as dt
 import json
 import os
 import runpy
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 from windows_exec_surface import skip_windows_exec_surface
 
@@ -17,6 +20,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 CONTEXT_BUDGET = REPO_ROOT / "master-ops" / "scripts" / "context-budget"
 CONTEXT_LOG = REPO_ROOT / "master-ops" / "scripts" / "context-quality-log.sh"
 CONTEXT_SAMPLER = REPO_ROOT / "master-ops" / "scripts" / "context-quality-sampler.sh"
+COMPACTION_PROBE = REPO_ROOT / "master-ops" / "scripts" / "compaction-probe.sh"
 
 
 def _run_budget(*args: str, cwd: Path = REPO_ROOT) -> subprocess.CompletedProcess[str]:
@@ -258,6 +262,7 @@ def test_context_quality_sampler_no_python3_fallback_prints_notice(tmp_path: Pat
     result = _run_sampler(env=env)
     assert result.returncode == 0, result.stderr
     assert "notice: python3 unavailable; all sections skipped" in result.stdout
+    assert "dispatches without a card today: unavailable" in result.stdout
 
 
 def test_context_quality_sampler_no_python3_fallback_with_bd_still_reports_python3(tmp_path: Path):
@@ -274,6 +279,7 @@ def test_context_quality_sampler_no_python3_fallback_with_bd_still_reports_pytho
     result = _run_sampler(env=env)
     assert result.returncode == 0, result.stderr
     assert "notice: python3 unavailable; all sections skipped" in result.stdout
+    assert "dispatches without a card today: unavailable" in result.stdout
 
 
 def test_context_quality_sampler_treats_command_timeout_as_unavailable(tmp_path: Path):
@@ -298,3 +304,45 @@ def test_context_quality_sampler_treats_command_timeout_as_unavailable(tmp_path:
     result = _run_sampler(env=env)
     assert result.returncode == 0, result.stderr
     assert "## bd active tracks (in_progress)\nunavailable" in result.stdout
+
+
+def test_context_quality_sampler_reports_today_card_gaps(tmp_path: Path):
+    ledger = tmp_path / "dispatch-ledger.jsonl"
+    now = int(dt.datetime.now(dt.timezone.utc).timestamp())
+    ledger.write_text(
+        "[]\n"
+        + json.dumps({"ts": now, "decision": "ALLOW", "job_id": "job-gap"})
+        + "\n"
+        + json.dumps(
+            {"ts": now, "decision": "ALLOW", "job_id": "job-card", "card": "card-1"}
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env["DISPATCH_GATE_LEDGER"] = str(ledger)
+    result = _run_sampler(env=env)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.rstrip().endswith("dispatches without a card today: 1")
+
+
+def test_compaction_probe_includes_card_recall_item():
+    if shutil.which("python3") is None:
+        pytest.skip("python3 unavailable")
+    env = os.environ.copy()
+    env["CONTEXT_QUALITY_LOG"] = "/tmp/context-quality-test.jsonl"
+    env["DISPATCH_GATE_LEDGER"] = "/tmp/dispatch-ledger-test.jsonl"
+    result = subprocess.run(
+        ["/bin/bash", str(COMPACTION_PROBE)],
+        input='{"source":"compact","session_id":"session-card"}\n',
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert result.returncode == 0
+    output = json.loads(result.stdout)
+    context = output["hookSpecificOutput"]["additionalContext"]
+    assert '"cards":' in context
+    assert "R5 Dispatch cards:" in context
+    assert "Context-quality log path:\n/tmp/context-quality-test.jsonl" in context
+    assert "Dispatch ledger path:\n/tmp/dispatch-ledger-test.jsonl" in context

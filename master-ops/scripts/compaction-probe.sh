@@ -9,10 +9,12 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 INPUT="$(cat 2>/dev/null)"
-LEDGER_PATH="${CONTEXT_QUALITY_LOG:-$HOME/.mogui/monitors/mg/context-quality.jsonl}"
+CONTEXT_LOG_PATH="${CONTEXT_QUALITY_LOG:-$HOME/.mogui/monitors/mg/context-quality.jsonl}"
+DISPATCH_LEDGER_PATH="${DISPATCH_GATE_LEDGER:-${MOGUI_STATE_DIR:-$HOME/.mogui}/dispatch-ledger.jsonl}"
 
 PROBE_INPUT="$INPUT" \
-LEDGER_PATH="$LEDGER_PATH" \
+CONTEXT_LOG_PATH="$CONTEXT_LOG_PATH" \
+DISPATCH_LEDGER_PATH="$DISPATCH_LEDGER_PATH" \
 python3 <<'PY' 2>/dev/null || true
 import json
 import os
@@ -28,9 +30,13 @@ if payload.get("source") != "compact":
     sys.exit(0)
 
 session_id = payload.get("session_id") or "<unknown-session>"
-ledger_path = os.environ.get(
-    "LEDGER_PATH",
+context_log_path = os.environ.get(
+    "CONTEXT_LOG_PATH",
     os.path.expanduser("~/.mogui/monitors/mg/context-quality.jsonl"),
+)
+dispatch_ledger_path = os.environ.get(
+    "DISPATCH_LEDGER_PATH",
+    os.path.expanduser("~/.mogui/dispatch-ledger.jsonl"),
 )
 
 record_template = {
@@ -41,6 +47,7 @@ record_template = {
     "model": "<actual model/tool version stamp>",
     "recall": {
         "tracks": "<remembered active tracks>",
+        "cards": "<remembered card ids for tracks dispatched or landed today>",
         "decisions": "<remembered recent accepted decisions>",
         "role": "<remembered Current Role and Lock>",
         "turn": "<remembered in-progress turn and next action>",
@@ -58,12 +65,16 @@ R1 Active tracks: from memory only, list active track ids and one-line status. A
 R2 Recent accepted decisions: from memory only, restate recent accepted decisions and artifacts. After recording, verify against Git history and docs.
 R3 Role State: from memory only, restate Current Role and Role Lock. After recording, verify against docs/runbooks/role-state.md.
 R4 In-progress turn: describe the work immediately before compaction and the next action. This item may have no independent source; mark uncertainty explicitly.
+R5 Dispatch cards: from memory only, the card ids of the tracks dispatched or landed today (KST). After recording, verify against the ledger's card column.
 
 Append one JSON record before source verification. Suggested payload:
 {json.dumps(record_template, ensure_ascii=False, separators=(",", ":"))}
 
-Ledger path:
-{ledger_path}
+Context-quality log path:
+{context_log_path}
+
+Dispatch ledger path:
+{dispatch_ledger_path}
 
 After recording, print a comparison table. If recall loss is present, write concrete loss_notes and set proposed_succession=true only when the workspace threshold says succession should be proposed. Automatic succession is not allowed."""
 

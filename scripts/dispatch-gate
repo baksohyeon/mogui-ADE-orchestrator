@@ -115,6 +115,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--pane",
         help="terminal handle the worker was dispatched to",
     )
+    register_parser.add_argument(
+        "--card",
+        help="tracker card id for this dispatch",
+    )
+    register_parser.add_argument(
+        "--card-reason",
+        help="reason no tracker card id is present",
+    )
 
     watch_parser = subparsers.add_parser("watch")
     watch_parser.add_argument("--log", required=True)
@@ -172,6 +180,17 @@ def _check(args: argparse.Namespace) -> int:
 
 
 def _register(args: argparse.Namespace) -> int:
+    # Keep direct callers that predate the card column readable. Reject a
+    # registration request that supplies both card metadata values or leaves
+    # both values empty once either option is supplied.
+    card_populated = bool(args.card and args.card.strip())
+    reason_populated = bool(args.card_reason and args.card_reason.strip())
+    if args.card is not None or args.card_reason is not None:
+        if card_populated == reason_populated:
+            _diagnose(
+                "INVALID_REQUEST: exactly one of card or card_reason must be populated"
+            )
+            return 2
     gate = _gate(args)
     completion_channel = gate.completion_channel_for_registration(
         contract_sha=args.contract_sha,
@@ -201,6 +220,8 @@ def _register(args: argparse.Namespace) -> int:
         expected_completion_channel=completion_channel,
         worker_pid=args.worker_pid,
         pane=args.pane,
+        card=args.card,
+        card_reason=args.card_reason,
     )
     mogui_emit(
         "info",

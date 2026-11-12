@@ -29,6 +29,7 @@ if ! command -v python3 >/dev/null 2>&1; then
   printf '## bd ready (backlog, 참고용)\nunavailable\n\n'
   printf '## bd closed in last 24h\nunavailable\n\n'
   printf '## %s git log --oneline -5\nunavailable\n' "$ANCHOR_LABEL"
+  printf 'dispatches without a card today: unavailable\n'
   exit 0
 fi
 
@@ -38,6 +39,7 @@ import json
 import os
 import shutil
 import subprocess
+from datetime import timedelta, timezone
 
 admin_dir = os.environ.get("ADMIN_PLANNING_DIR") or os.getcwd()
 repo_root = os.environ.get("REPO_ROOT") or admin_dir
@@ -172,6 +174,41 @@ else:
         print("unavailable")
     else:
         print(result.stdout.rstrip())
+
+ledger_value = os.environ.get("DISPATCH_GATE_LEDGER")
+if not ledger_value:
+    state_dir = os.environ.get("MOGUI_STATE_DIR")
+    ledger_value = (
+        os.path.join(state_dir, "dispatch-ledger.jsonl")
+        if state_dir
+        else os.path.expanduser("~/.mogui/dispatch-ledger.jsonl")
+    )
+missing_cards = 0
+today_kst = now.astimezone(timezone(timedelta(hours=9))).date()
+try:
+    ledger_lines = open(ledger_value, encoding="utf-8")
+except OSError:
+    ledger_lines = None
+if ledger_lines is not None:
+    for line in ledger_lines:
+        try:
+            row = json.loads(line)
+            if not isinstance(row, dict):
+                continue
+            stamp = dt.datetime.fromtimestamp(float(row.get("ts")), dt.timezone.utc)
+            stamp = stamp.astimezone(timezone(timedelta(hours=9)))
+        except (TypeError, ValueError, OSError, OverflowError, json.JSONDecodeError):
+            continue
+        if (
+            isinstance(row, dict)
+            and row.get("decision") == "ALLOW"
+            and row.get("job_id")
+            and stamp.date() == today_kst
+            and not str(row.get("card") or "").strip()
+        ):
+            missing_cards += 1
+    ledger_lines.close()
+print(f"dispatches without a card today: {missing_cards}")
 PY
 
 exit 0

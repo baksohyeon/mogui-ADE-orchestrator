@@ -1051,6 +1051,7 @@ BIN
       printf '%s\n' "$markers"
       printf '%s\n' "$1"
       echo 'record_dispatch_launched() { echo "FIRELOG outcome=$1 source=$3"; }'
+      echo 'fail_after_tracker_claim() { exit "${2:-3}"; }'
       echo 'TERMINAL=term_fake TASK=task_fake DISP=ctx_fake RUNTIME=claude'
       printf 'PRE_INJECT_CLASS=%q\n' "${5:-prepared-prompt}"
       printf 'DISP_RAW=%q\n' "$2"
@@ -1334,6 +1335,7 @@ BIN
       printf 'SCRIPTS_DIR=%q STATE_DIR=%q MODEL=claude-opus-5-5 RUNTIME=claude TASK=task_fake\n' "$(dirname "$dispatch")" "${2:-$work/state}"
       printf 'WORKTREE=%q TERMINAL=%q FAKE_CALLS=%q\n' "path:$work/worktree" "$1" "$work/calls"
       echo 'export FAKE_CALLS'
+      echo 'fail_after_tracker_claim() { exit "${2:-3}"; }'
       printf '%s\n' "$step_fns" "$block"
     } > "$work/step3.sh"
     out=$(PATH="$work/bin:$PATH" bash "$work/step3.sh" 2>&1)
@@ -1653,6 +1655,7 @@ BIN
       echo 'CODEX_REASONING_EFFORT=xhigh'
       echo 'TERMINAL=term_fake'
       echo 'TASK=task_fake'
+      echo 'fail_after_tracker_claim() { exit "${2:-3}"; }'
       printf '%s\n' "$body"
       echo 'echo WIRING_SURVIVED'
     } > "$outfile"
@@ -2172,6 +2175,7 @@ BIN
       printf 'CODEX_ACCOUNTS_DIR=%s\n' "$accounts_dir"
       printf 'WORKTREE=%s\n' "$worktree"
       printf 'HOOKS_ANSWER_BIN=%s\n' "$hooks_answer_bin"
+      echo 'fail_after_tracker_claim() { exit "${2:-3}"; }'
       printf '%s\n' "$wiring_text"
       echo 'echo WIRING_SURVIVED'
     } > "$outfile"
@@ -2712,6 +2716,7 @@ RULES
       printf '%s\n' "$block_fn"
       printf 'CHK=%s\n' "$(printf '%q' "$chat_json")"
       echo 'SPEC="original spec"'
+      echo 'fail_after_tracker_claim() { echo "✗ $1"; exit "${2:-3}"; }'
       printf '%s\n' "$append_block"
       echo 'printf "SPEC_TAIL::%s\n" "$SPEC"'
     } > "$outfile"

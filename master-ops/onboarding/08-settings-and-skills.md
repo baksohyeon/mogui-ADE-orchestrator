@@ -20,6 +20,7 @@ Wire every shipped hook and skill this template documents, without offering an o
 - SessionStart on compact: `scripts/compaction-probe.sh`
 - PreCompact: reload or export tracker memory
 - UserPromptSubmit: role-state line + `Proposal -> Approval -> Execution` (see charter §8 / §9)
+- UserPromptSubmit: dispatch tracker-card gap warning (`scripts/hooks/bd-gap-warn.sh`) alongside the orchestration inbox warning
 - PreToolUse: supervised-dispatch bypass warning
 - PreToolUse(Edit|Write|NotebookEdit) and PreToolUse(Bash): fail closed for
   product-repository writes with `scripts/hooks/product-path-guard.sh`; configure
@@ -68,6 +69,7 @@ When the owner asks to turn something off, explain the piece in one sentence, st
 | Bash output cap | Limits successful Bash or PowerShell output shown inline for the master | Remove `bashOutputMaxChars` from the master's workspace `.claude/settings.json` and start a fresh session; use `.claude/settings.local.json` for a temporary project-local value |
 | Tracker reachability warning (SessionStart) | Warns when the issue tracker is not reachable from the workspace root | Remove the SessionStart tracker-check hook |
 | Inbox / orch-inbox warn | Surfaces unread orchestration mailbox items | Remove the UserPromptSubmit hook for `orch-inbox-warn.sh` when present |
+| Dispatch card gap warning | Surfaces today's registered dispatches without a tracker card | Remove the UserPromptSubmit hook for `bd-gap-warn.sh` when present |
 | Blame-agent skill | Structured incident observation skill | Uninstall or unload the skill from the host skill path; documents stay in `master-ops/skills/blame-agent/` |
 | Methodology / restraint skill layers | How the master plans, verifies, and limits scope | Uninstall the host skill pack; charter remains readable as advice without them |
 | Worker runtime plugin | In-session delegation to another CLI | `/plugin` uninstall (or host equivalent) for that worker plugin |

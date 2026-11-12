@@ -2594,6 +2594,45 @@ def test_cli_report_shows_every_policy_a_day_was_judged_against(
     assert "/policies/legacy-entry.json: sha256=<unrecorded> decisions=1" in output
 
 
+def test_cli_report_counts_absolute_and_tilde_home_policy_paths_together(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
+    fake_home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(fake_home))
+    ledger = tmp_path / "policy-report-ledger.jsonl"
+    rows = (
+        {
+            "tier_policy_path": str(fake_home / "policies" / "installation.json"),
+            "tier_policy_sha256": "a" * 64,
+        },
+        {
+            "tier_policy_path": "~/policies/installation.json",
+            "tier_policy_sha256": "a" * 64,
+        },
+    )
+    with ledger.open("w", encoding="utf-8") as handle:
+        for index, row in enumerate(rows):
+            entry = {
+                "ts": 1_785_000_000 + index,
+                "decision": "ALLOW",
+                "reason": "OK",
+                "model": "gpt-5.6-luna",
+                "cost_proxy": 10,
+                **row,
+            }
+            handle.write(json.dumps(entry) + "\n")
+
+    assert script["main"](["--ledger", str(ledger), "report"]) == 0
+    output = capsys.readouterr().out
+    assert (
+        f"~/policies/installation.json: sha256={'a' * 12} decisions=2"
+        in output
+    )
+
+
 def test_cli_report_uses_stored_cost_and_labels_legacy_computation(
     tmp_path: Path,
     capsys,
@@ -3010,6 +3049,43 @@ def test_ledger_records_which_tier_policy_decided(tmp_path: Path) -> None:
     entries = _ledger_entries(tmp_path)[-2:]
     assert [entry["tier_policy_path"] for entry in entries] == [str(policy)] * 2
     assert [entry["tier_policy_sha256"] for entry in entries] == [digest] * 2
+
+
+def test_ledger_tier_policy_path_uses_tilde_for_home_path(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    fake_home = tmp_path / "home"
+    policy = fake_home / "policies" / "model-tier-policy.json"
+    policy.parent.mkdir(parents=True)
+    policy.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "worker_allowed": ["gpt-5.6-luna"],
+                "worker_denied_tiers": ["gpt-5.6-sol"],
+                "unknown_model": "deny",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(fake_home))
+    gate = _gate(tmp_path, tier_policy_path=policy)
+
+    decision = gate.check(
+        DispatchRequest(
+            runtime="codex",
+            model="gpt-5.6-luna",
+            contract_path=_contract(tmp_path, "home-relative policy path"),
+            est_input_chars=10_000,
+            n_agents=1,
+        )
+    )
+
+    assert decision.allow is True
+    assert _ledger_entries(tmp_path)[-1]["tier_policy_path"] == (
+        "~/policies/model-tier-policy.json"
+    )
 
 
 def test_tier_policy_rejects_case_differing_duplicate_across_sets(

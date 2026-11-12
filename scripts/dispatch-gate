@@ -29,6 +29,7 @@ from master_runtime.core.dispatch_gate import (  # noqa: E402
     DispatchRequest,
     GateDecision,
     ReasonCode,
+    normalize_tier_policy_path,
 )
 from master_runtime.core.watchdog import StallStatus, check_stall  # noqa: E402
 
@@ -286,7 +287,7 @@ def _report(args: argparse.Namespace) -> int:
         if isinstance(policy_path, str) and policy_path:
             policy_counts[
                 (
-                    policy_path,
+                    normalize_tier_policy_path(policy_path),
                     policy_digest if isinstance(policy_digest, str) else "",
                 )
             ] += 1

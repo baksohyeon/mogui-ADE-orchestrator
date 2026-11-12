@@ -32,7 +32,8 @@
 #   REDACTION_WORKSPACE_ROOT overrides the detected workspace root when a host's
 #   checkout layout cannot expose its main checkout location.
 #   REDACTION_PROFILE accepts internal or export and defaults to export; internal
-#   skips workspace_ rules and counts them as export-only-skipped.
+#   skips workspace_ rules and counts them as export-only-skipped. A non-empty
+#   value outside those choices exits 2.
 #   With REDACTION_REQUIRE_EXTRA=1, a missing or empty file exits 2 instead of
 #   scanning with generic rules only.
 #
@@ -67,11 +68,41 @@ EXTRA_SOURCE="none"
 REDACTION_PROFILE="${REDACTION_PROFILE:-export}"
 case "${REDACTION_PROFILE}" in
   internal|export) ;;
-  *) REDACTION_PROFILE="export" ;;
+  *)
+    echo "redaction-scan: REDACTION_PROFILE must be internal or export (received: ${REDACTION_PROFILE})" >&2
+    exit 2
+    ;;
 esac
 
+resolve_user_path() {
+  local value="$1"
+  local invocation_pwd="$2"
+  case "${value}" in
+    "~") printf '%s\n' "${HOME:-}" ;;
+    "~/"*) printf '%s/%s\n' "${HOME:-}" "${value#\~/}" ;;
+    /*) printf '%s\n' "${value}" ;;
+    *) printf '%s/%s\n' "${invocation_pwd}" "${value}" ;;
+  esac
+}
+
+resolve_workspace_root() {
+  local target_root="$1"
+  local invocation_pwd="$2"
+  local common_dir
+  local main_checkout
+  if [[ -n "${REDACTION_WORKSPACE_ROOT:-}" ]]; then
+    resolve_user_path "${REDACTION_WORKSPACE_ROOT}" "${invocation_pwd}"
+  elif common_dir="$(git -C "${target_root}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" \
+    && [[ -n "${common_dir}" ]]; then
+    main_checkout="$(dirname "${common_dir}")"
+    printf '%s\n' "$(dirname "${main_checkout}")"
+  else
+    printf '%s\n' "$(dirname "${target_root}")"
+  fi
+}
+
 usage() {
-  sed -n '2,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,41p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 while [[ $# -gt 0 ]]; do
@@ -124,23 +155,8 @@ if [[ -n "${TARGET_ROOT_INPUT}" ]]; then
   fi
 fi
 
-# A linked worktree can sit below the workspace root while its main checkout is
-# elsewhere. Resolve the common git directory first so the workspace root is the
-# parent of the main checkout. REDACTION_WORKSPACE_ROOT is the explicit escape
-# hatch for hosts whose layout cannot be inferred from git metadata.
 INVOCATION_PWD="${PWD}"
-if [[ -n "${REDACTION_WORKSPACE_ROOT:-}" ]]; then
-  WORKSPACE_ROOT="${REDACTION_WORKSPACE_ROOT}"
-  if [[ "${WORKSPACE_ROOT}" != /* ]]; then
-    WORKSPACE_ROOT="${INVOCATION_PWD}/${WORKSPACE_ROOT}"
-  fi
-elif COMMON_DIR="$(git -C "${TARGET_ROOT}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" \
-  && [[ -n "${COMMON_DIR}" ]]; then
-  MAIN_CHECKOUT="$(dirname "${COMMON_DIR}")"
-  WORKSPACE_ROOT="$(dirname "${MAIN_CHECKOUT}")"
-else
-  WORKSPACE_ROOT="$(dirname "${TARGET_ROOT}")"
-fi
+WORKSPACE_ROOT="$(resolve_workspace_root "${TARGET_ROOT}" "${INVOCATION_PWD}")"
 WORKSPACE_EXTRA="${WORKSPACE_ROOT}/.redaction-extra.txt"
 LEGACY_EXTRA="${HOME:-}/.config/redaction-extra.txt"
 if [[ -n "${REDACTION_EXTRA_PATTERNS:-}" ]]; then
@@ -161,7 +177,7 @@ fi
 # path would mean. A REDACTION_PYTHON with no slash is a bare command name
 # (for example python3.11) and stays as-is so it keeps resolving through PATH.
 if [[ -n "${REDACTION_EXTRA_PATTERNS:-}" && "${REDACTION_EXTRA_PATTERNS}" != /* ]]; then
-  REDACTION_EXTRA_PATTERNS="${INVOCATION_PWD}/${REDACTION_EXTRA_PATTERNS}"
+  REDACTION_EXTRA_PATTERNS="$(resolve_user_path "${REDACTION_EXTRA_PATTERNS}" "${INVOCATION_PWD}")"
 fi
 if [[ "${LEGACY_ALLOWLIST}" != /* ]]; then
   LEGACY_ALLOWLIST="${INVOCATION_PWD}/${LEGACY_ALLOWLIST}"

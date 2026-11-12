@@ -34,15 +34,10 @@ The scanners read tracked content, so an unstaged new file is invisible.
 
 ```console
 set -e
-# organization rules file; the default checks ../.redaction-extra.txt, then
-# ~/.config/redaction-extra.txt; see docs/internal/tooling/redaction-scan.md
-if [ -z "${REDACTION_EXTRA_PATTERNS:-}" ]; then
-  if [ -f ../.redaction-extra.txt ]; then
-    export REDACTION_EXTRA_PATTERNS=../.redaction-extra.txt
-  elif [ -f "$HOME/.config/redaction-extra.txt" ]; then
-    export REDACTION_EXTRA_PATTERNS="$HOME/.config/redaction-extra.txt"
-  fi
-fi
+# The scanner and inventory use REDACTION_EXTRA_PATTERNS when set; otherwise
+# they find .redaction-extra.txt at the workspace root, then ~/.config/redaction-extra.txt.
+# Set REDACTION_WORKSPACE_ROOT when the checkout layout cannot identify the
+# workspace root; see the tooling guide.
 export REDACTION_PROFILE=export
 PYTHONPATH=src uv run pytest tests -q
 bash master-ops/scripts/test-tool-naming.sh

@@ -11,7 +11,7 @@ narrows the rules' blind spot; it does not measure exposure.
 Exit codes
   0  no uncovered candidates
   1  uncovered candidates found
-  2  cannot decide (no pattern file, not a git repository)
+  2  cannot decide (invalid profile, no pattern file, not a git repository)
 
 Usage
   scripts/redaction-inventory
@@ -23,6 +23,16 @@ Usage
 import argparse, json, os, re, subprocess, sys
 from collections import Counter
 from pathlib import Path
+
+for _git_env in (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+):
+    os.environ.pop(_git_env, None)
 
 # Frequent generic tokens. Excluded from candidates.
 COMMON = set("""
@@ -167,9 +177,14 @@ def main():
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args()
 
-    profile = os.environ.get("REDACTION_PROFILE", "export")
+    profile = os.environ.get("REDACTION_PROFILE") or "export"
     if profile not in {"internal", "export"}:
-        profile = "export"
+        print(
+            "redaction-inventory: REDACTION_PROFILE must be internal or export "
+            f"(received: {profile})",
+            file=sys.stderr,
+        )
+        return 2
     path, source, looked = resolve_rules_path()
     if path is None or not path.is_file():
         if source == "none":

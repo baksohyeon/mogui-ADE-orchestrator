@@ -13,6 +13,11 @@ passes=0
 warnings=0
 waived=0
 
+# Keep Git discovery anchored to the repository carrying this script. An
+# inherited Git directory can point the workspace lookup at another checkout.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR \
+  GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
+
 # A required check that cannot be waived pushes the operator toward skipping the
 # whole preflight, which loses every other check with it. PREFLIGHT_WAIVE names
 # checks to downgrade from FAIL to WARN, and a waiver is always printed and
@@ -367,18 +372,43 @@ done
 # Required, not optional: REDACTION_REQUIRE_EXTRA=1 scanning exits 2 with no
 # rules loaded, and redaction-inventory exits 2 when this file is unset or
 # yields no readable rule. A missing file is a blocked publish path.
+resolve_user_path() {
+  local value="$1"
+  local invocation_pwd="$2"
+  case "${value}" in
+    "~") printf '%s\n' "${HOME:-}" ;;
+    "~/"*) printf '%s/%s\n' "${HOME:-}" "${value#\~/}" ;;
+    /*) printf '%s\n' "${value}" ;;
+    *) printf '%s/%s\n' "${invocation_pwd}" "${value}" ;;
+  esac
+}
+
+resolve_workspace_root() {
+  local target_root="$1"
+  local invocation_pwd="$2"
+  local common_dir
+  local main_checkout
+  if [[ -n "${REDACTION_WORKSPACE_ROOT:-}" ]]; then
+    resolve_user_path "${REDACTION_WORKSPACE_ROOT}" "${invocation_pwd}"
+  elif common_dir="$(git -C "${target_root}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" \
+    && [[ -n "${common_dir}" ]]; then
+    main_checkout="$(dirname "${common_dir}")"
+    printf '%s\n' "$(dirname "${main_checkout}")"
+  else
+    printf '%s\n' "$(dirname "${target_root}")"
+  fi
+}
+
 # Both consumers use the same lookup order: explicit variable, workspace root,
-# then legacy home path. The workspace root is the parent of the repository that
-# carries this script.
-redaction_workspace_root=$(cd "${runtime_root}/.." && pwd -P)
+# then legacy home path. The workspace root follows the main checkout's parent
+# when Git metadata is available, with a parent-of-repository fallback.
+redaction_workspace_root=$(resolve_workspace_root "${runtime_root}" "${PWD}")
 redaction_workspace_extra="${redaction_workspace_root}/.redaction-extra.txt"
 redaction_legacy_extra="${HOME}/.config/redaction-extra.txt"
 redaction_extra_source="none"
 if [[ -n "${REDACTION_EXTRA_PATTERNS:-}" ]]; then
   redaction_extra="${REDACTION_EXTRA_PATTERNS}"
-  if [[ "${redaction_extra}" != /* ]]; then
-    redaction_extra="$(pwd -P)/${redaction_extra}"
-  fi
+  redaction_extra="$(resolve_user_path "${redaction_extra}" "$(pwd -P)")"
   redaction_extra_source="env"
 elif [[ -f "${redaction_workspace_extra}" ]]; then
   redaction_extra="${redaction_workspace_extra}"

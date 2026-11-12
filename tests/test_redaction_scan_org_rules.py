@@ -17,7 +17,7 @@ requires_gitleaks = pytest.mark.skipif(
     shutil.which("gitleaks") is None,
     reason="gitleaks is not installed; the scanner requires it for real runs",
 )
-pytestmark = [requires_gitleaks, skip_windows_exec_surface]
+pytestmark = skip_windows_exec_surface
 
 SCAN_NAME = "scripts/redaction-scan.sh"
 
@@ -48,6 +48,7 @@ def _scan(
     )
 
 
+@requires_gitleaks
 def test_workspace_root_rules_load_without_environment_override(tmp_path: Path) -> None:
     repo = _repo_with_commits(tmp_path, ["plain change"])
     (tmp_path / ".redaction-extra.txt").write_text(
@@ -75,6 +76,7 @@ def test_help_includes_the_complete_exemptions_paragraph(tmp_path: Path) -> None
     )
 
 
+@requires_gitleaks
 def test_legacy_home_rules_remain_the_fallback(tmp_path: Path) -> None:
     repo = _repo_with_commits(tmp_path, ["plain change"])
     home = tmp_path / "home"
@@ -90,6 +92,7 @@ def test_legacy_home_rules_remain_the_fallback(tmp_path: Path) -> None:
     assert "org-rules-source=legacy-home" in result.stdout
 
 
+@requires_gitleaks
 def test_linked_worktree_uses_the_main_checkout_workspace_root(tmp_path: Path) -> None:
     main = _repo_with_commits(tmp_path, ["plain change"])
     linked = tmp_path / ".orca" / "worktrees" / "linked"
@@ -106,6 +109,7 @@ def test_linked_worktree_uses_the_main_checkout_workspace_root(tmp_path: Path) -
     assert "org-rules-source=workspace-root" in result.stdout
 
 
+@requires_gitleaks
 def test_explicit_workspace_root_overrides_git_layout(tmp_path: Path) -> None:
     main = _repo_with_commits(tmp_path, ["plain change"])
     linked = tmp_path / ".orca" / "worktrees" / "linked"
@@ -130,6 +134,7 @@ def test_explicit_workspace_root_overrides_git_layout(tmp_path: Path) -> None:
     assert "org-rules-source=workspace-root" in result.stdout
 
 
+@requires_gitleaks
 def test_environment_rules_win_over_workspace_root(tmp_path: Path) -> None:
     repo = _repo_with_commits(tmp_path, ["plain change"])
     (tmp_path / ".redaction-extra.txt").write_text(
@@ -147,6 +152,7 @@ def test_environment_rules_win_over_workspace_root(tmp_path: Path) -> None:
     assert "org-rules-source=env" in result.stdout
 
 
+@requires_gitleaks
 def test_internal_profile_skips_workspace_rules_and_export_loads_them(
     tmp_path: Path,
 ) -> None:
@@ -174,6 +180,7 @@ def test_internal_profile_skips_workspace_rules_and_export_loads_them(
     assert "workspace_rule" in default.stderr
 
 
+@requires_gitleaks
 def test_generic_and_credential_findings_fail_in_both_profiles(tmp_path: Path) -> None:
     repo = _repo_with_commits(tmp_path, ["plain change"])
     marker = repo / "marker.txt"
@@ -190,6 +197,7 @@ def test_generic_and_credential_findings_fail_in_both_profiles(tmp_path: Path) -
         assert "aws_access_key" in result.stderr
 
 
+@requires_gitleaks
 def test_missing_rules_warning_names_both_default_paths(tmp_path: Path) -> None:
     repo = _repo_with_commits(tmp_path, ["plain change"])
     home = tmp_path / "home"
@@ -206,3 +214,12 @@ def test_missing_rules_warning_names_both_default_paths(tmp_path: Path) -> None:
     assert result.returncode == 2, output
     assert str(tmp_path / ".redaction-extra.txt") in output
     assert str(home / ".config" / "redaction-extra.txt") in output
+
+
+def test_invalid_profile_fails_closed(tmp_path: Path) -> None:
+    repo = _repo_with_commits(tmp_path, ["plain change"])
+
+    result = _scan(repo, env_extra={"REDACTION_PROFILE": "private"})
+
+    assert result.returncode == 2
+    assert "REDACTION_PROFILE must be internal or export" in result.stderr

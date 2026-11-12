@@ -1990,6 +1990,26 @@ if [ -z "$TASK" ]; then
   fail_after_tracker_claim "task-create failed" 3
 fi
 
+# 2b. codex fresh worktree git index unlock
+# When codex launches in a fresh linked worktree with the workspace-write
+# sandbox, the first `git add` fails with "index.lock: Operation not
+# permitted" because git's worktree index lives outside the sandbox's write
+# root. Running one git read (status) before the worker launches "unlocks"
+# the index, allowing all subsequent sandboxed git operations in this session
+# to succeed. Mechanism unknown; observed pattern: after the first git write
+# outside the sandbox, sandboxed git works.
+if [ "$RUNTIME" = codex ]; then
+  wt_path="${WORKTREE-}"
+  wt_path="${wt_path#path:}"
+  if [ -n "$wt_path" ] && [ -e "$wt_path/.git" ]; then
+    if git -C "$wt_path" status --porcelain >/dev/null 2>&1; then
+      :
+    else
+      echo "WARNING: codex worktree git index preflight failed · path=$wt_path" >&2
+    fi
+  fi
+fi
+
 # 3. terminal (reuse or create in worktree)
 KIND="재사용"
 if [ -z "$TERMINAL" ]; then

@@ -11,8 +11,10 @@ start_fn=$(awk '$0=="codex_start_screen_problem() {"{f=1} f{print} f&&$0=="}"{ex
 recheck_fn=$(awk '$0=="codex_effort_recheck() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
 record_fn=$(awk '$0=="record_codex_effort() {"{f=1} f{print} f&&$0=="EOF"{e=1} f&&e&&$0=="}"{exit}' "$dispatch")
 markers=$(grep -E '^LIMIT_MARKERS=' "$dispatch")
+# Step 2b runs before terminal creation, so this fixture starts at the
+# dedicated 3b caller and keeps the launch preflight out of the extracted body.
 start_block=$(awk '
-  $0=="if [ \"$RUNTIME\" = codex ]; then"{f=1}
+  /^# 3b\. codex start screen, on a created pane/{f=1}
   f && $0=="# 4. dispatch --inject"{exit}
   f{print}
 ' "$dispatch")

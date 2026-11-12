@@ -1593,14 +1593,15 @@ codex_start_screen_wiring_test() (
   start_fn=$(awk '$0=="codex_start_screen_problem() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   orca_json_read_fn=$(awk '$0=="orca_json_read() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   markers=$(grep -E '^(LIMIT_MARKERS|HOOK_TRUST_MARKERS|PREPARED_PROMPT_MARKERS|PREPARED_UNICODE_PROMPT_MARKERS)=' "$dispatch")
-  # The block to extract now spans two `if`s: the codex start-screen gate,
+  # The block to extract starts at the dedicated 3b caller and spans two `if`s:
+  # the codex start-screen gate,
   # then (since the dispatch --inject reader moved behind orca_json_read) a
   # second `if [ -z "$DISP" ]; then ... fi` whose own body contains the
   # "dispatch failed" line this used to stop right after. Stopping there
   # left the extracted text with an unclosed `if`; stop at the next bare
   # `fi` instead, which closes that second block.
   wiring_block=$(awk '
-    $0=="if [ \"$RUNTIME\" = codex ]; then"{f=1}
+    /^# 3b\. codex start screen, on a created pane/{f=1}
     f{print}
     f && seen && $0=="fi"{exit}
     f && /dispatch failed/{seen=1}

@@ -51,6 +51,15 @@ assert_verdict warn "trim-warn warn path"
 out=$(printf '{"tool_input":{"command":"git diff | cut -c1-200"}}' | MOGUI_HOOK_FIRE_LOG="$LOG" bash "$TRIM" 2>&1)
 printf '%s' "$out" | grep -q '\[trim-warn\]' && ok "trim-warn cut path warns" || fail "trim-warn cut path stayed silent"
 assert_verdict warn "trim-warn cut path"
+out=$(printf '{"tool_input":{"command":"git diff | rg -m 20 pattern"}}' | MOGUI_HOOK_FIRE_LOG="$LOG" bash "$TRIM" 2>&1)
+[ -z "$out" ] && ok "trim-warn bounded rg path stays silent" || fail "trim-warn bounded rg path printed: $out"
+assert_verdict pass "trim-warn bounded rg path"
+out=$(printf '{"tool_input":{"command":"git diff | rg pattern"}}' | MOGUI_HOOK_FIRE_LOG="$LOG" bash "$TRIM" 2>&1)
+printf '%s' "$out" | grep -q '\[trim-warn\]' && ok "trim-warn unbounded rg path warns" || fail "trim-warn unbounded rg path stayed silent"
+assert_verdict warn "trim-warn unbounded rg path"
+out=$(printf '{"tool_input":{"command":"git diff; grep -q x"}}' | MOGUI_HOOK_FIRE_LOG="$LOG" bash "$TRIM" 2>&1)
+printf '%s' "$out" | grep -q '\[trim-warn\]' && ok "trim-warn compound path warns" || fail "trim-warn compound path stayed silent"
+assert_verdict warn "trim-warn compound path"
 out=$(printf 'not json' | MOGUI_HOOK_FIRE_LOG="$LOG" bash "$TRIM" 2>&1)
 [ -z "$out" ] && ok "trim-warn skip path stays silent" || fail "trim-warn skip path printed: $out"
 assert_verdict skip "trim-warn skip path"

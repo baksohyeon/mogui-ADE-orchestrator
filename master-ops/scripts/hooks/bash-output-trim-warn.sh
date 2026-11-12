@@ -34,12 +34,41 @@ if ! CMD=$(printf '%s' "$INPUT" | python3 -c "import json,sys; print(json.load(s
   VERDICT="skip"
   exit 0
 fi
-case "$CMD" in
-  *"| head"*|*"| tail"*|*"--jq"*|*"| wc"*|*"grep -c"*|*"grep -q"*) exit 0;;
-esac
-case "$CMD" in
-  *"gh api graphql"*|*"orca terminal list"*|*"orca terminal read"*|*"git log"*|*"git diff"*|*"git show"*|*"pytest"*|*"cat "*)
-    VERDICT="warn"
-    echo "[trim-warn] 대용량 출력 가능 명령에 필터가 없다. --jq/head/tail/wc/grep -c/grep -q로 필요한 줄만 받아라 (L0 토큰 규칙)" ;;
-esac
+if ! python3 - "$CMD" <<'PY'
+import re
+import sys
+
+command = sys.argv[1]
+large_markers = (
+    "gh api graphql",
+    "orca terminal list",
+    "orca terminal read",
+    "git log",
+    "git diff",
+    "git show",
+    "pytest",
+    "cat ",
+)
+bounded_stage = re.compile(
+    r"(?:^|\s)(?:head|tail)\b|--jq\b|(?:^|\s)wc\b|"
+    r"(?:^|\s)grep\s+-[cq](?:\s|$)|"
+    r"(?:^|\s)rg\s+(?:-c|--count|-q|--quiet|-l)(?:\s|$)|"
+    r"(?:^|\s)rg\s+(?:-m\s+\d+|--max-count(?:=|\s+)\d+)(?:\s|$)"
+)
+
+# Check each simple command in a compound command. A filter in a later
+# command must not exempt an earlier large-output command. For each large
+# command, only its final pipeline stage can bound the output.
+for segment in re.split(r";|&&|\|\|", command):
+    if not any(marker in segment for marker in large_markers):
+        continue
+    final_stage = segment.rsplit("|", 1)[-1]
+    if not bounded_stage.search(final_stage):
+        sys.exit(1)
+sys.exit(0)
+PY
+then
+  VERDICT="warn"
+  echo "[trim-warn] 대용량 출력 가능 명령에 필터가 없다. rg -m N/--max-count N, rg -c/--count, rg -q/--quiet, rg -l, head/tail/--jq/wc/grep -c/grep -q로 필요한 줄만 받아라 (L0 토큰 규칙)"
+fi
 exit 0

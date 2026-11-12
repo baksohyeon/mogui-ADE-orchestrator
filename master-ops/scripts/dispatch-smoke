@@ -201,6 +201,20 @@ print_artifact() {
   head -n "$max" "$path" >&2
 }
 
+orca_dispatch_status() {
+  python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+from lib import orca_json
+
+ok, result, _ = orca_json.parse_envelope(sys.stdin.read())
+if not ok:
+    print("unreadable")
+else:
+    print(orca_json.dispatch_status(result) or "unreadable")
+' "$SCRIPT_DIR"
+}
+
 cleanup() {
   local ledger_sha_after ledger_lines_after contracts_after diff added isolation_rc=0
 
@@ -523,14 +537,7 @@ fi
 # verdict can tell "delivery unverified, worker still running" apart from
 # "delivery unverified, worker already completed" instead of reporting the
 # pane transition alone.
-PRE_VERDICT_STATUS=$(orca orchestration dispatch-show --task "$TASK" --json 2>/dev/null | python3 -c '
-import json, sys
-try:
-    d = json.load(sys.stdin)
-    print(d["result"]["dispatch"]["status"] if d.get("ok") else "unreadable")
-except Exception:
-    print("unreadable")
-' 2>/dev/null)
+PRE_VERDICT_STATUS=$(orca orchestration dispatch-show --task "$TASK" --json 2>/dev/null | orca_dispatch_status 2>/dev/null)
 [ -n "$PRE_VERDICT_STATUS" ] || PRE_VERDICT_STATUS=unreadable
 
 VERDICT=$(normal_case_verdict "$WRAPPER_RC" "$NORMAL_LOG" "$PRE_VERDICT_STATUS")
@@ -556,14 +563,7 @@ DEADLINE=$(( $(date +%s) + WORKER_TIMEOUT ))
 LAST_DISPATCH_STATUS=""
 while :; do
   SHOW_JSON=$(orca orchestration dispatch-show --task "$TASK" --json 2>/dev/null)
-  LAST_DISPATCH_STATUS=$(printf '%s' "$SHOW_JSON" | python3 -c '
-import json, sys
-try:
-    d = json.load(sys.stdin)
-    print(d["result"]["dispatch"]["status"] if d.get("ok") else "unreadable")
-except Exception:
-    print("unreadable")
-' 2>/dev/null)
+  LAST_DISPATCH_STATUS=$(printf '%s' "$SHOW_JSON" | orca_dispatch_status 2>/dev/null)
   if [ "$LAST_DISPATCH_STATUS" = completed ]; then
     DISPATCH_COMPLETED=1
     break

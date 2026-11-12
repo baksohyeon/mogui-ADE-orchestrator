@@ -324,7 +324,7 @@ def test_legacy_home_rules_file_remains_a_fallback_without_environment_override(
 ) -> None:
     env = _host(tmp_path)
     env.pop("REDACTION_EXTRA_PATTERNS")
-    result = _run(env, tmp_path)
+    result = _run(env, tmp_path, script=_copied_preflight(tmp_path))
 
     assert "redaction-extra" in _labels(result.stdout, "PASS"), result.stdout
     assert "org-rules-source=legacy-home" in result.stdout

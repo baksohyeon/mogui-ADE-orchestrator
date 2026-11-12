@@ -41,7 +41,7 @@ A token written as a quoted key assignment, for example `access_token = "ack-<12
 
 ### 2026-11-12 redaction rules file move
 
-Move the organization rules file to the workspace root as `.redaction-extra.txt` and leave a symlink at `~/.config/redaction-extra.txt` for tools that still use the legacy location. Set `REDACTION_PROFILE=internal` in the operations repository's own pre-push hook so `workspace_` rules remain available to export checks and are skipped from the internal scan.
+Include the organization rules file move to the workspace root as `.redaction-extra.txt`, the legacy symlink at `~/.config/redaction-extra.txt`, and the operations repository's own pre-push hook update in the dry-run plan. After the owner explicitly approves these changes at step 4, move the file, leave the symlink for tools that still use the legacy location, and set `REDACTION_PROFILE=internal` in the operations repository's own pre-push hook so `workspace_` rules remain available to export checks and are skipped from the internal scan.
 
 3. **Dry-run apply (always first)**: print the exact file list and the reason for each path. No write yet. Pass the same eight measured `--placeholder` values as step 5; a dry run that omits them prints the missing-placeholder report and exits 2 by design, since a planned file still carries each unsupplied token.
 

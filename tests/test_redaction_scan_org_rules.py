@@ -3,14 +3,21 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
+
+import pytest
 
 from test_redaction_scan_commit_messages import LEAK, _git, _repo_with_commits
 
 from windows_exec_surface import skip_windows_exec_surface
 
-pytestmark = skip_windows_exec_surface
+requires_gitleaks = pytest.mark.skipif(
+    shutil.which("gitleaks") is None,
+    reason="gitleaks is not installed; the scanner requires it for real runs",
+)
+pytestmark = [requires_gitleaks, skip_windows_exec_surface]
 
 SCAN_NAME = "scripts/redaction-scan.sh"
 
@@ -22,7 +29,13 @@ def _scan(
     args: tuple[str, ...] = (),
 ) -> subprocess.CompletedProcess[str]:
     env = {**os.environ}
-    for key in ("REDACTION_EXTRA_PATTERNS", "REDACTION_REQUIRE_EXTRA", "REDACTION_PROFILE"):
+    for key in (
+        "REDACTION_EXTRA_PATTERNS",
+        "REDACTION_REQUIRE_EXTRA",
+        "REDACTION_PROFILE",
+        "REDACTION_REPO_ROOT",
+        "REDACTION_WORKSPACE_ROOT",
+    ):
         env.pop(key, None)
     env.update(env_extra or {})
     return subprocess.run(
@@ -50,6 +63,18 @@ def test_workspace_root_rules_load_without_environment_override(tmp_path: Path) 
     assert "export-only-skipped=0" in result.stdout
 
 
+def test_help_includes_the_complete_exemptions_paragraph(tmp_path: Path) -> None:
+    repo = _repo_with_commits(tmp_path, ["plain change"])
+
+    result = _scan(repo, args=("--help",))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Exemptions use gitleaks' own mechanisms" in result.stdout
+    assert result.stdout.rstrip().endswith(
+        "finding, or config/gitleaks.toml for a whole class."
+    )
+
+
 def test_legacy_home_rules_remain_the_fallback(tmp_path: Path) -> None:
     repo = _repo_with_commits(tmp_path, ["plain change"])
     home = tmp_path / "home"
@@ -63,6 +88,46 @@ def test_legacy_home_rules_remain_the_fallback(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     assert "org-rules=1" in result.stdout
     assert "org-rules-source=legacy-home" in result.stdout
+
+
+def test_linked_worktree_uses_the_main_checkout_workspace_root(tmp_path: Path) -> None:
+    main = _repo_with_commits(tmp_path, ["plain change"])
+    linked = tmp_path / ".orca" / "worktrees" / "linked"
+    linked.parent.mkdir(parents=True)
+    _git(main, "worktree", "add", "--detach", str(linked), "HEAD")
+    (tmp_path / ".redaction-extra.txt").write_text(
+        "org_linked|linked marker|LINKED_MARKER\n", encoding="utf-8"
+    )
+
+    result = _scan(main, env_extra={"REDACTION_REPO_ROOT": str(linked)})
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "org-rules=1" in result.stdout
+    assert "org-rules-source=workspace-root" in result.stdout
+
+
+def test_explicit_workspace_root_overrides_git_layout(tmp_path: Path) -> None:
+    main = _repo_with_commits(tmp_path, ["plain change"])
+    linked = tmp_path / ".orca" / "worktrees" / "linked"
+    linked.parent.mkdir(parents=True)
+    _git(main, "worktree", "add", "--detach", str(linked), "HEAD")
+    declared_root = tmp_path / "declared-workspace"
+    declared_root.mkdir()
+    (declared_root / ".redaction-extra.txt").write_text(
+        "org_override|override marker|OVERRIDE_MARKER\n", encoding="utf-8"
+    )
+
+    result = _scan(
+        main,
+        env_extra={
+            "REDACTION_REPO_ROOT": str(linked),
+            "REDACTION_WORKSPACE_ROOT": str(declared_root),
+        },
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "org-rules=1" in result.stdout
+    assert "org-rules-source=workspace-root" in result.stdout
 
 
 def test_environment_rules_win_over_workspace_root(tmp_path: Path) -> None:

@@ -29,6 +29,8 @@
 #   separate fields, so a regex may contain a pipe. Every regex must compile.
 #   When REDACTION_EXTRA_PATTERNS is unset or empty, the loader checks the
 #   workspace-root .redaction-extra.txt first, then ~/.config/redaction-extra.txt.
+#   REDACTION_WORKSPACE_ROOT overrides the detected workspace root when a host's
+#   checkout layout cannot expose its main checkout location.
 #   REDACTION_PROFILE accepts internal or export and defaults to export; internal
 #   skips workspace_ rules and counts them as export-only-skipped.
 #   With REDACTION_REQUIRE_EXTRA=1, a missing or empty file exits 2 instead of
@@ -69,7 +71,7 @@ case "${REDACTION_PROFILE}" in
 esac
 
 usage() {
-  sed -n '2,34p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 while [[ $# -gt 0 ]]; do
@@ -122,7 +124,23 @@ if [[ -n "${TARGET_ROOT_INPUT}" ]]; then
   fi
 fi
 
-WORKSPACE_ROOT="$(dirname "${TARGET_ROOT}")"
+# A linked worktree can sit below the workspace root while its main checkout is
+# elsewhere. Resolve the common git directory first so the workspace root is the
+# parent of the main checkout. REDACTION_WORKSPACE_ROOT is the explicit escape
+# hatch for hosts whose layout cannot be inferred from git metadata.
+INVOCATION_PWD="${PWD}"
+if [[ -n "${REDACTION_WORKSPACE_ROOT:-}" ]]; then
+  WORKSPACE_ROOT="${REDACTION_WORKSPACE_ROOT}"
+  if [[ "${WORKSPACE_ROOT}" != /* ]]; then
+    WORKSPACE_ROOT="${INVOCATION_PWD}/${WORKSPACE_ROOT}"
+  fi
+elif COMMON_DIR="$(git -C "${TARGET_ROOT}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" \
+  && [[ -n "${COMMON_DIR}" ]]; then
+  MAIN_CHECKOUT="$(dirname "${COMMON_DIR}")"
+  WORKSPACE_ROOT="$(dirname "${MAIN_CHECKOUT}")"
+else
+  WORKSPACE_ROOT="$(dirname "${TARGET_ROOT}")"
+fi
 WORKSPACE_EXTRA="${WORKSPACE_ROOT}/.redaction-extra.txt"
 LEGACY_EXTRA="${HOME:-}/.config/redaction-extra.txt"
 if [[ -n "${REDACTION_EXTRA_PATTERNS:-}" ]]; then
@@ -142,7 +160,6 @@ fi
 # TARGET_ROOT: resolve all three before the cd below changes what a relative
 # path would mean. A REDACTION_PYTHON with no slash is a bare command name
 # (for example python3.11) and stays as-is so it keeps resolving through PATH.
-INVOCATION_PWD="${PWD}"
 if [[ -n "${REDACTION_EXTRA_PATTERNS:-}" && "${REDACTION_EXTRA_PATTERNS}" != /* ]]; then
   REDACTION_EXTRA_PATTERNS="${INVOCATION_PWD}/${REDACTION_EXTRA_PATTERNS}"
 fi

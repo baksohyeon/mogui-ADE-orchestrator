@@ -367,9 +367,9 @@ done
 # Required, not optional: REDACTION_REQUIRE_EXTRA=1 scanning exits 2 with no
 # rules loaded, and redaction-inventory exits 2 when this file is unset or
 # yields no readable rule. A missing file is a blocked publish path.
-# Honor the variable both consumers read before falling back to the workspace
-# root and then the legacy home path. The workspace root is the parent of the
-# repository that carries this script.
+# Both consumers use the same lookup order: explicit variable, workspace root,
+# then legacy home path. The workspace root is the parent of the repository that
+# carries this script.
 redaction_workspace_root=$(cd "${runtime_root}/.." && pwd -P)
 redaction_workspace_extra="${redaction_workspace_root}/.redaction-extra.txt"
 redaction_legacy_extra="${HOME}/.config/redaction-extra.txt"

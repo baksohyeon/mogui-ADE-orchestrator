@@ -36,7 +36,13 @@ The scanners read tracked content, so an unstaged new file is invisible.
 set -e
 # organization rules file; the default checks ../.redaction-extra.txt, then
 # ~/.config/redaction-extra.txt; see docs/internal/tooling/redaction-scan.md
-export REDACTION_EXTRA_PATTERNS=../.redaction-extra.txt
+if [ -z "${REDACTION_EXTRA_PATTERNS:-}" ]; then
+  if [ -f ../.redaction-extra.txt ]; then
+    export REDACTION_EXTRA_PATTERNS=../.redaction-extra.txt
+  elif [ -f "$HOME/.config/redaction-extra.txt" ]; then
+    export REDACTION_EXTRA_PATTERNS="$HOME/.config/redaction-extra.txt"
+  fi
+fi
 export REDACTION_PROFILE=export
 PYTHONPATH=src uv run pytest tests -q
 bash master-ops/scripts/test-tool-naming.sh

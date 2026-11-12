@@ -1,1 +1,0 @@
-- The ledger plan strings in `docs/evals/evidence.json` and the earlier `2026-11-11-earn-its-place-and-ecc-skills` fragment now name a peer workspace survey instead of a workspace by name.

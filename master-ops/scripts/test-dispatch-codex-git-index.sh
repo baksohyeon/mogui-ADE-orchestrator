@@ -1,40 +1,39 @@
 #!/bin/bash
-# Test that dispatch's git status unlock step works for codex in linked worktrees
+# Static test: verify dispatch wrapper has the codex git index unlock fix
 # Card: mgm-up2w
 
 set -eu
 
-# Create fresh bare repo + worktree (simulating the failure case)
-TEST_ROOT=$(mktemp -d)
-trap "rm -rf '$TEST_ROOT'" EXIT
+DISPATCH="${DISPATCH:-$(dirname "$0")/dispatch}"
 
-git init --bare "$TEST_ROOT/repo.git" >/dev/null 2>&1
-git clone "$TEST_ROOT/repo.git" "$TEST_ROOT/main" >/dev/null 2>&1
-
-# Create a linked worktree (where .git is a FILE, not directory)
-cd "$TEST_ROOT/main"
-git worktree add "$TEST_ROOT/wt-test" >/dev/null 2>&1
-
-cd "$TEST_ROOT/wt-test"
-echo "test file" > test.txt
-
-# Test 1: With guard fixed to [ -e .git ], git status should be called
-# (This verifies the fix is in place; the actual call happens in dispatch, not here)
-if [ -e ".git" ]; then
-  echo "✓ Test 1: .git exists check passes for linked worktree"
-else
-  echo "✗ Test 1 FAILED: .git check failed for linked worktree"
+if [ ! -f "$DISPATCH" ]; then
+  echo "✗ dispatch file not found: $DISPATCH"
   exit 1
 fi
 
-# Test 2: After git status is called, git add succeeds
-git status --porcelain >/dev/null 2>&1
-if git add test.txt 2>&1 | grep -q "index.lock"; then
-  echo "✗ Test 2 FAILED: git add failed even after status call"
-  exit 1
+# Test 1: Guard must be [ -e ], not [ -d ]
+if grep -q '\[ -e "$wt_path/.git" \]' "$DISPATCH"; then
+  echo "✓ Test 1: dispatch contains [ -e .git ] guard (correct for linked worktrees)"
 else
-  echo "✓ Test 2: git add succeeds after status call"
+  echo "✗ Test 1 FAILED: dispatch missing [ -e .git ] guard"
+  exit 1
 fi
 
-echo "✓ All tests passed"
+# Test 2: Must NOT have the broken [ -d ] guard
+if grep -q '\[ -d "$wt_path/.git" \]' "$DISPATCH"; then
+  echo "✗ Test 2 FAILED: dispatch still contains broken [ -d .git ] guard"
+  exit 1
+else
+  echo "✓ Test 2: dispatch does not contain [ -d .git ] (good)"
+fi
+
+# Test 3: Must call git status inside the guard
+if grep -A 2 '\[ -e "$wt_path/.git" \]' "$DISPATCH" | grep -q 'git -C "$wt_path" status --porcelain'; then
+  echo "✓ Test 3: dispatch calls git status inside the guard"
+else
+  echo "✗ Test 3 FAILED: dispatch missing git status call in guard block"
+  exit 1
+fi
+
+echo "✓ All static checks passed"
 exit 0

@@ -20,6 +20,13 @@ you build on it.
 
 ## [Unreleased]
 
+## [0.5.312] - 2026-11-12
+
+### Changed
+
+- `config/gitleaks.toml`'s read-proof-token allowlist entry moves to `regexTarget = "secret"` with the anchored regex `^ack-[0-9a-f]{12}$`, so a real secret carrying the token shape as a prefix is no longer cleared (#238).
+- Tests cover `template-check`'s read-token advisory on an install's `config/gitleaks.toml` (#238).
+
 ## [0.5.304] - 2026-11-10
 
 ### Changed
@@ -455,7 +462,8 @@ tests pass, 1 skipped.
 There is no CI at this tag. Tests and the redaction scanners run locally before
 a push, so a passing count in a pull request is the author's word.
 
-[Unreleased]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.304...HEAD
+[Unreleased]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.312...HEAD
+[0.5.312]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.304...v0.5.312
 [0.5.304]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.301...v0.5.304
 [0.5.301]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.296...v0.5.301
 [0.5.296]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.294...v0.5.296

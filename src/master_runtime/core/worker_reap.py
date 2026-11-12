@@ -17,6 +17,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Optional
+from urllib.parse import urlparse
 
 
 # Agent CLI comm names worth refusing a reap over — a live process here means
@@ -301,13 +302,18 @@ class WorkerReaper:
                             f"{len(ignored_media)}"
                         )
                     elif execute:
-                        branch_name, branch_tip, common_dir, branch_reason = (
-                            self._measure_branch_identity(worktree_path)
-                        )
+                        (
+                            branch_name,
+                            branch_tip,
+                            common_dir,
+                            repository,
+                            branch_reason,
+                        ) = self._measure_branch_identity(worktree_path)
                         branch_action = self._plan_branch_deletion(
                             branch_name,
                             branch_tip,
                             common_dir,
+                            repository,
                             execute=False,
                             reason=branch_reason,
                         )
@@ -323,14 +329,19 @@ class WorkerReaper:
                             actions.append(branch_action)
                     else:
                         actions.append(f"would_remove_worktree:{worktree_path}")
-                        branch_name, branch_tip, common_dir, branch_reason = (
-                            self._measure_branch_identity(worktree_path)
-                        )
+                        (
+                            branch_name,
+                            branch_tip,
+                            common_dir,
+                            repository,
+                            branch_reason,
+                        ) = self._measure_branch_identity(worktree_path)
                         actions.append(
                             self._plan_branch_deletion(
                                 branch_name,
                                 branch_tip,
                                 common_dir,
+                                repository,
                                 execute=False,
                                 reason=branch_reason,
                             )
@@ -361,8 +372,8 @@ class WorkerReaper:
 
     def _measure_branch_identity(
         self, worktree_path: Path
-    ) -> tuple[Optional[str], Optional[str], Optional[str], str]:
-        """Measure the branch, its tip, and the shared git directory.
+    ) -> tuple[Optional[str], Optional[str], Optional[str], Optional[str], str]:
+        """Measure the branch, tip, repository, and shared git directory.
 
         The branch and tip must be captured before removing the worktree. A
         squash merge has no ancestry signal, so the tip is later compared to
@@ -374,30 +385,64 @@ class WorkerReaper:
         )
         branch_name = branch_output.strip()
         if code != 0 or not branch_name:
-            return None, None, None, "branch identity unavailable"
+            return None, None, None, None, "branch identity unavailable"
 
         code, tip_output, stderr = self.orca_runner(
             ["git", "-C", str(worktree_path), "rev-parse", "HEAD"]
         )
         branch_tip = tip_output.strip()
         if code != 0 or not branch_tip:
-            return branch_name, None, None, "branch tip unavailable"
+            return branch_name, None, None, None, "branch tip unavailable"
 
         code, common_output, stderr = self.orca_runner(
             ["git", "-C", str(worktree_path), "rev-parse", "--git-common-dir"]
         )
         raw_common_dir = common_output.rstrip("\r\n")
         if code != 0 or not raw_common_dir:
-            return branch_name, branch_tip, None, "git common directory unavailable"
+            return branch_name, branch_tip, None, None, "git common directory unavailable"
 
         common_dir = os.path.abspath(os.path.join(str(worktree_path), raw_common_dir))
-        return branch_name, branch_tip, common_dir, ""
+        code, remote_output, _stderr = self.orca_runner(
+            ["git", "-C", str(worktree_path), "remote", "get-url", "origin"]
+        )
+        repository = self._repository_from_remote(remote_output.strip())
+        if code != 0 or not repository:
+            return branch_name, branch_tip, common_dir, None, "repository unavailable"
+        return branch_name, branch_tip, common_dir, repository, ""
+
+    @staticmethod
+    def _repository_from_remote(remote_url: str) -> Optional[str]:
+        """Convert a Git remote URL to the ``gh --repo`` selector format."""
+
+        remote_url = remote_url.strip()
+        if not remote_url:
+            return None
+        if "://" in remote_url:
+            parsed = urlparse(remote_url)
+            host = parsed.hostname
+            path = parsed.path
+        else:
+            at_index = remote_url.rfind("@")
+            separator = remote_url.find(":", at_index)
+            if at_index < 0 or separator <= at_index:
+                return None
+            host = remote_url[at_index + 1 : separator]
+            path = remote_url[separator + 1 :]
+        if not host or not path:
+            return None
+        path = path.strip("/")
+        if path.endswith(".git"):
+            path = path[:-4]
+        if len(path.split("/")) < 2:
+            return None
+        return f"{host}/{path}"
 
     def _plan_branch_deletion(
         self,
         branch_name: Optional[str],
         branch_tip: Optional[str],
         common_dir: Optional[str],
+        repository: Optional[str],
         *,
         execute: bool,
         reason: str,
@@ -419,6 +464,8 @@ class WorkerReaper:
             return f"branch_left:{branch_name}:{reason or 'branch tip unavailable'}"
         if not common_dir:
             return f"branch_left:{branch_name}:{reason or 'git common directory unavailable'}"
+        if not repository:
+            return f"branch_left:{branch_name}:{reason or 'repository unavailable'}"
 
         code, stdout, stderr = self.orca_runner(
             [
@@ -426,6 +473,8 @@ class WorkerReaper:
                 "pr",
                 "view",
                 branch_name,
+                "--repo",
+                repository,
                 "--json",
                 "state,headRefOid",
             ]
@@ -449,15 +498,19 @@ class WorkerReaper:
             return f"branch_left:{branch_name}:no PR"
 
         merged_head_oid: Optional[str] = None
+        merged_pr_seen = False
         for pr in prs:
             if not isinstance(pr, dict):
                 continue
             if str(pr.get("state", "")).upper() == "MERGED":
+                merged_pr_seen = True
                 candidate = pr.get("headRefOid")
                 if isinstance(candidate, str) and candidate:
                     merged_head_oid = candidate
                     break
         if merged_head_oid is None:
+            if merged_pr_seen:
+                return f"branch_left:{branch_name}:gh unavailable"
             return f"branch_left:{branch_name}:not merged"
         if branch_tip != merged_head_oid:
             return f"branch_left:{branch_name}:tip differs from PR head"

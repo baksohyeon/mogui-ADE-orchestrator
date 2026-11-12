@@ -83,7 +83,12 @@ def run_case(module, gh_dir: Path, case: str, label: str, expected: str, *, pr_t
         os.environ["GH_STUB_HEAD"] = pr_tip or tip
         try:
             action = module.WorkerReaper()._plan_branch_deletion(
-                "feature/test", tip, common_dir, execute=True, reason=""
+                "feature/test",
+                tip,
+                common_dir,
+                "example/worker-reap",
+                execute=True,
+                reason="",
             )
         finally:
             os.environ["PATH"] = old_path
@@ -92,7 +97,8 @@ def run_case(module, gh_dir: Path, case: str, label: str, expected: str, *, pr_t
                     os.environ.pop(key, None)
                 else:
                     os.environ[key] = value
-        assert expected in action, (label, action)
+        if expected not in action:
+            raise AssertionError(f"{label}: expected {expected!r}, got {action!r}")
         branch = run_git(repo, "branch", "--list", "feature/test")
         if case == "merged" and pr_tip is None:
             assert branch == "", (label, branch)
@@ -129,7 +135,7 @@ fi
 
 # Mutant proof: remove the tip-equality check and the different-tip case must
 # fail. The probe exits nonzero when the mutant deletes that branch.
-python3 - "$MODULE" "$T/worker_reap_mutant.py" <<'PY'
+if ! python3 - "$MODULE" "$T/worker_reap_mutant.py" <<'PY'
 import sys
 
 source = open(sys.argv[1], encoding="utf-8").read()
@@ -142,9 +148,24 @@ if mutant == source:
     raise SystemExit("mutant text not found")
 open(sys.argv[2], "w", encoding="utf-8").write(mutant)
 PY
+then
+  echo "  FAIL: could not generate failability mutant"
+  exit 1
+fi
+if [ ! -s "$T/worker_reap_mutant.py" ]; then
+  echo "  FAIL: failability mutant file was not created"
+  exit 1
+fi
 
-if PYTHONPATH="$ROOT/src" python3 "$T/branch_probe.py" "$T/worker_reap_mutant.py" "$T" >/dev/null 2>&1; then
+if PYTHONPATH="$ROOT/src" python3 "$T/branch_probe.py" "$T/worker_reap_mutant.py" "$T" >"$T/mutant-probe.log" 2>&1; then
   echo "  FAIL: failability mutant deleted the different-tip branch"
+  exit 1
+fi
+if ! grep -q "merged + different tip keeps" "$T/mutant-probe.log" \
+  || ! grep -q "expected 'tip differs'" "$T/mutant-probe.log" \
+  || ! grep -q "got 'branch_deleted" "$T/mutant-probe.log"; then
+  echo "  FAIL: failability mutant did not fail for the different-tip case"
+  cat "$T/mutant-probe.log"
   exit 1
 fi
 echo "  ok:   failability mutant cannot delete a different-tip branch"

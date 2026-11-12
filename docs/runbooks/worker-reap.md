@@ -94,13 +94,14 @@ If **any** condition fails, the worktree is left in place and the reason is logg
 
 ### 4. Retire the Local Branch After Worktree Removal
 
-After a worktree is removed, the reaper captures its branch tip before removal
-and asks `gh pr view <branch> --json state,headRefOid` for the pull request
-state. It runs `git branch -D <branch>` through the shared git directory only
-when the pull request state is `MERGED` and its `headRefOid` equals the captured
-tip. This covers squash merges while keeping a branch when there is no pull
-request, the pull request is open or closed, the tip differs, or GitHub cannot
-be measured.
+Before a worktree is removed, the reaper captures its branch tip and repository
+and asks `gh pr view <branch> --repo <repository> --json state,headRefOid` for
+the pull request state. After removal, it rechecks the tip and runs `git branch
+-D <branch>` through the shared git directory only when the pull request state
+is `MERGED` and its `headRefOid` equals the captured tip. This covers squash
+merges while keeping a branch when there is no pull request, the pull request is
+open or closed, the tip differs, the branch is `main` or `master`, or GitHub
+cannot be measured.
 
 The action is recorded as `branch_deleted:<branch>` on success. A dry run
 reports `would_delete_branch:<branch>`. Every refusal reports one

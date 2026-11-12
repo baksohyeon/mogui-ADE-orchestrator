@@ -9,8 +9,6 @@ from collections.abc import Callable
 from pathlib import Path
 from unittest import mock
 
-from windows_exec_surface import skip_windows_exec_surface
-
 from master_runtime.core.worker_reap import (
     AGENT_CLI_COMMANDS,
     DispatchState,
@@ -1340,7 +1338,6 @@ class WorkerReaperTests(unittest.TestCase):
             self.assertEqual(entry["dispatch_id"], "d1")
 
 
-@skip_windows_exec_surface
 class BranchDeletionTests(unittest.TestCase):
     """Branch deletion is gated by GitHub's merged PR and exact head OID."""
 
@@ -1358,57 +1355,46 @@ class BranchDeletionTests(unittest.TestCase):
         common_dir = _git(repo, "rev-parse", "--git-common-dir").strip()
         return repo, tip, str((repo / common_dir).resolve())
 
-    def _gh_stub(self, root: Path) -> Path:
-        bindir = root / "bin"
-        bindir.mkdir()
-        gh = bindir / "gh"
-        gh.write_text(
-            "#!/usr/bin/env bash\n"
-            "case \"${GH_STUB_CASE:-}\" in\n"
-            "  merged) printf '{\"state\":\"MERGED\",\"headRefOid\":\"%s\"}\\n' \"$GH_STUB_HEAD\" ;;\n"
-            "  open) printf '{\"state\":\"OPEN\",\"headRefOid\":\"%s\"}\\n' \"$GH_STUB_HEAD\" ;;\n"
-            "  no-pr) echo 'no pull request found' >&2; exit 1 ;;\n"
-            "  unavailable) echo 'gh unavailable' >&2; exit 1 ;;\n"
-            "  *) echo 'unknown gh fixture' >&2; exit 1 ;;\n"
-            "esac\n",
-            encoding="utf-8",
-        )
-        gh.chmod(0o755)
-        return bindir
-
     def _run_case(
         self,
         case: str,
         branch_tip: str,
         common_dir: str,
-        bindir: Path,
         *,
         gh_head: str | None = None,
         execute: bool = True,
     ) -> str:
-        reaper = WorkerReaper()
-        with mock.patch.dict(
-            os.environ,
-            {
-                "PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}",
-                "GH_STUB_CASE": case,
-                "GH_STUB_HEAD": gh_head or branch_tip,
-            },
-            clear=False,
-        ):
-            return reaper._plan_branch_deletion(
-                "feature/test",
-                branch_tip,
-                common_dir,
-                execute=execute,
-                reason="",
-            )
+        def runner(cmd: list[str]) -> tuple[int, str, str]:
+            if cmd and cmd[0] == "gh":
+                head = gh_head or branch_tip
+                if case == "merged":
+                    return 0, json.dumps({"state": "MERGED", "headRefOid": head}), ""
+                if case == "merged-empty-head":
+                    return 0, json.dumps({"state": "MERGED"}), ""
+                if case == "open":
+                    return 0, json.dumps({"state": "OPEN", "headRefOid": head}), ""
+                if case == "no-pr":
+                    return 1, "", "no pull request found"
+                if case == "unavailable":
+                    return 1, "", "gh unavailable"
+                return 1, "", "unknown gh fixture"
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            return result.returncode, result.stdout, result.stderr
+
+        return WorkerReaper(orca_runner=runner)._plan_branch_deletion(
+            "feature/test",
+            branch_tip,
+            common_dir,
+            "example/worker-reap",
+            execute=execute,
+            reason="",
+        )
 
     def test_merged_pr_with_equal_tip_deletes_branch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             repo, tip, common_dir = self._repo_with_branch(root)
-            action = self._run_case("merged", tip, common_dir, self._gh_stub(root))
+            action = self._run_case("merged", tip, common_dir)
 
             self.assertEqual(action, "branch_deleted:feature/test")
             self.assertEqual(_git(repo, "branch", "--list", "feature/test"), "")
@@ -1422,7 +1408,6 @@ class BranchDeletionTests(unittest.TestCase):
                 "merged",
                 tip,
                 common_dir,
-                self._gh_stub(root),
                 gh_head=different_tip,
             )
 
@@ -1437,7 +1422,7 @@ class BranchDeletionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             repo, tip, common_dir = self._repo_with_branch(root)
-            action = self._run_case("open", tip, common_dir, self._gh_stub(root))
+            action = self._run_case("open", tip, common_dir)
 
             self.assertEqual(action, "branch_left:feature/test:not merged")
             self.assertEqual(
@@ -1448,9 +1433,20 @@ class BranchDeletionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             repo, tip, common_dir = self._repo_with_branch(root)
-            action = self._run_case("no-pr", tip, common_dir, self._gh_stub(root))
+            action = self._run_case("no-pr", tip, common_dir)
 
             self.assertEqual(action, "branch_left:feature/test:no PR")
+            self.assertEqual(
+                _git(repo, "rev-parse", "refs/heads/feature/test").strip(), tip
+            )
+
+    def test_merged_pr_without_head_oid_keeps_branch_as_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo, tip, common_dir = self._repo_with_branch(root)
+            action = self._run_case("merged-empty-head", tip, common_dir)
+
+            self.assertEqual(action, "branch_left:feature/test:gh unavailable")
             self.assertEqual(
                 _git(repo, "rev-parse", "refs/heads/feature/test").strip(), tip
             )
@@ -1460,7 +1456,7 @@ class BranchDeletionTests(unittest.TestCase):
             root = Path(tmp)
             repo, tip, common_dir = self._repo_with_branch(root)
             action = self._run_case(
-                "unavailable", tip, common_dir, self._gh_stub(root)
+                "unavailable", tip, common_dir
             )
 
             self.assertEqual(action, "branch_left:feature/test:gh unavailable")
@@ -1473,7 +1469,7 @@ class BranchDeletionTests(unittest.TestCase):
             root = Path(tmp)
             repo, tip, common_dir = self._repo_with_branch(root)
             action = self._run_case(
-                "merged", tip, common_dir, self._gh_stub(root), execute=False
+                "merged", tip, common_dir, execute=False
             )
 
             self.assertEqual(action, "would_delete_branch:feature/test")
@@ -1510,6 +1506,12 @@ class BranchDeletionTests(unittest.TestCase):
                     return 0, f"{tip}\n", ""
                 if cmd[:3] == ["git", "-C", str(worktree)] and "--git-common-dir" in cmd:
                     return 0, f"{common_dir}\n", ""
+                if cmd[:3] == ["git", "-C", str(worktree)] and cmd[3:] == [
+                    "remote",
+                    "get-url",
+                    "origin",
+                ]:
+                    return 0, "https://github.com/example/worker-reap.git\n", ""
                 if cmd[:2] == ["git", f"--git-dir={common_dir}"] and "rev-parse" in cmd:
                     return 0, f"{tip}\n", ""
                 if "branch" in cmd and "--merged" in cmd:
@@ -1532,6 +1534,19 @@ class BranchDeletionTests(unittest.TestCase):
 
             self.assertIn(f"worktree_removed:{worktree}", record.actions_taken)
             self.assertIn("branch_deleted:feature/test", record.actions_taken)
+            self.assertIn(
+                [
+                    "gh",
+                    "pr",
+                    "view",
+                    "feature/test",
+                    "--repo",
+                    "github.com/example/worker-reap",
+                    "--json",
+                    "state,headRefOid",
+                ],
+                calls,
+            )
             remove_index = next(
                 i for i, cmd in enumerate(calls) if "worktree" in cmd and "remove" in cmd
             )

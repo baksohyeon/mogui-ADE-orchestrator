@@ -2264,6 +2264,66 @@ def test_cli_spawn_uses_agent_specific_default_model() -> None:
 
 
 @skip_windows_exec_surface
+def test_cli_spawn_uses_claude_fable_5_2_default_model() -> None:
+    result = subprocess.run(
+        [
+            str(Path(__file__).resolve().parent.parent / "scripts" / "master-succeed"),
+            "spawn",
+            "--workspace-selector",
+            "folder:unit-a",
+            "--kickoff-text",
+            "start here",
+            "--root",
+            "/repo/example",
+            "--agent",
+            "claude",
+            "--title",
+            "successor",
+            "--dry-run",
+            "--json",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    assert "claude --model claude-fable-5-2" in payload["startup_command"]
+
+
+@skip_windows_exec_surface
+def test_cli_spawn_explicit_model_overrides_claude_default() -> None:
+    result = subprocess.run(
+        [
+            str(Path(__file__).resolve().parent.parent / "scripts" / "master-succeed"),
+            "spawn",
+            "--workspace-selector",
+            "folder:unit-a",
+            "--kickoff-text",
+            "start here",
+            "--root",
+            "/repo/example",
+            "--agent",
+            "claude",
+            "--model",
+            "claude-opus-5-5",
+            "--title",
+            "successor",
+            "--dry-run",
+            "--json",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    assert "claude --model claude-opus-5-5" in payload["startup_command"]
+
+
+@skip_windows_exec_surface
 def test_cli_spawn_requires_model_for_unknown_agent() -> None:
     result = subprocess.run(
         [
@@ -2496,7 +2556,7 @@ def _orca_create_json(handle: str, worktree_id: str) -> str:
     )
 
 
-def _spawn_create_command(selector: str, kickoff: str, root: str, title: str, model: str = "claude-fable-5"):
+def _spawn_create_command(selector: str, kickoff: str, root: str, title: str, model: str = "claude-fable-5-2"):
     return (
         "orca",
         "terminal",

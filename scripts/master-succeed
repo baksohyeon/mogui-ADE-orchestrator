@@ -19,8 +19,8 @@ sys.path.insert(0, str(SRC_ROOT))
 # each CLI's --help or docs. Omitted --model therefore exits with
 # "--model is required for agent X" until a measured id is recorded here.
 DEFAULT_MODELS = {
-    "claude": "claude-fable-5",
-    "claude-code": "claude-fable-5",
+    "claude": "claude-fable-5-2",
+    "claude-code": "claude-fable-5-2",
     "grok": "grok-4.5",
     "grok-build": "grok-4.5",
     "codex": "gpt-5.6-sol",

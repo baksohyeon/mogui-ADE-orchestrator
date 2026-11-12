@@ -367,11 +367,35 @@ done
 # Required, not optional: REDACTION_REQUIRE_EXTRA=1 scanning exits 2 with no
 # rules loaded, and redaction-inventory exits 2 when this file is unset or
 # yields no readable rule. A missing file is a blocked publish path.
-# Honor the variable both consumers read before falling back to the default path.
-redaction_extra="${REDACTION_EXTRA_PATTERNS:-${HOME}/.config/redaction-extra.txt}"
+# Honor the variable both consumers read before falling back to the workspace
+# root and then the legacy home path. The workspace root is the parent of the
+# repository that carries this script.
+redaction_workspace_root=$(cd "${runtime_root}/.." && pwd -P)
+redaction_workspace_extra="${redaction_workspace_root}/.redaction-extra.txt"
+redaction_legacy_extra="${HOME}/.config/redaction-extra.txt"
+redaction_extra_source="none"
+if [[ -n "${REDACTION_EXTRA_PATTERNS:-}" ]]; then
+  redaction_extra="${REDACTION_EXTRA_PATTERNS}"
+  if [[ "${redaction_extra}" != /* ]]; then
+    redaction_extra="$(pwd -P)/${redaction_extra}"
+  fi
+  redaction_extra_source="env"
+elif [[ -f "${redaction_workspace_extra}" ]]; then
+  redaction_extra="${redaction_workspace_extra}"
+  redaction_extra_source="workspace-root"
+elif [[ -f "${redaction_legacy_extra}" ]]; then
+  redaction_extra="${redaction_legacy_extra}"
+  redaction_extra_source="legacy-home"
+else
+  redaction_extra=""
+fi
 redaction_format='format: one rule per line as "id|description|regex"; blank lines and lines beginning with # are skipped; only the first two pipes separate fields, so the regex may contain "|"; the regex must compile, because redaction-inventory drops uncompilable rules without reporting them; keep the file out of version control'
 if [[ ! -f "$redaction_extra" ]]; then
-  fail "redaction-extra" "organization rules file missing: $redaction_extra; two of the three publish gates refuse to run without it; $redaction_format"
+  if [[ "${redaction_extra_source}" == "none" ]]; then
+    fail "redaction-extra" "organization rules file missing; looked at ${redaction_workspace_extra} and ${redaction_legacy_extra}; two of the three publish gates refuse to run without it; $redaction_format"
+  else
+    fail "redaction-extra" "organization rules file missing: $redaction_extra (source=${redaction_extra_source}); two of the three publish gates refuse to run without it; $redaction_format"
+  fi
 else
   # Counts only. This file's contents are what the scanner protects, so the
   # check must never print a rule, an identifier, or a match.
@@ -409,7 +433,7 @@ PY
     elif [[ "$rx_malformed" -gt 0 ]]; then
       fail "redaction-extra" "$rx_malformed of $rx_total rules in $redaction_extra are malformed or do not compile, so coverage is narrower than the file looks; $redaction_format"
     else
-      pass "redaction-extra" "$rx_valid rules load from $redaction_extra"
+      pass "redaction-extra" "$rx_valid rules load from $redaction_extra (org-rules-source=$redaction_extra_source)"
     fi
   fi
 fi

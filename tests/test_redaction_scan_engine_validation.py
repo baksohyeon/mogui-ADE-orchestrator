@@ -84,6 +84,7 @@ def test_engine_failure_during_scan_is_exit_2_not_silence(tmp_path: Path) -> Non
     env = {**os.environ, "PATH": f"{shim_bin}:{os.environ['PATH']}"}
     env.pop("REDACTION_EXTRA_PATTERNS", None)
     env.pop("REDACTION_REQUIRE_EXTRA", None)
+    env["HOME"] = str(tmp_path / "test-home")
 
     result = subprocess.run(
         ["bash", str(repo / "scripts" / "redaction-scan.sh")],
@@ -104,6 +105,7 @@ def test_unresolvable_range_is_exit_2_not_a_clean_scan(tmp_path: Path) -> None:
     env = {**os.environ}
     env.pop("REDACTION_EXTRA_PATTERNS", None)
     env.pop("REDACTION_REQUIRE_EXTRA", None)
+    env["HOME"] = str(tmp_path / "test-home")
 
     result = subprocess.run(
         [

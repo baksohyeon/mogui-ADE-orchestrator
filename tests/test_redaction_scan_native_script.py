@@ -71,6 +71,7 @@ def test_no_org_rules_means_no_native_warning(tmp_path: Path) -> None:
     env = {**os.environ}
     env.pop("REDACTION_EXTRA_PATTERNS", None)
     env.pop("REDACTION_REQUIRE_EXTRA", None)
+    env["HOME"] = str(tmp_path / "test-home")
     result = subprocess.run(
         ["bash", str(repo / "scripts" / "redaction-scan.sh")],
         cwd=repo,

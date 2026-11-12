@@ -14,7 +14,7 @@ Exit codes
   2  cannot decide (no pattern file, not a git repository)
 
 Usage
-  REDACTION_EXTRA_PATTERNS=~/.config/redaction-extra.txt scripts/redaction-inventory
+  REDACTION_EXTRA_PATTERNS=../.redaction-extra.txt scripts/redaction-inventory
   scripts/redaction-inventory --baseline .redaction-inventory-baseline
   scripts/redaction-inventory --json
 """

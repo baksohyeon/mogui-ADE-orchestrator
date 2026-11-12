@@ -153,15 +153,26 @@ def _run(
     env: dict,
     tmp_path: Path,
     args: tuple[str, ...] = (),
+    script: Path = PREFLIGHT,
 ) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["bash", str(PREFLIGHT), *args],
+        ["bash", str(script), *args],
         env=env,
         cwd=str(tmp_path),
         capture_output=True,
         text=True,
         check=False,
     )
+
+
+def _copied_preflight(tmp_path: Path) -> Path:
+    """Place the script under a temporary template with a known workspace root."""
+
+    script = tmp_path / "template" / "scripts" / "onboarding-preflight.sh"
+    script.parent.mkdir(parents=True)
+    script.write_text(PREFLIGHT.read_text(encoding="utf-8"), encoding="utf-8")
+    script.chmod(0o755)
+    return script
 
 
 def _labels(output: str, verdict: str) -> set[str]:
@@ -281,10 +292,43 @@ def test_missing_agent_cli_selection_fails(tmp_path: Path) -> None:
 @skip_windows_exec_surface
 def test_missing_rules_file_blocks_instead_of_warning(tmp_path: Path) -> None:
     env = _host(tmp_path, rules=None)
-    result = _run(env, tmp_path)
+    env.pop("REDACTION_EXTRA_PATTERNS")
+    result = _run(env, tmp_path, script=_copied_preflight(tmp_path))
+    output = result.stdout + result.stderr
     assert "redaction-extra" in _labels(result.stdout, "FAIL"), result.stdout
     assert "redaction-extra" not in _labels(result.stdout, "WARN"), result.stdout
+    assert str(tmp_path / ".redaction-extra.txt") in output
+    assert str(tmp_path / "home" / ".config" / "redaction-extra.txt") in output
     assert result.returncode == 1
+
+
+@skip_windows_exec_surface
+def test_workspace_root_rules_file_is_found_without_environment_override(
+    tmp_path: Path,
+) -> None:
+    env = _host(tmp_path, rules=None)
+    env.pop("REDACTION_EXTRA_PATTERNS")
+    (tmp_path / ".redaction-extra.txt").write_text(
+        "workspace_rule|workspace marker|WORKSPACE_MARKER\n", encoding="utf-8"
+    )
+    result = _run(env, tmp_path, script=_copied_preflight(tmp_path))
+
+    assert "redaction-extra" in _labels(result.stdout, "PASS"), result.stdout
+    assert "org-rules-source=workspace-root" in result.stdout
+    assert str(tmp_path / ".redaction-extra.txt") in result.stdout
+
+
+@skip_windows_exec_surface
+def test_legacy_home_rules_file_remains_a_fallback_without_environment_override(
+    tmp_path: Path,
+) -> None:
+    env = _host(tmp_path)
+    env.pop("REDACTION_EXTRA_PATTERNS")
+    result = _run(env, tmp_path)
+
+    assert "redaction-extra" in _labels(result.stdout, "PASS"), result.stdout
+    assert "org-rules-source=legacy-home" in result.stdout
+    assert str(tmp_path / "home" / ".config" / "redaction-extra.txt") in result.stdout
 
 
 @skip_windows_exec_surface

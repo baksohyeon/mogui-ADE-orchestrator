@@ -33,5 +33,6 @@ config/model-tier-policy.json
 *redact-result*
 *redaction-report*
 redaction-extra*.txt
+.redaction-extra.txt
 *.sweep.md
 .orca/

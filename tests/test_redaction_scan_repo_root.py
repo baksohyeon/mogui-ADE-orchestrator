@@ -54,6 +54,7 @@ def _scan(repo: Path, args: list[str], *, env_extra: dict[str, str] | None = Non
     env.pop("REDACTION_REQUIRE_EXTRA", None)
     env.pop("REDACTION_REPO_ROOT", None)
     env.pop("REDACTION_ALLOWLIST", None)
+    env["HOME"] = str(repo.parent / "test-home")
     env.update(env_extra or {})
     return subprocess.run(
         ["bash", str(repo / "scripts" / "redaction-scan.sh"), *args],

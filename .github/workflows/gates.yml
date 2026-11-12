@@ -255,6 +255,8 @@ jobs:
           tar -xzf gitleaks.tgz gitleaks
           sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
       - name: Scan tracked content (committed rules)
+        env:
+          REDACTION_PROFILE: export
         run: ./scripts/redaction-scan.sh
       - name: Inventory (informational — exit 1 is the normal triage state)
         run: ./scripts/redaction-inventory || true

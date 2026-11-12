@@ -70,6 +70,7 @@ def _scan(repo: Path, *args: str) -> subprocess.CompletedProcess:
     env = {**os.environ}
     env.pop("REDACTION_EXTRA_PATTERNS", None)
     env.pop("REDACTION_REQUIRE_EXTRA", None)
+    env["HOME"] = str(repo.parent / "test-home")
     return subprocess.run(
         ["bash", str(repo / "scripts" / "redaction-scan.sh"), *args],
         cwd=repo,

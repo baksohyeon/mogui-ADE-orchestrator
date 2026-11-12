@@ -35,6 +35,7 @@ def _scan_with_python_override(repo: Path, python_override: Path) -> subprocess.
     env = {**os.environ, "REDACTION_PYTHON": str(python_override)}
     env.pop("REDACTION_EXTRA_PATTERNS", None)
     env.pop("REDACTION_REQUIRE_EXTRA", None)
+    env["HOME"] = str(repo.parent / "test-home")
     return subprocess.run(
         ["bash", str(repo / "scripts" / "redaction-scan.sh")],
         cwd=repo,
@@ -186,6 +187,7 @@ def test_redaction_python_override_runs_per_commit_normalizer(tmp_path: Path) ->
     env = {**os.environ, "REDACTION_PYTHON": str(shim)}
     env.pop("REDACTION_EXTRA_PATTERNS", None)
     env.pop("REDACTION_REQUIRE_EXTRA", None)
+    env["HOME"] = str(tmp_path / "test-home")
     result = subprocess.run(
         ["bash", str(repo / "scripts" / "redaction-scan.sh"), "--range", "HEAD~2..HEAD"],
         cwd=repo,

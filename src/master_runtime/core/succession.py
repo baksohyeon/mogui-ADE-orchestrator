@@ -556,7 +556,7 @@ def spawn_successor(
     kickoff_text: str,
     root: str,
     title: str,
-    model: str = "claude-fable-5",
+    model: str = "claude-fable-5-2",
     agent: str = "claude",
     expected_placement: Optional[str] = None,
     orca_runner: Optional[OrcaRunner] = None,

@@ -22,6 +22,7 @@ you build on it.
 
 ### Fixed
 
+- Claude master onboarding and succession defaults now use Fable 5.2, while the tier policy retains prior Fable identifiers for compatibility (#252).
 - Dispatch ledger policy paths use `~` for home-relative paths, and reports count legacy absolute rows with new home-relative rows under one policy.
 
 ## [0.5.319] - 2026-11-12

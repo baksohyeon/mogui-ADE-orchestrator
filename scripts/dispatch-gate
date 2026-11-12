@@ -180,10 +180,9 @@ def _check(args: argparse.Namespace) -> int:
 
 
 def _register(args: argparse.Namespace) -> int:
-    # Keep direct callers that predate the card column readable. Once either
-    # option is supplied, exactly one of the two values must be populated.
-    # This prevents a row from claiming both a card and an explanation, or
-    # carrying neither while looking like an explicit card decision.
+    # Keep direct callers that predate the card column readable. Reject a
+    # registration request that supplies both card metadata values or leaves
+    # both values empty once either option is supplied.
     card_populated = bool(args.card and args.card.strip())
     reason_populated = bool(args.card_reason and args.card_reason.strip())
     if args.card is not None or args.card_reason is not None:

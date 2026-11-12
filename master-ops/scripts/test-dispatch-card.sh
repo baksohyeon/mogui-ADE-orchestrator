@@ -44,6 +44,8 @@ make_harness() {
       record-reason)
         printf 'LEDGER="%s" LEDGER_LOCK="%s" DISP=disp-test CARD_REASON="claim failed"\n' "$T/reason-ledger.jsonl" "$T/reason-ledger.lock"
         printf 'record_claim_failure_reason\ncat "$LEDGER"\n';;
+      register-stdin)
+        printf 'LEDGER="%s" LEDGER_LOCK="%s" REGISTER_GATE="%s"\nledger_locked_command "$REGISTER_GATE" register --ledger "$LEDGER"\n' "$T/register-ledger.jsonl" "$T/register-ledger.lock" "$T/register-gate";;
       check-only)
         printf 'CHECK_ONLY=1\n';;
     esac
@@ -115,6 +117,42 @@ printf '%s' "$out" | grep -q '"card":"tk-auto1"' \
   && ok "claim failure keeps the card id and adds the separate reason to the register row" \
   || fail "record-reason case: $out"
 
+cat > "$T/register-gate" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${REGISTER_LOG:?}"
+printf '{"allow":true}\n'
+EOF
+chmod +x "$T/register-gate"
+: > "$T/register-ledger.jsonl"
+make_harness register-stdin
+register_out=$(REGISTER_LOG="$T/register.log" python3 - "$T/harness-register-stdin.sh" <<'PY'
+import subprocess
+import sys
+
+proc = subprocess.Popen(
+    ["bash", sys.argv[1]],
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.STDOUT,
+    text=True,
+)
+try:
+    output = proc.communicate(timeout=3)[0]
+except subprocess.TimeoutExpired:
+    proc.kill()
+    output = proc.communicate()[0]
+    print(output, end="")
+    raise SystemExit("register path blocked on inherited stdin")
+print(output, end="")
+if proc.returncode != 0:
+    raise SystemExit(proc.returncode)
+PY
+)
+printf '%s' "$register_out" | grep -q '"allow":true' \
+  && grep -Fxq "register --ledger $T/register-ledger.jsonl" "$T/register.log" \
+  && ok "register path returns while terminal-like stdin remains open" \
+  || fail "register stdin case: $register_out"
+
 : > "$T/bd.log"
 make_harness release
 out=$(BD_CALL_LOG="$T/bd.log" bash "$T/harness-release.sh" 2>&1 || true)
@@ -132,10 +170,11 @@ bash "$T/harness-check-only.sh"
 # Exercise the production wrapper's own --check-only branch. This renders the
 # template placeholders and replaces only its external gate with a deterministic
 # fake; the branch is therefore not reproduced by this test harness.
-mkdir -p "$T/ops" "$T/runtime/scripts" "$T/state"
-mkdir -p "$T/lib"
-cp "$S/lib/orca_json.py" "$T/lib/orca_json.py"
-cp "$S/mogui_log.py" "$T/mogui_log.py"
+mkdir -p "$T/ops/scripts" "$T/runtime/scripts" "$T/state" "$T/harness" "$T/config"
+printf '{"master_host_runtime":"codex"}\n' > "$T/config/instance-runtime.json"
+mkdir -p "$T/harness/lib"
+cp "$S/lib/orca_json.py" "$T/harness/lib/orca_json.py"
+cp "$S/mogui_log.py" "$T/harness/mogui_log.py"
 printf '{"tiers":{"efficient":["claude-haiku-4-5-20251001"],"top":[]}}\n' > "$T/ops/model-tier-policy.json"
 printf '# production check-only fixture\n' > "$T/contract-production.md"
 cat > "$T/runtime/scripts/dispatch-gate" <<'EOF'
@@ -143,19 +182,21 @@ cat > "$T/runtime/scripts/dispatch-gate" <<'EOF'
 printf '{"allow":true,"contract_sha":"0123456789abcdef"}\n'
 EOF
 chmod +x "$T/runtime/scripts/dispatch-gate"
+cp "$T/runtime/scripts/dispatch-gate" "$T/ops/scripts/dispatch-gate"
+chmod +x "$T/ops/scripts/dispatch-gate"
 cat > "$T/bin/claude" <<'EOF'
 #!/usr/bin/env bash
 exit 0
 EOF
 chmod +x "$T/bin/claude"
-cp "$S/approval-prompt-markers.txt" "$T/approval-prompt-markers.txt"
+cp "$S/approval-prompt-markers.txt" "$T/harness/approval-prompt-markers.txt"
 sed -e "s|{{OPS_REPO}}|$T/ops|g" -e "s|{{RUNTIME_ROOT}}|$T/runtime|g" \
-  "$DISPATCH" > "$T/dispatch-production"
-chmod +x "$T/dispatch-production"
+  "$DISPATCH" > "$T/harness/dispatch-production"
+chmod +x "$T/harness/dispatch-production"
 : > "$T/bd.log"
 out=$(MOGUI_STATE_DIR="$T/state" CARD_LOG="$T/bd.log" \
   DISPATCH_STANDING_RULES="$S/../rules/standing-rules.md" PATH="$T/bin:$PATH" \
-  bash "$T/dispatch-production" \
+  bash "$T/harness/dispatch-production" \
     --contract "$T/contract-production.md" --spec production-check-only \
     --runtime claude --model claude-haiku-4-5-20251001 \
     --tier-policy "$T/ops/model-tier-policy.json" \
@@ -172,7 +213,8 @@ fi
 production_failure_case() {
   mode="$1"
   work="$T/production-$mode"
-  mkdir -p "$work/ops" "$work/runtime/scripts" "$work/state"
+  mkdir -p "$work/ops/scripts" "$work/runtime/scripts" "$work/state" "$work/harness" "$work/config"
+  printf '{"master_host_runtime":"codex"}\n' > "$work/config/instance-runtime.json"
   printf '{"tiers":{"efficient":["claude-haiku-4-5-20251001"],"top":[]}}\n' > "$work/ops/model-tier-policy.json"
   printf '# production failure fixture\n' > "$work/contract.md"
   cat > "$work/runtime/scripts/dispatch-gate" <<'EOF'
@@ -188,6 +230,8 @@ else
 fi
 EOF
   chmod +x "$work/runtime/scripts/dispatch-gate"
+  cp "$work/runtime/scripts/dispatch-gate" "$work/ops/scripts/dispatch-gate"
+  chmod +x "$work/ops/scripts/dispatch-gate"
   cat > "$work/orca" <<'EOF'
 #!/usr/bin/env bash
 if [ "$1" = orchestration ] && [ "$2" = task-create ]; then
@@ -230,20 +274,20 @@ EOF
 exit 0
 EOF
   chmod +x "$work/sleep"
-  cp "$S/approval-prompt-markers.txt" "$work/approval-prompt-markers.txt"
-  mkdir -p "$work/lib"
-  cp "$S/lib/orca_json.py" "$work/lib/orca_json.py"
-  cp "$S/mogui_log.py" "$work/mogui_log.py"
+  cp "$S/approval-prompt-markers.txt" "$work/harness/approval-prompt-markers.txt"
+  mkdir -p "$work/harness/lib"
+  cp "$S/lib/orca_json.py" "$work/harness/lib/orca_json.py"
+  cp "$S/mogui_log.py" "$work/harness/mogui_log.py"
   sed -e "s|{{OPS_REPO}}|$work/ops|g" -e "s|{{RUNTIME_ROOT}}|$work/runtime|g" \
-    "$DISPATCH" > "$work/dispatch"
-  chmod +x "$work/dispatch"
+    "$DISPATCH" > "$work/harness/dispatch"
+  chmod +x "$work/harness/dispatch"
   : > "$work/bd.log"
   : > "$work/read-count"
   set +e
   out=$(ORCA_MODE="$mode" GATE_MODE="$mode" ORCA_READ_COUNT="$work/read-count" \
     MOGUI_STATE_DIR="$work/state" CARD_LOG="$work/bd.log" \
     DISPATCH_STANDING_RULES="$S/../rules/standing-rules.md" \
-    PATH="$T/bin:$work:$PATH" bash "$work/dispatch" \
+    PATH="$T/bin:$work:$PATH" bash "$work/harness/dispatch" \
       --contract "$work/contract.md" --spec "$mode" \
       --runtime claude --model claude-haiku-4-5-20251001 \
       --tier-policy "$work/ops/model-tier-policy.json" \

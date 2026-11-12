@@ -2156,7 +2156,7 @@ lock_path, *command = sys.argv[1:]
 os.makedirs(os.path.dirname(os.path.abspath(lock_path)), exist_ok=True)
 with open(lock_path, "a", encoding="utf-8") as lock:
     fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-    result = subprocess.run(command, capture_output=True, text=True, input=sys.stdin.read())
+    result = subprocess.run(command, capture_output=True, text=True)
 sys.stdout.write(result.stdout)
 sys.stderr.write(result.stderr)
 sys.exit(result.returncode)

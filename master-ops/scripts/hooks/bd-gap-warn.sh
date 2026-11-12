@@ -43,6 +43,7 @@ fi
 
 RESULT=$(LEDGER="$LEDGER" python3 - <<'PY'
 import json
+import math
 import os
 import subprocess
 from datetime import datetime, timedelta, timezone
@@ -52,6 +53,7 @@ ledger = Path(os.environ["LEDGER"])
 kst = timezone(timedelta(hours=9))
 today_start = datetime.now(kst).replace(hour=0, minute=0, second=0, microsecond=0)
 today_start_ts = today_start.timestamp()
+today_end_ts = today_start_ts + 86400
 missing = 0
 
 def reverse_lines(path, block_size=8192):
@@ -85,8 +87,12 @@ try:
             stamp_value = float(stamp)
         except (TypeError, ValueError, OverflowError):
             continue
+        if not math.isfinite(stamp_value):
+            continue
         if stamp_value < today_start_ts:
             break
+        if stamp_value >= today_end_ts:
+            continue
         if row.get("decision") != "ALLOW" or not row.get("job_id"):
             continue
         if not str(row.get("card") or "").strip():

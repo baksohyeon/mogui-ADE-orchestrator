@@ -91,7 +91,8 @@ exit 1
 EOF
 chmod +x "$T/bin/bd"
 now=$(date +%s)
-printf '{"ts":%s,"decision":"ALLOW","job_id":"job-gap"}\n{"ts":%s,"decision":"ALLOW","job_id":"job-card","card":"card-1"}\n' "$now" "$now" > "$T/dispatch-ledger.jsonl"
+future=$((now + 172800))
+printf '{"ts":%s,"decision":"ALLOW","job_id":"job-future"}\n{"ts":NaN,"decision":"ALLOW","job_id":"job-nan"}\n{"ts":Infinity,"decision":"ALLOW","job_id":"job-infinity"}\n{"ts":%s,"decision":"ALLOW","job_id":"job-gap"}\n{"ts":%s,"decision":"ALLOW","job_id":"job-card","card":"card-1"}\n' "$future" "$now" "$now" > "$T/dispatch-ledger.jsonl"
 out=$(BD_CALL_LOG="$T/bd.log" DISPATCH_GATE_LEDGER="$T/dispatch-ledger.jsonl" PATH="$T/bin:$PATH" MOGUI_HOOK_FIRE_LOG="$LOG" bash "$BD_GAP" 2>&1)
 printf '%s' "$out" | grep -q 'today: 1 dispatches without a card · 1 in_progress' \
   && ok "bd-gap warn path prints missing-card count" \

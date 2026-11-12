@@ -9,6 +9,8 @@ from collections.abc import Callable
 from pathlib import Path
 from unittest import mock
 
+from windows_exec_surface import skip_windows_exec_surface
+
 from master_runtime.core.worker_reap import (
     AGENT_CLI_COMMANDS,
     DispatchState,
@@ -1338,6 +1340,7 @@ class WorkerReaperTests(unittest.TestCase):
             self.assertEqual(entry["dispatch_id"], "d1")
 
 
+@skip_windows_exec_surface
 class BranchDeletionTests(unittest.TestCase):
     """Branch deletion is gated by GitHub's merged PR and exact head OID."""
 

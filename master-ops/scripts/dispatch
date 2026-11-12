@@ -2089,6 +2089,21 @@ if [ "$RUNTIME" = codex ]; then
   esac
 fi
 
+# 3c. codex fresh worktree git index unlock (card mgm-up2w)
+# When codex launches in a fresh linked worktree with the workspace-write
+# sandbox, the first `git add` fails with "index.lock: Operation not
+# permitted" because git's worktree index lives outside the sandbox's write
+# root. Running one git read (status) before the worker launches "unlocks"
+# the index, allowing all subsequent sandboxed git operations in this session
+# to succeed. Mechanism unknown; observed pattern: after the first git write
+# outside the sandbox, sandboxed git works.
+if [ "$RUNTIME" = codex ]; then
+  wt_path="${WORKTREE#path:}"
+  if [ -n "$wt_path" ] && [ -d "$wt_path/.git" ]; then
+    git -C "$wt_path" status --porcelain >/dev/null 2>&1 || true
+  fi
+fi
+
 # 4. dispatch --inject
 PRE_INJECT_CLASS=$(pane_classification "$TERMINAL")
 DISP_RAW=$(orca orchestration dispatch "${DISPATCH_FROM_ARGS[@]+"${DISPATCH_FROM_ARGS[@]}"}" --task "$TASK" --to "$TERMINAL" --inject --json 2>/dev/null)

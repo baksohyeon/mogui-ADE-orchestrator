@@ -57,9 +57,32 @@ assert_verdict pass "trim-warn bounded rg path"
 out=$(printf '{"tool_input":{"command":"git diff | rg pattern"}}' | MOGUI_HOOK_FIRE_LOG="$LOG" bash "$TRIM" 2>&1)
 printf '%s' "$out" | grep -q '\[trim-warn\]' && ok "trim-warn unbounded rg path warns" || fail "trim-warn unbounded rg path stayed silent"
 assert_verdict warn "trim-warn unbounded rg path"
+out=$(printf '{"tool_input":{"command":"git diff | grep x"}}' | MOGUI_HOOK_FIRE_LOG="$LOG" bash "$TRIM" 2>&1)
+printf '%s' "$out" | grep -q '\[trim-warn\]' && ok "trim-warn plain grep path warns" || fail "trim-warn plain grep path stayed silent"
+assert_verdict warn "trim-warn plain grep path"
 out=$(printf '{"tool_input":{"command":"git diff; grep -q x"}}' | MOGUI_HOOK_FIRE_LOG="$LOG" bash "$TRIM" 2>&1)
 printf '%s' "$out" | grep -q '\[trim-warn\]' && ok "trim-warn compound path warns" || fail "trim-warn compound path stayed silent"
 assert_verdict warn "trim-warn compound path"
+out=$(printf '{"tool_input":{"command":"git log --author head"}}' | MOGUI_HOOK_FIRE_LOG="$LOG" bash "$TRIM" 2>&1)
+printf '%s' "$out" | grep -q '\[trim-warn\]' && ok "trim-warn argument word path warns" || fail "trim-warn argument word path stayed silent"
+assert_verdict warn "trim-warn argument word path"
+for rg_command in \
+  "git diff | rg -m20 pattern" \
+  "git diff | rg -m 20 pattern" \
+  "git diff | rg --max-count=20 pattern" \
+  "git diff | rg -i --max-count 20 pattern"; do
+  out=$(printf '{"tool_input":{"command":"%s"}}' "$rg_command" | MOGUI_HOOK_FIRE_LOG="$LOG" bash "$TRIM" 2>&1)
+  [ -z "$out" ] && ok "trim-warn rg max-count form stays silent: $rg_command" || fail "trim-warn rg max-count form printed: $rg_command: $out"
+  assert_verdict pass "trim-warn rg max-count form: $rg_command"
+done
+for grep_command in \
+  "git diff | grep -cq x" \
+  "git diff | grep --count x" \
+  "git diff | grep --quiet x"; do
+  out=$(printf '{"tool_input":{"command":"%s"}}' "$grep_command" | MOGUI_HOOK_FIRE_LOG="$LOG" bash "$TRIM" 2>&1)
+  [ -z "$out" ] && ok "trim-warn grep bounded form stays silent: $grep_command" || fail "trim-warn grep bounded form printed: $grep_command: $out"
+  assert_verdict pass "trim-warn grep bounded form: $grep_command"
+done
 out=$(printf 'not json' | MOGUI_HOOK_FIRE_LOG="$LOG" bash "$TRIM" 2>&1)
 [ -z "$out" ] && ok "trim-warn skip path stays silent" || fail "trim-warn skip path printed: $out"
 assert_verdict skip "trim-warn skip path"

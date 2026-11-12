@@ -39,13 +39,22 @@ case "$CMD" in
   *) exit 0;;
 esac
 is_bounded_stage() {
-  local stage="$1"
-  [[ "$stage" =~ (^|[[:space:]])(head|tail)([[:space:]]|$) ]] && return 0
-  [[ "$stage" == *"--jq"* ]] && return 0
-  [[ "$stage" =~ (^|[[:space:]])wc([[:space:]]|$) ]] && return 0
-  [[ "$stage" =~ (^|[[:space:]])grep[[:space:]]+-[cq]([[:space:]]|$) ]] && return 0
-  [[ "$stage" =~ (^|[[:space:]])rg[[:space:]]+(-c|--count|-q|--quiet|-l)([[:space:]]|$) ]] && return 0
-  [[ "$stage" =~ (^|[[:space:]])rg[[:space:]]+(-m[[:space:]]+[0-9]+|--max-count(=|[[:space:]]+)[0-9]+)([[:space:]]|$) ]] && return 0
+  local stage="$1" command_name
+  stage="${stage#"${stage%%[![:space:]]*}"}"
+  command_name="${stage%%[[:space:]]*}"
+  case "$command_name" in
+    head|tail|wc) return 0;;
+    gh)
+      [[ "$stage" == *"--jq"* ]] && return 0
+      ;;
+    grep)
+      [[ "$stage" =~ (^|[[:space:]])grep[[:space:]]+(-[[:alnum:]]*[cq][[:alnum:]]*|--count|--quiet)([[:space:]]|$) ]] && return 0
+      ;;
+    rg)
+      [[ "$stage" =~ (^|[[:space:]])rg([[:space:]]+.*)?[[:space:]](-c|--count|-q|--quiet|-l)([[:space:]]|$) ]] && return 0
+      [[ "$stage" =~ (^|[[:space:]])rg([[:space:]]+.*)?[[:space:]](-m[[:space:]]*[0-9]+|--max-count(=|[[:space:]]+)[0-9]+)([[:space:]]|$) ]] && return 0
+      ;;
+  esac
   return 1
 }
 

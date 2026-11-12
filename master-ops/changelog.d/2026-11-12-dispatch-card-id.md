@@ -1,1 +1,0 @@
-- Require every supervised dispatch to carry a tracker card id or an explicit gap reason, add daily gap warnings, and include card recall in the compaction probe.

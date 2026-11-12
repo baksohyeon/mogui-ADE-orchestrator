@@ -20,6 +20,11 @@ you build on it.
 
 ## [Unreleased]
 
+## [0.5.319] - 2026-11-12
+
+- Organization redaction rules load from the workspace-root `.redaction-extra.txt` by default, with `REDACTION_EXTRA_PATTERNS` taking precedence and `~/.config/redaction-extra.txt` retained as the fallback; the export profile loads `workspace_` rules while the internal profile counts and skips them (#246).
+- Supervised dispatches require a tracker card id or an explicit gap reason, daily card gaps are reported, and the compaction probe recalls dispatch cards (#248).
+
 ## [0.5.312] - 2026-11-12
 
 ### Changed
@@ -462,7 +467,8 @@ tests pass, 1 skipped.
 There is no CI at this tag. Tests and the redaction scanners run locally before
 a push, so a passing count in a pull request is the author's word.
 
-[Unreleased]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.312...HEAD
+[Unreleased]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.319...HEAD
+[0.5.319]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.312...v0.5.319
 [0.5.312]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.304...v0.5.312
 [0.5.304]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.301...v0.5.304
 [0.5.301]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.296...v0.5.301

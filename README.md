@@ -10,13 +10,13 @@ Anyone running more than two agents at once hits this; Dorito hit it, got tired 
 
 For a reader who wants the ideas before the install, [mogui harness, explained](https://github.com/baksohyeon/mogui-harness-explained) walks through twenty-seven mechanisms, three walkthroughs, and eight concept notes in five-minute pages, with every link pinned to a tagged release.
 
-**Watch the 110-second walkthrough.** One dispatch day in twelve scenes with a time axis along the bottom: the owner's word, the contract and its read token, two workers in their own checkouts, a prompt the master answers, the mailbox, a send-back, the gates before the merge, the record every dispatch leaves, the memory loop, and the template. Concept view, not a screen recording; the [release page](https://github.com/baksohyeon/mogui-harness-explained/releases/tag/walkthrough-110s-v2) has the file, the captions, and the credits.
+**Watch the three-minute walkthrough.** Five animated scenes, each proving one sentence: a pane and a worktree are different places; a contract travels and a read token comes back; a report is not approval; every dispatch leaves rows, and the seat survives its own memory; and what is Orca and what is the harness. Blue is what Orca provides, orange is what the harness adds. Concept view, not a screen recording; the [release page](https://github.com/baksohyeon/mogui-harness-explained/releases/tag/walkthrough-manim-v1) has the file, the captions, and the credits.
 
-<p align="center"><a href="https://github.com/baksohyeon/mogui-harness-explained/releases/tag/walkthrough-110s-v2"><img src="docs/assets/walkthrough-110s-poster.jpg" alt="a frame of the walkthrough: the master runs the test itself, the test fails, approval is withheld, and the time axis below marks the send-back" width="100%"></a></p>
+<p align="center"><a href="https://github.com/baksohyeon/mogui-harness-explained/releases/tag/walkthrough-manim-v1"><img src="docs/assets/walkthrough-manim-poster.jpg" alt="a frame of the animated walkthrough: the pieces of the film sorted into an Orca column and a harness column, each pair joined by a dotted line" width="100%"></a></p>
 
 <p align="center"><sub>The player below shows in a web browser. In the GitHub mobile app, tap the picture; the release page has the film.</sub></p>
 
-https://github.com/user-attachments/assets/68379a9b-2474-40ee-a717-e950bbc15c27
+https://github.com/user-attachments/assets/6740ff43-636d-4929-b03e-9b261ea596f0
 
 Clone it, open it in Orca, start an agent inside the clone, and tell it to wake up. The agent runs the install interview and explains as it goes.
 

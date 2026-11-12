@@ -28,6 +28,7 @@ make_harness() {
     extract_function resolve_tracker_card
     extract_function release_tracker_claim
     extract_function fail_after_tracker_claim
+    extract_function ledger_locked_command
     extract_function record_claim_failure_reason
     case "$mode" in
       card)
@@ -41,8 +42,8 @@ make_harness() {
       release)
         printf 'CARD="tk-auto1"; CARD_CLAIMED=1\nfail_after_tracker_claim "task-create failed" 3\n';;
       record-reason)
-        printf 'LEDGER="%s" DISP=disp-test CARD_REASON="claim failed"\n' "$T/reason-ledger.jsonl"
-        printf 'ledger_locked_command() { "$@"; }\nrecord_claim_failure_reason\ncat "$LEDGER"\n';;
+        printf 'LEDGER="%s" LEDGER_LOCK="%s" DISP=disp-test CARD_REASON="claim failed"\n' "$T/reason-ledger.jsonl" "$T/reason-ledger.lock"
+        printf 'record_claim_failure_reason\ncat "$LEDGER"\n';;
       check-only)
         printf 'CHECK_ONLY=1\n';;
     esac

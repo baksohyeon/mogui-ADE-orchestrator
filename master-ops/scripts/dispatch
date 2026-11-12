@@ -2146,7 +2146,7 @@ fi
 # All wrapper ledger writers share this lock. The gate itself writes the register
 # row, so hold the lock while it runs and while later appends or updates run.
 ledger_locked_command() {
-  python3 - "${LEDGER_LOCK:-$LEDGER.lock}" "$@" <<'EOF'
+  python3 -c '
 import fcntl
 import os
 import subprocess
@@ -2156,11 +2156,11 @@ lock_path, *command = sys.argv[1:]
 os.makedirs(os.path.dirname(os.path.abspath(lock_path)), exist_ok=True)
 with open(lock_path, "a", encoding="utf-8") as lock:
     fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-    result = subprocess.run(command, capture_output=True, text=True)
+    result = subprocess.run(command, capture_output=True, text=True, input=sys.stdin.read())
 sys.stdout.write(result.stdout)
 sys.stderr.write(result.stderr)
 sys.exit(result.returncode)
-EOF
+' "${LEDGER_LOCK:-$LEDGER.lock}" "$@"
 }
 
 record_claim_failure_reason() {

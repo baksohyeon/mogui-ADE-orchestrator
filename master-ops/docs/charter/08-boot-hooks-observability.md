@@ -18,6 +18,8 @@ Recommended hook spec:
 - PostToolUse: collect non-sensitive audit markers when locally approved
 - SessionStart: warn when the issue tracker is not reachable from `{{WORKSPACE_ROOT}}`, or when an environment variable points its database outside the workspace
 
+- 2026-11-12: The master's `bashOutputMaxChars: 6000` settings cap is the enforcement layer; `bash-output-trim-warn.sh` and `bash-output-size-warn.sh` are reminder layers only.
+
 The tracker SessionStart warning covers a failure that is otherwise silent. The
 master runs at the workspace root, and a tracker that resolves its database
 from the current directory finds nothing there, or finds a product repository's

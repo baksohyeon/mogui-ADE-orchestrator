@@ -44,11 +44,14 @@ fragment, not a complete settings object; the exact host settings file remains
 owner-managed:
 
 ```json
+"bashOutputMaxChars": 6000,
 "PreToolUse": [
   {"matcher": "Edit|Write|NotebookEdit", "hooks": [{"type": "command", "command": "bash \"{{OPS_REPO}}/scripts/hooks/product-path-guard.sh\""}]},
   {"matcher": "Bash", "hooks": [{"type": "command", "command": "bash \"{{OPS_REPO}}/scripts/hooks/product-path-guard.sh\""}]}
 ]
 ```
+
+Place `bashOutputMaxChars` in the master's workspace-level project file `.claude/settings.json`; the user-wide `~/.claude/settings.json` reaches every project. Tool output is the largest context cost of a long master session. Claude Code v2.1.261 or later applies this setting to successful Bash or PowerShell commands: above 6000 characters, it saves the result to a session file and sends the model a short preview plus the file path; an oversized failed command receives a head-and-tail excerpt instead. The dispatch script starts each worker with a separate per-task `--settings` file containing only worker guard hooks, so workers do not receive the master's cap.
 
 Record in the ops notes that harness wiring is default-on as of this install. Reuse the dependency-set approval from Step 0; if it was not asked there, ask it once here and name the `ctx` local history indexing side effect before running `--fix`. Ask a separate host-edit approval before changing host `settings.json`, hooks, or plugin configuration. If host-edit approval is declined, print the commands, record that wiring as pending, and continue only where unconfigured execution is allowed.
 
@@ -62,6 +65,7 @@ When the owner asks to turn something off, explain the piece in one sentence, st
 | Compaction probe (SessionStart on compact) | Checks that the master still knows required facts after compaction | Remove the compact SessionStart hook that runs `scripts/compaction-probe.sh` |
 | Dispatch / supervised-dispatch warning (PreToolUse) | Warns when a worker path bypasses the dispatch gate | Remove the PreToolUse warn hook for bare worker invocation |
 | Product-path guard (PreToolUse) | Blocks master writes into product repositories; optionally enables measured fail-closed Bash decisions and records decisions in the event log | Remove the two PreToolUse hook entries for `scripts/hooks/product-path-guard.sh`; restore them to re-enable |
+| Bash output cap | Limits successful Bash or PowerShell output shown inline for the master | Remove `bashOutputMaxChars` from the master's workspace `.claude/settings.json` and start a fresh session; use `.claude/settings.local.json` for a temporary project-local value |
 | Tracker reachability warning (SessionStart) | Warns when the issue tracker is not reachable from the workspace root | Remove the SessionStart tracker-check hook |
 | Inbox / orch-inbox warn | Surfaces unread orchestration mailbox items | Remove the UserPromptSubmit hook for `orch-inbox-warn.sh` when present |
 | Blame-agent skill | Structured incident observation skill | Uninstall or unload the skill from the host skill path; documents stay in `master-ops/skills/blame-agent/` |

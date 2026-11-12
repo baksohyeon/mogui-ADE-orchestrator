@@ -72,7 +72,7 @@ def ledger_tier_policy_path(path: str | Path) -> str:
 def normalize_tier_policy_path(path: str) -> str:
     """Use one comparison key for absolute and home-relative policy paths."""
 
-    return ledger_tier_policy_path(Path(path).expanduser())
+    return ledger_tier_policy_path(Path(os.path.expanduser(path)))
 
 
 def _default_ledger_path() -> Path:

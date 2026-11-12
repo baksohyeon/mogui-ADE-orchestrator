@@ -2601,7 +2601,7 @@ def test_cli_report_counts_absolute_and_tilde_home_policy_paths_together(
 ) -> None:
     script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
     fake_home = tmp_path / "home"
-    monkeypatch.setenv("HOME", str(fake_home))
+    _set_fake_home(monkeypatch, fake_home)
     ledger = tmp_path / "policy-report-ledger.jsonl"
     rows = (
         {
@@ -2629,6 +2629,31 @@ def test_cli_report_counts_absolute_and_tilde_home_policy_paths_together(
     output = capsys.readouterr().out
     assert (
         f"~/policies/installation.json: sha256={'a' * 12} decisions=2"
+        in output
+    )
+
+
+def test_cli_report_preserves_unknown_user_tilde_policy_paths(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
+    ledger = tmp_path / "policy-report-ledger.jsonl"
+    entry = {
+        "ts": 1_785_000_000,
+        "decision": "ALLOW",
+        "reason": "OK",
+        "model": "gpt-5.6-luna",
+        "cost_proxy": 10,
+        "tier_policy_path": "~other/policies/installation.json",
+        "tier_policy_sha256": "b" * 64,
+    }
+    ledger.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+
+    assert script["main"](["--ledger", str(ledger), "report"]) == 0
+    output = capsys.readouterr().out
+    assert (
+        f"~other/policies/installation.json: sha256={'b' * 12} decisions=1"
         in output
     )
 
@@ -3069,7 +3094,7 @@ def test_ledger_tier_policy_path_uses_tilde_for_home_path(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setenv("HOME", str(fake_home))
+    _set_fake_home(monkeypatch, fake_home)
     gate = _gate(tmp_path, tier_policy_path=policy)
 
     decision = gate.check(
@@ -3675,6 +3700,12 @@ def _gate(
         ),
         clock=clock or (lambda: now if now is not None else 1_000),
     )
+
+
+def _set_fake_home(monkeypatch, fake_home: Path) -> None:
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+    monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.setenv("USERPROFILE", str(fake_home))
 
 
 def _tier_policy(tmp_path: Path, unknown_model: str = "deny") -> Path:

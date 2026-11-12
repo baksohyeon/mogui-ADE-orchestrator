@@ -11,8 +11,8 @@ Git worktree indices reside in the shared `.git/worktrees/<name>/` directory, wh
 - `master-ops/scripts/test-dispatch-codex-git-index.sh`: Test verifying the fix does not break the wrapper
 
 ## Testing
-Verified on fresh linked worktrees that `git status --porcelain` successfully enables subsequent `git add` operations without "index.lock" errors.
+Verified that `git status --porcelain` succeeds on a fresh linked worktree; the test does not exercise a sandboxed `git add`.
 
 ## References
 - Card: mgm-up2w
-- Postmortem: `docs/postmortem/2026-11-12-codex-worker-git-index-outside-sandbox.md`
+- The private postmortem records the observed sandbox boundary and the pre-launch status check used to prepare the index.

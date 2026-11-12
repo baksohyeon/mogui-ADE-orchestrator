@@ -2636,16 +2636,26 @@ def test_cli_report_counts_absolute_and_tilde_home_policy_paths_together(
 def test_cli_report_preserves_unknown_user_tilde_policy_paths(
     tmp_path: Path,
     capsys,
+    monkeypatch,
 ) -> None:
     script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
     ledger = tmp_path / "policy-report-ledger.jsonl"
+    unknown_user_path = "~mogui-unknown-user/policies/installation.json"
+    expanduser = os.path.expanduser
+
+    def preserve_unknown_user(path: str) -> str:
+        if path == unknown_user_path:
+            return path
+        return expanduser(path)
+
+    monkeypatch.setattr(dispatch_gate.os.path, "expanduser", preserve_unknown_user)
     entry = {
         "ts": 1_785_000_000,
         "decision": "ALLOW",
         "reason": "OK",
         "model": "gpt-5.6-luna",
         "cost_proxy": 10,
-        "tier_policy_path": "~other/policies/installation.json",
+        "tier_policy_path": unknown_user_path,
         "tier_policy_sha256": "b" * 64,
     }
     ledger.write_text(json.dumps(entry) + "\n", encoding="utf-8")
@@ -2653,7 +2663,7 @@ def test_cli_report_preserves_unknown_user_tilde_policy_paths(
     assert script["main"](["--ledger", str(ledger), "report"]) == 0
     output = capsys.readouterr().out
     assert (
-        f"~other/policies/installation.json: sha256={'b' * 12} decisions=1"
+        f"{unknown_user_path}: sha256={'b' * 12} decisions=1"
         in output
     )
 

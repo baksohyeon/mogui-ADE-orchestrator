@@ -564,6 +564,7 @@ LAST_DISPATCH_STATUS=""
 while :; do
   SHOW_JSON=$(orca orchestration dispatch-show --task "$TASK" --json 2>/dev/null)
   LAST_DISPATCH_STATUS=$(printf '%s' "$SHOW_JSON" | orca_dispatch_status 2>/dev/null)
+  [ -n "$LAST_DISPATCH_STATUS" ] || LAST_DISPATCH_STATUS=unreadable
   if [ "$LAST_DISPATCH_STATUS" = completed ]; then
     DISPATCH_COMPLETED=1
     break

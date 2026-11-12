@@ -108,11 +108,12 @@ if mutant_run=$(run_detect_case "$MUT_JSON" \
 else
   mutant_rc=$?
 fi
+mutant_detection="not detected"
 if [ "$mutant_rc" -eq 0 ] && [ "$mutant_run" = "run_new_shape" ]; then
-  echo "FAIL: failability: task-id mutant still detected the new run shape" >&2
-  exit 1
+  mutant_detection=detected
 fi
-echo "ok   — failability: run-id mutant cannot detect the new run shape (exit $mutant_rc)"
+check "failability: run-id mutant cannot detect the new run shape" \
+  "not detected" "$mutant_detection"
 rm -f "$MUT_JSON"
 
 # Failability: a spawn-test whose FAIL* arm reports SKIP must fail the failure-kind cases.

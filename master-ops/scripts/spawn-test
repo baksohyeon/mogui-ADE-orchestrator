@@ -152,10 +152,15 @@ report_status_kind() {
 
 orca_run_id() {
   python3 - "$SCRIPT_DIR" "$1" <<'PY'
+import importlib.util
 import sys
+from pathlib import Path
 
-sys.path.insert(0, sys.argv[1])
-from lib import orca_json
+path = Path(sys.argv[1]) / "lib" / "orca_json.py"
+spec = importlib.util.spec_from_file_location("orca_json", path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+orca_json = module
 
 try:
     with open(sys.argv[2], "r", encoding="utf-8") as f:

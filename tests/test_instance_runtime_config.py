@@ -136,6 +136,16 @@ def test_seat_path_env_overrides_file(tmp_path: Path) -> None:
     assert loaded.require_master_seat_path() == str(tmp_path / "from-env")
 
 
+def test_relative_seat_path_is_rejected(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "instance-runtime.json",
+        {"master_seat_path": "relative/workspace"},
+    )
+    loaded = load_instance_runtime_config(config_path, environ={})
+    with pytest.raises(InstanceRuntimeConfigError, match="absolute paths"):
+        loaded.require_master_seat_path()
+
+
 def test_product_repo_env_overrides_file(tmp_path: Path) -> None:
     config_path = _write_config(
         tmp_path / "instance-runtime.json",

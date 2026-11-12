@@ -587,7 +587,7 @@ def _resolve_spawn_workspace_selector(
             sessions = find_sessions(orca_runner, list_worktree="path:" + seat_path)
         except SuccessionError:
             sessions = ()
-        matches = _recorded_seat_matches(sessions, seat_path)
+        matches = _recorded_seat_matches(sessions, seat_path, scoped_path_match=True)
 
     if len(matches) == 1:
         return next(iter(matches))
@@ -603,13 +603,19 @@ def _resolve_spawn_workspace_selector(
 
 
 def _recorded_seat_matches(
-    sessions: Sequence[SessionInfo], seat_path: str
+    sessions: Sequence[SessionInfo], seat_path: str, *, scoped_path_match: bool = False
 ) -> frozenset[str]:
     return frozenset(
-        session.worktree_id
+        _recorded_workspace_selector(session.worktree_id)
         for session in sessions
-        if session.worktree_id and _session_holds_path(session, seat_path)
+        if session.worktree_id
+        and (scoped_path_match or _session_holds_path(session, seat_path))
     )
+
+
+def _recorded_workspace_selector(worktree_id: str) -> str:
+    normalized = _normalize_worktree_selector(worktree_id)
+    return normalized if worktree_id.strip().startswith("id:") else "id:" + normalized
 
 
 def _session_holds_path(session: SessionInfo, seat_path: str) -> bool:

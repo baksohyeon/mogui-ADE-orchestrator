@@ -969,7 +969,11 @@ def test_spawn_successor_resolves_recorded_seat_path_with_one_live_match(tmp_pat
         }
     )
 
-    with patch.dict(os.environ, {"INSTANCE_RUNTIME_CONFIG": str(config)}, clear=False):
+    with patch.dict(
+        os.environ,
+        {"INSTANCE_RUNTIME_CONFIG": str(config), "MOGUI_MASTER_SEAT_PATH": ""},
+        clear=False,
+    ):
         report = spawn_successor(
             workspace_selector=None,
             kickoff_text="start here",
@@ -980,7 +984,59 @@ def test_spawn_successor_resolves_recorded_seat_path_with_one_live_match(tmp_pat
         )
 
     assert report.status == "DRY_RUN"
-    assert report.requested_worktree == "repo:current::{0}".format(seat_path)
+    assert report.requested_worktree == "id:repo:current::{0}".format(seat_path)
+
+
+def test_spawn_successor_uses_scoped_path_listing_for_legacy_folder_id(
+    tmp_path: Path,
+) -> None:
+    seat_path = tmp_path / "workspace"
+    seat_path.mkdir()
+    config = tmp_path / "instance-runtime.json"
+    config.write_text(
+        json.dumps({"master_seat_path": str(seat_path)}), encoding="utf-8"
+    )
+    global_fixture = _orca_json_from_terminals(
+        {
+            "handle": "term-current",
+            "worktreeId": "folder:legacy",
+            "worktreePath": "",
+            "connected": True,
+            "title": "current master",
+        }
+    )
+    scoped_fixture = _orca_json_from_terminals(
+        {
+            "handle": "term-current",
+            "worktreeId": "folder:legacy",
+            "worktreePath": "",
+            "connected": True,
+            "title": "current master",
+        }
+    )
+    scoped_command = _scoped_list_command("path:" + str(seat_path))
+
+    with patch.dict(
+        os.environ,
+        {"INSTANCE_RUNTIME_CONFIG": str(config), "MOGUI_MASTER_SEAT_PATH": ""},
+        clear=False,
+    ):
+        report = spawn_successor(
+            workspace_selector=None,
+            kickoff_text="start here",
+            root="/repo/example",
+            title="successor",
+            orca_runner=_runner(
+                {
+                    _LIST_COMMAND: (0, global_fixture, ""),
+                    scoped_command: (0, scoped_fixture, ""),
+                }
+            ),
+            dry_run=True,
+        )
+
+    assert report.status == "DRY_RUN"
+    assert report.requested_worktree == "id:folder:legacy"
 
 
 def test_spawn_successor_refuses_recorded_seat_path_without_live_match(tmp_path: Path) -> None:
@@ -999,7 +1055,11 @@ def test_spawn_successor_refuses_recorded_seat_path_without_live_match(tmp_path:
         }
     )
 
-    with patch.dict(os.environ, {"INSTANCE_RUNTIME_CONFIG": str(config)}, clear=False):
+    with patch.dict(
+        os.environ,
+        {"INSTANCE_RUNTIME_CONFIG": str(config), "MOGUI_MASTER_SEAT_PATH": ""},
+        clear=False,
+    ):
         with unittest.TestCase().assertRaisesRegex(
             SuccessionError, "recorded seat path .* has no live workspace match"
         ):
@@ -1038,7 +1098,11 @@ def test_spawn_successor_refuses_recorded_seat_path_with_multiple_live_matches(
         },
     )
 
-    with patch.dict(os.environ, {"INSTANCE_RUNTIME_CONFIG": str(config)}, clear=False):
+    with patch.dict(
+        os.environ,
+        {"INSTANCE_RUNTIME_CONFIG": str(config), "MOGUI_MASTER_SEAT_PATH": ""},
+        clear=False,
+    ):
         with unittest.TestCase().assertRaisesRegex(
             SuccessionError, "recorded seat path .* has multiple live workspace matches"
         ):
@@ -1061,7 +1125,11 @@ def test_spawn_successor_explicit_selector_overrides_recorded_seat_path(tmp_path
     def unexpected_runner(_command: Sequence[str]) -> Tuple[int, str, str]:
         raise AssertionError("explicit selector should not resolve the recorded seat")
 
-    with patch.dict(os.environ, {"INSTANCE_RUNTIME_CONFIG": str(config)}, clear=False):
+    with patch.dict(
+        os.environ,
+        {"INSTANCE_RUNTIME_CONFIG": str(config), "MOGUI_MASTER_SEAT_PATH": ""},
+        clear=False,
+    ):
         report = spawn_successor(
             workspace_selector="folder:explicit",
             kickoff_text="start here",
@@ -2381,13 +2449,17 @@ def test_cli_spawn_dry_run_resolves_recorded_seat_path(tmp_path: Path) -> None:
         check=False,
         capture_output=True,
         text=True,
-        env={**os.environ, "INSTANCE_RUNTIME_CONFIG": str(config)},
+        env={
+            **os.environ,
+            "INSTANCE_RUNTIME_CONFIG": str(config),
+            "MOGUI_MASTER_SEAT_PATH": "",
+        },
     )
 
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
     assert payload["status"] == "DRY_RUN"
-    assert payload["requested_worktree"] == "repo:current::{0}".format(seat_path)
+    assert payload["requested_worktree"] == "id:repo:current::{0}".format(seat_path)
 
 
 @skip_windows_exec_surface

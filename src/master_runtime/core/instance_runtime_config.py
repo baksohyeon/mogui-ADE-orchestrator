@@ -97,7 +97,7 @@ class InstanceRuntimeConfig:
                 f"(default {DEFAULT_RELATIVE_CONFIG_PATH}; override path with "
                 f"{CONFIG_PATH_ENV})"
             )
-        return self.master_seat_path.strip()
+        return _require_absolute_path(self.master_seat_path, "master_seat_path")
 
     def require_transcript_glob(self, runtime: str | None = None) -> str:
         name = (runtime or self.master_host_runtime or "").strip()

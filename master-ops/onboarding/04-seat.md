@@ -14,7 +14,7 @@ Load rule: read this file only when Step 3.5 begins. Router: [`../ONBOARDING.md`
 2. Add `{{WORKSPACE_ROOT}}` as an Orca project if needed and open that folder workspace. For a single-repository workspace, this still means the selected parent folder for that repository, not the repository's product worktree.
 3. You open one **temporary plain terminal** there — not the Master. We only need its seat id. It will feel like "open, we measure, then close."
 4. You paste or send us that terminal's handle so we can read where it sits.
-5. We record the stable seat path and the measured selector in the instance-owned runtime config.
+5. We record the stable seat path in the instance runtime config and the measured selector in the ops-repository placement record.
 6. **You close that temporary terminal** (or we close it if it is ours). Leaving it open means the Master's chair is still occupied, so the spawn step must stop until the chair is empty. The real Master is created only in the spawn step, and exactly one Master may exist.
 
 Only after the owner has heard that sequence, ask them to perform steps 2–4.

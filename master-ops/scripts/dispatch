@@ -2099,7 +2099,7 @@ fi
 # outside the sandbox, sandboxed git works.
 if [ "$RUNTIME" = codex ]; then
   wt_path="${WORKTREE#path:}"
-  if [ -n "$wt_path" ] && [ -d "$wt_path/.git" ]; then
+  if [ -n "$wt_path" ] && [ -e "$wt_path/.git" ]; then
     git -C "$wt_path" status --porcelain >/dev/null 2>&1 || true
   fi
 fi

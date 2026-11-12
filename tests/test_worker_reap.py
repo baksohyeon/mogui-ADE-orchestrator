@@ -1338,6 +1338,206 @@ class WorkerReaperTests(unittest.TestCase):
             self.assertEqual(entry["dispatch_id"], "d1")
 
 
+class BranchDeletionTests(unittest.TestCase):
+    """Branch deletion is gated by GitHub's merged PR and exact head OID."""
+
+    def _repo_with_branch(self, root: Path) -> tuple[Path, str, str]:
+        repo = root / "repo"
+        repo.mkdir()
+        _git(repo, "init", "--initial-branch", "main")
+        _git(repo, "config", "user.email", "worker-reap@example.invalid")
+        _git(repo, "config", "user.name", "worker-reap test")
+        (repo / "README").write_text("base\n", encoding="utf-8")
+        _git(repo, "add", "README")
+        _git(repo, "commit", "-m", "base")
+        _git(repo, "branch", "feature/test")
+        tip = _git(repo, "rev-parse", "refs/heads/feature/test").strip()
+        common_dir = _git(repo, "rev-parse", "--git-common-dir").strip()
+        return repo, tip, str((repo / common_dir).resolve())
+
+    def _gh_stub(self, root: Path) -> Path:
+        bindir = root / "bin"
+        bindir.mkdir()
+        gh = bindir / "gh"
+        gh.write_text(
+            "#!/usr/bin/env bash\n"
+            "case \"${GH_STUB_CASE:-}\" in\n"
+            "  merged) printf '{\"state\":\"MERGED\",\"headRefOid\":\"%s\"}\\n' \"$GH_STUB_HEAD\" ;;\n"
+            "  open) printf '{\"state\":\"OPEN\",\"headRefOid\":\"%s\"}\\n' \"$GH_STUB_HEAD\" ;;\n"
+            "  no-pr) echo 'no pull request found' >&2; exit 1 ;;\n"
+            "  unavailable) echo 'gh unavailable' >&2; exit 1 ;;\n"
+            "  *) echo 'unknown gh fixture' >&2; exit 1 ;;\n"
+            "esac\n",
+            encoding="utf-8",
+        )
+        gh.chmod(0o755)
+        return bindir
+
+    def _run_case(
+        self,
+        case: str,
+        branch_tip: str,
+        common_dir: str,
+        bindir: Path,
+        *,
+        gh_head: str | None = None,
+        execute: bool = True,
+    ) -> str:
+        reaper = WorkerReaper()
+        with mock.patch.dict(
+            os.environ,
+            {
+                "PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}",
+                "GH_STUB_CASE": case,
+                "GH_STUB_HEAD": gh_head or branch_tip,
+            },
+            clear=False,
+        ):
+            return reaper._plan_branch_deletion(
+                "feature/test",
+                branch_tip,
+                common_dir,
+                execute=execute,
+                reason="",
+            )
+
+    def test_merged_pr_with_equal_tip_deletes_branch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo, tip, common_dir = self._repo_with_branch(root)
+            action = self._run_case("merged", tip, common_dir, self._gh_stub(root))
+
+            self.assertEqual(action, "branch_deleted:feature/test")
+            self.assertEqual(_git(repo, "branch", "--list", "feature/test"), "")
+
+    def test_merged_pr_with_different_tip_keeps_branch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo, tip, common_dir = self._repo_with_branch(root)
+            different_tip = "0" * 40
+            action = self._run_case(
+                "merged",
+                tip,
+                common_dir,
+                self._gh_stub(root),
+                gh_head=different_tip,
+            )
+
+            self.assertIn("branch_left:feature/test:tip differs", action)
+            self.assertEqual(
+                _git(repo, "rev-parse", "refs/heads/feature/test").strip(), tip
+            )
+            # Mutant proof: remove the tip-equality check and this different-tip
+            # case must fail because the branch would be deleted.
+
+    def test_open_pr_keeps_branch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo, tip, common_dir = self._repo_with_branch(root)
+            action = self._run_case("open", tip, common_dir, self._gh_stub(root))
+
+            self.assertEqual(action, "branch_left:feature/test:not merged")
+            self.assertEqual(
+                _git(repo, "rev-parse", "refs/heads/feature/test").strip(), tip
+            )
+
+    def test_no_pr_keeps_branch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo, tip, common_dir = self._repo_with_branch(root)
+            action = self._run_case("no-pr", tip, common_dir, self._gh_stub(root))
+
+            self.assertEqual(action, "branch_left:feature/test:no PR")
+            self.assertEqual(
+                _git(repo, "rev-parse", "refs/heads/feature/test").strip(), tip
+            )
+
+    def test_gh_unavailable_keeps_branch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo, tip, common_dir = self._repo_with_branch(root)
+            action = self._run_case(
+                "unavailable", tip, common_dir, self._gh_stub(root)
+            )
+
+            self.assertEqual(action, "branch_left:feature/test:gh unavailable")
+            self.assertEqual(
+                _git(repo, "rev-parse", "refs/heads/feature/test").strip(), tip
+            )
+
+    def test_dry_run_reports_branch_deletion_without_deleting(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo, tip, common_dir = self._repo_with_branch(root)
+            action = self._run_case(
+                "merged", tip, common_dir, self._gh_stub(root), execute=False
+            )
+
+            self.assertEqual(action, "would_delete_branch:feature/test")
+            self.assertEqual(
+                _git(repo, "rev-parse", "refs/heads/feature/test").strip(), tip
+            )
+
+    def test_reap_deletes_branch_after_worktree_removal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            worktree = Path(tmp)
+            tip = "a" * 40
+            common_dir = str(worktree / "repo.git")
+            calls: list[list[str]] = []
+
+            def runner(cmd: list[str]) -> tuple[int, str, str]:
+                calls.append(cmd)
+                if "dispatch-show" in cmd:
+                    return 0, json.dumps(
+                        {
+                            "dispatch_id": "d1",
+                            "task_id": "t1",
+                            "status": "COMPLETED",
+                            "worktree_path": str(worktree),
+                        }
+                    ), ""
+                if cmd[:3] == ["git", "-C", str(worktree)] and "status" in cmd:
+                    return 0, "", ""
+                if cmd[:3] == ["git", "-C", str(worktree)] and "--show-current" in cmd:
+                    return 0, "feature/test\n", ""
+                if (
+                    cmd[:3] == ["git", "-C", str(worktree)]
+                    and cmd[3:5] == ["rev-parse", "HEAD"]
+                ):
+                    return 0, f"{tip}\n", ""
+                if cmd[:3] == ["git", "-C", str(worktree)] and "--git-common-dir" in cmd:
+                    return 0, f"{common_dir}\n", ""
+                if cmd[:2] == ["git", f"--git-dir={common_dir}"] and "rev-parse" in cmd:
+                    return 0, f"{tip}\n", ""
+                if "branch" in cmd and "--merged" in cmd:
+                    return 0, "* main\n", ""
+                if "rev-parse" in cmd and "origin/main^{tree}" in cmd:
+                    return 0, "tree-main\n", ""
+                if "merge-tree" in cmd:
+                    return 0, "tree-main\n", ""
+                if cmd and cmd[0] == "gh":
+                    return 0, json.dumps(
+                        [{"state": "MERGED", "headRefOid": tip}]
+                    ), ""
+                if "worktree" in cmd and "remove" in cmd:
+                    return 0, "", ""
+                if "branch" in cmd and "-D" in cmd:
+                    return 0, "", ""
+                return 0, "", ""
+
+            record = WorkerReaper(orca_runner=runner).reap(task_id="t1", execute=True)
+
+            self.assertIn(f"worktree_removed:{worktree}", record.actions_taken)
+            self.assertIn("branch_deleted:feature/test", record.actions_taken)
+            remove_index = next(
+                i for i, cmd in enumerate(calls) if "worktree" in cmd and "remove" in cmd
+            )
+            delete_index = next(
+                i for i, cmd in enumerate(calls) if "branch" in cmd and "-D" in cmd
+            )
+            self.assertLess(remove_index, delete_index)
+
+
 class _FakeRunner:
     def __call__(self, cmd: list[str]) -> tuple[int, str, str]:
         return 0, "", ""

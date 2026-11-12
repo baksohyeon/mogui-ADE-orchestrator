@@ -54,6 +54,10 @@ IGNORED_MEDIA_SUFFIXES = frozenset(
 MAX_WORKER_LIST_PAGES = 20
 WORKER_LIST_PAGE_LIMIT = 100
 
+# A reaper may be given a worktree for the repository's primary branch by
+# mistake. Keep the branch-protection check independent of the PR lookup.
+PROTECTED_BRANCHES = frozenset({"main", "master"})
+
 # Dropped from every subprocess env: an inherited value here would point git
 # at the caller's repository (or its index/object store) instead of the one
 # named by -C.
@@ -297,10 +301,40 @@ class WorkerReaper:
                             f"{len(ignored_media)}"
                         )
                     elif execute:
+                        branch_name, branch_tip, common_dir, branch_reason = (
+                            self._measure_branch_identity(worktree_path)
+                        )
+                        branch_action = self._plan_branch_deletion(
+                            branch_name,
+                            branch_tip,
+                            common_dir,
+                            execute=False,
+                            reason=branch_reason,
+                        )
                         self._remove_worktree(worktree_path)
                         actions.append(f"worktree_removed:{worktree_path}")
+                        if branch_action.startswith("would_delete_branch:"):
+                            actions.append(
+                                self._delete_local_branch(
+                                    branch_name, branch_tip, common_dir
+                                )
+                            )
+                        else:
+                            actions.append(branch_action)
                     else:
                         actions.append(f"would_remove_worktree:{worktree_path}")
+                        branch_name, branch_tip, common_dir, branch_reason = (
+                            self._measure_branch_identity(worktree_path)
+                        )
+                        actions.append(
+                            self._plan_branch_deletion(
+                                branch_name,
+                                branch_tip,
+                                common_dir,
+                                execute=False,
+                                reason=branch_reason,
+                            )
+                        )
                 else:
                     actions.append(f"worktree_left:{worktree_path}:{reason}")
             except Exception as e:
@@ -324,6 +358,140 @@ class WorkerReaper:
             self._append_reap_record(record)
 
         return record
+
+    def _measure_branch_identity(
+        self, worktree_path: Path
+    ) -> tuple[Optional[str], Optional[str], Optional[str], str]:
+        """Measure the branch, its tip, and the shared git directory.
+
+        The branch and tip must be captured before removing the worktree. A
+        squash merge has no ancestry signal, so the tip is later compared to
+        the merged PR's ``headRefOid`` before any branch deletion is attempted.
+        """
+
+        code, branch_output, stderr = self.orca_runner(
+            ["git", "-C", str(worktree_path), "branch", "--show-current"]
+        )
+        branch_name = branch_output.strip()
+        if code != 0 or not branch_name:
+            return None, None, None, "branch identity unavailable"
+
+        code, tip_output, stderr = self.orca_runner(
+            ["git", "-C", str(worktree_path), "rev-parse", "HEAD"]
+        )
+        branch_tip = tip_output.strip()
+        if code != 0 or not branch_tip:
+            return branch_name, None, None, "branch tip unavailable"
+
+        code, common_output, stderr = self.orca_runner(
+            ["git", "-C", str(worktree_path), "rev-parse", "--git-common-dir"]
+        )
+        raw_common_dir = common_output.rstrip("\r\n")
+        if code != 0 or not raw_common_dir:
+            return branch_name, branch_tip, None, "git common directory unavailable"
+
+        common_dir = os.path.abspath(os.path.join(str(worktree_path), raw_common_dir))
+        return branch_name, branch_tip, common_dir, ""
+
+    def _plan_branch_deletion(
+        self,
+        branch_name: Optional[str],
+        branch_tip: Optional[str],
+        common_dir: Optional[str],
+        *,
+        execute: bool,
+        reason: str,
+    ) -> str:
+        """Delete a local branch only after a merged PR proves its exact tip.
+
+        ``git branch -d`` is an ancestry check and cannot prove a squash merge.
+        ``-D`` is therefore allowed only after GitHub reports ``MERGED`` and
+        the local tip equals that PR's ``headRefOid``. Any missing measurement
+        leaves the branch in place with a machine-readable reason.
+        """
+
+        display_name = branch_name or "<unknown>"
+        if not branch_name:
+            return f"branch_left:{display_name}:{reason or 'branch name unavailable'}"
+        if branch_name in PROTECTED_BRANCHES:
+            return f"branch_left:{branch_name}:protected branch"
+        if not branch_tip:
+            return f"branch_left:{branch_name}:{reason or 'branch tip unavailable'}"
+        if not common_dir:
+            return f"branch_left:{branch_name}:{reason or 'git common directory unavailable'}"
+
+        code, stdout, stderr = self.orca_runner(
+            [
+                "gh",
+                "pr",
+                "view",
+                branch_name,
+                "--json",
+                "state,headRefOid",
+            ]
+        )
+        if code != 0:
+            error = stderr.lower()
+            if "no pull request" in error or "not found" in error:
+                return f"branch_left:{branch_name}:no PR"
+            return f"branch_left:{branch_name}:gh unavailable"
+        try:
+            payload = json.loads(stdout)
+        except json.JSONDecodeError:
+            return f"branch_left:{branch_name}:gh unavailable"
+        if isinstance(payload, dict):
+            prs = [payload]
+        elif isinstance(payload, list):
+            prs = payload
+        else:
+            return f"branch_left:{branch_name}:gh unavailable"
+        if not prs:
+            return f"branch_left:{branch_name}:no PR"
+
+        merged_head_oid: Optional[str] = None
+        for pr in prs:
+            if not isinstance(pr, dict):
+                continue
+            if str(pr.get("state", "")).upper() == "MERGED":
+                candidate = pr.get("headRefOid")
+                if isinstance(candidate, str) and candidate:
+                    merged_head_oid = candidate
+                    break
+        if merged_head_oid is None:
+            return f"branch_left:{branch_name}:not merged"
+        if branch_tip != merged_head_oid:
+            return f"branch_left:{branch_name}:tip differs from PR head"
+        if not execute:
+            return f"would_delete_branch:{branch_name}"
+
+        return self._delete_local_branch(branch_name, branch_tip, common_dir)
+
+    def _delete_local_branch(
+        self,
+        branch_name: Optional[str],
+        expected_tip: Optional[str],
+        common_dir: Optional[str],
+    ) -> str:
+        """Delete a prevalidated branch through the shared git directory."""
+
+        if not branch_name or not expected_tip or not common_dir:
+            return f"branch_left:{branch_name or '<unknown>'}:branch identity unavailable"
+        code, stdout, _stderr = self.orca_runner(
+            [
+                "git",
+                f"--git-dir={common_dir}",
+                "rev-parse",
+                f"refs/heads/{branch_name}",
+            ]
+        )
+        if code != 0 or stdout.strip() != expected_tip:
+            return f"branch_left:{branch_name}:tip differs from PR head"
+        code, _stdout, _stderr = self.orca_runner(
+            [f"git", f"--git-dir={common_dir}", "branch", "-D", branch_name]
+        )
+        if code != 0:
+            return f"branch_left:{branch_name}:git branch -D failed"
+        return f"branch_deleted:{branch_name}"
 
     def _plan_terminal_action(
         self, dispatch_state: DispatchState, execute: bool

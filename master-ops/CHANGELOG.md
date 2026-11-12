@@ -48,6 +48,20 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+## v0.5.319
+
+Release v0.5.319 (2026-11-12): master-ops/TEMPLATE-VERSION and master-ops/MANIFEST.json move to v0.5.319 alongside the changelog fold, and the root CHANGELOG.md rolls its Unreleased section into 0.5.319.
+
+- Require every supervised dispatch to carry a tracker card id or an explicit gap reason, add daily gap warnings, and include card recall in the compaction probe.
+
+Onboarding configures the master's workspace-level Claude Code settings with `bashOutputMaxChars: 6000` on Claude Code v2.1.261 and later; the template ships the guidance and hook changes. Successful results above the cap are saved to a session file and represented to the model by the path and a short preview; oversized failures receive a head-and-tail excerpt. The trim warning hook now treats bounded `rg` forms (`-c`, `--count`, `-q`, `--quiet`, `-l`, `-m N`, `--max-count N`) plus `head`, `tail`, `--jq`, `wc`, and pipeline `grep -c`/`grep -q` as pass cases. The `rg -m N` and `--max-count N` forms limit matches per file; the 6000-character settings cap still bounds the result, and the hook remains a reminder. Compound commands are checked segment by segment so a later filter cannot exempt an earlier unbounded large-output command. Onboarding and observability docs describe the settings cap as enforcement and both output hooks as reminders.
+
+Verification: the focused hook test passed; the full `master-ops/scripts/test-*.sh` shell set passed with 32 of 32 scripts; `PYTHONPATH=src python3 -m pytest tests -q` recorded 978 passed, 19 subtests passed, and 7 environment-related failures.
+
+Organization redaction rules now load from the workspace-root `.redaction-extra.txt` by default, with `REDACTION_EXTRA_PATTERNS` taking precedence and `~/.config/redaction-extra.txt` retained as the fallback. The export profile loads `workspace_` rules, while the internal profile counts and skips them. Operators should move the file to the workspace root, leave a symlink at `~/.config/redaction-extra.txt` for tools that still use the legacy location, and set `REDACTION_PROFILE=internal` in the operations repository's own pre-push hook.
+
+Records, reports, and owner-facing messages now require exact minute timestamps anchored to one named event, with masked and rounded times excluded.
+
 ## v0.5.312
 
 Release v0.5.312 (2026-11-12): master-ops/TEMPLATE-VERSION and master-ops/MANIFEST.json move to v0.5.312 alongside the changelog fold, and the root CHANGELOG.md rolls its Unreleased section into 0.5.312.

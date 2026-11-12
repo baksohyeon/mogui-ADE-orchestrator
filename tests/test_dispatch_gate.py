@@ -2589,9 +2589,18 @@ def test_cli_report_shows_every_policy_a_day_was_judged_against(
 
     assert script["main"](["--ledger", str(ledger), "report"]) == 0
     output = capsys.readouterr().out
-    assert f"/policies/installation.json: sha256={'a' * 12} decisions=2" in output
-    assert f"/tmp/substituted.json: sha256={'b' * 12} decisions=1" in output
-    assert "/policies/legacy-entry.json: sha256=<unrecorded> decisions=1" in output
+    installation_path = dispatch_gate.normalize_tier_policy_path(
+        "/policies/installation.json"
+    )
+    substituted_path = dispatch_gate.normalize_tier_policy_path(
+        "/tmp/substituted.json"
+    )
+    legacy_path = dispatch_gate.normalize_tier_policy_path(
+        "/policies/legacy-entry.json"
+    )
+    assert f"{installation_path}: sha256={'a' * 12} decisions=2" in output
+    assert f"{substituted_path}: sha256={'b' * 12} decisions=1" in output
+    assert f"{legacy_path}: sha256=<unrecorded> decisions=1" in output
 
 
 def test_cli_report_counts_absolute_and_tilde_home_policy_paths_together(
@@ -2627,8 +2636,11 @@ def test_cli_report_counts_absolute_and_tilde_home_policy_paths_together(
 
     assert script["main"](["--ledger", str(ledger), "report"]) == 0
     output = capsys.readouterr().out
+    expected_path = dispatch_gate.normalize_tier_policy_path(
+        "~/policies/installation.json"
+    )
     assert (
-        f"~/policies/installation.json: sha256={'a' * 12} decisions=2"
+        f"{expected_path}: sha256={'a' * 12} decisions=2"
         in output
     )
 
@@ -2662,8 +2674,9 @@ def test_cli_report_preserves_unknown_user_tilde_policy_paths(
 
     assert script["main"](["--ledger", str(ledger), "report"]) == 0
     output = capsys.readouterr().out
+    expected_path = dispatch_gate.normalize_tier_policy_path(unknown_user_path)
     assert (
-        f"{unknown_user_path}: sha256={'b' * 12} decisions=1"
+        f"{expected_path}: sha256={'b' * 12} decisions=1"
         in output
     )
 
@@ -3082,7 +3095,8 @@ def test_ledger_records_which_tier_policy_decided(tmp_path: Path) -> None:
     assert allowed.allow is True
     assert denied.allow is False
     entries = _ledger_entries(tmp_path)[-2:]
-    assert [entry["tier_policy_path"] for entry in entries] == [str(policy)] * 2
+    expected_path = dispatch_gate.ledger_tier_policy_path(policy)
+    assert [entry["tier_policy_path"] for entry in entries] == [expected_path] * 2
     assert [entry["tier_policy_sha256"] for entry in entries] == [digest] * 2
 
 
@@ -3118,9 +3132,8 @@ def test_ledger_tier_policy_path_uses_tilde_for_home_path(
     )
 
     assert decision.allow is True
-    assert _ledger_entries(tmp_path)[-1]["tier_policy_path"] == (
-        "~/policies/model-tier-policy.json"
-    )
+    expected_path = dispatch_gate.ledger_tier_policy_path(policy)
+    assert _ledger_entries(tmp_path)[-1]["tier_policy_path"] == expected_path
 
 
 def test_tier_policy_rejects_case_differing_duplicate_across_sets(

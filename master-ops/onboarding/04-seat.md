@@ -14,7 +14,7 @@ Load rule: read this file only when Step 3.5 begins. Router: [`../ONBOARDING.md`
 2. Add `{{WORKSPACE_ROOT}}` as an Orca project if needed and open that folder workspace. For a single-repository workspace, this still means the selected parent folder for that repository, not the repository's product worktree.
 3. You open one **temporary plain terminal** there — not the Master. We only need its seat id. It will feel like "open, we measure, then close."
 4. You paste or send us that terminal's handle so we can read where it sits.
-5. We record the durable seat id in the ops repository.
+5. We save the workspace path and the seat details where the installation can use them again.
 6. **You close that temporary terminal** (or we close it if it is ours). Leaving it open means the Master's chair is still occupied, so the spawn step must stop until the chair is empty. The real Master is created only in the spawn step, and exactly one Master may exist.
 
 Only after the owner has heard that sequence, ask them to perform steps 2–4.
@@ -32,7 +32,15 @@ $ ORCA repo add --path "{{OPS_REPO}}" --json
 $ ORCA terminal show --terminal <terminal handle> --json
 ```
 
-Capture the returned selector only when the terminal metadata proves the workspace-level seat. The folder workspace's shape depends on the Orca build: older builds report `worktreeId` as `folder:<uuid>` with an empty `worktreePath` (the `folder:` prefix is the proof; the empty path is expected), and Orca 1.4.224 reports `<repoId>::<path>` where `<path>` and `worktreePath` are `{{WORKSPACE_ROOT}}`, not a repository checkout; persist whichever `worktreeId` you measured with the `id:` prefix (`id:<repoId>::<path>` passed terminal list and master-succeed placement as `MATCH` on 1.4.224). Before continuing, persist a durable placement result in an ops-repository file containing the selector in `id:` prefixed form, `{{WORKSPACE_ROOT}}`, and the `terminal show` proof; do not rely on conversation state, and do not treat the temporary terminal's handle as durable, because handles are scoped to the app runtime and die with restarts. The durable identity is the selector. After persisting, ask the user to close the temporary seat-check terminal (or close it yourself if it is yours). The tracker step initializes the issue tracker independently and does not require a second placement copy; it may record a pointer to this result. Do not substitute a filesystem path for the measured selector, and do not infer the seat from a shell's cwd.
+Capture the returned selector only when the terminal metadata proves the workspace-level seat. The folder workspace's shape depends on the Orca build: older builds report `worktreeId` as `folder:<uuid>` with an empty `worktreePath` (the `folder:` prefix is the proof; the empty path is expected), and Orca 1.4.224 reports `<repoId>::<path>` where `<path>` and `worktreePath` are `{{WORKSPACE_ROOT}}`, not a repository checkout; persist whichever `worktreeId` you measured with the `id:` prefix (`id:<repoId>::<path>` passed terminal list and master-succeed placement as `MATCH` on 1.4.224). Before continuing, persist the stable path as `master_seat_path` in `{{RUNTIME_ROOT}}/config/instance-runtime.json` and persist a durable placement result in an ops-repository file containing the selector in `id:` prefixed form, `{{WORKSPACE_ROOT}}`, and the `terminal show` proof. Do not rely on conversation state, and do not treat the temporary terminal's handle as durable, because handles are scoped to the app runtime and die with restarts. The path is the succession record; the selector is a measured placement override. After persisting, ask the user to close the temporary seat-check terminal (or close it yourself if it is yours). The tracker step initializes the issue tracker independently and does not require a second placement copy; it may record a pointer to this result. Do not substitute a filesystem path for the measured selector in the placement result, and do not infer either value from a shell's cwd.
+
+The runtime record has this shape, merged with the answers already written there:
+
+```json
+{
+  "master_seat_path": "{{WORKSPACE_ROOT}}"
+}
+```
 
 ### Worktree base outside the root
 
@@ -52,6 +60,7 @@ With `nestWorkspaces` on, Orca appends the repository name, so worktrees land in
 - `terminal show` measured the terminal metadata
 - the selector points at the workspace-level seat, never an individual repository product worktree
 - the durable placement result exists in `id:` prefixed selector form before founding spawn
+- `{{RUNTIME_ROOT}}/config/instance-runtime.json` contains the measured `master_seat_path`
 - the temporary seat-check terminal is closed, so the founding spawn will be the only terminal in that seat
 
 ## If fail

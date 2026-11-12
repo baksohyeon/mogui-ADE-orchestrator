@@ -30,6 +30,7 @@ CONFIG_PATH_ENV = "INSTANCE_RUNTIME_CONFIG"
 MASTER_HOST_RUNTIME_ENV = "MOGUI_MASTER_HOST_RUNTIME"
 # Alternate name used by some instance wrappers (measured 2026-08-04).
 MASTER_HOST_RUNTIME_ENV_ALT = "MASTER_HOST_RUNTIME"
+MASTER_SEAT_PATH_ENV = "MOGUI_MASTER_SEAT_PATH"
 TRANSCRIPT_GLOB_ENV = "MOGUI_TRANSCRIPT_GLOB"
 PRODUCT_REPO_ENV = "MOGUI_PRODUCT_REPO"
 
@@ -68,6 +69,7 @@ class InstanceRuntimeConfig:
     """Resolved instance runtime facts. Missing optional fields stay None."""
 
     master_host_runtime: str | None
+    master_seat_path: str | None
     transcript_globs: Mapping[str, str]
     product_repositories: tuple[str, ...]
     unavailable_runtimes: Mapping[str, UnavailableRuntime]
@@ -85,6 +87,17 @@ class InstanceRuntimeConfig:
                 f"{CONFIG_PATH_ENV})"
             )
         return self.master_host_runtime.strip()
+
+    def require_master_seat_path(self) -> str:
+        if self.master_seat_path is None or not self.master_seat_path.strip():
+            raise InstanceRuntimeConfigError(
+                "master_seat_path is unconfigured: set "
+                f"{MASTER_SEAT_PATH_ENV}, or write master_seat_path in the instance "
+                "config file "
+                f"(default {DEFAULT_RELATIVE_CONFIG_PATH}; override path with "
+                f"{CONFIG_PATH_ENV})"
+            )
+        return _require_absolute_path(self.master_seat_path, "master_seat_path")
 
     def require_transcript_glob(self, runtime: str | None = None) -> str:
         name = (runtime or self.master_host_runtime or "").strip()
@@ -168,6 +181,9 @@ def load_instance_runtime_config(
     payload = _read_payload(config_path)
 
     file_master = _config_optional_str(payload.get("master_host_runtime"), "master_host_runtime")
+    file_seat_path = _config_optional_str(
+        payload.get("master_seat_path"), "master_seat_path"
+    )
     file_globs = _parse_transcript_globs(payload.get("transcript_globs"))
     file_unavailable = _parse_unavailable_runtimes(payload.get("unavailable_runtimes"))
 
@@ -176,6 +192,7 @@ def load_instance_runtime_config(
         or _optional_str(env.get(MASTER_HOST_RUNTIME_ENV_ALT))
         or file_master
     )
+    seat_path = _optional_str(env.get(MASTER_SEAT_PATH_ENV)) or file_seat_path
     # Env transcript glob is runtime-agnostic so a single override can target
     # the active probe without inventing per-runtime env var names.
     transcript_env = _optional_str(env.get(TRANSCRIPT_GLOB_ENV))
@@ -191,6 +208,7 @@ def load_instance_runtime_config(
 
     return InstanceRuntimeConfig(
         master_host_runtime=master,
+        master_seat_path=seat_path,
         transcript_globs=file_globs,
         product_repositories=product_repositories,
         unavailable_runtimes=file_unavailable,

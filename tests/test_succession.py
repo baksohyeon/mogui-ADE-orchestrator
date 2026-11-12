@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from windows_exec_surface import skip_windows_exec_surface
 import json
+import os
 import shlex
 import subprocess
 import tempfile
@@ -949,6 +950,215 @@ def test_spawn_successor_creates_and_verifies_worktree() -> None:
     assert report.verified is True
     assert create_command in calls
     assert "expected_placement" not in report.verification
+
+
+def test_spawn_successor_resolves_recorded_seat_path_with_one_live_match(tmp_path: Path) -> None:
+    seat_path = tmp_path / "workspace"
+    seat_path.mkdir()
+    config = tmp_path / "instance-runtime.json"
+    config.write_text(
+        json.dumps({"master_seat_path": str(seat_path)}), encoding="utf-8"
+    )
+    fixture = _orca_json_from_terminals(
+        {
+            "handle": "term-current",
+            "worktreeId": "repo:current::{0}".format(seat_path),
+            "worktreePath": str(seat_path),
+            "connected": True,
+            "title": "current master",
+        }
+    )
+
+    with patch.dict(
+        os.environ,
+        {"INSTANCE_RUNTIME_CONFIG": str(config), "MOGUI_MASTER_SEAT_PATH": ""},
+        clear=False,
+    ):
+        report = spawn_successor(
+            workspace_selector=None,
+            kickoff_text="start here",
+            root="/repo/example",
+            title="successor",
+            orca_runner=_runner({_LIST_COMMAND: (0, fixture, "")}),
+            dry_run=True,
+        )
+
+    assert report.status == "DRY_RUN"
+    assert report.requested_worktree == "id:repo:current::{0}".format(seat_path)
+
+
+def test_spawn_successor_uses_scoped_path_listing_for_legacy_folder_id(
+    tmp_path: Path,
+) -> None:
+    seat_path = tmp_path / "workspace"
+    seat_path.mkdir()
+    config = tmp_path / "instance-runtime.json"
+    config.write_text(
+        json.dumps({"master_seat_path": str(seat_path)}), encoding="utf-8"
+    )
+    global_fixture = _orca_json_from_terminals(
+        {
+            "handle": "term-current",
+            "worktreeId": "folder:legacy",
+            "worktreePath": "",
+            "connected": True,
+            "title": "current master",
+        }
+    )
+    scoped_fixture = _orca_json_from_terminals(
+        {
+            "handle": "term-current",
+            "worktreeId": "id:folder:legacy",
+            "worktreePath": "",
+            "connected": True,
+            "title": "current master",
+        }
+    )
+    scoped_command = _scoped_list_command("path:" + str(seat_path))
+
+    with patch.dict(
+        os.environ,
+        {"INSTANCE_RUNTIME_CONFIG": str(config), "MOGUI_MASTER_SEAT_PATH": ""},
+        clear=False,
+    ):
+        report = spawn_successor(
+            workspace_selector=None,
+            kickoff_text="start here",
+            root="/repo/example",
+            title="successor",
+            orca_runner=_runner(
+                {
+                    _LIST_COMMAND: (0, global_fixture, ""),
+                    scoped_command: (0, scoped_fixture, ""),
+                }
+            ),
+            dry_run=True,
+        )
+
+    assert report.status == "DRY_RUN"
+    assert report.requested_worktree == "id:folder:legacy"
+
+
+def test_spawn_successor_refuses_recorded_seat_path_without_live_match(tmp_path: Path) -> None:
+    seat_path = tmp_path / "workspace"
+    config = tmp_path / "instance-runtime.json"
+    config.write_text(
+        json.dumps({"master_seat_path": str(seat_path)}), encoding="utf-8"
+    )
+    fixture = _orca_json_from_terminals(
+        {
+            "handle": "term-other",
+            "worktreeId": "repo:other::/repo/other",
+            "worktreePath": "/repo/other",
+            "connected": True,
+            "title": "other workspace",
+        }
+    )
+
+    with patch.dict(
+        os.environ,
+        {"INSTANCE_RUNTIME_CONFIG": str(config), "MOGUI_MASTER_SEAT_PATH": ""},
+        clear=False,
+    ):
+        with unittest.TestCase().assertRaisesRegex(
+            SuccessionError, "recorded seat path .* has no live workspace match"
+        ):
+            spawn_successor(
+                workspace_selector=None,
+                kickoff_text="start here",
+                root="/repo/example",
+                title="successor",
+                orca_runner=_runner({_LIST_COMMAND: (0, fixture, "")}),
+                dry_run=True,
+            )
+
+
+def test_spawn_successor_refuses_recorded_seat_path_with_multiple_live_matches(
+    tmp_path: Path,
+) -> None:
+    seat_path = tmp_path / "workspace"
+    config = tmp_path / "instance-runtime.json"
+    config.write_text(
+        json.dumps({"master_seat_path": str(seat_path)}), encoding="utf-8"
+    )
+    fixture = _orca_json_from_terminals(
+        {
+            "handle": "term-one",
+            "worktreeId": "repo:one::{0}".format(seat_path),
+            "worktreePath": str(seat_path),
+            "connected": True,
+            "title": "one",
+        },
+        {
+            "handle": "term-two",
+            "worktreeId": "repo:two::{0}".format(seat_path),
+            "worktreePath": str(seat_path),
+            "connected": True,
+            "title": "two",
+        },
+    )
+
+    with patch.dict(
+        os.environ,
+        {"INSTANCE_RUNTIME_CONFIG": str(config), "MOGUI_MASTER_SEAT_PATH": ""},
+        clear=False,
+    ):
+        with unittest.TestCase().assertRaisesRegex(
+            SuccessionError, "recorded seat path .* has multiple live workspace matches"
+        ):
+            spawn_successor(
+                workspace_selector=None,
+                kickoff_text="start here",
+                root="/repo/example",
+                title="successor",
+                orca_runner=_runner({_LIST_COMMAND: (0, fixture, "")}),
+                dry_run=True,
+            )
+
+
+def test_spawn_successor_explicit_selector_overrides_recorded_seat_path(tmp_path: Path) -> None:
+    config = tmp_path / "instance-runtime.json"
+    config.write_text(
+        json.dumps({"master_seat_path": str(tmp_path / "recorded")}), encoding="utf-8"
+    )
+
+    def unexpected_runner(_command: Sequence[str]) -> Tuple[int, str, str]:
+        raise AssertionError("explicit selector should not resolve the recorded seat")
+
+    with patch.dict(
+        os.environ,
+        {"INSTANCE_RUNTIME_CONFIG": str(config), "MOGUI_MASTER_SEAT_PATH": ""},
+        clear=False,
+    ):
+        report = spawn_successor(
+            workspace_selector="folder:explicit",
+            kickoff_text="start here",
+            root="/repo/example",
+            title="successor",
+            orca_runner=unexpected_runner,
+            dry_run=True,
+        )
+
+    assert report.requested_worktree == "folder:explicit"
+
+
+def test_spawn_successor_missing_record_keeps_selector_requirement(tmp_path: Path) -> None:
+    missing = tmp_path / "missing-instance-runtime.json"
+    with patch.dict(
+        os.environ,
+        {"INSTANCE_RUNTIME_CONFIG": str(missing), "MOGUI_MASTER_SEAT_PATH": ""},
+        clear=False,
+    ):
+        with unittest.TestCase().assertRaisesRegex(
+            SuccessionError, "workspace selector is required"
+        ):
+            spawn_successor(
+                workspace_selector=None,
+                kickoff_text="start here",
+                root="/repo/example",
+                title="successor",
+                dry_run=True,
+            )
 
 
 def test_spawn_successor_bare_folder_selector_uses_id_for_list_only() -> None:
@@ -2202,6 +2412,54 @@ def test_cli_spawn_dry_run_outputs_json() -> None:
     assert payload["status"] == "DRY_RUN"
     assert payload["verification"]["fail_closed_action"] == "terminal close on mismatch"
     assert "expected_placement" not in payload["verification"]
+
+
+@skip_windows_exec_surface
+def test_cli_spawn_dry_run_resolves_recorded_seat_path(tmp_path: Path) -> None:
+    seat_path = tmp_path / "workspace"
+    seat_path.mkdir()
+    config = tmp_path / "instance-runtime.json"
+    config.write_text(
+        json.dumps({"master_seat_path": str(seat_path)}), encoding="utf-8"
+    )
+    fixture = _orca_json_from_terminals(
+        {
+            "handle": "term-current",
+            "worktreeId": "repo:current::{0}".format(seat_path),
+            "worktreePath": str(seat_path),
+            "connected": True,
+            "title": "current master",
+        }
+    )
+    result = subprocess.run(
+        [
+            str(Path(__file__).resolve().parent.parent / "scripts" / "master-succeed"),
+            "spawn",
+            "--kickoff-text",
+            "start here",
+            "--root",
+            "/repo/example",
+            "--title",
+            "successor",
+            "--dry-run",
+            "--json",
+            "--fixture-json",
+            fixture,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "INSTANCE_RUNTIME_CONFIG": str(config),
+            "MOGUI_MASTER_SEAT_PATH": "",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "DRY_RUN"
+    assert payload["requested_worktree"] == "id:repo:current::{0}".format(seat_path)
 
 
 @skip_windows_exec_surface

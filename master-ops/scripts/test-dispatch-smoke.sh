@@ -13,6 +13,62 @@ extract_fn() {  # wrapper-ish-file, "name() {"
   awk -v hdr="$2" '$0==hdr{f=1} f{print} f&&$0=="}"{exit}' "$1"
 }
 
+# --- Feature: orca dispatch status reads both response shapes ----------------
+status_reader_test() (
+  set +e
+  set -u
+  local smoke="$1" fn work script_file out mutant_fn
+
+  fn=$(extract_fn "$smoke" 'orca_dispatch_status() {')
+  [ -n "$fn" ] || { echo "FAIL: could not extract orca_dispatch_status" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-smoke-status-test.$$"
+  mkdir -p "$work"
+  trap 'rm -rf "$work"' EXIT
+
+  run_case() {  # fixture  want
+    local fixture="$1" want="$2"
+    script_file="$work/run.sh"
+    {
+      echo 'set -u'
+      printf 'SCRIPT_DIR=%q\n' "$(dirname "$smoke")"
+      printf '%s\n' "$fn"
+      printf 'printf %%s %q | orca_dispatch_status\n' "$fixture"
+    } > "$script_file"
+    out=$(bash "$script_file" 2>&1)
+    [ "$out" = "$want" ] || {
+      echo "FAIL: expected '$want', got '$out' for fixture=$fixture" >&2
+      return 1
+    }
+  }
+
+  run_case '{"ok":true,"result":{"dispatch":{"status":"running"}}}' running || return 1
+  echo "ok   : orca dispatch status reads the old response shape"
+  run_case '{"ok":true,"result":{"status":"completed"}}' completed || return 1
+  echo "ok   : orca dispatch status reads the new response shape"
+
+  mutant_fn=${fn/'orca_json.dispatch_status'/'orca_json.task_id'}
+  if [ "$mutant_fn" = "$fn" ]; then
+    echo "FAIL: dispatch-status mutant did not change the source" >&2
+    return 1
+  fi
+  script_file="$work/mutant.sh"
+  {
+    echo 'set -u'
+    printf 'SCRIPT_DIR=%q\n' "$(dirname "$smoke")"
+    printf '%s\n' "$mutant_fn"
+    printf 'printf %%s %q | orca_dispatch_status\n' \
+      '{"ok":true,"result":{"status":"completed"}}'
+  } > "$script_file"
+  out=$(bash "$script_file" 2>&1)
+  if [ "$out" = completed ]; then
+    echo "FAIL: failability: task-id mutant still read the new dispatch status" >&2
+    return 1
+  fi
+  echo "ok   : failability: task-id mutant cannot read the new dispatch status (got '$out')"
+)
+status_reader_test "$smoke" || exit 1
+
 # --- Feature: normal_case_verdict (milestone parser + layer verdict) -------
 #
 # One canned log per layer named in the contract's localization table: gate,

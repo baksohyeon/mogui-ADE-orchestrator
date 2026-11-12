@@ -18,6 +18,7 @@ NC='\033[0m'
 # Configuration
 GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
 OPS_REPO_PATH="$GIT_ROOT"
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # Workspace root: from ops worktree path (.../<ops-repo>/.orca/worktrees/.../..)
 # We need to go up to the workspace directory
 WORKSPACE_ROOT="{{WORKSPACE_ROOT}}"
@@ -149,6 +150,33 @@ report_status_kind() {
   esac
 }
 
+orca_run_id() {
+  python3 - "$SCRIPT_DIR" "$1" <<'PY'
+import importlib.util
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1]) / "lib" / "orca_json.py"
+spec = importlib.util.spec_from_file_location("orca_json", path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+orca_json = module
+
+try:
+    with open(sys.argv[2], "r", encoding="utf-8") as f:
+        ok, result, _ = orca_json.parse_envelope(f.read())
+except Exception:
+    sys.exit(1)
+
+if not ok:
+    sys.exit(1)
+run_id = orca_json.run_id(result)
+if not run_id:
+    sys.exit(1)
+print(run_id)
+PY
+}
+
 detect_coordinator_run() {
   if [ -n "$COORDINATOR_RUN" ]; then
     echo "$COORDINATOR_RUN"
@@ -156,6 +184,7 @@ detect_coordinator_run() {
   fi
 
   local run_file="$RESULTS_DIR/coordinator-run.json"
+  local coordinator_run=""
   # Ask without --from first: run-current resolves the invoking terminal from
   # the environment, and the harness runs as a child of the coordinator, so the
   # env path needs no handle to be correct. The --from path stays as a fallback
@@ -167,31 +196,20 @@ detect_coordinator_run() {
   # cannot assume it is still bound; re-verify with run-current before relying
   # on the binding, and rebind with run-use. The harness reporting a missing
   # binding was correct behaviour, not the defect it first looked like.
-  if ! orca orchestration run-current --json > "$run_file" 2>/dev/null \
-     || ! grep -q '"run"[[:space:]]*:[[:space:]]*{' "$run_file"; then
+  if orca orchestration run-current --json > "$run_file" 2>/dev/null; then
+    coordinator_run=$(orca_run_id "$run_file" || true)
+  fi
+  if [ -z "$coordinator_run" ]; then
     if [ -z "$COORDINATOR_TERMINAL" ]; then
       return 1
     fi
     if ! orca orchestration run-current --from "$COORDINATOR_TERMINAL" --json > "$run_file" 2>/dev/null; then
       return 1
     fi
+    coordinator_run=$(orca_run_id "$run_file" || true)
   fi
-
-  python3 - "$run_file" <<'PY'
-import json
-import sys
-
-try:
-    with open(sys.argv[1], "r", encoding="utf-8") as f:
-        payload = json.load(f)
-except Exception:
-    sys.exit(1)
-
-run_id = (((payload or {}).get("result") or {}).get("run") or {}).get("id")
-if not run_id:
-    sys.exit(1)
-print(run_id)
-PY
+  [ -n "$coordinator_run" ] || return 1
+  echo "$coordinator_run"
 }
 
 save_message_subject() {

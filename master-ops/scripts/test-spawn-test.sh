@@ -68,10 +68,57 @@ for rt in claude codex grok; do
   check "$rt launches unchanged" "$rt" "$(runtime_launch_command $rt)"
 done
 
+# --- Defect 3: run-current's new result shape was invisible -----------------
+run_detect_case() (
+  local script="$1" response="$2" work
+  work=$(mktemp -d)
+  trap 'rm -rf "${work:-}"' EXIT
+  mkdir -p "$work/bin" "$work/results"
+  printf '%s\n' "$response" > "$work/response.json"
+  cat > "$work/bin/orca" <<EOF
+#!/bin/bash
+cat "$work/response.json"
+EOF
+  chmod +x "$work/bin/orca"
+  . "$script" >/dev/null 2>&1 || true
+  RESULTS_DIR="$work/results" \
+  COORDINATOR_RUN="" \
+  COORDINATOR_TERMINAL="" \
+  PATH="$work/bin:$PATH" \
+  detect_coordinator_run
+)
+
+old_run=$(run_detect_case ./scripts/spawn-test \
+  '{"ok":true,"result":{"run":{"id":"run_old_shape"}}}')
+check "detect_coordinator_run reads the old run shape" "run_old_shape" "$old_run"
+new_run=$(run_detect_case ./scripts/spawn-test \
+  '{"ok":true,"result":{"runId":"run_new_shape"}}')
+check "detect_coordinator_run reads the new run shape" "run_new_shape" "$new_run"
+
+MUT_JSON="./scripts/.spawn-test-json.mutant.$$"
+trap 'rm -f "${MUT:-}" "${MUT_JSON:-}"' EXIT
+sed 's/orca_json.run_id(result)/orca_json.task_id(result)/' ./scripts/spawn-test > "$MUT_JSON"
+if [ ! -f "$MUT_JSON" ] || cmp -s ./scripts/spawn-test "$MUT_JSON"; then
+  echo "FAIL: run-id mutant not generated" >&2
+  exit 1
+fi
+if mutant_run=$(run_detect_case "$MUT_JSON" \
+  '{"ok":true,"result":{"runId":"run_new_shape"}}' 2>/dev/null); then
+  mutant_rc=0
+else
+  mutant_rc=$?
+fi
+mutant_detection="not detected"
+if [ "$mutant_rc" -eq 0 ] && [ "$mutant_run" = "run_new_shape" ]; then
+  mutant_detection=detected
+fi
+check "failability: run-id mutant cannot detect the new run shape" \
+  "not detected" "$mutant_detection"
+rm -f "$MUT_JSON"
 
 # Failability: a spawn-test whose FAIL* arm reports SKIP must fail the failure-kind cases.
 MUT="./scripts/.spawn-test.mutant.$$"
-trap 'rm -f "$MUT"' EXIT
+trap 'rm -f "${MUT:-}" "${MUT_JSON:-}"' EXIT
 sed 's/^    FAIL\*)    echo "FAIL" ;;$/    FAIL*)    echo "SKIP" ;;/' ./scripts/spawn-test > "$MUT"
 if [ ! -f "$MUT" ] || cmp -s ./scripts/spawn-test "$MUT"; then
   echo "FAIL: mutant not generated" >&2

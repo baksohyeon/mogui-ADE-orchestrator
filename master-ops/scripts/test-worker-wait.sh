@@ -202,6 +202,94 @@ else
   fail "failability: old-path-only mutant should have dropped ctx_dead0002, got exit $mutant_rc: $mutant_out"
 fi
 
+# --- Case 4: worker-list pagination reaches a target on page two ------------
+# Both response shapes must carry page-one workers forward while requesting the
+# cursor returned by that page. The fake orca rejects a missing or wrong cursor,
+# so a loop that stops after page one cannot satisfy the assertions.
+pagination_case() {
+  local shape="$1" page1 page2 terminal_json orca_bin bin ledger calls out rc cursor
+  page1="$work/worker_list_${shape}_page1.json"
+  page2="$work/worker_list_${shape}_page2.json"
+  terminal_json="$work/terminal_list_${shape}.json"
+  orca_bin="$work/orca-${shape}"
+  bin="$work/pagination-${shape}-bin"
+  ledger="$work/ledger-${shape}.jsonl"
+  calls="$work/pagination-${shape}.calls"
+
+  if [ "$shape" = old ]; then
+    printf '%s\n' '{"ok":true,"result":{"workers":[{"dispatchId":"ctx_page_old_1","dispatchStatus":"dispatched","agentTerminalHandle":"term_page_old_1"}],"page":{"hasMore":true,"nextCursor":"cursor-old-page-2"}}}' > "$page1"
+    printf '%s\n' '{"ok":true,"result":{"workers":[{"dispatchId":"ctx_page_old_2","dispatchStatus":"dispatched","agentTerminalHandle":"term_page_old_2"}],"page":{"hasMore":false,"nextCursor":""}}}' > "$page2"
+    cursor="cursor-old-page-2"
+  else
+    printf '%s\n' '{"ok":true,"result":{"workers":[{"dispatchId":"ctx_page_new_1","outcome":"in_progress","terminal":"term_page_new_1"}],"nextCursor":"cursor-new-page-2"}}' > "$page1"
+    printf '%s\n' '{"ok":true,"result":{"workers":[{"dispatchId":"ctx_page_new_2","outcome":"in_progress","terminal":"term_page_new_2"}],"nextCursor":""}}' > "$page2"
+    cursor="cursor-new-page-2"
+  fi
+  printf '%s\n' "{\"ok\":true,\"result\":{\"terminals\":[{\"handle\":\"term_page_${shape}_1\",\"lastOutputAt\":1},{\"handle\":\"term_page_${shape}_2\",\"lastOutputAt\":1}]}}" > "$terminal_json"
+  printf '%s\n' \
+    "{\"job_id\": \"ctx_page_${shape}_1\", \"worker_pid\": \"9999\", \"pane\": \"term_page_${shape}_1\"}" \
+    "{\"job_id\": \"ctx_page_${shape}_2\", \"worker_pid\": \"9999\", \"pane\": \"term_page_${shape}_2\"}" > "$ledger"
+  : > "$calls"
+  cat > "$orca_bin" <<EOF
+#!/usr/bin/env bash
+printf '%s\\n' "\$*" >> "$calls"
+cursor=""
+previous=""
+for arg in "\$@"; do
+  if [ "\$previous" = "--cursor" ]; then cursor="\$arg"; fi
+  previous="\$arg"
+done
+case "\$1 \$2" in
+  "orchestration worker-list")
+    case "\$cursor" in
+      "") cat "$page1" ;;
+      "$cursor") cat "$page2" ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  "terminal list") cat "$terminal_json" ;;
+  "terminal read") echo "" ;;
+  *) echo "{}" ;;
+esac
+EOF
+  chmod +x "$orca_bin"
+  mkdir -p "$bin"
+  cp "$orca_bin" "$bin/orca"
+  cp "$work/ps" "$bin/ps"
+
+  out=$(PATH="$bin:$PATH" HOME="$work/home" "$SCRIPT" --once --json --run run_x --ledger "$ledger" 2>&1)
+  rc=$?
+  if [ "$rc" -eq 0 ] \
+    && printf '%s' "$out" | grep -q "ctx_page_${shape}_1" \
+    && printf '%s' "$out" | grep -q "ctx_page_${shape}_2" \
+    && grep -q -- "--cursor $cursor" "$calls"; then
+    ok "pagination $shape shape: page one and page two are accounted for"
+  else
+    fail "pagination $shape shape: expected both pages and --cursor $cursor, got exit $rc: $out"
+  fi
+}
+
+pagination_case old
+pagination_case new
+
+pagination_mutant="$work/worker-wait-mutant-page-one"
+mkdir -p "$work/page-mutant/lib"
+sed 's/if not cursor:/if True:  # mutated: stop after page one/' "$SCRIPT" > "$pagination_mutant"
+cp "$ROOT/scripts/mogui_log.py" "$work/page-mutant/mogui_log.py"
+cp "$ROOT/scripts/lib/orca_json.py" "$work/page-mutant/lib/orca_json.py"
+chmod +x "$pagination_mutant"
+if cmp -s "$SCRIPT" "$pagination_mutant"; then
+  fail "failability: page-one pagination sed pattern did not match the script"
+fi
+mutant_out=$(PATH="$work/pagination-old-bin:$PATH" HOME="$work/home" \
+  "$pagination_mutant" --once --json --run run_x --ledger "$work/ledger-old.jsonl" 2>&1)
+mutant_rc=$?
+if [ "$mutant_rc" -eq 0 ] && ! printf '%s' "$mutant_out" | grep -q 'ctx_page_old_2'; then
+  ok "failability: page-one mutant drops the page-two dispatch (mutant run: $mutant_out)"
+else
+  fail "failability: page-one mutant unexpectedly accounted for page two, got exit $mutant_rc: $mutant_out"
+fi
+
 # --- Case 4: `check --wait` with no deliveryId (1.4.246+ dropped it; a -------
 # consuming check marks the batch handled server-side and `--ack` is a
 # no-op) must not print the old "no deliveryId to ack" warning, and must

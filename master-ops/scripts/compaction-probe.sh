@@ -41,6 +41,7 @@ record_template = {
     "model": "<actual model/tool version stamp>",
     "recall": {
         "tracks": "<remembered active tracks>",
+        "cards": "<remembered card ids for tracks dispatched or landed today>",
         "decisions": "<remembered recent accepted decisions>",
         "role": "<remembered Current Role and Lock>",
         "turn": "<remembered in-progress turn and next action>",
@@ -58,6 +59,7 @@ R1 Active tracks: from memory only, list active track ids and one-line status. A
 R2 Recent accepted decisions: from memory only, restate recent accepted decisions and artifacts. After recording, verify against Git history and docs.
 R3 Role State: from memory only, restate Current Role and Role Lock. After recording, verify against docs/runbooks/role-state.md.
 R4 In-progress turn: describe the work immediately before compaction and the next action. This item may have no independent source; mark uncertainty explicitly.
+R5 Dispatch cards: from memory only, the card ids of the tracks dispatched or landed today (KST). After recording, verify against the ledger's card column.
 
 Append one JSON record before source verification. Suggested payload:
 {json.dumps(record_template, ensure_ascii=False, separators=(",", ":"))}

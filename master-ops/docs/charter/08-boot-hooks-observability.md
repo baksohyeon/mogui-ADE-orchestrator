@@ -13,6 +13,7 @@ Recommended hook spec:
 - PreCompact: reload or export issue-tracker memory
 - UserPromptSubmit: inject the current role-state line from `docs/runbooks/role-state.md` and the `Proposal -> Approval -> Execution` rule. This pairing mechanically counters the host's autonomy defaults, which can override the charter unless the execution rule is present in every turn's context. See §9 for the incident that motivated this coupling.
 - UserPromptSubmit: warn when unacknowledged orchestration inbox messages exist, using `scripts/hooks/orch-inbox-warn.sh`.
+- UserPromptSubmit: warn when today's registered dispatches lack tracker cards, using `scripts/hooks/bd-gap-warn.sh`.
 - PreToolUse(Bash): warn when a hand-rolled poll loop appears; event waits use `scripts/orca-wait`. See `docs/runbooks/orca-wait.md`.
 - PreToolUse: warn when supervised dispatch is bypassed
 - PostToolUse: collect non-sensitive audit markers when locally approved

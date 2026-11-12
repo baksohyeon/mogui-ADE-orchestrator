@@ -210,6 +210,13 @@
       "plan": "none (grandfathered)"
     },
     {
+      "key": "scripts/hooks/bd-gap-warn.sh",
+      "kind": "hook",
+      "loads": "every prompt",
+      "status": "untested",
+      "plan": "none (grandfathered)"
+    },
+    {
       "key": "scripts/hooks/product-path-guard.sh",
       "kind": "hook",
       "loads": "every use",

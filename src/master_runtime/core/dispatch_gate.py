@@ -548,6 +548,8 @@ class DispatchGate:
         expected_completion_channel: str | None = None,
         worker_pid: str | None = None,
         pane: str | None = None,
+        card: str | None = None,
+        card_reason: str | None = None,
     ) -> GateDecision:
         """Register a job only after independent probe verification succeeds."""
 
@@ -653,6 +655,12 @@ class DispatchGate:
                 entry["worker_pid"] = worker_pid.strip()
             if pane and pane.strip():
                 entry["pane"] = pane.strip()
+            # The card fields are optional for the Python API so older callers
+            # and ledgers remain readable. The supervised wrapper supplies one
+            # of them for every new dispatch registration.
+            if card is not None or card_reason is not None:
+                entry["card"] = card.strip() if card is not None else ""
+                entry["card_reason"] = card_reason.strip() if card_reason is not None else ""
             # Say what was verified and how, so a later reader can tell an
             # unverified registration from a verified one instead of assuming.
             entry["model_declared"] = declared_model

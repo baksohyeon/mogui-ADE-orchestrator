@@ -68,6 +68,7 @@ RUNTIME_CANDIDATES="claude codex cursor grok gemini opencode"
 usage() {
   echo "usage: dispatch --contract FILE --spec TEXT (--terminal HANDLE | --worktree SELECTOR) \\"
   echo "                [--model ID] [--runtime NAME] [--same-host-reason TEXT]"
+  echo "                [--card ID | --no-card REASON]"
   echo "                [--top-approved TEXT]"
   echo "                [--tier-policy FILE]"
   echo "                [--est-chars N] [--transcript-glob GLOB] [--check-only]"
@@ -85,6 +86,13 @@ TGLOB_EXPLICIT=0
 EST=3000
 TERMINAL="" WORKTREE="" CONTRACT="" SPEC="" RUNTIME="" SAME_HOST_REASON="" CHECK_ONLY=0
 TIER_POLICY_OVERRIDE=""
+# Tracker card choice. With neither flag, the wrapper creates and claims a card
+# from the contract's H1 title when bd resolves to an active tracker.
+CARD=""
+CARD_ARG_SET=0
+NO_CARD_REASON=""
+NO_CARD_ARG_SET=0
+CARD_REASON=""
 # Owner approval for a top-tier model, carrying the reason. Empty means unasked.
 TOP_APPROVED=""
 TGLOB=""
@@ -100,11 +108,18 @@ while [ $# -gt 0 ]; do
     --est-chars) EST=$2; shift 2;;
     --transcript-glob) TGLOB=$2; TGLOB_EXPLICIT=1; shift 2;;
     --check-only) CHECK_ONLY=1; shift;;
+    --card) CARD=$2; CARD_ARG_SET=1; shift 2;;
+    --no-card) NO_CARD_REASON=$2; NO_CARD_ARG_SET=1; shift 2;;
     --top-approved) TOP_APPROVED=$2; shift 2;;
     --tier-policy) TIER_POLICY_OVERRIDE=$2; shift 2;;
     *) usage;;
   esac
 done
+
+if [ "$CARD_ARG_SET" = 1 ] && [ "$NO_CARD_ARG_SET" = 1 ]; then
+  echo "✗ choose one of --card or --no-card" >&2
+  exit 1
+fi
 
 # Testability seam (docs/runbooks/host-harness-inventory.md): MOGUI_STATE_DIR
 # redirects this dispatch's mutable state (ledger, delivered-contract copies)
@@ -170,6 +185,81 @@ if json_line is None:
 d = json.loads(json_line)
 print($1)
 "
+}
+
+# The tracker title is the contract's first level-one Markdown heading. Keep
+# the extraction small and deterministic so the card title and the worker's
+# contract remain the same source of intent.
+contract_h1_title() {
+  python3 - "$1" <<'PY'
+import sys
+
+for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+    if line.startswith("# "):
+        title = line[2:].strip()
+        if title:
+            print(title)
+            break
+else:
+    print("dispatch: " + sys.argv[1].rsplit("/", 1)[-1])
+PY
+}
+
+# Print the first tracker id from bd create output. Beads has emitted both
+# human-readable and JSON-shaped output over time, so accept either without
+# treating the surrounding prose as the id.
+tracker_card_id() {
+  python3 -c '
+import re
+import sys
+
+text = sys.stdin.read()
+match = re.search(r"(?<![A-Za-z0-9])[A-Za-z0-9]+-[A-Za-z0-9][A-Za-z0-9._-]*(?![A-Za-z0-9])", text)
+if match:
+    print(match.group(0))
+'
+}
+
+resolve_tracker_card() {
+  if [ "$CARD_ARG_SET" = 1 ]; then
+    if [ -z "${CARD//[[:space:]]/}" ]; then
+      echo "✗ --card requires a non-empty tracker id" >&2
+      return 2
+    fi
+  elif [ "$NO_CARD_ARG_SET" = 1 ]; then
+    if [ -z "${NO_CARD_REASON//[[:space:]]/}" ]; then
+      echo "✗ --no-card requires a reason" >&2
+      return 2
+    fi
+    CARD_REASON="$NO_CARD_REASON"
+  else
+    CARD_REASON=""
+    if command -v bd >/dev/null 2>&1 && bd where >/dev/null 2>&1; then
+      CARD_TITLE=$(contract_h1_title "$CONTRACT")
+      CREATE_OUT=$(bd create "$CARD_TITLE" -t task -p 2 2>&1)
+      CREATE_RC=$?
+      if [ "$CREATE_RC" = 0 ]; then
+        CARD=$(printf '%s' "$CREATE_OUT" | tracker_card_id)
+      fi
+      if [ -n "$CARD" ]; then
+        if ! bd update "$CARD" --claim >/dev/null 2>&1; then
+          echo "⚠ tracker card claim failed · card=$CARD" >&2
+          CARD=""
+          CARD_REASON="tracker claim failed"
+        fi
+      elif [ "$CREATE_RC" != 0 ]; then
+        echo "⚠ tracker card creation failed; dispatch has no card" >&2
+        CARD_REASON="tracker create failed"
+      else
+        echo "⚠ tracker card id was not returned; dispatch has no card" >&2
+        CARD_REASON="tracker create returned no id"
+      fi
+    else
+      CARD_REASON="tracker unavailable"
+      echo "⚠ tracker unavailable; dispatch has no card" >&2
+    fi
+  fi
+  return 0
 }
 
 # Reads one normalized key (task_id, terminal_handle, dispatch_id,
@@ -1721,7 +1811,7 @@ if [ "$CHECK_ONLY" = 1 ]; then
   [ "$TIER" = "top" ] && [ -n "$TOP_APPROVED_TEXT" ] && echo "🔓 top tier approved by owner · $TOP_APPROVED"
   COLLISION_WARN=$(MOGUI_PRODUCT_REPO="${PRODUCT_REPO_ARG:-}" "$COLLISION_CHECK" "$CONTRACT" "$LEDGER" 2>/dev/null || true)
   [ -n "$COLLISION_WARN" ] && echo "$COLLISION_WARN"
-  echo "⚙ gate ✓ $TIER · $MODEL · est $((EST/1000)).$(( (EST%1000)/100 ))k · 계약 ${SHA:0:8}"
+  echo "⚙ gate ✓ $TIER · $MODEL · est $((EST/1000)).$(( (EST%1000)/100 ))k · 계약 ${SHA:0:8} · card=not-created(check-only)"
   exit 0
 fi
 # A concurrent dispatch can spend the budget after this preflight. If the final
@@ -1746,6 +1836,14 @@ if [ "$ALLOW" != "True" ]; then
   echo "✗ gate DENY · $(echo "$CHK" | jqf "d['reason']") · model=$MODEL tier=$TIER"
   echo "$CHK"; exit 2
 fi
+
+# Resolve the tracker card before creating the Orca Task. An explicit card or
+# no-card reason is carried through unchanged; with neither, create and claim
+# one only when bd resolves to an active tracker. Missing tracker state is a
+# visible, ledger-recorded gap rather than a reason to invent an id.
+resolve_tracker_card || exit 2
+echo "tracker card · ${CARD:-none}${CARD_REASON:+ · reason:$CARD_REASON}"
+
 # The reason prints into this script's stdout, which is the run log by design.
 # The gate's register subcommand has no field for it, so it does not reach the
 # ledger. Once scripts/mogui_log.py lands it becomes an event-log.jsonl line
@@ -1823,6 +1921,12 @@ $block"
   done
   echo "📎 standing rules · $STANDING_RULE_NAMES"
 fi
+
+# Keep this line in the prepared worker prompt so the card survives a later
+# context compaction. `none` is deliberate for an explicit or measured gap.
+SPEC="$SPEC
+
+Tracker card: ${CARD:-none}"
 
 # Snapshot this dispatch's codex rollout candidates right before the
 # worker's pane is created or reused, so new_rollout_since (step 5, below)
@@ -2026,11 +2130,15 @@ EOF
 # 5b. register (job probe = ledger-vs-dispatch-show; model probe only when it can
 # be scoped to THIS worker — an unscoped glob confirms a model from whatever
 # session happens to be newest, which is a false pass, not a measurement)
+REGISTER_CARD_ARGS=()
+[ -n "$CARD" ] && REGISTER_CARD_ARGS+=(--card "$CARD")
+[ -n "$CARD_REASON" ] && REGISTER_CARD_ARGS+=(--card-reason "$CARD_REASON")
 REG=$(ledger_locked_command "$GATE" --ledger "$LEDGER" register --job-id "$DISP" --contract-sha "$SHA" \
       --runtime "$RUNTIME" --tier-policy "$POLICY" \
       --probe-cmd "orca orchestration dispatch-show --task $TASK --json 2>/dev/null | grep -o $DISP | head -1" \
       --orchestration-task "$TASK" --declared-model "$MODEL" --pane "$TERMINAL" \
-      "${MODEL_PROBE_ARGS[@]+"${MODEL_PROBE_ARGS[@]}"}" 2>/dev/null)
+      "${MODEL_PROBE_ARGS[@]+"${MODEL_PROBE_ARGS[@]}"}" \
+      "${REGISTER_CARD_ARGS[@]+"${REGISTER_CARD_ARGS[@]}"}" 2>/dev/null)
 if [ "$(echo "$REG" | jqf "d['allow']")" != "True" ]; then
   echo "✗ register $(echo "$REG" | jqf "d['reason']") · dispatch=$DISP (worker IS running — resolve register manually)"
   exit 4
@@ -2050,7 +2158,7 @@ case "$PROBE_STATE" in
     PROBE_LABEL="model=transcript실측(codex-new-rollout: worker-scoped, found by existence since launch)";;
   *) PROBE_LABEL="model=transcript실측(caller glob)";;
 esac
-echo "⚡ register ✓ $DISP${WARN:+ · warn:$WARN} · probe: job=원장대조 $PROBE_LABEL"
+echo "⚡ register ✓ $DISP${WARN:+ · warn:$WARN} · card=${CARD:-none} · probe: job=원장대조 $PROBE_LABEL"
 if [ "$PROBE_STATE" = unavailable ]; then
   if [ -n "$CODEX_ROLLOUT_REASON" ]; then
     echo "  The declared model $MODEL was NOT verified against the worker: $CODEX_ROLLOUT_REASON."

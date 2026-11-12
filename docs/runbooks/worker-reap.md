@@ -92,7 +92,23 @@ If **any** condition fails, the worktree is left in place and the reason is logg
 - Ignored media present, flag not set: `worktree_left:<path>:ignored_media:<count>`
 - Ignored media scan failed: `worktree_left:<path>:ignored_media_unmeasured`
 
-### 4. Record the Reap
+### 4. Retire the Local Branch After Worktree Removal
+
+Before a worktree is removed, the reaper captures its branch tip and repository
+and asks `gh pr view <branch> --repo <repository> --json state,headRefOid` for
+the pull request state. After removal, it rechecks the tip and runs `git branch
+-D <branch>` through the shared git directory only when the pull request state
+is `MERGED` and its `headRefOid` equals the captured tip. This covers squash
+merges while keeping a branch when there is no pull request, the pull request is
+open or closed, the tip differs, the branch is `main` or `master`, or GitHub
+cannot be measured.
+
+The action is recorded as `branch_deleted:<branch>` on success. A dry run
+reports `would_delete_branch:<branch>`. Every refusal reports one
+`branch_left:<branch>:<reason>` line, so an unavailable `gh` command leaves the
+branch in place without making a guess.
+
+### 5. Record the Reap
 
 A reap record is appended to the dispatch ledger with:
 - `task_id`, `dispatch_id`, `terminal_id`, `worktree_path`

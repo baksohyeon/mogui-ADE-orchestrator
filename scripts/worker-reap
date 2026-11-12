@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Command line entry point for worker lease reaping."""
+"""Command line entry point for worker lease reaping and branch cleanup."""
 
 from __future__ import annotations
 
@@ -76,7 +76,10 @@ def main(argv: list[str] | None = None) -> int:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="worker-reap",
-        description="Close settled worker terminals and clean up worktrees",
+        description=(
+            "Close settled worker terminals, clean up worktrees, and retire "
+            "matching merged local branches"
+        ),
     )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument(

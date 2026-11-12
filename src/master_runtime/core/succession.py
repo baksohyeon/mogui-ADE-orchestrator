@@ -8,9 +8,14 @@ import re
 import shlex
 import subprocess
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Callable, Mapping, Optional, Sequence, Tuple
 
 from master_runtime.core.bootstrap import RoleState
+from master_runtime.core.instance_runtime_config import (
+    InstanceRuntimeConfigError,
+    load_instance_runtime_config,
+)
 
 
 TRIGGER_IMMEDIATE = "IMMEDIATE"
@@ -551,8 +556,85 @@ def _retirement_outcome(
     )
 
 
+def _resolve_spawn_workspace_selector(
+    workspace_selector: Optional[str],
+    orca_runner: Optional[OrcaRunner],
+) -> str:
+    """Resolve the live workspace id from the install-time seat path when needed."""
+
+    if workspace_selector is not None and workspace_selector.strip():
+        return workspace_selector.strip()
+
+    try:
+        seat_path = load_instance_runtime_config().require_master_seat_path()
+    except InstanceRuntimeConfigError:
+        raise SuccessionError(
+            "workspace selector is required: pass --workspace-selector or record "
+            "master_seat_path in the instance runtime config"
+        )
+
+    try:
+        sessions = find_sessions(orca_runner)
+    except SuccessionError:
+        sessions = ()
+
+    matches = _recorded_seat_matches(sessions, seat_path)
+    if not matches:
+        # Folder workspaces on some Orca builds return an empty worktreePath in
+        # the global list, while the path selector still resolves the live
+        # workspace. Keep the same path-based contract for that scoped query.
+        try:
+            sessions = find_sessions(orca_runner, list_worktree="path:" + seat_path)
+        except SuccessionError:
+            sessions = ()
+        matches = _recorded_seat_matches(sessions, seat_path)
+
+    if len(matches) == 1:
+        return next(iter(matches))
+    if not matches:
+        raise SuccessionError(
+            "recorded seat path {0!r} has no live workspace match; pass "
+            "--workspace-selector or fix the recorded seat path".format(seat_path)
+        )
+    raise SuccessionError(
+        "recorded seat path {0!r} has multiple live workspace matches; pass "
+        "--workspace-selector or close the extra workspace".format(seat_path)
+    )
+
+
+def _recorded_seat_matches(
+    sessions: Sequence[SessionInfo], seat_path: str
+) -> frozenset[str]:
+    return frozenset(
+        session.worktree_id
+        for session in sessions
+        if session.worktree_id and _session_holds_path(session, seat_path)
+    )
+
+
+def _session_holds_path(session: SessionInfo, seat_path: str) -> bool:
+    if _paths_match(session.worktree_path, seat_path):
+        return True
+    worktree_id = _normalize_worktree_selector(session.worktree_id)
+    if "::" not in worktree_id:
+        return False
+    _repo_id, path = worktree_id.split("::", 1)
+    return _paths_match(path, seat_path)
+
+
+def _paths_match(actual: str, expected: str) -> bool:
+    if not actual.strip() or not expected.strip():
+        return False
+    try:
+        actual_path = Path(actual).expanduser().resolve(strict=False)
+        expected_path = Path(expected).expanduser().resolve(strict=False)
+        return actual_path == expected_path
+    except (OSError, RuntimeError, ValueError):
+        return actual.rstrip("/") == expected.rstrip("/")
+
+
 def spawn_successor(
-    workspace_selector: str,
+    workspace_selector: Optional[str],
     kickoff_text: str,
     root: str,
     title: str,
@@ -564,7 +646,7 @@ def spawn_successor(
 ) -> SpawnReport:
     """Create a successor terminal and fail closed on worktree or handle-liveness mismatch."""
 
-    selector = _require_substr(workspace_selector, "workspace_selector")
+    selector = _resolve_spawn_workspace_selector(workspace_selector, orca_runner)
     kickoff = _require_substr(kickoff_text, "kickoff_text")
     cwd = _require_substr(root, "root")
     pane_title = _require_substr(title, "title")

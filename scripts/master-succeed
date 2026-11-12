@@ -156,7 +156,13 @@ def _build_parser() -> argparse.ArgumentParser:
     retire.add_argument("--execute", action="store_true")
 
     spawn = subparsers.add_parser("spawn", parents=[common])
-    spawn.add_argument("--workspace-selector", required=True)
+    spawn.add_argument(
+        "--workspace-selector",
+        help=(
+            "Live Orca workspace selector. When omitted, resolve it from the "
+            "recorded master_seat_path in the instance runtime config."
+        ),
+    )
     kickoff = spawn.add_mutually_exclusive_group(required=True)
     kickoff.add_argument("--kickoff-text")
     kickoff.add_argument("--kickoff-file")

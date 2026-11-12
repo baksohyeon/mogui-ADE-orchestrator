@@ -16,6 +16,7 @@ from master_runtime.core.instance_runtime_config import (
     CONFIG_PATH_ENV,
     MASTER_HOST_RUNTIME_ENV,
     MASTER_HOST_RUNTIME_ENV_ALT,
+    MASTER_SEAT_PATH_ENV,
     PRODUCT_REPO_ENV,
     TRANSCRIPT_GLOB_ENV,
     InstanceRuntimeConfigError,
@@ -48,10 +49,16 @@ def _abs_repo_path(name: str) -> str:
 def test_example_file_is_valid_json_with_documented_keys() -> None:
     payload = json.loads(EXAMPLE.read_text(encoding="utf-8"))
     assert "master_host_runtime" in payload
+    assert "master_seat_path" in payload
     assert "transcript_globs" in payload
     docs = payload.get("_docs")
     assert isinstance(docs, dict)
-    for key in ("master_host_runtime", "transcript_globs", "product_repositories"):
+    for key in (
+        "master_host_runtime",
+        "master_seat_path",
+        "transcript_globs",
+        "product_repositories",
+    ):
         assert key in docs
         assert docs[key].strip()
 
@@ -77,12 +84,14 @@ def test_file_value_used_when_env_absent(tmp_path: Path) -> None:
         tmp_path / "instance-runtime.json",
         {
             "master_host_runtime": "grok",
+            "master_seat_path": str(tmp_path / "workspace"),
             "transcript_globs": {"grok": "/tmp/grok/*.jsonl"},
             "product_repo": product_repo,
         },
     )
     loaded = load_instance_runtime_config(config_path, environ={})
     assert loaded.require_master_host_runtime() == "grok"
+    assert loaded.require_master_seat_path() == str(tmp_path / "workspace")
     assert loaded.require_transcript_glob("grok") == "/tmp/grok/*.jsonl"
     assert loaded.require_product_repositories() == (product_repo,)
 
@@ -92,6 +101,8 @@ def test_missing_file_and_env_is_honest_unconfigured(tmp_path: Path) -> None:
     loaded = load_instance_runtime_config(missing, environ={})
     with pytest.raises(InstanceRuntimeConfigError, match="unconfigured"):
         loaded.require_master_host_runtime()
+    with pytest.raises(InstanceRuntimeConfigError, match="unconfigured"):
+        loaded.require_master_seat_path()
     with pytest.raises(InstanceRuntimeConfigError, match="unconfigured"):
         loaded.require_transcript_glob("claude")
     with pytest.raises(InstanceRuntimeConfigError, match="unconfigured"):
@@ -111,6 +122,18 @@ def test_transcript_glob_env_overrides_file(tmp_path: Path) -> None:
         environ={TRANSCRIPT_GLOB_ENV: "/from-env/*.jsonl"},
     )
     assert loaded.require_transcript_glob("claude") == "/from-env/*.jsonl"
+
+
+def test_seat_path_env_overrides_file(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "instance-runtime.json",
+        {"master_seat_path": str(tmp_path / "from-file")},
+    )
+    loaded = load_instance_runtime_config(
+        config_path,
+        environ={MASTER_SEAT_PATH_ENV: str(tmp_path / "from-env")},
+    )
+    assert loaded.require_master_seat_path() == str(tmp_path / "from-env")
 
 
 def test_product_repo_env_overrides_file(tmp_path: Path) -> None:

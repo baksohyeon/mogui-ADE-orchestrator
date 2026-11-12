@@ -20,6 +20,8 @@ Use the repository onboarding guide as the source of truth:
 
 Placement targets the workspace-level seat: the folder workspace of the workspace root (selector form `id:folder:<uuid>`) in a multi-repository workspace, or the primary worktree when the workspace is one repository. Repository worktrees inside a multi-repository workspace are worker seats. [orca-concepts.md](./orca-concepts.md) explains the object model and which selector forms are verified.
 
+Onboarding records the stable seat path as `master_seat_path` in the instance runtime config. A succession spawn with no `--workspace-selector` lists live Orca terminals, finds the current workspace id that owns that path, and uses that id for placement. Zero matches and multiple matches refuse with the path and an action for the operator; an explicit `--workspace-selector` remains available for a deliberate recovery placement.
+
 The actual spawn entry point is `scripts/master-succeed spawn`. A dry run is the safe way to inspect the host command before creating a terminal:
 
 ```bash
@@ -119,6 +121,19 @@ scripts/master-succeed handoff \
   --spec ./ops/handoff-spec.json \
   --json
 ```
+
+With `master_seat_path` recorded during onboarding, the successor spawn can resolve the live workspace selector at runtime:
+
+```bash
+scripts/master-succeed spawn \
+  --kickoff-file ./ops/successor-kickoff.txt \
+  --root . \
+  --model example-model \
+  --title "Successor boot" \
+  --json
+```
+
+The recorded path must identify exactly one live workspace. A missing match or an ambiguous match stops the spawn and names the path so the operator can correct the seat or provide an explicit selector.
 
 The successor then proves recovery through a report shape consumed by:
 

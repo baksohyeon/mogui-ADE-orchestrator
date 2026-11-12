@@ -18,6 +18,12 @@ For a reader who wants the ideas before the install, [mogui harness, explained](
 
 https://github.com/user-attachments/assets/6740ff43-636d-4929-b03e-9b261ea596f0
 
+**Short on time? The harness in one picture, 67 seconds.** The system diagram, part by part: the owner, the master, the contract and its read token, the workers in their own checkouts, the Orca mailbox, one pull request, the memory loop, and the template. Same concept view; the [release page](https://github.com/baksohyeon/mogui-harness-explained/releases/tag/architecture-film-20261109) has the file and the credits.
+
+<p align="center"><a href="https://github.com/baksohyeon/mogui-harness-explained/releases/tag/architecture-film-20261109"><img src="docs/assets/architecture-poster.jpg" alt="the harness in one picture, every part lit: the owner, the master pane, three workers in their own checkouts, the Orca mailbox, the pull request, the operations repository, the issue tracker, and the template" width="100%"></a></p>
+
+https://github.com/user-attachments/assets/657a1571-be9a-456d-a866-97d1bc85da1a
+
 Clone it, open it in Orca, start an agent inside the clone, and tell it to wake up. The agent runs the install interview and explains as it goes.
 
 ## Quickstart

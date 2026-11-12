@@ -20,6 +20,10 @@ you build on it.
 
 ## [Unreleased]
 
+### Fixed
+
+- Dispatch ledger policy paths use `~` for home-relative paths, and reports count legacy absolute rows with new home-relative rows under one policy.
+
 ## [0.5.319] - 2026-11-12
 
 - Organization redaction rules load from the workspace-root `.redaction-extra.txt` by default, with `REDACTION_EXTRA_PATTERNS` taking precedence and `~/.config/redaction-extra.txt` retained as the fallback; the export profile loads `workspace_` rules while the internal profile counts and skips them (#246).

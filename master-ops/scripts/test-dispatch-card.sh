@@ -37,6 +37,10 @@ make_harness() {
         printf 'NO_CARD_REASON="owner-approved-gap"; NO_CARD_ARG_SET=1\nresolve_tracker_card\nprintf "CARD=%%s REASON=%%s\\n" "$CARD" "$CARD_REASON"\n';;
       auto)
         printf 'resolve_tracker_card\nprintf "CARD=%%s REASON=%%s\\n" "$CARD" "$CARD_REASON"\n';;
+      auto-trim)
+        printf 'BD_ID_MODE=whitespace; export BD_ID_MODE\nresolve_tracker_card\nprintf "CARD=%%s REASON=%%s\\n" "$CARD" "$CARD_REASON"\n';;
+      auto-invalid)
+        printf 'BD_ID_MODE=invalid; export BD_ID_MODE\nresolve_tracker_card\nprintf "CARD=%%s REASON=%%s\\n" "$CARD" "$CARD_REASON"\n';;
       claim-fail)
         printf 'BD_CLAIM_MODE=fail; export BD_CLAIM_MODE\nresolve_tracker_card\nprintf "CARD=%%s REASON=%%s\\n" "$CARD" "$CARD_REASON"\n';;
       release)
@@ -64,7 +68,16 @@ cat > "$T/bin/bd" <<'EOF'
 printf '%s\n' "$*" >> "$CARD_LOG"
 case "$1" in
   where) exit 0;;
-  create) printf '{"id":"tk-auto1"}\n'; exit 0;;
+  create)
+    if [ "${BD_ID_MODE:-}" = invalid ]; then
+      printf '{"id":"not a card"}\n'
+    elif [ "${BD_ID_MODE:-}" = whitespace ]; then
+      printf '{"id":"  tk-auto1  "}\n'
+    else
+      printf '{"id":"tk-auto1"}\n'
+    fi
+    exit 0;;
+  unclaim) exit 0;;
   update)
     if [ "$3" = "--claim" ] && [ "${BD_CLAIM_MODE:-}" = fail ]; then
       exit 1
@@ -99,6 +112,22 @@ if [ "$out" = "CARD=tk-auto1 REASON=" ] \
 else
   fail "auto-create case: $out; calls=$(tr '\n' ';' < "$T/bd.log")"
 fi
+
+: > "$T/bd.log"
+make_harness auto-trim
+out=$(CARD_LOG="$T/bd.log" bash "$T/harness-auto-trim.sh")
+[ "$out" = "CARD=tk-auto1 REASON=" ] \
+  && grep -Fxq 'update tk-auto1 --claim' "$T/bd.log" \
+  && ok "auto-create trims a valid tracker id before claiming" \
+  || fail "trimmed-id case: $out; calls=$(tr '\n' ';' < "$T/bd.log")"
+
+: > "$T/bd.log"
+make_harness auto-invalid
+out=$(CARD_LOG="$T/bd.log" bash "$T/harness-auto-invalid.sh")
+[ "$out" = "CARD= REASON=tracker create returned no id" ] \
+  && ! grep -Fq ' --claim' "$T/bd.log" \
+  && ok "auto-create rejects an unusable tracker id before claiming" \
+  || fail "invalid-id case: $out; calls=$(tr '\n' ';' < "$T/bd.log")"
 
 : > "$T/bd.log"
 make_harness claim-fail
@@ -157,7 +186,7 @@ printf '%s' "$register_out" | grep -q '"allow":true' \
 make_harness release
 out=$(BD_CALL_LOG="$T/bd.log" bash "$T/harness-release.sh" 2>&1 || true)
 printf '%s' "$out" | grep -q 'task-create failed · tracker claim released · card=tk-auto1' \
-  && grep -Fxq 'update tk-auto1 --status open' "$T/bd.log" \
+  && grep -Fxq 'unclaim tk-auto1' "$T/bd.log" \
   && ok "post-claim failure releases the tracker claim" \
   || fail "release case: $out; calls=$(tr '\n' ';' < "$T/bd.log")"
 
@@ -303,7 +332,7 @@ EOF
   fi
   if [ "$status" -eq "$expected" ] \
       && printf '%s\n' "$out" | grep -q 'tracker claim released · card=tk-auto1' \
-      && grep -Fxq 'update tk-auto1 --status open' "$work/bd.log"; then
+      && grep -Fxq 'unclaim tk-auto1' "$work/bd.log"; then
     ok "$mode releases the claimed tracker card"
   else
     fail "$mode release case: rc=$status out=$out calls=$(tr '\n' ';' < "$work/bd.log")"

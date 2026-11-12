@@ -46,6 +46,8 @@ reporting the last released tag, so that value names the release it came from an
 not the exact body it received. When the difference matters, record the commit the
 installation was taken from alongside the tag.
 
+## Unreleased
+
 ## v0.5.326
 
 Release v0.5.326 (2026-11-12): master-ops/TEMPLATE-VERSION and master-ops/MANIFEST.json move to v0.5.326 alongside the changelog fold, and the root CHANGELOG.md rolls its Unreleased section into 0.5.326.

@@ -2589,15 +2589,9 @@ def test_cli_report_shows_every_policy_a_day_was_judged_against(
 
     assert script["main"](["--ledger", str(ledger), "report"]) == 0
     output = capsys.readouterr().out
-    installation_path = dispatch_gate.normalize_tier_policy_path(
-        "/policies/installation.json"
-    )
-    substituted_path = dispatch_gate.normalize_tier_policy_path(
-        "/tmp/substituted.json"
-    )
-    legacy_path = dispatch_gate.normalize_tier_policy_path(
-        "/policies/legacy-entry.json"
-    )
+    installation_path = str(Path("/policies/installation.json"))
+    substituted_path = str(Path("/tmp/substituted.json"))
+    legacy_path = str(Path("/policies/legacy-entry.json"))
     assert f"{installation_path}: sha256={'a' * 12} decisions=2" in output
     assert f"{substituted_path}: sha256={'b' * 12} decisions=1" in output
     assert f"{legacy_path}: sha256=<unrecorded> decisions=1" in output
@@ -2636,9 +2630,7 @@ def test_cli_report_counts_absolute_and_tilde_home_policy_paths_together(
 
     assert script["main"](["--ledger", str(ledger), "report"]) == 0
     output = capsys.readouterr().out
-    expected_path = dispatch_gate.normalize_tier_policy_path(
-        "~/policies/installation.json"
-    )
+    expected_path = str(Path("~") / "policies" / "installation.json")
     assert (
         f"{expected_path}: sha256={'a' * 12} decisions=2"
         in output
@@ -2674,7 +2666,7 @@ def test_cli_report_preserves_unknown_user_tilde_policy_paths(
 
     assert script["main"](["--ledger", str(ledger), "report"]) == 0
     output = capsys.readouterr().out
-    expected_path = dispatch_gate.normalize_tier_policy_path(unknown_user_path)
+    expected_path = str(Path(unknown_user_path))
     assert (
         f"{expected_path}: sha256={'b' * 12} decisions=1"
         in output
@@ -3066,9 +3058,13 @@ def test_case_variant_of_allowed_model_stays_allowed(tmp_path: Path) -> None:
     assert decision.reason == ReasonCode.OK
 
 
-def test_ledger_records_which_tier_policy_decided(tmp_path: Path) -> None:
+def test_ledger_records_which_tier_policy_decided(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     """The policy path is caller-supplied, so the decision must name the file."""
 
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     policy = _tier_policy(tmp_path)
     digest = hashlib.sha256(policy.read_bytes()).hexdigest()
     gate = _gate(tmp_path, now=1_000, tier_policy_path=policy)
@@ -3095,7 +3091,7 @@ def test_ledger_records_which_tier_policy_decided(tmp_path: Path) -> None:
     assert allowed.allow is True
     assert denied.allow is False
     entries = _ledger_entries(tmp_path)[-2:]
-    expected_path = dispatch_gate.ledger_tier_policy_path(policy)
+    expected_path = str(policy)
     assert [entry["tier_policy_path"] for entry in entries] == [expected_path] * 2
     assert [entry["tier_policy_sha256"] for entry in entries] == [digest] * 2
 
@@ -3132,7 +3128,7 @@ def test_ledger_tier_policy_path_uses_tilde_for_home_path(
     )
 
     assert decision.allow is True
-    expected_path = dispatch_gate.ledger_tier_policy_path(policy)
+    expected_path = str(Path("~") / "policies" / "model-tier-policy.json")
     assert _ledger_entries(tmp_path)[-1]["tier_policy_path"] == expected_path
 
 

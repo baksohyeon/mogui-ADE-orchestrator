@@ -82,6 +82,7 @@ assert_verdict skip "orch-inbox skip path"
 # card-bearing row stays silent.
 cat > "$T/bin/bd" <<'EOF'
 #!/usr/bin/env bash
+printf '%s\n' "$*" >> "${BD_CALL_LOG:?}"
 if [ "$*" = "list --status=in_progress --json" ]; then
   printf '%s\n' '[{"id":"card-active"}]'
   exit 0
@@ -91,14 +92,19 @@ EOF
 chmod +x "$T/bin/bd"
 now=$(date +%s)
 printf '{"ts":%s,"decision":"ALLOW","job_id":"job-gap"}\n{"ts":%s,"decision":"ALLOW","job_id":"job-card","card":"card-1"}\n' "$now" "$now" > "$T/dispatch-ledger.jsonl"
-out=$(DISPATCH_GATE_LEDGER="$T/dispatch-ledger.jsonl" PATH="$T/bin:$PATH" MOGUI_HOOK_FIRE_LOG="$LOG" bash "$BD_GAP" 2>&1)
+out=$(BD_CALL_LOG="$T/bd.log" DISPATCH_GATE_LEDGER="$T/dispatch-ledger.jsonl" PATH="$T/bin:$PATH" MOGUI_HOOK_FIRE_LOG="$LOG" bash "$BD_GAP" 2>&1)
 printf '%s' "$out" | grep -q 'today: 1 dispatches without a card · 1 in_progress' \
   && ok "bd-gap warn path prints missing-card count" \
   || fail "bd-gap warn path missing count: $out"
+[ "$(grep -c '^list --status=in_progress --json$' "$T/bd.log")" = 1 ] \
+  && ok "bd-gap warn path queries active tracker count" \
+  || fail "bd-gap warn path active-count query missing"
 assert_verdict warn "bd-gap warn path"
 printf '{"ts":%s,"decision":"ALLOW","job_id":"job-card","card":"card-1"}\n' "$now" > "$T/dispatch-ledger.jsonl"
-out=$(DISPATCH_GATE_LEDGER="$T/dispatch-ledger.jsonl" PATH="$T/bin:$PATH" MOGUI_HOOK_FIRE_LOG="$LOG" bash "$BD_GAP" 2>&1)
+ : > "$T/bd.log"
+out=$(BD_CALL_LOG="$T/bd.log" DISPATCH_GATE_LEDGER="$T/dispatch-ledger.jsonl" PATH="$T/bin:$PATH" MOGUI_HOOK_FIRE_LOG="$LOG" bash "$BD_GAP" 2>&1)
 [ -z "$out" ] && ok "bd-gap pass path stays silent" || fail "bd-gap pass path printed: $out"
+[ ! -s "$T/bd.log" ] && ok "bd-gap pass path does not query tracker" || fail "bd-gap pass path queried tracker"
 assert_verdict pass "bd-gap pass path"
 
 # role-state-inject: pass on readable role-state; warn via unreadable-path mutant.

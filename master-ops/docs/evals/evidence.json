@@ -214,7 +214,9 @@
       "kind": "hook",
       "loads": "every prompt",
       "status": "untested",
-      "plan": "none (grandfathered)"
+      "plan": "prereg page due by measure_by",
+      "owner": "master",
+      "measure_by": "2026-12-12"
     },
     {
       "key": "scripts/hooks/product-path-guard.sh",

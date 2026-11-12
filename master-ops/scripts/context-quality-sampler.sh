@@ -29,7 +29,7 @@ if ! command -v python3 >/dev/null 2>&1; then
   printf '## bd ready (backlog, 참고용)\nunavailable\n\n'
   printf '## bd closed in last 24h\nunavailable\n\n'
   printf '## %s git log --oneline -5\nunavailable\n' "$ANCHOR_LABEL"
-  printf 'dispatches without a card today: 0\n'
+  printf 'dispatches without a card today: unavailable\n'
   exit 0
 fi
 
@@ -39,7 +39,7 @@ import json
 import os
 import shutil
 import subprocess
-from zoneinfo import ZoneInfo
+from datetime import timedelta, timezone
 
 admin_dir = os.environ.get("ADMIN_PLANNING_DIR") or os.getcwd()
 repo_root = os.environ.get("REPO_ROOT") or admin_dir
@@ -184,7 +184,7 @@ if not ledger_value:
         else os.path.expanduser("~/.mogui/dispatch-ledger.jsonl")
     )
 missing_cards = 0
-today_kst = now.astimezone(ZoneInfo("Asia/Seoul")).date()
+today_kst = now.astimezone(timezone(timedelta(hours=9))).date()
 try:
     ledger_lines = open(ledger_value, encoding="utf-8")
 except OSError:
@@ -193,8 +193,10 @@ if ledger_lines is not None:
     for line in ledger_lines:
         try:
             row = json.loads(line)
+            if not isinstance(row, dict):
+                continue
             stamp = dt.datetime.fromtimestamp(float(row.get("ts")), dt.timezone.utc)
-            stamp = stamp.astimezone(ZoneInfo("Asia/Seoul"))
+            stamp = stamp.astimezone(timezone(timedelta(hours=9)))
         except (TypeError, ValueError, OSError, OverflowError, json.JSONDecodeError):
             continue
         if (

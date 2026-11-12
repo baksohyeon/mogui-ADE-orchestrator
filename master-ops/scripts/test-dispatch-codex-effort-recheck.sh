@@ -61,6 +61,7 @@ run_case() {
     echo 'RUNTIME=codex MODEL=gpt-5.5 CODEX_REASONING_EFFORT=xhigh TERMINAL=term_fake'
     echo 'HOOKS_ANSWERED=0 HOOKS_ANSWER_BIN=missing'
     printf '%s\n' "$markers" "$start_fn" "$recheck_fn" "$record_fn"
+    echo 'fail_after_tracker_claim() { exit "${2:-3}"; }'
     printf '%s\n' "$start_block"
     echo 'DELIVERY_SUCCEEDED=1'
     echo 'if [ "${CODEX_EFFORT_RECHECK:-0}" = 1 ]; then'

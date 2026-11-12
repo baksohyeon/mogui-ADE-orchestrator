@@ -180,14 +180,18 @@ def _check(args: argparse.Namespace) -> int:
 
 
 def _register(args: argparse.Namespace) -> int:
-    # Keep direct callers that predate the card column readable. The supervised
-    # wrapper always supplies one of these fields; when a caller explicitly
-    # supplies an empty card, however, require the reason at the CLI boundary.
-    if args.card is not None and not args.card.strip() and not (
-        args.card_reason and args.card_reason.strip()
-    ):
-        _diagnose("INVALID_REQUEST: card_reason is required when card is empty")
-        return 2
+    # Keep direct callers that predate the card column readable. Once either
+    # option is supplied, exactly one of the two values must be populated.
+    # This prevents a row from claiming both a card and an explanation, or
+    # carrying neither while looking like an explicit card decision.
+    card_populated = bool(args.card and args.card.strip())
+    reason_populated = bool(args.card_reason and args.card_reason.strip())
+    if args.card is not None or args.card_reason is not None:
+        if card_populated == reason_populated:
+            _diagnose(
+                "INVALID_REQUEST: exactly one of card or card_reason must be populated"
+            )
+            return 2
     gate = _gate(args)
     completion_channel = gate.completion_channel_for_registration(
         contract_sha=args.contract_sha,

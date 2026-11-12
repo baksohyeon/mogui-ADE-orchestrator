@@ -906,13 +906,13 @@ def test_register_records_tracker_card_and_reason_columns(tmp_path: Path) -> Non
     decision = gate.register_job(
         "job-card",
         lambda job_id: job_id == "job-card",
-        card="mgm-card1",
+        card="tk-card1",
         card_reason="",
     )
 
     assert decision.allow is True
     entry = _ledger_entries(tmp_path)[-1]
-    assert entry["card"] == "mgm-card1"
+    assert entry["card"] == "tk-card1"
     assert entry["card_reason"] == ""
 
 
@@ -1082,7 +1082,7 @@ def test_cli_register_accepts_worker_pid_and_pane_flags(
                 "--pane",
                 "term_abc123",
                 "--card",
-                "mgm-cli1",
+                "tk-cli1",
             ]
         )
         == 0
@@ -1090,7 +1090,7 @@ def test_cli_register_accepts_worker_pid_and_pane_flags(
     entry = _ledger_entries(tmp_path)[-1]
     assert entry["worker_pid"] == "4242"
     assert entry["pane"] == "term_abc123"
-    assert entry["card"] == "mgm-cli1"
+    assert entry["card"] == "tk-cli1"
     assert entry["card_reason"] == ""
 
 
@@ -1135,6 +1135,48 @@ def test_cli_register_accepts_card_reason_without_card(tmp_path: Path, monkeypat
     entry = _ledger_entries(tmp_path)[-1]
     assert entry["card"] == ""
     assert entry["card_reason"] == "tracker unavailable"
+
+
+def test_cli_register_rejects_card_and_reason_together(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
+    assert script["main"](
+        [
+            "--ledger",
+            str(tmp_path / "ledger.jsonl"),
+            "register",
+            "--job-id",
+            "job-both-card-values",
+            "--probe-cmd",
+            "printf job-both-card-values",
+            "--card",
+            "tk-card1",
+            "--card-reason",
+            "tracker unavailable",
+        ]
+    ) == 2
+
+
+def test_cli_register_rejects_empty_card_and_reason_together(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_test")
+    assert script["main"](
+        [
+            "--ledger",
+            str(tmp_path / "ledger.jsonl"),
+            "register",
+            "--job-id",
+            "job-empty-card-values",
+            "--probe-cmd",
+            "printf job-empty-card-values",
+            "--card",
+            "",
+            "--card-reason",
+            "",
+        ]
+    ) == 2
 
 
 def test_cli_register_with_verified_orchestration_task_records_task(

@@ -45,36 +45,57 @@ RESULT=$(LEDGER="$LEDGER" python3 - <<'PY'
 import json
 import os
 import subprocess
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 ledger = Path(os.environ["LEDGER"])
-today = datetime.now(ZoneInfo("Asia/Seoul")).date()
+kst = timezone(timedelta(hours=9))
+today_start = datetime.now(kst).replace(hour=0, minute=0, second=0, microsecond=0)
+today_start_ts = today_start.timestamp()
 missing = 0
 
+def reverse_lines(path, block_size=8192):
+    with path.open("rb") as handle:
+        handle.seek(0, 2)
+        position = handle.tell()
+        buffer = b""
+        while position > 0:
+            size = min(block_size, position)
+            position -= size
+            handle.seek(position)
+            buffer = handle.read(size) + buffer
+            parts = buffer.split(b"\n")
+            buffer = parts[0]
+            for part in reversed(parts[1:]):
+                yield part.decode("utf-8", errors="replace")
+        if buffer:
+            yield buffer.decode("utf-8", errors="replace")
+
 try:
-    lines = ledger.read_text(encoding="utf-8").splitlines()
+    rows = reverse_lines(ledger)
+    for line in rows:
+        try:
+            row = json.loads(line)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if not isinstance(row, dict):
+            continue
+        stamp = row.get("ts")
+        try:
+            stamp_value = float(stamp)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if stamp_value < today_start_ts:
+            break
+        if row.get("decision") != "ALLOW" or not row.get("job_id"):
+            continue
+        if not str(row.get("card") or "").strip():
+            missing += 1
 except OSError:
     raise SystemExit(0)
 
-for line in lines:
-    try:
-        row = json.loads(line)
-    except (TypeError, json.JSONDecodeError):
-        continue
-    if not isinstance(row, dict) or row.get("decision") != "ALLOW" or not row.get("job_id"):
-        continue
-    stamp = row.get("ts")
-    try:
-        stamp_date = datetime.fromtimestamp(float(stamp), ZoneInfo("Asia/Seoul")).date()
-    except (TypeError, ValueError, OSError, OverflowError):
-        continue
-    if stamp_date == today and not str(row.get("card") or "").strip():
-        missing += 1
-
 active = 0
-if __import__("shutil").which("bd"):
+if missing and __import__("shutil").which("bd"):
     try:
         result = subprocess.run(
             ["bd", "list", "--status=in_progress", "--json"],

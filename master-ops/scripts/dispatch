@@ -93,6 +93,7 @@ CARD_ARG_SET=0
 NO_CARD_REASON=""
 NO_CARD_ARG_SET=0
 CARD_REASON=""
+CARD_CLAIMED=0
 # Owner approval for a top-tier model, carrying the reason. Empty means unasked.
 TOP_APPROVED=""
 TGLOB=""
@@ -205,16 +206,29 @@ else:
 PY
 }
 
-# Print the first tracker id from bd create output. Beads has emitted both
-# human-readable and JSON-shaped output over time, so accept either without
-# treating the surrounding prose as the id.
+# Parse the created tracker id from bd's structured response. The wrapper must
+# not turn an incidental id-shaped word in an error message into a claimed
+# card; the regex helper below is display-only.
 tracker_card_id() {
+  python3 -c '
+import json
+import sys
+
+try:
+    payload = json.loads(sys.stdin.read())
+except (TypeError, ValueError, json.JSONDecodeError):
+    sys.exit(0)
+if isinstance(payload, dict) and isinstance(payload.get("id"), str):
+    print(payload["id"])
+'
+}
+
+tracker_card_display() {
   python3 -c '
 import re
 import sys
 
-text = sys.stdin.read()
-match = re.search(r"(?<![A-Za-z0-9])[A-Za-z0-9]+-[A-Za-z0-9][A-Za-z0-9._-]*(?![A-Za-z0-9])", text)
+match = re.search(r"(?<![A-Za-z0-9])[A-Za-z0-9]+-[A-Za-z0-9][A-Za-z0-9._-]*(?![A-Za-z0-9])", sys.stdin.read())
 if match:
     print(match.group(0))
 '
@@ -236,7 +250,7 @@ resolve_tracker_card() {
     CARD_REASON=""
     if command -v bd >/dev/null 2>&1 && bd where >/dev/null 2>&1; then
       CARD_TITLE=$(contract_h1_title "$CONTRACT")
-      CREATE_OUT=$(bd create "$CARD_TITLE" -t task -p 2 2>&1)
+      CREATE_OUT=$(bd create "$CARD_TITLE" -t task -p 2 --json 2>&1)
       CREATE_RC=$?
       if [ "$CREATE_RC" = 0 ]; then
         CARD=$(printf '%s' "$CREATE_OUT" | tracker_card_id)
@@ -244,11 +258,13 @@ resolve_tracker_card() {
       if [ -n "$CARD" ]; then
         if ! bd update "$CARD" --claim >/dev/null 2>&1; then
           echo "⚠ tracker card claim failed · card=$CARD" >&2
-          CARD=""
-          CARD_REASON="tracker claim failed"
+          CARD_REASON="claim failed"
+        else
+          CARD_CLAIMED=1
         fi
       elif [ "$CREATE_RC" != 0 ]; then
-        echo "⚠ tracker card creation failed; dispatch has no card" >&2
+        DISPLAY_ID=$(printf '%s' "$CREATE_OUT" | tracker_card_display)
+        echo "⚠ tracker card creation failed${DISPLAY_ID:+ · id=$DISPLAY_ID}; dispatch has no card" >&2
         CARD_REASON="tracker create failed"
       else
         echo "⚠ tracker card id was not returned; dispatch has no card" >&2
@@ -260,6 +276,29 @@ resolve_tracker_card() {
     fi
   fi
   return 0
+}
+
+release_tracker_claim() {
+  [ "$CARD_CLAIMED" = 1 ] || return 0
+  if command -v bd >/dev/null 2>&1 && bd update "$CARD" --status open >/dev/null 2>&1; then
+    CARD_CLAIMED=0
+    return 0
+  fi
+  return 1
+}
+
+fail_after_tracker_claim() {
+  local message="$1" code="${2:-3}"
+  if [ "$CARD_CLAIMED" = 1 ]; then
+    if release_tracker_claim; then
+      echo "✗ $message · tracker claim released · card=$CARD" >&2
+    else
+      echo "✗ $message · tracker claim release failed · card=$CARD" >&2
+    fi
+  else
+    echo "✗ $message" >&2
+  fi
+  exit "$code"
 }
 
 # Reads one normalized key (task_id, terminal_handle, dispatch_id,
@@ -1873,22 +1912,22 @@ echo "⚙ gate ✓ $TIER · $MODEL · est $((EST/1000)).$(( (EST%1000)/100 ))k �
 if [ -n "$CONTRACT" ]; then
   CONTRACT_DIR="${STATE_DIR:-$HOME/.mogui}/dispatch-contracts"
   if ! mkdir -p "$CONTRACT_DIR" 2>/dev/null; then
-    echo "✗ cannot create contract delivery directory: $CONTRACT_DIR" >&2; exit 3
+    fail_after_tracker_claim "cannot create contract delivery directory: $CONTRACT_DIR" 3
   fi
   CONTRACT_DEST="$CONTRACT_DIR/${SHA:0:8}-$(basename "$CONTRACT")"
-  cp "$CONTRACT" "$CONTRACT_DEST" || { echo "✗ contract copy failed" >&2; exit 3; }
+  cp "$CONTRACT" "$CONTRACT_DEST" || fail_after_tracker_claim "contract copy failed" 3
   # A copy that truncated silently is worse than no copy.
-  cmp -s "$CONTRACT" "$CONTRACT_DEST" || { echo "✗ delivered contract differs from source" >&2; exit 3; }
+  cmp -s "$CONTRACT" "$CONTRACT_DEST" || fail_after_tracker_claim "delivered contract differs from source" 3
   READ_TOKEN="ack-${SHA:8:12}"
   if [ -z "${SHA:8:12}" ]; then
-    echo "✗ contract sha too short to derive a read token" >&2; exit 3
+    fail_after_tracker_claim "contract sha too short to derive a read token" 3
   fi
   {
     printf '\n---\n\n## Acknowledgement token\n\n'
     printf 'Quote this token in your report. It exists so the coordinator can tell a worker\n'
     printf 'that read this contract from one that only received a path.\n\n'
     printf '    %s\n' "$READ_TOKEN"
-  } >> "$CONTRACT_DEST" || { echo "✗ cannot append read token" >&2; exit 3; }
+  } >> "$CONTRACT_DEST" || fail_after_tracker_claim "cannot append read token" 3
   SPEC="$SPEC
 
 Read your contract before doing anything. It is at this absolute path and it is the
@@ -1912,7 +1951,7 @@ STANDING_RULE_NAMES=$(echo "$CHK" | jqf "' '.join(d.get('front_matter', {}).get(
 if [ -n "$STANDING_RULE_NAMES" ]; then
   for name in $STANDING_RULE_NAMES; do
     block=$(standing_rule_block "$name") || {
-      echo "✗ standing rule block not found: $name" >&2; exit 3; }
+      fail_after_tracker_claim "standing rule block not found: $name" 3; }
     SPEC="$SPEC
 
 Standing rules ($name):
@@ -1945,8 +1984,7 @@ TASK_RAW=$(orca orchestration task-create "${DISPATCH_FROM_ARGS[@]+"${DISPATCH_F
 TASK=$(printf '%s' "$TASK_RAW" | orca_json_read task_id)
 if [ -z "$TASK" ]; then
   echo "task-create raw response (first 200 chars): ${TASK_RAW:0:200}" >&2
-  echo "✗ task-create failed" >&2
-  exit 3
+  fail_after_tracker_claim "task-create failed" 3
 fi
 
 # 3. terminal (reuse or create in worktree)
@@ -1954,7 +1992,7 @@ KIND="재사용"
 if [ -z "$TERMINAL" ]; then
   KIND="신규"
   if [ "$RUNTIME" = claude ]; then
-    WORKER_SETTINGS=$(write_worker_settings "$TASK" "${WORKTREE#path:}") || exit 3
+    WORKER_SETTINGS=$(write_worker_settings "$TASK" "${WORKTREE#path:}") || fail_after_tracker_claim "worker settings creation failed" 3
     CLAUDE_SETTINGS_FLAG=" --settings $(shell_quote "$WORKER_SETTINGS")"
     echo "write root ✓ claude · guard settings worker-settings/$TASK.json"
   fi
@@ -1963,8 +2001,7 @@ if [ -z "$TERMINAL" ]; then
   TERMINAL=$(printf '%s' "$TERMINAL_RAW" | orca_json_read terminal_handle)
   if [ -z "$TERMINAL" ]; then
     echo "terminal create raw response (first 200 chars): ${TERMINAL_RAW:0:200}" >&2
-    echo "✗ terminal create failed" >&2
-    exit 3
+    fail_after_tracker_claim "terminal create failed" 3
   fi
   orca terminal wait --terminal "$TERMINAL" --for tui-idle --timeout-ms 60000 --json >/dev/null 2>&1
 elif [ "$RUNTIME" = claude ]; then
@@ -2012,7 +2049,7 @@ if [ "$RUNTIME" = codex ]; then
       if codex_hooks_vet_homes; then
         if [ ! -f "$HOOKS_ANSWER_BIN" ] || [ ! -x "$HOOKS_ANSWER_BIN" ]; then
           echo "✗ codex start screen · hooks-review answer tool missing or not executable at $HOOKS_ANSWER_BIN · spec NOT injected" >&2
-          exit 3
+          fail_after_tracker_claim "codex start screen · hooks-review answer tool missing or not executable at $HOOKS_ANSWER_BIN · spec NOT injected" 3
         fi
         HOOKS_ANSWER_OUT=$("$HOOKS_ANSWER_BIN" "$TERMINAL" 2>&1)
         HOOKS_ANSWER_RC=$?
@@ -2020,13 +2057,13 @@ if [ "$RUNTIME" = codex ]; then
         if [ "$HOOKS_ANSWER_RC" != 0 ]; then
           echo "✗ codex start screen · hooks-review answer did not clear the modal · spec NOT injected" >&2
           printf '%s\n' "$HOOKS_ANSWER_OUT" >&2
-          exit 3
+          fail_after_tracker_claim "codex start screen · hooks-review answer did not clear the modal · spec NOT injected" 3
         fi
         attempt=1
         continue
       else
         echo "✗ codex start screen · hooks vet failed, hooks-review modal not answered · spec NOT injected" >&2
-        exit 3
+        fail_after_tracker_claim "codex start screen · hooks vet failed, hooks-review modal not answered · spec NOT injected" 3
       fi
     fi
     if [ "$CODEX_START_RC" = 2 ] && [ "$attempt" -lt 5 ]; then
@@ -2039,7 +2076,7 @@ if [ "$RUNTIME" = codex ]; then
   if [ "$CODEX_START_RC" != 0 ] && [ "$CODEX_START_RC" != 3 ]; then
     echo "✗ codex start screen · $CODEX_START_PROBLEM · spec NOT injected" >&2
     echo "  orca terminal read --terminal $TERMINAL --limit 40" >&2
-    exit 3
+    fail_after_tracker_claim "codex start screen · $CODEX_START_PROBLEM · spec NOT injected" 3
   fi
   case "$CODEX_START_RC" in
     3)
@@ -2055,8 +2092,7 @@ DISP_RAW=$(orca orchestration dispatch "${DISPATCH_FROM_ARGS[@]+"${DISPATCH_FROM
 DISP=$(printf '%s' "$DISP_RAW" | orca_json_read dispatch_id)
 if [ -z "$DISP" ]; then
   echo "dispatch raw response (first 200 chars): ${DISP_RAW:0:200}" >&2
-  echo "✗ dispatch failed" >&2
-  exit 3
+  fail_after_tracker_claim "dispatch failed" 3
 fi
 
 # 5. resolve the model probe target honestly before registering.
@@ -2127,12 +2163,69 @@ sys.exit(result.returncode)
 EOF
 }
 
+record_claim_failure_reason() {
+  [ "$CARD_REASON" = "claim failed" ] || return 0
+  ledger_locked_command python3 - "$LEDGER" "$DISP" "$CARD_REASON" <<'EOF'
+import json
+import os
+import sys
+import tempfile
+
+ledger_path, dispatch_id, reason = sys.argv[1:]
+with open(ledger_path, encoding="utf-8") as stream:
+    lines = stream.readlines()
+
+entries = []
+updated = False
+for line in lines:
+    try:
+        entry = json.loads(line)
+    except json.JSONDecodeError:
+        entries.append(line)
+        continue
+    if (
+        isinstance(entry, dict)
+        and entry.get("job_id") == dispatch_id
+        and entry.get("decision") == "ALLOW"
+    ):
+        entry["card_reason"] = reason
+        updated = True
+    entries.append(entry)
+
+if not updated:
+    print("registered dispatch row not found for claim-failure reason", file=sys.stderr)
+    sys.exit(1)
+
+parent = os.path.dirname(os.path.abspath(ledger_path)) or "."
+with tempfile.NamedTemporaryFile(
+    "w", encoding="utf-8", dir=parent, prefix=".dispatch-ledger-", delete=False
+) as stream:
+    replacement = stream.name
+    for entry in entries:
+        if isinstance(entry, dict):
+            stream.write(json.dumps(entry, sort_keys=True, separators=(",", ":")))
+            stream.write("\n")
+        else:
+            stream.write(entry)
+os.replace(replacement, ledger_path)
+EOF
+}
+
 # 5b. register (job probe = ledger-vs-dispatch-show; model probe only when it can
 # be scoped to THIS worker — an unscoped glob confirms a model from whatever
 # session happens to be newest, which is a false pass, not a measurement)
 REGISTER_CARD_ARGS=()
-[ -n "$CARD" ] && REGISTER_CARD_ARGS+=(--card "$CARD")
-[ -n "$CARD_REASON" ] && REGISTER_CARD_ARGS+=(--card-reason "$CARD_REASON")
+if [ "$CARD_REASON" = "claim failed" ] && [ -n "$CARD" ]; then
+  REGISTER_CARD_ARGS+=(--card "$CARD")
+elif [ -n "$CARD_REASON" ]; then
+  # The gate's CLI deliberately accepts exactly one populated card field. A
+  # no-card decision registers the explicit reason. A claim failure registers
+  # the card first, then record_claim_failure_reason adds the second fact to
+  # the row under the ledger lock.
+  REGISTER_CARD_ARGS+=(--card-reason "$CARD_REASON")
+elif [ -n "$CARD" ]; then
+  REGISTER_CARD_ARGS+=(--card "$CARD")
+fi
 REG=$(ledger_locked_command "$GATE" --ledger "$LEDGER" register --job-id "$DISP" --contract-sha "$SHA" \
       --runtime "$RUNTIME" --tier-policy "$POLICY" \
       --probe-cmd "orca orchestration dispatch-show --task $TASK --json 2>/dev/null | grep -o $DISP | head -1" \
@@ -2140,8 +2233,10 @@ REG=$(ledger_locked_command "$GATE" --ledger "$LEDGER" register --job-id "$DISP"
       "${MODEL_PROBE_ARGS[@]+"${MODEL_PROBE_ARGS[@]}"}" \
       "${REGISTER_CARD_ARGS[@]+"${REGISTER_CARD_ARGS[@]}"}" 2>/dev/null)
 if [ "$(echo "$REG" | jqf "d['allow']")" != "True" ]; then
-  echo "✗ register $(echo "$REG" | jqf "d['reason']") · dispatch=$DISP (worker IS running — resolve register manually)"
-  exit 4
+  fail_after_tracker_claim "register $(echo "$REG" | jqf "d['reason']") · dispatch=$DISP (worker IS running — resolve register manually)" 4
+fi
+if ! record_claim_failure_reason; then
+  fail_after_tracker_claim "claim-failure reason could not be recorded · dispatch=$DISP" 4
 fi
 record_host_diversity_audit
 WARN=$(echo "$REG" | jqf "','.join(d.get('warnings',[]))")
@@ -2234,16 +2329,16 @@ case "$DELIVERY_CLASS" in
       echo "✗ delivery FAILED · hook/trust gate is still present; the spec was NOT consumed"
       echo "  Dismiss or pre-trust the gate before dispatching another task."
     fi
-    exit 5;;
+    fail_after_tracker_claim "delivery FAILED · hook/trust gate is still present; the spec was NOT consumed" 5;;
   limit)
     echo "✗ delivery FAILED · provider limit is present; the spec was NOT consumed"
     echo "  Wait for the provider limit to clear or use an available runtime."
-    exit 5;;
+    fail_after_tracker_claim "delivery FAILED · provider limit is present; the spec was NOT consumed" 5;;
   approval)
     echo "✗ delivery BLOCKED · the pane is waiting on an approval prompt; the worker cannot continue until it is cleared"
     echo "  pane: $TERMINAL"
     echo "  Classify and clear it in scope (charter 04): $SCRIPTS_DIR/worker-pane-sweep, then orca terminal read --terminal $TERMINAL --limit 40"
-    exit 5;;
+    fail_after_tracker_claim "delivery BLOCKED · the pane is waiting on an approval prompt; the worker cannot continue until it is cleared" 5;;
   done)
     echo "✓ delivery ✓ worker completed inside the window (dispatch completed)"
     DELIVERY_SUCCEEDED=1;;
@@ -2276,27 +2371,22 @@ if [ "${DELIVERY_SUCCEEDED:-0}" = 1 ] && [ "$RUNTIME" = codex ]; then
     case "$CODEX_EFFORT_RECHECK_RC" in
       0)
         record_codex_effort measured || {
-          echo "✗ codex effort outcome could not be recorded" >&2
-          exit 3
+          fail_after_tracker_claim "codex effort outcome could not be recorded" 3
         }
         echo "effort ✓ codex · measured";;
       1|2)
         record_codex_effort unverified || {
-          echo "✗ codex effort outcome could not be recorded" >&2
-          exit 3
+          fail_after_tracker_claim "codex effort outcome could not be recorded" 3
         }
         echo "⚠ codex effort unverified · $CODEX_EFFORT_RECHECK_PROBLEM" >&2;;
       3)
-        echo "✗ codex effort re-check · $CODEX_EFFORT_RECHECK_PROBLEM" >&2
-        exit 3;;
+        fail_after_tracker_claim "codex effort re-check · $CODEX_EFFORT_RECHECK_PROBLEM" 3;;
       *)
-        echo "✗ codex effort re-check · $CODEX_EFFORT_RECHECK_PROBLEM" >&2
-        exit 3;;
+        fail_after_tracker_claim "codex effort re-check · $CODEX_EFFORT_RECHECK_PROBLEM" 3;;
     esac
   else
     record_codex_effort measured || {
-      echo "✗ codex effort outcome could not be recorded" >&2
-      exit 3
+      fail_after_tracker_claim "codex effort outcome could not be recorded" 3
     }
     echo "effort ✓ codex · measured"
   fi

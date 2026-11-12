@@ -1,21 +1,32 @@
 # Tracker card gap hook (`scripts/hooks/bd-gap-warn.sh`)
 
-Add this block to workspace `.claude/settings.json` under `hooks`, alongside
-the `orch-inbox-warn.sh` UserPromptSubmit block:
+Append the new hook to the existing `UserPromptSubmit` array in the workspace
+`.claude/settings.json`. Keep one merged settings object and one array key:
 
 ```json
 {
-  "UserPromptSubmit": [
-    {
-      "hooks": [
-        {
-          "type": "command",
-          "command": "bash \"{{OPS_REPO}}/scripts/hooks/bd-gap-warn.sh\"",
-          "statusMessage": "Checking dispatch tracker cards"
-        }
-      ]
-    }
-  ]
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"{{OPS_REPO}}/scripts/hooks/orch-inbox-warn.sh\"",
+            "statusMessage": "Checking orchestration inbox"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"{{OPS_REPO}}/scripts/hooks/bd-gap-warn.sh\"",
+            "statusMessage": "Checking dispatch tracker cards"
+          }
+        ]
+      }
+    ]
+  }
 }
 ```
 

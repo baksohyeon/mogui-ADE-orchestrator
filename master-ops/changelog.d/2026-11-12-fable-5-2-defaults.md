@@ -6,7 +6,7 @@ Claude master onboarding and succession now recommend and default to `claude-fab
 
 ## Changes
 
-- `model-tier-policy.json` lists `claude-fable-5-2` in `tiers.top` and retains the prior Fable identifiers for compatibility.
+- `model-tier-policy.json` adds `claude-fable-5-2` to `tiers.top` and re-adds `claude-fable-5` alongside `claude-fable-5-1` for compatibility.
 - Onboarding recommends `claude-fable-5-2` for the Claude master candidate.
 - `master-succeed` and `spawn_successor` agree on `claude-fable-5-2`, while an explicit model remains authoritative.
 

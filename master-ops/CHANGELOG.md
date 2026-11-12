@@ -46,7 +46,92 @@ reporting the last released tag, so that value names the release it came from an
 not the exact body it received. When the difference matters, record the commit the
 installation was taken from alongside the tag.
 
-## Unreleased
+## v0.5.326
+
+Release v0.5.326 (2026-11-12): master-ops/TEMPLATE-VERSION and master-ops/MANIFEST.json move to v0.5.326 alongside the changelog fold, and the root CHANGELOG.md rolls its Unreleased section into 0.5.326.
+
+# fix: codex workers can commit in a fresh worktree
+
+## Summary
+Codex workers launched in fresh linked worktrees with the `workspace-write` sandbox were blocked on the first `git add` with "index.lock: Operation not permitted". The index lives outside the sandbox's write root (`.git/worktrees/<name>/`). Running `git status --porcelain` once before the worker launches "unlocks" the index, allowing all subsequent sandboxed git operations in that session to succeed.
+
+## Root Cause
+Git worktree indices reside in the shared `.git/worktrees/<name>/` directory, which falls outside the `workspace-write` sandbox's permitted write paths (worktree root, `/tmp`, `$TMPDIR`). The fix is to initialize git's index state before sandbox isolation by running a git read operation (status) from the wrapper, outside the sandbox.
+
+## Changes
+- `master-ops/scripts/dispatch`: Added `git status --porcelain` call for codex runtime only, before worker launch (section 3c)
+- `master-ops/scripts/test-dispatch-codex-git-index.sh`: Test verifying the fix does not break the wrapper
+
+## Testing
+Verified that `git status --porcelain` succeeds on a fresh linked worktree; the test does not exercise a sandboxed `git add`.
+
+## References
+- Card: mgm-up2w
+- The private postmortem records the observed sandbox boundary and the pre-launch status check used to prepare the index.
+
+# chore: Fable 5.2 defaults
+
+## Summary
+
+Claude master onboarding and succession now recommend and default to `claude-fable-5-2`.
+
+## Changes
+
+- `model-tier-policy.json` adds `claude-fable-5-2` to `tiers.top` and re-adds `claude-fable-5` alongside `claude-fable-5-1` for compatibility.
+- Onboarding recommends `claude-fable-5-2` for the Claude master candidate.
+- `master-succeed` and `spawn_successor` agree on `claude-fable-5-2`, while an explicit model remains authoritative.
+
+## References
+
+- Issue: #252
+
+# refactor: route remaining Orca JSON callers through the shared reader
+
+## Summary
+
+The spawn-test and dispatch-smoke harnesses now read both supported Orca JSON
+shapes through `scripts/lib/orca_json.py`, and worker-wait has an end-to-end
+regression fixture for a target dispatch on the second worker-list page.
+
+## Changes
+
+- `scripts/spawn-test` uses `run_id()` for coordinator Run detection and tests
+  both response shapes.
+- `scripts/dispatch-smoke` uses `dispatch_status()` for both dispatch-show
+  reads and tests both response shapes.
+- `scripts/test-worker-wait.sh` covers old and new two-page worker-list
+  responses and proves a page-one-only mutant drops the page-two dispatch.
+
+## References
+
+- Issue: #218
+
+# feat: resolve succession spawn from the recorded seat path
+
+## Summary
+
+Onboarding records the stable master seat path in the instance runtime config, and `master-succeed spawn` resolves the current live Orca workspace selector from that path when no selector is supplied.
+
+## Changes
+
+- `master-succeed spawn` refuses when the recorded path has zero or multiple live workspace matches and keeps explicit selector overrides available.
+- Onboarding step 3.5 and the public lifecycle guide document the path record and runtime resolution.
+- Tests cover one match, zero matches, multiple matches, explicit override, and the missing-record fallback.
+
+## References
+
+- Issue: #216
+
+# fix: worker-reap retires the matching merged local branch
+
+Before a clean merged worktree is removed, `worker-reap` now captures the local
+branch tip and repository and checks the pull request state through `gh`. After
+removal, it deletes the local branch only when the pull request is `MERGED` and
+`headRefOid` equals that tip, which covers squash merges while keeping branches
+for missing, open, or unmeasurable pull requests and for changed tips.
+
+Dry runs report the planned branch deletion, and every refusal records a reason
+alongside the existing reap actions.
 
 ## v0.5.319
 

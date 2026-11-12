@@ -20,13 +20,17 @@ you build on it.
 
 ## [Unreleased]
 
+## [0.5.326] - 2026-11-12
+
 ### Changed
 
 - Claude master onboarding and succession defaults now use Fable 5.2, while the tier policy contains the compatible Fable identifiers (#252).
+- `master-succeed spawn` resolves the live Orca workspace selector from the recorded master seat path when no explicit selector is supplied and keeps explicit overrides available (#259).
 
 ### Fixed
 
 - Dispatch ledger policy paths use `~` for home-relative paths, and reports count legacy absolute rows with new home-relative rows under one policy.
+- `worker-reap` deletes a matching merged local branch after its clean worktree is removed, while preserving branches when the pull request is open, missing, or unmeasurable (#257).
 
 ## [0.5.319] - 2026-11-12
 
@@ -475,7 +479,8 @@ tests pass, 1 skipped.
 There is no CI at this tag. Tests and the redaction scanners run locally before
 a push, so a passing count in a pull request is the author's word.
 
-[Unreleased]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.319...HEAD
+[Unreleased]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.326...HEAD
+[0.5.326]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.319...v0.5.326
 [0.5.319]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.312...v0.5.319
 [0.5.312]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.304...v0.5.312
 [0.5.304]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.301...v0.5.304

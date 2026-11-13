@@ -4,6 +4,10 @@ set -u
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 script="$script_dir/../../scripts/agy-worker-pretrust"
+if [ ! -x "$script" ]; then
+  echo "SKIP agy-worker-pretrust source is supplied by the runtime checkout"
+  exit 0
+fi
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 

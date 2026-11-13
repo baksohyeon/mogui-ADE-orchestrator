@@ -3,6 +3,11 @@ import os
 import subprocess
 from pathlib import Path
 
+from windows_exec_surface import skip_windows_exec_surface
+
+
+pytestmark = skip_windows_exec_surface
+
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "agy-worker-pretrust"
 

@@ -2305,7 +2305,13 @@ elif DERIVED_GLOB=$(transcript_glob_for "$RUNTIME" "$WORKTREE"); then
   case "$RUNTIME" in
     codex)
       CODEX_WORKTREE_PATH=$(terminal_worktree_path "$TERMINAL")
-      if new_rollout_since "$CODEX_ROLLOUT_BEFORE" "$TGLOB"; then
+      if [ -z "$CODEX_WORKTREE_PATH" ] && [[ "$WORKTREE" == path:* ]]; then
+        CODEX_WORKTREE_PATH="${WORKTREE#path:}"
+      fi
+      if [ -z "$CODEX_WORKTREE_PATH" ]; then
+        PROBE_STATE="unavailable"
+        CODEX_ROLLOUT_REASON="worktree path unavailable; cannot scope rollout"
+      elif new_rollout_since "$CODEX_ROLLOUT_BEFORE" "$TGLOB"; then
         PROBE_STATE="codex-new-rollout"
       else
         PROBE_STATE="unavailable"
@@ -2493,7 +2499,10 @@ if not session_id and runtime == "agy":
         if path
     }
     brain_root = Path.home() / ".gemini" / "antigravity-cli" / "brain"
-    contract_name = Path(contract).name if contract else ""
+    contract_paths = (
+        {str(Path(contract)), str(Path(contract).resolve())} if contract else set()
+    )
+    placement_markers = [worktree_path] if worktree_path else []
     candidates = []
     try:
         brain_dirs = sorted(brain_root.iterdir(), key=lambda item: item.name)
@@ -2507,7 +2516,9 @@ if not session_id and runtime == "agy":
             text = transcript.read_text(encoding="utf-8")
         except OSError:
             continue
-        if contract_name and contract_name in text:
+        contract_matches = any(path in text for path in contract_paths)
+        placement_matches = any(marker in text for marker in placement_markers)
+        if contract_matches and (placement_matches or not placement_markers):
             candidates.append(brain_dir.name)
     if len(candidates) == 1:
         session_id = candidates[0]

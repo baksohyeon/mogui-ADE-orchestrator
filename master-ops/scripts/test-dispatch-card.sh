@@ -56,7 +56,7 @@ make_harness() {
         printf 'CHECK_ONLY=0 LEDGER="%s" LEDGER_LOCK="%s" DISP=disp-placement TERMINAL=term-placement WORKTREE=folder:folder-placement RUNTIME=claude\nrecord_dispatch_placement\ncat "$LEDGER"\n' "$T/placement-ledger.jsonl" "$T/placement-ledger.lock";;
       agy-placement)
         extract_function record_dispatch_placement
-        printf 'mkdir -p "%s/home/.gemini/antigravity-cli/brain/agy-conversation/.system_generated/logs"\nHOME="%s/home"; export HOME\nprintf '"'"'contract.md\\n'"'"' > "%s/home/.gemini/antigravity-cli/brain/agy-conversation/.system_generated/logs/transcript_full.jsonl"\nAGY_BRAIN_BEFORE="" CHECK_ONLY=0 LEDGER="%s" LEDGER_LOCK="%s" DISP=disp-agy TERMINAL=term-placement WORKTREE=folder:folder-placement RUNTIME=agy\nrecord_dispatch_placement\ncat "$LEDGER"\n' "$T" "$T" "$T" "$T/agy-ledger.jsonl" "$T/agy-ledger.lock";;
+        printf 'mkdir -p "%s/home/.gemini/antigravity-cli/brain/agy-conversation/.system_generated/logs"\nHOME="%s/home"; export HOME\nprintf '"'"'%%s\\n'"'"' "$CONTRACT" > "%s/home/.gemini/antigravity-cli/brain/agy-conversation/.system_generated/logs/transcript_full.jsonl"\nAGY_BRAIN_BEFORE="" CHECK_ONLY=0 LEDGER="%s" LEDGER_LOCK="%s" DISP=disp-agy TERMINAL=term-placement WORKTREE=folder:folder-placement RUNTIME=agy\nrecord_dispatch_placement\ncat "$LEDGER"\n' "$T" "$T" "$T" "$T/agy-ledger.jsonl" "$T/agy-ledger.lock";;
       codex-rollout)
         extract_function snapshot_codex_rollouts
         extract_function codex_rollout_session_for_worktree
@@ -289,16 +289,17 @@ else
 fi
 
 event_ledger="$T/state/dispatch-ledger.jsonl"
+event_status=0
 event_out=$(MOGUI_STATE_DIR="$T/state" DISPATCH_STANDING_RULES="$S/../rules/standing-rules.md" \
   PATH="$T/bin:$PATH" bash "$T/harness/dispatch-production" \
   --ledger-event resume_attempt --dispatch-id disp-event --worktree folder:event \
   --worktree-path "$T/event-worktree" --session-id agy-event \
-  --search-query agy-event --result resumed 2>&1)
-if [ -s "$event_ledger" ] && grep -q '"kind":"resume_attempt"' "$event_ledger" \
+  --search-query agy-event --result resumed 2>&1) || event_status=$?
+if [ "$event_status" -eq 0 ] && [ -s "$event_ledger" ] && grep -q '"kind":"resume_attempt"' "$event_ledger" \
     && grep -q '"resume_result":"resumed"' "$event_ledger"; then
   ok "--ledger-event writes resume_attempt to the configured temporary ledger"
 else
-  fail "ledger-event case: rc=$? out=$event_out ledger=$(cat "$event_ledger" 2>/dev/null || true)"
+  fail "ledger-event case: rc=$event_status out=$event_out ledger=$(cat "$event_ledger" 2>/dev/null || true)"
 fi
 set +e
 MOGUI_STATE_DIR="$T/state" DISPATCH_STANDING_RULES="$S/../rules/standing-rules.md" \

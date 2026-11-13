@@ -1163,15 +1163,24 @@ class WorkerReaperTests(unittest.TestCase):
             _git(repo, "init", "--initial-branch", "main")
             _git(repo, "config", "user.email", "test@example.invalid")
             _git(repo, "config", "user.name", "Test User")
-            (repo / "old.txt").write_text("base\n", encoding="utf-8")
+            (repo / "old.txt").write_text(
+                "line one\nline two\nline three\nline four\nline five\n",
+                encoding="utf-8",
+            )
             _git(repo, "add", "old.txt")
             _git(repo, "commit", "-m", "base")
             _git(repo, "checkout", "-b", "feature-x")
             _git(repo, "mv", "old.txt", "new.txt")
-            (repo / "new.txt").write_text("feature\n", encoding="utf-8")
+            (repo / "new.txt").write_text(
+                "line one\nline two\nline three\nline four\nfeature\n",
+                encoding="utf-8",
+            )
             _git(repo, "commit", "-am", "feature rename")
             _git(repo, "checkout", "main")
-            (repo / "new.txt").write_text("feature\n", encoding="utf-8")
+            (repo / "new.txt").write_text(
+                "line one\nline two\nline three\nline four\nfeature\n",
+                encoding="utf-8",
+            )
             _git(repo, "add", "new.txt")
             _git(repo, "commit", "-m", "squash new content")
             _git(repo, "update-ref", "refs/remotes/origin/main", "main")
@@ -1679,6 +1688,15 @@ class BranchDeletionTests(unittest.TestCase):
             # Mutant proof: closing before the landing check loses the session
             # needed to resume this unfinished dispatch.
 
+    def test_selector_without_worktree_path_is_non_destructive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _SelectorEnvironment(tmp, no_worktree_path=True)
+            record = WorkerReaper(orca_runner=env).reap(task_id="t1", execute=True)
+
+            self.assertIn("worktree_path_unmeasured", record.actions_taken)
+            self.assertEqual(env.closed_commands, [])
+            self.assertEqual(env.removed_commands, [])
+
     def test_selector_refuses_nonzero_sweep_with_parsed_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             env = _SelectorEnvironment(tmp, sweep_fails=True)
@@ -1699,6 +1717,14 @@ class BranchDeletionTests(unittest.TestCase):
             )
             self.assertEqual(len(env.closed_commands), 1)
             self.assertEqual(len(env.removed_commands), 1)
+
+    def test_selector_does_not_claim_terminals_closed_when_no_pane_was_selected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _SelectorEnvironment(tmp, no_panes=True, remove_fails=True)
+            record = WorkerReaper(orca_runner=env).reap(task_id="t1", execute=True)
+
+            self.assertIn("cleanup_partial:terminals_not_closed:worktree_remove_failed", record.actions_taken)
+            self.assertNotIn("cleanup_partial:terminals_closed", record.actions_taken)
 
     def test_selector_refuses_unmeasured_pane_handle(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1734,6 +1760,8 @@ class _SelectorEnvironment:
         reused_by: str | None = None,
         sweep_fails: bool = False,
         remove_fails: bool = False,
+        no_panes: bool = False,
+        no_worktree_path: bool = False,
     ) -> None:
         self.worktree_path = worktree_path
         self.content_equal = content_equal
@@ -1743,30 +1771,33 @@ class _SelectorEnvironment:
         self.reused_by = reused_by
         self.sweep_fails = sweep_fails
         self.remove_fails = remove_fails
+        self.no_panes = no_panes
+        self.no_worktree_path = no_worktree_path
         self.closed_commands: list[list[str]] = []
         self.removed_commands: list[list[str]] = []
 
     def __call__(self, cmd: list[str]) -> tuple[int, str, str]:
         if "dispatch-show" in cmd:
-            return 0, json.dumps(
-                {
-                    "dispatch_id": "d1",
-                    "task_id": "t1",
-                    "terminal_id": "term-target",
-                    "status": "COMPLETED",
-                    "worktree_path": self.worktree_path,
-                    "worktree_selector": "id:repo:target",
-                }
-            ), ""
+            dispatch = {
+                "dispatch_id": "d1",
+                "task_id": "t1",
+                "terminal_id": "term-target",
+                "status": "COMPLETED",
+                "worktree_path": self.worktree_path,
+                "worktree_selector": "id:repo:target",
+            }
+            if self.no_worktree_path:
+                dispatch.pop("worktree_path")
+            return 0, json.dumps(dispatch), ""
         if cmd[:4] == ["orca", "terminal", "list", "--json"]:
             target = {
-                    "worktreeId": "repo:target",
-                    "worktreePath": self.worktree_path,
-                    "title": "same title",
-                }
+                "worktreeId": "repo:target",
+                "worktreePath": self.worktree_path,
+                "title": "same title",
+            }
             if not self.missing_handle:
                 target["handle"] = "term-target"
-            terminals = [target]
+            terminals = [] if self.no_panes else [target]
             if self.include_title_decoy:
                 terminals.append(
                     {

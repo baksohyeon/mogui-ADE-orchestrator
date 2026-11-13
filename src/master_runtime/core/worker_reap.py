@@ -300,8 +300,14 @@ class WorkerReaper:
         # A settled dispatch that has not landed must retain its resume pane.
         if dispatch_state.worktree_selector:
             terminal_action, terminal_measurements = self._plan_terminal_action(
-                dispatch_state, execute if not dispatch_state.worktree_path else False
+                dispatch_state, False
             )
+            if not dispatch_state.worktree_path:
+                terminal_action = (
+                    f"terminal_left:{dispatch_state.worktree_selector}:"
+                    "worktree_path_unmeasured"
+                )
+                terminal_measurements["terminal_reclaim_allowed"] = False
             measurements.update(terminal_measurements)
             terminal_reclaim_allowed = bool(
                 terminal_measurements.get("terminal_reclaim_allowed")
@@ -358,13 +364,16 @@ class WorkerReaper:
                             f"worktree_left:{worktree_path}:pane_not_idle"
                         )
                     elif execute:
+                        terminals_closed = False
                         if terminal_action and terminal_action.startswith("would_close_worktree:"):
                             self._close_worktree_terminals(dispatch_state.worktree_selector or "")
+                            terminals_closed = True
                             actions.append(
                                 f"terminal_closed_by_worktree:{dispatch_state.worktree_selector}"
                             )
                         elif terminal_action and terminal_action.startswith("would_close_terminal:"):
                             self._close_terminal(dispatch_state.terminal_id)
+                            terminals_closed = True
                             actions.append(f"terminal_closed:{dispatch_state.terminal_id}")
                         if dispatch_state.worktree_selector:
                             try:
@@ -373,7 +382,9 @@ class WorkerReaper:
                                 )
                             except ReapError as error:
                                 actions.append(
-                                    f"cleanup_partial:terminals_closed:worktree_remove_failed:{error}"
+                                    "cleanup_partial:"
+                                    f"{'terminals_closed' if terminals_closed else 'terminals_not_closed'}:"
+                                    f"worktree_remove_failed:{error}"
                                 )
                                 actions.append(
                                     f"worktree_remove_failed:{dispatch_state.worktree_selector}:{error}"

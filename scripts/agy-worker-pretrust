@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  printf 'Usage: %s <worktree-path>\n' "${0##*/}" >&2
+}
+
+if [[ $# -ne 1 ]]; then
+  usage
+  exit 2
+fi
+
+worktree_path=$1
+if [[ "$worktree_path" != /* ]]; then
+  printf 'ERROR worktree path must be absolute: %s\n' "$worktree_path" >&2
+  usage
+  exit 2
+fi
+if [[ "$worktree_path" == *$'\n'* || "$worktree_path" == *$'\r'* ]]; then
+  printf 'ERROR worktree path must not contain a line break\n' >&2
+  exit 2
+fi
+if [[ "$worktree_path" == */ ]]; then
+  worktree_path=${worktree_path%/}
+fi
+if [[ -z "$worktree_path" || "$worktree_path" =~ ^/+$ ]]; then
+  printf 'ERROR worktree path must not be the filesystem root\n' >&2
+  exit 2
+fi
+case "$worktree_path" in
+  */.|*/..|*/./*|*/../*)
+    printf 'ERROR worktree path must not contain . or .. components\n' >&2
+    exit 2
+    ;;
+  *[\*\?\[\]]*)
+    printf 'ERROR worktree path must not contain glob characters\n' >&2
+    exit 2
+    ;;
+esac
+if [[ ! -d "$worktree_path" ]]; then
+  printf 'ERROR worktree path must be an existing directory: %s\n' "$worktree_path" >&2
+  exit 2
+fi
+home_path=${HOME:-}
+if [[ "$home_path" == */ ]]; then
+  home_path=${home_path%/}
+fi
+if [[ -n "$home_path" && "$worktree_path" == "$home_path" ]]; then
+  printf 'ERROR worktree path must not be the home directory\n' >&2
+  exit 2
+fi
+
+config_home=${AGY_CONFIG_HOME:-${HOME:+$HOME/.gemini}}
+if [[ -n "${AGY_SETTINGS_PATH:-}" ]]; then
+  settings_path=$AGY_SETTINGS_PATH
+elif [[ -n "$config_home" ]]; then
+  settings_path="$config_home/antigravity-cli/settings.json"
+else
+  printf 'ERROR agy settings path is unknown: set AGY_SETTINGS_PATH or AGY_CONFIG_HOME\n' >&2
+  exit 2
+fi
+
+status=$(
+  python3 - "$settings_path" "$worktree_path" <<'PY'
+import fcntl
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+
+settings_path = Path(sys.argv[1])
+worktree_path = sys.argv[2]
+target_path = settings_path.resolve()
+
+
+def abort(message: str) -> None:
+    print(f"ERROR {settings_path}: {message}", file=sys.stderr)
+    raise SystemExit(2)
+
+
+def reject_constant(token: str) -> None:
+    abort(f"cannot parse JSON: invalid constant {token!r}")
+
+
+# The settings file is shared by concurrent dispatches. Lock the complete
+# read, modify, and replace sequence so one worktree cannot overwrite another.
+target_path.parent.mkdir(parents=True, exist_ok=True)
+lock_path = target_path.with_name(f".{target_path.name}.lock")
+with lock_path.open("a+", encoding="utf-8") as lock_file:
+    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+    if target_path.exists():
+        try:
+            raw = target_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as error:
+            abort(f"cannot parse JSON: {error}")
+        try:
+            document = json.loads(raw, parse_constant=reject_constant)
+        except json.JSONDecodeError as error:
+            abort(f"cannot parse JSON: {error}")
+        if not isinstance(document, dict):
+            abort("top-level value is not an object")
+    else:
+        raw = ""
+        document = {}
+
+    if "trustedWorkspaces" not in document:
+        trusted_workspaces = []
+    else:
+        trusted_workspaces = document["trustedWorkspaces"]
+        if not isinstance(trusted_workspaces, list) or not all(
+            isinstance(item, str) for item in trusted_workspaces
+        ):
+            abort("trustedWorkspaces must be an array of strings")
+
+    if worktree_path in trusted_workspaces:
+        print("already")
+        raise SystemExit(0)
+
+    document["trustedWorkspaces"] = [*trusted_workspaces, worktree_path]
+    rendered = json.dumps(document, indent=2, ensure_ascii=False)
+    if raw.endswith("\n") or not raw:
+        rendered += "\n"
+
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{target_path.name}.", suffix=".tmp", dir=str(target_path.parent)
+    )
+    tmp_path = Path(tmp_name)
+    fd_open = fd
+    try:
+        with os.fdopen(fd_open, "w", encoding="utf-8") as tmp_file:
+            fd_open = -1
+            tmp_file.write(rendered)
+            tmp_file.flush()
+            os.fsync(tmp_file.fileno())
+        if target_path.exists():
+            os.chmod(tmp_path, target_path.stat().st_mode)
+        else:
+            os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, target_path)
+        tmp_path = None
+        print("added")
+    finally:
+        if fd_open != -1:
+            os.close(fd_open)
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink()
+            except FileNotFoundError:
+                pass
+PY
+)
+
+case "$status" in
+  already)
+    printf '%s: already trusted\n' "$settings_path"
+    printf 'Summary: 0 added, 0 updated, 1 already trusted\n';;
+  added)
+    printf '%s: trusted (added)\n' "$settings_path"
+    printf 'Summary: 1 added, 0 updated, 0 already trusted\n';;
+  *)
+    printf 'ERROR unexpected pre-trust status: %s\n' "$status" >&2
+    exit 2;;
+esac

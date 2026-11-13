@@ -1207,9 +1207,11 @@ EOF
   printf '%s\n' "$file"
 }
 
-PRETRUST_BIN={{RUNTIME_ROOT}}/scripts/codex-worker-pretrust
-CURSOR_PRETRUST_BIN={{RUNTIME_ROOT}}/scripts/cursor-worker-pretrust
-CLAUDE_PRETRUST_BIN={{RUNTIME_ROOT}}/scripts/claude-worker-pretrust
+RUNTIME_SCRIPTS={{RUNTIME_ROOT}}/scripts
+PRETRUST_BIN="$RUNTIME_SCRIPTS/codex-worker-pretrust"
+CURSOR_PRETRUST_BIN="$RUNTIME_SCRIPTS/cursor-worker-pretrust"
+CLAUDE_PRETRUST_BIN="$RUNTIME_SCRIPTS/claude-worker-pretrust"
+AGY_PRETRUST_BIN="$RUNTIME_SCRIPTS/agy-worker-pretrust"
 
 # The registry prescribes pre-trust for codex instead of a launch flag. RUN it
 # here rather than telling the operator to. A manual step in front of a dispatch
@@ -1321,6 +1323,41 @@ ensure_claude_pretrust() {
       printf '%s\n' "$out" >&2; return 1;;
     *)
       echo "pre-trust ✓ claude · $summary";;
+  esac
+}
+
+# Antigravity's --dangerously-skip-permissions flag does not cover its first
+# visit workspace-trust prompt. A measured launch on 2026-11-13 showed the
+# prompt before the CLI reached its input screen; agy stores the accepted
+# workspace in ~/.gemini/antigravity-cli/settings.json under trustedWorkspaces.
+ensure_agy_pretrust() {
+  [ "$1" = "agy" ] || return 0
+  local wt_path="${2#path:}" out summary status
+  if [ -z "$wt_path" ] || [ "${wt_path#/}" = "$wt_path" ]; then
+    echo "✗ agy needs an absolute worktree path to pre-trust; got '${2:-<none>}'" >&2
+    echo "  agy's --dangerously-skip-permissions flag does not clear the folder-trust prompt." >&2
+    echo "  Dispatch with --worktree path:<absolute-path>, or choose a runtime whose approval" >&2
+    echo "  posture is measured to cover it." >&2
+    return 1
+  fi
+  if [ ! -x "$AGY_PRETRUST_BIN" ]; then
+    echo "✗ agy pre-trust script not executable: $AGY_PRETRUST_BIN" >&2
+    return 1
+  fi
+  out=$("$AGY_PRETRUST_BIN" "$wt_path" 2>&1) || {
+    status=$?
+    echo "✗ agy pre-trust failed (exit $status)" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  }
+  summary=$(printf '%s\n' "$out" | grep -m1 '^Summary:' || true)
+  case "$summary" in
+    "")
+      echo "✗ agy pre-trust produced no Summary line; unmeasured, treating as not trusted" >&2
+      printf '%s\n' "$out" >&2
+      return 1;;
+    *)
+      echo "pre-trust ✓ agy · $summary";;
   esac
 }
 
@@ -1869,6 +1906,7 @@ else
   ensure_codex_pretrust "$RUNTIME" "$WORKTREE" || exit 2
   ensure_cursor_pretrust "$RUNTIME" "$WORKTREE" || exit 2
   ensure_claude_pretrust "$RUNTIME" "$WORKTREE" || exit 2
+  ensure_agy_pretrust "$RUNTIME" "$WORKTREE" || exit 2
 fi
 
 CHK=$("$GATE" "${GATE_ARGS[@]}" 2>/dev/null)

@@ -931,7 +931,9 @@ PY
   echo "FAIL: expected exactly one default INSTANCE_RUNTIME_CONFIG line in hook" >&2
   exit 1
 fi
-sed "s|$runtime_root_anchor|$installed_runtime|g" "$HOOK" >"$installed_hook"
+runtime_root_sed_pattern=$(printf '%s\n' "$runtime_root_anchor" | sed 's/[.[\*^$\\|]/\\&/g')
+installed_runtime_sed_replacement=$(printf '%s\n' "$installed_runtime" | sed 's/[\\&|]/\\&/g')
+sed "s|$runtime_root_sed_pattern|$installed_runtime_sed_replacement|g" "$HOOK" >"$installed_hook"
 if cmp -s "$HOOK" "$installed_hook"; then
   echo "FAIL: installed hook did not replace the runtime-root anchor" >&2
   exit 1
@@ -953,7 +955,7 @@ if source.count(needle) != 1:
     raise SystemExit("FAIL: runtime-root sentinel mutant anchor not found exactly once")
 Path(sys.argv[2]).write_text(source.replace(needle, replacement, 1), encoding="utf-8")
 PY
-sed "s|$runtime_root_anchor|$installed_runtime|g" "$mutant_source" >"$mutant_installed_hook"
+sed "s|$runtime_root_sed_pattern|$installed_runtime_sed_replacement|g" "$mutant_source" >"$mutant_installed_hook"
 if cmp -s "$mutant_source" "$mutant_installed_hook"; then
   echo "FAIL: mutant installed hook did not replace the runtime-root anchor" >&2
   exit 1

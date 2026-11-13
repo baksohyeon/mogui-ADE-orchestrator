@@ -412,4 +412,48 @@ out=$("$SCRIPT" --root "$scratch" --check 2>&1); rc=$?
 expect 0 "$rc" "an absent local ledger passes --check" "$out"
 rm -rf "$scratch"
 
+# Case 26: non-finite measured_tokens values fail while either ledger loads.
+for nonfinite in Infinity NaN; do
+  scratch="$(mktemp -d)"
+  mkdir -p "$scratch/docs/evals"
+  cat >"$scratch/$TEMPLATE_LEDGER" <<'JSON'
+{"measured_at": "2026-01-01", "parts": []}
+JSON
+  cat >"$scratch/$INSTANCE_LEDGER" <<JSON
+{"measured_at": "2026-01-01", "parts": [
+  {"key": "hook-stdout-nonfinite", "kind": "hook", "loads": "every session", "status": "untested", "plan": "none (grandfathered)", "measured_tokens": $nonfinite}
+]}
+JSON
+  out=$("$SCRIPT" --root "$scratch" 2>&1); rc=$?
+  expect 2 "$rc" "$nonfinite measured_tokens fails while loading" "$out"
+  expect_contains "$out" "non-finite measured_tokens" "$nonfinite is named as non-finite" "$out"
+  rm -rf "$scratch"
+done
+
+# Case 27: disk-sized keys cannot escape the install root, while an exec row
+# retains declared-name semantics even when its key is absolute.
+scratch="$(mktemp -d)"
+mkdir -p "$scratch/docs/evals"
+cat >"$scratch/$TEMPLATE_LEDGER" <<'JSON'
+{"measured_at": "2026-01-01", "parts": []}
+JSON
+for bad_key in "../outside.md" "$scratch/outside.md"; do
+  cat >"$scratch/$INSTANCE_LEDGER" <<JSON
+{"measured_at": "2026-01-01", "parts": [
+  {"key": "$bad_key", "kind": "skill", "loads": "every use", "status": "untested", "plan": "none (grandfathered)"}
+]}
+JSON
+  out=$("$SCRIPT" --root "$scratch" --check 2>&1); rc=$?
+  expect 2 "$rc" "disk-sized key outside root fails" "$out"
+  expect_contains "$out" "path outside root" "the disk-sized path boundary is named" "$out"
+done
+cat >"$scratch/$INSTANCE_LEDGER" <<JSON
+{"measured_at": "2026-01-01", "parts": [
+  {"key": "$scratch/declared-hook-name", "kind": "hook", "loads": "every use", "status": "untested", "plan": "none (grandfathered)"}
+]}
+JSON
+out=$("$SCRIPT" --root "$scratch" 2>&1); rc=$?
+expect 0 "$rc" "an absolute exec key retains declared-name semantics" "$out"
+rm -rf "$scratch"
+
 [ "$F" -eq 0 ] && exit 0 || exit 1

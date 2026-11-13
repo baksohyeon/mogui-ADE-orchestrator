@@ -40,9 +40,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import sys
 from pathlib import Path
+from pathlib import PurePosixPath
 
 STATUS_VALUES = frozenset({"helps", "no-effect", "hurts", "untested", "safety"})
 LOADS_VALUES = frozenset({"every session", "every prompt", "every use", "every dispatch"})
@@ -98,6 +100,13 @@ def load_ledger(path: Path) -> dict:
         _require_enum(part, "kind", KIND_VALUES, path, i, key)
         _require_enum(part, "loads", LOADS_VALUES, path, i, key)
         _require_enum(part, "status", STATUS_VALUES, path, i, key)
+        if part["kind"] not in EXEC_KINDS:
+            key_path = PurePosixPath(key)
+            if key_path.is_absolute() or ".." in key_path.parts:
+                raise LedgerError(f"ledger {path}: parts[{i}] ({key}) has a path outside root")
+        measured = part.get("measured_tokens")
+        if isinstance(measured, float) and not math.isfinite(measured):
+            raise LedgerError(f"ledger {path}: parts[{i}] ({key}) has non-finite measured_tokens")
         sources = part.get("sources")
         if sources is not None and (
             not isinstance(sources, list) or not all(isinstance(s, str) for s in sources)

@@ -1,0 +1,1 @@
+- Added workspace-card routing guidance so template pull requests receive a review skill pass before merge alongside review bots, with a shell checklist for repeated paths and hardcoded absolute paths.

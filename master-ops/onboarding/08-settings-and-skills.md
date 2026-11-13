@@ -20,7 +20,7 @@ Wire every shipped hook and skill this template documents, without offering an o
 - SessionStart on compact: `scripts/compaction-probe.sh`
 - PreCompact: reload or export tracker memory
 - UserPromptSubmit: role-state line + `Proposal -> Approval -> Execution` (see charter §8 / §9)
-- PostToolUse (all tools) and UserPromptSubmit: `scripts/hooks/compact-rehydration-hook.bash` restores the work layer once the compact recall record is present, or after the bounded recall wait
+- PostToolUse (all tools) and UserPromptSubmit: `scripts/hooks/compact-rehydration-hook.sh` restores the work layer once the compact recall record is present, or after the bounded recall wait
 - UserPromptSubmit: dispatch tracker-card gap warning (`scripts/hooks/bd-gap-warn.sh`) alongside the orchestration inbox warning
 - PreToolUse: supervised-dispatch bypass warning
 - PreToolUse(Edit|Write|NotebookEdit) and PreToolUse(Bash): fail closed for
@@ -62,10 +62,10 @@ after the recall append:
 ```json
 "hooks": {
   "PostToolUse": [
-    {"matcher": "", "hooks": [{"type": "command", "command": "bash \"{{OPS_REPO}}/scripts/hooks/compact-rehydration-hook.bash\""}]}
+    {"matcher": "", "hooks": [{"type": "command", "command": "bash \"{{OPS_REPO}}/scripts/hooks/compact-rehydration-hook.sh\""}]}
   ],
   "UserPromptSubmit": [
-    {"matcher": "", "hooks": [{"type": "command", "command": "bash \"{{OPS_REPO}}/scripts/hooks/compact-rehydration-hook.bash\""}]}
+    {"matcher": "", "hooks": [{"type": "command", "command": "bash \"{{OPS_REPO}}/scripts/hooks/compact-rehydration-hook.sh\""}]}
   ]
 }
 ```
@@ -88,7 +88,7 @@ When the owner asks to turn something off, explain the piece in one sentence, st
 | --- | --- | --- |
 | Role-state injection (UserPromptSubmit) | Restates the active role and Proposal→Approval→Execution every turn | Remove or comment the UserPromptSubmit hook entry in the host settings that points at the role-state inject script; re-enable by restoring it |
 | Compaction probe (SessionStart on compact) | Checks that the master still knows required facts after compaction | Remove the compact SessionStart hook that runs `scripts/compaction-probe.sh` |
-| Compact rehydration (PostToolUse and UserPromptSubmit) | Restores tracker work after the recall measurement is recorded or bounded | Remove the two hook entries for `compact-rehydration-hook.bash`; restore them to re-enable |
+| Compact rehydration (PostToolUse and UserPromptSubmit) | Restores tracker work after the recall measurement is recorded or bounded | Remove the two hook entries for `compact-rehydration-hook.sh`; restore them to re-enable |
 | Dispatch / supervised-dispatch warning (PreToolUse) | Warns when a worker path bypasses the dispatch gate | Remove the PreToolUse warn hook for bare worker invocation |
 | Product-path guard (PreToolUse) | Blocks master writes into product repositories; optionally enables measured fail-closed Bash decisions and records decisions in the event log | Remove the two PreToolUse hook entries for `scripts/hooks/product-path-guard.sh`; restore them to re-enable |
 | Bash output cap | Limits successful Bash or PowerShell output shown inline for the master | Remove `bashOutputMaxChars` from the master's workspace `.claude/settings.json` and start a fresh session; use `.claude/settings.local.json` for a temporary project-local value |

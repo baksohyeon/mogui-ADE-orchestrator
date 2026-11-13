@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Contract proof for scripts/hooks/compact-rehydration-hook.bash.
+# Contract proof for scripts/hooks/compact-rehydration-hook.sh.
 set -u
 
 S="$(cd "$(dirname "$0")" && pwd)"
-HOOK="$S/hooks/compact-rehydration-hook.bash"
+HOOK="$S/hooks/compact-rehydration-hook.sh"
 PROBE="$S/compaction-probe.sh"
 T="$(mktemp -d)"
 trap 'rm -rf "$T"' EXIT
@@ -19,8 +19,6 @@ CONFIG="$T/instance-runtime.json"
 F=0
 
 ok() { echo "PASS: $*"; }
-warn() { echo "WARN: $*"; }
-skip() { echo "SKIP: $*"; }
 fail() { echo "FAIL: $*" >&2; F=1; }
 
 mkdir -p "$OPS/docs/runbooks" "$STATE" "$BIN"
@@ -99,9 +97,9 @@ append_record() {
 
 marker_exists() { [ -f "$STATE/compact-pending/$1" ]; }
 
-# No marker: silent and exits successfully. This is the explicit skip verdict.
+# No marker: silent and exits successfully.
 out="$(run_hook "$HOOK" PostToolUse no-marker)"
-[ -z "$out" ] && skip "no marker stays silent" || fail "no marker printed: $out"
+[ -z "$out" ] && ok "no marker stays silent" || fail "no marker printed: $out"
 
 # The probe's printed append command must execute unchanged in the temp seat.
 if [ -x "$PROBE" ]; then
@@ -144,7 +142,7 @@ PY
     fail "printed recall command did not append a compact record: $recall_command"
   fi
 else
-  skip "printed recall command requires the instance-owned probe in this rendered copy"
+  fail "printed recall command requires the instance-owned probe in this rendered copy"
 fi
 
 # A missing record stays silent for two PostToolUse calls and rehydrates on the third.
@@ -155,7 +153,7 @@ third="$(run_hook "$HOOK" PostToolUse third-post)"
 [ -z "$first" ] && ok "first PostToolUse without recall stays silent" || fail "first PostToolUse printed: $first"
 [ -z "$second" ] && ok "second PostToolUse without recall stays silent" || fail "second PostToolUse printed: $second"
 printf '%s' "$third" | grep -q 'measurement is contaminated' \
-  && warn "third PostToolUse injects skipped recall work layer" \
+  && ok "third PostToolUse injects skipped recall work layer" \
   || fail "third PostToolUse missed skipped recall message: $third"
 grep -q '"event":"recall_skipped"' "$LOG" \
   && ok "skipped recall appends one ledger event" \
@@ -168,7 +166,7 @@ grep -q '"event":"recall_skipped"' "$LOG" \
 run_probe first-prompt
 prompt="$(run_hook "$HOOK" UserPromptSubmit first-prompt)"
 printf '%s' "$prompt" | grep -q 'measurement is contaminated' \
-  && warn "first UserPromptSubmit injects skipped recall work layer" \
+  && ok "first UserPromptSubmit injects skipped recall work layer" \
   || fail "first UserPromptSubmit missed skipped recall message: $prompt"
 [ ! -f "$STATE/compact-pending/first-prompt" ] \
   && ok "first UserPromptSubmit consumes marker" \
@@ -254,7 +252,7 @@ os.utime(claimed_path, (old, old))
 PY
 stale_claim="$(run_hook "$HOOK" PostToolUse stale-claim)"
 printf '%s' "$stale_claim" | grep -q 'measurement is contaminated' \
-  && warn "stale claim is reclaimed and injects the work layer" \
+  && ok "stale claim is reclaimed and injects the work layer" \
   || fail "stale claim was not reclaimed: $stale_claim"
 [ ! -f "$STATE/compact-pending/stale-claim" ] && ok "stale claim consumes the marker" || fail "stale claim left the marker"
 [ ! -f "$STATE/compact-pending/stale-claim.claimed" ] && ok "stale claim releases ownership" || fail "stale claim left ownership"

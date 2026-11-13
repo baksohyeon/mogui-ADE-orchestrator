@@ -203,6 +203,15 @@
       "plan": "none (grandfathered)"
     },
     {
+      "key": "scripts/hooks/compact-rehydration-hook.sh",
+      "kind": "hook",
+      "loads": "every use",
+      "status": "untested",
+      "plan": "measure compact recall rehydration delivery and bounded skip outcomes; prereg page due by measure_by",
+      "owner": "master",
+      "measure_by": "2026-12-13"
+    },
+    {
       "key": "scripts/hooks/orch-inbox-warn.sh",
       "kind": "hook",
       "loads": "every prompt",

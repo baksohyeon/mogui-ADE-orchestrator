@@ -19,7 +19,7 @@ TEMPLATE_CHECK="$OPS_DIR/scripts/template-check"
 # The generic hook inventory below intentionally includes the compact
 # rehydration hook. It must stay visible here so an install cannot carry the
 # script without a corresponding host registration.
-COMPACT_REHYDRATION_HOOK_NAME="compact-rehydration-hook.bash"
+COMPACT_REHYDRATION_HOOK_NAME="compact-rehydration-hook.sh"
 
 exit_code=0
 

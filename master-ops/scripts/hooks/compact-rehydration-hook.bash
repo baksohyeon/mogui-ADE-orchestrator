@@ -148,8 +148,6 @@ def claim(path: Path) -> Path | None:
     claimed = path.with_name(path.name + ".claimed")
     try:
         os.link(path, claimed)
-        os.utime(claimed, None)
-        return claimed
     except FileExistsError:
         try:
             age = dt.datetime.now(dt.timezone.utc).timestamp() - claimed.stat().st_mtime
@@ -157,17 +155,19 @@ def claim(path: Path) -> Path | None:
                 return None
             claimed.unlink()
             os.link(path, claimed)
-            os.utime(claimed, None)
-            return claimed
         except OSError:
             return None
     except OSError:
+        return None
+    try:
+        os.utime(claimed, None)
+    except OSError:
         try:
-            if claimed.is_file():
-                claimed.unlink()
+            claimed.unlink()
         except OSError:
             pass
         return None
+    return claimed
 
 
 def delete(path: Path) -> None:

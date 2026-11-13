@@ -230,6 +230,35 @@ fresh_claim="$(run_hook "$HOOK" PostToolUse fresh-claim)"
 [ -f "$STATE/compact-pending/fresh-claim" ] && ok "fresh claim preserves the marker" || fail "fresh claim lost the marker"
 [ -f "$STATE/compact-pending/fresh-claim.claimed" ] && ok "fresh claim remains owned" || fail "fresh claim ownership was lost"
 
+# An aged claim is reclaimable and injects exactly once.
+python3 - "$STATE/compact-pending/stale-claim" "$LOG" <<'PY'
+import datetime as dt
+import json
+import os
+import shutil
+import sys
+from pathlib import Path
+
+marker_path, log_path = map(Path, sys.argv[1:])
+marker_path.write_text(json.dumps({
+    "compact_time": dt.datetime.now(dt.timezone.utc).isoformat(),
+    "log_path": str(log_path.resolve()),
+    "log_offset": 0,
+    "session_id": "stale-claim",
+    "post_tool_uses": 2,
+}) + "\n", encoding="utf-8")
+claimed_path = marker_path.with_name(marker_path.name + ".claimed")
+shutil.copy2(marker_path, claimed_path)
+old = dt.datetime.now(dt.timezone.utc).timestamp() - 600
+os.utime(claimed_path, (old, old))
+PY
+stale_claim="$(run_hook "$HOOK" PostToolUse stale-claim)"
+printf '%s' "$stale_claim" | grep -q 'measurement is contaminated' \
+  && warn "stale claim is reclaimed and injects the work layer" \
+  || fail "stale claim was not reclaimed: $stale_claim"
+[ ! -f "$STATE/compact-pending/stale-claim" ] && ok "stale claim consumes the marker" || fail "stale claim left the marker"
+[ ! -f "$STATE/compact-pending/stale-claim.claimed" ] && ok "stale claim releases ownership" || fail "stale claim left ownership"
+
 # Two hundred long fake rows stay within the 9,000-character cap.
 python3 - "$TRACKS" <<'PY'
 import json

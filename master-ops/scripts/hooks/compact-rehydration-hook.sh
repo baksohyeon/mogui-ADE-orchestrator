@@ -13,7 +13,7 @@ STATE_DIR="${MOGUI_STATE_DIR:-${HOME:-$(cd ~ 2>/dev/null && pwd)}/.mogui}"
 INSTANCE_CONFIG="${MOGUI_INSTANCE_RUNTIME_CONFIG:-${INSTANCE_RUNTIME_CONFIG:-$OPS_REPO/config/instance-runtime.json}}"
 PENDING_DIR="$STATE_DIR/compact-pending"
 shopt -s nullglob
-pending_entries=("$PENDING_DIR"/*)
+pending_entries=("$PENDING_DIR"/* "$PENDING_DIR"/.[!.]* "$PENDING_DIR"/..?*)
 if [ "${#pending_entries[@]}" -eq 0 ]; then
   exit 0
 fi

@@ -240,6 +240,13 @@ printf '%s' "$recorded" | grep -q 'recent active track' \
   || fail "recorded recall missed active track: $recorded"
 [ -z "$again" ] && ok "recorded recall injects once" || fail "recorded recall repeated output: $again"
 
+run_probe .dot-session
+append_record .dot-session
+dot_session="$(run_hook "$HOOK" PostToolUse .dot-session)"
+printf '%s' "$dot_session" | grep -q 'recent active track' \
+  && ok "dot-prefixed session marker is processed" \
+  || fail "dot-prefixed session marker was skipped: $dot_session"
+
 # A marker older than six hours is deleted silently.
 mkdir -p "$STATE/compact-pending"
 cat > "$STATE/compact-pending/stale-session" <<EOF

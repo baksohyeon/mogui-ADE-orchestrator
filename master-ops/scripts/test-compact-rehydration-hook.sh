@@ -246,6 +246,9 @@ dot_session="$(run_hook "$HOOK" PostToolUse .dot-session)"
 printf '%s' "$dot_session" | grep -q 'recent active track' \
   && ok "dot-prefixed session marker is processed" \
   || fail "dot-prefixed session marker was skipped: $dot_session"
+[ ! -f "$STATE/compact-pending/.dot-session" ] \
+  && ok "dot-prefixed session marker is consumed" \
+  || fail "dot-prefixed session marker remains pending"
 
 # A marker older than six hours is deleted silently.
 mkdir -p "$STATE/compact-pending"

@@ -5,6 +5,8 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SCRIPT="$ROOT/scripts/harness-inventory"
+TEMPLATE_LEDGER="docs/evals/evidence.json"
+INSTANCE_LEDGER="docs/evals/evidence.instance.json"
 F=0
 
 expect() {
@@ -31,7 +33,7 @@ expect_contains() {
 scratch="$(mktemp -d)"
 mkdir -p "$scratch/skills/foo" "$scratch/docs/evals"
 printf 'short skill body, well under five hundred tokens of ascii text.\n' >"$scratch/skills/foo/SKILL.md"
-cat >"$scratch/docs/evals/evidence.json" <<'JSON'
+cat >"$scratch/$TEMPLATE_LEDGER" <<'JSON'
 {
   "measured_at": "2026-01-01",
   "parts": [
@@ -64,7 +66,7 @@ rm -rf "$scratch"
 scratch="$(mktemp -d)"
 mkdir -p "$scratch/skills/foo" "$scratch/docs/evals"
 printf 'x\n' >"$scratch/skills/foo/SKILL.md"
-cat >"$scratch/docs/evals/evidence.json" <<'JSON'
+cat >"$scratch/$TEMPLATE_LEDGER" <<'JSON'
 {"measured_at": "2026-01-01", "parts": [
   {"key": "skills/foo/SKILL.md", "kind": "skill", "loads": "every use", "status": "untested", "plan": "none (grandfathered)"}
 ]}
@@ -79,7 +81,7 @@ scratch="$(mktemp -d)"
 mkdir -p "$scratch/skills/foo" "$scratch/skills/bar" "$scratch/docs/evals"
 printf 'x\n' >"$scratch/skills/foo/SKILL.md"
 printf 'x\n' >"$scratch/skills/bar/SKILL.md"
-cat >"$scratch/docs/evals/evidence.json" <<'JSON'
+cat >"$scratch/$TEMPLATE_LEDGER" <<'JSON'
 {"measured_at": "2026-01-01", "parts": [
   {"key": "skills/foo/SKILL.md", "kind": "skill", "loads": "every use", "status": "untested", "plan": "none (grandfathered)"}
 ]}
@@ -94,7 +96,7 @@ rm -rf "$scratch"
 scratch="$(mktemp -d)"
 mkdir -p "$scratch/scripts/hooks" "$scratch/docs/evals"
 printf '#!/bin/sh\n' >"$scratch/scripts/hooks/example-warn.sh"
-cat >"$scratch/docs/evals/evidence.json" <<'JSON'
+cat >"$scratch/$TEMPLATE_LEDGER" <<'JSON'
 {"measured_at": "2026-01-01", "parts": []}
 JSON
 out=$("$SCRIPT" --root "$scratch" --check 2>&1); rc=$?
@@ -106,7 +108,7 @@ rm -rf "$scratch"
 # but is missing measure_by (owner present).
 scratch="$(mktemp -d)"
 mkdir -p "$scratch/docs/evals"
-cat >"$scratch/docs/evals/evidence.json" <<'JSON'
+cat >"$scratch/$TEMPLATE_LEDGER" <<'JSON'
 {"measured_at": "2026-01-01", "parts": [
   {"key": "skills/unmeasured/SKILL.md", "kind": "skill", "loads": "every use", "status": "untested", "plan": "first-use review", "owner": "master"}
 ]}
@@ -121,7 +123,7 @@ rm -rf "$scratch"
 # with no sources; exits 0 once both are fixed.
 scratch="$(mktemp -d)"
 mkdir -p "$scratch/docs/evals"
-cat >"$scratch/docs/evals/evidence.json" <<'JSON'
+cat >"$scratch/$TEMPLATE_LEDGER" <<'JSON'
 {"measured_at": "2026-01-01", "parts": [
   {"key": "scripts/hooks/guard.sh", "kind": "hook", "loads": "every use", "status": "safety"},
   {"key": "skills/measured/SKILL.md", "kind": "skill", "loads": "every use", "status": "helps"}
@@ -131,7 +133,7 @@ out=$("$SCRIPT" --root "$scratch" --check 2>&1); rc=$?
 expect 1 "$rc" "--check exits 1 on a safety row with no reason and a helps row with no sources" "$out"
 expect_contains "$out" "scripts/hooks/guard.sh" "the safety row is named" "$out"
 expect_contains "$out" "skills/measured/SKILL.md" "the helps row is named" "$out"
-cat >"$scratch/docs/evals/evidence.json" <<'JSON'
+cat >"$scratch/$TEMPLATE_LEDGER" <<'JSON'
 {"measured_at": "2026-01-01", "parts": [
   {"key": "scripts/hooks/guard.sh", "kind": "hook", "loads": "every use", "status": "safety", "reason": "stops an irreversible write"},
   {"key": "skills/measured/SKILL.md", "kind": "skill", "loads": "every use", "status": "helps", "sources": ["trial-1"]}
@@ -148,25 +150,28 @@ expect 0 "$rc" "--check exits 0 on the seeded template ledger against the reposi
 
 # Case 8: a non-directory --root is a usage error (exit 2), not a silent
 # empty report.
-out=$("$SCRIPT" --root "/nonexistent-$$-dir" 2>&1); rc=$?
+scratch="$(mktemp -d)"
+missing_root="$scratch/missing"
+out=$("$SCRIPT" --root "$missing_root" 2>&1); rc=$?
 expect 2 "$rc" "missing --root exits 2" "$out"
+rm -rf "$scratch"
 
 # Case 9: a malformed ledger (parts is not a list) exits 2 and names the
 # ledger path (checked by suffix: the full $scratch path can differ after
 # symlink resolution on macOS).
 scratch="$(mktemp -d)"
 mkdir -p "$scratch/docs/evals"
-printf '{"measured_at": "2026-01-01", "parts": "nope"}\n' >"$scratch/docs/evals/evidence.json"
+printf '{"measured_at": "2026-01-01", "parts": "nope"}\n' >"$scratch/$TEMPLATE_LEDGER"
 out=$("$SCRIPT" --root "$scratch" 2>&1); rc=$?
 expect 2 "$rc" "a parts value that is not a list exits 2" "$out"
-expect_contains "$out" "docs/evals/evidence.json" "the error names the ledger path" "$out"
+expect_contains "$out" "$TEMPLATE_LEDGER" "the error names the ledger path" "$out"
 rm -rf "$scratch"
 
 # Case 10: --check exits 1 on an untested row whose plan is not grandfathered
 # and has measure_by but no owner (the mirror image of Case 5).
 scratch="$(mktemp -d)"
 mkdir -p "$scratch/docs/evals"
-cat >"$scratch/docs/evals/evidence.json" <<'JSON'
+cat >"$scratch/$TEMPLATE_LEDGER" <<'JSON'
 {"measured_at": "2026-01-01", "parts": [
   {"key": "skills/unowned/SKILL.md", "kind": "skill", "loads": "every use", "status": "untested", "plan": "first-use review", "measure_by": "2026-12-11"}
 ]}
@@ -182,7 +187,7 @@ rm -rf "$scratch"
 scratch="$(mktemp -d)"
 mkdir -p "$scratch/skills/foo" "$scratch/docs/evals"
 printf 'x\n' >"$scratch/skills/foo/SKILL.md"
-cat >"$scratch/docs/evals/evidence.json" <<'JSON'
+cat >"$scratch/$TEMPLATE_LEDGER" <<'JSON'
 {"measured_at": "2026-01-01", "parts": [
   {"key": "skills/foo/SKILL.md", "kind": "skill", "loads": "every use", "status": "untested", "plan": "none (grandfathered)"},
   {"key": "scripts/dispatch", "kind": "dispatch", "loads": "every dispatch", "status": "untested", "plan": "none (grandfathered)"}
@@ -201,7 +206,7 @@ rm -rf "$scratch"
 # resolved to whichever row happened to load last.
 scratch="$(mktemp -d)"
 mkdir -p "$scratch/docs/evals"
-cat >"$scratch/docs/evals/evidence.json" <<'JSON'
+cat >"$scratch/$TEMPLATE_LEDGER" <<'JSON'
 {"measured_at": "2026-01-01", "parts": [
   {"key": "skills/dup/SKILL.md", "kind": "skill", "loads": "every use", "status": "untested", "plan": "none (grandfathered)"},
   {"key": "skills/dup/SKILL.md", "kind": "skill", "loads": "every use", "status": "safety", "reason": "x"}
@@ -216,7 +221,7 @@ rm -rf "$scratch"
 # silently falling through to absent.
 scratch="$(mktemp -d)"
 mkdir -p "$scratch/docs/evals"
-cat >"$scratch/docs/evals/evidence.json" <<'JSON'
+cat >"$scratch/$TEMPLATE_LEDGER" <<'JSON'
 {"measured_at": "2026-01-01", "parts": [
   {"key": "hook-stdout-foo", "kind": "hook", "loads": "every session", "status": "untested", "plan": "none (grandfathered)", "measured_tokens": "500"}
 ]}
@@ -230,7 +235,7 @@ rm -rf "$scratch"
 # instead of raising TypeError when the table tries to join it.
 scratch="$(mktemp -d)"
 mkdir -p "$scratch/docs/evals"
-cat >"$scratch/docs/evals/evidence.json" <<'JSON'
+cat >"$scratch/$TEMPLATE_LEDGER" <<'JSON'
 {"measured_at": "2026-01-01", "parts": [
   {"key": "skills/measured/SKILL.md", "kind": "skill", "loads": "every use", "status": "helps", "sources": [1, "trial-2"]}
 ]}
@@ -243,7 +248,7 @@ rm -rf "$scratch"
 # reported before owner/measure_by are ever considered.
 scratch="$(mktemp -d)"
 mkdir -p "$scratch/docs/evals"
-cat >"$scratch/docs/evals/evidence.json" <<'JSON'
+cat >"$scratch/$TEMPLATE_LEDGER" <<'JSON'
 {"measured_at": "2026-01-01", "parts": [
   {"key": "skills/noplan/SKILL.md", "kind": "skill", "loads": "every use", "status": "untested"}
 ]}
@@ -257,7 +262,7 @@ rm -rf "$scratch"
 # though it is present.
 scratch="$(mktemp -d)"
 mkdir -p "$scratch/docs/evals"
-cat >"$scratch/docs/evals/evidence.json" <<'JSON'
+cat >"$scratch/$TEMPLATE_LEDGER" <<'JSON'
 {"measured_at": "2026-01-01", "parts": [
   {"key": "skills/soon/SKILL.md", "kind": "skill", "loads": "every use", "status": "untested", "plan": "first-use review", "owner": "master", "measure_by": "soon"}
 ]}
@@ -271,7 +276,7 @@ rm -rf "$scratch"
 # TypeError from an unhashable value inside a frozenset lookup.
 scratch="$(mktemp -d)"
 mkdir -p "$scratch/docs/evals"
-cat >"$scratch/docs/evals/evidence.json" <<'JSON'
+cat >"$scratch/$TEMPLATE_LEDGER" <<'JSON'
 {"measured_at": "2026-01-01", "parts": [
   {"key": "skills/weird/SKILL.md", "kind": ["skill"], "loads": "every use", "status": "untested", "plan": "none (grandfathered)"}
 ]}
@@ -288,7 +293,7 @@ mkdir -p "$scratch/docs/charter" "$scratch/docs/evals" "$scratch/workspace-card"
 printf '# x\n' >"$scratch/docs/charter/01-example.md"
 printf 'x\n' >"$scratch/AGENTS.md"
 printf 'x\n' >"$scratch/workspace-card/AGENTS.md"
-cat >"$scratch/docs/evals/evidence.json" <<'JSON'
+cat >"$scratch/$TEMPLATE_LEDGER" <<'JSON'
 {"measured_at": "2026-01-01", "parts": []}
 JSON
 out=$("$SCRIPT" --root "$scratch" --check 2>&1); rc=$?
@@ -302,7 +307,7 @@ rm -rf "$scratch"
 # in the rendered table, instead of opening an extra column.
 scratch="$(mktemp -d)"
 mkdir -p "$scratch/docs/evals"
-cat >"$scratch/docs/evals/evidence.json" <<'JSON'
+cat >"$scratch/$TEMPLATE_LEDGER" <<'JSON'
 {"measured_at": "2026-01-01", "parts": [
   {"key": "scripts/hooks/pipey.sh", "kind": "hook", "loads": "every use", "status": "safety", "reason": "a|b"}
 ]}
@@ -321,13 +326,134 @@ python3 -c "
 import json
 json.dump({'measured_at': '2026-01-01', 'parts': [
     {'key': 'scripts/hooks/newliney.sh', 'kind': 'hook', 'loads': 'every use', 'status': 'safety', 'reason': 'a\nb'}
-]}, open('$scratch/docs/evals/evidence.json', 'w'))
+]}, open('$scratch/$TEMPLATE_LEDGER', 'w'))
 "
 out=$("$SCRIPT" --root "$scratch" 2>&1); rc=$?
 expect 0 "$rc" "a newline in a cell value still exits 0" "$out"
 row_count=$(printf '%s\n' "$out" | grep -c "newliney.sh")
 expect 1 "$row_count" "the row with an embedded newline stays on one physical line" "$out"
 expect_contains "$out" "a b" "the newline is flattened to a space" "$out"
+rm -rf "$scratch"
+
+# Case 21: an install-owned hook with a local ledger row passes --check, and
+# normal output names the ledger that supplied the row.
+scratch="$(mktemp -d)"
+mkdir -p "$scratch/scripts/hooks" "$scratch/docs/evals"
+printf '#!/bin/sh\n' >"$scratch/scripts/hooks/instance-hook.sh"
+cat >"$scratch/$TEMPLATE_LEDGER" <<'JSON'
+{"measured_at": "2026-01-01", "parts": []}
+JSON
+cat >"$scratch/$INSTANCE_LEDGER" <<'JSON'
+{"measured_at": "2026-01-01", "parts": [
+  {"key": "scripts/hooks/instance-hook.sh", "kind": "hook", "loads": "every use", "status": "untested", "plan": "none (grandfathered)"}
+]}
+JSON
+out=$("$SCRIPT" --root "$scratch" --check 2>&1); rc=$?
+expect 0 "$rc" "an install-owned hook with a local row passes --check" "$out"
+out=$("$SCRIPT" --root "$scratch" 2>&1); rc=$?
+expect 0 "$rc" "a local-ledger table run exits 0" "$out"
+expect_contains "$out" "$INSTANCE_LEDGER" "table output names the local ledger" "$out"
+json_out=$("$SCRIPT" --root "$scratch" --json 2>&1); rc=$?
+expect 0 "$rc" "a local-ledger JSON run exits 0" "$json_out"
+expect_contains "$json_out" "\"ledger\": \"$INSTANCE_LEDGER\"" "JSON output names the local ledger" "$json_out"
+rm -rf "$scratch"
+
+# Case 22: an install-owned hook with no local row remains a --check failure.
+scratch="$(mktemp -d)"
+mkdir -p "$scratch/scripts/hooks" "$scratch/docs/evals"
+printf '#!/bin/sh\n' >"$scratch/scripts/hooks/instance-hook.sh"
+cat >"$scratch/$TEMPLATE_LEDGER" <<'JSON'
+{"measured_at": "2026-01-01", "parts": []}
+JSON
+out=$("$SCRIPT" --root "$scratch" --check 2>&1); rc=$?
+expect 1 "$rc" "an install-owned hook with no row fails --check" "$out"
+expect_contains "$out" "no ledger row for registered hook on disk" "the missing local row is reported" "$out"
+rm -rf "$scratch"
+
+# Case 23: a path declared in both ledgers fails with both ledger names.
+scratch="$(mktemp -d)"
+mkdir -p "$scratch/docs/evals"
+cat >"$scratch/$TEMPLATE_LEDGER" <<'JSON'
+{"measured_at": "2026-01-01", "parts": [
+  {"key": "scripts/hooks/duplicate.sh", "kind": "hook", "loads": "every use", "status": "untested", "plan": "none (grandfathered)"}
+]}
+JSON
+cat >"$scratch/$INSTANCE_LEDGER" <<'JSON'
+{"measured_at": "2026-01-01", "parts": [
+  {"key": "scripts/hooks/duplicate.sh", "kind": "hook", "loads": "every use", "status": "untested", "plan": "none (grandfathered)"}
+]}
+JSON
+out=$("$SCRIPT" --root "$scratch" --check 2>&1); rc=$?
+expect 2 "$rc" "a duplicate path across ledgers fails" "$out"
+expect_contains "$out" "scripts/hooks/duplicate.sh" "the duplicate path is named" "$out"
+expect_contains "$out" "$TEMPLATE_LEDGER" "the duplicate error names the template ledger" "$out"
+expect_contains "$out" "$INSTANCE_LEDGER" "the duplicate error names the local ledger" "$out"
+rm -rf "$scratch"
+
+# Case 24: malformed local JSON fails and names the local ledger.
+scratch="$(mktemp -d)"
+mkdir -p "$scratch/docs/evals"
+cat >"$scratch/$TEMPLATE_LEDGER" <<'JSON'
+{"measured_at": "2026-01-01", "parts": []}
+JSON
+printf '{not-json\n' >"$scratch/$INSTANCE_LEDGER"
+out=$("$SCRIPT" --root "$scratch" --check 2>&1); rc=$?
+expect 2 "$rc" "malformed local JSON fails" "$out"
+expect_contains "$out" "$INSTANCE_LEDGER" "the malformed local ledger is named" "$out"
+rm -rf "$scratch"
+
+# Case 25: an absent local ledger is an empty overlay and still passes.
+scratch="$(mktemp -d)"
+mkdir -p "$scratch/docs/evals"
+cat >"$scratch/$TEMPLATE_LEDGER" <<'JSON'
+{"measured_at": "2026-01-01", "parts": []}
+JSON
+out=$("$SCRIPT" --root "$scratch" --check 2>&1); rc=$?
+expect 0 "$rc" "an absent local ledger passes --check" "$out"
+rm -rf "$scratch"
+
+# Case 26: non-finite measured_tokens values fail while either ledger loads.
+for nonfinite in Infinity NaN; do
+  scratch="$(mktemp -d)"
+  mkdir -p "$scratch/docs/evals"
+  cat >"$scratch/$TEMPLATE_LEDGER" <<'JSON'
+{"measured_at": "2026-01-01", "parts": []}
+JSON
+  cat >"$scratch/$INSTANCE_LEDGER" <<JSON
+{"measured_at": "2026-01-01", "parts": [
+  {"key": "hook-stdout-nonfinite", "kind": "hook", "loads": "every session", "status": "untested", "plan": "none (grandfathered)", "measured_tokens": $nonfinite}
+]}
+JSON
+  out=$("$SCRIPT" --root "$scratch" 2>&1); rc=$?
+  expect 2 "$rc" "$nonfinite measured_tokens fails while loading" "$out"
+  expect_contains "$out" "non-finite measured_tokens" "$nonfinite is named as non-finite" "$out"
+  rm -rf "$scratch"
+done
+
+# Case 27: disk-sized keys cannot escape the install root, while an exec row
+# retains declared-name semantics even when its key is absolute.
+scratch="$(mktemp -d)"
+mkdir -p "$scratch/docs/evals"
+cat >"$scratch/$TEMPLATE_LEDGER" <<'JSON'
+{"measured_at": "2026-01-01", "parts": []}
+JSON
+for bad_key in "../outside.md" "$scratch/outside.md"; do
+  cat >"$scratch/$INSTANCE_LEDGER" <<JSON
+{"measured_at": "2026-01-01", "parts": [
+  {"key": "$bad_key", "kind": "skill", "loads": "every use", "status": "untested", "plan": "none (grandfathered)"}
+]}
+JSON
+  out=$("$SCRIPT" --root "$scratch" --check 2>&1); rc=$?
+  expect 2 "$rc" "disk-sized key outside root fails" "$out"
+  expect_contains "$out" "path outside root" "the disk-sized path boundary is named" "$out"
+done
+cat >"$scratch/$INSTANCE_LEDGER" <<JSON
+{"measured_at": "2026-01-01", "parts": [
+  {"key": "$scratch/declared-hook-name", "kind": "hook", "loads": "every use", "status": "untested", "plan": "none (grandfathered)"}
+]}
+JSON
+out=$("$SCRIPT" --root "$scratch" 2>&1); rc=$?
+expect 0 "$rc" "an absolute exec key retains declared-name semantics" "$out"
 rm -rf "$scratch"
 
 [ "$F" -eq 0 ] && exit 0 || exit 1

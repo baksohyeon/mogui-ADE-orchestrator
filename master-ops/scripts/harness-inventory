@@ -3,8 +3,9 @@
 
 A part is anything docs/charter/11-earn-its-place.md says must earn its
 place: a card, a skill, a hook, a memory file, or a dispatch artifact. The
-ledger at docs/evals/evidence.json declares which parts exist and what is
-known about each one; this script sizes a part from the ledger's own `key`
+The ledgers at docs/evals/evidence.json and the optional
+docs/evals/evidence.instance.json declare which parts exist and what is known
+about each one; this script sizes a part from the ledger's own `key`
 rather than searching for it, so it never walks the filesystem looking for
 parts to size. `--check` is the exception: it globs `skills/*/SKILL.md`,
 `scripts/hooks/*.sh`, and `docs/charter/*.md`, and looks for the two fixed
@@ -30,17 +31,20 @@ Usage:
     scripts/harness-inventory --json
 
 Default root: this script lives at <root>/scripts/harness-inventory, so the
-default is its own grandparent directory. Default ledger:
-<root>/docs/evals/evidence.json.
+default is its own grandparent directory. Default ledgers:
+<root>/docs/evals/evidence.json and the optional
+<root>/docs/evals/evidence.instance.json.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import sys
 from pathlib import Path
+from pathlib import PurePosixPath
 
 STATUS_VALUES = frozenset({"helps", "no-effect", "hurts", "untested", "safety"})
 LOADS_VALUES = frozenset({"every session", "every prompt", "every use", "every dispatch"})
@@ -48,6 +52,8 @@ KIND_VALUES = frozenset({"card", "skill", "hook", "memory", "dispatch", "shared"
 EXEC_KINDS = frozenset({"hook", "dispatch"})
 MEASURE_BY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 FIXED_CARD_PATHS = ("workspace-card/AGENTS.md", "AGENTS.md")
+TEMPLATE_LEDGER_RELATIVE = Path("docs/evals/evidence.json")
+INSTANCE_LEDGER_RELATIVE = Path("docs/evals/evidence.instance.json")
 
 
 class LedgerError(Exception):
@@ -94,12 +100,44 @@ def load_ledger(path: Path) -> dict:
         _require_enum(part, "kind", KIND_VALUES, path, i, key)
         _require_enum(part, "loads", LOADS_VALUES, path, i, key)
         _require_enum(part, "status", STATUS_VALUES, path, i, key)
+        if part["kind"] not in EXEC_KINDS:
+            key_path = PurePosixPath(key)
+            if key_path.is_absolute() or ".." in key_path.parts:
+                raise LedgerError(f"ledger {path}: parts[{i}] ({key}) has a path outside root")
+        measured = part.get("measured_tokens")
+        if isinstance(measured, float) and not math.isfinite(measured):
+            raise LedgerError(f"ledger {path}: parts[{i}] ({key}) has non-finite measured_tokens")
         sources = part.get("sources")
         if sources is not None and (
             not isinstance(sources, list) or not all(isinstance(s, str) for s in sources)
         ):
             raise LedgerError(f"ledger {path}: parts[{i}] ({key}) has a malformed sources list")
     return data
+
+
+def ledger_label(root: Path, path: Path) -> str:
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def load_ledgers(template_path: Path, instance_path: Path, root: Path) -> list[tuple[dict, str]]:
+    loaded = [(load_ledger(template_path), ledger_label(root, template_path))]
+    if instance_path.exists():
+        loaded.append((load_ledger(instance_path), ledger_label(root, instance_path)))
+
+    seen: dict[str, str] = {}
+    for ledger, source in loaded:
+        for part in ledger["parts"]:
+            key = part["key"]
+            previous_source = seen.get(key)
+            if previous_source is not None:
+                raise LedgerError(
+                    f"duplicate key {key!r} across ledgers {previous_source} and {source}"
+                )
+            seen[key] = source
+    return loaded
 
 
 def plan_or_source(part: dict) -> str:
@@ -118,36 +156,38 @@ def escape_cell(value: object) -> str:
     return text.replace("|", "\\|")
 
 
-def rank_rows(root: Path, ledger: dict) -> list[dict]:
+def rank_rows(root: Path, ledgers: list[tuple[dict, str]]) -> list[dict]:
     rows = []
-    for part in ledger["parts"]:
-        kind = part["kind"]
-        measured = part.get("measured_tokens")
-        if isinstance(measured, (int, float)) and not isinstance(measured, bool):
-            tokens: int | str = int(measured)
-            marked = True
-        elif kind in EXEC_KINDS:
-            tokens = "exec"
-            marked = False
-        else:
-            target = root / part["key"]
-            if target.is_file():
-                tokens = estimate_tokens(target)
+    for ledger, source in ledgers:
+        for part in ledger["parts"]:
+            kind = part["kind"]
+            measured = part.get("measured_tokens")
+            if isinstance(measured, (int, float)) and not isinstance(measured, bool):
+                tokens: int | str = int(measured)
+                marked = True
+            elif kind in EXEC_KINDS:
+                tokens = "exec"
                 marked = False
             else:
-                tokens = "absent"
-                marked = False
-        rows.append(
-            {
-                "key": part["key"],
-                "kind": kind,
-                "tokens": tokens,
-                "marked": marked,
-                "loads": part["loads"],
-                "status": part["status"],
-                "plan_or_source": plan_or_source(part),
-            }
-        )
+                target = root / part["key"]
+                if target.is_file():
+                    tokens = estimate_tokens(target)
+                    marked = False
+                else:
+                    tokens = "absent"
+                    marked = False
+            rows.append(
+                {
+                    "key": part["key"],
+                    "kind": kind,
+                    "tokens": tokens,
+                    "marked": marked,
+                    "loads": part["loads"],
+                    "status": part["status"],
+                    "plan_or_source": plan_or_source(part),
+                    "ledger": source,
+                }
+            )
     # Numeric (sized) rows rank first, descending; `exec` and `absent` rows
     # sort after every sized row and keep their ledger order among
     # themselves (Python's sort is stable).
@@ -157,21 +197,22 @@ def rank_rows(root: Path, ledger: dict) -> list[dict]:
 
 def render_table(rows: list[dict]) -> str:
     lines = ["estimate, about ±40%", ""]
-    lines.append("| rank | key | kind | tokens | loads | status | plan or source |")
-    lines.append("|---|---|---|---|---|---|---|")
+    lines.append("| rank | key | kind | tokens | loads | status | plan or source | ledger |")
+    lines.append("|---|---|---|---|---|---|---|---|")
     for i, row in enumerate(rows, start=1):
         tokens = row["tokens"]
         tokens_cell = f"{tokens}{'*' if row['marked'] else ''}" if isinstance(tokens, int) else str(tokens)
         lines.append(
             f"| {i} | {escape_cell(row['key'])} | {escape_cell(row['kind'])} | {tokens_cell} | "
-            f"{escape_cell(row['loads'])} | {escape_cell(row['status'])} | {escape_cell(row['plan_or_source'])} |"
+            f"{escape_cell(row['loads'])} | {escape_cell(row['status'])} | {escape_cell(row['plan_or_source'])} | "
+            f"{escape_cell(row['ledger'])} |"
         )
     return "\n".join(lines) + "\n"
 
 
-def check(root: Path, ledger: dict) -> list[str]:
+def check(root: Path, ledgers: list[tuple[dict, str]]) -> list[str]:
     offenders: list[str] = []
-    keys = {part["key"] for part in ledger["parts"]}
+    keys = {part["key"] for ledger, _source in ledgers for part in ledger["parts"]}
 
     for skill_md in sorted((root / "skills").glob("*/SKILL.md")) if (root / "skills").is_dir() else []:
         rel = skill_md.relative_to(root).as_posix()
@@ -194,40 +235,46 @@ def check(root: Path, ledger: dict) -> list[str]:
         if (root / fixed_card).is_file() and fixed_card not in keys:
             offenders.append(f"no ledger row for card on disk: {fixed_card}")
 
-    for part in ledger["parts"]:
-        key = part["key"]
-        status = part["status"]
-        measured = part.get("measured_tokens")
-        if measured is not None and not (
-            isinstance(measured, (int, float)) and not isinstance(measured, bool)
-        ):
-            offenders.append(f"{key}: measured_tokens must be numeric")
-        if status == "untested":
-            plan = part.get("plan")
-            if not isinstance(plan, str) or not plan:
-                offenders.append(f"{key}: untested row needs a string plan")
-            elif plan != "none (grandfathered)":
-                if not part.get("owner"):
-                    offenders.append(f"{key}: untested row with a plan needs owner")
-                measure_by = part.get("measure_by")
-                if not measure_by:
-                    offenders.append(f"{key}: untested row with a plan needs measure_by")
-                elif not (isinstance(measure_by, str) and MEASURE_BY_RE.fullmatch(measure_by)):
-                    offenders.append(f"{key}: measure_by must match YYYY-MM-DD")
-        elif status == "safety":
-            if not part.get("reason"):
-                offenders.append(f"{key}: safety row needs reason")
-        elif status in ("helps", "no-effect", "hurts"):
-            sources = part.get("sources")
-            if not isinstance(sources, list) or not sources:
-                offenders.append(f"{key}: {status} row needs sources")
+    for ledger, source in ledgers:
+        for part in ledger["parts"]:
+            key = part["key"]
+            status = part["status"]
+            measured = part.get("measured_tokens")
+            if measured is not None and not (
+                isinstance(measured, (int, float)) and not isinstance(measured, bool)
+            ):
+                offenders.append(f"{key} ({source}): measured_tokens must be numeric")
+            if status == "untested":
+                plan = part.get("plan")
+                if not isinstance(plan, str) or not plan:
+                    offenders.append(f"{key} ({source}): untested row needs a string plan")
+                elif plan != "none (grandfathered)":
+                    if not part.get("owner"):
+                        offenders.append(f"{key} ({source}): untested row with a plan needs owner")
+                    measure_by = part.get("measure_by")
+                    if not measure_by:
+                        offenders.append(f"{key} ({source}): untested row with a plan needs measure_by")
+                    elif not (isinstance(measure_by, str) and MEASURE_BY_RE.fullmatch(measure_by)):
+                        offenders.append(f"{key} ({source}): measure_by must match YYYY-MM-DD")
+            elif status == "safety":
+                if not part.get("reason"):
+                    offenders.append(f"{key} ({source}): safety row needs reason")
+            elif status in ("helps", "no-effect", "hurts"):
+                sources = part.get("sources")
+                if not isinstance(sources, list) or not sources:
+                    offenders.append(f"{key} ({source}): {status} row needs sources")
     return offenders
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--root", type=Path, default=None, help="install root (default: this script's grandparent directory)")
-    ap.add_argument("--ledger", type=Path, default=None, help="ledger path (default: <root>/docs/evals/evidence.json)")
+    ap.add_argument(
+        "--ledger",
+        type=Path,
+        default=None,
+        help="template ledger path (default: <root>/docs/evals/evidence.json)",
+    )
     ap.add_argument("--check", action="store_true", help="exit 1 and name every offender; exit 0 otherwise")
     ap.add_argument("--json", action="store_true", help="print the ranked rows as JSON instead of a table")
     args = ap.parse_args(argv)
@@ -236,21 +283,22 @@ def main(argv: list[str] | None = None) -> int:
     if not root.is_dir():
         sys.stderr.write(f"harness-inventory: not a directory: {root}\n")
         return 2
-    ledger_path = args.ledger.resolve() if args.ledger is not None else root / "docs" / "evals" / "evidence.json"
+    ledger_path = args.ledger.resolve() if args.ledger is not None else root / TEMPLATE_LEDGER_RELATIVE
+    instance_ledger_path = root / INSTANCE_LEDGER_RELATIVE
 
     try:
-        ledger = load_ledger(ledger_path)
+        ledgers = load_ledgers(ledger_path, instance_ledger_path, root)
     except LedgerError as exc:
         sys.stderr.write(f"harness-inventory: {exc}\n")
         return 2
 
     if args.check:
-        offenders = check(root, ledger)
+        offenders = check(root, ledgers)
         for line in offenders:
             sys.stdout.write(f"{line}\n")
         return 1 if offenders else 0
 
-    rows = rank_rows(root, ledger)
+    rows = rank_rows(root, ledgers)
     if args.json:
         sys.stdout.write(json.dumps(rows, indent=2) + "\n")
     else:

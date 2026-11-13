@@ -677,7 +677,15 @@ class WorkerReaper:
             for terminal in terminals
             if self._terminal_in_worktree(terminal, selector, dispatch_state.worktree_path)
         ]
-        handles = [str(item.get("handle")) for item in members if item.get("handle")]
+        if any(
+            not isinstance(item.get("handle"), str) or not item["handle"]
+            for item in members
+        ):
+            return (
+                f"terminal_left:{selector}:worktree_membership_unmeasured",
+                measurements,
+            )
+        handles = [item["handle"] for item in members]
         measurements["worktree_terminal_handles"] = handles
         if not handles:
             measurements["terminal_reclaim_allowed"] = True

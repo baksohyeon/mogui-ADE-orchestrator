@@ -38,6 +38,7 @@ The routing table below is adapted from `workspace-card/CLAUDE.md` (identical in
 >
 > - New feature, design change, or improvement request -> `superpowers:brainstorming`, then a worker contract.
 > - Bug, unexpected behavior, or "why is this broken" -> `superpowers:systematic-debugging` before proposing any fix.
+> - Closing a worker pane, resuming a worker, or searching worker sessions -> `orca-cli` skill first.
 > - Any dispatch, worker, or multi-agent coordination -> `orchestration` skill; vendor-direct CLIs are never a dispatch path.
 > - Review-bot threads on PRs -> dispatched fix worker per charter section 4 (`docs/charter/04-worker-routing-review.md`); reply style is `docs/runbooks/review-voice.md`.
 > - Session observability (journey notes, field notes, postmortems) -> skills under `skills/` when present; postmortem records and generation logs go to the genres in `docs/observability/`.

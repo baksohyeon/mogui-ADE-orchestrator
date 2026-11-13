@@ -1604,6 +1604,17 @@ class BranchDeletionTests(unittest.TestCase):
             # Mutant proof: treating every pane as idle would close a live
             # worker and remove its worktree.
 
+    def test_selector_refuses_unmeasured_pane_handle(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _SelectorEnvironment(tmp, missing_handle=True)
+            record = WorkerReaper(orca_runner=env).reap(task_id="t1", execute=True)
+
+            self.assertIn("worktree_membership_unmeasured", record.actions_taken)
+            self.assertEqual(env.closed_commands, [])
+            self.assertEqual(env.removed_commands, [])
+            # Mutant proof: filtering missing handles and treating the list as
+            # empty would remove a worktree without measuring its pane.
+
     def test_selector_dry_run_reports_content_landing_rule(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             env = _SelectorEnvironment(tmp)
@@ -1623,11 +1634,13 @@ class _SelectorEnvironment:
         content_equal: bool = True,
         pane_state: str = "idle",
         include_title_decoy: bool = False,
+        missing_handle: bool = False,
     ) -> None:
         self.worktree_path = worktree_path
         self.content_equal = content_equal
         self.pane_state = pane_state
         self.include_title_decoy = include_title_decoy
+        self.missing_handle = missing_handle
         self.closed_commands: list[list[str]] = []
         self.removed_commands: list[list[str]] = []
 
@@ -1644,14 +1657,14 @@ class _SelectorEnvironment:
                 }
             ), ""
         if cmd[:4] == ["orca", "terminal", "list", "--json"]:
-            terminals = [
-                {
-                    "handle": "term-target",
+            target = {
                     "worktreeId": "repo:target",
                     "worktreePath": self.worktree_path,
                     "title": "same title",
                 }
-            ]
+            if not self.missing_handle:
+                target["handle"] = "term-target"
+            terminals = [target]
             if self.include_title_decoy:
                 terminals.append(
                     {

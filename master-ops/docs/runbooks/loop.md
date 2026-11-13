@@ -98,13 +98,18 @@ items, and anything the standing rules route to the owner stay outside it.
    [dispatch-smoke](dispatch-smoke.md)'s localization table uses to name
    which layer a check belongs to. Then poll checks and threads.
 8. **dispatched → dispatched: relaunched**, once, on a worker process gone
-   with no `worker_done` (one relaunch on the same worktree); write the
-   row's state as `dispatched: relaunched`, rewriting its `task` and
-   `dispatch` columns to the new ids in the same edit, so the row never
-   points back at the abandoned dispatch. A second death on a `dispatched:
-   relaunched` row ends the item `failed: worker-died-twice`. `loop-check`
-   treats both states as in flight; resume either state by waiting on its
-   existing dispatch, not by creating another task. See section 4.
+   with no `worker_done`. Before creating a replacement task, follow
+   [Resume before re-dispatch](dispatch.md#resume-before-re-dispatch) for the
+   same dispatch and worktree: search the recorded session, verify the hit's
+   worktree, and run its `resumeCommand`. Only a measured resume failure may
+   proceed to one relaunch on the same worktree; record
+   `redispatched_after_resume_failure` with the failure reason before creating
+   the new task. Then write the row's state as `dispatched: relaunched`,
+   rewriting its `task` and `dispatch` columns to the new ids in the same edit,
+   so the row never points back at the abandoned dispatch. A second death on a
+   `dispatched: relaunched` row ends the item `failed: worker-died-twice`.
+   `loop-check` treats both states as in flight; resume either state by waiting
+   on its existing dispatch, not by creating another task. See section 4.
 9. **dispatched → blocked**, on a worker `question` or `escalation`. The loop
    stops here (`stop reason=5`); it does not pick further while that is open.
 10. **verifying → failed**, on a clone verification failure. No retry; name
@@ -126,13 +131,15 @@ items, and anything the standing rules route to the owner stay outside it.
 
 Verbatim from the spec's retry limits:
 
-1. A worker that dies without `worker_done` gets one relaunch on the same
-   worktree, with edits preserved: fence the dead dispatch with
-   `worker-abandon` first, then create a new task and dispatch into the same
-   worktree, and write the row's state `dispatched: relaunched`, rewriting
-   its `task` and `dispatch` columns to the new ids in the same edit. A
-   second death on a `dispatched: relaunched` row ends the item `failed:
-   worker-died-twice`.
+1. A worker that dies without `worker_done` first follows the same-session
+   resume gate in [Resume before re-dispatch](dispatch.md#resume-before-re-dispatch).
+   If that measured resume fails, it gets one relaunch on the same worktree,
+   with edits preserved: fence the dead dispatch with `worker-abandon` first,
+   record `redispatched_after_resume_failure`, then create a new task and
+   dispatch into the same worktree, and write the row's state `dispatched:
+   relaunched`, rewriting its `task` and `dispatch` columns to the new ids in
+   the same edit. A second death on a `dispatched: relaunched` row ends the
+   item `failed: worker-died-twice`.
 2. Bot rounds: at most three per item; the third unresolved re-review ends
    the item `blocked`.
 3. Clone verification failure: no retry; the item ends `failed` with the

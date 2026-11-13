@@ -72,6 +72,7 @@ usage() {
   echo "                [--top-approved TEXT]"
   echo "                [--tier-policy FILE]"
   echo "                [--est-chars N] [--transcript-glob GLOB] [--check-only]"
+  echo "       dispatch --ledger-event TYPE --dispatch-id ID [event options]"
   echo "  --transcript-glob: worker transcript location for the model probe"
   echo "                     (default: derived for claude from --worktree when possible)"
   echo "  DISPATCH_FROM_TERMINAL=<handle>: sender terminal for callers that have no ORCA_TERMINAL_HANDLE (launchd, cron)"
@@ -97,6 +98,13 @@ CARD_CLAIMED=0
 # Owner approval for a top-tier model, carrying the reason. Empty means unasked.
 TOP_APPROVED=""
 TGLOB=""
+LEDGER_EVENT=""
+LEDGER_EVENT_DISPATCH_ID=""
+LEDGER_EVENT_RESULT=""
+LEDGER_EVENT_REASON=""
+LEDGER_EVENT_QUERY=""
+LEDGER_EVENT_SESSION_ID=""
+LEDGER_EVENT_WORKTREE_PATH=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --contract) CONTRACT=$2; shift 2;;
@@ -113,6 +121,13 @@ while [ $# -gt 0 ]; do
     --no-card) NO_CARD_REASON=$2; NO_CARD_ARG_SET=1; shift 2;;
     --top-approved) TOP_APPROVED=$2; shift 2;;
     --tier-policy) TIER_POLICY_OVERRIDE=$2; shift 2;;
+    --ledger-event) LEDGER_EVENT=$2; shift 2;;
+    --dispatch-id) LEDGER_EVENT_DISPATCH_ID=$2; shift 2;;
+    --result) LEDGER_EVENT_RESULT=$2; shift 2;;
+    --reason) LEDGER_EVENT_REASON=$2; shift 2;;
+    --search-query) LEDGER_EVENT_QUERY=$2; shift 2;;
+    --session-id) LEDGER_EVENT_SESSION_ID=$2; shift 2;;
+    --worktree-path) LEDGER_EVENT_WORKTREE_PATH=$2; shift 2;;
     *) usage;;
   esac
 done
@@ -142,6 +157,67 @@ else
 fi
 LEDGER="$STATE_DIR/dispatch-ledger.jsonl"
 LEDGER_LOCK="$STATE_DIR/dispatch-ledger.lock"
+
+if [ -n "$LEDGER_EVENT" ]; then
+  if [ -z "$LEDGER_EVENT_DISPATCH_ID" ]; then
+    echo "✗ --ledger-event requires --dispatch-id" >&2
+    exit 1
+  fi
+  case "$LEDGER_EVENT" in
+    resume_attempt)
+      [ "$LEDGER_EVENT_RESULT" = resumed ] || [ "$LEDGER_EVENT_RESULT" = failed ] || {
+        echo "✗ resume_attempt requires --result resumed|failed" >&2
+        exit 1
+      }
+      ;;
+    redispatched_after_resume_failure)
+      [ -n "$LEDGER_EVENT_REASON" ] || {
+        echo "✗ redispatched_after_resume_failure requires --reason" >&2
+        exit 1
+      }
+      ;;
+    *)
+      echo "✗ unsupported ledger event: $LEDGER_EVENT" >&2
+      exit 1
+      ;;
+  esac
+  python3 - "$LEDGER" "$LEDGER_LOCK" "$LEDGER_EVENT" \
+    "$LEDGER_EVENT_DISPATCH_ID" "$LEDGER_EVENT_RESULT" "$LEDGER_EVENT_REASON" \
+    "$LEDGER_EVENT_QUERY" "$LEDGER_EVENT_SESSION_ID" "$WORKTREE" \
+    "$LEDGER_EVENT_WORKTREE_PATH" <<'EOF'
+import fcntl
+import json
+import os
+import sys
+import time
+
+ledger, lock_path, kind, dispatch_id, result, reason, query, session_id, selector, worktree_path = sys.argv[1:]
+entry = {
+    "ts": time.time(),
+    "kind": kind,
+    "job_id": dispatch_id,
+}
+if result:
+    entry["resume_result"] = result
+if reason:
+    entry["failure_reason"] = reason
+if query:
+    entry["resume_query"] = query
+if session_id:
+    entry["agent_session_id"] = session_id
+if selector:
+    entry["worktree_selector"] = selector
+if worktree_path:
+    entry["worktree_path"] = worktree_path
+
+os.makedirs(os.path.dirname(os.path.abspath(lock_path)), exist_ok=True)
+with open(lock_path, "a", encoding="utf-8") as lock:
+    fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+    with open(ledger, "a", encoding="utf-8") as stream:
+        stream.write(json.dumps(entry, sort_keys=True, separators=(",", ":")) + "\n")
+EOF
+  exit $?
+fi
 
 [ -z "$CONTRACT" ] || [ ! -f "$CONTRACT" ] && { echo "✗ contract file missing: $CONTRACT" >&2; exit 1; }
 [ "$CHECK_ONLY" = 0 ] && [ -z "$SPEC" ] && usage
@@ -1549,6 +1625,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 
 ledger_path, dispatch_id, outcome, lock_path = sys.argv[1:]
 os.makedirs(os.path.dirname(os.path.abspath(lock_path)), exist_ok=True)
@@ -2248,6 +2325,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+import time
 
 ledger_path, dispatch_id, terminal, requested_selector, runtime, rollout, lock_path = sys.argv[1:]
 try:
@@ -2266,8 +2344,8 @@ if isinstance(terminals, list):
 
 target = target or {}
 measured_id = str(target.get("worktreeId") or target.get("worktree_id") or "")
-selector = requested_selector.strip() or measured_id
-if selector and not requested_selector.strip() and not selector.startswith(("id:", "path:")):
+selector = measured_id or requested_selector.strip()
+if selector and not selector.startswith(("id:", "path:")):
     selector = "id:" + selector
 worktree_path = str(target.get("worktreePath") or target.get("worktree_path") or "")
 session_id = str(
@@ -2299,7 +2377,7 @@ with open(lock_path, "a", encoding="utf-8") as lock:
         if (
             isinstance(entry, dict)
             and entry.get("job_id") == dispatch_id
-            and entry.get("decision") == "ALLOW"
+            and entry.get("decision") in ("ALLOW", "DENY")
         ):
             if selector:
                 entry["worktree_selector"] = selector
@@ -2311,8 +2389,17 @@ with open(lock_path, "a", encoding="utf-8") as lock:
         entries.append(entry)
 
     if not updated:
-        print("dispatch placement row not found for dispatch", file=sys.stderr)
-        sys.exit(1)
+        entries.append(
+            {
+                "ts": time.time(),
+                "kind": "dispatch_placement",
+                "job_id": dispatch_id,
+                "placement_measured": bool(selector or worktree_path or session_id),
+                **({"worktree_selector": selector} if selector else {}),
+                **({"worktree_path": worktree_path} if worktree_path else {}),
+                **({"agent_session_id": session_id} if session_id else {}),
+            }
+        )
 
     parent = os.path.dirname(os.path.abspath(ledger_path)) or "."
     with tempfile.NamedTemporaryFile(
@@ -2356,6 +2443,7 @@ REG=$(ledger_locked_command "$GATE" --ledger "$LEDGER" register --job-id "$DISP"
       "${MODEL_PROBE_ARGS[@]+"${MODEL_PROBE_ARGS[@]}"}" \
       "${REGISTER_CARD_ARGS[@]+"${REGISTER_CARD_ARGS[@]}"}" 2>/dev/null)
 if [ "$(echo "$REG" | jqf "d['allow']")" != "True" ]; then
+  record_dispatch_placement
   fail_after_tracker_claim "register $(echo "$REG" | jqf "d['reason']") · dispatch=$DISP (worker IS running — resolve register manually)" 4
 fi
 if ! record_claim_failure_reason; then

@@ -296,6 +296,7 @@ def test_concurrent_runs_preserve_all_entries_and_catch_unlocked_mutant(
     barrier = tmp_path / "mutant-barrier"
     barrier.mkdir()
     mutant_env = os.environ.copy()
+    mutant_env.pop("AGY_SETTINGS_PATH", None)
     mutant_env["AGY_MUTANT_BARRIER"] = str(barrier)
     mutant_env["AGY_MUTANT_COUNT"] = str(count)
     mutant_results = run_many(

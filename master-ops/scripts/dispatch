@@ -165,10 +165,15 @@ if [ -n "$LEDGER_EVENT" ]; then
   fi
   case "$LEDGER_EVENT" in
     resume_attempt)
-      [ "$LEDGER_EVENT_RESULT" = resumed ] || [ "$LEDGER_EVENT_RESULT" = failed ] || {
-        echo "✗ resume_attempt requires --result resumed|failed" >&2
+      if [ "$LEDGER_EVENT_RESULT" = resumed ]; then
+        :
+      elif [ "$LEDGER_EVENT_RESULT" = failed ] \
+          && [ -n "${LEDGER_EVENT_REASON//[[:space:]]/}" ]; then
+        :
+      else
+        echo "✗ resume_attempt requires --result resumed|failed and --reason for failed" >&2
         exit 1
-      }
+      fi
       ;;
     redispatched_after_resume_failure)
       [ -n "$LEDGER_EVENT_REASON" ] || {

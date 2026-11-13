@@ -57,7 +57,7 @@ if [ -n "$WORKTREE_PATH" ]; then
   SEARCH_PATH_ARGS=(--path "$WORKTREE_PATH")
 fi
 if ! SEARCH_RESULT=$(orca search "$SEARCH_QUERY" --scope conversation \
-  --sort newest --limit 50 "${SEARCH_PATH_ARGS[@]}"); then
+  --sort newest --limit 50 --json "${SEARCH_PATH_ARGS[@]}"); then
   "$DISPATCH_SCRIPT" --ledger-event resume_attempt --dispatch-id "$DISPATCH_ID" \
     --worktree "$WORKTREE_SELECTOR" --worktree-path "$WORKTREE_PATH" \
     --session-id "$SESSION_ID" --search-query "$SEARCH_QUERY" \

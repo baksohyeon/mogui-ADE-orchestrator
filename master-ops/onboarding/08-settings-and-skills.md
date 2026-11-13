@@ -58,7 +58,7 @@ Record in the ops notes that harness wiring is default-on as of this install. Re
 
 ### Antigravity folder trust and contract command approvals
 
-When `agy` is a worker runtime, run `{{RUNTIME_ROOT}}/scripts/agy-worker-pretrust <absolute-worktree-path>` immediately before its launch. The wrapper writes one exact path to agy's `~/.gemini/antigravity-cli/settings.json` under `trustedWorkspaces`; it preserves the other settings, never writes a wildcard, and prints a `Summary:` line. The measured first-run sequence on 2026-11-13 showed the `Do you trust the contents of this project?` screen before the CLI input screen; after selecting `Yes, I trust this folder`, the before/after diff added one array entry under `trustedWorkspaces` in that settings file, while `~/.gemini/trustedFolders.json` was unchanged.
+When `agy` is a worker runtime, run `{{RUNTIME_ROOT}}/scripts/agy-worker-pretrust <absolute-existing-worktree-path>` immediately before its launch. The wrapper strips one trailing slash, refuses root, home, nonexistent paths, dot components, and glob characters, then writes one exact path to agy's `~/.gemini/antigravity-cli/settings.json` under `trustedWorkspaces`; it preserves the other settings, never writes a wildcard, and prints a `Summary:` line. The measured first-run sequence on 2026-11-13 showed the `Do you trust the contents of this project?` screen before the CLI input screen; after selecting `Yes, I trust this folder`, the before/after diff added one array entry under `trustedWorkspaces` in that settings file, while `~/.gemini/trustedFolders.json` was unchanged.
 
 The same host-edit approval covers agy's contract command allowlist. Merge these entries into the existing `permissions.allow` array and preserve unrelated entries:
 
@@ -76,15 +76,13 @@ The same host-edit approval covers agy's contract command allowlist. Merge these
       "command(orca orchestration worker-start)",
       "command(orca orchestration reply)",
       "command(orca orchestration check)",
-      "command(PYTHONPATH=src python3 -m pytest tests -q)",
-      "command(bash master-ops/scripts/test-agy-pretrust.sh)",
-      "command(bash master-ops/scripts/test-dispatch-agy-pretrust.sh)"
+      "command(PYTHONPATH=src python3 -m pytest tests -q)"
     ]
   }
 }
 ```
 
-The `permissions.allow` key and `command(...)` entries were observed in agy 1.5.8's own settings file. This template covers the commands used by the worker contract and the repository's targeted CI test entry points; a host may add an exact repository-specific test command when its checkout uses a different interpreter or test runner. The measured syntax does not establish a narrower remote/ref rule for `git push`, so force-push variants remain an explicit operator decision until that syntax is measured.
+The `permissions.allow` key and `command(...)` entries were observed in agy 1.5.8's own settings file. This general template covers commands used by every worker contract; targeted shell regression scripts remain repository test commands rather than general worker approvals. A host may add an exact repository-specific test command when its checkout uses a different interpreter or test runner. The measured syntax does not establish a narrower remote/ref rule for `git push`, so force-push variants remain an explicit operator decision until that syntax is measured.
 
 ### Agent notes — disable guidance (for the master later)
 

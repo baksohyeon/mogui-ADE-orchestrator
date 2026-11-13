@@ -1352,11 +1352,6 @@ ensure_agy_pretrust() {
   }
   summary=$(printf '%s\n' "$out" | grep -m1 '^Summary:' || true)
   case "$summary" in
-    *skipped*)
-      echo "✗ agy pre-trust reported: $summary" >&2
-      echo "  A skipped summary leaves the trust prompt in place, which is a delivery gate," >&2
-      echo "  not a warning. Resolve pre-trust or dispatch to a different runtime." >&2
-      return 1;;
     "")
       echo "✗ agy pre-trust produced no Summary line; unmeasured, treating as not trusted" >&2
       printf '%s\n' "$out" >&2
@@ -1890,16 +1885,6 @@ SHA=$(echo "$CHK" | jqf "d.get('contract_sha') or ''")
 if [ "$ALLOW" != "True" ]; then
   echo "✗ gate DENY · $(echo "$CHK" | jqf "d['reason']") · model=$MODEL tier=$TIER"
   echo "$CHK"; exit 2
-fi
-# A check-only dispatch must not edit host settings. A real agy launch runs the
-# pre-trust helper below after the gate has passed; the dry run reports that the
-# mutating step is reserved for the launch path.
-if [ "$CHECK_ONLY" = 1 ] && [ "$RUNTIME" = agy ]; then
-  if [ -n "$TERMINAL" ] && [ -z "$WORKTREE" ]; then
-    echo "pre-trust · skipped · pane reused, nothing launched; the post-inject pane check still catches a trust gate"
-  else
-    echo "pre-trust · skipped · check-only does not edit agy settings; real dispatch will pre-trust before launch"
-  fi
 fi
 if [ "$CHECK_ONLY" = 1 ]; then
   [ "$TIER" = "top" ] && [ -n "$TOP_APPROVED_TEXT" ] && echo "🔓 top tier approved by owner · $TOP_APPROVED"

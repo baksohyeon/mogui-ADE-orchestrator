@@ -20,13 +20,41 @@ if [[ "$worktree_path" == *$'\n'* || "$worktree_path" == *$'\r'* ]]; then
   printf 'ERROR worktree path must not contain a line break\n' >&2
   exit 2
 fi
+if [[ "$worktree_path" == */ ]]; then
+  worktree_path=${worktree_path%/}
+fi
+if [[ -z "$worktree_path" || "$worktree_path" =~ ^/+$ ]]; then
+  printf 'ERROR worktree path must not be the filesystem root\n' >&2
+  exit 2
+fi
+case "$worktree_path" in
+  */.|*/..|*/./*|*/../*)
+    printf 'ERROR worktree path must not contain . or .. components\n' >&2
+    exit 2
+    ;;
+  *[\*\?\[\]]*)
+    printf 'ERROR worktree path must not contain glob characters\n' >&2
+    exit 2
+    ;;
+esac
+if [[ ! -d "$worktree_path" ]]; then
+  printf 'ERROR worktree path must be an existing directory: %s\n' "$worktree_path" >&2
+  exit 2
+fi
+home_path=${HOME:-}
+if [[ "$home_path" == */ ]]; then
+  home_path=${home_path%/}
+fi
+if [[ -n "$home_path" && "$worktree_path" == "$home_path" ]]; then
+  printf 'ERROR worktree path must not be the home directory\n' >&2
+  exit 2
+fi
 
+config_home=${AGY_CONFIG_HOME:-${HOME:+$HOME/.gemini}}
 if [[ -n "${AGY_SETTINGS_PATH:-}" ]]; then
   settings_path=$AGY_SETTINGS_PATH
-elif [[ -n "${AGY_CONFIG_HOME:-}" ]]; then
-  settings_path="$AGY_CONFIG_HOME/antigravity-cli/settings.json"
-elif [[ -n "${HOME:-}" ]]; then
-  settings_path="$HOME/.gemini/antigravity-cli/settings.json"
+elif [[ -n "$config_home" ]]; then
+  settings_path="$config_home/antigravity-cli/settings.json"
 else
   printf 'ERROR agy settings path is unknown: set AGY_SETTINGS_PATH or AGY_CONFIG_HOME\n' >&2
   exit 2
@@ -34,10 +62,11 @@ fi
 
 status=$(
   python3 - "$settings_path" "$worktree_path" <<'PY'
+import fcntl
 import json
 import os
 import sys
-import fcntl
+import tempfile
 from pathlib import Path
 
 
@@ -94,14 +123,32 @@ with lock_path.open("a+", encoding="utf-8") as lock_file:
     if raw.endswith("\n") or not raw:
         rendered += "\n"
 
-    tmp_path = target_path.with_name(f".{target_path.name}.{os.getpid()}.tmp")
-    tmp_path.write_text(rendered, encoding="utf-8")
-    if target_path.exists():
-        os.chmod(tmp_path, target_path.stat().st_mode)
-    else:
-        os.chmod(tmp_path, 0o600)
-    os.replace(tmp_path, target_path)
-    print("added")
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{target_path.name}.", suffix=".tmp", dir=str(target_path.parent)
+    )
+    tmp_path = Path(tmp_name)
+    fd_open = fd
+    try:
+        with os.fdopen(fd_open, "w", encoding="utf-8") as tmp_file:
+            fd_open = -1
+            tmp_file.write(rendered)
+            tmp_file.flush()
+            os.fsync(tmp_file.fileno())
+        if target_path.exists():
+            os.chmod(tmp_path, target_path.stat().st_mode)
+        else:
+            os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, target_path)
+        tmp_path = None
+        print("added")
+    finally:
+        if fd_open != -1:
+            os.close(fd_open)
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink()
+            except FileNotFoundError:
+                pass
 PY
 )
 

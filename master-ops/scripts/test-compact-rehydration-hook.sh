@@ -105,7 +105,10 @@ out="$(run_hook "$HOOK" PostToolUse no-marker)"
 
 # The probe's printed append command must execute unchanged in the temp seat.
 if [ -x "$PROBE" ]; then
-  command_output="$(MOGUI_STATE_DIR="$STATE" CONTEXT_QUALITY_LOG="$LOG" \
+  COMMAND_DIR="$T/space seat"
+  COMMAND_LOG="$COMMAND_DIR/context quality.jsonl"
+  mkdir -p "$COMMAND_DIR"
+  command_output="$(MOGUI_STATE_DIR="$STATE" CONTEXT_QUALITY_LOG="$COMMAND_LOG" \
     bash "$PROBE" <<'EOF'
 {"source":"compact","session_id":"command-session"}
 EOF
@@ -123,7 +126,7 @@ for line in text.splitlines():
 PY
 )"
   if [ -n "$recall_command" ] && (cd "$T" && bash -c "$recall_command") >/dev/null 2>&1 \
-    && python3 - "$LOG" <<'PY'
+    && python3 - "$COMMAND_LOG" <<'PY'
 import json
 import sys
 
@@ -217,9 +220,25 @@ printf '%s' "$cap" | grep -q 'more: run' \
   && ok "cap names a runnable command for omitted rows" \
   || fail "cap omitted-row command missing"
 
+python3 - "$TRACKS" <<'PY'
+import json
+import sys
+rows = [
+    {"id": f"short-{i:03d}", "title": "x", "updated_at": "2099-01-01T00:00:00+00:00"}
+    for i in range(600)
+]
+with open(sys.argv[1], "w", encoding="utf-8") as handle:
+    json.dump(rows, handle)
+PY
+run_probe short-cap-session
+append_record short-cap-session
+short_cap="$(run_hook "$HOOK" PostToolUse short-cap-session)"
+short_cap_bytes="$(printf '%s' "$short_cap" | wc -c | tr -d ' ')"
+[ "$short_cap_bytes" -le 9000 ] && ok "short tracker rows stay under the serialized cap" || fail "short-row cap exceeded: $short_cap_bytes"
+
 make_mutant() {
   local name="$1" old="$2" new="$3"
-  python3 - "$HOOK" "$T/$name.sh" "$old" "$new" <<'PY'
+  if ! python3 - "$HOOK" "$T/$name.sh" "$old" "$new" <<'PY'
 import sys
 source, target, old, new = sys.argv[1:]
 text = open(source, encoding="utf-8").read()
@@ -227,7 +246,14 @@ if old not in text:
     raise SystemExit(f"mutant source not found: {old}")
 open(target, "w", encoding="utf-8").write(text.replace(old, new, 1))
 PY
-  chmod +x "$T/$name.sh"
+  then
+    fail "mutant $name was not built"
+    return
+  fi
+  if ! chmod +x "$T/$name.sh"; then
+    fail "mutant $name could not be made executable"
+    return
+  fi
 }
 
 # Each mutant changes one contract rule and must make its focused case fail.

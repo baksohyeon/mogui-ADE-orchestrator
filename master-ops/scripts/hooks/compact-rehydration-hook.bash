@@ -39,6 +39,7 @@ from typing import Any
 CAP = 8_500
 STALE_SECONDS = 6 * 60 * 60
 POST_TOOL_LIMIT = 2
+CLAIM_TIMEOUT_SECONDS = 120
 OPS_REPO = Path(os.environ.get("OPS_REPO", "")).expanduser()
 STATE_DIR = Path(os.environ.get("STATE_DIR", "")).expanduser()
 INSTANCE_CONFIG = Path(os.environ.get("INSTANCE_CONFIG", "")).expanduser()
@@ -146,10 +147,20 @@ def recorded_recall(marker: dict[str, Any]) -> bool:
 def claim(path: Path) -> Path | None:
     claimed = path.with_name(path.name + ".claimed")
     try:
-        path.replace(claimed)
+        os.link(path, claimed)
+        return claimed
+    except FileExistsError:
+        try:
+            age = dt.datetime.now(dt.timezone.utc).timestamp() - claimed.stat().st_mtime
+            if age <= CLAIM_TIMEOUT_SECONDS:
+                return None
+            claimed.unlink()
+            os.link(path, claimed)
+            return claimed
+        except OSError:
+            return None
     except OSError:
         return None
-    return claimed
 
 
 def delete(path: Path) -> None:
@@ -395,8 +406,8 @@ def compose_work_layer(limit: int = CAP) -> str:
     active, decisions, tracker_command = tracker_section()
     sections: list[dict[str, Any]] = [
         {"heading": "## Role State", "lines": role_state_lines(), "trim": False, "command": ""},
-        {"heading": "## In-progress tracker items", "lines": active, "trim": active != ["unavailable", "none"], "command": tracker_command},
-        {"heading": "## Open decisions", "lines": decisions, "trim": decisions != ["unavailable", "none"], "command": "bd list --status=open --type=decision --json --limit=0 --flat"},
+        {"heading": "## In-progress tracker items", "lines": active, "trim": active not in (["unavailable"], ["none"]), "command": tracker_command},
+        {"heading": "## Open decisions", "lines": decisions, "trim": decisions not in (["unavailable"], ["none"]), "command": "bd list --status=open --type=decision --json --limit=0 --flat"},
         {"heading": "## Live worker panes", "lines": panes_lines(), "trim": False, "command": "orca terminal list --json"},
         {"heading": "## Uncommitted files in the ops repository", "lines": uncommitted_lines(), "trim": False, "command": "git status --porcelain"},
         {"heading": "## Seat-declared extra lines", "lines": extras_lines(), "trim": True, "command": "read the instance runtime extra-lines configuration"},
@@ -421,11 +432,40 @@ def compose_work_layer(limit: int = CAP) -> str:
             continue
     if marker:
         output = "\n".join(line for section in sections for line in [section["heading"], *section["lines"]])
-        return output + "\n" + marker
+        combined = output + "\n" + marker
+        if len(combined) <= limit:
+            return combined
+        return output[: max(0, limit - len(marker) - 1)] + "\n" + marker
     output = "\n".join(line for section in sections for line in [section["heading"], *section["lines"]])
     if len(output) <= limit:
         return output
     return output[: max(0, limit - 1)] + "\n"
+
+
+def fit_post_tool_context(context: str) -> str:
+    wrapper = {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": context}}
+    def serialized_size(value: str) -> int:
+        wrapper["hookSpecificOutput"]["additionalContext"] = value
+        return len(json.dumps(wrapper, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+
+    if serialized_size(context) <= CAP:
+        return context
+    lines = context.splitlines()
+    marker = lines[-1] if lines and " more: run " in lines[-1] else ""
+    body = "\n".join(lines[:-1]) if marker else context
+    body_bytes = body.encode("utf-8")
+    low, high = 0, len(body_bytes)
+    best = ""
+    while low <= high:
+        midpoint = (low + high) // 2
+        prefix = body_bytes[:midpoint].decode("utf-8", errors="ignore").rstrip()
+        candidate = prefix + (("\n" + marker) if marker else "")
+        if serialized_size(candidate) <= CAP:
+            best = candidate
+            low = midpoint + 1
+        else:
+            high = midpoint - 1
+    return best
 
 
 def main() -> None:
@@ -475,6 +515,7 @@ def main() -> None:
         if event == "posttooluse":
             wrapper_size = len(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": ""}}, ensure_ascii=False, separators=(",", ":")))
             context = prefix + compose_work_layer(max(1, CAP - wrapper_size - len(prefix)))
+            context = fit_post_tool_context(context)
         else:
             context = prefix + compose_work_layer(max(1, CAP - len(prefix)))
         if event == "posttooluse":
@@ -483,6 +524,7 @@ def main() -> None:
             print(context)
     finally:
         delete(claimed)
+        delete(path)
 
 
 main()

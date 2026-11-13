@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SessionStart(compact) context-quality recall probe.
-# This emits instructions only. It records no secret values and implements no
-# dispatch or security enforcement.
+# This writes a per-session marker and emits recall instructions. It records no
+# secret values and implements no dispatch or security enforcement.
 set +e
 
 if ! command -v python3 >/dev/null 2>&1; then
@@ -23,6 +23,7 @@ CONTEXT_LOG_SCRIPT="$CONTEXT_LOG_SCRIPT" \
 python3 <<'PY' 2>/dev/null || true
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -46,7 +47,8 @@ dispatch_ledger_path = os.environ.get(
     os.path.expanduser("~/.mogui/dispatch-ledger.jsonl"),
 )
 
-if session_id != "<unknown-session>":
+safe_session = isinstance(session_id, str) and re.fullmatch(r"[A-Za-z0-9._:-]+", session_id)
+if safe_session:
     state_dir = Path(os.environ.get("STATE_DIR", "") or "").expanduser()
     context_log = Path(context_log_path).expanduser().resolve()
     marker_dir = state_dir / "compact-pending"
@@ -99,7 +101,7 @@ Append one JSON record before source verification. Suggested payload:
 {json.dumps(record_template, ensure_ascii=False, separators=(",", ":"))}
 
 Append the recall record with this runnable command:
-{shlex.quote('CONTEXT_QUALITY_LOG=' + str(Path(context_log_path).expanduser().resolve()))} {shlex.quote(str(Path(os.environ.get('CONTEXT_LOG_SCRIPT', '')).expanduser().resolve()))} {shlex.quote(json.dumps(record_template, ensure_ascii=False, separators=(',', ':')))}
+{'CONTEXT_QUALITY_LOG=' + shlex.quote(str(Path(context_log_path).expanduser().resolve()))} {shlex.quote(str(Path(os.environ.get('CONTEXT_LOG_SCRIPT', '')).expanduser().resolve()))} {shlex.quote(json.dumps(record_template, ensure_ascii=False, separators=(',', ':')))}
 
 Dispatch ledger path:
 {dispatch_ledger_path}

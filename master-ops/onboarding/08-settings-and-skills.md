@@ -53,17 +53,21 @@ owner-managed:
 ]
 ```
 
-Register the compact rehydration hook in both event arrays. An empty PostToolUse
-matcher covers every tool, while the UserPromptSubmit entry handles a turn that
-ends immediately after the recall append:
+Register the compact rehydration hook in the existing `hooks` object. Append the
+PostToolUse entry to its event array and merge the UserPromptSubmit entry with
+the existing UserPromptSubmit array. An empty PostToolUse matcher covers every
+tool, while the UserPromptSubmit entry handles a turn that ends immediately
+after the recall append:
 
 ```json
-"PostToolUse": [
-  {"matcher": "", "hooks": [{"type": "command", "command": "bash \"{{OPS_REPO}}/scripts/hooks/compact-rehydration-hook.bash\""}]}
-],
-"UserPromptSubmit": [
-  {"matcher": "", "hooks": [{"type": "command", "command": "bash \"{{OPS_REPO}}/scripts/hooks/compact-rehydration-hook.bash\""}]}
-]
+"hooks": {
+  "PostToolUse": [
+    {"matcher": "", "hooks": [{"type": "command", "command": "bash \"{{OPS_REPO}}/scripts/hooks/compact-rehydration-hook.bash\""}]}
+  ],
+  "UserPromptSubmit": [
+    {"matcher": "", "hooks": [{"type": "command", "command": "bash \"{{OPS_REPO}}/scripts/hooks/compact-rehydration-hook.bash\""}]}
+  ]
+}
 ```
 
 The optional `work_layer_extra_lines` array in the instance runtime config

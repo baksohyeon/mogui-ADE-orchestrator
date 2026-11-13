@@ -176,7 +176,7 @@ if [ -n "$LEDGER_EVENT" ]; then
       fi
       ;;
     redispatched_after_resume_failure)
-      [ -n "$LEDGER_EVENT_REASON" ] || {
+      [ -n "${LEDGER_EVENT_REASON//[[:space:]]/}" ] || {
         echo "✗ redispatched_after_resume_failure requires --reason" >&2
         exit 1
       }
@@ -2580,7 +2580,7 @@ EOF
   if [ "$rc" != 0 ]; then
     echo "⚠ dispatch placement could not be recorded · dispatch=$DISP" >&2
   fi
-  return 0
+  return "$rc"
 }
 
 # 5b. register (job probe = ledger-vs-dispatch-show; model probe only when it can
@@ -2605,13 +2605,17 @@ REG=$(ledger_locked_command "$GATE" --ledger "$LEDGER" register --job-id "$DISP"
       "${MODEL_PROBE_ARGS[@]+"${MODEL_PROBE_ARGS[@]}"}" \
       "${REGISTER_CARD_ARGS[@]+"${REGISTER_CARD_ARGS[@]}"}" 2>/dev/null)
 if [ "$(echo "$REG" | jqf "d['allow']")" != "True" ]; then
-  record_dispatch_placement
+  if ! record_dispatch_placement; then
+    echo "⚠ dispatch placement could not be recorded after register denial · dispatch=$DISP" >&2
+  fi
   fail_after_tracker_claim "register $(echo "$REG" | jqf "d['reason']") · dispatch=$DISP (worker IS running — resolve register manually)" 4
 fi
 if ! record_claim_failure_reason; then
   fail_after_tracker_claim "claim-failure reason could not be recorded · dispatch=$DISP" 4
 fi
-record_dispatch_placement
+if ! record_dispatch_placement; then
+  fail_after_tracker_claim "dispatch placement could not be recorded · dispatch=$DISP (worker IS running; resolve placement manually)" 4
+fi
 record_host_diversity_audit
 WARN=$(echo "$REG" | jqf "','.join(d.get('warnings',[]))")
 case "$PROBE_STATE" in

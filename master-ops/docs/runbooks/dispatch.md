@@ -52,15 +52,18 @@ if [ "$INDEX_ENABLED" != true ]; then
     --result failed --reason index-disabled
   exit 1
 fi
-SEARCH_PATH_ARGS=()
 # Antigravity search results carry cwd=null. A recorded session id is the
 # authoritative match and must not be narrowed by the path filter; only the
 # no-recorded-id fallback uses selector/path matching.
-if [ -z "$SESSION_ID" ] && [ -n "$WORKTREE_PATH" ]; then
-  SEARCH_PATH_ARGS=(--path "$WORKTREE_PATH")
-fi
-if ! SEARCH_RESULT=$(orca search "$SEARCH_QUERY" --scope conversation \
-  --sort newest --limit 50 --json "${SEARCH_PATH_ARGS[@]}"); then
+search_resume() {
+  if [ -z "$SESSION_ID" ] && [ -n "$WORKTREE_PATH" ]; then
+    orca search "$SEARCH_QUERY" --scope conversation --sort newest --limit 50 \
+      --path "$WORKTREE_PATH" --json
+  else
+    orca search "$SEARCH_QUERY" --scope conversation --sort newest --limit 50 --json
+  fi
+}
+if ! SEARCH_RESULT=$(search_resume); then
   "$DISPATCH_SCRIPT" --ledger-event resume_attempt --dispatch-id "$DISPATCH_ID" \
     --worktree "$WORKTREE_SELECTOR" --worktree-path "$WORKTREE_PATH" \
     --session-id "$SESSION_ID" --search-query "$SEARCH_QUERY" \

@@ -966,12 +966,32 @@ class WorkerReaper:
                 isinstance(row, dict) for row in workers
             ):
                 return None
-            rows.extend(workers)
+            for worker in workers:
+                normalized = dict(worker)
+                if "dispatchId" not in normalized and normalized.get("id"):
+                    normalized["dispatchId"] = normalized["id"]
+                if "dispatchStatus" not in normalized and "outcome" in normalized:
+                    outcome = str(normalized.get("outcome") or "")
+                    normalized["dispatchStatus"] = (
+                        "dispatched" if outcome == "in_progress" else outcome
+                    )
+                if "agentTerminalHandle" not in normalized and "terminal" in normalized:
+                    terminal = normalized.get("terminal")
+                    if isinstance(terminal, dict):
+                        terminal = terminal.get("handle") or terminal.get("id")
+                    if terminal:
+                        normalized["agentTerminalHandle"] = terminal
+                rows.append(normalized)
             page = result.get("page")
-            if not isinstance(page, dict):
+            if isinstance(page, dict):
+                has_more = bool(page.get("hasMore"))
+                cursor = page.get("nextCursor")
+            elif "nextCursor" in result:
+                cursor = result.get("nextCursor")
+                has_more = bool(cursor)
+            else:
                 return None
-            cursor = page.get("nextCursor")
-            if page.get("hasMore"):
+            if has_more:
                 if not cursor or page_index == MAX_WORKER_LIST_PAGES - 1:
                     return None
             else:

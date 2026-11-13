@@ -1632,6 +1632,8 @@ class BranchDeletionTests(unittest.TestCase):
             )
             self.assertEqual(record.measurements["worktree_landed_by"], "content")
             self.assertIn("worktree_remove_requested:", record.actions_taken)
+            self.assertEqual(len(env.quiet_commands), 1)
+            self.assertEqual(env.quiet_commands[0][-2:], ["--", "src/worker.py"])
             # Mutant proof: replacing the content rule with ancestry leaves
             # this squash-merged branch unreaped.
 
@@ -1642,6 +1644,7 @@ class BranchDeletionTests(unittest.TestCase):
 
             self.assertIn("differing paths: src/worker.py", record.actions_taken)
             self.assertEqual(env.removed_commands, [])
+            self.assertEqual(env.quiet_commands[0][-2:], ["--", "src/worker.py"])
             # Mutant proof: removing the path-scoped `git diff --quiet` check
             # would delete a branch whose changed file still differs.
 
@@ -1676,6 +1679,17 @@ class BranchDeletionTests(unittest.TestCase):
             self.assertEqual(env.removed_commands, [])
             # Mutant proof: dropping the worktree-level reuse guard closes all
             # panes belonging to the newer dispatch.
+
+    def test_selector_refuses_reuse_in_current_worker_list_shape(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _SelectorEnvironment(
+                tmp, reused_by="ctx-newer", worker_list_shape="current"
+            )
+            record = WorkerReaper(orca_runner=env).reap(task_id="t1", execute=True)
+
+            self.assertIn("reused_by:ctx-newer", record.actions_taken)
+            self.assertEqual(env.closed_commands, [])
+            self.assertEqual(env.removed_commands, [])
 
     def test_selector_does_not_close_before_unmerged_verdict(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1762,6 +1776,7 @@ class _SelectorEnvironment:
         remove_fails: bool = False,
         no_panes: bool = False,
         no_worktree_path: bool = False,
+        worker_list_shape: str = "legacy",
     ) -> None:
         self.worktree_path = worktree_path
         self.content_equal = content_equal
@@ -1773,8 +1788,10 @@ class _SelectorEnvironment:
         self.remove_fails = remove_fails
         self.no_panes = no_panes
         self.no_worktree_path = no_worktree_path
+        self.worker_list_shape = worker_list_shape
         self.closed_commands: list[list[str]] = []
         self.removed_commands: list[list[str]] = []
+        self.quiet_commands: list[list[str]] = []
 
     def __call__(self, cmd: list[str]) -> tuple[int, str, str]:
         if "dispatch-show" in cmd:
@@ -1811,13 +1828,24 @@ class _SelectorEnvironment:
         if cmd[:4] == ["orca", "orchestration", "worker-list", "--limit"]:
             workers = []
             if self.reused_by:
-                workers.append(
-                    {
-                        "dispatchId": self.reused_by,
-                        "dispatchStatus": "dispatched",
-                        "worktreeId": "repo:target",
-                    }
-                )
+                if self.worker_list_shape == "current":
+                    workers.append(
+                        {
+                            "id": self.reused_by,
+                            "outcome": "in_progress",
+                            "terminal": "term-target",
+                        }
+                    )
+                else:
+                    workers.append(
+                        {
+                            "dispatchId": self.reused_by,
+                            "dispatchStatus": "dispatched",
+                            "worktreeId": "repo:target",
+                        }
+                    )
+            if self.worker_list_shape == "current":
+                return 0, json.dumps({"result": {"workers": workers, "nextCursor": ""}}), ""
             return 0, json.dumps({"result": {"workers": workers, "page": {"hasMore": False}}}), ""
         if cmd and cmd[0].endswith("worker-pane-sweep"):
             return (1 if self.sweep_fails else 0), (
@@ -1840,6 +1868,9 @@ class _SelectorEnvironment:
         if "git" in cmd and "--name-only" in cmd:
             return 0, "src/worker.py\0", ""
         if "git" in cmd and "--quiet" in cmd:
+            self.quiet_commands.append(cmd)
+            if "--" not in cmd or cmd[cmd.index("--") + 1 :] != ["src/worker.py"]:
+                return 2, "", "path scope missing"
             return (0 if self.content_equal else 1), "", ""
         return 0, "", ""
 

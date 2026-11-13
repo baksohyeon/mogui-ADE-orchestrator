@@ -207,6 +207,7 @@ make_harness placement
 : > "$T/placement-ledger.jsonl"
 placement_out=$(PLACEMENT_WORKTREE="$T/placement-worktree" bash "$T/harness-placement.sh")
 if printf '%s' "$placement_out" | grep -q '"worktree_selector":"folder:folder-placement"' \
+    && printf '%s' "$placement_out" | grep -Fq '"worktree_path":"'$T'/placement-worktree"' \
     && ! printf '%s' "$placement_out" | grep -q 'id:folder:folder-placement'; then
   ok "record_dispatch_placement preserves the folder selector"
 else
@@ -296,7 +297,12 @@ event_out=$(MOGUI_STATE_DIR="$T/state" DISPATCH_STANDING_RULES="$S/../rules/stan
   --worktree-path "$T/event-worktree" --session-id agy-event \
   --search-query agy-event --result resumed 2>&1) || event_status=$?
 if [ "$event_status" -eq 0 ] && [ -s "$event_ledger" ] && grep -q '"kind":"resume_attempt"' "$event_ledger" \
-    && grep -q '"resume_result":"resumed"' "$event_ledger"; then
+    && grep -q '"resume_result":"resumed"' "$event_ledger" \
+    && grep -q '"job_id":"disp-event"' "$event_ledger" \
+    && grep -q '"worktree_selector":"folder:event"' "$event_ledger" \
+    && grep -Fq '"worktree_path":"'$T'/event-worktree"' "$event_ledger" \
+    && grep -q '"agent_session_id":"agy-event"' "$event_ledger" \
+    && grep -q '"resume_query":"agy-event"' "$event_ledger"; then
   ok "--ledger-event writes resume_attempt to the configured temporary ledger"
 else
   fail "ledger-event case: rc=$event_status out=$event_out ledger=$(cat "$event_ledger" 2>/dev/null || true)"
@@ -310,6 +316,15 @@ set -u
 [ "$event_failed_status" -ne 0 ] \
   && ok "--ledger-event refuses a failed resume without a reason" \
   || fail "ledger-event accepted a failed resume without a reason"
+set +e
+MOGUI_STATE_DIR="$T/state" DISPATCH_STANDING_RULES="$S/../rules/standing-rules.md" \
+  PATH="$T/bin:$PATH" bash "$T/harness/dispatch-production" \
+  --ledger-event redispatched_after_resume_failure --dispatch-id disp-event --reason "   " >/dev/null 2>&1
+event_blank_status=$?
+set -u
+[ "$event_blank_status" -ne 0 ] \
+  && ok "--ledger-event refuses a whitespace-only redispatch reason" \
+  || fail "ledger-event accepted a whitespace-only redispatch reason"
 
 production_failure_case() {
   mode="$1"
@@ -355,6 +370,10 @@ if [ "$1" = orchestration ] && [ "$2" = dispatch-show ]; then
   printf '{"ok":true,"result":{"dispatch":{"id":"disp-test","status":"dispatched"}}}\n'
   exit 0
 fi
+if [ "$1" = terminal ] && [ "$2" = list ]; then
+  printf '{"result":{"terminals":[{"handle":"term_test","worktreeId":"repo:test"}]}}\n'
+  exit 0
+fi
 if [ "$1" = terminal ] && [ "$2" = read ]; then
   count=0
   [ -f "$ORCA_READ_COUNT" ] && count=$(<"$ORCA_READ_COUNT")
@@ -384,6 +403,7 @@ EOF
   chmod +x "$work/harness/dispatch"
   : > "$work/bd.log"
   : > "$work/read-count"
+  : > "$work/state/dispatch-ledger.jsonl"
   set +e
   out=$(ORCA_MODE="$mode" GATE_MODE="$mode" ORCA_READ_COUNT="$work/read-count" \
     MOGUI_STATE_DIR="$work/state" CARD_LOG="$work/bd.log" \

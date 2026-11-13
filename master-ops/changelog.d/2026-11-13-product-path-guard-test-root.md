@@ -1,0 +1,1 @@
+- Fixed the product-path-guard regression test so installed-hook fixtures derive the runtime-root replacement anchor from the hook's default configuration line.

@@ -148,6 +148,7 @@ def claim(path: Path) -> Path | None:
     claimed = path.with_name(path.name + ".claimed")
     try:
         os.link(path, claimed)
+        os.utime(claimed, None)
         return claimed
     except FileExistsError:
         try:
@@ -156,10 +157,16 @@ def claim(path: Path) -> Path | None:
                 return None
             claimed.unlink()
             os.link(path, claimed)
+            os.utime(claimed, None)
             return claimed
         except OSError:
             return None
     except OSError:
+        try:
+            if claimed.is_file():
+                claimed.unlink()
+        except OSError:
+            pass
         return None
 
 

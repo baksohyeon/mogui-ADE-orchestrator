@@ -200,6 +200,36 @@ stale="$(run_hook "$HOOK" UserPromptSubmit stale-session)"
 [ -z "$stale" ] && ok "stale marker stays silent" || fail "stale marker printed: $stale"
 [ ! -f "$STATE/compact-pending/stale-session" ] && ok "stale marker is deleted" || fail "stale marker remains"
 
+# An old marker with a fresh claimed copy belongs to an active consumer. The
+# claim timeout must use the claim file's mtime, so this case fails before the
+# claim stamp is added.
+python3 - "$STATE/compact-pending/fresh-claim" "$LOG" <<'PY'
+import datetime as dt
+import json
+import os
+import shutil
+import sys
+from pathlib import Path
+
+marker_path, log_path = map(Path, sys.argv[1:])
+marker_path.write_text(json.dumps({
+    "compact_time": dt.datetime.now(dt.timezone.utc).isoformat(),
+    "log_path": str(log_path.resolve()),
+    "log_offset": 0,
+    "session_id": "fresh-claim",
+    "post_tool_uses": 2,
+}) + "\n", encoding="utf-8")
+claimed_path = marker_path.with_name(marker_path.name + ".claimed")
+shutil.copy2(marker_path, claimed_path)
+old = dt.datetime.now(dt.timezone.utc).timestamp() - 600
+os.utime(marker_path, (old, old))
+os.utime(claimed_path, None)
+PY
+fresh_claim="$(run_hook "$HOOK" PostToolUse fresh-claim)"
+[ -z "$fresh_claim" ] && ok "fresh claim blocks a duplicate injection" || fail "fresh claim was treated as stale: $fresh_claim"
+[ -f "$STATE/compact-pending/fresh-claim" ] && ok "fresh claim preserves the marker" || fail "fresh claim lost the marker"
+[ -f "$STATE/compact-pending/fresh-claim.claimed" ] && ok "fresh claim remains owned" || fail "fresh claim ownership was lost"
+
 # Two hundred long fake rows stay within the 9,000-character cap.
 python3 - "$TRACKS" <<'PY'
 import json

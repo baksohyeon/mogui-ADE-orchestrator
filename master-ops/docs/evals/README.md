@@ -7,10 +7,14 @@ template: every harness part either ships with evidence that it helps, or with a
 an owner, and a measure-by date. This template ships no runner. A plan here is a document; the
 trials are run by whoever owns the plan, with whatever harness they have.
 
-## `evidence.json`
+## `evidence.json` and `evidence.instance.json`
 
-One JSON object: `{"measured_at": "<date>", "parts": [...]}`. `measured_at` is the date the ledger
-itself was last reviewed as a whole, not the date of any one part's trial.
+The template ledger is one JSON object: `{"measured_at": "<date>", "parts": [...]}`.
+`measured_at` is the date the ledger itself was last reviewed as a whole, not the date of any
+one part's trial. An install that wants to track its own parts adds rows to the optional
+`evidence.instance.json`, which is instance-owned in `MANIFEST.json` and survives template
+upgrades. `harness-inventory` merges both ledgers; the local file uses the same object and row
+schema, and its absence means that the install has no local rows.
 
 Each entry in `parts` is one harness part:
 
@@ -61,8 +65,9 @@ disk. `scripts/harness-inventory` prints that number verbatim, marked `*`, inste
 it. One such part is out of this ledger's scope entirely: the SessionStart tracker-priming stdout
 an installed tracker hook writes into context is not a template script (it comes from the
 install's own tracker wiring, the way the gstack and ponytail session banners are not template
-parts either), so it carries no row here. An install that wants to track it adds its own row under
-a declared name, using the same `measured_tokens` / `measured_on` fields.
+parts either), so it carries no row here. An install that wants to track it adds its own row to
+`evidence.instance.json` under a declared name, using the same `measured_tokens` / `measured_on`
+fields.
 
 ## Status values and the disqualifier words
 

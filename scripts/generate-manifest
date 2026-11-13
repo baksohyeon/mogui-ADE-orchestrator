@@ -58,6 +58,7 @@ INSTANCE_OWNED = (
     "contracts/",
     "docs/blame/",
     "docs/lineage/",
+    "docs/evals/evidence.instance.json",
     "AGENTS.md",
     "CLAUDE.md",
     "docs/MASTER-OPERATIONS.md",

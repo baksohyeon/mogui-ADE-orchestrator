@@ -83,7 +83,12 @@ PY
 
 run_hook() {
   local hook="$1" event="$2" session="$3"
-  printf '{"session_id":"%s","hook_event_name":"%s"}\n' "$session" "$event" |
+  run_hook_payload "$hook" "$event" "$(printf '{"session_id":"%s","hook_event_name":"%s"}\n' "$session" "$event")"
+}
+
+run_hook_payload() {
+  local hook="$1" event="$2" payload="$3"
+  printf '%s' "$payload" |
     MOGUI_STATE_DIR="$STATE" MOGUI_OPS_REPO="$OPS" \
     MOGUI_INSTANCE_RUNTIME_CONFIG="$CONFIG" \
     TRACKS_FILE="$TRACKS" DECISIONS_FILE="$DECISIONS" PANES_FILE="$PANES" \
@@ -100,6 +105,41 @@ marker_exists() { [ -f "$STATE/compact-pending/$1" ]; }
 # No marker: silent and exits successfully.
 out="$(run_hook "$HOOK" PostToolUse no-marker)"
 [ -z "$out" ] && ok "no marker stays silent" || fail "no marker printed: $out"
+
+fast_ms="$(python3 - "$HOOK" "$STATE" "$OPS" "$CONFIG" "$TRACKS" "$DECISIONS" "$PANES" "$BIN" <<'PY'
+import json
+import os
+import subprocess
+import sys
+import time
+
+hook, state, ops, config, tracks, decisions, panes, bin_dir = sys.argv[1:]
+payload = json.dumps({"session_id": "no-marker", "hook_event_name": "PostToolUse"})
+environment = {
+    **os.environ,
+    "MOGUI_STATE_DIR": state,
+    "MOGUI_OPS_REPO": ops,
+    "MOGUI_INSTANCE_RUNTIME_CONFIG": config,
+    "TRACKS_FILE": tracks,
+    "DECISIONS_FILE": decisions,
+    "PANES_FILE": panes,
+    "PATH": f"{bin_dir}:{os.environ['PATH']}",
+}
+started = time.perf_counter()
+for _ in range(20):
+    result = subprocess.run(
+        ["bash", hook, "PostToolUse"], input=payload, text=True,
+        capture_output=True, env=environment, check=False,
+    )
+    if result.returncode != 0 or result.stdout:
+        raise SystemExit("no-marker fast path produced output or failed")
+elapsed_ms = (time.perf_counter() - started) * 1000 / 20
+if elapsed_ms >= 100:
+    raise SystemExit(f"no-marker fast path measured {elapsed_ms:.3f} ms per call")
+print(f"{elapsed_ms:.3f}")
+PY
+)"
+[ -n "$fast_ms" ] && ok "no-marker fast path measures ${fast_ms} ms per call" || fail "no-marker fast path timing failed"
 
 # The probe's printed append command must execute unchanged in the temp seat.
 if [ -x "$PROBE" ]; then
@@ -162,15 +202,26 @@ grep -q '"event":"recall_skipped"' "$LOG" \
   && ok "third PostToolUse consumes marker" \
   || fail "third PostToolUse left marker"
 
-# UserPromptSubmit is the first-call fallback.
+# A manual UserPromptSubmit before any PostToolUse leaves the marker and says the
+# recall check is owed; the bounded skip path begins after a PostToolUse count.
 run_probe first-prompt
 prompt="$(run_hook "$HOOK" UserPromptSubmit first-prompt)"
+printf '%s' "$prompt" | grep -q 'Recall check is owed' \
+  && ok "first UserPromptSubmit reports owed recall" \
+  || fail "first UserPromptSubmit missed owed-recall message: $prompt"
+[ -f "$STATE/compact-pending/first-prompt" ] \
+  && ok "first UserPromptSubmit preserves marker" \
+  || fail "first UserPromptSubmit consumed marker"
+
+run_probe prompt-after-post
+run_hook "$HOOK" PostToolUse prompt-after-post >/dev/null
+prompt="$(run_hook "$HOOK" UserPromptSubmit prompt-after-post)"
 printf '%s' "$prompt" | grep -q 'measurement is contaminated' \
-  && ok "first UserPromptSubmit injects skipped recall work layer" \
-  || fail "first UserPromptSubmit missed skipped recall message: $prompt"
-[ ! -f "$STATE/compact-pending/first-prompt" ] \
-  && ok "first UserPromptSubmit consumes marker" \
-  || fail "first UserPromptSubmit left marker"
+  && ok "UserPromptSubmit after PostToolUse injects skipped recall work layer" \
+  || fail "UserPromptSubmit after PostToolUse missed skipped recall message: $prompt"
+[ ! -f "$STATE/compact-pending/prompt-after-post" ] \
+  && ok "UserPromptSubmit after PostToolUse consumes marker" \
+  || fail "UserPromptSubmit after PostToolUse left marker"
 
 # An append for another session is ignored.
 run_probe other-session
@@ -197,6 +248,13 @@ EOF
 stale="$(run_hook "$HOOK" UserPromptSubmit stale-session)"
 [ -z "$stale" ] && ok "stale marker stays silent" || fail "stale marker printed: $stale"
 [ ! -f "$STATE/compact-pending/stale-session" ] && ok "stale marker is deleted" || fail "stale marker remains"
+
+cat > "$STATE/compact-pending/missing-time" <<EOF
+{"log_path":"$LOG","log_offset":0,"session_id":"missing-time","post_tool_uses":0}
+EOF
+missing_time="$(run_hook "$HOOK" PostToolUse missing-time)"
+[ -z "$missing_time" ] && ok "marker without compact time stays silent" || fail "marker without compact time printed: $missing_time"
+[ ! -f "$STATE/compact-pending/missing-time" ] && ok "marker without compact time is deleted" || fail "marker without compact time remains"
 
 # An old marker with a fresh claimed copy belongs to an active consumer. The
 # claim timeout must use the claim file's mtime, so this case fails before the
@@ -292,6 +350,84 @@ append_record short-cap-session
 short_cap="$(run_hook "$HOOK" PostToolUse short-cap-session)"
 short_cap_bytes="$(printf '%s' "$short_cap" | wc -c | tr -d ' ')"
 [ "$short_cap_bytes" -le 9000 ] && ok "short tracker rows stay under the serialized cap" || fail "short-row cap exceeded: $short_cap_bytes"
+
+python3 - "$TRACKS" "$DECISIONS" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "w", encoding="utf-8") as handle:
+    json.dump(
+        [
+            {"id": f"active-{i:03d}", "title": "진행중" * 300, "updated_at": "2099-01-01T00:00:00+00:00"}
+            for i in range(25)
+        ],
+        handle,
+        ensure_ascii=False,
+    )
+with open(sys.argv[2], "w", encoding="utf-8") as handle:
+    json.dump(
+        [
+            {"id": f"decision-{i:03d}", "title": "결정" * 150, "updated_at": "2099-01-01T00:00:00+00:00"}
+            for i in range(150)
+        ],
+        handle,
+        ensure_ascii=False,
+    )
+PY
+run_probe multibyte-cap
+append_record multibyte-cap
+multibyte_cap="$(run_hook "$HOOK" PostToolUse multibyte-cap)"
+MULTIBYTE_OUTPUT="$multibyte_cap" python3 - <<'PY'
+import json
+import os
+import re
+
+payload = json.loads(os.environ["MULTIBYTE_OUTPUT"])
+context = payload["hookSpecificOutput"]["additionalContext"]
+headings = [
+    "## Role State",
+    "## In-progress tracker items",
+    "## Open decisions",
+    "## Live worker panes",
+    "## Uncommitted files in the ops repository",
+    "## Seat-declared extra lines",
+]
+assert all(heading in context for heading in headings), context
+assert len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) <= 9000
+
+def section(heading):
+    start = context.index(heading) + len(heading)
+    remaining = context[start:]
+    end = min((remaining.index(candidate) for candidate in headings if candidate in remaining), default=len(remaining))
+    return remaining[:end].splitlines()
+
+active = section("## In-progress tracker items")
+decisions = section("## Open decisions")
+active_more = next(int(match.group(1)) for line in active if (match := re.match(r"(\d+) more: run bd list --status=in_progress", line)))
+decision_more = next(int(match.group(1)) for line in decisions if (match := re.match(r"(\d+) more: run bd list --status=open --type=decision", line)))
+active_rows = sum(line.startswith("- active-") for line in active)
+decision_rows = sum(line.startswith("- decision-") for line in decisions)
+assert active_rows + active_more == 25, (active_rows, active_more)
+assert decision_rows + decision_more == 150, (decision_rows, decision_more)
+PY
+ok "multibyte cap keeps every section and reports each omitted-row count"
+
+run_probe large-payload
+run_hook "$HOOK" PostToolUse large-payload >/dev/null
+run_hook "$HOOK" PostToolUse large-payload >/dev/null
+large_payload="$(python3 - <<'PY'
+import json
+print(json.dumps({
+    "session_id": "large-payload",
+    "hook_event_name": "PostToolUse",
+    "tool_result": "x" * 1_200_000,
+}))
+PY
+)"
+large_output="$(run_hook_payload "$HOOK" PostToolUse "$large_payload")"
+[ -n "$large_output" ] && [ ! -f "$STATE/compact-pending/large-payload" ] \
+  && ok "payload over 1 MB is processed and consumes the marker" \
+  || fail "payload over 1 MB was dropped or left the marker"
 
 make_mutant() {
   local name="$1" old="$2" new="$3"

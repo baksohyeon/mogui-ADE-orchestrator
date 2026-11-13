@@ -11,25 +11,29 @@ if [[ "$OPS_REPO" == *"{{OPS_REPO}}"* ]]; then
 fi
 STATE_DIR="${MOGUI_STATE_DIR:-${HOME:-$(cd ~ 2>/dev/null && pwd)}/.mogui}"
 INSTANCE_CONFIG="${MOGUI_INSTANCE_RUNTIME_CONFIG:-${INSTANCE_RUNTIME_CONFIG:-$OPS_REPO/config/instance-runtime.json}}"
-HOOK_INPUT="$(cat 2>/dev/null)"
-# The hook payload is in HOOK_INPUT; close the inherited pipe before the
-# embedded program starts so a host pipe cannot keep the shell alive.
-exec 0<&-
+PENDING_DIR="$STATE_DIR/compact-pending"
+shopt -s nullglob
+pending_entries=("$PENDING_DIR"/*)
+if [ "${#pending_entries[@]}" -eq 0 ]; then
+  exit 0
+fi
 
 OPS_REPO="$OPS_REPO" \
 STATE_DIR="$STATE_DIR" \
 INSTANCE_CONFIG="$INSTANCE_CONFIG" \
 SCRIPT_DIR="$SCRIPT_DIR" \
-HOOK_INPUT="$HOOK_INPUT" \
-python3 - "$@" <<'PY' 2>/dev/null || true
+PENDING_DIR="$PENDING_DIR" \
+python3 - "$@" 3<&0 <<'PY' 2>/dev/null || true
 from __future__ import annotations
 
 import datetime as dt
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -44,11 +48,24 @@ OPS_REPO = Path(os.environ.get("OPS_REPO", "")).expanduser()
 STATE_DIR = Path(os.environ.get("STATE_DIR", "")).expanduser()
 INSTANCE_CONFIG = Path(os.environ.get("INSTANCE_CONFIG", "")).expanduser()
 SCRIPT_DIR = Path(os.environ.get("SCRIPT_DIR", "")).expanduser()
+PENDING_DIR = Path(os.environ.get("PENDING_DIR", "")).expanduser()
+ACTIVE_TRACKER_COMMAND = ("bd", "list", "--status=in_progress", "--json", "--limit=0", "--flat")
+DECISION_TRACKER_COMMAND = ("bd", "list", "--status=open", "--type=decision", "--json", "--limit=0", "--flat")
+
+
+def display_command(command: tuple[str, ...]) -> str:
+    return " ".join(shlex.quote(part) for part in command)
+
+
+def post_tool_payload(context: str) -> dict[str, Any]:
+    return {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": context}}
 
 
 def parse_payload() -> dict[str, Any] | None:
     try:
-        value = json.loads(os.environ.get("HOOK_INPUT", "") or "{}")
+        with os.fdopen(3, "rb") as handle:
+            raw = handle.read()
+        value = json.loads(raw.decode("utf-8") or "{}")
     except Exception:
         return None
     return value if isinstance(value, dict) else None
@@ -91,7 +108,7 @@ def parse_time(value: Any) -> dt.datetime | None:
 
 
 def marker_path(session: str) -> Path:
-    return STATE_DIR / "compact-pending" / session
+    return PENDING_DIR / session
 
 
 def read_marker(path: Path) -> dict[str, Any] | None:
@@ -146,28 +163,46 @@ def recorded_recall(marker: dict[str, Any]) -> bool:
 
 def claim(path: Path) -> Path | None:
     claimed = path.with_name(path.name + ".claimed")
-    try:
-        os.link(path, claimed)
-    except FileExistsError:
+    for _ in range(3):
         try:
-            age = dt.datetime.now(dt.timezone.utc).timestamp() - claimed.stat().st_mtime
+            descriptor = os.open(claimed, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            os.close(descriptor)
+            return claimed
+        except FileExistsError:
+            try:
+                age = dt.datetime.now(dt.timezone.utc).timestamp() - claimed.stat().st_mtime
+            except FileNotFoundError:
+                continue
+            except OSError:
+                return None
             if age <= CLAIM_TIMEOUT_SECONDS:
                 return None
-            claimed.unlink()
-            os.link(path, claimed)
+            stale_name = claimed.with_name(
+                f"{claimed.name}.stale-{os.getpid()}-{time.time_ns()}"
+            )
+            try:
+                os.rename(claimed, stale_name)
+            except FileNotFoundError:
+                continue
+            except OSError:
+                return None
+            try:
+                descriptor = os.open(claimed, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                os.close(descriptor)
+            except (FileExistsError, OSError):
+                try:
+                    stale_name.unlink()
+                except OSError:
+                    pass
+                return None
+            try:
+                stale_name.unlink()
+            except OSError:
+                pass
+            return claimed
         except OSError:
             return None
-    except OSError:
-        return None
-    try:
-        os.utime(claimed, None)
-    except OSError:
-        try:
-            claimed.unlink()
-        except OSError:
-            pass
-        return None
-    return claimed
+    return None
 
 
 def delete(path: Path) -> None:
@@ -252,14 +287,8 @@ def format_issue(row: dict[str, Any]) -> str:
 
 
 def tracker_section() -> tuple[list[str], list[str], str]:
-    active_raw = command_json(
-        ["bd", "list", "--status=in_progress", "--json", "--limit=0", "--flat"],
-        OPS_REPO,
-    )
-    decisions_raw = command_json(
-        ["bd", "list", "--status=open", "--type=decision", "--json", "--limit=0", "--flat"],
-        OPS_REPO,
-    )
+    active_raw = command_json(ACTIVE_TRACKER_COMMAND, OPS_REPO)
+    decisions_raw = command_json(DECISION_TRACKER_COMMAND, OPS_REPO)
     active = rows_from(active_raw)
     decisions = rows_from(decisions_raw)
     now = dt.datetime.now(dt.timezone.utc)
@@ -281,7 +310,7 @@ def tracker_section() -> tuple[list[str], list[str], str]:
         active_lines = ["none"]
     if not decision_lines:
         decision_lines = ["none"]
-    return active_lines, decision_lines, "bd list --status=in_progress --json --limit=0 --flat"
+    return active_lines, decision_lines, display_command(ACTIVE_TRACKER_COMMAND)
 
 
 def role_state_lines() -> list[str]:
@@ -347,13 +376,7 @@ def extras_lines() -> list[str]:
         return ["unavailable"]
     if not isinstance(payload, dict):
         return ["unavailable"]
-    extras: Any = None
-    for key in ("work_layer_extra_lines", "compact_rehydration_extra_lines", "rehydration_extra_lines"):
-        if key in payload:
-            extras = payload[key]
-            break
-    if extras is None and isinstance(payload.get("compact_rehydration"), dict):
-        extras = payload["compact_rehydration"].get("extra_lines")
+    extras: Any = payload.get("work_layer_extra_lines")
     if extras is None:
         return ["none"]
     if isinstance(extras, dict):
@@ -367,10 +390,7 @@ def extras_lines() -> list[str]:
             continue
         if not isinstance(entry, dict):
             return ["unavailable"]
-        label = compact_text(entry.get("label") or entry.get("name") or "extra", 120)
-        if "line" in entry:
-            output.append(f"{label}: {compact_text(entry['line'])}")
-            continue
+        label = compact_text(entry.get("label") or "extra", 120)
         if "value" in entry:
             output.append(f"{label}: {compact_text(entry['value'])}")
             continue
@@ -383,96 +403,55 @@ def extras_lines() -> list[str]:
             except (OSError, json.JSONDecodeError):
                 return ["unavailable"]
             continue
-        if entry.get("command"):
-            try:
-                result = subprocess.run(
-                    str(entry["command"]),
-                    cwd=str(OPS_REPO),
-                    shell=True,
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                    check=False,
-                )
-            except (OSError, subprocess.TimeoutExpired):
-                return ["unavailable"]
-            if result.returncode != 0:
-                return ["unavailable"]
-            values = [compact_text(line) for line in result.stdout.splitlines() if line.strip()]
-            output.extend(f"{label}: {line}" for line in values)
-            continue
         return ["unavailable"]
     return output or ["none"]
 
 
-def section_total(sections: list[dict[str, Any]]) -> int:
-    return len("\n".join(line for section in sections for line in [section["heading"], *section["lines"]]))
+def render_sections(sections: list[dict[str, Any]]) -> str:
+    rendered: list[str] = []
+    for section in sections:
+        rendered.append(section["heading"])
+        rendered.extend(section["lines"])
+        if section["omitted"]:
+            rendered.append(f"{section['omitted']} more: run {section['command']}")
+    return "\n".join(rendered)
 
 
-def compose_work_layer(limit: int = CAP) -> str:
+def context_fits(context: str, limit: int, post_tool: bool) -> bool:
+    if post_tool:
+        return len(json.dumps(post_tool_payload(context), ensure_ascii=False, separators=(",", ":")).encode("utf-8")) <= limit
+    return len(context.encode("utf-8")) <= limit
+
+
+def compose_work_layer(limit: int = CAP, prefix: str = "", post_tool: bool = False) -> str:
     active, decisions, tracker_command = tracker_section()
     sections: list[dict[str, Any]] = [
-        {"heading": "## Role State", "lines": role_state_lines(), "trim": False, "command": ""},
-        {"heading": "## In-progress tracker items", "lines": active, "trim": active not in (["unavailable"], ["none"]), "command": tracker_command},
-        {"heading": "## Open decisions", "lines": decisions, "trim": decisions not in (["unavailable"], ["none"]), "command": "bd list --status=open --type=decision --json --limit=0 --flat"},
-        {"heading": "## Live worker panes", "lines": panes_lines(), "trim": False, "command": "orca terminal list --json"},
-        {"heading": "## Uncommitted files in the ops repository", "lines": uncommitted_lines(), "trim": False, "command": "git status --porcelain"},
-        {"heading": "## Seat-declared extra lines", "lines": extras_lines(), "trim": True, "command": "read the instance runtime extra-lines configuration"},
+        {"key": "role", "heading": "## Role State", "lines": role_state_lines(), "command": "read docs/runbooks/role-state.md", "omitted": 0},
+        {"key": "active", "heading": "## In-progress tracker items", "lines": active, "command": tracker_command, "omitted": 0},
+        {"key": "decisions", "heading": "## Open decisions", "lines": decisions, "command": display_command(DECISION_TRACKER_COMMAND), "omitted": 0},
+        {"key": "panes", "heading": "## Live worker panes", "lines": panes_lines(), "command": display_command(("orca", "terminal", "list", "--json")), "omitted": 0},
+        {"key": "uncommitted", "heading": "## Uncommitted files in the ops repository", "lines": uncommitted_lines(), "command": display_command(("git", "status", "--porcelain")), "omitted": 0},
+        {"key": "extras", "heading": "## Seat-declared extra lines", "lines": extras_lines(), "command": "read the instance runtime extra-lines configuration", "omitted": 0},
     ]
-    marker = ""
-    omitted = 0
-    omitted_command = tracker_command
-    while True:
-        total = section_total(sections)
-        if total <= limit and (not marker or total + len(marker) + 1 <= limit):
+    trim_order = ("extras", "decisions", "active", "panes", "uncommitted", "role")
+
+    def can_trim(section: dict[str, Any]) -> bool:
+        lines = section["lines"]
+        return bool(lines) and not (len(lines) == 1 and lines[0] in ("unavailable", "none"))
+
+    def next_trimmed() -> bool:
+        for key in trim_order:
+            section = next(item for item in sections if item["key"] == key)
+            if can_trim(section):
+                section["lines"].pop()
+                section["omitted"] += 1
+                return True
+        return False
+
+    while not context_fits(prefix + render_sections(sections), limit, post_tool):
+        if not next_trimmed():
             break
-        candidates = [section for section in sections if section["trim"] and section["lines"]]
-        if not candidates:
-            candidates = [section for section in sections if len(section["lines"]) > 1]
-        if not candidates:
-            break
-        candidates[0]["lines"].pop()
-        omitted += 1
-        omitted_command = candidates[0]["command"]
-        marker = f"{omitted} more: run {omitted_command}"
-        if section_total(sections) + len(marker) + 1 <= limit:
-            continue
-    if marker:
-        output = "\n".join(line for section in sections for line in [section["heading"], *section["lines"]])
-        combined = output + "\n" + marker
-        if len(combined) <= limit:
-            return combined
-        return output[: max(0, limit - len(marker) - 1)] + "\n" + marker
-    output = "\n".join(line for section in sections for line in [section["heading"], *section["lines"]])
-    if len(output) <= limit:
-        return output
-    return output[: max(0, limit - 1)] + "\n"
-
-
-def fit_post_tool_context(context: str) -> str:
-    wrapper = {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": context}}
-    def serialized_size(value: str) -> int:
-        wrapper["hookSpecificOutput"]["additionalContext"] = value
-        return len(json.dumps(wrapper, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
-
-    if serialized_size(context) <= CAP:
-        return context
-    lines = context.splitlines()
-    marker = lines[-1] if lines and " more: run " in lines[-1] else ""
-    body = "\n".join(lines[:-1]) if marker else context
-    body_bytes = body.encode("utf-8")
-    low, high = 0, len(body_bytes)
-    best = ""
-    while low <= high:
-        midpoint = (low + high) // 2
-        prefix = body_bytes[:midpoint].decode("utf-8", errors="ignore").rstrip()
-        candidate = prefix + (("\n" + marker) if marker else "")
-        if serialized_size(candidate) <= CAP:
-            best = candidate
-            low = midpoint + 1
-        else:
-            high = midpoint - 1
-    return best
+    return prefix + render_sections(sections)
 
 
 def main() -> None:
@@ -490,7 +469,7 @@ def main() -> None:
     if marker is None:
         return
     compacted_at = parse_time(marker.get("compact_time"))
-    if compacted_at is not None and (dt.datetime.now(dt.timezone.utc) - compacted_at).total_seconds() > STALE_SECONDS:
+    if compacted_at is None or (dt.datetime.now(dt.timezone.utc) - compacted_at).total_seconds() > STALE_SECONDS:
         delete(path)
         return
     event = event_name(payload, sys.argv[1:]).lower()
@@ -498,6 +477,9 @@ def main() -> None:
     skipped = False
     if not recorded:
         if event == "userpromptsubmit":
+            if marker["post_tool_uses"] == 0:
+                print("[compact-rehydration] Recall check is owed; the work layer follows the recorded recall.")
+                return
             skipped = True
         elif event == "posttooluse":
             if marker["post_tool_uses"] < POST_TOOL_LIMIT:
@@ -520,18 +502,16 @@ def main() -> None:
         if skipped:
             prefix = "[compact-rehydration] Recall check was not recorded; the context-quality measurement is contaminated.\n"
         if event == "posttooluse":
-            wrapper_size = len(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": ""}}, ensure_ascii=False, separators=(",", ":")))
-            context = prefix + compose_work_layer(max(1, CAP - wrapper_size - len(prefix)))
-            context = fit_post_tool_context(context)
+            context = compose_work_layer(CAP, prefix=prefix, post_tool=True)
         else:
-            context = prefix + compose_work_layer(max(1, CAP - len(prefix)))
+            context = compose_work_layer(CAP, prefix=prefix)
         if event == "posttooluse":
-            print(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": context}}, ensure_ascii=False, separators=(",", ":")))
+            print(json.dumps(post_tool_payload(context), ensure_ascii=False, separators=(",", ":")))
         elif event == "userpromptsubmit":
             print(context)
     finally:
-        delete(claimed)
         delete(path)
+        delete(claimed)
 
 
 main()

@@ -42,6 +42,7 @@ context_log_path = os.environ.get(
     "CONTEXT_LOG_PATH",
     os.path.expanduser("~/.mogui/monitors/mg/context-quality.jsonl"),
 )
+context_log_path = str(Path(context_log_path).expanduser().resolve())
 dispatch_ledger_path = os.environ.get(
     "DISPATCH_LEDGER_PATH",
     os.path.expanduser("~/.mogui/dispatch-ledger.jsonl"),
@@ -50,7 +51,7 @@ dispatch_ledger_path = os.environ.get(
 safe_session = isinstance(session_id, str) and re.fullmatch(r"[A-Za-z0-9._:-]+", session_id)
 if safe_session:
     state_dir = Path(os.environ.get("STATE_DIR", "") or "").expanduser()
-    context_log = Path(context_log_path).expanduser().resolve()
+    context_log = Path(context_log_path)
     marker_dir = state_dir / "compact-pending"
     marker_path = marker_dir / str(session_id)
     try:
@@ -101,7 +102,7 @@ Append one JSON record before source verification. Suggested payload:
 {json.dumps(record_template, ensure_ascii=False, separators=(",", ":"))}
 
 Append the recall record with this runnable command:
-{'CONTEXT_QUALITY_LOG=' + shlex.quote(str(Path(context_log_path).expanduser().resolve()))} {shlex.quote(str(Path(os.environ.get('CONTEXT_LOG_SCRIPT', '')).expanduser().resolve()))} {shlex.quote(json.dumps(record_template, ensure_ascii=False, separators=(',', ':')))}
+{'CONTEXT_QUALITY_LOG=' + shlex.quote(context_log_path)} {shlex.quote(str(Path(os.environ.get('CONTEXT_LOG_SCRIPT', '')).expanduser().resolve()))} {shlex.quote(json.dumps(record_template, ensure_ascii=False, separators=(',', ':')))}
 
 Dispatch ledger path:
 {dispatch_ledger_path}

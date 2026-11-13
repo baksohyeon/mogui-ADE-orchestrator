@@ -900,25 +900,66 @@ installed_runtime="$TMP/installed-runtime"
 installed_hook="$TMP/product-path-guard-installed.sh"
 mkdir -p "$installed_runtime/config"
 printf '{"master_host_runtime":"claude","product_repositories":["%s"]}\n' "$product" >"$installed_runtime/config/instance-runtime.json"
-sed "s|{{RUNTIME_ROOT}}|$installed_runtime|g" "$HOOK" >"$installed_hook"
+runtime_root_token="{""{RUNTIME_ROOT}}"
+if ! runtime_root_anchor="$(python3 - "$HOOK" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+pattern = re.compile(r'^[ \t]*INSTANCE_RUNTIME_CONFIG="(.+)/config/instance-runtime\.json"[ \t]*$')
+matches = []
+in_default_branch = False
+for line in text.splitlines():
+    stripped = line.strip()
+    if stripped == "else" and not in_default_branch:
+        in_default_branch = True
+        continue
+    if stripped == "fi" and in_default_branch:
+        in_default_branch = False
+        continue
+    if in_default_branch:
+        match = pattern.fullmatch(line)
+        if match:
+            matches.append(match.group(1))
+
+if len(matches) != 1:
+    raise SystemExit(1)
+print(matches[0])
+PY
+)"; then
+  echo "FAIL: expected exactly one default INSTANCE_RUNTIME_CONFIG line in hook" >&2
+  exit 1
+fi
+runtime_root_sed_pattern=$(printf '%s\n' "$runtime_root_anchor" | sed 's/[.[\*^$\\|]/\\&/g')
+installed_runtime_sed_replacement=$(printf '%s\n' "$installed_runtime" | sed 's/[\\&|]/\\&/g')
+sed "s|$runtime_root_sed_pattern|$installed_runtime_sed_replacement|g" "$HOOK" >"$installed_hook"
+if cmp -s "$HOOK" "$installed_hook"; then
+  echo "FAIL: installed hook did not replace the runtime-root anchor" >&2
+  exit 1
+fi
 chmod +x "$installed_hook"
 expect_allowed substituted-runtime-root-default-config run_bash_default_config "ls" "$ops" "$installed_hook"
 expect_verdict pass substituted-runtime-root-default-config
 
 mutant_source="$TMP/product-path-guard-mutant-source.sh"
 mutant_installed_hook="$TMP/product-path-guard-mutant-installed.sh"
-python3 - "$HOOK" "$mutant_source" <<'PY'
+python3 - "$HOOK" "$mutant_source" "$runtime_root_anchor" <<'PY'
 from pathlib import Path
 import sys
 
 source = Path(sys.argv[1]).read_text(encoding="utf-8")
 needle = 'if [[ "$INSTANCE_RUNTIME_CONFIG" == *"$runtime_root_token"* ]]; then'
-replacement = 'if [[ "$INSTANCE_RUNTIME_CONFIG" == *"{{RUNTIME_ROOT}}"* ]]; then'
+replacement = f'if [[ "$INSTANCE_RUNTIME_CONFIG" == *"{sys.argv[3]}"* ]]; then'
 if source.count(needle) != 1:
     raise SystemExit("FAIL: runtime-root sentinel mutant anchor not found exactly once")
 Path(sys.argv[2]).write_text(source.replace(needle, replacement, 1), encoding="utf-8")
 PY
-sed "s|{{RUNTIME_ROOT}}|$installed_runtime|g" "$mutant_source" >"$mutant_installed_hook"
+sed "s|$runtime_root_sed_pattern|$installed_runtime_sed_replacement|g" "$mutant_source" >"$mutant_installed_hook"
+if cmp -s "$mutant_source" "$mutant_installed_hook"; then
+  echo "FAIL: mutant installed hook did not replace the runtime-root anchor" >&2
+  exit 1
+fi
 chmod +x "$mutant_installed_hook"
 (
   expect_allowed failability-substituted-runtime-root-default-config run_bash_default_config "ls" "$ops" "$mutant_installed_hook"

@@ -241,12 +241,16 @@ def test_concurrent_runs_preserve_all_entries_and_catch_unlocked_mutant(
     count = 30
     worktrees = [make_worktree(tmp_path, f"worktree-{index}") for index in range(count)]
 
-    def run_many(config_home: Path, script: Path | None = None) -> list[subprocess.CompletedProcess[str]]:
+    def run_many(
+        config_home: Path,
+        script: Path | None = None,
+        env: dict[str, str] | None = None,
+    ) -> list[subprocess.CompletedProcess[str]]:
         with ThreadPoolExecutor(max_workers=count) as executor:
             return list(
                 executor.map(
                     lambda worktree: run_pretrust(
-                        str(worktree), config_home, script=script
+                        str(worktree), config_home, env=env, script=script
                     ),
                     worktrees,
                 )
@@ -263,17 +267,40 @@ def test_concurrent_runs_preserve_all_entries_and_catch_unlocked_mutant(
     assert set(locked_entries) == {str(worktree) for worktree in worktrees}
 
     mutant_source = SCRIPT.read_text(encoding="utf-8")
+    mutant_source = mutant_source.replace("import fcntl\n", "import fcntl\nimport time\n", 1)
     mutant_source = mutant_source.replace(
-        "import fcntl\n", "import fcntl\nimport time\n", 1
-    ).replace(
         "    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)\n",
-        "    # mutant: lock removed\n    time.sleep(0.1)\n",
+        "    # mutant: lock removed\n",
+        1,
+    )
+    mutant_source = mutant_source.replace(
+        '    if "trustedWorkspaces" not in document:\n',
+        """    mutant_barrier = os.environ.get(\"AGY_MUTANT_BARRIER\")
+    if mutant_barrier:
+        marker = Path(mutant_barrier) / f\"ready-{os.getpid()}\"
+        marker.touch()
+        deadline = time.monotonic() + 10
+        expected = int(os.environ[\"AGY_MUTANT_COUNT\"])
+        while len(list(Path(mutant_barrier).glob(\"ready-*\"))) < expected:
+            if time.monotonic() >= deadline:
+                raise RuntimeError(\"mutant barrier timed out\")
+            time.sleep(0.01)
+
+    if \"trustedWorkspaces\" not in document:
+""",
         1,
     )
     mutant = tmp_path / "agy-worker-pretrust-mutant"
     mutant.write_text(mutant_source, encoding="utf-8")
     mutant.chmod(0o755)
-    mutant_results = run_many(tmp_path / "unlocked-home" / ".gemini", mutant)
+    barrier = tmp_path / "mutant-barrier"
+    barrier.mkdir()
+    mutant_env = os.environ.copy()
+    mutant_env["AGY_MUTANT_BARRIER"] = str(barrier)
+    mutant_env["AGY_MUTANT_COUNT"] = str(count)
+    mutant_results = run_many(
+        tmp_path / "unlocked-home" / ".gemini", mutant, mutant_env
+    )
     assert all(result.returncode == 0 for result in mutant_results)
     mutant_entries = json.loads(
         settings_path(tmp_path / "unlocked-home" / ".gemini").read_text(encoding="utf-8")

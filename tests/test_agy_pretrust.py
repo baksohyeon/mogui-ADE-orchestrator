@@ -19,7 +19,8 @@ def run_pretrust(
     env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     run_env = os.environ.copy() if env is None else env.copy()
-    run_env.pop("AGY_SETTINGS_PATH", None)
+    if env is None:
+        run_env.pop("AGY_SETTINGS_PATH", None)
     run_env["AGY_CONFIG_HOME"] = str(config_home)
     return subprocess.run(
         [str(SCRIPT), worktree_path],
@@ -80,6 +81,24 @@ def test_second_run_is_byte_for_byte_idempotent(tmp_path: Path) -> None:
     assert settings.read_bytes() == before
 
 
+def test_existing_trusted_file_is_byte_for_byte_idempotent(tmp_path: Path) -> None:
+    config_home = tmp_path / ".gemini"
+    settings = settings_path(config_home)
+    settings.parent.mkdir(parents=True)
+    settings.write_text(
+        json.dumps({"trustedWorkspaces": ["/tmp/worktree"], "keep": "yes"}, indent=2)
+        + "\n",
+        encoding="utf-8",
+    )
+    before = settings.read_bytes()
+
+    result = run_pretrust("/tmp/worktree", config_home)
+
+    assert result.returncode == 0, result.stderr
+    assert "Summary: 0 added, 0 updated, 1 already trusted" in result.stdout
+    assert settings.read_bytes() == before
+
+
 def test_relative_worktree_path_is_rejected(tmp_path: Path) -> None:
     result = run_pretrust("relative/worktree", tmp_path / ".gemini")
 
@@ -127,3 +146,20 @@ def test_null_trusted_workspaces_are_refused(tmp_path: Path) -> None:
     assert result.returncode == 2
     assert "trustedWorkspaces must be an array of strings" in result.stderr
     assert settings.read_text(encoding="utf-8") == original
+
+
+def test_explicit_settings_path_override_is_used(tmp_path: Path) -> None:
+    config_home = tmp_path / ".gemini"
+    explicit_settings = tmp_path / "explicit-settings.json"
+    explicit_settings.write_text('{"trustedWorkspaces": []}\n', encoding="utf-8")
+    run_env = os.environ.copy()
+    run_env["AGY_SETTINGS_PATH"] = str(explicit_settings)
+
+    result = run_pretrust("/tmp/worktree", config_home, env=run_env)
+
+    assert result.returncode == 0, result.stderr
+    assert "Summary: 1 added, 0 updated, 0 already trusted" in result.stdout
+    assert json.loads(explicit_settings.read_text(encoding="utf-8"))["trustedWorkspaces"] == [
+        "/tmp/worktree"
+    ]
+    assert not settings_path(config_home).exists()

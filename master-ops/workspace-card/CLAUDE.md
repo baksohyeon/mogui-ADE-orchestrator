@@ -18,6 +18,7 @@ When a request matches a row, invoke the skill FIRST — before answering, explo
 - Review-bot threads on PRs → dispatched fix worker per charter §4 ([Worker Routing and Review]({{OPS_REPO}}/docs/charter/04-worker-routing-review.md)); reply style is [review voice]({{OPS_REPO}}/docs/runbooks/review-voice.md).
 - Session observability (journey notes, field notes, postmortems) → skills under [skills]({{OPS_REPO}}/skills/) when present; postmortem records and generation logs go to the genres in [observability]({{OPS_REPO}}/docs/observability/).
 - Shipping product changes → repo gate conventions, PR flow, squash merge only after zero unresolved review threads.
+- Promoting to the template (any PR on the template repository) → before merge, the master runs a review skill on the PR diff (`gstack /review` or `superpowers:requesting-code-review`) besides the review bots; the reviewer brief includes a shell checklist that starts with "a path or name used twice is one variable" and "no hardcoded absolute paths". Seat-repository commits are out of scope.
 
 ## Measured gate commands
 

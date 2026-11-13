@@ -294,12 +294,14 @@ class WorkerReaper:
         measurements: dict[str, object] = {}
         terminal_reclaim_allowed = True
 
-        # Close panes only after worktree membership and pane state are measured.
+        terminal_action: Optional[str] = None
+        # Measure pane membership and state before inspecting the worktree, but
+        # defer the actual close whenever worktree cleanup is still conditional.
+        # A settled dispatch that has not landed must retain its resume pane.
         if dispatch_state.worktree_selector:
-            action, terminal_measurements = self._plan_terminal_action(
-                dispatch_state, execute
+            terminal_action, terminal_measurements = self._plan_terminal_action(
+                dispatch_state, execute if not dispatch_state.worktree_path else False
             )
-            actions.append(action)
             measurements.update(terminal_measurements)
             terminal_reclaim_allowed = bool(
                 terminal_measurements.get("terminal_reclaim_allowed")
@@ -308,15 +310,16 @@ class WorkerReaper:
             # Older ledger rows predate the worktree selector. Keep their
             # established fail-closed handle checks while new rows use the
             # worktree-membership path above.
-            action, terminal_measurements = self._plan_terminal_action(
-                dispatch_state, execute
+            terminal_action, terminal_measurements = self._plan_terminal_action(
+                dispatch_state, execute if not dispatch_state.worktree_path else False
             )
-            actions.append(action)
             measurements.update(terminal_measurements)
             # Legacy rows have no selector with which to prove worktree
             # membership. Preserve their independent terminal/worktree
             # decisions; selector-backed rows take the stricter gate above.
             terminal_reclaim_allowed = True
+        if terminal_action and not dispatch_state.worktree_path:
+            actions.append(terminal_action)
 
         # Check and possibly remove worktree
         if dispatch_state.worktree_path:
@@ -334,28 +337,51 @@ class WorkerReaper:
                         None if ignored_media is None else len(ignored_media)
                     )
                     if ignored_media is None:
+                        if terminal_action:
+                            actions.append(terminal_action)
                         actions.append(
                             f"worktree_left:{worktree_path}:ignored_media_unmeasured"
                         )
                     elif ignored_media and not (
                         remove_ignored_media or self.remove_ignored_media
                     ):
+                        if terminal_action:
+                            actions.append(terminal_action)
                         actions.append(
                             f"worktree_left:{worktree_path}:ignored_media:"
                             f"{len(ignored_media)}"
                         )
                     elif dispatch_state.worktree_selector and not terminal_reclaim_allowed:
+                        if terminal_action:
+                            actions.append(terminal_action)
                         actions.append(
                             f"worktree_left:{worktree_path}:pane_not_idle"
                         )
                     elif execute:
-                        if dispatch_state.worktree_selector:
-                            self._remove_worktree(
-                                worktree_path, dispatch_state.worktree_selector
-                            )
+                        if terminal_action and terminal_action.startswith("would_close_worktree:"):
+                            self._close_worktree_terminals(dispatch_state.worktree_selector or "")
                             actions.append(
-                                f"worktree_removed:{worktree_path}:orca_delete_branch"
+                                f"terminal_closed_by_worktree:{dispatch_state.worktree_selector}"
                             )
+                        elif terminal_action and terminal_action.startswith("would_close_terminal:"):
+                            self._close_terminal(dispatch_state.terminal_id)
+                            actions.append(f"terminal_closed:{dispatch_state.terminal_id}")
+                        if dispatch_state.worktree_selector:
+                            try:
+                                self._remove_worktree(
+                                    worktree_path, dispatch_state.worktree_selector
+                                )
+                            except ReapError as error:
+                                actions.append(
+                                    f"cleanup_partial:terminals_closed:worktree_remove_failed:{error}"
+                                )
+                                actions.append(
+                                    f"worktree_remove_failed:{dispatch_state.worktree_selector}:{error}"
+                                )
+                            else:
+                                actions.append(
+                                    f"worktree_remove_requested:{worktree_path}:branch_delete_requested"
+                                )
                         else:
                             (
                                 branch_name,
@@ -384,6 +410,8 @@ class WorkerReaper:
                                 actions.append(branch_action)
                     else:
                         if dispatch_state.worktree_selector:
+                            if terminal_action:
+                                actions.append(terminal_action)
                             actions.append(
                                 f"would_remove_worktree:{worktree_path}:landed_by:{self._last_landing_rule}"
                             )
@@ -407,10 +435,14 @@ class WorkerReaper:
                                 )
                             )
                 else:
+                    if terminal_action:
+                        actions.append(terminal_action)
                     actions.append(f"worktree_left:{worktree_path}:{reason}")
             except Exception as e:
                 measurements["worktree_clean"] = None
                 measurements["worktree_merged"] = None
+                if terminal_action:
+                    actions.append(terminal_action)
                 actions.append(f"worktree_left:{worktree_path}:Check failed: {e}")
 
         # Build record
@@ -691,6 +723,15 @@ class WorkerReaper:
             measurements["terminal_reclaim_allowed"] = True
             return f"terminal_left:{selector}:pane_absent", measurements
 
+        reused_by = self._reused_by_dispatched_worktree(
+            selector, dispatch_state.worktree_path, handles, dispatch_state.dispatch_id
+        )
+        measurements["worktree_reused_by"] = reused_by
+        if reused_by is None:
+            return f"terminal_left:{selector}:reuse_unmeasured", measurements
+        if reused_by:
+            return f"terminal_left:{selector}:reused_by:{reused_by}", measurements
+
         states = self._pane_states(handles)
         measurements["pane_states"] = states
         if states is None:
@@ -771,7 +812,7 @@ class WorkerReaper:
             for handle in handles:
                 if handle.startswith(prefix):
                     states[handle] = fields[1]
-        if code != 0 and not states:
+        if code != 0:
             return None
         if any(handle not in states for handle in handles):
             return None
@@ -819,6 +860,65 @@ class WorkerReaper:
             if row_dispatch_id == own_dispatch_id:
                 continue
             return str(row_dispatch_id) if row_dispatch_id else "unknown"
+        return ""
+
+    def _reused_by_dispatched_worktree(
+        self,
+        selector: str,
+        worktree_path: Optional[str],
+        handles: list[str],
+        own_dispatch_id: str,
+    ) -> Optional[str]:
+        """Find a newer dispatched row that still owns this worktree.
+
+        Selector-backed cleanup closes every pane in the selected worktree, so
+        matching only a terminal handle is insufficient. A row is considered
+        the same worktree when its selector, canonical path, or measured pane
+        handle matches the dispatch being reaped.
+        """
+        rows = self._all_worker_list_rows()
+        if rows is None:
+            return None
+        expected_selector = self._normalize_worktree_selector(selector)
+        expected_path = (
+            os.path.normcase(os.path.realpath(worktree_path))
+            if worktree_path
+            else ""
+        )
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            status = str(row.get("dispatchStatus") or row.get("status") or "").lower()
+            if status != "dispatched":
+                continue
+            row_dispatch_id = row.get("dispatchId") or row.get("dispatch_id")
+            if row_dispatch_id == own_dispatch_id:
+                continue
+            row_selector = str(
+                row.get("worktreeSelector")
+                or row.get("worktree_selector")
+                or row.get("worktreeId")
+                or row.get("worktree_id")
+                or ""
+            )
+            row_path = str(row.get("worktreePath") or row.get("worktree_path") or "")
+            row_handle = str(
+                row.get("agentTerminalHandle")
+                or row.get("assignee_handle")
+                or row.get("terminal_id")
+                or ""
+            )
+            same_selector = bool(
+                row_selector
+                and self._normalize_worktree_selector(row_selector) == expected_selector
+            )
+            same_path = bool(
+                expected_path
+                and row_path
+                and os.path.normcase(os.path.realpath(row_path)) == expected_path
+            )
+            if same_selector or same_path or row_handle in handles:
+                return str(row_dispatch_id) if row_dispatch_id else "unknown"
         return ""
 
     def _all_worker_list_rows(self) -> Optional[list[dict]]:
@@ -1187,20 +1287,24 @@ class WorkerReaper:
                 code, changed_output, stderr = self.orca_runner(
                     [
                         "git",
+                        "--literal-pathspecs",
                         "-C",
                         str(worktree_path),
                         "diff",
                         "--name-only",
+                        "-z",
+                        "--no-renames",
                         merge_base,
                         branch_name,
                     ]
                 )
                 if code == 0:
-                    changed_paths = [path for path in changed_output.splitlines() if path]
+                    changed_paths = [path for path in changed_output.split("\0") if path]
                     if not changed_paths:
                         return True, "branch changes are already included in origin/main"
                     diff_command = [
                         "git",
+                        "--literal-pathspecs",
                         "-C",
                         str(worktree_path),
                         "diff",

@@ -602,6 +602,71 @@ snapshot_codex_rollouts() {
   done
 }
 
+snapshot_agy_brain_dirs() {
+  local brain_dir="$HOME/.gemini/antigravity-cli/brain"
+  [ -d "$brain_dir" ] || return 0
+  find "$brain_dir" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null | sort
+}
+
+terminal_worktree_path() {
+  local terminal="$1" placement_raw
+  placement_raw=$(orca terminal list --json 2>/dev/null || true)
+  PLACEMENT_JSON="$placement_raw" python3 - "$terminal" <<'EOF'
+import json
+import os
+import sys
+
+terminal = sys.argv[1]
+try:
+    payload = json.loads(os.environ.get("PLACEMENT_JSON", ""))
+except json.JSONDecodeError:
+    payload = {}
+result = payload.get("result") if isinstance(payload, dict) else None
+terminals = result.get("terminals") if isinstance(result, dict) else None
+if isinstance(terminals, list):
+    for item in terminals:
+        if isinstance(item, dict) and str(item.get("handle") or "") == terminal:
+            print(str(item.get("worktreePath") or item.get("worktree_path") or ""))
+            break
+EOF
+}
+
+codex_rollout_session_for_worktree() {
+  local rollout="$1" expected_path="$2"
+  python3 - "$rollout" "$expected_path" <<'EOF'
+import json
+import os
+import sys
+
+rollout, expected = sys.argv[1:]
+if not expected:
+    raise SystemExit(1)
+expected = os.path.realpath(expected)
+try:
+    stream = open(rollout, encoding="utf-8")
+except OSError:
+    raise SystemExit(1)
+with stream:
+    for line in stream:
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if item.get("type") != "session_meta":
+            continue
+        payload = item.get("payload")
+        if not isinstance(payload, dict):
+            raise SystemExit(1)
+        cwd = str(payload.get("cwd") or "")
+        session_id = str(payload.get("id") or "")
+        if session_id and cwd and os.path.realpath(cwd) == expected:
+            print(session_id)
+            raise SystemExit(0)
+        raise SystemExit(1)
+raise SystemExit(1)
+EOF
+}
+
 # The one rollout file matching glob $2 now that was absent from snapshot
 # $1 (taken by snapshot_codex_rollouts right before this worker's pane was
 # created or reused): this worker's own rollout, selected by existence
@@ -627,24 +692,49 @@ snapshot_codex_rollouts() {
 # function in a subshell, where an assignment to either variable is
 # discarded the instant the subshell exits.
 new_rollout_since() {
-  local before="$1" glob="$2" after new count
+  local before="$1" glob="$2" expected_path="${3:-${CODEX_WORKTREE_PATH:-}}" after new candidate session_id
+  local -a matched=() matched_ids=()
   after=$(snapshot_codex_rollouts "$glob")
   new=$(comm -13 <(printf '%s\n' "$before" | sort) <(printf '%s\n' "$after" | sort))
-  count=$(printf '%s\n' "$new" | grep -c .)
-  case "$count" in
+  if [ -z "$expected_path" ]; then
+    while IFS= read -r candidate; do
+      [ -n "$candidate" ] || continue
+      matched+=("$candidate")
+    done <<< "$new"
+  else
+    while IFS= read -r candidate; do
+      [ -n "$candidate" ] || continue
+      if session_id=$(codex_rollout_session_for_worktree "$candidate" "$expected_path"); then
+        matched+=("$candidate")
+        matched_ids+=("$session_id")
+      fi
+    done <<< "$new"
+  fi
+  case "${#matched[@]}" in
     1)
-      CODEX_ROLLOUT="$new"
+      CODEX_ROLLOUT="${matched[0]}"
+      CODEX_ROLLOUT_SESSION_ID="${matched_ids[0]:-}"
       CODEX_ROLLOUT_REASON=""
       return 0
       ;;
     0)
       CODEX_ROLLOUT=""
-      CODEX_ROLLOUT_REASON="no new rollout file appeared for this worker"
+      CODEX_ROLLOUT_SESSION_ID=""
+      if [ -n "$expected_path" ]; then
+        CODEX_ROLLOUT_REASON="no new rollout with a session cwd matching this worker"
+      else
+        CODEX_ROLLOUT_REASON="no new rollout file appeared for this worker"
+      fi
       return 1
       ;;
     *)
       CODEX_ROLLOUT=""
-      CODEX_ROLLOUT_REASON="more than one new rollout file appeared; cannot scope to this worker"
+      CODEX_ROLLOUT_SESSION_ID=""
+      if [ -n "$expected_path" ]; then
+        CODEX_ROLLOUT_REASON="more than one new rollout matched this worker; cannot scope to this worker"
+      else
+        CODEX_ROLLOUT_REASON="more than one new rollout file appeared; cannot scope to this worker"
+      fi
       return 1
       ;;
   esac
@@ -2063,6 +2153,10 @@ if [ "$RUNTIME" = codex ] && [ "$TGLOB_EXPLICIT" != 1 ] \
     && CODEX_ROLLOUT_GLOB=$(transcript_glob_for codex "$WORKTREE"); then
   CODEX_ROLLOUT_BEFORE=$(snapshot_codex_rollouts "$CODEX_ROLLOUT_GLOB")
 fi
+AGY_BRAIN_BEFORE=""
+if [ "$RUNTIME" = agy ]; then
+  AGY_BRAIN_BEFORE=$(snapshot_agy_brain_dirs)
+fi
 
 # 2. task-create
 TASK_RAW=$(orca orchestration task-create "${DISPATCH_FROM_ARGS[@]+"${DISPATCH_FROM_ARGS[@]}"}" --spec "$SPEC" --json 2>/dev/null)
@@ -2203,12 +2297,14 @@ fi
 # 5. resolve the model probe target honestly before registering.
 CODEX_ROLLOUT=""
 CODEX_ROLLOUT_REASON=""
+CODEX_ROLLOUT_SESSION_ID=""
 if [ "$TGLOB_EXPLICIT" = 1 ]; then
   PROBE_STATE="explicit-glob"
 elif DERIVED_GLOB=$(transcript_glob_for "$RUNTIME" "$WORKTREE"); then
   TGLOB=$DERIVED_GLOB
   case "$RUNTIME" in
     codex)
+      CODEX_WORKTREE_PATH=$(terminal_worktree_path "$TERMINAL")
       if new_rollout_since "$CODEX_ROLLOUT_BEFORE" "$TGLOB"; then
         PROBE_STATE="codex-new-rollout"
       else
@@ -2319,11 +2415,14 @@ EOF
 record_dispatch_placement() {
   [ "$CHECK_ONLY" = 1 ] && return 0
   # The Orca terminal list is the dispatch-time source for worktree membership
-  # and any session identity it exposes. Codex's rollout filename is the
-  # fallback session identity when the terminal projection does not carry one.
+  # and any session identity it exposes. Codex's rollout metadata and
+  # Antigravity's brain directory are fallbacks when the terminal projection
+  # does not carry a session identity.
   local placement_raw
   placement_raw=$(orca terminal list --json 2>/dev/null || true)
-  PLACEMENT_JSON="$placement_raw" python3 - "$LEDGER" "$DISP" "$TERMINAL" "$WORKTREE" "$RUNTIME" "${CODEX_ROLLOUT:-}" "${LEDGER_LOCK:-$LEDGER.lock}" <<'EOF'
+  PLACEMENT_JSON="$placement_raw" AGY_BRAIN_BEFORE="${AGY_BRAIN_BEFORE:-}" \
+    python3 - "$LEDGER" "$DISP" "$TERMINAL" "$WORKTREE" "$RUNTIME" \
+    "${CODEX_ROLLOUT:-}" "$CONTRACT" "${LEDGER_LOCK:-$LEDGER.lock}" <<'EOF'
 import fcntl
 import json
 import os
@@ -2332,7 +2431,7 @@ import tempfile
 from pathlib import Path
 import time
 
-ledger_path, dispatch_id, terminal, requested_selector, runtime, rollout, lock_path = sys.argv[1:]
+ledger_path, dispatch_id, terminal, requested_selector, runtime, rollout, contract, lock_path = sys.argv[1:]
 try:
     payload = json.loads(os.environ.get("PLACEMENT_JSON", ""))
 except json.JSONDecodeError:
@@ -2350,7 +2449,7 @@ if isinstance(terminals, list):
 target = target or {}
 measured_id = str(target.get("worktreeId") or target.get("worktree_id") or "")
 selector = measured_id or requested_selector.strip()
-if selector and not selector.startswith(("id:", "path:")):
+if selector and not selector.startswith(("id:", "path:", "folder:")):
     selector = "id:" + selector
 worktree_path = str(target.get("worktreePath") or target.get("worktree_path") or "")
 session_id = str(
@@ -2362,9 +2461,56 @@ session_id = str(
     or ""
 )
 if not session_id and runtime == "codex" and rollout:
-    session_id = Path(rollout).stem
-    if session_id.startswith("rollout-"):
-        session_id = session_id[len("rollout-") :]
+    expected_path = worktree_path
+    if not expected_path and requested_selector.startswith("path:"):
+        expected_path = requested_selector[5:]
+    try:
+        with Path(rollout).open(encoding="utf-8") as stream:
+            for line in stream:
+                try:
+                    item = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if item.get("type") != "session_meta":
+                    continue
+                payload = item.get("payload")
+                if (
+                    isinstance(payload, dict)
+                    and str(payload.get("id") or "")
+                    and expected_path
+                    and str(payload.get("cwd") or "")
+                    and os.path.realpath(str(payload["cwd"]))
+                    == os.path.realpath(expected_path)
+                ):
+                    session_id = str(payload["id"])
+                break
+    except OSError:
+        pass
+if not session_id and runtime == "agy":
+    before = {
+        os.path.realpath(path)
+        for path in os.environ.get("AGY_BRAIN_BEFORE", "").splitlines()
+        if path
+    }
+    brain_root = Path.home() / ".gemini" / "antigravity-cli" / "brain"
+    contract_name = Path(contract).name if contract else ""
+    candidates = []
+    try:
+        brain_dirs = sorted(brain_root.iterdir(), key=lambda item: item.name)
+    except OSError:
+        brain_dirs = []
+    for brain_dir in brain_dirs:
+        if not brain_dir.is_dir() or os.path.realpath(str(brain_dir)) in before:
+            continue
+        transcript = brain_dir / ".system_generated" / "logs" / "transcript_full.jsonl"
+        try:
+            text = transcript.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if contract_name and contract_name in text:
+            candidates.append(brain_dir.name)
+    if len(candidates) == 1:
+        session_id = candidates[0]
 
 os.makedirs(os.path.dirname(os.path.abspath(lock_path)), exist_ok=True)
 with open(lock_path, "a", encoding="utf-8") as lock:

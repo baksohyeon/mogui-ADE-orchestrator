@@ -22,6 +22,7 @@ make_harness() {
     printf 'CARD="" CARD_REASON="" CARD_CLAIMED=0 CARD_ARG_SET=0 NO_CARD_REASON="" NO_CARD_ARG_SET=0\n'
     printf 'CARD_LOG="%s"; export CARD_LOG\n' "$T/bd.log"
     printf 'PATH="%s:$PATH"\n' "$T/bin"
+    printf 'CONTRACT="%s"\n' "$T/contract.md"
     extract_function contract_h1_title
     extract_function tracker_card_id
     extract_function tracker_card_display
@@ -50,6 +51,17 @@ make_harness() {
         printf 'record_claim_failure_reason\ncat "$LEDGER"\n';;
       register-stdin)
         printf 'LEDGER="%s" LEDGER_LOCK="%s" REGISTER_GATE="%s"\nledger_locked_command "$REGISTER_GATE" register --ledger "$LEDGER"\n' "$T/register-ledger.jsonl" "$T/register-ledger.lock" "$T/register-gate";;
+      placement)
+        extract_function record_dispatch_placement
+        printf 'CHECK_ONLY=0 LEDGER="%s" LEDGER_LOCK="%s" DISP=disp-placement TERMINAL=term-placement WORKTREE=folder:folder-placement RUNTIME=claude\nrecord_dispatch_placement\ncat "$LEDGER"\n' "$T/placement-ledger.jsonl" "$T/placement-ledger.lock";;
+      agy-placement)
+        extract_function record_dispatch_placement
+        printf 'mkdir -p "%s/home/.gemini/antigravity-cli/brain/agy-conversation/.system_generated/logs"\nHOME="%s/home"; export HOME\nprintf '"'"'contract.md\\n'"'"' > "%s/home/.gemini/antigravity-cli/brain/agy-conversation/.system_generated/logs/transcript_full.jsonl"\nAGY_BRAIN_BEFORE="" CHECK_ONLY=0 LEDGER="%s" LEDGER_LOCK="%s" DISP=disp-agy TERMINAL=term-placement WORKTREE=folder:folder-placement RUNTIME=agy\nrecord_dispatch_placement\ncat "$LEDGER"\n' "$T" "$T" "$T" "$T/agy-ledger.jsonl" "$T/agy-ledger.lock";;
+      codex-rollout)
+        extract_function snapshot_codex_rollouts
+        extract_function codex_rollout_session_for_worktree
+        extract_function new_rollout_since
+        printf 'mkdir -p "%s/rollouts"\nprintf '"'"'%%s\\n'"'"' '"'"'{"type":"session_meta","payload":{"id":"old","cwd":"%s/wt-target"}}'"'"' > "%s/rollouts/old.jsonl"\nbefore=$(snapshot_codex_rollouts "%s/rollouts/*.jsonl")\nprintf '"'"'%%s\\n'"'"' '"'"'{"type":"session_meta","payload":{"id":"target-session","cwd":"%s/wt-target"}}'"'"' > "%s/rollouts/new-target.jsonl"\nprintf '"'"'%%s\\n'"'"' '"'"'{"type":"session_meta","payload":{"id":"other-session","cwd":"%s/wt-other"}}'"'"' > "%s/rollouts/new-other.jsonl"\nnew_rollout_since "$before" "%s/rollouts/*.jsonl" "%s/wt-target"\nprintf '"'"'rollout=%%s session=%%s reason=%%s\\n'"'"' "$CODEX_ROLLOUT" "$CODEX_ROLLOUT_SESSION_ID" "$CODEX_ROLLOUT_REASON"\n' "$T" "$T" "$T" "$T" "$T" "$T" "$T" "$T" "$T" "$T";;
       check-only)
         printf 'CHECK_ONLY=1\n';;
     esac
@@ -87,6 +99,15 @@ esac
 exit 1
 EOF
 chmod +x "$T/bin/bd"
+cat > "$T/bin/orca" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1:$2:$3" = "terminal:list:--json" ]; then
+  printf '{"result":{"terminals":[{"handle":"term-placement","worktreePath":"%s"}]}}\n' "$PLACEMENT_WORKTREE"
+  exit 0
+fi
+printf '{}\n'
+EOF
+chmod +x "$T/bin/orca"
 
 make_harness card
 out=$(bash "$T/harness-card.sh")
@@ -182,6 +203,34 @@ printf '%s' "$register_out" | grep -q '"allow":true' \
   && ok "register path returns while terminal-like stdin remains open" \
   || fail "register stdin case: $register_out"
 
+make_harness placement
+: > "$T/placement-ledger.jsonl"
+placement_out=$(PLACEMENT_WORKTREE="$T/placement-worktree" bash "$T/harness-placement.sh")
+if printf '%s' "$placement_out" | grep -q '"worktree_selector":"folder:folder-placement"' \
+    && ! printf '%s' "$placement_out" | grep -q 'id:folder:folder-placement'; then
+  ok "record_dispatch_placement preserves the folder selector"
+else
+  fail "placement selector case: $placement_out"
+fi
+
+make_harness agy-placement
+: > "$T/agy-ledger.jsonl"
+agy_out=$(bash "$T/harness-agy-placement.sh")
+if printf '%s' "$agy_out" | grep -q '"agent_session_id":"agy-conversation"'; then
+  ok "record_dispatch_placement records the new Antigravity brain conversation"
+else
+  fail "agy placement case: $agy_out"
+fi
+
+make_harness codex-rollout
+codex_rollout_out=$(bash "$T/harness-codex-rollout.sh")
+if printf '%s' "$codex_rollout_out" | grep -q 'session=target-session' \
+    && printf '%s' "$codex_rollout_out" | grep -q 'new-target.jsonl'; then
+  ok "new_rollout_since scopes Codex session metadata to the worktree cwd"
+else
+  fail "codex rollout scope case: $codex_rollout_out"
+fi
+
 : > "$T/bd.log"
 make_harness release
 out=$(BD_CALL_LOG="$T/bd.log" bash "$T/harness-release.sh" 2>&1 || true)
@@ -238,6 +287,28 @@ if [ "$status" -eq 0 ] \
 else
   fail "production --check-only case: rc=$status out=$out calls=$(tr '\n' ';' < "$T/bd.log")"
 fi
+
+event_ledger="$T/state/dispatch-ledger.jsonl"
+event_out=$(MOGUI_STATE_DIR="$T/state" DISPATCH_STANDING_RULES="$S/../rules/standing-rules.md" \
+  PATH="$T/bin:$PATH" bash "$T/harness/dispatch-production" \
+  --ledger-event resume_attempt --dispatch-id disp-event --worktree folder:event \
+  --worktree-path "$T/event-worktree" --session-id agy-event \
+  --search-query agy-event --result resumed 2>&1)
+if [ -s "$event_ledger" ] && grep -q '"kind":"resume_attempt"' "$event_ledger" \
+    && grep -q '"resume_result":"resumed"' "$event_ledger"; then
+  ok "--ledger-event writes resume_attempt to the configured temporary ledger"
+else
+  fail "ledger-event case: rc=$? out=$event_out ledger=$(cat "$event_ledger" 2>/dev/null || true)"
+fi
+set +e
+MOGUI_STATE_DIR="$T/state" DISPATCH_STANDING_RULES="$S/../rules/standing-rules.md" \
+  PATH="$T/bin:$PATH" bash "$T/harness/dispatch-production" \
+  --ledger-event resume_attempt --dispatch-id disp-event --result failed >/dev/null 2>&1
+event_failed_status=$?
+set -u
+[ "$event_failed_status" -ne 0 ] \
+  && ok "--ledger-event refuses a failed resume without a reason" \
+  || fail "ledger-event accepted a failed resume without a reason"
 
 production_failure_case() {
   mode="$1"
@@ -316,7 +387,7 @@ EOF
   out=$(ORCA_MODE="$mode" GATE_MODE="$mode" ORCA_READ_COUNT="$work/read-count" \
     MOGUI_STATE_DIR="$work/state" CARD_LOG="$work/bd.log" \
     DISPATCH_STANDING_RULES="$S/../rules/standing-rules.md" \
-    PATH="$T/bin:$work:$PATH" bash "$work/harness/dispatch" \
+    PATH="$work:$T/bin:$PATH" bash "$work/harness/dispatch" \
       --contract "$work/contract.md" --spec "$mode" \
       --runtime claude --model claude-haiku-4-5-20251001 \
       --tier-policy "$work/ops/model-tier-policy.json" \

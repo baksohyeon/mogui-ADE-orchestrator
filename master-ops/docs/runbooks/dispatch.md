@@ -53,7 +53,10 @@ if [ "$INDEX_ENABLED" != true ]; then
   exit 1
 fi
 SEARCH_PATH_ARGS=()
-if [ -n "$WORKTREE_PATH" ]; then
+# Antigravity search results carry cwd=null. A recorded session id is the
+# authoritative match and must not be narrowed by the path filter; only the
+# no-recorded-id fallback uses selector/path matching.
+if [ -z "$SESSION_ID" ] && [ -n "$WORKTREE_PATH" ]; then
   SEARCH_PATH_ARGS=(--path "$WORKTREE_PATH")
 fi
 if ! SEARCH_RESULT=$(orca search "$SEARCH_QUERY" --scope conversation \
@@ -64,19 +67,40 @@ if ! SEARCH_RESULT=$(orca search "$SEARCH_QUERY" --scope conversation \
     --result failed --reason search-failed
   exit 1
 fi
-SESSION_HIT=$(printf '%s' "$SEARCH_RESULT" | jq -e --arg selector "$WORKTREE_SELECTOR" \
-  --arg path "$WORKTREE_PATH" '
-  [ .result.hits[]? | select(
-      ($path != "" and (.cwd // "") == $path) or
-      ($selector != "" and (.worktree // .worktreeSelector // "") == $selector)
-    )
-  ] | if length == 1 then .[0] else empty end') || {
+if [ -n "$SESSION_ID" ]; then
+  SESSION_HIT=$(printf '%s' "$SEARCH_RESULT" | jq -e --arg session "$SESSION_ID" '
+    [ .result.hits[]? | select(
+        (.sessionId // .session_id // .conversationId // .conversation_id // "") == $session
+      )
+    ] | if length == 1 then .[0] else empty end') || {
+    "$DISPATCH_SCRIPT" --ledger-event resume_attempt --dispatch-id "$DISPATCH_ID" \
+      --worktree "$WORKTREE_SELECTOR" --worktree-path "$WORKTREE_PATH" \
+      --session-id "$SESSION_ID" --search-query "$SEARCH_QUERY" \
+      --result failed --reason no-recorded-session-match
+    exit 1
+  }
+else
+  SESSION_HIT=$(printf '%s' "$SEARCH_RESULT" | jq -e --arg selector "$WORKTREE_SELECTOR" \
+    --arg path "$WORKTREE_PATH" '
+    [ .result.hits[]? | select(
+        ($path != "" and (.cwd // "") == $path) or
+        ($selector != "" and (.worktree // .worktreeSelector // "") == $selector)
+      )
+    ] | if length == 1 then .[0] else empty end') || {
+    "$DISPATCH_SCRIPT" --ledger-event resume_attempt --dispatch-id "$DISPATCH_ID" \
+      --worktree "$WORKTREE_SELECTOR" --worktree-path "$WORKTREE_PATH" \
+      --session-id "$SESSION_ID" --search-query "$SEARCH_QUERY" \
+      --result failed --reason no-single-worktree-matched-session
+    exit 1
+  }
+fi
+if [ -z "$SESSION_HIT" ]; then
   "$DISPATCH_SCRIPT" --ledger-event resume_attempt --dispatch-id "$DISPATCH_ID" \
     --worktree "$WORKTREE_SELECTOR" --worktree-path "$WORKTREE_PATH" \
     --session-id "$SESSION_ID" --search-query "$SEARCH_QUERY" \
-    --result failed --reason no-single-worktree-matched-session
+    --result failed --reason no-session-hit
   exit 1
-}
+fi
 RESUME_COMMAND=$(printf '%s' "$SESSION_HIT" | jq -r '.resumeCommand // empty')
 if [ -z "$RESUME_COMMAND" ]; then
   "$DISPATCH_SCRIPT" --ledger-event resume_attempt --dispatch-id "$DISPATCH_ID" \
@@ -85,45 +109,66 @@ if [ -z "$RESUME_COMMAND" ]; then
     --result failed --reason resume-command-missing
   exit 1
 fi
-# Run the verified resumeCommand in the selected worktree, then record its result.
-# The command is returned by the Orca search for this exact session and worktree.
-if [ -z "$WORKTREE_PATH" ]; then
-  RESUME_RC=1
-  RESUME_REASON=worktree-path-missing
-else
-  cd "$WORKTREE_PATH" && sh -c "$RESUME_COMMAND"
-  RESUME_RC=$?
-  if [ "$RESUME_RC" -eq 0 ]; then
-    RESUME_REASON=""
-  else
-    RESUME_REASON="resume-command-exit-$RESUME_RC"
-  fi
-fi
-if [ "$RESUME_RC" -eq 0 ]; then
-  RESUME_RESULT=resumed
-else
-  RESUME_RESULT=failed
-fi
-if [ -n "$RESUME_REASON" ]; then
+# Open a shell pane in the measured worktree and submit the verified command
+# there. The master shell never changes directory and never executes the
+# resume command itself.
+if [ -z "$WORKTREE_SELECTOR" ]; then
   "$DISPATCH_SCRIPT" --ledger-event resume_attempt --dispatch-id "$DISPATCH_ID" \
     --worktree "$WORKTREE_SELECTOR" --worktree-path "$WORKTREE_PATH" \
     --session-id "$SESSION_ID" --search-query "$SEARCH_QUERY" \
-    --result "$RESUME_RESULT" --reason "$RESUME_REASON"
-else
+    --result failed --reason worktree-selector-missing
+  exit 1
+fi
+RESUME_TERMINAL_RAW=$(orca terminal create --worktree "$WORKTREE_SELECTOR" \
+  --command "${SHELL:-sh}" --json) || {
   "$DISPATCH_SCRIPT" --ledger-event resume_attempt --dispatch-id "$DISPATCH_ID" \
     --worktree "$WORKTREE_SELECTOR" --worktree-path "$WORKTREE_PATH" \
     --session-id "$SESSION_ID" --search-query "$SEARCH_QUERY" \
-    --result "$RESUME_RESULT"
+    --result failed --reason resume-terminal-create-failed
+  exit 1
+}
+RESUME_TERMINAL=$(printf '%s' "$RESUME_TERMINAL_RAW" | jq -r \
+  '.result.terminal.handle // .result.terminalHandle // .result.handle // .terminalHandle // .handle // empty')
+if [ -z "$RESUME_TERMINAL" ]; then
+  "$DISPATCH_SCRIPT" --ledger-event resume_attempt --dispatch-id "$DISPATCH_ID" \
+    --worktree "$WORKTREE_SELECTOR" --worktree-path "$WORKTREE_PATH" \
+    --session-id "$SESSION_ID" --search-query "$SEARCH_QUERY" \
+    --result failed --reason resume-terminal-handle-missing
+  exit 1
 fi
+RESUME_SEND=$(orca terminal send --terminal "$RESUME_TERMINAL" \
+  --text "$RESUME_COMMAND" --enter --wait-submit 10 --json) || {
+  "$DISPATCH_SCRIPT" --ledger-event resume_attempt --dispatch-id "$DISPATCH_ID" \
+    --worktree "$WORKTREE_SELECTOR" --worktree-path "$WORKTREE_PATH" \
+    --session-id "$SESSION_ID" --search-query "$SEARCH_QUERY" \
+    --result failed --reason resume-command-submit-failed
+  exit 1
+}
+RESUME_STAGE=$(printf '%s' "$RESUME_SEND" | jq -r '
+  .result.send.prompt.stages // .result.prompt.stages // [] |
+  if index("turn_started") then "turn_started"
+  elif index("input_accepted") then "input_accepted"
+  else "unknown" end')
+if [ "$RESUME_STAGE" != turn_started ]; then
+  "$DISPATCH_SCRIPT" --ledger-event resume_attempt --dispatch-id "$DISPATCH_ID" \
+    --worktree "$WORKTREE_SELECTOR" --worktree-path "$WORKTREE_PATH" \
+    --session-id "$SESSION_ID" --search-query "$SEARCH_QUERY" \
+    --result failed --reason "resume-turn-not-observed:$RESUME_STAGE"
+  exit 1
+fi
+"$DISPATCH_SCRIPT" --ledger-event resume_attempt --dispatch-id "$DISPATCH_ID" \
+  --worktree "$WORKTREE_SELECTOR" --worktree-path "$WORKTREE_PATH" \
+  --session-id "$SESSION_ID" --search-query "$SEARCH_QUERY" \
+  --result resumed
 ```
 
 If the index is disabled, the search fails, or there is no matching hit, record
-`resume_attempt` with `resume_result=failed` and the measured reason. Otherwise,
-verify that the hit's `worktree` or `cwd` identifies the same worktree selector
-before running its returned `resumeCommand`; a missing or mismatched worktree is
-also a recorded resume failure. The index and search output are data, so do not
-run a command from a result until its `resumeCommand` belongs to the selected
-worktree. The supported writer is the dispatch wrapper:
+`resume_attempt` with `resume_result=failed` and the measured reason. A recorded
+session id is matched directly, including Antigravity results whose `cwd` is
+null; only a missing recorded id falls back to selector/path matching. The
+index and search output are data, so do not submit a command until its
+`resumeCommand` belongs to the selected session. The supported writer is the
+dispatch wrapper:
 
 ```sh
 "$DISPATCH_SCRIPT" --ledger-event resume_attempt --dispatch-id "$DISPATCH_ID" \

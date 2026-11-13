@@ -1132,6 +1132,59 @@ class WorkerReaperTests(unittest.TestCase):
             self.assertTrue(merged)
             self.assertEqual(reason, "")
 
+    def test_squash_merge_detection_does_not_quote_non_ascii_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            _git(repo, "init", "--initial-branch", "main")
+            _git(repo, "config", "user.email", "test@example.invalid")
+            _git(repo, "config", "user.name", "Test User")
+            path = repo / "한글.md"
+            path.write_text("base\n", encoding="utf-8")
+            _git(repo, "add", "한글.md")
+            _git(repo, "commit", "-m", "base")
+            _git(repo, "checkout", "-b", "feature-x")
+            path.write_text("feature\n", encoding="utf-8")
+            _git(repo, "commit", "-am", "feature")
+            _git(repo, "checkout", "main")
+            _git(repo, "update-ref", "refs/remotes/origin/main", "main")
+            _git(repo, "checkout", "feature-x")
+
+            clean, merged, reason = WorkerReaper()._check_worktree_safe_to_remove(repo)
+
+            self.assertFalse(clean)
+            self.assertFalse(merged)
+            self.assertIn("differing paths: 한글.md", reason)
+            # Mutant proof: newline parsing of Git's quoted name reports a
+            # pathspec that matches nothing and falsely returns landed.
+
+    def test_squash_merge_detection_disables_rename_detection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            _git(repo, "init", "--initial-branch", "main")
+            _git(repo, "config", "user.email", "test@example.invalid")
+            _git(repo, "config", "user.name", "Test User")
+            (repo / "old.txt").write_text("base\n", encoding="utf-8")
+            _git(repo, "add", "old.txt")
+            _git(repo, "commit", "-m", "base")
+            _git(repo, "checkout", "-b", "feature-x")
+            _git(repo, "mv", "old.txt", "new.txt")
+            (repo / "new.txt").write_text("feature\n", encoding="utf-8")
+            _git(repo, "commit", "-am", "feature rename")
+            _git(repo, "checkout", "main")
+            (repo / "new.txt").write_text("feature\n", encoding="utf-8")
+            _git(repo, "add", "new.txt")
+            _git(repo, "commit", "-m", "squash new content")
+            _git(repo, "update-ref", "refs/remotes/origin/main", "main")
+            _git(repo, "checkout", "feature-x")
+
+            clean, merged, reason = WorkerReaper()._check_worktree_safe_to_remove(repo)
+
+            self.assertFalse(clean)
+            self.assertFalse(merged)
+            self.assertIn("old.txt", reason)
+            # Mutant proof: rename detection lists only new.txt, which is
+            # identical on main and would falsely report the branch landed.
+
     def test_reap_leaves_clean_merged_worktree_holding_ignored_media(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             fake_runner, removed_paths = _clean_worktree_runner(
@@ -1569,7 +1622,7 @@ class BranchDeletionTests(unittest.TestCase):
                 [["orca", "worktree", "rm", "--worktree", "id:repo:target", "--delete-branch", "--json"]],
             )
             self.assertEqual(record.measurements["worktree_landed_by"], "content")
-            self.assertIn("worktree_removed:", record.actions_taken)
+            self.assertIn("worktree_remove_requested:", record.actions_taken)
             # Mutant proof: replacing the content rule with ancestry leaves
             # this squash-merged branch unreaped.
 
@@ -1604,6 +1657,49 @@ class BranchDeletionTests(unittest.TestCase):
             # Mutant proof: treating every pane as idle would close a live
             # worker and remove its worktree.
 
+    def test_selector_refuses_a_worktree_reused_by_dispatched_worker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _SelectorEnvironment(tmp, reused_by="ctx-newer")
+            record = WorkerReaper(orca_runner=env).reap(task_id="t1", execute=True)
+
+            self.assertIn("reused_by:ctx-newer", record.actions_taken)
+            self.assertEqual(env.closed_commands, [])
+            self.assertEqual(env.removed_commands, [])
+            # Mutant proof: dropping the worktree-level reuse guard closes all
+            # panes belonging to the newer dispatch.
+
+    def test_selector_does_not_close_before_unmerged_verdict(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _SelectorEnvironment(tmp, content_equal=False)
+            record = WorkerReaper(orca_runner=env).reap(task_id="t1", execute=True)
+
+            self.assertIn("branch changes are not included", record.actions_taken)
+            self.assertEqual(env.closed_commands, [])
+            self.assertEqual(env.removed_commands, [])
+            # Mutant proof: closing before the landing check loses the session
+            # needed to resume this unfinished dispatch.
+
+    def test_selector_refuses_nonzero_sweep_with_parsed_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _SelectorEnvironment(tmp, sweep_fails=True)
+            record = WorkerReaper(orca_runner=env).reap(task_id="t1", execute=True)
+
+            self.assertIn("pane_state_unmeasured", record.actions_taken)
+            self.assertEqual(env.closed_commands, [])
+            self.assertEqual(env.removed_commands, [])
+
+    def test_selector_records_partial_cleanup_when_worktree_remove_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _SelectorEnvironment(tmp, remove_fails=True)
+            record = WorkerReaper(orca_runner=env).reap(task_id="t1", execute=True)
+
+            self.assertIn(
+                "cleanup_partial:terminals_closed:worktree_remove_failed",
+                record.actions_taken,
+            )
+            self.assertEqual(len(env.closed_commands), 1)
+            self.assertEqual(len(env.removed_commands), 1)
+
     def test_selector_refuses_unmeasured_pane_handle(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             env = _SelectorEnvironment(tmp, missing_handle=True)
@@ -1635,12 +1731,18 @@ class _SelectorEnvironment:
         pane_state: str = "idle",
         include_title_decoy: bool = False,
         missing_handle: bool = False,
+        reused_by: str | None = None,
+        sweep_fails: bool = False,
+        remove_fails: bool = False,
     ) -> None:
         self.worktree_path = worktree_path
         self.content_equal = content_equal
         self.pane_state = pane_state
         self.include_title_decoy = include_title_decoy
         self.missing_handle = missing_handle
+        self.reused_by = reused_by
+        self.sweep_fails = sweep_fails
+        self.remove_fails = remove_fails
         self.closed_commands: list[list[str]] = []
         self.removed_commands: list[list[str]] = []
 
@@ -1675,8 +1777,19 @@ class _SelectorEnvironment:
                     }
                 )
             return 0, json.dumps({"result": {"terminals": terminals}}), ""
+        if cmd[:4] == ["orca", "orchestration", "worker-list", "--limit"]:
+            workers = []
+            if self.reused_by:
+                workers.append(
+                    {
+                        "dispatchId": self.reused_by,
+                        "dispatchStatus": "dispatched",
+                        "worktreeId": "repo:target",
+                    }
+                )
+            return 0, json.dumps({"result": {"workers": workers, "page": {"hasMore": False}}}), ""
         if cmd and cmd[0].endswith("worker-pane-sweep"):
-            return 0 if self.pane_state == "idle" else 1, (
+            return (1 if self.sweep_fails else 0), (
                 f"ok {self.pane_state} term-target worker\n"
             ), ""
         if cmd[:5] == ["orca", "terminal", "close", "--worktree", "id:repo:target"]:
@@ -1684,7 +1797,7 @@ class _SelectorEnvironment:
             return 0, "", ""
         if cmd[:5] == ["orca", "worktree", "rm", "--worktree", "id:repo:target"]:
             self.removed_commands.append(cmd)
-            return 0, "", ""
+            return (1, "", "remove failed") if self.remove_fails else (0, "", "")
         if "git" in cmd and "status" in cmd:
             return 0, "", ""
         if "git" in cmd and "branch" in cmd and "--show-current" in cmd:
@@ -1694,7 +1807,7 @@ class _SelectorEnvironment:
         if "git" in cmd and "merge-base" in cmd:
             return 0, "base\n", ""
         if "git" in cmd and "--name-only" in cmd:
-            return 0, "src/worker.py\n", ""
+            return 0, "src/worker.py\0", ""
         if "git" in cmd and "--quiet" in cmd:
             return (0 if self.content_equal else 1), "", ""
         return 0, "", ""

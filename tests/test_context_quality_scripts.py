@@ -326,12 +326,13 @@ def test_context_quality_sampler_reports_today_card_gaps(tmp_path: Path):
     assert result.stdout.rstrip().endswith("dispatches without a card today: 1")
 
 
-def test_compaction_probe_includes_card_recall_item():
+def test_compaction_probe_includes_card_recall_item(tmp_path: Path):
     if shutil.which("python3") is None:
         pytest.skip("python3 unavailable")
     env = os.environ.copy()
     env["CONTEXT_QUALITY_LOG"] = "/tmp/context-quality-test.jsonl"
     env["DISPATCH_GATE_LEDGER"] = "/tmp/dispatch-ledger-test.jsonl"
+    env["MOGUI_STATE_DIR"] = str(tmp_path / "compact-state")
     result = subprocess.run(
         ["/bin/bash", str(COMPACTION_PROBE)],
         input='{"source":"compact","session_id":"session-card"}\n',
@@ -344,5 +345,8 @@ def test_compaction_probe_includes_card_recall_item():
     context = output["hookSpecificOutput"]["additionalContext"]
     assert '"cards":' in context
     assert "R5 Dispatch cards:" in context
-    assert "Context-quality log path:\n/tmp/context-quality-test.jsonl" in context
+    assert "Append the recall record with this runnable command:" in context
+    assert "CONTEXT_QUALITY_LOG=" in context
+    assert "context-quality-test.jsonl " in context
+    assert "context-quality-log.sh" in context
     assert "Dispatch ledger path:\n/tmp/dispatch-ledger-test.jsonl" in context

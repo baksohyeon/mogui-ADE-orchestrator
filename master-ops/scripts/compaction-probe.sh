@@ -11,15 +11,22 @@ fi
 INPUT="$(cat 2>/dev/null)"
 CONTEXT_LOG_PATH="${CONTEXT_QUALITY_LOG:-$HOME/.mogui/monitors/mg/context-quality.jsonl}"
 DISPATCH_LEDGER_PATH="${DISPATCH_GATE_LEDGER:-${MOGUI_STATE_DIR:-$HOME/.mogui}/dispatch-ledger.jsonl}"
+STATE_DIR="${MOGUI_STATE_DIR:-${HOME:-$(cd ~ 2>/dev/null && pwd)}/.mogui}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P)"
+CONTEXT_LOG_SCRIPT="$SCRIPT_DIR/context-quality-log.sh"
 
 PROBE_INPUT="$INPUT" \
 CONTEXT_LOG_PATH="$CONTEXT_LOG_PATH" \
 DISPATCH_LEDGER_PATH="$DISPATCH_LEDGER_PATH" \
+STATE_DIR="$STATE_DIR" \
+CONTEXT_LOG_SCRIPT="$CONTEXT_LOG_SCRIPT" \
 python3 <<'PY' 2>/dev/null || true
 import json
 import os
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
+import shlex
 
 try:
     payload = json.loads(os.environ.get("PROBE_INPUT", "") or "{}")
@@ -38,6 +45,27 @@ dispatch_ledger_path = os.environ.get(
     "DISPATCH_LEDGER_PATH",
     os.path.expanduser("~/.mogui/dispatch-ledger.jsonl"),
 )
+
+if session_id != "<unknown-session>":
+    state_dir = Path(os.environ.get("STATE_DIR", "") or "").expanduser()
+    context_log = Path(context_log_path).expanduser().resolve()
+    marker_dir = state_dir / "compact-pending"
+    marker_path = marker_dir / str(session_id)
+    try:
+        marker_dir.mkdir(parents=True, exist_ok=True)
+        log_offset = context_log.stat().st_size if context_log.is_file() else 0
+        marker = {
+            "compact_time": datetime.now(timezone.utc).isoformat(),
+            "log_path": str(context_log),
+            "log_offset": log_offset,
+            "session_id": str(session_id),
+            "post_tool_uses": 0,
+        }
+        temporary = marker_path.with_name(marker_path.name + ".tmp")
+        temporary.write_text(json.dumps(marker, ensure_ascii=False) + "\n", encoding="utf-8")
+        temporary.replace(marker_path)
+    except Exception:
+        pass
 
 record_template = {
     "ts": datetime.now(timezone.utc).isoformat(),
@@ -70,8 +98,8 @@ R5 Dispatch cards: from memory only, the card ids of the tracks dispatched or la
 Append one JSON record before source verification. Suggested payload:
 {json.dumps(record_template, ensure_ascii=False, separators=(",", ":"))}
 
-Context-quality log path:
-{context_log_path}
+Append the recall record with this runnable command:
+{shlex.quote('CONTEXT_QUALITY_LOG=' + str(Path(context_log_path).expanduser().resolve()))} {shlex.quote(str(Path(os.environ.get('CONTEXT_LOG_SCRIPT', '')).expanduser().resolve()))} {shlex.quote(json.dumps(record_template, ensure_ascii=False, separators=(',', ':')))}
 
 Dispatch ledger path:
 {dispatch_ledger_path}

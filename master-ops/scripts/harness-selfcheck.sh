@@ -16,6 +16,10 @@ SETTINGS_FILE="$WORKSPACE_ROOT/.claude/settings.json"
 SKILLS_DISCOVERY_PATH="$WORKSPACE_ROOT/.claude/skills"
 HOOKS_REPO_DIR="$OPS_DIR/scripts/hooks"
 TEMPLATE_CHECK="$OPS_DIR/scripts/template-check"
+# The generic hook inventory below intentionally includes the compact
+# rehydration hook. It must stay visible here so an install cannot carry the
+# script without a corresponding host registration.
+COMPACT_REHYDRATION_HOOK_NAME="compact-rehydration-hook.bash"
 
 exit_code=0
 
@@ -287,6 +291,16 @@ if [ -d "$HOOKS_REPO_DIR" ]; then
       exit_code=1
     fi
   done
+fi
+
+# Keep the new hook's name explicit in this check as a guard against a future
+# inventory filter that accidentally excludes it from the generic loop.
+if [ -f "$HOOKS_REPO_DIR/$COMPACT_REHYDRATION_HOOK_NAME" ] \
+  && ! printf '%s\n' "$wired_hooks" | grep -qF "$COMPACT_REHYDRATION_HOOK_NAME"; then
+  case " $unwired_hooks " in
+    *" $COMPACT_REHYDRATION_HOOK_NAME "*) ;;
+    *) unwired_hooks="$unwired_hooks $COMPACT_REHYDRATION_HOOK_NAME"; exit_code=1 ;;
+  esac
 fi
 
 if [ -n "$hook_missing" ] || [ -n "$unwired_hooks" ]; then

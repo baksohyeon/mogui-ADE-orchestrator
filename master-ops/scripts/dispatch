@@ -1891,16 +1891,14 @@ if [ "$ALLOW" != "True" ]; then
   echo "✗ gate DENY · $(echo "$CHK" | jqf "d['reason']") · model=$MODEL tier=$TIER"
   echo "$CHK"; exit 2
 fi
-# A check-only agy dispatch still measures the same pre-trust step as a real
-# launch, so its output tells the operator whether the throwaway worktree is
-# ready for the command that would follow. The other runtimes retain their
-# existing check-only path because their pre-trust scripts may be unavailable
-# in lightweight harnesses that only exercise the gate.
+# A check-only dispatch must not edit host settings. A real agy launch runs the
+# pre-trust helper below after the gate has passed; the dry run reports that the
+# mutating step is reserved for the launch path.
 if [ "$CHECK_ONLY" = 1 ] && [ "$RUNTIME" = agy ]; then
   if [ -n "$TERMINAL" ] && [ -z "$WORKTREE" ]; then
     echo "pre-trust · skipped · pane reused, nothing launched; the post-inject pane check still catches a trust gate"
   else
-    ensure_agy_pretrust "$RUNTIME" "$WORKTREE" || exit 2
+    echo "pre-trust · skipped · check-only does not edit agy settings; real dispatch will pre-trust before launch"
   fi
 fi
 if [ "$CHECK_ONLY" = 1 ]; then

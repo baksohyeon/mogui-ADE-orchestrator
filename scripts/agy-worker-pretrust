@@ -37,6 +37,7 @@ status=$(
 import json
 import os
 import sys
+import fcntl
 from pathlib import Path
 
 
@@ -54,47 +55,53 @@ def reject_constant(token: str) -> None:
     abort(f"cannot parse JSON: invalid constant {token!r}")
 
 
-if target_path.exists():
-    try:
-        raw = target_path.read_text(encoding="utf-8")
-    except UnicodeDecodeError as error:
-        abort(f"cannot parse JSON: {error}")
-    try:
-        document = json.loads(raw, parse_constant=reject_constant)
-    except json.JSONDecodeError as error:
-        abort(f"cannot parse JSON: {error}")
-    if not isinstance(document, dict):
-        abort("top-level value is not an object")
-else:
-    raw = ""
-    document = {}
-
-trusted_workspaces = document.get("trustedWorkspaces")
-if trusted_workspaces is None:
-    trusted_workspaces = []
-elif not isinstance(trusted_workspaces, list) or not all(
-    isinstance(item, str) for item in trusted_workspaces
-):
-    abort("trustedWorkspaces must be an array of strings")
-
-if worktree_path in trusted_workspaces:
-    print("already")
-    raise SystemExit(0)
-
-document["trustedWorkspaces"] = [*trusted_workspaces, worktree_path]
-rendered = json.dumps(document, indent=2, ensure_ascii=False)
-if raw.endswith("\n") or not raw:
-    rendered += "\n"
-
+# The settings file is shared by concurrent dispatches. Lock the complete
+# read, modify, and replace sequence so one worktree cannot overwrite another.
 target_path.parent.mkdir(parents=True, exist_ok=True)
-tmp_path = target_path.with_name(f".{target_path.name}.{os.getpid()}.tmp")
-tmp_path.write_text(rendered, encoding="utf-8")
-if target_path.exists():
-    os.chmod(tmp_path, target_path.stat().st_mode)
-else:
-    os.chmod(tmp_path, 0o600)
-os.replace(tmp_path, target_path)
-print("added")
+lock_path = target_path.with_name(f".{target_path.name}.lock")
+with lock_path.open("a+", encoding="utf-8") as lock_file:
+    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+    if target_path.exists():
+        try:
+            raw = target_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as error:
+            abort(f"cannot parse JSON: {error}")
+        try:
+            document = json.loads(raw, parse_constant=reject_constant)
+        except json.JSONDecodeError as error:
+            abort(f"cannot parse JSON: {error}")
+        if not isinstance(document, dict):
+            abort("top-level value is not an object")
+    else:
+        raw = ""
+        document = {}
+
+    if "trustedWorkspaces" not in document:
+        trusted_workspaces = []
+    else:
+        trusted_workspaces = document["trustedWorkspaces"]
+        if not isinstance(trusted_workspaces, list) or not all(
+            isinstance(item, str) for item in trusted_workspaces
+        ):
+            abort("trustedWorkspaces must be an array of strings")
+
+    if worktree_path in trusted_workspaces:
+        print("already")
+        raise SystemExit(0)
+
+    document["trustedWorkspaces"] = [*trusted_workspaces, worktree_path]
+    rendered = json.dumps(document, indent=2, ensure_ascii=False)
+    if raw.endswith("\n") or not raw:
+        rendered += "\n"
+
+    tmp_path = target_path.with_name(f".{target_path.name}.{os.getpid()}.tmp")
+    tmp_path.write_text(rendered, encoding="utf-8")
+    if target_path.exists():
+        os.chmod(tmp_path, target_path.stat().st_mode)
+    else:
+        os.chmod(tmp_path, 0o600)
+    os.replace(tmp_path, target_path)
+    print("added")
 PY
 )
 

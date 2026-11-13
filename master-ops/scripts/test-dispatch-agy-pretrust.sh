@@ -15,6 +15,10 @@ fi
 
 cat >"$work/agy-worker-pretrust" <<'EOF'
 #!/usr/bin/env bash
+if [ "${1:-}" != "$AGY_EXPECTED_PATH" ]; then
+  echo "unexpected worktree path: ${1:-<none>}" >&2
+  exit 1
+fi
 printf 'Summary: 0 added, 0 updated, 1 already trusted\n'
 EOF
 chmod +x "$work/agy-worker-pretrust"
@@ -23,9 +27,10 @@ write_runner() {
   {
     echo '#!/usr/bin/env bash'
     echo 'set -u'
+    printf 'export AGY_EXPECTED_PATH=%q\n' "$work"
     printf 'AGY_PRETRUST_BIN=%q\n' "$work/agy-worker-pretrust"
     printf '%s\n' "$body"
-    printf 'ensure_agy_pretrust agy %q && printf "TRUSTED\\n"\n' "$work"
+    printf 'ensure_agy_pretrust agy path:%q && printf "TRUSTED\\n"\n' "$work"
   } >"$runner"
   chmod +x "$runner"
 }
@@ -84,4 +89,13 @@ if [ -z "$check_only_line" ]; then
   echo "FAIL: dispatch check-only agy pre-trust block is missing" >&2
   exit 1
 fi
-echo "ok   : check-only agy dispatch has an explicit pre-trust measurement block"
+check_only_block=$(sed -n "${check_only_line},$((check_only_line + 8))p" "$dispatch")
+if printf '%s\n' "$check_only_block" | grep -q 'ensure_agy_pretrust'; then
+  echo "FAIL: check-only agy dispatch must not mutate host trust settings" >&2
+  exit 1
+fi
+if ! printf '%s\n' "$check_only_block" | grep -q 'check-only does not edit agy settings'; then
+  echo "FAIL: check-only agy dispatch must explain its non-mutating pre-trust behavior" >&2
+  exit 1
+fi
+echo "ok   : check-only agy dispatch leaves host trust settings unchanged"

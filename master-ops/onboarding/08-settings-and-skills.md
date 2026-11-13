@@ -77,13 +77,14 @@ The same host-edit approval covers agy's contract command allowlist. Merge these
       "command(orca orchestration reply)",
       "command(orca orchestration check)",
       "command(PYTHONPATH=src python3 -m pytest tests -q)",
-      "command(bash master-ops/scripts/test-)"
+      "command(bash master-ops/scripts/test-agy-pretrust.sh)",
+      "command(bash master-ops/scripts/test-dispatch-agy-pretrust.sh)"
     ]
   }
 }
 ```
 
-The `permissions.allow` key and `command(...)` entries were observed in agy 1.5.8's own settings file. This template covers the commands used by the worker contract and the repository's CI test entry points; a host may add an exact repository-specific test command when its checkout uses a different interpreter or test runner.
+The `permissions.allow` key and `command(...)` entries were observed in agy 1.5.8's own settings file. This template covers the commands used by the worker contract and the repository's targeted CI test entry points; a host may add an exact repository-specific test command when its checkout uses a different interpreter or test runner. The measured syntax does not establish a narrower remote/ref rule for `git push`, so force-push variants remain an explicit operator decision until that syntax is measured.
 
 ### Agent notes — disable guidance (for the master later)
 

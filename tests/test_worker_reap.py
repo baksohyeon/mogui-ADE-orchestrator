@@ -1555,6 +1555,137 @@ class BranchDeletionTests(unittest.TestCase):
             )
             self.assertLess(remove_index, delete_index)
 
+    def test_selector_reaps_squash_merged_content_with_orca_verbs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _SelectorEnvironment(tmp)
+            record = WorkerReaper(orca_runner=env).reap(task_id="t1", execute=True)
+
+            self.assertEqual(
+                env.closed_commands,
+                [["orca", "terminal", "close", "--worktree", "id:repo:target", "--all", "--json"]],
+            )
+            self.assertEqual(
+                env.removed_commands,
+                [["orca", "worktree", "rm", "--worktree", "id:repo:target", "--delete-branch", "--json"]],
+            )
+            self.assertEqual(record.measurements["worktree_landed_by"], "content")
+            self.assertIn("worktree_removed:", record.actions_taken)
+            # Mutant proof: replacing the content rule with ancestry leaves
+            # this squash-merged branch unreaped.
+
+    def test_selector_refuses_content_difference_and_names_the_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _SelectorEnvironment(tmp, content_equal=False)
+            record = WorkerReaper(orca_runner=env).reap(task_id="t1", execute=True)
+
+            self.assertIn("differing paths: src/worker.py", record.actions_taken)
+            self.assertEqual(env.removed_commands, [])
+            # Mutant proof: removing the path-scoped `git diff --quiet` check
+            # would delete a branch whose changed file still differs.
+
+    def test_selector_ignores_matching_title_in_another_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _SelectorEnvironment(tmp, include_title_decoy=True)
+            WorkerReaper(orca_runner=env).reap(task_id="t1", execute=True)
+
+            close_command = env.closed_commands[0]
+            self.assertEqual(close_command[3:5], ["--worktree", "id:repo:target"])
+            self.assertNotIn("term-decoy", " ".join(close_command))
+            # Mutant proof: selecting by title would close the decoy pane.
+
+    def test_selector_refuses_a_busy_pane(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _SelectorEnvironment(tmp, pane_state="working")
+            record = WorkerReaper(orca_runner=env).reap(task_id="t1", execute=True)
+
+            self.assertIn("pane_not_idle:term-target:working", record.actions_taken)
+            self.assertEqual(env.closed_commands, [])
+            self.assertEqual(env.removed_commands, [])
+            # Mutant proof: treating every pane as idle would close a live
+            # worker and remove its worktree.
+
+    def test_selector_dry_run_reports_content_landing_rule(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _SelectorEnvironment(tmp)
+            record = WorkerReaper(orca_runner=env).reap(task_id="t1", execute=False)
+
+            self.assertIn("landed_by:content", record.actions_taken)
+            self.assertEqual(record.measurements["worktree_landed_by"], "content")
+            self.assertEqual(env.closed_commands, [])
+            self.assertEqual(env.removed_commands, [])
+
+
+class _SelectorEnvironment:
+    def __init__(
+        self,
+        worktree_path: str,
+        *,
+        content_equal: bool = True,
+        pane_state: str = "idle",
+        include_title_decoy: bool = False,
+    ) -> None:
+        self.worktree_path = worktree_path
+        self.content_equal = content_equal
+        self.pane_state = pane_state
+        self.include_title_decoy = include_title_decoy
+        self.closed_commands: list[list[str]] = []
+        self.removed_commands: list[list[str]] = []
+
+    def __call__(self, cmd: list[str]) -> tuple[int, str, str]:
+        if "dispatch-show" in cmd:
+            return 0, json.dumps(
+                {
+                    "dispatch_id": "d1",
+                    "task_id": "t1",
+                    "terminal_id": "term-target",
+                    "status": "COMPLETED",
+                    "worktree_path": self.worktree_path,
+                    "worktree_selector": "id:repo:target",
+                }
+            ), ""
+        if cmd[:4] == ["orca", "terminal", "list", "--json"]:
+            terminals = [
+                {
+                    "handle": "term-target",
+                    "worktreeId": "repo:target",
+                    "worktreePath": self.worktree_path,
+                    "title": "same title",
+                }
+            ]
+            if self.include_title_decoy:
+                terminals.append(
+                    {
+                        "handle": "term-decoy",
+                        "worktreeId": "repo:other",
+                        "worktreePath": str(Path(self.worktree_path).parent / "other"),
+                        "title": "same title",
+                    }
+                )
+            return 0, json.dumps({"result": {"terminals": terminals}}), ""
+        if cmd and cmd[0].endswith("worker-pane-sweep"):
+            return 0 if self.pane_state == "idle" else 1, (
+                f"ok {self.pane_state} term-target worker\n"
+            ), ""
+        if cmd[:5] == ["orca", "terminal", "close", "--worktree", "id:repo:target"]:
+            self.closed_commands.append(cmd)
+            return 0, "", ""
+        if cmd[:5] == ["orca", "worktree", "rm", "--worktree", "id:repo:target"]:
+            self.removed_commands.append(cmd)
+            return 0, "", ""
+        if "git" in cmd and "status" in cmd:
+            return 0, "", ""
+        if "git" in cmd and "branch" in cmd and "--show-current" in cmd:
+            return 0, "feature-x\n", ""
+        if "git" in cmd and "branch" in cmd and "--merged" in cmd:
+            return 0, "* main\n", ""
+        if "git" in cmd and "merge-base" in cmd:
+            return 0, "base\n", ""
+        if "git" in cmd and "--name-only" in cmd:
+            return 0, "src/worker.py\n", ""
+        if "git" in cmd and "--quiet" in cmd:
+            return (0 if self.content_equal else 1), "", ""
+        return 0, "", ""
+
 
 class _FakeRunner:
     def __call__(self, cmd: list[str]) -> tuple[int, str, str]:

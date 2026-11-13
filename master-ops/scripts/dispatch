@@ -2234,6 +2234,106 @@ os.replace(replacement, ledger_path)
 EOF
 }
 
+record_dispatch_placement() {
+  [ "$CHECK_ONLY" = 1 ] && return 0
+  # The Orca terminal list is the dispatch-time source for worktree membership
+  # and any session identity it exposes. Codex's rollout filename is the
+  # fallback session identity when the terminal projection does not carry one.
+  local placement_raw
+  placement_raw=$(orca terminal list --json 2>/dev/null || true)
+  PLACEMENT_JSON="$placement_raw" python3 - "$LEDGER" "$DISP" "$TERMINAL" "$WORKTREE" "$RUNTIME" "${CODEX_ROLLOUT:-}" "${LEDGER_LOCK:-$LEDGER.lock}" <<'EOF'
+import fcntl
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+ledger_path, dispatch_id, terminal, requested_selector, runtime, rollout, lock_path = sys.argv[1:]
+try:
+    payload = json.loads(os.environ.get("PLACEMENT_JSON", ""))
+except json.JSONDecodeError:
+    payload = {}
+
+result = payload.get("result") if isinstance(payload, dict) else None
+terminals = result.get("terminals") if isinstance(result, dict) else None
+target = None
+if isinstance(terminals, list):
+    for item in terminals:
+        if isinstance(item, dict) and str(item.get("handle") or "") == terminal:
+            target = item
+            break
+
+target = target or {}
+measured_id = str(target.get("worktreeId") or target.get("worktree_id") or "")
+selector = requested_selector.strip() or measured_id
+if selector and not requested_selector.strip() and not selector.startswith(("id:", "path:")):
+    selector = "id:" + selector
+worktree_path = str(target.get("worktreePath") or target.get("worktree_path") or "")
+session_id = str(
+    target.get("agentSessionId")
+    or target.get("sessionId")
+    or target.get("sessionID")
+    or target.get("conversationId")
+    or target.get("conversation_id")
+    or ""
+)
+if not session_id and runtime == "codex" and rollout:
+    session_id = Path(rollout).stem
+    if session_id.startswith("rollout-"):
+        session_id = session_id[len("rollout-") :]
+
+os.makedirs(os.path.dirname(os.path.abspath(lock_path)), exist_ok=True)
+with open(lock_path, "a", encoding="utf-8") as lock:
+    fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+    with open(ledger_path, encoding="utf-8") as stream:
+        lines = stream.readlines()
+    entries = []
+    updated = False
+    for line in lines:
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            entries.append(line)
+            continue
+        if (
+            isinstance(entry, dict)
+            and entry.get("job_id") == dispatch_id
+            and entry.get("decision") == "ALLOW"
+        ):
+            if selector:
+                entry["worktree_selector"] = selector
+            if worktree_path:
+                entry["worktree_path"] = worktree_path
+            if session_id:
+                entry["agent_session_id"] = session_id
+            updated = True
+        entries.append(entry)
+
+    if not updated:
+        print("dispatch placement row not found for dispatch", file=sys.stderr)
+        sys.exit(1)
+
+    parent = os.path.dirname(os.path.abspath(ledger_path)) or "."
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=parent, prefix=".dispatch-ledger-", delete=False
+    ) as stream:
+        replacement = stream.name
+        for entry in entries:
+            if isinstance(entry, dict):
+                stream.write(json.dumps(entry, sort_keys=True, separators=(",", ":")))
+                stream.write("\n")
+            else:
+                stream.write(entry)
+    os.replace(replacement, ledger_path)
+EOF
+  local rc=$?
+  if [ "$rc" != 0 ]; then
+    echo "⚠ dispatch placement could not be recorded · dispatch=$DISP" >&2
+  fi
+  return 0
+}
+
 # 5b. register (job probe = ledger-vs-dispatch-show; model probe only when it can
 # be scoped to THIS worker — an unscoped glob confirms a model from whatever
 # session happens to be newest, which is a false pass, not a measurement)
@@ -2261,6 +2361,7 @@ fi
 if ! record_claim_failure_reason; then
   fail_after_tracker_claim "claim-failure reason could not be recorded · dispatch=$DISP" 4
 fi
+record_dispatch_placement
 record_host_diversity_audit
 WARN=$(echo "$REG" | jqf "','.join(d.get('warnings',[]))")
 case "$PROBE_STATE" in

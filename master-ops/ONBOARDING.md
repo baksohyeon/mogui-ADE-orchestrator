@@ -4,6 +4,8 @@
 
 This Stage 2 flow turns the Stage 1 skeleton into a working workspace/orchestrator operations repository. The flow is split into one file per step under `onboarding/`. This router is the only file that stays loaded for the whole install; everything else is loaded one step at a time.
 
+For an abnormal worker exit, follow [Resume before re-dispatch](docs/runbooks/dispatch.md#resume-before-re-dispatch) before handing the same contract to a new worker.
+
 ## First: classify the session mode
 
 Before anything else — before orientation, before any measurement — ask the owner which of these this session is, with a one-line gloss each. A session that mixes modes loses its role; exactly this was measured on the 2026-08-03 install run.

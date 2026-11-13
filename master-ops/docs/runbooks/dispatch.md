@@ -27,3 +27,18 @@ The prepared prompt includes `Tracker card: <id>` (or `none`) after the
 contract and standing-rule material, so a worker can retain the association
 through context compaction. The register milestone names the same card; the
 ledger is the source of truth for later reconciliation.
+
+## Resume before re-dispatch
+
+When a worker exits abnormally, inspect the dispatch ledger row for its
+`worktree_selector` and `agent_session_id`. Find the recorded session with
+`orca search`, or search by agent when the session id is unavailable, and run
+the returned `resumeCommand` in the same worktree. A session that will be
+reused stays asleep until its resume command is ready; closing its pane removes
+the resume record.
+
+Record the resume attempt and its result in the dispatch ledger. Re-dispatch
+the same contract only after the resume command fails, and record
+`redispatched_after_resume_failure` with the failure reason before starting the
+new dispatch. The Orca CLI skill is the first routing point for terminal close,
+session search, and resume operations.

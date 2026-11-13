@@ -56,6 +56,35 @@ Place `bashOutputMaxChars` in the master's workspace-level project file `.claude
 
 Record in the ops notes that harness wiring is default-on as of this install. Reuse the dependency-set approval from Step 0; if it was not asked there, ask it once here and name the `ctx` local history indexing side effect before running `--fix`. Ask a separate host-edit approval before changing host `settings.json`, hooks, or plugin configuration. If host-edit approval is declined, print the commands, record that wiring as pending, and continue only where unconfigured execution is allowed.
 
+### Antigravity folder trust and contract command approvals
+
+When `agy` is a worker runtime, run `{{RUNTIME_ROOT}}/scripts/agy-worker-pretrust <absolute-worktree-path>` immediately before its launch. The wrapper writes one exact path to agy's `~/.gemini/antigravity-cli/settings.json` under `trustedWorkspaces`; it preserves the other settings, never writes a wildcard, and prints a `Summary:` line. The measured first-run sequence on 2026-11-13 showed the `Do you trust the contents of this project?` screen before the CLI input screen; after selecting `Yes, I trust this folder`, the before/after diff added one array entry under `trustedWorkspaces` in that settings file, while `~/.gemini/trustedFolders.json` was unchanged.
+
+The same host-edit approval covers agy's contract command allowlist. Merge these entries into the existing `permissions.allow` array and preserve unrelated entries:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "command(git add)",
+      "command(git commit)",
+      "command(git push)",
+      "command(gh pr create)",
+      "command(gh pr view)",
+      "command(orca orchestration ask)",
+      "command(orca orchestration send)",
+      "command(orca orchestration worker-start)",
+      "command(orca orchestration reply)",
+      "command(orca orchestration check)",
+      "command(PYTHONPATH=src python3 -m pytest tests -q)",
+      "command(bash master-ops/scripts/test-)"
+    ]
+  }
+}
+```
+
+The `permissions.allow` key and `command(...)` entries were observed in agy 1.5.8's own settings file. This template covers the commands used by the worker contract and the repository's CI test entry points; a host may add an exact repository-specific test command when its checkout uses a different interpreter or test runner.
+
 ### Agent notes — disable guidance (for the master later)
 
 When the owner asks to turn something off, explain the piece in one sentence, state what behaviour changes, then apply the disable only after they confirm:

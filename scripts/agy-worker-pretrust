@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  printf 'Usage: %s <worktree-path>\n' "${0##*/}" >&2
+}
+
+if [[ $# -ne 1 ]]; then
+  usage
+  exit 2
+fi
+
+worktree_path=$1
+if [[ "$worktree_path" != /* ]]; then
+  printf 'ERROR worktree path must be absolute: %s\n' "$worktree_path" >&2
+  usage
+  exit 2
+fi
+if [[ "$worktree_path" == *$'\n'* || "$worktree_path" == *$'\r'* ]]; then
+  printf 'ERROR worktree path must not contain a line break\n' >&2
+  exit 2
+fi
+
+if [[ -n "${AGY_SETTINGS_PATH:-}" ]]; then
+  settings_path=$AGY_SETTINGS_PATH
+elif [[ -n "${AGY_CONFIG_HOME:-}" ]]; then
+  settings_path="$AGY_CONFIG_HOME/antigravity-cli/settings.json"
+elif [[ -n "${HOME:-}" ]]; then
+  settings_path="$HOME/.gemini/antigravity-cli/settings.json"
+else
+  printf 'ERROR agy settings path is unknown: set AGY_SETTINGS_PATH or AGY_CONFIG_HOME\n' >&2
+  exit 2
+fi
+
+status=$(
+  python3 - "$settings_path" "$worktree_path" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+
+settings_path = Path(sys.argv[1])
+worktree_path = sys.argv[2]
+target_path = settings_path.resolve()
+
+
+def abort(message: str) -> None:
+    print(f"ERROR {settings_path}: {message}", file=sys.stderr)
+    raise SystemExit(2)
+
+
+def reject_constant(token: str) -> None:
+    abort(f"cannot parse JSON: invalid constant {token!r}")
+
+
+if target_path.exists():
+    try:
+        raw = target_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as error:
+        abort(f"cannot parse JSON: {error}")
+    try:
+        document = json.loads(raw, parse_constant=reject_constant)
+    except json.JSONDecodeError as error:
+        abort(f"cannot parse JSON: {error}")
+    if not isinstance(document, dict):
+        abort("top-level value is not an object")
+else:
+    raw = ""
+    document = {}
+
+trusted_workspaces = document.get("trustedWorkspaces")
+if trusted_workspaces is None:
+    trusted_workspaces = []
+elif not isinstance(trusted_workspaces, list) or not all(
+    isinstance(item, str) for item in trusted_workspaces
+):
+    abort("trustedWorkspaces must be an array of strings")
+
+if worktree_path in trusted_workspaces:
+    print("already")
+    raise SystemExit(0)
+
+document["trustedWorkspaces"] = [*trusted_workspaces, worktree_path]
+rendered = json.dumps(document, indent=2, ensure_ascii=False)
+if raw.endswith("\n") or not raw:
+    rendered += "\n"
+
+target_path.parent.mkdir(parents=True, exist_ok=True)
+tmp_path = target_path.with_name(f".{target_path.name}.{os.getpid()}.tmp")
+tmp_path.write_text(rendered, encoding="utf-8")
+if target_path.exists():
+    os.chmod(tmp_path, target_path.stat().st_mode)
+else:
+    os.chmod(tmp_path, 0o600)
+os.replace(tmp_path, target_path)
+print("added")
+PY
+)
+
+case "$status" in
+  already)
+    printf '%s: already trusted\n' "$settings_path"
+    printf 'Summary: 0 added, 0 updated, 1 already trusted\n';;
+  added)
+    printf '%s: trusted (added)\n' "$settings_path"
+    printf 'Summary: 1 added, 0 updated, 0 already trusted\n';;
+  *)
+    printf 'ERROR unexpected pre-trust status: %s\n' "$status" >&2
+    exit 2;;
+esac

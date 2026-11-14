@@ -3853,6 +3853,10 @@ def test_measure_model_requires_the_quoted_line_to_be_in_the_record(
     assert entry["model_record"] == "session.jsonl"
 
 
+@pytest.mark.skipif(
+    dispatch_gate.fcntl is None,
+    reason="ledger file locking is unavailable on this platform",
+)
 def test_measure_model_preserves_an_append_waiting_on_the_ledger_lock(
     tmp_path: Path,
     monkeypatch,

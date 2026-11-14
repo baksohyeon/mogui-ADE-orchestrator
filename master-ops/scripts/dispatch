@@ -998,11 +998,15 @@ join_csv() {
 }
 
 choose_default_runtime() {
-  dispatchable_runtimes | while IFS= read -r runtime; do
-    [ "$runtime" = "$MASTER_HOST_RUNTIME" ] && continue
-    echo "$runtime"
-    break
-  done
+  local runtime chosen=""
+  while IFS= read -r runtime; do
+    if [ "$runtime" != "$MASTER_HOST_RUNTIME" ] && [ -z "$chosen" ]; then
+      chosen="$runtime"
+    fi
+  done < <(dispatchable_runtimes)
+  if [ -n "$chosen" ]; then
+    printf '%s\n' "$chosen"
+  fi
 }
 
 # Pane classification markers, per agent host. A start screen is IDLE, so

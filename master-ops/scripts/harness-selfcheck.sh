@@ -261,9 +261,27 @@ EOFPYTHON
 hook_wired=0
 hook_missing=""
 
-for cmd in $wired_hooks; do
-  # Extract the script path (usually word containing .sh extension)
-  script_path=$(echo "$cmd" | tr ' ' '\n' | grep -E '\.sh$' | head -1)
+# Read one complete command at a time. Word-splitting the settings text makes
+# an installed path containing a space look like several commands, and it also
+# leaves quotes attached to the path. shlex is the same shell-token boundary
+# the host uses for these command entries.
+while IFS= read -r cmd; do
+  [ -n "$cmd" ] || continue
+  script_path=$(python3 - "$cmd" <<'EOFPATH'
+import shlex
+import sys
+
+try:
+    tokens = shlex.split(sys.argv[1])
+except ValueError:
+    print(sys.argv[1])
+    raise SystemExit(0)
+for token in tokens:
+    if token.endswith(".sh"):
+        print(token)
+        break
+EOFPATH
+  )
 
   if [ -n "$script_path" ]; then
     if [ -f "$script_path" ] && [ -x "$script_path" ]; then
@@ -273,7 +291,7 @@ for cmd in $wired_hooks; do
       exit_code=1
     fi
   fi
-done
+done <<< "$wired_hooks"
 
 # Check for unwired hooks under scripts/hooks/
 unwired_hooks=""

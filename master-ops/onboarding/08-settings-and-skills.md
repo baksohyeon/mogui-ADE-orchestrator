@@ -17,14 +17,19 @@ Where we are: the Master's ground rules are saved, and the Herald now prepares t
 Wire every shipped hook and skill this template documents, without offering an opt-out menu:
 
 - SessionStart: master operations context, role state, tracker memory
-- SessionStart on compact: `scripts/compaction-probe.sh`
+- SessionStart on compact: `{{OPS_REPO}}/scripts/compaction-probe.sh`
 - PreCompact: reload or export tracker memory
 - UserPromptSubmit: role-state line + `Proposal -> Approval -> Execution` (see charter §8 / §9)
-- PostToolUse (all tools) and UserPromptSubmit: `scripts/hooks/compact-rehydration-hook.sh` restores the work layer once the compact recall record is present, or after the bounded recall wait
-- UserPromptSubmit: dispatch tracker-card gap warning (`scripts/hooks/bd-gap-warn.sh`) alongside the orchestration inbox warning
+- PostToolUse (all tools) and UserPromptSubmit: `{{OPS_REPO}}/scripts/hooks/compact-rehydration-hook.sh` restores the work layer once the compact recall record is present, or after the bounded recall wait
+- UserPromptSubmit: dispatch tracker-card gap warning (`{{OPS_REPO}}/scripts/hooks/bd-gap-warn.sh`) alongside the orchestration inbox warning
 - PreToolUse: supervised-dispatch bypass warning
+- PreToolUse: `{{OPS_REPO}}/scripts/hooks/bash-poll-warn.sh` runs before a polling command
+- PreToolUse: `{{OPS_REPO}}/scripts/hooks/bash-bare-cd-warn.sh` reports bare `cd` commands
+- PreToolUse: `{{OPS_REPO}}/scripts/hooks/bash-output-trim-warn.sh` reports unbounded large-output commands
+- UserPromptSubmit: `{{OPS_REPO}}/scripts/hooks/worker-block-warn.sh` reports panes waiting for coordinator action
+- PostToolUse: `{{OPS_REPO}}/scripts/hooks/bash-output-size-warn.sh` runs when tool output exceeds the inline budget
 - PreToolUse(Edit|Write|NotebookEdit) and PreToolUse(Bash): fail closed for
-  product-repository writes with `scripts/hooks/product-path-guard.sh`; configure
+  product-repository writes with `{{OPS_REPO}}/scripts/hooks/product-path-guard.sh`; configure
   the instance `product_repositories` array (or the one-entry `product_repo`
   string) during onboarding before enabling it. The measured Bash inversion is
   opt-in via `MOGUI_PRODUCT_GUARD_FAIL_CLOSED=1`; it is off by default so an
@@ -40,17 +45,40 @@ Wire every shipped hook and skill this template documents, without offering an o
 - SessionStart: tracker reachability from `{{WORKSPACE_ROOT}}`
 - Shipped skills under `master-ops/skills/` (for example blame-agent) and the recommended methodology / restraint / tracker skill layers named in the stack table below
 
-The host settings must merge the following `PreToolUse` fragment for both matchers,
-alongside the SessionStart, UserPromptSubmit, and other hooks listed above. This is a
-fragment, not a complete settings object; the exact host settings file remains
-owner-managed:
+The host settings must merge the following hook fragment alongside the SessionStart,
+UserPromptSubmit, and other hooks listed above. Every command names the installed
+script through the rendered operations-repository path, so a hook keeps resolving
+from a worker worktree. This is a fragment, not a complete settings object; the
+exact host settings file remains owner-managed:
+
+This fragment has no shipped-hook exclusions: every `master-ops/scripts/hooks/*.sh`
+script appears below or in the compact rehydration block that follows.
 
 ```json
 "bashOutputMaxChars": 6000,
-"PreToolUse": [
-  {"matcher": "Edit|Write|NotebookEdit", "hooks": [{"type": "command", "command": "bash \"{{OPS_REPO}}/scripts/hooks/product-path-guard.sh\""}]},
-  {"matcher": "Bash", "hooks": [{"type": "command", "command": "bash \"{{OPS_REPO}}/scripts/hooks/product-path-guard.sh\""}]}
-]
+"hooks": {
+  "SessionStart": [
+    {"matcher": "", "hooks": [{"type": "command", "command": "bash \"{{OPS_REPO}}/scripts/hooks/role-state-inject.sh\" SessionStart"}]},
+    {"matcher": "compact", "hooks": [{"type": "command", "command": "bash \"{{OPS_REPO}}/scripts/compaction-probe.sh\""}]},
+    {"matcher": "", "hooks": [{"type": "command", "command": "bash \"{{OPS_REPO}}/scripts/hooks/tracker-check.sh\""}]}
+  ],
+  "PreToolUse": [
+    {"matcher": "Edit|Write|NotebookEdit", "hooks": [{"type": "command", "command": "bash \"{{OPS_REPO}}/scripts/hooks/product-path-guard.sh\""}]},
+    {"matcher": "Bash", "hooks": [{"type": "command", "command": "bash \"{{OPS_REPO}}/scripts/hooks/product-path-guard.sh\""}]},
+    {"matcher": "Bash", "hooks": [{"type": "command", "command": "bash \"{{OPS_REPO}}/scripts/hooks/bash-poll-warn.sh\""}]},
+    {"matcher": "Bash", "hooks": [{"type": "command", "command": "bash \"{{OPS_REPO}}/scripts/hooks/bash-bare-cd-warn.sh\""}]},
+    {"matcher": "Bash", "hooks": [{"type": "command", "command": "bash \"{{OPS_REPO}}/scripts/hooks/bash-output-trim-warn.sh\""}]}
+  ],
+  "UserPromptSubmit": [
+    {"matcher": "", "hooks": [{"type": "command", "command": "bash \"{{OPS_REPO}}/scripts/hooks/role-state-inject.sh\""}]},
+    {"matcher": "", "hooks": [{"type": "command", "command": "bash \"{{OPS_REPO}}/scripts/hooks/orch-inbox-warn.sh\""}]},
+    {"matcher": "", "hooks": [{"type": "command", "command": "bash \"{{OPS_REPO}}/scripts/hooks/bd-gap-warn.sh\""}]},
+    {"matcher": "", "hooks": [{"type": "command", "command": "bash \"{{OPS_REPO}}/scripts/hooks/worker-block-warn.sh\""}]}
+  ],
+  "PostToolUse": [
+    {"matcher": "Bash", "hooks": [{"type": "command", "command": "bash \"{{OPS_REPO}}/scripts/hooks/bash-output-size-warn.sh\""}]}
+  ]
+}
 ```
 
 Register the compact rehydration hook in the existing `hooks` object. Append the
@@ -115,10 +143,15 @@ When the owner asks to turn something off, explain the piece in one sentence, st
 | piece | what it does | how to disable later |
 | --- | --- | --- |
 | Role-state injection (UserPromptSubmit) | Restates the active role and Proposal→Approval→Execution every turn | Remove or comment the UserPromptSubmit hook entry in the host settings that points at the role-state inject script; re-enable by restoring it |
-| Compaction probe (SessionStart on compact) | Checks that the master still knows required facts after compaction | Remove the compact SessionStart hook that runs `scripts/compaction-probe.sh` |
-| Compact rehydration (PostToolUse and UserPromptSubmit) | Restores tracker work after the recall measurement is recorded or bounded | Remove the two hook entries for `compact-rehydration-hook.sh`; restore them to re-enable |
+| Compaction probe (SessionStart on compact) | Checks that the master still knows required facts after compaction | Remove the compact SessionStart hook that runs `{{OPS_REPO}}/scripts/compaction-probe.sh` |
+| Compact rehydration (PostToolUse and UserPromptSubmit) | Restores tracker work after the recall measurement is recorded or bounded | Remove the two hook entries for `{{OPS_REPO}}/scripts/hooks/compact-rehydration-hook.sh`; restore them to re-enable |
 | Dispatch / supervised-dispatch warning (PreToolUse) | Warns when a worker path bypasses the dispatch gate | Remove the PreToolUse warn hook for bare worker invocation |
-| Product-path guard (PreToolUse) | Blocks master writes into product repositories; optionally enables measured fail-closed Bash decisions and records decisions in the event log | Remove the two PreToolUse hook entries for `scripts/hooks/product-path-guard.sh`; restore them to re-enable |
+| Product-path guard (PreToolUse) | Blocks master writes into product repositories; optionally enables measured fail-closed Bash decisions and records decisions in the event log | Remove the two PreToolUse hook entries for `{{OPS_REPO}}/scripts/hooks/product-path-guard.sh`; restore them to re-enable |
+| Bash poll hook (PreToolUse) | Runs before a polling command so bounded foreground checks remain visible | Remove the PreToolUse hook entry for `{{OPS_REPO}}/scripts/hooks/bash-poll-warn.sh`; restore it to re-enable |
+| Bash bare-cd hook (PreToolUse) | Reports bare `cd` commands whose shell state can persist between calls | Remove the PreToolUse hook entry for `{{OPS_REPO}}/scripts/hooks/bash-bare-cd-warn.sh`; restore it to re-enable |
+| Bash output-trim hook (PreToolUse) | Reports large-output commands without a bounded filter | Remove the PreToolUse hook entry for `{{OPS_REPO}}/scripts/hooks/bash-output-trim-warn.sh`; restore it to re-enable |
+| Worker-block hook (UserPromptSubmit) | Reports panes waiting for coordinator action | Remove the UserPromptSubmit hook entry for `{{OPS_REPO}}/scripts/hooks/worker-block-warn.sh`; restore it to re-enable |
+| Bash output-size hook (PostToolUse) | Runs when a tool result exceeds the inline output budget | Remove the PostToolUse hook entry for `{{OPS_REPO}}/scripts/hooks/bash-output-size-warn.sh`; restore it to re-enable |
 | Bash output cap | Limits successful Bash or PowerShell output shown inline for the master | Remove `bashOutputMaxChars` from the master's workspace `.claude/settings.json` and start a fresh session; use `.claude/settings.local.json` for a temporary project-local value |
 | Tracker reachability warning (SessionStart) | Warns when the issue tracker is not reachable from the workspace root | Remove the SessionStart tracker-check hook |
 | Inbox / orch-inbox warn | Surfaces unread orchestration mailbox items | Remove the UserPromptSubmit hook for `orch-inbox-warn.sh` when present |

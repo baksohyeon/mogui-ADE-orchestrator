@@ -66,8 +66,10 @@ if [ "${#pending_entries[@]}" -eq 0 ]; then
   exit 0
 fi
 VERDICT="pass"
-VERDICT_FILE="$PENDING_DIR/.fire-verdict-$$"
-FIRE_EVENT_FILE="$PENDING_DIR/.fire-event-$$"
+FIRE_STATE_DIR="$STATE_DIR/.compact-rehydration"
+mkdir -p "$FIRE_STATE_DIR" 2>/dev/null || true
+VERDICT_FILE="$FIRE_STATE_DIR/.fire-verdict-$$"
+FIRE_EVENT_FILE="$FIRE_STATE_DIR/.fire-event-$$"
 
 OPS_REPO="$OPS_REPO" \
 STATE_DIR="$STATE_DIR" \

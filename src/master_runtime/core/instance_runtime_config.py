@@ -43,7 +43,9 @@ PRODUCT_REPO_ENV = "MOGUI_PRODUCT_REPO"
 # Mirrors RUNTIME_CANDIDATES in master-ops/scripts/dispatch, the only consumer
 # of unavailable_runtimes; the two lists cannot share source across the
 # bash/Python boundary, so a new runtime candidate updates both.
-KNOWN_RUNTIME_CANDIDATES = frozenset({"claude", "codex", "cursor", "grok", "gemini", "opencode"})
+KNOWN_RUNTIME_CANDIDATES = frozenset(
+    {"claude", "codex", "cursor", "grok", "gemini", "agy", "opencode"}
+)
 
 
 class InstanceRuntimeConfigError(ValueError):

@@ -1779,6 +1779,20 @@ class BranchDeletionTests(unittest.TestCase):
             self.assertEqual(env.closed_commands, [])
             self.assertEqual(env.removed_commands, [])
 
+    def test_virtual_merge_override_requires_exact_reason_shape(self) -> None:
+        self.assertTrue(
+            WorkerReaper._is_virtual_merge_failure_reason(
+                "Current branch feature-x is not merged to origin/main "
+                "(virtual merge failed: conflict)"
+            )
+        )
+        self.assertFalse(
+            WorkerReaper._is_virtual_merge_failure_reason(
+                "Current branch feature-x is not merged to origin/main "
+                "(content note: virtual merge failed: conflict)"
+            )
+        )
+
     def test_squash_merge_override_requires_orca_verbs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             env = _SelectorEnvironment(

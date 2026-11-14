@@ -73,6 +73,8 @@ usage() {
   echo "                [--tier-policy FILE]"
   echo "                [--est-chars N] [--transcript-glob GLOB] [--check-only]"
   echo "       dispatch --ledger-event TYPE --dispatch-id ID [event options]"
+  echo "         git_escalation: --worktree-path PATH --operation add|commit|fetch|push"
+  echo "           --escalated yes|no --refusal TEXT"
   echo "  --transcript-glob: worker transcript location for the model probe"
   echo "                     (default: derived for claude from --worktree when possible)"
   echo "  DISPATCH_FROM_TERMINAL=<handle>: sender terminal for callers that have no ORCA_TERMINAL_HANDLE (launchd, cron)"
@@ -108,6 +110,9 @@ LEDGER_EVENT_REASON=""
 LEDGER_EVENT_QUERY=""
 LEDGER_EVENT_SESSION_ID=""
 LEDGER_EVENT_WORKTREE_PATH=""
+LEDGER_EVENT_OPERATION=""
+LEDGER_EVENT_ESCALATED=""
+LEDGER_EVENT_REFUSAL=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --contract) CONTRACT=$2; shift 2;;
@@ -131,6 +136,9 @@ while [ $# -gt 0 ]; do
     --search-query) LEDGER_EVENT_QUERY=$2; shift 2;;
     --session-id) LEDGER_EVENT_SESSION_ID=$2; shift 2;;
     --worktree-path) LEDGER_EVENT_WORKTREE_PATH=$2; shift 2;;
+    --operation) LEDGER_EVENT_OPERATION=$2; shift 2;;
+    --escalated) LEDGER_EVENT_ESCALATED=$2; shift 2;;
+    --refusal) LEDGER_EVENT_REFUSAL=$2; shift 2;;
     *) usage;;
   esac
 done
@@ -169,6 +177,84 @@ resolve_shared_paths() {
   export DISPATCH_CURSOR_SESSION_ROOT="$CURSOR_SESSION_ROOT"
 }
 
+record_ledger_event() {
+  python3 - "$LEDGER" "$LEDGER_LOCK" "$LEDGER_EVENT" \
+    "$LEDGER_EVENT_DISPATCH_ID" "$LEDGER_EVENT_RESULT" "$LEDGER_EVENT_REASON" \
+    "$LEDGER_EVENT_QUERY" "$LEDGER_EVENT_SESSION_ID" "$WORKTREE" \
+    "$LEDGER_EVENT_WORKTREE_PATH" "$LEDGER_EVENT_OPERATION" \
+    "$LEDGER_EVENT_ESCALATED" "$LEDGER_EVENT_REFUSAL" <<'EOF'
+import fcntl
+import json
+import os
+import sys
+import time
+
+ledger, lock_path, kind, dispatch_id, result, reason, query, session_id, selector, worktree_path, operation, escalated, refusal = sys.argv[1:]
+os.makedirs(os.path.dirname(os.path.abspath(lock_path)), exist_ok=True)
+if worktree_path:
+    event_worktree = os.path.realpath(worktree_path)
+elif selector.startswith("path:"):
+    event_worktree = os.path.realpath(selector[5:])
+else:
+    event_worktree = selector
+entry = {
+    "ts": time.time(),
+    "kind": kind,
+    "job_id": dispatch_id,
+}
+if kind == "git_escalation":
+    entry.update({
+        "worktree": event_worktree,
+        "operation": operation,
+        "escalated": escalated == "yes",
+        "refusal": (refusal.splitlines() or [""])[0],
+    })
+else:
+    if result:
+        entry["resume_result"] = result
+    if reason:
+        entry["failure_reason"] = reason
+    if query:
+        entry["resume_query"] = query
+    if session_id:
+        entry["agent_session_id"] = session_id
+    if selector:
+        entry["worktree_selector"] = selector
+    if worktree_path:
+        entry["worktree_path"] = worktree_path
+
+def append_entry():
+    with open(ledger, "a", encoding="utf-8") as stream:
+        stream.write(json.dumps(entry, sort_keys=True, separators=(",", ":")) + "\n")
+
+
+inherited_fd = os.environ.get("DISPATCH_LEDGER_LOCK_FD", "")
+try:
+    inherited_fd = int(inherited_fd)
+except ValueError:
+    inherited_fd = -1
+if fcntl is not None and inherited_fd >= 0:
+    try:
+        fd_stat = os.fstat(inherited_fd)
+        lock_stat = os.stat(lock_path)
+        same_file = (fd_stat.st_dev, fd_stat.st_ino) == (lock_stat.st_dev, lock_stat.st_ino)
+    except OSError:
+        same_file = False
+    if same_file:
+        try:
+            fcntl.flock(inherited_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            pass
+        else:
+            append_entry()
+            raise SystemExit(0)
+
+with open(lock_path, "a", encoding="utf-8") as lock:
+    fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+    append_entry()
+EOF
+}
+
 if [ -n "$LEDGER_EVENT" ]; then
   resolve_shared_paths
   if [ -z "$LEDGER_EVENT_DISPATCH_ID" ]; then
@@ -193,46 +279,38 @@ if [ -n "$LEDGER_EVENT" ]; then
         exit 1
       }
       ;;
+    git_escalation)
+      [ -n "$LEDGER_EVENT_REFUSAL" ] || LEDGER_EVENT_REFUSAL="$LEDGER_EVENT_REASON"
+      case "$LEDGER_EVENT_OPERATION" in
+        add|commit|fetch|push) ;;
+        *)
+          echo "✗ git_escalation requires --operation add|commit|fetch|push" >&2
+          exit 1
+          ;;
+      esac
+      case "$LEDGER_EVENT_ESCALATED" in
+        yes|no) ;;
+        *)
+          echo "✗ git_escalation requires --escalated yes|no" >&2
+          exit 1
+          ;;
+      esac
+      if [ "$LEDGER_EVENT_ESCALATED" = yes ] \
+          && [ -z "${LEDGER_EVENT_REFUSAL//[[:space:]]/}" ]; then
+        echo "✗ an escalated git_escalation requires --refusal" >&2
+        exit 1
+      fi
+      if [ -z "$LEDGER_EVENT_WORKTREE_PATH" ] && [ -z "$WORKTREE" ]; then
+        echo "✗ git_escalation requires --worktree or --worktree-path" >&2
+        exit 1
+      fi
+      ;;
     *)
       echo "✗ unsupported ledger event: $LEDGER_EVENT" >&2
       exit 1
       ;;
   esac
-  python3 - "$LEDGER" "$LEDGER_LOCK" "$LEDGER_EVENT" \
-    "$LEDGER_EVENT_DISPATCH_ID" "$LEDGER_EVENT_RESULT" "$LEDGER_EVENT_REASON" \
-    "$LEDGER_EVENT_QUERY" "$LEDGER_EVENT_SESSION_ID" "$WORKTREE" \
-    "$LEDGER_EVENT_WORKTREE_PATH" <<'EOF'
-import fcntl
-import json
-import os
-import sys
-import time
-
-ledger, lock_path, kind, dispatch_id, result, reason, query, session_id, selector, worktree_path = sys.argv[1:]
-entry = {
-    "ts": time.time(),
-    "kind": kind,
-    "job_id": dispatch_id,
-}
-if result:
-    entry["resume_result"] = result
-if reason:
-    entry["failure_reason"] = reason
-if query:
-    entry["resume_query"] = query
-if session_id:
-    entry["agent_session_id"] = session_id
-if selector:
-    entry["worktree_selector"] = selector
-if worktree_path:
-    entry["worktree_path"] = worktree_path
-
-os.makedirs(os.path.dirname(os.path.abspath(lock_path)), exist_ok=True)
-with open(lock_path, "a", encoding="utf-8") as lock:
-    fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-    with open(ledger, "a", encoding="utf-8") as stream:
-        stream.write(json.dumps(entry, sort_keys=True, separators=(",", ":")) + "\n")
-EOF
+  record_ledger_event
   exit $?
 fi
 
@@ -1232,6 +1310,11 @@ codex_effort_recheck() {
 CODEX_REASONING_EFFORT=xhigh
 CODEX_MIGRATION_ACK='notice.model_migrations={"gpt-5.5"="gpt-6.1-sol"}'
 CODEX_BYPASS_FLAG=
+CODEX_SHARED_GIT_DIR=
+CODEX_WORKTREE_GIT_DIR=
+CODEX_SHARED_GIT_CONFIG_HASH=
+CODEX_SHARED_GIT_HOOKS_LISTING=
+CODEX_SHARED_GIT_SURFACE_CAPTURED=0
 
 # Optional codex_reasoning_effort and codex_bypass_approvals_and_sandbox from the
 # instance runtime config. Effort list from codex-cli 0.163.0 (2026-10-17); an
@@ -1297,8 +1380,102 @@ print(shlex.quote(sys.argv[1]))
 EOF
 }
 
+capture_codex_shared_git_surface() {
+  local shared="$1" snapshot
+  snapshot=$(python3 - "$shared/config" "$shared/hooks" <<'EOF'
+import hashlib
+import json
+import os
+import stat
+import sys
+from pathlib import Path
+
+config, hooks = (Path(value) for value in sys.argv[1:])
+MAX_SNAPSHOT_BYTES = 1024 * 1024
+
+def safe_snapshot(path):
+    try:
+        metadata = os.lstat(path)
+    except FileNotFoundError:
+        return ["<missing>"]
+    except OSError:
+        return ["<unreadable>"]
+
+    mode_bits = metadata.st_mode & 0o7777
+    if stat.S_ISLNK(metadata.st_mode):
+        try:
+            target = os.readlink(path)
+        except OSError:
+            target = "<unreadable>"
+        return [f"<symlink:{target}>", mode_bits]
+    if not stat.S_ISREG(metadata.st_mode):
+        return [f"<special:{stat.S_IFMT(metadata.st_mode):o}>", mode_bits]
+
+    flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError:
+        return ["<unreadable>", mode_bits]
+    try:
+        opened = os.fstat(descriptor)
+        opened_mode_bits = opened.st_mode & 0o7777
+        if not stat.S_ISREG(opened.st_mode):
+            return [f"<special:{stat.S_IFMT(opened.st_mode):o}>", opened_mode_bits]
+        if opened.st_size > MAX_SNAPSHOT_BYTES:
+            return ["<too-large>", opened_mode_bits, opened.st_size]
+        content = bytearray()
+        while len(content) <= MAX_SNAPSHOT_BYTES:
+            chunk = os.read(descriptor, min(65536, MAX_SNAPSHOT_BYTES + 1 - len(content)))
+            if not chunk:
+                return [hashlib.sha256(content).hexdigest(), opened_mode_bits]
+            content.extend(chunk)
+            if len(content) > MAX_SNAPSHOT_BYTES:
+                return ["<too-large>", opened_mode_bits, len(content)]
+    except OSError:
+        return ["<unreadable>", mode_bits]
+    finally:
+        os.close(descriptor)
+
+config_hash = json.dumps(safe_snapshot(config), separators=(",", ":"))
+try:
+    hook_entries = []
+    for path in sorted(hooks.iterdir(), key=lambda item: item.name):
+        hook_entries.append([path.name, safe_snapshot(path)])
+    hooks_listing = json.dumps(hook_entries, separators=(",", ":"))
+except FileNotFoundError:
+    hooks_listing = "<missing>"
+except OSError:
+    hooks_listing = "<unreadable>"
+print(config_hash)
+print(hooks_listing)
+EOF
+) || return 1
+  CODEX_SHARED_GIT_CONFIG_HASH=$(printf '%s\n' "$snapshot" | sed -n '1p')
+  CODEX_SHARED_GIT_HOOKS_LISTING=$(printf '%s\n' "$snapshot" | sed -n '2p')
+  CODEX_SHARED_GIT_SURFACE_CAPTURED=1
+}
+
+warn_codex_shared_git_surface_changes() {
+  local previous_config="$CODEX_SHARED_GIT_CONFIG_HASH"
+  local previous_hooks="$CODEX_SHARED_GIT_HOOKS_LISTING"
+  local config_changed=0 hooks_changed=0 detail
+  capture_codex_shared_git_surface "$CODEX_SHARED_GIT_DIR" || return 0
+  [ "$previous_config" = "$CODEX_SHARED_GIT_CONFIG_HASH" ] || config_changed=1
+  [ "$previous_hooks" = "$CODEX_SHARED_GIT_HOOKS_LISTING" ] || hooks_changed=1
+  if [ "$config_changed" = 1 ] && [ "$hooks_changed" = 1 ]; then
+    detail="config hash and hooks listing"
+  elif [ "$config_changed" = 1 ]; then
+    detail="config hash"
+  elif [ "$hooks_changed" = 1 ]; then
+    detail="hooks listing"
+  else
+    return 0
+  fi
+  echo "WARNING: codex shared Git surface changed after dispatch: $detail"
+}
+
 runtime_command() {
-  local model_arg
+  local model_arg codex_shared_arg
   model_arg=$(shell_quote "$MODEL")
   case "$1" in
     # Pass the model id through unchanged. This line used to strip a trailing
@@ -1357,7 +1534,12 @@ runtime_command() {
     # written as an inline table: the dotted form reads the dot inside the
     # model id as a nesting separator and fails with "invalid type: map,
     # expected a string".
-    codex) echo "codex --model $model_arg -c $(shell_quote "model_reasoning_effort=\"$CODEX_REASONING_EFFORT\"") -c check_for_update_on_startup=false -c $(shell_quote "$CODEX_MIGRATION_ACK")${CODEX_BYPASS_FLAG:- --approve-for-me -c sandbox_workspace_write.network_access=true}";;
+    codex)
+      codex_shared_arg=
+      if [ -n "${CODEX_SHARED_GIT_DIR:-}" ]; then
+        codex_shared_arg=" --add-dir $(shell_quote "$CODEX_SHARED_GIT_DIR")"
+      fi
+      echo "codex --model $model_arg -c $(shell_quote "model_reasoning_effort=\"$CODEX_REASONING_EFFORT\"") -c check_for_update_on_startup=false -c $(shell_quote "$CODEX_MIGRATION_ACK")$codex_shared_arg${CODEX_BYPASS_FLAG:- --approve-for-me -c sandbox_workspace_write.network_access=true}";;
     gemini) echo "gemini";;
     opencode) echo "opencode";;
     # agy is the Gemini host; `agy models` reports gemini-* ids. Its approval flag
@@ -1413,6 +1595,50 @@ CURSOR_PRETRUST_BIN="$RUNTIME_SCRIPTS/cursor-worker-pretrust"
 CLAUDE_PRETRUST_BIN="$RUNTIME_SCRIPTS/claude-worker-pretrust"
 AGY_PRETRUST_BIN="$RUNTIME_SCRIPTS/agy-worker-pretrust"
 
+resolve_codex_shared_git_roots() {
+  local selector="${WORKTREE-}" wt_path
+  CODEX_WORKTREE_GIT_DIR=
+  CODEX_SHARED_GIT_DIR=
+  CODEX_SHARED_GIT_SURFACE_CAPTURED=0
+  case "$selector" in
+    path:*)
+      wt_path="${selector#path:}"
+      if [ -z "$wt_path" ] || [ "${wt_path#/}" = "$wt_path" ]; then
+        echo "✗ codex needs an absolute worktree path to resolve its shared git dir; received '$selector'" >&2
+        return 1
+      fi
+      if [ -e "$wt_path/.git" ]; then
+        if CODEX_WORKTREE_GIT_DIR=$(env -u GIT_DIR -u GIT_COMMON_DIR git -C "$wt_path" rev-parse --path-format=absolute --git-dir 2>/dev/null) \
+            && CODEX_SHARED_GIT_DIR=$(env -u GIT_DIR -u GIT_COMMON_DIR git -C "$wt_path" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) \
+            && case "$CODEX_WORKTREE_GIT_DIR:$CODEX_SHARED_GIT_DIR" in /*:/*) ;; *) false;; esac; then
+          :
+        else
+          echo "✗ codex shared git dir could not be resolved · worktree=$wt_path" >&2
+          return 1
+        fi
+        if env -u GIT_DIR -u GIT_COMMON_DIR git -C "$wt_path" status --porcelain >/dev/null 2>&1; then
+          :
+        else
+          echo "WARNING: codex worktree git index preflight failed · path=$wt_path" >&2
+        fi
+        if ! capture_codex_shared_git_surface "$CODEX_SHARED_GIT_DIR"; then
+          echo "WARNING: codex shared Git surface baseline unavailable · comparison skipped" >&2
+        fi
+      else
+        echo "✗ codex needs an absolute worktree path to resolve its shared git dir; received '$selector'" >&2
+        return 1
+      fi
+      ;;
+    "")
+      echo "✗ codex needs an absolute worktree path to resolve its shared git dir; received '<none>'" >&2
+      return 1
+      ;;
+    *)
+      echo "codex shared git dir skipped · received worktree selector '${selector:-<none>}'"
+      ;;
+  esac
+}
+
 # The registry prescribes pre-trust for codex instead of a launch flag. RUN it
 # here rather than telling the operator to. A manual step in front of a dispatch
 # is a step that gets skipped, and the thing it prevents is precisely the gate
@@ -1424,9 +1650,9 @@ AGY_PRETRUST_BIN="$RUNTIME_SCRIPTS/agy-worker-pretrust"
 # leaves the trust prompt in place, so proceeding would hand the worker a gate.
 ensure_codex_pretrust() {
   [ "$1" = "codex" ] || return 0
-  local wt_path="${2#path:}" out summary
+  local selector="${2:-}" wt_path="${2#path:}" out summary
   if [ -z "$wt_path" ] || [ "${wt_path#/}" = "$wt_path" ]; then
-    echo "✗ codex needs an absolute worktree path to pre-trust; got '${2:-<none>}'" >&2
+    echo "✗ codex needs an absolute worktree path to pre-trust; received '${selector:-<none>}'" >&2
     echo "  codex has no launch approval flag by registry decision, so an untrusted worktree" >&2
     echo "  will stop the worker on a trust prompt that reads as idle. Dispatch with --worktree" >&2
     echo "  path:<absolute-path>, or choose a runtime whose approval flag is measured." >&2
@@ -2252,23 +2478,15 @@ if [ -z "$TASK" ]; then
   fail_after_tracker_claim "task-create failed" 3
 fi
 
-# 2b. codex fresh worktree git index unlock
-# When codex launches in a fresh linked worktree with the workspace-write
-# sandbox, the first `git add` fails with "index.lock: Operation not
-# permitted" because git's worktree index lives outside the sandbox's write
-# root. Running one git read (status) before the worker launches "unlocks"
-# the index, allowing all subsequent sandboxed git operations in this session
-# to succeed. Mechanism unknown; observed pattern: after the first git write
-# outside the sandbox, sandboxed git works.
-if [ "$RUNTIME" = codex ]; then
-  wt_path="${WORKTREE-}"
-  wt_path="${wt_path#path:}"
-  if [ -n "$wt_path" ] && [ -e "$wt_path/.git" ]; then
-    if git -C "$wt_path" status --porcelain >/dev/null 2>&1; then
-      :
-    else
-      echo "WARNING: codex worktree git index preflight failed · path=$wt_path" >&2
-    fi
+# 2b. codex fresh worktree Git root and index preflight
+# A linked worktree keeps its index and shared object database under Git
+# metadata outside the worktree. Resolve both Git directories before launch so
+# runtime_command can add only the shared directory to Codex's writable roots.
+# The status read remains a cheap preflight and preserves the measured failure
+# warning when the worktree index cannot be read.
+if [ "$RUNTIME" = codex ] && [ -z "$TERMINAL" ]; then
+  if ! resolve_codex_shared_git_roots; then
+    fail_after_tracker_claim "codex shared git dir resolution failed" 2
   fi
 fi
 
@@ -2789,6 +3007,10 @@ DISPATCH_STATUS=$(printf '%s' "$DISPATCH_SHOW_RAW" | orca_json_read dispatch_sta
 if [ -z "$DISPATCH_STATUS" ]; then
   echo "dispatch-show raw response (first 200 chars): ${DISPATCH_SHOW_RAW:0:200}" >&2
   DISPATCH_STATUS=unreadable
+fi
+if [ "$DISPATCH_STATUS" = completed ] \
+    && [ "${CODEX_SHARED_GIT_SURFACE_CAPTURED:-0}" = 1 ]; then
+  warn_codex_shared_git_surface_changes
 fi
 DELIVERY_CLASS=$(delivery_result "$PRE_INJECT_CLASS" "$POST_INJECT_CLASS" "$DISPATCH_STATUS" "$ORCA_STAGE")
 # `done` comes from the dispatch record, ahead of both signals above, so the

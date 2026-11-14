@@ -1783,7 +1783,7 @@ class BranchDeletionTests(unittest.TestCase):
         self.assertTrue(
             WorkerReaper._is_virtual_merge_failure_reason(
                 "Current branch feature-x is not merged to origin/main "
-                "(virtual merge failed: conflict)"
+                "(virtual merge failed: conflict\nmerge detail\n)"
             )
         )
         self.assertFalse(

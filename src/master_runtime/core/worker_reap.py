@@ -951,6 +951,7 @@ class WorkerReaper:
             re.fullmatch(
                 r"Current branch .+ is not merged to \S+ \(virtual merge failed:.*\)",
                 reason,
+                re.DOTALL,
             )
         )
 

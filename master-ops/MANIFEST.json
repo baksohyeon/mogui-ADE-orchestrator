@@ -76,6 +76,7 @@
     "scripts/hooks/bash-output-trim-warn.sh",
     "scripts/hooks/bash-poll-warn.sh",
     "scripts/hooks/bd-gap-warn.sh",
+    "scripts/hooks/compact-rehydration-constants.inc",
     "scripts/hooks/compact-rehydration-hook.sh",
     "scripts/hooks/orch-inbox-warn.sh",
     "scripts/hooks/product-path-guard-readonly-allowlist.txt",

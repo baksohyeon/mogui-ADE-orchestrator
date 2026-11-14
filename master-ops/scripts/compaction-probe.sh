@@ -14,12 +14,17 @@ DISPATCH_LEDGER_PATH="${DISPATCH_GATE_LEDGER:-${MOGUI_STATE_DIR:-$HOME/.mogui}/d
 STATE_DIR="${MOGUI_STATE_DIR:-${HOME:-$(cd ~ 2>/dev/null && pwd)}/.mogui}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P)"
 CONTEXT_LOG_SCRIPT="$SCRIPT_DIR/context-quality-log.sh"
+if ! source "$SCRIPT_DIR/hooks/compact-rehydration-constants.inc" 2>/dev/null; then
+  exit 0
+fi
 
 PROBE_INPUT="$INPUT" \
 CONTEXT_LOG_PATH="$CONTEXT_LOG_PATH" \
 DISPATCH_LEDGER_PATH="$DISPATCH_LEDGER_PATH" \
 STATE_DIR="$STATE_DIR" \
 CONTEXT_LOG_SCRIPT="$CONTEXT_LOG_SCRIPT" \
+COMPACT_SESSION_ID_PATTERN="$COMPACT_SESSION_ID_PATTERN" \
+COMPACT_PENDING_DIR_NAME="$COMPACT_PENDING_DIR_NAME" \
 python3 <<'PY' 2>/dev/null || true
 import json
 import os
@@ -48,11 +53,16 @@ dispatch_ledger_path = os.environ.get(
     os.path.expanduser("~/.mogui/dispatch-ledger.jsonl"),
 )
 
-safe_session = isinstance(session_id, str) and re.fullmatch(r"[A-Za-z0-9._:-]+", session_id)
+session_id_pattern = os.environ.get("COMPACT_SESSION_ID_PATTERN")
+safe_session = (
+    isinstance(session_id, str)
+    and isinstance(session_id_pattern, str)
+    and re.fullmatch(session_id_pattern, session_id)
+)
 if safe_session:
     state_dir = Path(os.environ.get("STATE_DIR", "") or "").expanduser()
     context_log = Path(context_log_path)
-    marker_dir = state_dir / "compact-pending"
+    marker_dir = state_dir / os.environ["COMPACT_PENDING_DIR_NAME"]
     marker_path = marker_dir / str(session_id)
     try:
         marker_dir.mkdir(parents=True, exist_ok=True)

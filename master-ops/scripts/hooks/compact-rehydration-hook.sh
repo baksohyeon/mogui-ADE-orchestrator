@@ -4,6 +4,9 @@
 set +e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P)"
+if ! source "$SCRIPT_DIR/compact-rehydration-constants.inc" 2>/dev/null; then
+  exit 0
+fi
 OPS_REPO_DEFAULT="{{OPS_REPO}}"
 OPS_REPO="${MOGUI_OPS_REPO:-$OPS_REPO_DEFAULT}"
 if [[ "$OPS_REPO" == *"{{OPS_REPO}}"* ]]; then
@@ -11,7 +14,7 @@ if [[ "$OPS_REPO" == *"{{OPS_REPO}}"* ]]; then
 fi
 STATE_DIR="${MOGUI_STATE_DIR:-${HOME:-$(cd ~ 2>/dev/null && pwd)}/.mogui}"
 INSTANCE_CONFIG="${MOGUI_INSTANCE_RUNTIME_CONFIG:-${INSTANCE_RUNTIME_CONFIG:-$OPS_REPO/config/instance-runtime.json}}"
-PENDING_DIR="$STATE_DIR/compact-pending"
+PENDING_DIR="$STATE_DIR/$COMPACT_PENDING_DIR_NAME"
 shopt -s nullglob
 pending_entries=("$PENDING_DIR"/* "$PENDING_DIR"/.[!.]* "$PENDING_DIR"/..?*)
 if [ "${#pending_entries[@]}" -eq 0 ]; then
@@ -23,6 +26,9 @@ STATE_DIR="$STATE_DIR" \
 INSTANCE_CONFIG="$INSTANCE_CONFIG" \
 SCRIPT_DIR="$SCRIPT_DIR" \
 PENDING_DIR="$PENDING_DIR" \
+COMPACT_SESSION_ID_PATTERN="$COMPACT_SESSION_ID_PATTERN" \
+COMPACT_PENDING_DIR_NAME="$COMPACT_PENDING_DIR_NAME" \
+CONTEXT_LOG_WRITER="${CONTEXT_QUALITY_LOG_WRITER:-$SCRIPT_DIR/../context-quality-log.sh}" \
 python3 - "$@" 3<&0 <<'PY' 2>/dev/null || true
 from __future__ import annotations
 
@@ -49,8 +55,12 @@ STATE_DIR = Path(os.environ.get("STATE_DIR", "")).expanduser()
 INSTANCE_CONFIG = Path(os.environ.get("INSTANCE_CONFIG", "")).expanduser()
 SCRIPT_DIR = Path(os.environ.get("SCRIPT_DIR", "")).expanduser()
 PENDING_DIR = Path(os.environ.get("PENDING_DIR", "")).expanduser()
+CONTEXT_LOG_WRITER = Path(os.environ.get("CONTEXT_LOG_WRITER", "")).expanduser()
+SESSION_ID_PATTERN = os.environ.get("COMPACT_SESSION_ID_PATTERN", "")
 ACTIVE_TRACKER_COMMAND = ("bd", "list", "--status=in_progress", "--json", "--limit=0", "--flat")
 DECISION_TRACKER_COMMAND = ("bd", "list", "--status=open", "--type=decision", "--json", "--limit=0", "--flat")
+PANE_COMMAND = ("orca", "terminal", "list", "--json")
+GIT_STATUS_COMMAND = ("git", "status", "--porcelain")
 
 
 def display_command(command: tuple[str, ...]) -> str:
@@ -85,7 +95,7 @@ def session_name(payload: dict[str, Any]) -> str | None:
     if not isinstance(value, str) or not value.strip():
         return None
     value = value.strip()
-    if not re.fullmatch(r"[A-Za-z0-9._:-]+", value):
+    if not SESSION_ID_PATTERN or not re.fullmatch(SESSION_ID_PATTERN, value):
         return None
     return value
 
@@ -224,10 +234,19 @@ def append_recall_skipped(marker: dict[str, Any]) -> None:
         "proposed_succession": False,
     }
     try:
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        with log_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
-    except OSError:
+        if not CONTEXT_LOG_WRITER.is_file():
+            return
+        environment = os.environ.copy()
+        environment["CONTEXT_QUALITY_LOG"] = str(log_path)
+        subprocess.run(
+            ["bash", str(CONTEXT_LOG_WRITER), json.dumps(row, ensure_ascii=False, separators=(",", ":"))],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+            env=environment,
+        )
+    except (OSError, subprocess.TimeoutExpired):
         pass
 
 
@@ -327,7 +346,7 @@ def role_state_lines() -> list[str]:
 
 
 def panes_lines() -> list[str]:
-    payload = command_json(["orca", "terminal", "list", "--json"])
+    payload = command_json(list(PANE_COMMAND))
     rows = rows_from(payload)
     if rows is None:
         return ["unavailable"]
@@ -346,11 +365,12 @@ def panes_lines() -> list[str]:
 def uncommitted_lines() -> list[str]:
     try:
         result = subprocess.run(
-            ["git", "-C", str(OPS_REPO), "status", "--porcelain"],
+            list(GIT_STATUS_COMMAND),
             capture_output=True,
             text=True,
             timeout=5,
             check=False,
+            cwd=str(OPS_REPO),
         )
     except (OSError, subprocess.TimeoutExpired):
         return ["unavailable"]
@@ -429,8 +449,8 @@ def compose_work_layer(limit: int = CAP, prefix: str = "", post_tool: bool = Fal
         {"key": "role", "heading": "## Role State", "lines": role_state_lines(), "command": "read docs/runbooks/role-state.md", "omitted": 0},
         {"key": "active", "heading": "## In-progress tracker items", "lines": active, "command": tracker_command, "omitted": 0},
         {"key": "decisions", "heading": "## Open decisions", "lines": decisions, "command": display_command(DECISION_TRACKER_COMMAND), "omitted": 0},
-        {"key": "panes", "heading": "## Live worker panes", "lines": panes_lines(), "command": display_command(("orca", "terminal", "list", "--json")), "omitted": 0},
-        {"key": "uncommitted", "heading": "## Uncommitted files in the ops repository", "lines": uncommitted_lines(), "command": display_command(("git", "status", "--porcelain")), "omitted": 0},
+        {"key": "panes", "heading": "## Live worker panes", "lines": panes_lines(), "command": display_command(PANE_COMMAND), "omitted": 0},
+        {"key": "uncommitted", "heading": "## Uncommitted files in the ops repository", "lines": uncommitted_lines(), "command": display_command(GIT_STATUS_COMMAND), "omitted": 0},
         {"key": "extras", "heading": "## Seat-declared extra lines", "lines": extras_lines(), "command": "read the instance runtime extra-lines configuration", "omitted": 0},
     ]
     trim_order = ("extras", "decisions", "active", "panes", "uncommitted", "role")

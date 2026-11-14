@@ -191,6 +191,27 @@ def test_context_quality_log_accepts_proposed_succession_field(tmp_path: Path):
     assert "appended:" in result.stdout
 
 
+def test_context_quality_log_accepts_recall_skipped_event(tmp_path: Path):
+    ledger = tmp_path / "context-quality.jsonl"
+    env = os.environ.copy()
+    env["CONTEXT_QUALITY_LOG"] = str(ledger)
+    payload = json.dumps(
+        {
+            "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "session": "s-1",
+            "event": "recall_skipped",
+            "model": "<hook>",
+            "recall": {},
+            "loss_notes": ["compact recall record was not recorded before rehydration"],
+            "proposed_succession": False,
+        }
+    )
+
+    result = _run_log(payload, env=env)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(ledger.read_text(encoding="utf-8"))["event"] == "recall_skipped"
+
+
 def test_context_quality_log_rejects_legacy_proposed_respawn_field(tmp_path: Path):
     ledger = tmp_path / "context-quality.jsonl"
     env = os.environ.copy()

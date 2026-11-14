@@ -91,6 +91,7 @@ run_hook_payload() {
   printf '%s' "$payload" |
     MOGUI_STATE_DIR="$STATE" MOGUI_OPS_REPO="$OPS" \
     MOGUI_INSTANCE_RUNTIME_CONFIG="$CONFIG" \
+    CONTEXT_QUALITY_LOG_WRITER="$S/context-quality-log.sh" \
     TRACKS_FILE="$TRACKS" DECISIONS_FILE="$DECISIONS" PANES_FILE="$PANES" \
     PATH="$BIN:$PATH" bash "$hook" "$event"
 }
@@ -198,6 +199,10 @@ printf '%s' "$third" | grep -q 'measurement is contaminated' \
 grep -q '"event":"recall_skipped"' "$LOG" \
   && ok "skipped recall appends one ledger event" \
   || fail "skipped recall ledger event missing"
+skip_count="$(grep -c '"event":"recall_skipped"' "$LOG")"
+[ "$skip_count" -eq 1 ] \
+  && ok "hook writes one recall_skipped record through the ledger writer" \
+  || fail "hook wrote $skip_count recall_skipped records for one skip"
 [ ! -f "$STATE/compact-pending/third-post" ] \
   && ok "third PostToolUse consumes marker" \
   || fail "third PostToolUse left marker"
@@ -422,6 +427,74 @@ assert decision_rows + decision_more == 150, (decision_rows, decision_more)
 PY
 ok "multibyte cap keeps every section and reports each omitted-row count"
 
+cat > "$CONFIG" <<'EOF'
+{"work_layer_extra_lines":["extra-0 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","extra-1 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","extra-2 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"]}
+EOF
+python3 - "$TRACKS" "$DECISIONS" <<'PY'
+import json
+import sys
+
+active, decisions = sys.argv[1:]
+with open(active, "w", encoding="utf-8") as handle:
+    json.dump(
+        [{"id": f"trim-active-{i:02d}", "title": "a" * 100, "updated_at": "2099-01-01T00:00:00+00:00"} for i in range(25)],
+        handle,
+    )
+with open(decisions, "w", encoding="utf-8") as handle:
+    json.dump(
+        [{"id": f"trim-decision-{i:03d}", "title": "d" * 100, "updated_at": "2099-01-01T00:00:00+00:00"} for i in range(150)],
+        handle,
+    )
+PY
+run_probe trim-order
+append_record trim-order
+trim_order_output="$(run_hook "$HOOK" PostToolUse trim-order)"
+if TRIM_ORDER_OUTPUT="$trim_order_output" python3 - <<'PY'
+import json
+import os
+import re
+
+payload = json.loads(os.environ["TRIM_ORDER_OUTPUT"])
+serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+assert len(serialized) <= 9000, len(serialized)
+context = payload["hookSpecificOutput"]["additionalContext"]
+headings = [
+    "## Role State",
+    "## In-progress tracker items",
+    "## Open decisions",
+    "## Live worker panes",
+    "## Uncommitted files in the ops repository",
+    "## Seat-declared extra lines",
+]
+assert all(heading in context for heading in headings), context
+
+def section(heading):
+    start = context.index(heading) + len(heading)
+    remaining = context[start:]
+    end = min((remaining.index(candidate) for candidate in headings if candidate in remaining), default=len(remaining))
+    return remaining[:end].splitlines()
+
+active = section("## In-progress tracker items")
+decisions = section("## Open decisions")
+extras = section("## Seat-declared extra lines")
+active_rows = sum(line.startswith("- trim-active-") for line in active)
+decision_rows = sum(line.startswith("- trim-decision-") for line in decisions)
+extra_rows = sum(line.startswith("extra-") for line in extras)
+active_more = sum(line.startswith("more: run bd list --status=in_progress") for line in active)
+decision_more = [line for line in decisions if re.match(r"\d+ more: run bd list --status=open --type=decision(?: .*)?$", line)]
+extra_more = [line for line in extras if re.match(r"\d+ more: run read the instance runtime extra-lines configuration$", line)]
+assert active_rows == 25, active_rows
+assert active_more == 0, active
+assert decision_rows + int(decision_more[0].split()[0]) == 150, decision_more
+assert extra_rows == 0 and extra_more and extra_more[0].startswith("3 more:"), extras
+assert "more: run bd list --status=open --type=decision" in context, context
+PY
+then
+  ok "trim order keeps all active rows, trims extras first, and names omitted decisions"
+else
+  fail "trim order did not preserve active rows or per-section omissions"
+fi
+
 run_probe large-payload
 run_hook "$HOOK" PostToolUse large-payload >/dev/null
 run_hook "$HOOK" PostToolUse large-payload >/dev/null
@@ -453,11 +526,35 @@ PY
     fail "mutant $name was not built"
     return
   fi
+  cp "$S/hooks/compact-rehydration-constants.inc" "$T/compact-rehydration-constants.inc"
   if ! chmod +x "$T/$name.sh"; then
     fail "mutant $name could not be made executable"
     return
   fi
 }
+
+make_mutant mutant-trim-order 'trim_order = ("extras", "decisions", "active", "panes", "uncommitted", "role")' 'trim_order = ("active", "decisions", "extras", "panes", "uncommitted", "role")'
+run_probe mutant-trim-order
+append_record mutant-trim-order
+trim_mutant="$(run_hook "$T/mutant-trim-order.sh" PostToolUse mutant-trim-order)"
+if TRIM_ORDER_OUTPUT="$trim_mutant" python3 - <<'PY'
+import json
+import os
+
+payload = json.loads(os.environ["TRIM_ORDER_OUTPUT"])
+context = payload["hookSpecificOutput"]["additionalContext"]
+active_start = context.index("## In-progress tracker items")
+active_end = context.index("## Open decisions")
+active = context[active_start:active_end]
+extras_start = context.index("## Seat-declared extra lines")
+extras = context[extras_start:]
+assert active.count("- trim-active-") < 25 or "extra-" in extras, context
+PY
+then
+  ok "mutant-trim-order is caught"
+else
+  fail "mutant-trim-order survived"
+fi
 
 # Each mutant changes one contract rule and must make its focused case fail.
 make_mutant mutant-record-gate 'recorded = recorded_recall(marker)' 'recorded = True'

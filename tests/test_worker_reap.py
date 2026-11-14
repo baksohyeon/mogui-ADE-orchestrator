@@ -225,6 +225,9 @@ class _MeasuredEnvironment:
             self.closed_terminals.append(cmd[-1])
             return 0, '{"ok":true}', ""
 
+        if cmd[:3] == ["gh", "pr", "list"]:
+            return 0, "[]", ""
+
         # Worktree cleanliness/merge scenarios (dirty, non-main branch, not
         # yet merged) are covered by the dedicated _clean_worktree_runner
         # fake below, not by this one: every _MeasuredEnvironment call site
@@ -234,6 +237,12 @@ class _MeasuredEnvironment:
             return 0, "", ""
         if "git" in cmd and "branch" in cmd and "--show-current" in cmd:
             return 0, "main\n", ""
+        if "git" in cmd and cmd[3:5] == ["rev-parse", "HEAD"]:
+            return 0, "tip\n", ""
+        if "git" in cmd and "--git-common-dir" in cmd:
+            return 0, "/repo/.git\n", ""
+        if "git" in cmd and cmd[3:] == ["remote", "get-url", "origin"]:
+            return 0, "https://github.com/example/worker-reap.git\n", ""
         if "git" in cmd and "branch" in cmd and "--merged" in cmd:
             return 0, "* main\n", ""
         if "git" in cmd and "worktree" in cmd and "remove" in cmd:
@@ -727,10 +736,18 @@ class WorkerReaperTests(unittest.TestCase):
                 if "terminal" in cmd and "close" in cmd:
                     closed_terminals.append(cmd[-1])
                     return 0, '{"ok":true}', ""
+                if cmd[:3] == ["gh", "pr", "list"]:
+                    return 0, "[]", ""
                 if "git" in cmd and "status" in cmd:
                     return 0, "", ""
                 if "git" in cmd and "branch" in cmd and "--show-current" in cmd:
                     return 0, "main\n", ""
+                if "git" in cmd and cmd[3:5] == ["rev-parse", "HEAD"]:
+                    return 0, "tip\n", ""
+                if "git" in cmd and "--git-common-dir" in cmd:
+                    return 0, f"{FAKE_GIT_COMMON_DIR}\n", ""
+                if "git" in cmd and cmd[3:] == ["remote", "get-url", "origin"]:
+                    return 0, "https://github.com/example/worker-reap.git\n", ""
                 if "git" in cmd and "branch" in cmd and "--merged" in cmd:
                     return 0, "* main\n", ""
                 if "git" in cmd and "rev-parse" in cmd and "--git-common-dir" in cmd:
@@ -865,7 +882,30 @@ class WorkerReaperTests(unittest.TestCase):
             record = reaper.reap(task_id="t1", execute=True)
 
             self.assertIn(tmp_path, removed_paths)
+
+    def test_legacy_pr_state_is_not_measured_for_ancestry_reclaim(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_runner, removed_paths = _clean_worktree_runner(
+                tmp,
+                current_branch="main",
+                merged_branches="* main\n",
+            )
+
+            def runner_with_unavailable_gh(cmd: list[str]) -> tuple[int, str, str]:
+                if cmd[:3] == ["gh", "pr", "list"]:
+                    return 1, "", "gh unavailable"
+                return fake_runner(cmd)
+
+            record = WorkerReaper(orca_runner=runner_with_unavailable_gh).reap(
+                task_id="t1", execute=True
+            )
+
+            self.assertEqual(
+                {key for key in record.measurements if key.startswith("worktree_pr_")},
+                set(),
+            )
             self.assertIn("worktree_removed:", record.actions_taken)
+            self.assertIn(tmp, removed_paths)
 
     def test_reap_removes_clean_squash_merged_worktree(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -883,6 +923,41 @@ class WorkerReaperTests(unittest.TestCase):
 
             self.assertIn(tmp_path, removed_paths)
             self.assertIn("worktree_removed:", record.actions_taken)
+
+    def test_reaper_resets_landing_rule_between_worktrees(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            first = Path(tmp) / "first"
+            second = Path(tmp) / "second"
+            first.mkdir()
+            second.mkdir()
+
+            def runner(cmd: list[str]) -> tuple[int, str, str]:
+                path = str(cmd[2]) if len(cmd) > 2 and cmd[:2] == ["git", "-C"] else ""
+                if "status" in cmd:
+                    return 0, "", ""
+                if "remote" in cmd and "get-url" in cmd:
+                    return 0, "https://github.com/example/worker-reap.git\n", ""
+                if cmd[:3] == ["gh", "repo", "view"]:
+                    return 0, json.dumps({"defaultBranchRef": {"name": "main"}}), ""
+                if "branch" in cmd and "--show-current" in cmd:
+                    return 0, ("main\n" if path == str(first) else "feature-x\n"), ""
+                if "branch" in cmd and "--merged" in cmd:
+                    return 0, "* main\n", ""
+                if "merge-base" in cmd:
+                    return 0, "base\n", ""
+                if "--name-only" in cmd:
+                    return 0, "src/worker.py\0", ""
+                if "--quiet" in cmd:
+                    return (0 if path == str(first) else 1), "", ""
+                return 0, "", ""
+
+            reaper = WorkerReaper(orca_runner=runner)
+            first_result = reaper._check_worktree_safe_to_remove(first)
+            second_result = reaper._check_worktree_safe_to_remove(second)
+
+            self.assertEqual(first_result[:2], (True, True))
+            self.assertEqual(second_result[:2], (False, False))
+            self.assertIsNone(reaper._last_landing_rule)
 
     def test_reap_removes_the_worktree_through_its_git_dir_from_outside(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1403,6 +1478,32 @@ class WorkerReaperTests(unittest.TestCase):
 class BranchDeletionTests(unittest.TestCase):
     """Branch deletion is gated by GitHub's merged PR and exact head OID."""
 
+    def test_orca_cleanup_detection_requires_usage_lines(self) -> None:
+        def runner(cmd: list[str]) -> tuple[int, str, str]:
+            if cmd == ["orca", "terminal", "close", "--help"]:
+                return 0, "--worktree <selector> --all\n", ""
+            if cmd == ["orca", "worktree", "rm", "--help"]:
+                return 0, "--worktree <selector> --delete-branch\n", ""
+            return 0, "", ""
+
+        self.assertFalse(WorkerReaper(orca_runner=runner)._orca_cleanup_supported())
+
+    def test_orca_cleanup_detection_requires_selector_flags(self) -> None:
+        for missing in ("terminal", "worktree"):
+            with self.subTest(missing=missing):
+                def runner(cmd: list[str]) -> tuple[int, str, str]:
+                    if cmd == ["orca", "terminal", "close", "--help"]:
+                        usage = "Usage: orca terminal close"
+                        flags = " --all" if missing == "terminal" else " --worktree <selector> --all"
+                        return 0, usage + flags + "\n", ""
+                    if cmd == ["orca", "worktree", "rm", "--help"]:
+                        usage = "Usage: orca worktree rm"
+                        flags = " --delete-branch" if missing == "worktree" else " --worktree <selector> --delete-branch"
+                        return 0, usage + flags + "\n", ""
+                    return 0, "", ""
+
+                self.assertFalse(WorkerReaper(orca_runner=runner)._orca_cleanup_supported())
+
     def _repo_with_branch(self, root: Path) -> tuple[Path, str, str]:
         repo = root / "repo"
         repo.mkdir()
@@ -1637,6 +1738,269 @@ class BranchDeletionTests(unittest.TestCase):
             # Mutant proof: replacing the content rule with ancestry leaves
             # this squash-merged branch unreaped.
 
+    def test_unpushed_worktree_skips_orca_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _SelectorEnvironment(tmp, content_equal=False)
+            record = WorkerReaper(orca_runner=env).reap(task_id="t1", execute=True)
+
+            self.assertIn("branch changes are not included", record.actions_taken)
+            self.assertEqual(env.closed_commands, [])
+            self.assertEqual(env.removed_commands, [])
+            self.assertIn("would_close_worktree:id:repo:target", record.actions_taken)
+            self.assertEqual(record.measurements["worktree_terminal_handles"], ["term-target"])
+            self.assertEqual(record.measurements["pane_states"], {"term-target": "idle"})
+            self.assertEqual(record.measurements["agent_process"], "")
+            # Mutant proof: calling cleanup verbs before the unpushed check
+            # would discard the resume worktree.
+
+    def test_squash_merge_pr_evidence_routes_through_orca(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _SelectorEnvironment(
+                tmp,
+                content_equal=False,
+                merged_pr=True,
+                virtual_merge_fails=True,
+            )
+            record = WorkerReaper(orca_runner=env).reap(task_id="t1", execute=True)
+
+            self.assertEqual(record.measurements["worktree_landed_by"], "merged_pr")
+            self.assertEqual(len(env.closed_commands), 1)
+            self.assertEqual(len(env.removed_commands), 1)
+            # Mutant proof: treating a failed virtual/content landing check as
+            # final would leave the squash-merged #285 worktree behind.
+
+    def test_squash_merge_pr_evidence_keeps_content_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _SelectorEnvironment(tmp, content_equal=False, merged_pr=True)
+            record = WorkerReaper(orca_runner=env).reap(task_id="t1", execute=True)
+
+            self.assertIn("branch changes are not included", record.actions_taken)
+            self.assertNotIn("worktree_landed_by", record.measurements)
+            self.assertEqual(env.closed_commands, [])
+            self.assertEqual(env.removed_commands, [])
+
+    def test_virtual_merge_override_requires_exact_reason_shape(self) -> None:
+        self.assertTrue(
+            WorkerReaper._is_virtual_merge_failure_reason(
+                "Current branch feature-x is not merged to origin/main "
+                "(virtual merge failed: conflict\nmerge detail\n)"
+            )
+        )
+        self.assertFalse(
+            WorkerReaper._is_virtual_merge_failure_reason(
+                "Current branch feature-x is not merged to origin/main "
+                "(content note: virtual merge failed: conflict)"
+            )
+        )
+
+    def test_squash_merge_override_requires_orca_verbs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _SelectorEnvironment(
+                tmp,
+                content_equal=False,
+                merged_pr=True,
+                virtual_merge_fails=True,
+                orca_cleanup_supported=False,
+            )
+            record = WorkerReaper(orca_runner=env).reap(task_id="t1", execute=True)
+
+            self.assertIn("virtual merge failed", record.actions_taken)
+            self.assertEqual(env.closed_commands, [])
+            self.assertEqual(env.removed_commands, [])
+            self.assertEqual(env.legacy_removed_commands, [])
+
+    def test_squash_merge_tip_mismatch_keeps_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _SelectorEnvironment(
+                tmp,
+                content_equal=False,
+                merged_pr=True,
+                virtual_merge_fails=True,
+                merged_pr_head="older-tip",
+            )
+            record = WorkerReaper(orca_runner=env).reap(task_id="t1", execute=True)
+
+            self.assertIn("virtual merge failed", record.actions_taken)
+            self.assertEqual(env.closed_commands, [])
+            self.assertEqual(env.removed_commands, [])
+            self.assertEqual(env.legacy_removed_commands, [])
+            # Mutant proof: deleting the headRefOid == branch tip comparison
+            # would incorrectly reclaim a branch with local commits not pushed.
+
+    def test_fork_pr_with_same_branch_name_keeps_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _SelectorEnvironment(
+                tmp,
+                content_equal=False,
+                merged_pr=True,
+                virtual_merge_fails=True,
+                merged_pr_repository="fork/worker-reap",
+            )
+            record = WorkerReaper(orca_runner=env).reap(task_id="t1", execute=True)
+
+            self.assertIn("virtual merge failed", record.actions_taken)
+            self.assertEqual(env.removed_commands, [])
+            self.assertEqual(env.legacy_removed_commands, [])
+
+    def test_squash_merge_uses_measured_default_branch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _SelectorEnvironment(
+                tmp,
+                content_equal=False,
+                merged_pr=True,
+                virtual_merge_fails=True,
+                merged_pr_base="trunk",
+                default_branch="trunk",
+            )
+            record = WorkerReaper(orca_runner=env).reap(task_id="t1", execute=True)
+
+            self.assertEqual(record.measurements["worktree_landed_by"], "merged_pr")
+            self.assertEqual(len(env.removed_commands), 1)
+            self.assertTrue(
+                any(
+                    cmd[-1] == "origin/trunk"
+                    for cmd in env.merge_commands
+                )
+            )
+
+    def test_missing_orca_verbs_use_legacy_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _SelectorEnvironment(tmp, orca_cleanup_supported=False)
+            record = WorkerReaper(orca_runner=env).reap(task_id="t1", execute=True)
+
+            self.assertIn("worktree_removed:", record.actions_taken)
+            self.assertEqual(env.closed_commands, [])
+            self.assertEqual(env.removed_commands, [])
+            self.assertEqual(len(env.legacy_closed_commands), 1)
+            self.assertEqual(len(env.legacy_removed_commands), 1)
+            # Mutant proof: calling selector verbs without measured support
+            # would fail on older hosts instead of using the existing path.
+
+    def test_missing_terminal_id_keeps_legacy_cleanup_message_and_success(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _SelectorEnvironment(
+                tmp, orca_cleanup_supported=False, no_terminal_id=True
+            )
+            record = WorkerReaper(orca_runner=env).reap(task_id="t1", execute=True)
+
+            self.assertIn("worktree_removed:", record.actions_taken)
+            self.assertEqual(len(env.legacy_removed_commands), 1)
+
+    def test_legacy_absent_terminal_checks_agent_process_before_removal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _SelectorEnvironment(
+                tmp,
+                orca_cleanup_supported=False,
+                no_terminal_id=True,
+                agent_pid="4242",
+            )
+            record = WorkerReaper(orca_runner=env).reap(task_id="t1", execute=True)
+
+            self.assertIn("agent_process:4242:claude", record.actions_taken)
+            self.assertEqual(env.legacy_removed_commands, [])
+
+    def test_merged_pr_for_another_base_does_not_prove_landing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _SelectorEnvironment(
+                tmp, content_equal=False, merged_pr=True, merged_pr_base="release"
+            )
+            record = WorkerReaper(orca_runner=env).reap(task_id="t1", execute=True)
+
+            self.assertIn("branch changes are not included", record.actions_taken)
+            self.assertEqual(env.removed_commands, [])
+
+    def test_pr_measurement_failure_keeps_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _SelectorEnvironment(tmp, gh_pr_fails=True)
+            record = WorkerReaper(orca_runner=env).reap(task_id="t1", execute=True)
+
+            self.assertEqual(record.measurements["worktree_pr_state"], "UNMEASURED")
+            self.assertEqual(record.measurements["worktree_pr_reason"], "pr_state_unmeasured")
+            self.assertEqual(env.removed_commands, [])
+            self.assertEqual(env.legacy_removed_commands, [])
+
+    def test_open_pr_skips_orca_cleanup(self) -> None:
+        for repository in ("example/worker-reap", "EXAMPLE/WORKER-REAP"):
+            with self.subTest(repository=repository), tempfile.TemporaryDirectory() as tmp:
+                env = _SelectorEnvironment(
+                    tmp, open_pr=True, merged_pr_repository=repository
+                )
+                record = WorkerReaper(orca_runner=env).reap(
+                    task_id="t1", execute=True
+                )
+
+                self.assertIn("pull request is open", record.actions_taken)
+                self.assertEqual(env.closed_commands, [])
+                self.assertEqual(env.removed_commands, [])
+
+    def test_selector_resolution_mismatch_refuses_worktree_removal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            other = str(Path(tmp) / "other")
+            env = _SelectorEnvironment(tmp, resolved_worktree_path=other)
+            record = WorkerReaper(orca_runner=env).reap(task_id="t1", execute=True)
+
+            self.assertIn("resolved to", record.actions_taken)
+            self.assertEqual(env.closed_commands, [])
+            self.assertEqual(env.removed_commands, [])
+            self.assertNotIn("--force", " ".join(" ".join(cmd) for cmd in env.commands))
+
+    def test_unsupported_orca_host_keeps_legacy_content_landing_behavior(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _SelectorEnvironment(
+                tmp, orca_cleanup_supported=False, gh_pr_fails=True
+            )
+            record = WorkerReaper(orca_runner=env).reap(task_id="t1", execute=True)
+
+            self.assertIn("worktree_removed:", record.actions_taken)
+            self.assertEqual(
+                {key for key in record.measurements if key.startswith("worktree_pr_")},
+                set(),
+            )
+            self.assertEqual(len(env.legacy_closed_commands), 1)
+            self.assertEqual(len(env.legacy_removed_commands), 1)
+
+    def test_selector_dirty_worktree_keeps_resources_with_merged_pr(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _SelectorEnvironment(tmp, dirty=True, merged_pr=True)
+            record = WorkerReaper(orca_runner=env).reap(task_id="t1", execute=True)
+
+            self.assertIn("Worktree has uncommitted changes", record.actions_taken)
+            self.assertEqual(env.closed_commands, [])
+            self.assertEqual(env.removed_commands, [])
+
+    def test_selector_cleanup_never_passes_force(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _SelectorEnvironment(tmp)
+            WorkerReaper(orca_runner=env).reap(task_id="t1", execute=True)
+
+            self.assertTrue(env.removed_commands)
+            self.assertTrue(all("--force" not in cmd for cmd in env.removed_commands))
+
+    def test_pr_list_size_guard_is_unmeasured(self) -> None:
+        commands: list[list[str]] = []
+
+        def runner(cmd: list[str]) -> tuple[int, str, str]:
+            commands.append(cmd)
+            return 0, json.dumps([{} for _ in range(100)]), ""
+
+        self.assertIsNone(
+            WorkerReaper(orca_runner=runner)._pull_requests_for_branch(
+                "feature-x", "github.com/example/worker-reap"
+            )
+        )
+        self.assertIn("--limit", commands[0])
+        self.assertEqual(commands[0][commands[0].index("--limit") + 1], "100")
+
+    def test_selector_reports_orca_branch_warning_verbatim(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _SelectorEnvironment(tmp, remove_warning=True)
+            record = WorkerReaper(orca_runner=env).reap(task_id="t1", execute=True)
+
+            self.assertIn(
+                'warning: local branch "feature-x" was kept because Git could not safely delete it',
+                record.actions_taken,
+            )
+
     def test_selector_refuses_content_difference_and_names_the_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             env = _SelectorEnvironment(tmp, content_equal=False)
@@ -1732,6 +2096,30 @@ class BranchDeletionTests(unittest.TestCase):
             self.assertEqual(len(env.closed_commands), 1)
             self.assertEqual(len(env.removed_commands), 1)
 
+    def test_selector_checks_agent_process_when_no_panes_match(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _SelectorEnvironment(tmp, no_panes=True, agent_pid="4242")
+            record = WorkerReaper(orca_runner=env).reap(task_id="t1", execute=True)
+
+            self.assertIn("agent_process:4242:claude", record.actions_taken)
+            self.assertEqual(env.removed_commands, [])
+
+    def test_selector_checks_worktree_reuse_when_no_panes_match(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _SelectorEnvironment(tmp, no_panes=True, reused_by="ctx-newer")
+            record = WorkerReaper(orca_runner=env).reap(task_id="t1", execute=True)
+
+            self.assertIn("reused_by:ctx-newer", record.actions_taken)
+            self.assertEqual(env.removed_commands, [])
+
+    def test_selector_refuses_no_panes_when_agent_process_scan_is_unmeasured(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _SelectorEnvironment(tmp, no_panes=True, ps_fails=True)
+            record = WorkerReaper(orca_runner=env).reap(task_id="t1", execute=True)
+
+            self.assertIn("agent_process_unmeasured", record.actions_taken)
+            self.assertEqual(env.removed_commands, [])
+
     def test_selector_does_not_claim_terminals_closed_when_no_pane_was_selected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             env = _SelectorEnvironment(tmp, no_panes=True, remove_fails=True)
@@ -1777,6 +2165,21 @@ class _SelectorEnvironment:
         no_panes: bool = False,
         no_worktree_path: bool = False,
         worker_list_shape: str = "legacy",
+        orca_cleanup_supported: bool = True,
+        merged_pr: bool = False,
+        merged_pr_base: str = "main",
+        merged_pr_head: str = "tip",
+        merged_pr_repository: str = "example/worker-reap",
+        default_branch: str = "main",
+        virtual_merge_fails: bool = False,
+        gh_pr_fails: bool = False,
+        open_pr: bool = False,
+        remove_warning: bool = False,
+        no_terminal_id: bool = False,
+        agent_pid: str | None = None,
+        ps_fails: bool = False,
+        resolved_worktree_path: str | None = None,
+        dirty: bool = False,
     ) -> None:
         self.worktree_path = worktree_path
         self.content_equal = content_equal
@@ -1789,11 +2192,55 @@ class _SelectorEnvironment:
         self.no_panes = no_panes
         self.no_worktree_path = no_worktree_path
         self.worker_list_shape = worker_list_shape
+        self.orca_cleanup_supported = orca_cleanup_supported
+        self.merged_pr = merged_pr
+        self.merged_pr_base = merged_pr_base
+        self.merged_pr_head = merged_pr_head
+        self.merged_pr_repository = merged_pr_repository
+        self.default_branch = default_branch
+        self.virtual_merge_fails = virtual_merge_fails
+        self.branch_show_calls = 0
+        self.gh_pr_fails = gh_pr_fails
+        self.open_pr = open_pr
+        self.remove_warning = remove_warning
+        self.no_terminal_id = no_terminal_id
+        self.agent_pid = agent_pid
+        self.ps_fails = ps_fails
+        self.resolved_worktree_path = resolved_worktree_path or worktree_path
+        self.dirty = dirty
+        self.commands: list[list[str]] = []
         self.closed_commands: list[list[str]] = []
         self.removed_commands: list[list[str]] = []
+        self.legacy_closed_commands: list[list[str]] = []
+        self.legacy_removed_commands: list[list[str]] = []
         self.quiet_commands: list[list[str]] = []
+        self.merge_commands: list[list[str]] = []
 
     def __call__(self, cmd: list[str]) -> tuple[int, str, str]:
+        self.commands.append(cmd)
+        if cmd == ["orca", "terminal", "close", "--help"]:
+            if self.orca_cleanup_supported:
+                return 0, "Usage: orca terminal close --worktree <selector> --all\n", ""
+            return 0, "usage: orca terminal close\n", ""
+        if cmd == ["orca", "worktree", "rm", "--help"]:
+            if self.orca_cleanup_supported:
+                return 0, "Usage: orca worktree rm --worktree <selector> --delete-branch\n", ""
+            return 0, "usage: orca worktree rm\n", ""
+        if cmd[:4] == ["orca", "worktree", "list", "--json"]:
+            return 0, json.dumps(
+                {
+                    "result": {
+                        "worktrees": [
+                            {
+                                "worktreeId": "repo:target",
+                                "worktreePath": self.resolved_worktree_path,
+                            }
+                        ]
+                    }
+                }
+            ), ""
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return 0, json.dumps({"defaultBranchRef": {"name": self.default_branch}}), ""
         if "dispatch-show" in cmd:
             dispatch = {
                 "dispatch_id": "d1",
@@ -1805,6 +2252,8 @@ class _SelectorEnvironment:
             }
             if self.no_worktree_path:
                 dispatch.pop("worktree_path")
+            if self.no_terminal_id:
+                dispatch.pop("terminal_id")
             return 0, json.dumps(dispatch), ""
         if cmd[:4] == ["orca", "terminal", "list", "--json"]:
             target = {
@@ -1851,20 +2300,49 @@ class _SelectorEnvironment:
             return (1 if self.sweep_fails else 0), (
                 f"ok {self.pane_state} term-target worker\n"
             ), ""
+        if cmd[:2] == ["ps", "-axo"]:
+            if self.ps_fails:
+                return 1, "", "ps unavailable"
+            if self.agent_pid:
+                return 0, f"{self.agent_pid} claude\n", ""
+            return 0, "", ""
+        if cmd[:2] == ["lsof", "-a"] and self.agent_pid:
+            return 0, f"p{self.agent_pid}\nfcwd\nn{self.worktree_path}\n", ""
         if cmd[:5] == ["orca", "terminal", "close", "--worktree", "id:repo:target"]:
             self.closed_commands.append(cmd)
             return 0, "", ""
         if cmd[:5] == ["orca", "worktree", "rm", "--worktree", "id:repo:target"]:
             self.removed_commands.append(cmd)
-            return (1, "", "remove failed") if self.remove_fails else (0, "", "")
-        if "git" in cmd and "status" in cmd:
+            if self.remove_fails:
+                return 1, "", "remove failed"
+            if self.remove_warning:
+                return 0, (
+                    'warning: local branch "feature-x" was kept because Git could not safely delete it\n'
+                ), ""
             return 0, "", ""
+        if cmd[:4] == ["orca", "terminal", "close", "--terminal"]:
+            self.legacy_closed_commands.append(cmd)
+            return 0, "", ""
+        if "git" in cmd and "status" in cmd:
+            return 0, (" M src/worker.py\n" if self.dirty else ""), ""
         if "git" in cmd and "branch" in cmd and "--show-current" in cmd:
+            self.branch_show_calls += 1
+            if self.virtual_merge_fails and self.branch_show_calls == 2:
+                return 1, "", "branch measurement failed"
             return 0, "feature-x\n", ""
+        if "git" in cmd and cmd[3:5] == ["rev-parse", "HEAD"]:
+            return 0, "tip\n", ""
+        if "git" in cmd and "--git-common-dir" in cmd:
+            return 0, "/repo/.git\n", ""
+        if "git" in cmd and cmd[3:] == ["remote", "get-url", "origin"]:
+            return 0, "https://github.com/example/worker-reap.git\n", ""
         if "git" in cmd and "branch" in cmd and "--merged" in cmd:
+            self.merge_commands.append(cmd)
             return 0, "* main\n", ""
         if "git" in cmd and "merge-base" in cmd:
             return 0, "base\n", ""
+        if self.virtual_merge_fails and "merge-tree" in cmd:
+            return 1, "", "virtual merge failed"
         if "git" in cmd and "--name-only" in cmd:
             return 0, "src/worker.py\0", ""
         if "git" in cmd and "--quiet" in cmd:
@@ -1872,6 +2350,39 @@ class _SelectorEnvironment:
             if "--" not in cmd or cmd[cmd.index("--") + 1 :] != ["src/worker.py"]:
                 return 2, "", "path scope missing"
             return (0 if self.content_equal else 1), "", ""
+        if (
+            cmd
+            and cmd[0] == "git"
+            and any(arg.startswith("--git-dir=") for arg in cmd[1:])
+            and "worktree" in cmd
+            and "remove" in cmd
+        ):
+            self.legacy_removed_commands.append(cmd)
+            return 0, "", ""
+        if cmd and cmd[0] == "gh" and cmd[1:3] == ["pr", "list"]:
+            if self.gh_pr_fails:
+                return 1, "", "gh unavailable"
+            if self.open_pr:
+                return 0, json.dumps(
+                    [{
+                        "state": "OPEN",
+                        "headRefOid": "tip",
+                        "baseRefName": self.merged_pr_base,
+                        "headRepositoryOwner": {"login": self.merged_pr_repository.split("/", 1)[0]},
+                        "headRepository": {"name": self.merged_pr_repository.split("/", 1)[1]},
+                    }]
+                ), ""
+            if self.merged_pr:
+                return 0, json.dumps(
+                    [{
+                        "state": "MERGED",
+                        "headRefOid": self.merged_pr_head,
+                        "baseRefName": self.merged_pr_base,
+                        "headRepositoryOwner": {"login": self.merged_pr_repository.split("/", 1)[0]},
+                        "headRepository": {"name": self.merged_pr_repository.split("/", 1)[1]},
+                    }]
+                ), ""
+            return 0, "[]", ""
         return 0, "", ""
 
 
@@ -1907,6 +2418,8 @@ def _clean_worktree_runner(
             return 0, "", ""
         if "git" in cmd and "branch" in cmd and "--show-current" in cmd:
             return 0, f"{current_branch}\n", ""
+        if "git" in cmd and cmd[3:] == ["remote", "get-url", "origin"]:
+            return 0, "https://github.com/example/worker-reap.git\n", ""
         if "git" in cmd and "branch" in cmd and "--merged" in cmd:
             return 0, merged_branches, ""
         if "git" in cmd and "rev-parse" in cmd and "--git-common-dir" in cmd:
@@ -1918,8 +2431,16 @@ def _clean_worktree_runner(
         if "git" in cmd and "worktree" in cmd and "remove" in cmd:
             removed_paths.append(cmd[-1])
             return 0, "", ""
+        if cmd[:4] == ["orca", "terminal", "list", "--json"]:
+            return 0, json.dumps({"result": {"terminals": [{"handle": "term1"}]}}), ""
+        if cmd[:4] == ["orca", "orchestration", "worker-list", "--limit"]:
+            return 0, json.dumps({"result": {"workers": [], "page": {"hasMore": False}}}), ""
+        if cmd[:2] == ["ps", "-axo"]:
+            return 0, "", ""
         if "terminal" in cmd and "close" in cmd:
             return 0, "", ""
+        if cmd[:3] == ["gh", "pr", "list"]:
+            return 0, "[]", ""
         return 0, "", ""
 
     return fake_runner, removed_paths

@@ -36,6 +36,7 @@ Do not expand scope. If a request belongs outside the active role, ask whether i
 Processing a completion report ends at verification, merge decision, **and reap with a ledger record**. A settled worker left idle is harness debris, not a convenience.
 
 - After verifying a worker's completion and acceptance, initiate reap with `scripts/worker-reap --task-id <id> --ledger <path>`
+- Keep the deprecated `scripts/worker-reap --task-id <id> --ledger <path>` wrapper as the audited compatibility entry point. Prefer it for cleanup; direct Orca cleanup is allowed only after its checks pass: no currently dispatched row for a different dispatch claims the pane, no agent CLI process has its cwd in the worktree, and the worktree has no uncommitted or unmerged changes. When the installed help exposes all selector flags, the audited path routes eligible cleanup through `orca terminal close --worktree <selector> --all`, then `orca worktree rm --worktree <selector> --delete-branch`; older hosts keep the terminal-handle and Git fallback.
 - Reaping closes the worker terminal and removes clean, merged worktrees
 - Ambiguous worktrees (dirty, unmerged, inaccessible) are left with a reason logged
 - Reap is never automatic; only explicit operator or master instruction reaps

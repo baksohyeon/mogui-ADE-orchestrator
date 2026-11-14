@@ -131,8 +131,17 @@ every `OPEN_PANE` row additionally calls `scripts/worker-reap --task-id <id>
 --json` — with no `--dry-run` — for that row's dispatch (the task id comes
 from whichever worker-list row last claimed that pane), and folds the
 reaper's own record into the row under a `reap` key. This is a real close:
-`WorkerReaper.reap(execute=True)` runs `orca terminal close` and `git
-worktree remove` for real when its own measurements clear, so `worker-wait
+The wrapper remains the audited entry point. Prefer `scripts/worker-reap` for
+cleanup; direct Orca cleanup is allowed only after its checks pass: no currently
+dispatched row for a different dispatch claims the pane, no agent CLI process has its cwd in
+the worktree, and the worktree has no uncommitted or unmerged changes. When the
+installed help exposes `--worktree`, `--all`, and `--delete-branch`,
+`WorkerReaper.reap(execute=True)` routes eligible cleanup through `orca
+terminal close --worktree <selector> --all`, then `orca worktree rm --worktree
+<selector> --delete-branch`.
+`WorkerReaper.reap(execute=True)` runs the measured Orca cleanup verbs when
+their capabilities are present and keeps `git worktree remove` as the fallback,
+so `worker-wait
 --once --reap` on a Run you do not coordinate can close its settled panes and
 delete its worktrees — it is not a read-only inspection in that mode. The
 reaper measures, before closing anything: the pane is still present in `orca

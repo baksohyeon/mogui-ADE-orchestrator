@@ -620,6 +620,123 @@ contract_delivery_test() (
 )
 contract_delivery_test "$dispatch" || exit 1
 
+# --- Feature: quota guard is fail-open and account scoped -------------------
+#
+# Quota is an advisory preflight. A provider reader that disappears or emits
+# malformed data must leave dispatch available with an explicit unknown state,
+# while a valid blocked result still stops dispatch. The extracted function is
+# also run through mutants so deleting the blocked branch or the configured
+# threshold makes this test fail.
+quota_guard_test() (
+  set +e
+  set -u
+  local dispatch="$1" root_fn guard_fn jqf_fn work gate script_file out status
+  local blocked_mutant threshold_mutant
+
+  root_fn=$(awk '$0=="quota_guard_codex_root() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  guard_fn=$(awk '$0=="quota_guard() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  jqf_fn=$(awk '$0=="jqf() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  [ -n "$root_fn" ] || { echo "FAIL: could not extract quota account resolver" >&2; return 1; }
+  [ -n "$guard_fn" ] || { echo "FAIL: could not extract quota guard" >&2; return 1; }
+  [ -n "$jqf_fn" ] || { echo "FAIL: could not extract jqf" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-quota-test.$$"
+  mkdir -p "$work/home" "$work/accounts"
+  trap 'rm -rf "$work"' EXIT
+  gate="$work/gate"
+  cat > "$gate" <<'BIN'
+#!/bin/bash
+printf '%s\n' "$*" >> "$QUOTA_ARGS_LOG"
+case "${QUOTA_MODE:-}" in
+  fail) exit 7 ;;
+  malformed) printf 'not-json\n' ;;
+  blocked)
+    if printf '%s\n' "$*" | grep -q -- '--threshold 15'; then
+      printf '{"known":true,"remaining_percent":14,"age_seconds":1,"resets_at":99,"blocked":true}\n'
+    else
+      printf '{"known":true,"remaining_percent":14,"age_seconds":1,"resets_at":99,"blocked":false}\n'
+    fi
+    ;;
+esac
+BIN
+  chmod +x "$gate"
+
+  write_script() {
+    local outfile="$1" runtime="$2" mode="$3" body="${4:-$guard_fn}"
+    {
+      echo 'set -u'
+      printf '%s\n' "$jqf_fn"
+      printf '%s\n' "$root_fn"
+      printf '%s\n' 'codex_accounts_dir() { printf "%s\\n" "$ACCOUNTS"; }'
+      printf '%s\n' "$body"
+      printf 'GATE=%s\nRUNTIME=%s\nQUOTA_MODE=%s\nQUOTA_ARGS_LOG=%s\nQUOTA_THRESHOLD_PERCENT=15\nACCOUNTS=%s\n' "$gate" "$runtime" "$mode" "$work/args.log" "$work/accounts"
+      echo 'export QUOTA_MODE QUOTA_ARGS_LOG'
+      echo 'quota_guard; quota_status=$?'
+      echo 'printf "DONE\\n"'
+      echo 'exit "$quota_status"'
+    } > "$outfile"
+  }
+
+  script_file="$work/run.sh"
+  for mode in fail malformed; do
+    : > "$work/args.log"
+    write_script "$script_file" claude "$mode"
+    out=$(bash "$script_file" 2>&1)
+    status=$?
+    if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -qF "quota: unknown (claude, $([ "$mode" = fail ] && printf 'quota reader failed' || printf 'unreadable quota output'))"; then
+      echo "FAIL: quota $mode output should be unknown and dispatchable" >&2
+      printf '%s\n' "$out" >&2
+      return 1
+    fi
+  done
+  echo "ok   : quota reader failure and malformed output fail open as unknown"
+
+  : > "$work/args.log"
+  write_script "$script_file" claude blocked
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 2 ] || ! grep -q -- '--threshold 15' "$work/args.log"; then
+    echo "FAIL: a valid blocked quota must stop dispatch and receive the configured threshold" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : valid blocked quota stops dispatch at the configured threshold"
+
+  blocked_mutant=${guard_fn/'if [ "$QUOTA_BLOCKED" = True ]; then'/'if false; then'}
+  [ "$blocked_mutant" != "$guard_fn" ] || { echo "FAIL: blocked-branch mutant did not change source" >&2; return 1; }
+  write_script "$script_file" claude blocked "$blocked_mutant"
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: failability: deleting the blocked branch should let the valid blocked result through the mutant" >&2
+    return 1
+  fi
+  echo "ok   : failability: deleting the blocked branch changes the guard result"
+
+  threshold_mutant=${guard_fn/'local quota_args=(quota --runtime "$RUNTIME" --threshold "$QUOTA_THRESHOLD_PERCENT")'/'local quota_args=(quota --runtime "$RUNTIME")'}
+  [ "$threshold_mutant" != "$guard_fn" ] || { echo "FAIL: threshold mutant did not change source" >&2; return 1; }
+  : > "$work/args.log"
+  write_script "$script_file" claude blocked "$threshold_mutant"
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] || grep -q -- '--threshold' "$work/args.log"; then
+    echo "FAIL: failability: dropping the threshold should change the fake reader result" >&2
+    return 1
+  fi
+  echo "ok   : failability: dropping the threshold changes the guard result"
+
+  write_script "$script_file" codex blocked
+  out=$(HOME="$work/home" CODEX_HOME= CODEX_ACCOUNTS_DIR= bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -qF 'quota: unknown (codex, account unresolved)'; then
+    echo "FAIL: an unresolved Codex account must remain unknown and dispatchable" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : unresolved Codex account remains unknown and dispatchable"
+)
+quota_guard_test "$dispatch" || exit 1
+
 # --- Feature: cursor pre-trust before launch --------------------------------
 #
 # Cursor Agent's launch flags (--force --trust) cover the approval/permission

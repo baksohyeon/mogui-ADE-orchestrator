@@ -208,7 +208,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "settle", help="attach measured usage to a registered dispatch"
     )
     settle_parser.add_argument("--dispatch-id", required=True)
-    settle_parser.add_argument("--runtime", required=True)
+    settle_parser.add_argument("--runtime")
     settle_parser.add_argument("--record")
 
     quota_parser = subparsers.add_parser(
@@ -366,10 +366,11 @@ def _measure_usage(args: argparse.Namespace) -> int:
 
 
 def _settle(args: argparse.Namespace) -> int:
+    runtime = args.runtime or "unknown"
     usage = (
-        read_runtime(args.runtime, args.record)
+        read_runtime(runtime, args.record)
         if args.record
-        else unmeasured(args.runtime, "no record supplied")
+        else unmeasured(runtime, "runtime omitted; no record supplied")
     )
     decision = _gate(args).settle_usage(args.dispatch_id, usage)
     _print_decision(decision)
@@ -403,9 +404,13 @@ def _budget(args: argparse.Namespace) -> int:
     budget = front_matter.get("budget") if isinstance(front_matter, dict) else None
     basis = front_matter.get("tokens_basis", "total") if isinstance(front_matter, dict) else "total"
     if basis not in {"total", "uncached"}:
-        basis = "total"
+        _diagnose("tokens_basis must be total or uncached")
+        return 2
     if isinstance(budget, dict) and "tokens" in budget:
         token_budget = budget.get("tokens")
+        if isinstance(token_budget, bool) or not isinstance(token_budget, int) or token_budget < 0:
+            _diagnose("budget.tokens must be a nonnegative integer")
+            return 2
         payload = {
             "token_budget": token_budget,
             "tokens_basis": basis,
@@ -418,7 +423,7 @@ def _budget(args: argparse.Namespace) -> int:
         payload = {
             "token_budget": defaults.get(args.tier),
             "tokens_basis": basis,
-            "source": "tier-p90" if args.tier in defaults else "unset:no-records",
+            "source": "tier-p90" if args.tier in defaults else "unset:no-default",
             "records": counts.get(args.tier, 0),
             "tier": args.tier,
         }

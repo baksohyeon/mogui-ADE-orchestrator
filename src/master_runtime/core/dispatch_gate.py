@@ -873,21 +873,48 @@ class DispatchGate:
             entries = list(self._read_entries())
             found = False
             changed = False
+            replaced_unmeasured = False
             for entry in entries:
                 if entry.get("job_id") != dispatch_id:
                     continue
                 found = True
                 if "token_usage" in entry:
+                    existing = entry.get("token_usage")
+                    existing_source = (
+                        existing.get("source")
+                        if isinstance(existing, Mapping)
+                        else None
+                    )
+                    if existing_source == "unmeasured" and source != "unmeasured":
+                        entry["token_usage"] = normalized
+                        entry["token_usage_settled"] = True
+                        changed = True
+                        replaced_unmeasured = True
                     break
                 entry["token_usage"] = normalized
                 entry["token_usage_settled"] = True
                 changed = True
                 break
             if not found:
-                return GateDecision(False, ReasonCode.NO_MATCHING_TICKET, message=f"dispatch_id={dispatch_id}")
+                entries.append(
+                    {
+                        "ts": self._clock(),
+                        "job_id": dispatch_id,
+                        "token_usage": normalized,
+                        "token_usage_settled": True,
+                        "settlement_without_registration": True,
+                    }
+                )
+                changed = True
             if changed:
                 _replace_ledger_entries(Path(self.config.ledger_path), entries)
-        return GateDecision(True, ReasonCode.OK, message="usage recorded" if changed else "usage already settled")
+        if replaced_unmeasured:
+            message = "usage upgraded from unmeasured"
+        elif changed:
+            message = "usage recorded without registration" if not found else "usage recorded"
+        else:
+            message = "usage already settled"
+        return GateDecision(True, ReasonCode.OK, message=message)
 
     def completion_channel_for_registration(
         self,

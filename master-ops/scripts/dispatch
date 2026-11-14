@@ -312,11 +312,8 @@ if [ -n "$LEDGER_EVENT" ]; then
   fi
   case "$LEDGER_EVENT" in
     worker_done|reap)
-      if [ -z "$RUNTIME" ]; then
-        echo "✗ $LEDGER_EVENT requires --runtime" >&2
-        exit 1
-      fi
-      SETTLE_ARGS=(--ledger "$LEDGER" settle --dispatch-id "$LEDGER_EVENT_DISPATCH_ID" --runtime "$RUNTIME")
+      SETTLE_ARGS=(--ledger "$LEDGER" settle --dispatch-id "$LEDGER_EVENT_DISPATCH_ID")
+      [ -n "$RUNTIME" ] && SETTLE_ARGS+=(--runtime "$RUNTIME")
       [ -n "$LEDGER_EVENT_SESSION_RECORD" ] && SETTLE_ARGS+=(--record "$LEDGER_EVENT_SESSION_RECORD")
       "$GATE" "${SETTLE_ARGS[@]}" >/dev/null || exit $?
       ;;
@@ -429,17 +426,60 @@ resolve_token_budget() {
   TOKEN_BUDGET_RECORDS=$(printf '%s' "$TOKEN_FIELDS" | jqf "d.get('records') if d.get('records') is not None else ''")
 }
 
+quota_guard_codex_root() {
+  [ "${RUNTIME:-}" = codex ] || return 1
+  local candidate account_root account_count=0 selected=""
+  if [ -n "${DISPATCH_CODEX_SESSION_ROOT:-}" ] && [ -d "$DISPATCH_CODEX_SESSION_ROOT" ]; then
+    printf '%s\n' "$DISPATCH_CODEX_SESSION_ROOT"
+    return 0
+  fi
+  if [ -n "${CODEX_HOME:-}" ]; then
+    for candidate in "$CODEX_HOME/sessions" "$CODEX_HOME/home/sessions"; do
+      if [ -d "$candidate" ]; then
+        account_count=$((account_count + 1))
+        selected=$candidate
+      fi
+    done
+    [ "$account_count" -eq 1 ] && { printf '%s\n' "$selected"; return 0; }
+    return 1
+  fi
+  if [ -d "$HOME/.codex/sessions" ]; then
+    printf '%s\n' "$HOME/.codex/sessions"
+    return 0
+  fi
+  account_root=$(codex_accounts_dir)
+  for candidate in "$account_root"/*/home/sessions; do
+    if [ -d "$candidate" ]; then
+      account_count=$((account_count + 1))
+      selected=$candidate
+    fi
+  done
+  [ "$account_count" -eq 1 ] || return 1
+  printf '%s\n' "$selected"
+}
+
 quota_guard() {
-  if ! QUOTA_JSON=$("$GATE" quota --runtime "$RUNTIME" --threshold "$QUOTA_THRESHOLD_PERCENT" 2>/dev/null); then
-    echo "✗ quota guard failed for $RUNTIME; ask the master before dispatching" >&2
-    return 2
+  local quota_args=(quota --runtime "$RUNTIME" --threshold "$QUOTA_THRESHOLD_PERCENT")
+  local quota_root=""
+  case "$RUNTIME" in codex)
+    if ! quota_root=$(quota_guard_codex_root); then
+      echo "quota: unknown (codex, account unresolved)"
+      return 0
+    fi
+    quota_args+=(--root "$quota_root")
+    ;;
+  esac
+  if ! QUOTA_JSON=$("$GATE" "${quota_args[@]}" 2>/dev/null); then
+    echo "quota: unknown ($RUNTIME, quota reader failed)"
+    return 0
   fi
   if ! QUOTA_KNOWN=$(printf '%s' "$QUOTA_JSON" | jqf "d.get('known',False)" 2>/dev/null); then
-    echo "✗ quota guard returned unreadable data for $RUNTIME; ask the master before dispatching" >&2
-    return 2
+    echo "quota: unknown ($RUNTIME, unreadable quota output)"
+    return 0
   fi
   if [ "$QUOTA_KNOWN" != "True" ]; then
-    echo "quota: unknown ($RUNTIME)"
+    QUOTA_WHY=$(printf '%s' "$QUOTA_JSON" | jqf "d.get('why') or 'source unavailable'" 2>/dev/null || printf 'source unavailable')
+    echo "quota: unknown ($RUNTIME, $QUOTA_WHY)"
     return 0
   fi
   QUOTA_REMAINING=$(printf '%s' "$QUOTA_JSON" | jqf "d.get('remaining_percent')")

@@ -19,6 +19,8 @@ from typing import Iterable, Mapping
 
 RUNTIME_NAMES = frozenset({"codex", "claude", "agy", "cursor"})
 DEFAULT_QUOTA_THRESHOLD_PERCENT = 15.0
+TIER_DEFAULT_WINDOW_SECONDS = 30 * 24 * 60 * 60
+TIER_DEFAULT_MIN_RECORDS = 10
 
 
 @dataclass(frozen=True)
@@ -229,6 +231,20 @@ def _record_model(runtime: str, path: Path) -> str | None:
     return None
 
 
+def _record_is_worker(path: Path) -> bool:
+    """Exclude records that explicitly identify themselves as host sessions."""
+
+    for event in _read_jsonl(path):
+        values = [event.get("session_kind")]
+        payload = event.get("payload")
+        if isinstance(payload, Mapping):
+            values.append(payload.get("session_kind"))
+        for value in values:
+            if isinstance(value, str) and value.casefold() in {"master", "interactive"}:
+                return False
+    return True
+
+
 def _codex_roots(root: str | Path | None = None) -> tuple[Path, ...]:
     """Resolve Codex session roots without treating an empty value as ``.``."""
 
@@ -239,6 +255,11 @@ def _codex_roots(root: str | Path | None = None) -> tuple[Path, ...]:
     if explicit:
         candidate = Path(explicit).expanduser()
         return (candidate,) if candidate.is_dir() else ()
+    codex_home = os.environ.get("CODEX_HOME", "").strip()
+    if codex_home:
+        home = Path(codex_home).expanduser()
+        candidates = (home / "sessions", home / "home" / "sessions")
+        return tuple(candidate.resolve() for candidate in candidates if candidate.is_dir())
     accounts = os.environ.get("CODEX_ACCOUNTS_DIR", "").strip()
     if accounts:
         account_root = Path(accounts).expanduser()
@@ -262,12 +283,43 @@ def sys_platform_is_darwin() -> bool:
     return os.uname().sysname == "Darwin" if hasattr(os, "uname") else False
 
 
+def _jsonl_paths_newest_first(root: Path) -> tuple[Path, ...]:
+    """List readable candidates newest first without trusting directory metadata."""
+
+    try:
+        paths = root.rglob("*.jsonl")
+    except OSError:
+        return ()
+    candidates: list[tuple[float, Path]] = []
+    try:
+        for path in paths:
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                continue
+            candidates.append((mtime, path))
+    except OSError:
+        return tuple(path for _, path in sorted(candidates, key=lambda item: (item[0], str(item[1])), reverse=True))
+    return tuple(path for _, path in sorted(candidates, key=lambda item: (item[0], str(item[1])), reverse=True))
+
+
+def _tier_defaults_cache_path(cache_path: str | Path | None) -> Path:
+    if cache_path is not None:
+        return Path(cache_path).expanduser()
+    configured = os.environ.get("DISPATCH_TOKEN_BUDGET_CACHE", "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / ".mogui" / "token-budget-defaults.json"
+
+
 def tier_defaults(
     tier_policy: str | Path,
     *,
     codex_root: str | Path | None = None,
     claude_root: str | Path | None = None,
     basis: str = "total",
+    now: float | None = None,
+    cache_path: str | Path | None = None,
 ) -> tuple[dict[str, int], dict[str, int]]:
     """Compute per-tier p90 totals from existing Codex and Claude records.
 
@@ -300,24 +352,114 @@ def tier_defaults(
         "codex": _codex_roots(codex_root),
         "claude": (claude_path,),
     }
-    totals: dict[str, list[int]] = {}
-    counts: dict[str, int] = {}
+    current = time.time() if now is None else now
+    cutoff = current - TIER_DEFAULT_WINDOW_SECONDS
+    candidate_paths: dict[str, tuple[Path, ...]] = {}
     for runtime, runtime_roots in roots.items():
+        paths: list[Path] = []
         for root in runtime_roots:
             if not root.is_dir():
                 continue
-            for path in root.rglob("*.jsonl"):
-                model = _record_model(runtime, path)
-                tier = model_tiers.get(model.casefold()) if model else None
-                if tier is None:
+            for path in _jsonl_paths_newest_first(root):
+                try:
+                    if path.stat().st_mtime >= cutoff:
+                        paths.append(path)
+                except OSError:
                     continue
-                usage = read_runtime(runtime, path)
-                total = cap_total(usage, basis)
-                if total is None:
-                    continue
-                totals.setdefault(tier, []).append(total)
-                counts[tier] = counts.get(tier, 0) + 1
-    return {tier: value for tier, values in totals.items() if (value := p90(values)) is not None}, counts
+        candidate_paths[runtime] = tuple(paths)
+
+    try:
+        policy_mtime = Path(tier_policy).stat().st_mtime
+    except OSError:
+        policy_mtime = None
+    newest_mtimes: dict[str, float | None] = {}
+    for runtime, paths in candidate_paths.items():
+        newest_mtimes[runtime] = None
+        for path in paths:
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                continue
+            if newest_mtimes[runtime] is None or mtime > newest_mtimes[runtime]:
+                newest_mtimes[runtime] = mtime
+    signature = {
+        "policy": str(Path(tier_policy).expanduser()),
+        "policy_mtime": policy_mtime,
+        "basis": basis,
+        "window_seconds": TIER_DEFAULT_WINDOW_SECONDS,
+        "minimum_records": TIER_DEFAULT_MIN_RECORDS,
+        "roots": {
+            runtime: [str(root) for root in runtime_roots]
+            for runtime, runtime_roots in roots.items()
+        },
+        "inputs": {
+            runtime: {
+                "count": len(paths),
+                "newest_mtime": newest_mtimes[runtime],
+            }
+            for runtime, paths in candidate_paths.items()
+        },
+    }
+    cache_file = _tier_defaults_cache_path(cache_path)
+    try:
+        cached = json.loads(cache_file.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        cached = None
+    if isinstance(cached, Mapping) and cached.get("signature") == signature:
+        defaults = cached.get("defaults")
+        cached_counts = cached.get("counts")
+        if isinstance(defaults, Mapping) and isinstance(cached_counts, Mapping):
+            return (
+                {str(key): value for key, value in defaults.items() if _integer(value) is not None},
+                {str(key): value for key, value in cached_counts.items() if _integer(value) is not None},
+            )
+    totals: dict[str, list[int]] = {}
+    counts: dict[str, int] = {}
+    for runtime, paths in candidate_paths.items():
+        for path in paths:
+            if not _record_is_worker(path):
+                continue
+            model = _record_model(runtime, path)
+            tier = model_tiers.get(model.casefold()) if model else None
+            if tier is None:
+                continue
+            usage = read_runtime(runtime, path)
+            total = cap_total(usage, basis)
+            if total is None:
+                continue
+            totals.setdefault(tier, []).append(total)
+            counts[tier] = counts.get(tier, 0) + 1
+    defaults = {
+        tier: value
+        for tier, values in totals.items()
+        if counts.get(tier, 0) >= TIER_DEFAULT_MIN_RECORDS
+        and (value := p90(values)) is not None
+    }
+    try:
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        cache_file.write_text(
+            json.dumps({"signature": signature, "defaults": defaults, "counts": counts}, sort_keys=True),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+    return defaults, counts
+
+
+def _codex_quota_roots(root: str | Path | None = None) -> tuple[Path, ...]:
+    """Resolve exactly one worker account for quota reads, or remain unknown."""
+
+    if root:
+        candidate = Path(root).expanduser()
+        return (candidate,) if candidate.is_dir() else ()
+    explicit = os.environ.get("DISPATCH_CODEX_SESSION_ROOT", "").strip()
+    if explicit:
+        candidate = Path(explicit).expanduser()
+        return (candidate,) if candidate.is_dir() else ()
+    roots = _codex_roots()
+    if len(roots) == 1:
+        return roots
+    return ()
 
 
 def latest_codex_quota(
@@ -327,15 +469,16 @@ def latest_codex_quota(
 ) -> dict[str, object]:
     """Return the newest valid Codex weekly quota snapshot."""
 
-    roots = _codex_roots(root)
+    roots = _codex_quota_roots(root)
     if not roots:
-        return {"known": False, "runtime": "codex", "why": "no session root"}
+        return {"known": False, "runtime": "codex", "why": "account unresolved"}
     current = time.time() if now is None else now
-    newest: tuple[float, Mapping[str, object]] | None = None
+    newest_candidate: Mapping[str, object] | None = None
     for base in roots:
         if not base.is_dir():
             continue
-        for path in base.rglob("*.jsonl"):
+        for path in _jsonl_paths_newest_first(base):
+            file_candidates: list[tuple[float, Mapping[str, object]]] = []
             for event in _read_jsonl(path):
                 payload = event.get("payload")
                 if not isinstance(payload, Mapping) or payload.get("type") != "token_count":
@@ -347,20 +490,19 @@ def latest_codex_quota(
                     continue
                 weekly = None
                 weekly_name = ""
-                for key in ("primary", "secondary"):
-                    candidate_limit = rate_limits.get(key)
-                    if not isinstance(candidate_limit, Mapping):
-                        continue
-                    window_minutes = _integer(candidate_limit.get("window_minutes"))
-                    if window_minutes == 10080 or (key == "secondary" and window_minutes is None):
-                        weekly = candidate_limit
-                        weekly_name = key
-                        break
+                candidate_limit = rate_limits.get("primary")
+                if isinstance(candidate_limit, Mapping) and _integer(candidate_limit.get("window_minutes")) == 10080:
+                    weekly = candidate_limit
+                    weekly_name = "primary"
                 if weekly is None:
                     continue
                 used = weekly.get("used_percent")
                 reset = _number(weekly.get("resets_at"))
-                stamp = _timestamp(event.get("timestamp")) or path.stat().st_mtime
+                try:
+                    path_mtime = path.stat().st_mtime
+                except OSError:
+                    continue
+                stamp = _timestamp(event.get("timestamp")) or path_mtime
                 if not isinstance(used, (int, float)) or isinstance(used, bool) or not math.isfinite(float(used)):
                     continue
                 candidate = {
@@ -369,11 +511,18 @@ def latest_codex_quota(
                     "timestamp": stamp,
                     "source_name": weekly_name,
                 }
-                if newest is None or stamp > newest[0]:
-                    newest = (stamp, candidate)
-    if newest is None:
+                file_candidates.append((stamp, candidate))
+            if file_candidates:
+                _, candidate = max(file_candidates, key=lambda item: item[0])
+                newest_candidate = candidate
+                break
+        else:
+            continue
+        break
+    if newest_candidate is None:
         return {"known": False, "runtime": "codex", "why": "no weekly snapshot"}
-    stamp, candidate = newest
+    candidate = newest_candidate
+    stamp = float(candidate["timestamp"])
     reset = candidate.get("resets_at")
     if isinstance(reset, (int, float)) and current >= reset:
         return {"known": False, "runtime": "codex", "why": "snapshot passed reset"}

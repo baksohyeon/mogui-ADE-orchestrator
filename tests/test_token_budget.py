@@ -83,7 +83,7 @@ def test_tier_defaults_only_use_measured_records(tmp_path: Path) -> None:
     claude = tmp_path / "claude"
     codex.mkdir()
     claude.mkdir()
-    (codex / "one.jsonl").write_text(
+    complete = (
         json.dumps({"type": "session_meta", "payload": {"model": "gpt-5.6-luna"}})
         + "\n"
         + json.dumps(
@@ -102,9 +102,10 @@ def test_tier_defaults_only_use_measured_records(tmp_path: Path) -> None:
                 },
             }
         )
-        + "\n",
-        encoding="utf-8",
+        + "\n"
     )
+    for index in range(10):
+        (codex / f"complete-{index}.jsonl").write_text(complete, encoding="utf-8")
     (codex / "incomplete.jsonl").write_text(
         json.dumps({"type": "session_meta", "payload": {"model": "gpt-5.6-luna"}})
         + "\n"
@@ -124,7 +125,7 @@ def test_tier_defaults_only_use_measured_records(tmp_path: Path) -> None:
     defaults, counts = tier_defaults(policy, codex_root=codex, claude_root=claude)
 
     assert defaults == {"efficient": 13}
-    assert counts == {"efficient": 1}
+    assert counts == {"efficient": 10}
 
 
 def test_tier_defaults_apply_uncached_basis(tmp_path: Path) -> None:
@@ -132,7 +133,7 @@ def test_tier_defaults_apply_uncached_basis(tmp_path: Path) -> None:
     policy.write_text(json.dumps({"tiers": {"efficient": ["gpt-5.6-luna"]}}), encoding="utf-8")
     codex = tmp_path / "codex"
     codex.mkdir()
-    (codex / "one.jsonl").write_text(
+    complete = (
         json.dumps({"type": "session_meta", "payload": {"model": "gpt-5.6-luna"}})
         + "\n"
         + json.dumps(
@@ -150,16 +151,139 @@ def test_tier_defaults_apply_uncached_basis(tmp_path: Path) -> None:
                 }
             }
         )
-        + "\n",
-        encoding="utf-8",
+        + "\n"
     )
+    for index in range(10):
+        (codex / f"complete-{index}.jsonl").write_text(complete, encoding="utf-8")
 
     defaults, counts = tier_defaults(
         policy, codex_root=codex, claude_root=tmp_path / "claude", basis="uncached"
     )
 
     assert defaults == {"efficient": 11}
-    assert counts == {"efficient": 1}
+    assert counts == {"efficient": 10}
+
+
+def test_tier_defaults_require_recent_minimum_and_recompute_cache(tmp_path: Path) -> None:
+    policy = tmp_path / "policy.json"
+    policy.write_text(json.dumps({"tiers": {"efficient": ["gpt-5.6-luna"]}}), encoding="utf-8")
+    codex = tmp_path / "codex"
+    codex.mkdir()
+    complete = (
+        json.dumps({"type": "session_meta", "payload": {"model": "gpt-5.6-luna"}})
+        + "\n"
+        + json.dumps(
+            {
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "total_token_usage": {
+                            "input_tokens": 10,
+                            "cached_input_tokens": 2,
+                            "output_tokens": 3,
+                            "total_tokens": 13,
+                        }
+                    },
+                }
+            }
+        )
+        + "\n"
+    )
+    for index in range(9):
+        (codex / f"recent-{index}.jsonl").write_text(complete, encoding="utf-8")
+    old = codex / "old.jsonl"
+    old.write_text(complete, encoding="utf-8")
+    old_time = time.time() - 31 * 24 * 60 * 60
+    os.utime(old, (old_time, old_time))
+    cache = tmp_path / "defaults.json"
+
+    defaults, counts = tier_defaults(
+        policy, codex_root=codex, claude_root=tmp_path / "claude", cache_path=cache
+    )
+    assert defaults == {}
+    assert counts == {"efficient": 9}
+
+    (codex / "recent-9.jsonl").write_text(complete, encoding="utf-8")
+    defaults, counts = tier_defaults(
+        policy, codex_root=codex, claude_root=tmp_path / "claude", cache_path=cache
+    )
+    assert defaults == {"efficient": 13}
+    assert counts == {"efficient": 10}
+
+
+def test_quota_uses_only_the_dispatch_account(monkeypatch, tmp_path: Path) -> None:
+    accounts = tmp_path / "accounts"
+    exhausted = accounts / "exhausted" / "home" / "sessions"
+    dispatch = accounts / "dispatch" / "home" / "sessions"
+    exhausted.mkdir(parents=True)
+    dispatch.mkdir(parents=True)
+    def event(used: int) -> str:
+        return json.dumps(
+            {
+                "timestamp": 1_000,
+                "payload": {
+                    "type": "token_count",
+                    "rate_limits": {
+                        "primary": {
+                            "used_percent": used,
+                            "window_minutes": 10080,
+                            "resets_at": 5_000,
+                        }
+                    },
+                },
+            }
+        ) + "\n"
+    (exhausted / "fresh.jsonl").write_text(event(99), encoding="utf-8")
+    (dispatch / "worker.jsonl").write_text(event(10), encoding="utf-8")
+    monkeypatch.setenv("CODEX_ACCOUNTS_DIR", str(accounts))
+    monkeypatch.setenv("CODEX_HOME", str(accounts / "dispatch" / "home"))
+
+    status = latest_codex_quota(now=1_100)
+
+    assert status["known"] is True
+    assert status["remaining_percent"] == 90.0
+
+    monkeypatch.delenv("CODEX_HOME")
+    assert latest_codex_quota(now=1_100)["why"] == "account unresolved"
+
+
+def test_quota_scans_newest_file_then_stops_at_first_valid_snapshot(tmp_path: Path) -> None:
+    newer = tmp_path / "newer.jsonl"
+    older = tmp_path / "older.jsonl"
+    newer.write_text(
+        json.dumps(
+            {
+                "timestamp": 1_000,
+                "payload": {
+                    "type": "token_count",
+                    "rate_limits": {"primary": {"used_percent": 99, "window_minutes": 10080}},
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    older.write_text(
+        json.dumps(
+            {
+                "timestamp": 1_100,
+                "payload": {
+                    "type": "token_count",
+                    "rate_limits": {"primary": {"used_percent": 10, "window_minutes": 10080}},
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    now = time.time()
+    os.utime(newer, (now, now))
+    os.utime(older, (now - 10, now - 10))
+
+    status = latest_codex_quota(tmp_path, now=1_100)
+
+    assert status["known"] is True
+    assert status["remaining_percent"] == 1.0
 
 
 def test_quota_guard_marks_14_percent_remaining_as_known(tmp_path: Path) -> None:
@@ -172,8 +296,9 @@ def test_quota_guard_marks_14_percent_remaining_as_known(tmp_path: Path) -> None
                 "payload": {
                     "type": "token_count",
                     "rate_limits": {
-                        "secondary": {
+                        "primary": {
                             "used_percent": 86,
+                            "window_minutes": 10080,
                             "resets_at": 5_000,
                         }
                     },
@@ -200,8 +325,9 @@ def test_quota_guard_16_percent_remaining_passes_threshold(tmp_path: Path) -> No
                 "payload": {
                     "type": "token_count",
                     "rate_limits": {
-                        "secondary": {
+                        "primary": {
                             "used_percent": 84,
+                            "window_minutes": 10080,
                             "resets_at": 5_000,
                         }
                     },
@@ -243,8 +369,9 @@ def test_quota_guard_treats_a_stale_snapshot_as_unknown(tmp_path: Path) -> None:
                 "payload": {
                     "type": "token_count",
                     "rate_limits": {
-                        "secondary": {
+                        "primary": {
                             "used_percent": 99,
+                            "window_minutes": 10080,
                             "resets_at": 5_000,
                         }
                     },
@@ -339,12 +466,76 @@ def test_settle_usage_is_idempotent_and_stores_unmeasured_state(tmp_path: Path) 
     assert gate.register_job("job-1", lambda value: value == "job-1", token_budget=100).allow
     usage = {"source": "unmeasured", "why": "cursor has no reader"}
     assert gate.settle_usage("job-1", usage).allow
+    measured = {
+        "input": 4,
+        "cached_input": 1,
+        "output": 2,
+        "total": 6,
+        "source": "codex:token_count",
+    }
+    assert gate.settle_usage("job-1", measured).allow
     assert gate.settle_usage("job-1", {"source": "unmeasured", "why": "late"}).allow
     row = json.loads((tmp_path / "ledger.jsonl").read_text(encoding="utf-8").splitlines()[-1])
     assert row["token_budget"] == 100
-    assert row["token_usage"] == usage
+    assert row["token_usage"] == measured
     entries = [
         json.loads(line)
         for line in (tmp_path / "ledger.jsonl").read_text(encoding="utf-8").splitlines()
     ]
     assert sum(entry.get("job_id") == "job-1" and "token_usage" in entry for entry in entries) == 1
+
+    assert gate.settle_usage("pre-pr-job", usage).allow
+    assert gate.settle_usage("pre-pr-job", measured).allow
+    pre_pr = [entry for entry in gate.ledger_entries() if entry.get("job_id") == "pre-pr-job"]
+    assert len(pre_pr) == 1
+    assert pre_pr[0]["settlement_without_registration"] is True
+    assert pre_pr[0]["token_usage"] == measured
+
+
+def test_settle_cli_accepts_omitted_runtime(tmp_path: Path) -> None:
+    ledger = tmp_path / "ledger.jsonl"
+    script = Path(__file__).parents[1] / "scripts" / "dispatch-gate"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--ledger",
+            str(ledger),
+            "settle",
+            "--dispatch-id",
+            "pre-pr-cli",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")},
+    )
+
+    assert result.returncode == 0
+    assert json.loads(result.stdout)["allow"] is True
+
+
+def test_budget_cli_revalidates_declared_tokens(tmp_path: Path) -> None:
+    policy = tmp_path / "policy.json"
+    policy.write_text(json.dumps({"tiers": {"efficient": []}}), encoding="utf-8")
+    script = Path(__file__).parents[1] / "scripts" / "dispatch-gate"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "budget",
+            "--tier",
+            "efficient",
+            "--tier-policy",
+            str(policy),
+            "--front-matter",
+            '{"budget":{"tokens":true}}',
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")},
+    )
+
+    assert result.returncode == 2
+    assert "budget.tokens must be a nonnegative integer" in result.stderr

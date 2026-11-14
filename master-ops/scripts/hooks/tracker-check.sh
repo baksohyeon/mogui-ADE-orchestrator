@@ -3,8 +3,12 @@
 # workspace root (MASTER-OPERATIONS §7 — this failure is otherwise silent).
 
 VERDICT="pass"
-FIRE_LOG="${MOGUI_HOOK_FIRE_LOG:-${HOME:-$(cd ~ && pwd)}/.mogui/hook-fire-log.jsonl}"
 HOOK_CWD="$PWD"
+STATE_ROOT="${MOGUI_STATE_DIR:-${HOME:-$(cd ~ && pwd)}/.mogui}"
+if [[ "$STATE_ROOT" != /* ]]; then
+  STATE_ROOT="$HOOK_CWD/$STATE_ROOT"
+fi
+FIRE_LOG="${MOGUI_HOOK_FIRE_LOG:-$STATE_ROOT/hook-fire-log.jsonl}"
 if [[ "$FIRE_LOG" != /* ]]; then
   FIRE_LOG="$HOOK_CWD/$FIRE_LOG"
 fi
@@ -34,7 +38,24 @@ trap log_fire EXIT
 
 # WORKSPACE_ROOT lets a test point the hook at a scratch tree; the install path is the default.
 ROOT_DEFAULT='{{WORKSPACE_ROOT}}'
-cd "${WORKSPACE_ROOT:-$ROOT_DEFAULT}" || { VERDICT="skip"; exit 0; }
+WORKSPACE_ROOT_PATH="${WORKSPACE_ROOT:-$ROOT_DEFAULT}"
+skip() {
+  VERDICT="skip"
+  printf '[tracker] SKIP: %s\n' "$1"
+  exit 0
+}
+case "$WORKSPACE_ROOT_PATH" in
+  /*) ;;
+  *)
+    skip "WORKSPACE_ROOT is not absolute"
+    ;;
+esac
+if [ ! -d "$WORKSPACE_ROOT_PATH" ]; then
+  skip "WORKSPACE_ROOT is not a directory"
+fi
+if ! cd "$WORKSPACE_ROOT_PATH"; then
+  skip "WORKSPACE_ROOT is not accessible"
+fi
 OPS_BASENAME="$(basename "{{OPS_REPO}}")"
 out=$(bd where 2>&1)
 case "$out" in
@@ -50,14 +71,22 @@ fi
 # 2026-09-14: the previous fixed string called two unwired guards "active" on a peer
 # seat while the same boot's self-check listed them as UNWIRED. Wiring is read from the
 # settings file; a shipped hook that no command references prints as NOT WIRED. Warn only.
-supp=$(wc -l < ~/.mogui/guard-suppressions.jsonl 2>/dev/null | tr -d ' ')
+SUPPRESSIONS="$STATE_ROOT/guard-suppressions.jsonl"
+supp=0
+if [ -f "$SUPPRESSIONS" ]; then
+  supp=$(wc -l "$SUPPRESSIONS" 2>/dev/null | awk '{print $1}')
+  supp=${supp:-0}
+fi
 # Count only ledger rows that name this install's policy path (basename-scoped).
 # No bare filename fallback — a shared ledger must not import other installs.
-decisions=$(grep -cF -- "$OPS_BASENAME/model-tier-policy.json" ~/.mogui/dispatch-ledger.jsonl 2>/dev/null || true)
-decisions=${decisions:-0}
+LEDGER="$STATE_ROOT/dispatch-ledger.jsonl"
+decisions=0
+if [ -f "$LEDGER" ]; then
+  decisions=$(grep -cF -- "$OPS_BASENAME/model-tier-policy.json" "$LEDGER" 2>/dev/null || true)
+fi
 HOOKS_DIR="${MOGUI_HOOKS_DIR:-$(cd "$(dirname "$0")" && pwd)}"
-# scripts/hooks -> scripts -> ops repo -> workspace root; seat settings live under root.
-SEAT_ROOT="${WORKSPACE_ROOT:-$(cd "$HOOKS_DIR/../../.." 2>/dev/null && pwd)}"
+# Seat settings live under the same root that passed the workspace-root gate.
+SEAT_ROOT="$WORKSPACE_ROOT_PATH"
 SETTINGS="${MOGUI_SETTINGS_FILE:-$SEAT_ROOT/.claude/settings.json}"
 wired_blob=$(python3 -c '
 import json,sys

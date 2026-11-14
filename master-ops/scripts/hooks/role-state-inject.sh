@@ -29,11 +29,13 @@ log_fire() {
     "$(date +%s)" "$(json_str "$event")" "$(json_str "$PWD")" "$(json_str "${MOGUI_RUNTIME_HINT:-unknown}")" "$(json_str "$session_kind")" "$(json_str "$VERDICT")" >> "$FIRE_LOG" 2>/dev/null || true
 }
 
-# Detect hook event from stdin or environment
-hook_event="UserPromptSubmit"
-if [ -z "$1" ] && [[ "$0" == *"SessionStart"* ]]; then
+# Detect hook event from the explicit host argument, with the legacy script-name
+# fallback retained for direct SessionStart invocations.
+hook_event="${1:-}"
+if [ -z "$hook_event" ] && [[ "$0" == *"SessionStart"* ]]; then
   hook_event="SessionStart"
 fi
+hook_event="${hook_event:-UserPromptSubmit}"
 
 trap 'log_fire "$hook_event"' EXIT
 

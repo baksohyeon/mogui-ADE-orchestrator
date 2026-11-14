@@ -142,8 +142,8 @@ try:
 except ValueError:
     fail("ts must be ISO-8601 parseable")
 
-if record["event"] not in ("compact", "respawn"):
-    fail("event must be compact or respawn")
+if record["event"] not in ("compact", "respawn", "recall_skipped"):
+    fail("event must be compact, respawn, or recall_skipped")
 
 if not isinstance(record.get("recall"), dict):
     fail("recall must be an object")

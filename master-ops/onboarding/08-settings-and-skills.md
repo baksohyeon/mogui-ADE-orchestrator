@@ -20,6 +20,7 @@ Wire every shipped hook and skill this template documents, without offering an o
 - SessionStart on compact: `scripts/compaction-probe.sh`
 - PreCompact: reload or export tracker memory
 - UserPromptSubmit: role-state line + `Proposal -> Approval -> Execution` (see charter §8 / §9)
+- PostToolUse (all tools) and UserPromptSubmit: `scripts/hooks/compact-rehydration-hook.sh` restores the work layer once the compact recall record is present, or after the bounded recall wait
 - UserPromptSubmit: dispatch tracker-card gap warning (`scripts/hooks/bd-gap-warn.sh`) alongside the orchestration inbox warning
 - PreToolUse: supervised-dispatch bypass warning
 - PreToolUse(Edit|Write|NotebookEdit) and PreToolUse(Bash): fail closed for
@@ -51,6 +52,29 @@ owner-managed:
   {"matcher": "Bash", "hooks": [{"type": "command", "command": "bash \"{{OPS_REPO}}/scripts/hooks/product-path-guard.sh\""}]}
 ]
 ```
+
+Register the compact rehydration hook in the existing `hooks` object. Append the
+PostToolUse entry to its event array and merge the UserPromptSubmit entry with
+the existing UserPromptSubmit array. An empty PostToolUse matcher covers every
+tool, while the UserPromptSubmit entry handles a turn that ends immediately
+after the recall append:
+
+```json
+"hooks": {
+  "PostToolUse": [
+    {"matcher": "", "hooks": [{"type": "command", "command": "bash \"{{OPS_REPO}}/scripts/hooks/compact-rehydration-hook.sh\""}]}
+  ],
+  "UserPromptSubmit": [
+    {"matcher": "", "hooks": [{"type": "command", "command": "bash \"{{OPS_REPO}}/scripts/hooks/compact-rehydration-hook.sh\""}]}
+  ]
+}
+```
+
+The optional `work_layer_extra_lines` array in the instance runtime config
+declares seat-specific lines. Entries may be strings, `{ "label": "...",
+"value": "..." }`, or `{ "label": "...", "path": "..." }` for a JSON
+array/object count; the hook keeps these lines after the ops-repository status
+count and treats unreadable entries as unavailable.
 
 Place `bashOutputMaxChars` in the master's workspace-level project file `.claude/settings.json`; the user-wide `~/.claude/settings.json` reaches every project. Tool output is the largest context cost of a long master session. Claude Code v2.1.261 or later applies this setting to successful Bash or PowerShell commands: above 6000 characters, it saves the result to a session file and sends the model a short preview plus the file path; an oversized failed command receives a head-and-tail excerpt instead. The dispatch script starts each worker with a separate per-task `--settings` file containing only worker guard hooks, so workers do not receive the master's cap.
 
@@ -92,6 +116,7 @@ When the owner asks to turn something off, explain the piece in one sentence, st
 | --- | --- | --- |
 | Role-state injection (UserPromptSubmit) | Restates the active role and Proposal→Approval→Execution every turn | Remove or comment the UserPromptSubmit hook entry in the host settings that points at the role-state inject script; re-enable by restoring it |
 | Compaction probe (SessionStart on compact) | Checks that the master still knows required facts after compaction | Remove the compact SessionStart hook that runs `scripts/compaction-probe.sh` |
+| Compact rehydration (PostToolUse and UserPromptSubmit) | Restores tracker work after the recall measurement is recorded or bounded | Remove the two hook entries for `compact-rehydration-hook.sh`; restore them to re-enable |
 | Dispatch / supervised-dispatch warning (PreToolUse) | Warns when a worker path bypasses the dispatch gate | Remove the PreToolUse warn hook for bare worker invocation |
 | Product-path guard (PreToolUse) | Blocks master writes into product repositories; optionally enables measured fail-closed Bash decisions and records decisions in the event log | Remove the two PreToolUse hook entries for `scripts/hooks/product-path-guard.sh`; restore them to re-enable |
 | Bash output cap | Limits successful Bash or PowerShell output shown inline for the master | Remove `bashOutputMaxChars` from the master's workspace `.claude/settings.json` and start a fresh session; use `.claude/settings.local.json` for a temporary project-local value |

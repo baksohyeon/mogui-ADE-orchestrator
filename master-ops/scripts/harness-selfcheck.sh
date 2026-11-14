@@ -16,7 +16,6 @@ SETTINGS_FILE="$WORKSPACE_ROOT/.claude/settings.json"
 SKILLS_DISCOVERY_PATH="$WORKSPACE_ROOT/.claude/skills"
 HOOKS_REPO_DIR="$OPS_DIR/scripts/hooks"
 TEMPLATE_CHECK="$OPS_DIR/scripts/template-check"
-
 exit_code=0
 
 # --- Orca version/install check ---

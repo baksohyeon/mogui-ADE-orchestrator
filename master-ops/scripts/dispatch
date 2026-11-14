@@ -83,6 +83,8 @@ MODEL=claude-haiku-4-5-20251001
 # 1 when the caller named the model. An explicit id is never silently replaced;
 # an unnamed one is derived for the chosen runtime from the tier policy.
 MODEL_EXPLICIT=0
+MODEL_NEEDS_MEASUREMENT=0
+MODEL_WARNING_REASON=""
 TGLOB_EXPLICIT=0
 EST=3000
 TERMINAL="" WORKTREE="" CONTRACT="" SPEC="" RUNTIME="" SAME_HOST_REASON="" CHECK_ONLY=0
@@ -1906,8 +1908,20 @@ host_model_ids() {
       command -v cursor-agent >/dev/null 2>&1 || return 1
       cursor-agent models 2>/dev/null | sed -n 's/^\([A-Za-z0-9._-][A-Za-z0-9._-]*\) - .*$/\1/p'
       ;;
+    agy)
+      command -v agy >/dev/null 2>&1 || return 1
+      agy models 2>/dev/null | sed -n 's/^\([A-Za-z0-9._-][A-Za-z0-9._-]*\)[[:space:]].*$/\1/p'
+      ;;
+    grok)
+      command -v grok >/dev/null 2>&1 || return 1
+      grok models 2>/dev/null | sed -n 's/^[[:space:]]*[-*][[:space:]]*\([A-Za-z0-9._-][A-Za-z0-9._-]*\).*/\1/p'
+      ;;
     *) return 1;;
   esac
+}
+mark_model_needs_measurement() {
+  MODEL_NEEDS_MEASUREMENT=1
+  [ -n "$MODEL_WARNING_REASON" ] || MODEL_WARNING_REASON="$1"
 }
 # When the caller did not name a model, derive one for the chosen runtime from
 # the tier policy instead of leaving the claude-shaped default in place. No new
@@ -1984,26 +1998,25 @@ runtime_accepts_vendor() {
     *) return 1 ;;
   esac
 }
-# This is the minimal runtime capability mapping needed for agy in this PR. A
+# This is the minimal runtime capability mapping needed for host model probes. A
 # complete capability table is intentionally a separate contract.
 if is_multi_vendor_host "$RUNTIME"; then
   HOST_IDS=$(host_model_ids "$RUNTIME") || {
-    echo "✗ cannot ask $RUNTIME which models it offers; refusing to guess" >&2
-    echo "  A declared model this host cannot run writes a false declared_model into the" >&2
-    echo "  ledger and makes the register probe grep for a string that never appears." >&2
-    exit 2
+    mark_model_needs_measurement "host model list unavailable for $RUNTIME"
+    HOST_IDS=""
   }
   if ! printf '%s\n' "$HOST_IDS" | grep -Fxq -- "$MODEL"; then
-    echo "✗ $RUNTIME does not offer model=$MODEL" >&2
-    echo "  This host runs several vendors' models, so the check is its own list rather" >&2
-    echo "  than a vendor prefix. Ids it offers that the tier policy also allows:" >&2
-    python3 -c "
-import json,sys
-ids=set(sys.stdin.read().split())
-tiers=json.load(open('$POLICY'))['tiers']
-ok=[m for t in ('efficient','top') for m in tiers.get(t,[]) if m in ids]
-print('   ', ', '.join(ok) if ok else '(none)')" <<<"$HOST_IDS" >&2
-    exit 2
+    mark_model_needs_measurement "$RUNTIME does not offer model=$MODEL"
+  fi
+elif [ "$RUNTIME" = agy ] || [ "$RUNTIME" = grok ]; then
+  HOST_IDS=$(host_model_ids "$RUNTIME") || {
+    mark_model_needs_measurement "host model list unavailable for $RUNTIME"
+    HOST_IDS=""
+  }
+  if [ -z "$HOST_IDS" ]; then
+    mark_model_needs_measurement "host model list unavailable for $RUNTIME"
+  elif ! printf '%s\n' "$HOST_IDS" | grep -Fxq -- "$MODEL"; then
+    mark_model_needs_measurement "$RUNTIME does not offer model=$MODEL"
   fi
 elif [ "$MODEL_VENDOR" != unknown ] && ! runtime_accepts_vendor "$RUNTIME" "$MODEL_VENDOR"; then
   echo "✗ model/runtime mismatch · model=$MODEL (vendor $MODEL_VENDOR) runtime=$RUNTIME" >&2
@@ -2033,6 +2046,12 @@ fi
 # card tells the operator to dry-run first, so following the procedure was what
 # exhausted the cap.
 TIER=$(tier_for_model "$MODEL" 2>/dev/null || echo unknown)
+if [ "$TIER" = unknown ]; then
+  mark_model_needs_measurement "model is absent from the tier policy"
+fi
+if [ "$MODEL_NEEDS_MEASUREMENT" = 1 ]; then
+  echo "WARNING: unknown model · model=$MODEL · reason=$MODEL_WARNING_REASON · dispatch proceeds; ledger mark: model=needs measurement"
+fi
 # Top tier asks the owner, once, per dispatch.
 #
 # This replaced a counting cap on 2026-08-05 by owner directive. The cap needed a
@@ -2051,6 +2070,7 @@ fi
 GATE_ARGS=(--ledger "$LEDGER" check --runtime "$RUNTIME" --model "$MODEL" \
       --tier-policy "$POLICY" --contract "$CONTRACT" --agents 1 \
       --est-chars "$EST" --completion-channel orchestration)
+[ "$MODEL_NEEDS_MEASUREMENT" = 1 ] && GATE_ARGS+=(--model-needs-measurement)
 CHK=$("$GATE" "${GATE_ARGS[@]}" --no-record 2>/dev/null)
 ALLOW=$(echo "$CHK" | jqf "d['allow']")
 SHA=$(echo "$CHK" | jqf "d.get('contract_sha') or ''")
@@ -2179,6 +2199,12 @@ fi
 SPEC="$SPEC
 
 Tracker card: ${CARD:-none}"
+if [ "$MODEL_NEEDS_MEASUREMENT" = 1 ]; then
+  SPEC="$SPEC
+
+Model measurement required: attach to worker_done the path of your own session record and the raw line from it that names the model (codex rollout model, claude transcript message.model, agy brain transcript, or grok session record)."
+  echo "📎 model measurement · worker_done must include the session record path and raw model line"
+fi
 
 # Snapshot this dispatch's codex rollout candidates right before the
 # worker's pane is created or reused, so new_rollout_since (step 5, below)

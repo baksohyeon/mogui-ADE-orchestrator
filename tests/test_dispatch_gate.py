@@ -419,7 +419,7 @@ def test_noncanonical_requested_model_is_invalid_request(tmp_path: Path) -> None
     assert not (tmp_path / "dispatch-tickets").exists()
 
 
-def test_unknown_model_follows_policy_setting(tmp_path: Path) -> None:
+def test_unknown_model_is_warned_even_by_legacy_deny_setting(tmp_path: Path) -> None:
     deny_dir = tmp_path / "deny"
     deny_dir.mkdir()
     deny_contract = _contract(deny_dir, "unknown model denied")
@@ -456,8 +456,10 @@ def test_unknown_model_follows_policy_setting(tmp_path: Path) -> None:
         )
     )
 
-    assert deny_decision.allow is False
-    assert deny_decision.reason == ReasonCode.TIER_POLICY
+    assert deny_decision.allow is True
+    assert deny_decision.reason == ReasonCode.OK
+    assert deny_decision.warnings[0] == ReasonCode.TIER_POLICY
+    assert _ledger_entries(deny_dir)[-1]["model_status"] == "needs measurement"
     assert warn_decision.allow is True
     assert warn_decision.warnings == (
         ReasonCode.TIER_POLICY,
@@ -2559,6 +2561,50 @@ def test_cli_report_rolls_up_models_denials_and_overrides(
     assert (
         'gpt-5.6-sol: reason="owner approved benchmark" count=1' in output
     )
+    assert "Model measurement:" in output
+    assert "  unmeasured: 0" in output
+    assert "  mismatch: 0" in output
+
+
+def test_cli_report_counts_unmeasured_and_mismatched_models(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_measurement_report_test")
+    ledger = tmp_path / "measurement-report-ledger.jsonl"
+    rows = (
+        {
+            "ts": 1_785_000_000,
+            "decision": "ALLOW",
+            "reason": "OK",
+            "job_id": "job-unmeasured",
+            "model": "future-model",
+            "model_status": "needs measurement",
+        },
+        {
+            "ts": 1_785_000_001,
+            "decision": "ALLOW",
+            "reason": "OK",
+            "job_id": "job-mismatch",
+            "model": "future-model",
+            "model_mismatch": True,
+        },
+        {
+            "ts": 1_785_000_002,
+            "decision": "ALLOW",
+            "reason": "OK",
+            "model": "future-model",
+            "model_status": "needs measurement",
+        },
+    )
+    with ledger.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row) + "\n")
+
+    assert script["main"](["--ledger", str(ledger), "report"]) == 0
+    output = capsys.readouterr().out
+    assert "  unmeasured: 1" in output
+    assert "  mismatch: 1" in output
 
 
 def test_cli_report_shows_every_policy_a_day_was_judged_against(
@@ -3232,8 +3278,10 @@ def test_v2_override_passes_the_cap_and_still_consumes_it(tmp_path: Path) -> Non
     assert "used=2" in blocked.message
 
 
-def test_v2_unknown_model_is_capped_not_denied(tmp_path: Path) -> None:
-    """A model the policy has never heard of is usable once, and never silently."""
+def test_v2_unknown_model_ignores_any_legacy_cap_and_stays_dispatchable(
+    tmp_path: Path,
+) -> None:
+    """A model the policy has never heard of never blocks the dispatch."""
 
     policy = _tier_policy_v2(tmp_path)
     gate = _gate(tmp_path, now=1_000, tier_policy_path=policy)
@@ -3253,19 +3301,21 @@ def test_v2_unknown_model_is_capped_not_denied(tmp_path: Path) -> None:
     assert ReasonCode.TIER_POLICY not in allowed.warnings
     entry = _ledger_entries(tmp_path)[-1]
     assert entry["tier"] == "unknown"
+    assert entry["model_status"] == "needs measurement"
     assert entry["warnings"] == ["TIER_UNKNOWN_MODEL", "CONTRACT_FRONT_MATTER_MISSING"]
 
-    denied = gate.check(
-        DispatchRequest(
-            runtime="codex",
-            model="gpt-6-released-yesterday",
-            contract_path=_contract(tmp_path, "unknown model twice"),
-            est_input_chars=1_000,
-            n_agents=1,
+    for index in range(3):
+        repeated = gate.check(
+            DispatchRequest(
+                runtime="codex",
+                model="gpt-6-released-yesterday",
+                contract_path=_contract(tmp_path, f"unknown model repeat {index}"),
+                est_input_chars=1_000,
+                n_agents=1,
+            )
         )
-    )
-    assert denied.allow is False
-    assert denied.reason == ReasonCode.TIER_FANOUT_CAP
+        assert repeated.allow is True
+        assert ReasonCode.TIER_UNKNOWN_MODEL in repeated.warnings
 
 
 def test_v2_uncapped_tier_allows_a_large_fanout(tmp_path: Path) -> None:
@@ -3532,7 +3582,9 @@ def test_template_policy_resolves_claude_sonnet_5_as_efficient() -> None:
     assert policy.tier_of("claude-sonnet-5") == "efficient"
     assert policy.tier_of("claude-opus-5") == "top"
     assert policy.tier_of("claude-haiku-4-5") == "efficient"
-    assert policy.tier_of("grok-4.5-fast") == "efficient"
+    assert policy.tier_of("grok-4.6") == "top"
+    assert policy.tier_of("grok-4.5") == "efficient"
+    assert policy.tier_of("grok-4.5-fast") == "unknown"
     assert policy.tier_of("never-listed-anywhere") == "unknown"
     assert policy.cap_for("top") is None
     assert policy.cap_for("unknown") is None
@@ -3684,6 +3736,112 @@ def test_register_under_a_v1_policy_warns_but_cannot_rank(tmp_path: Path) -> Non
 
     assert decision.allow is True
     assert ReasonCode.MODEL_MISMATCH in decision.warnings
+
+
+def _marked_registration(tmp_path: Path):
+    policy = _tier_policy_v2(tmp_path, caps={})
+    gate = _gate(tmp_path, now=1_000, tier_policy_path=policy)
+    contract = _contract(tmp_path, "marked model dispatch")
+    checked = gate.check(
+        DispatchRequest(
+            runtime="codex",
+            model="future-model",
+            contract_path=contract,
+            est_input_chars=1_000,
+            n_agents=1,
+        )
+    )
+    assert checked.allow is True
+    registered = gate.register_job(
+        "job-marked",
+        lambda job_id: job_id == "job-marked",
+        declared_model="future-model",
+        measured_model="future-model",
+    )
+    assert registered.allow is True
+    assert _ledger_entries(tmp_path)[-1]["model_status"] == "needs measurement"
+    return gate
+
+
+def test_measure_model_requires_the_quoted_line_to_be_in_the_record(
+    tmp_path: Path,
+) -> None:
+    gate = _marked_registration(tmp_path)
+    record = tmp_path / "session.jsonl"
+    present = json.dumps({"type": "response_item", "payload": {"model": "future-model"}})
+    record.write_text(present + "\n", encoding="utf-8")
+
+    measured = gate.measure_model("job-marked", record, present)
+
+    assert measured.allow is True
+    entry = _ledger_entries(tmp_path)[-1]
+    assert entry["model_measured"] == "future-model"
+    assert entry["model_verified"] is True
+    assert "model_status" not in entry
+
+
+def test_measure_model_leaves_mark_when_the_line_is_absent(tmp_path: Path) -> None:
+    gate = _marked_registration(tmp_path)
+    record = tmp_path / "session.jsonl"
+    actual = json.dumps({"message": {"model": "future-model"}})
+    record.write_text(actual + "\n", encoding="utf-8")
+
+    measured = gate.measure_model(
+        "job-marked", record, json.dumps({"message": {"model": "other-model"}})
+    )
+
+    assert measured.allow is False
+    assert measured.reason == ReasonCode.MODEL_EVIDENCE_MISSING
+    entry = _ledger_entries(tmp_path)[-1]
+    assert entry["model_status"] == "needs measurement"
+    assert entry["model_measured"] is None
+
+
+def test_measure_model_records_a_declared_measured_mismatch(tmp_path: Path) -> None:
+    gate = _marked_registration(tmp_path)
+    record = tmp_path / "session.jsonl"
+    present = json.dumps({"message": {"model": "different-model"}})
+    record.write_text(present + "\n", encoding="utf-8")
+
+    measured = gate.measure_model("job-marked", record, present)
+
+    assert measured.allow is True
+    assert measured.warnings == (ReasonCode.MODEL_MISMATCH,)
+    entry = _ledger_entries(tmp_path)[-1]
+    assert entry["model_measured"] == "different-model"
+    assert entry["model_verified"] is False
+    assert entry["model_mismatch"] is True
+    assert "model_status" not in entry
+
+
+def test_cli_measure_model_verifies_the_session_record_line(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    gate = _marked_registration(tmp_path)
+    record = tmp_path / "session.jsonl"
+    present = json.dumps({"model": "future-model"})
+    record.write_text(present + "\n", encoding="utf-8")
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_measure_model_test")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+    assert script["main"](
+        [
+            "--ledger",
+            str(gate.config.ledger_path),
+            "measure-model",
+            "--dispatch-id",
+            "job-marked",
+            "--session-record",
+            str(record),
+            "--model-line",
+            present,
+        ]
+    ) == 0
+    output = capsys.readouterr().out
+    assert '"model_status":"measured"' in output
+    assert "model_status" not in _ledger_entries(tmp_path)[-1]
 
 
 @skip_windows_exec_surface

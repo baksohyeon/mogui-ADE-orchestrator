@@ -44,6 +44,7 @@ INSTANCE_TIER_POLICY_RELATIVE_PATH = Path("config") / "model-tier-policy.json"
 # dispatches, so the cap counts agents inside a window rather than at once.
 DEFAULT_TIER_WINDOW_SECONDS = 24 * 60 * 60
 UNKNOWN_TIER = "unknown"
+MODEL_NEEDS_MEASUREMENT = "needs measurement"
 DEFAULT_TICKET_TTL_SECONDS = 600
 DEFAULT_EXPIRED_TICKET_GC_GRACE_SECONDS = 24 * 60 * 60
 RUNTIME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
@@ -187,6 +188,9 @@ class ReasonCode(str, Enum):
     MODEL_MISMATCH = "MODEL_MISMATCH"
     MODEL_UNVERIFIED = "MODEL_UNVERIFIED"
     MODEL_PROBE_FAILED = "MODEL_PROBE_FAILED"
+    MODEL_EVIDENCE_MISSING = "MODEL_EVIDENCE_MISSING"
+    MODEL_EVIDENCE_INVALID = "MODEL_EVIDENCE_INVALID"
+    MODEL_NOT_PENDING = "MODEL_NOT_PENDING"
     UNKNOWN_RUNTIME = "UNKNOWN_RUNTIME"
     CONTRACT_FRONT_MATTER = "CONTRACT_FRONT_MATTER"
     CONTRACT_FRONT_MATTER_MISSING = "CONTRACT_FRONT_MATTER_MISSING"
@@ -208,6 +212,7 @@ class DispatchRequest:
     completion_channel: str | None = None
     model: str | None = None
     tier_override: str | None = None
+    model_needs_measurement: bool = False
 
 
 @dataclass(frozen=True)
@@ -222,6 +227,7 @@ class GateDecision:
     message: str = ""
     tier_override: str | None = None
     front_matter: Mapping[str, object] | None = None
+    model_status: str | None = None
 
 
 @dataclass(frozen=True)
@@ -384,6 +390,9 @@ class DispatchGate:
             return decision
 
         tier_warning: ReasonCode | None = None
+        model_status = (
+            MODEL_NEEDS_MEASUREMENT if request.model_needs_measurement else None
+        )
         tier_override: str | None = None
         model = request.model.strip() if request.model is not None else ""
         # Casefolded: a denied tier spelled in another case is the same tier.
@@ -393,7 +402,7 @@ class DispatchGate:
             tier = tier_policy.tier_of(model_key)
             self._tier = tier
             cap = tier_policy.cap_for(tier)
-            if cap is not None:
+            if cap is not None and tier != UNKNOWN_TIER:
                 used = self._tier_window_agents(tier, tier_policy)
                 if used + request.n_agents > cap:
                     if request.tier_override is None:
@@ -417,12 +426,14 @@ class DispatchGate:
             # warning surfaces it in the rollup.
             if tier == UNKNOWN_TIER:
                 tier_warning = ReasonCode.TIER_UNKNOWN_MODEL
+                model_status = MODEL_NEEDS_MEASUREMENT
 
         elif model_key not in tier_policy.worker_allowed:
-            policy_denies = (
-                model_key in tier_policy.worker_denied_tiers
-                or tier_policy.unknown_model == "deny"
-            )
+            # An id absent from the policy is an observation gap. The legacy
+            # v1 `unknown_model=deny` switch predates the current rule that a
+            # newer id must remain dispatchable, so only an explicitly named
+            # denied id can still refuse here.
+            policy_denies = model_key in tier_policy.worker_denied_tiers
             if policy_denies:
                 if request.tier_override is None:
                     decision = GateDecision(
@@ -435,6 +446,7 @@ class DispatchGate:
                 tier_override = request.tier_override.strip()
             else:
                 tier_warning = ReasonCode.TIER_POLICY
+                model_status = MODEL_NEEDS_MEASUREMENT
 
         try:
             contract_content = _contract_content(request.contract_path)
@@ -552,6 +564,7 @@ class DispatchGate:
             cost_proxy=cost_proxy,
             tier_override=tier_override,
             front_matter=front_matter_result,
+            model_status=model_status,
         )
         append_decision(decision)
         if record:
@@ -620,6 +633,7 @@ class DispatchGate:
             pending = candidate.pending
             selected_ticket = candidate.selected_ticket
             completion_channel = _string_or_none(pending.get("completion_channel"))
+            pending_model_status = _string_or_none(pending.get("model_status"))
 
             if (
                 expected_completion_channel is not None
@@ -653,6 +667,7 @@ class DispatchGate:
                     if contract_sha is not None and selected_ticket is None
                     else ""
                 ),
+                model_status=pending_model_status,
             )
             entry: dict[str, object] = {
                 "ts": self._clock(),
@@ -687,10 +702,20 @@ class DispatchGate:
             # Say what was verified and how, so a later reader can tell an
             # unverified registration from a verified one instead of assuming.
             entry["model_declared"] = declared_model
-            entry["model_measured"] = measured_model
-            entry["model_verified"] = bool(
-                declared_model and measured_model and not model_probe_failed
-            )
+            # A model mark comes from a dispatch whose declaration was not
+            # independently grounded in the host's policy or offered list.
+            # The register-time probe is useful context, but it is not the
+            # worker_done evidence pair that is allowed to clear the mark.
+            if pending_model_status == MODEL_NEEDS_MEASUREMENT:
+                entry["model_measured"] = None
+                entry["model_verified"] = False
+            else:
+                entry["model_measured"] = measured_model
+                entry["model_verified"] = bool(
+                    declared_model and measured_model and not model_probe_failed
+                )
+            if pending_model_status is not None:
+                entry["model_status"] = pending_model_status
             if model_warning is not None:
                 entry["warnings"] = [
                     *entry.get("warnings", []),
@@ -707,6 +732,7 @@ class DispatchGate:
                 cost_proxy=decision.cost_proxy,
                 message=decision.message,
                 tier_override=decision.tier_override,
+                model_status=decision.model_status,
             )
         return decision
 
@@ -835,6 +861,112 @@ class DispatchGate:
 
         return tuple(self._read_entries())
 
+    def measure_model(
+        self,
+        dispatch_id: str,
+        session_record: str | Path,
+        evidence_line: str,
+    ) -> GateDecision:
+        """Verify a worker-reported session line and clear its model mark.
+
+        The worker's path and line are pointers supplied by the worker. They
+        are claims until this method opens the record, finds the exact line,
+        and extracts a model id from that line. A missing or malformed line
+        leaves ``model_status=needs measurement`` in place.
+        """
+
+        if not dispatch_id.strip() or not evidence_line.strip():
+            return GateDecision(False, ReasonCode.INVALID_REQUEST)
+        record_path = Path(session_record).expanduser()
+        try:
+            record_text = record_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            return GateDecision(
+                False,
+                ReasonCode.MODEL_EVIDENCE_MISSING,
+                message=f"session_record={record_path}",
+            )
+
+        normalized_line = evidence_line.rstrip("\r\n")
+        if not any(line == normalized_line for line in record_text.splitlines()):
+            return GateDecision(
+                False,
+                ReasonCode.MODEL_EVIDENCE_MISSING,
+                message="quoted model line is absent from session record",
+            )
+        try:
+            evidence = json.loads(normalized_line)
+        except json.JSONDecodeError:
+            return GateDecision(
+                False,
+                ReasonCode.MODEL_EVIDENCE_INVALID,
+                message="quoted model line is not JSON",
+            )
+        measured_model = _model_from_evidence(evidence)
+        if measured_model is None:
+            return GateDecision(
+                False,
+                ReasonCode.MODEL_EVIDENCE_INVALID,
+                message="quoted model line has no model field",
+            )
+
+        with _ticket_lock(Path(self.config.ticket_dir)):
+            entries = list(self._read_entries())
+            target_index: int | None = None
+            for index, entry in enumerate(entries):
+                if (
+                    isinstance(entry, Mapping)
+                    and entry.get("job_id") == dispatch_id
+                    and entry.get("decision") == "ALLOW"
+                ):
+                    target_index = index
+            if target_index is None:
+                return GateDecision(
+                    False,
+                    ReasonCode.NO_MATCHING_TICKET,
+                    message=f"dispatch_id={dispatch_id}",
+                )
+            target = dict(entries[target_index])
+            if target.get("model_status") != MODEL_NEEDS_MEASUREMENT:
+                return GateDecision(
+                    False,
+                    ReasonCode.MODEL_NOT_PENDING,
+                    message=f"dispatch_id={dispatch_id}",
+                )
+
+            declared_model = _string_or_none(target.get("model_declared"))
+            if declared_model is None:
+                declared_model = _string_or_none(target.get("model"))
+            matches = (
+                declared_model is not None
+                and measured_model.casefold() == declared_model.casefold()
+            )
+            target["model_measured"] = measured_model
+            target["model_record"] = str(record_path)
+            target["model_evidence_line"] = normalized_line
+            target.pop("model_status", None)
+            target["model_verified"] = matches
+            if matches:
+                target.pop("model_mismatch", None)
+            else:
+                target["model_mismatch"] = True
+                warnings = target.get("warnings")
+                warning_values = list(warnings) if isinstance(warnings, list) else []
+                if ReasonCode.MODEL_MISMATCH.value not in warning_values:
+                    warning_values.append(ReasonCode.MODEL_MISMATCH.value)
+                target["warnings"] = warning_values
+            entries[target_index] = target
+            _replace_ledger_entries(Path(self.config.ledger_path), entries)
+
+        warnings = (ReasonCode.MODEL_MISMATCH,) if not matches else ()
+        return GateDecision(
+            True,
+            ReasonCode.OK,
+            warnings=warnings,
+            message=("model mismatch" if not matches else "model measured"),
+            model_status=("mismatch" if not matches else "measured"),
+        )
+
     def _model_verification(
         self,
         declared_model: str | None,
@@ -872,6 +1004,8 @@ class DispatchGate:
 
         declared_tier = policy.tier_of(declared_model.strip().casefold())
         measured_tier = policy.tier_of(measured_model.strip().casefold())
+        if declared_tier == UNKNOWN_TIER:
+            return ReasonCode.MODEL_MISMATCH, None
         if policy.strictness_of(measured_tier) < policy.strictness_of(declared_tier):
             return None, (
                 f"declared={declared_model} tier={declared_tier} "
@@ -939,6 +1073,11 @@ class DispatchGate:
             "completion_channel": request.completion_channel,
             "model": request.model,
         }
+        model_status = decision.model_status
+        if model_status is None and request.model_needs_measurement:
+            model_status = MODEL_NEEDS_MEASUREMENT
+        if model_status is not None:
+            entry["model_status"] = model_status
         if decision.warnings:
             entry["warnings"] = [warning.value for warning in decision.warnings]
         if decision.tier_override is not None:
@@ -1545,6 +1684,48 @@ def _string_or_none(value: object) -> str | None:
     if isinstance(value, str):
         return value
     return None
+
+
+def _model_from_evidence(value: object) -> str | None:
+    """Extract a model id from one raw JSONL evidence line."""
+
+    if isinstance(value, Mapping):
+        model = value.get("model")
+        if isinstance(model, str) and model.strip():
+            return model.strip()
+        for nested_key in ("message", "payload", "item", "response"):
+            nested_model = _model_from_evidence(value.get(nested_key))
+            if nested_model is not None:
+                return nested_model
+    elif isinstance(value, list):
+        for item in value:
+            nested_model = _model_from_evidence(item)
+            if nested_model is not None:
+                return nested_model
+    return None
+
+
+def _replace_ledger_entries(
+    ledger_path: Path,
+    entries: Sequence[Mapping[str, object]],
+) -> None:
+    """Atomically rewrite the ledger after a verified model measurement."""
+
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = ledger_path.with_name(
+        f".{ledger_path.name}.{os.getpid()}.measurement.tmp"
+    )
+    try:
+        with temporary_path.open("w", encoding="utf-8") as ledger:
+            for entry in entries:
+                ledger.write(json.dumps(entry, sort_keys=True, separators=(",", ":")))
+                ledger.write("\n")
+        os.replace(temporary_path, ledger_path)
+    finally:
+        try:
+            temporary_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def _contract_lint_warnings(

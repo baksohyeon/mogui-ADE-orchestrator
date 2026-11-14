@@ -44,17 +44,19 @@ echo "dispatch agy capability regression test passed"
 cursor_multivendor_test() (
   set +e
   set -u
-  local dispatch="$1" work model_vendor_fn multivendor_fns accepts_fn if_block
+  local dispatch="$1" work model_vendor_fn multivendor_fns accepts_fn mark_fn if_block
   local script_file out status mutant_fns
 
   model_vendor_fn=$(awk '$0=="model_vendor() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   multivendor_fns=$(awk '$0=="MULTI_VENDOR_HOSTS=\"cursor\""{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   accepts_fn=$(awk '$0=="runtime_accepts_vendor() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  mark_fn=$(awk '$0=="mark_model_needs_measurement() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   if_block=$(awk '$0=="if is_multi_vendor_host \"$RUNTIME\"; then"{f=1} f{print} f&&$0=="fi"{exit}' "$dispatch")
 
   [ -n "$model_vendor_fn" ] || { echo "FAIL: could not extract model_vendor" >&2; return 1; }
   [ -n "$multivendor_fns" ] || { echo "FAIL: could not extract MULTI_VENDOR_HOSTS/is_multi_vendor_host/host_model_ids" >&2; return 1; }
   [ -n "$accepts_fn" ] || { echo "FAIL: could not extract runtime_accepts_vendor" >&2; return 1; }
+  [ -n "$mark_fn" ] || { echo "FAIL: could not extract mark_model_needs_measurement" >&2; return 1; }
   [ -n "$if_block" ] || { echo "FAIL: could not extract the multi-vendor mismatch-check branch" >&2; return 1; }
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-cursor-test.$$"
@@ -73,12 +75,16 @@ BIN
       echo 'set -u'
       printf '%s\n' "$fns"
       printf '%s\n' "$accepts_fn"
+      printf '%s\n' "$mark_fn"
       echo 'RUNTIME=cursor'
       echo 'MODEL=gpt-5.3-codex'
       echo 'POLICY=/dev/null'
+      echo 'MODEL_NEEDS_MEASUREMENT=0'
+      echo 'MODEL_WARNING_REASON=""'
       printf '%s\n' "$model_vendor_fn"
       echo 'MODEL_VENDOR=$(model_vendor "$MODEL")'
       printf '%s\n' "$branch"
+      echo 'echo MEASUREMENT=$MODEL_NEEDS_MEASUREMENT reason=$MODEL_WARNING_REASON'
       echo 'echo ACCEPTED'
     } > "$outfile"
   }
@@ -94,6 +100,49 @@ BIN
     return 1
   fi
   echo "ok   — cursor accepts a model present in cursor-agent models output"
+
+  # An unavailable or stale host list is an observation gap. The dispatch
+  # remains runnable and carries a measurement mark for the session record.
+  cat > "$work/cursor-agent" <<'BIN'
+#!/bin/bash
+[ "$1" = models ] || exit 1
+printf 'claude-opus-5-thinking-high - Anthropic\n'
+BIN
+  chmod +x "$work/cursor-agent"
+  write_script "$script_file" "$multivendor_fns" "$if_block"
+  out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^MEASUREMENT=1 reason=cursor does not offer model=gpt-5.3-codex$' \
+      || ! printf '%s\n' "$out" | grep -q '^ACCEPTED$'; then
+    echo "FAIL: cursor model-list mismatch should warn and remain dispatchable" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   — cursor model-list mismatch proceeds with a measurement mark"
+
+  # Failability: restoring the former hard refusal must fail this case.
+  local refusal_mutant
+  refusal_mutant=${if_block/'mark_model_needs_measurement "$RUNTIME does not offer model=$MODEL"'/'exit 2'}
+  if [ "$refusal_mutant" = "$if_block" ]; then
+    echo "FAIL: former cursor mismatch refusal mutant did not change the source" >&2
+    return 1
+  fi
+  write_script "$script_file" "$multivendor_fns" "$refusal_mutant"
+  out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ]; then
+    echo "FAIL: failability — restoring the former cursor mismatch refusal should fail" >&2
+    return 1
+  fi
+  echo "ok   — failability: restoring the former cursor mismatch refusal fails"
+
+  # Restore an offered list for the existing mutant below.
+  cat > "$work/cursor-agent" <<'BIN'
+#!/bin/bash
+[ "$1" = models ] || exit 1
+printf 'claude-opus-5-thinking-high - Anthropic\ngpt-5.3-codex - OpenAI\n'
+BIN
+  chmod +x "$work/cursor-agent"
 
   # Failability: dropping cursor from MULTI_VENDOR_HOSTS falls back to the
   # single-vendor check, which rejects a model cursor legitimately offers.
@@ -126,11 +175,12 @@ cursor_multivendor_test "$dispatch" || exit 1
 checkonly_ledger_test() (
   set +e
   set -u
-  local dispatch="$1" work jqf_fn tier_fn block
+  local dispatch="$1" work jqf_fn tier_fn mark_fn block
   local gate ledger policy contract script_file status before after out mutant_block
 
   jqf_fn=$(awk '$0=="jqf() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   tier_fn=$(awk '$0=="tier_for_model() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  mark_fn=$(awk '$0=="mark_model_needs_measurement() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   block=$(awk '
     $0=="TIER=$(tier_for_model \"$MODEL\" 2>/dev/null || echo unknown)"{f=1}
     f{print}
@@ -140,6 +190,7 @@ checkonly_ledger_test() (
 
   [ -n "$jqf_fn" ] || { echo "FAIL: could not extract jqf" >&2; return 1; }
   [ -n "$tier_fn" ] || { echo "FAIL: could not extract tier_for_model" >&2; return 1; }
+  [ -n "$mark_fn" ] || { echo "FAIL: could not extract mark_model_needs_measurement" >&2; return 1; }
   [ -n "$block" ] || { echo "FAIL: could not extract the check-only gate block" >&2; return 1; }
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-checkonly-test.$$"
@@ -172,6 +223,7 @@ BIN
       echo 'set -u'
       printf '%s\n' "$jqf_fn"
       printf '%s\n' "$tier_fn"
+      printf '%s\n' "$mark_fn"
       printf 'GATE=%s\n' "$gate"
       printf 'LEDGER=%s\n' "$ledger"
       printf 'POLICY=%s\n' "$policy"
@@ -180,6 +232,8 @@ BIN
       echo 'MODEL=claude-haiku-4-5-20251001'
       echo 'EST=3000'
       echo 'TOP_APPROVED=""'
+      echo 'MODEL_NEEDS_MEASUREMENT=0'
+      echo 'MODEL_WARNING_REASON=""'
       echo 'CHECK_ONLY=1'
       echo 'COLLISION_CHECK=/bin/true'
       printf '%s\n' "$body"

@@ -17,7 +17,7 @@
       "claude-fable-5-1",
       "claude-fable-5",
       "gpt-5.5-pro",
-      "grok-4-heavy"
+      "grok-4.6"
     ],
     "efficient": [
       "gpt-5.6-luna",
@@ -28,8 +28,7 @@
       "claude-haiku-4-5-20251001",
       "gemini-3.6-flash",
       "claude-sonnet-5",
-      "gpt-5.5",
-      "grok-4.5-fast"
+      "gpt-5.5"
     ]
   },
   "fanout_caps": {},

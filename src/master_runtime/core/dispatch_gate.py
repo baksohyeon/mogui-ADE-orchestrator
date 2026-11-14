@@ -749,7 +749,9 @@ class DispatchGate:
         if runtime is not None and runtime_filter is None:
             return None
 
-        with _ticket_lock(Path(self.config.ticket_dir)):
+        with _ledger_lock(Path(self.config.ledger_path)), _ticket_lock(
+            Path(self.config.ticket_dir)
+        ):
             candidate, denial = self._registration_candidate(
                 contract_sha,
                 runtime_filter,
@@ -952,6 +954,17 @@ class DispatchGate:
             target["model_verified"] = matches
             if matches:
                 target.pop("model_mismatch", None)
+                warnings = target.get("warnings")
+                if isinstance(warnings, list):
+                    warning_values = [
+                        warning
+                        for warning in warnings
+                        if warning != ReasonCode.MODEL_MISMATCH.value
+                    ]
+                    if warning_values:
+                        target["warnings"] = warning_values
+                    else:
+                        target.pop("warnings", None)
             else:
                 target["model_mismatch"] = True
                 warnings = target.get("warnings")
@@ -1118,7 +1131,10 @@ class DispatchGate:
             self._append_entry(entry)
 
     def append_ledger_entry(self, entry: Mapping[str, object]) -> None:
-        """Append an externally prepared ledger entry under the gate lock."""
+        """Append an externally prepared denial entry under the gate lock."""
+
+        if entry.get("decision") != "DENY":
+            raise ValueError("append_ledger_entry accepts DENY entries only")
 
         with _ledger_lock(Path(self.config.ledger_path)):
             self._append_entry(entry)
@@ -1732,6 +1748,8 @@ def _replace_ledger_entries(
             for entry in entries:
                 ledger.write(json.dumps(entry, sort_keys=True, separators=(",", ":")))
                 ledger.write("\n")
+            ledger.flush()
+            os.fsync(ledger.fileno())
         os.replace(temporary_path, ledger_path)
     finally:
         try:
@@ -1843,7 +1861,7 @@ def _ledger_lock(ledger_path: Path) -> Iterator[None]:
     """Serialize ledger updates without creating the ticket directory."""
 
     ledger_path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = ledger_path.parent / ".dispatch-gate.lock"
+    lock_path = ledger_path.parent / ".dispatch-gate-ledger.lock"
     with lock_path.open("a", encoding="utf-8") as lock_file:
         if fcntl is not None:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)

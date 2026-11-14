@@ -2229,7 +2229,7 @@ def test_concurrent_repeated_checks_receive_distinct_attempts(
     assert sorted(entry["attempt"] for entry in _ledger_entries(tmp_path)) == [1, 2]
 
 
-def test_register_uses_ticket_flock(
+def test_register_uses_ledger_and_ticket_flocks(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -3754,7 +3754,7 @@ def test_register_under_a_v1_policy_warns_but_cannot_rank(tmp_path: Path) -> Non
 def test_unknown_declared_model_does_not_escalate_registration(
     tmp_path: Path,
 ) -> None:
-    policy = _tier_policy_v2(tmp_path, caps={"top": 1, "unknown": 1})
+    policy = _tier_policy_v2(tmp_path, caps={"top": 1, "unknown": 0})
     gate = _gate(tmp_path, now=1_000, tier_policy_path=policy)
     contract = _contract(tmp_path, "unknown declared registration")
     checked = gate.check(
@@ -3819,6 +3819,35 @@ def test_measure_model_requires_the_quoted_line_to_be_in_the_record(
     assert entry["model_measured"] == "future-model"
     assert entry["model_verified"] is True
     assert "model_status" not in entry
+
+
+def test_measure_model_clears_a_stale_mismatch_warning_when_model_matches(
+    tmp_path: Path,
+) -> None:
+    gate = _marked_registration(tmp_path)
+    ledger_path = Path(gate.config.ledger_path)
+    entries = _ledger_entries(tmp_path)
+    entries[-1]["warnings"] = ["MODEL_MISMATCH"]
+    ledger_path.write_text(
+        "".join(json.dumps(entry) + "\n" for entry in entries),
+        encoding="utf-8",
+    )
+    record = tmp_path / "session.jsonl"
+    present = json.dumps({"model": "future-model"})
+    record.write_text(present + "\n", encoding="utf-8")
+
+    measured = gate.measure_model("job-marked", record, present)
+
+    assert measured.allow is True
+    entry = _ledger_entries(tmp_path)[-1]
+    assert "warnings" not in entry
+
+
+def test_append_ledger_entry_rejects_allow_rows(tmp_path: Path) -> None:
+    gate = _gate(tmp_path, now=1_000)
+
+    with pytest.raises(ValueError, match="DENY entries only"):
+        gate.append_ledger_entry({"decision": "ALLOW"})
 
 
 def test_measure_model_leaves_mark_when_the_line_is_absent(tmp_path: Path) -> None:

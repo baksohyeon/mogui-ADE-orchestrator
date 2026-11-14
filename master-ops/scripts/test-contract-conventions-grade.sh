@@ -21,7 +21,7 @@ check_distribution() {
   echo "ok   - grade distribution matches tagged clauses"
 }
 
-check_distribution "$CONVENTIONS_PATH"
+check_distribution "$CONVENTIONS_PATH" || exit 1
 
 MUTANT_PATH="$TMP_DIR/contract-conventions-mutant.md"
 sed '/^## 17\./s/ \[prose\]$//' "$CONVENTIONS_PATH" > "$MUTANT_PATH"

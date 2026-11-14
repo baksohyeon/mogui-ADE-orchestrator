@@ -497,6 +497,9 @@ where the proof belongs. The gate's closure is measured, not assumed.
 
 ## 17. Judgment evidence clause: evidence for each judgment in research and design work [prose]
 
+Grade basis: no current hook, linter, or gate in this template reads research or
+design verdict tables to check their evidence fields.
+
 Measured on 2026-11-14 in the case recorded by issue #277: a research document's
 "what to adopt and what to defer" table gave one reason per decision but omitted what
 each item did, the source and retrieval date for each cell, and the relation to the
@@ -509,11 +512,27 @@ design deliverable carries:
 
 - what the item does, in one sentence;
 - the source of each cell and its retrieval date;
-- how it relates to the owner's stated work;
+- how it relates to the owner's stated work, quoted from an owner record or marked
+  "estimate" when inferred;
 - the reason for the verdict.
 
-When the only reason for a verdict is a missing field in the installation's own
-tooling, say that explicitly and name the field.
+When the only reason for a verdict is a tooling constraint, mark it "owner check
+needed". When that constraint is a missing field in the installation's own tooling,
+say so explicitly and name the field.
+
+For example:
+
+```text
+- Item: Adds signed links to a visitor's saved report so the visitor can reopen the evidence trail.
+- Sources: product brief section 2, retrieved 2026-11-14; prototype note section 4, retrieved 2026-11-14.
+- Owner relation: "The visitor should be able to trace each answer to its source." (owner record, 2026-11-13).
+- Verdict: adopt. Reason: the sources show that signed links fit the owner's stated traceability work.
+
+- Item: Adds an evidence URI to the installation tracker so each judgment can link to its source.
+- Sources: tracker schema, retrieved 2026-11-14; contract review record, retrieved 2026-11-14.
+- Owner relation: estimate: the field would support the owner's requested evidence review.
+- Verdict: owner check needed. Reason: the installation's tracker lacks the evidence_uri field, so the tooling constraint is the only basis for this verdict.
+```
 
 ## Grade distribution (2026-10-23, clause 15 added; 2026-11-09, clause 16 added; 2026-11-14, clause 17 added)
 

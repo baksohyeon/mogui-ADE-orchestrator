@@ -1,6 +1,6 @@
 # Standing rules
 
-Five named rule blocks, each a `## <name>` heading. A contract's front matter
+Six named rule blocks, each a `## <name>` heading. A contract's front matter
 may name any subset of these under `standing_rules: [...]`; `scripts/dispatch`
 reads the named blocks and appends their text to the dispatched spec, so a
 worker receives the rule as part of its own task text instead of needing a
@@ -14,6 +14,16 @@ refreshes on every template re-stamp; the overlay, in the instance-owned
 You are headless. Do not background any command, do not use any
 background-task facility, never start a watch and end your turn. Poll in the
 foreground with a bounded loop.
+
+## headless-browser-first
+
+When checking a web page, use Orca's embedded browser first with `orca tab create`,
+`orca snapshot`, `orca screenshot`, and page actions such as `orca click` or
+`orca fill`. If that does not cover the check, use a headless Chrome screenshot
+or an already-installed Playwright, and use `curl` for plain HTTP or HTML
+structure. Use Computer Use or drive the owner's browser only when the work
+requires a visible GUI these options cannot cover; ask the coordinator first and
+name why.
 
 ## ack-token
 

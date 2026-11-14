@@ -56,6 +56,7 @@ make_harness() {
         printf 'CHECK_ONLY=0 LEDGER="%s" LEDGER_LOCK="%s" DISP=disp-placement TERMINAL=term-placement WORKTREE=folder:folder-placement RUNTIME=claude\nrecord_dispatch_placement\ncat "$LEDGER"\n' "$T/placement-ledger.jsonl" "$T/placement-ledger.lock";;
       agy-placement)
         extract_function record_dispatch_placement
+        printf 'DISPATCH_AGY_SESSION_ROOT="%s/home/.gemini/antigravity-cli/brain"; export DISPATCH_AGY_SESSION_ROOT\n' "$T"
         printf 'mkdir -p "%s/home/.gemini/antigravity-cli/brain/agy-conversation/.system_generated/logs"\nHOME="%s/home"; export HOME\nprintf '"'"'%%s\\n'"'"' "$CONTRACT" > "%s/home/.gemini/antigravity-cli/brain/agy-conversation/.system_generated/logs/transcript_full.jsonl"\nAGY_BRAIN_BEFORE="" CHECK_ONLY=0 LEDGER="%s" LEDGER_LOCK="%s" DISP=disp-agy TERMINAL=term-placement WORKTREE=folder:folder-placement RUNTIME=agy\nrecord_dispatch_placement\ncat "$LEDGER"\n' "$T" "$T" "$T" "$T/agy-ledger.jsonl" "$T/agy-ledger.lock";;
       codex-rollout)
         extract_function snapshot_codex_rollouts

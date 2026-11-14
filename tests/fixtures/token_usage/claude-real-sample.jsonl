@@ -1,2 +1,3 @@
-{"type":"assistant","message":{"model":"claude-sonnet-5","usage":{"input_tokens":42,"cache_creation_input_tokens":60,"cache_read_input_tokens":100,"output_tokens":8}}}
-{"type":"assistant","message":{"model":"claude-sonnet-5","usage":{"input_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":200,"output_tokens":12}}}
+{"type":"assistant","message":{"id":"msg-1","model":"claude-sonnet-5","usage":{"input_tokens":42,"cache_creation_input_tokens":60,"cache_read_input_tokens":100,"output_tokens":8}}}
+{"type":"assistant","message":{"id":"msg-2","model":"claude-sonnet-5","usage":{"input_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":200,"output_tokens":12}}}
+{"type":"assistant","message":{"id":"msg-1","model":"claude-sonnet-5","usage":{"input_tokens":42,"cache_creation_input_tokens":60,"cache_read_input_tokens":100,"output_tokens":8}}}

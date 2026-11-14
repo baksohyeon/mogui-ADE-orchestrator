@@ -316,6 +316,13 @@ def test_settle_usage_is_idempotent_and_stores_unmeasured_state(tmp_path: Path) 
             known_roots_path=tmp_path / "roots.json",
         )
     )
+    for label, value in (("negative", -1), ("bool", True), ("string", "100")):
+        invalid = gate.register_job(
+            f"bad-{label}", lambda value: value.startswith("bad-"), token_budget=value
+        )
+        assert invalid.allow is False
+        assert invalid.reason.value == "INVALID_REQUEST"
+    assert not (tmp_path / "ledger.jsonl").exists()
     assert gate.check(
         DispatchRequest(
             runtime="codex",

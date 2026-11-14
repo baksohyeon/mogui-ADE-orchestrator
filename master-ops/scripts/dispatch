@@ -134,10 +134,6 @@ if not math.isfinite(value) or not 0 <= value <= 100:
     raise SystemExit(1)
 PY
 }
-if ! validate_quota_threshold; then
-  echo "✗ invalid quota threshold: $QUOTA_THRESHOLD_PERCENT (expected a finite number from 0 to 100)" >&2
-  exit 2
-fi
 # Tracker card choice. With neither flag, the wrapper creates and claims a card
 # from the contract's H1 title when bd resolves to an active tracker.
 CARD=""
@@ -190,6 +186,11 @@ while [ $# -gt 0 ]; do
     *) usage;;
   esac
 done
+
+if [ -z "$LEDGER_EVENT" ] && ! validate_quota_threshold; then
+  echo "✗ invalid quota threshold: $QUOTA_THRESHOLD_PERCENT (expected a finite number from 0 to 100)" >&2
+  exit 2
+fi
 
 if [ "$CARD_ARG_SET" = 1 ] && [ "$NO_CARD_ARG_SET" = 1 ]; then
   echo "✗ choose one of --card or --no-card" >&2

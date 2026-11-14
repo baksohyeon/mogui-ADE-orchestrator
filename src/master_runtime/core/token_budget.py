@@ -111,11 +111,25 @@ def read_claude_transcript(path: str | Path) -> dict[str, object]:
     cached = 0
     output = 0
     seen = False
+    seen_messages: set[str] = set()
     for event in _read_jsonl(path):
         message = event.get("message")
         usage = message.get("usage") if isinstance(message, Mapping) else event.get("usage")
         if not isinstance(usage, Mapping):
             continue
+        message_id = None
+        if isinstance(message, Mapping):
+            candidate_id = message.get("id") or message.get("requestId")
+            if isinstance(candidate_id, str) and candidate_id:
+                message_id = candidate_id
+        if message_id is None:
+            candidate_id = event.get("requestId")
+            if isinstance(candidate_id, str) and candidate_id:
+                message_id = candidate_id
+        if message_id is not None:
+            if message_id in seen_messages:
+                continue
+            seen_messages.add(message_id)
         values = {
             key: _integer(usage.get(key))
             for key in (

@@ -63,7 +63,7 @@ else
   MASTER_HOST_RUNTIME=$DEFAULT_MASTER_HOST_RUNTIME
   MASTER_HOST_SOURCE=fallback
 fi
-RUNTIME_CANDIDATES="claude codex cursor grok gemini opencode"
+RUNTIME_CANDIDATES="claude codex cursor grok gemini agy opencode"
 
 usage() {
   echo "usage: dispatch --contract FILE --spec TEXT (--terminal HANDLE | --worktree SELECTOR) \\"

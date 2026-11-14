@@ -111,6 +111,15 @@ def test_check_without_model_records_denial_in_ledger(tmp_path: Path) -> None:
     assert _ledger_entries(tmp_path)[-1]["reason"] == "NO_MODEL"
 
 
+def test_model_session_roots_cover_supported_runtimes(tmp_path: Path) -> None:
+    roots = dispatch_gate._model_session_roots(
+        {dispatch_gate.MODEL_SESSION_ROOTS_ENV: str(tmp_path)}
+    )
+
+    assert set(roots) == {"codex", "claude", "cursor", "agy", "grok"}
+    assert roots["cursor"] == (tmp_path.resolve(),)
+
+
 def test_check_records_model(tmp_path: Path) -> None:
     contract = _contract(tmp_path, "model recorded")
     gate = _gate(tmp_path, now=1_000)

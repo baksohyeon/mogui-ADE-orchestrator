@@ -99,7 +99,7 @@ def _model_session_roots(
 ) -> Mapping[str, tuple[Path, ...]]:
     """Return the runtime session roots accepted as model evidence.
 
-    The wrapper's transcript and rollout globs all live below these four
+    The wrapper's transcript and rollout globs all live below these five
     runtime-owned trees. Tests can replace the complete allowlist with one
     path-list value without changing the production layout.
     """
@@ -112,7 +112,10 @@ def _model_session_roots(
             for item in override.split(os.pathsep)
             if item.strip()
         )
-        return {runtime: roots for runtime in ("codex", "claude", "agy", "grok")}
+        return {
+            runtime: roots
+            for runtime in ("codex", "claude", "cursor", "agy", "grok")
+        }
     codex_accounts = env.get("CODEX_ACCOUNTS_DIR")
     if not codex_accounts:
         codex_accounts = (
@@ -132,6 +135,7 @@ def _model_session_roots(
     return {
         "codex": codex_sessions,
         "claude": ((Path.home() / ".claude" / "projects").resolve(),),
+        "cursor": ((Path.home() / ".cursor" / "projects").resolve(),),
         "agy": ((Path.home() / ".gemini" / "antigravity-cli" / "brain").resolve(),),
         "grok": ((Path.home() / ".grok" / "sessions").resolve(),),
     }

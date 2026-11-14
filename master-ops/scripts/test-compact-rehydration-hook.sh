@@ -110,6 +110,20 @@ out="$(run_hook "$HOOK" PostToolUse no-marker)"
 [ -s "$T/hook-fire-log.jsonl" ] \
   && ok "no-marker path records a hook fire" \
   || fail "no-marker path missed its hook fire record"
+if FIRE_LOG_PATH="$T/hook-fire-log.jsonl" python3 - <<'PY'
+import json
+import os
+
+with open(os.environ["FIRE_LOG_PATH"], encoding="utf-8") as handle:
+    rows = [json.loads(line) for line in handle if line.strip()]
+assert rows[-1]["event"] == "PostToolUse", rows[-1]
+assert rows[-1]["verdict"] == "skip", rows[-1]
+PY
+then
+  ok "fire log preserves the event and skip verdict"
+else
+  fail "fire log event or skip verdict was incorrect"
+fi
 
 fast_ms="$(python3 - "$HOOK" "$STATE" "$OPS" "$CONFIG" "$TRACKS" "$DECISIONS" "$PANES" "$BIN" <<'PY'
 import json
@@ -125,6 +139,7 @@ environment = {
     "MOGUI_STATE_DIR": state,
     "MOGUI_OPS_REPO": ops,
     "MOGUI_INSTANCE_RUNTIME_CONFIG": config,
+    "MOGUI_HOOK_FIRE_LOG": os.path.join(state, "hook-fire-log.jsonl"),
     "TRACKS_FILE": tracks,
     "DECISIONS_FILE": decisions,
     "PANES_FILE": panes,
@@ -203,6 +218,9 @@ printf '%s' "$third" | grep -q 'measurement is contaminated' \
 grep -q '"event":"recall_skipped"' "$LOG" \
   && ok "skipped recall appends one ledger event" \
   || fail "skipped recall ledger event missing"
+grep -q '"verdict":"warn"' "$T/hook-fire-log.jsonl" \
+  && ok "skipped recall records a warning verdict" \
+  || fail "skipped recall warning verdict missing"
 skip_count="$(grep -c '"event":"recall_skipped"' "$LOG")"
 [ "$skip_count" -eq 1 ] \
   && ok "hook writes one recall_skipped record through the ledger writer" \

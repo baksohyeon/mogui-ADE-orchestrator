@@ -3,7 +3,9 @@
 # Every failure is silent so a context repair hook cannot block a tool call or prompt.
 set +e
 
-VERDICT="pass"
+VERDICT="skip"
+VERDICT_FILE=""
+FIRE_EVENT_FILE=""
 FIRE_LOG="${MOGUI_HOOK_FIRE_LOG:-${HOME:-$(cd ~ 2>/dev/null && pwd)}/.mogui/hook-fire-log.jsonl}"
 json_str() {
   local value="${1-}"
@@ -28,7 +30,23 @@ log_fire() {
   printf '{"ts":%d,"hook":"compact-rehydration-hook","event":"%s","cwd":"%s","runtime_hint":"%s","session_kind":"%s","verdict":"%s"}\n' \
     "$(date +%s)" "$(json_str "${1:-UserPromptSubmit}")" "$(json_str "$PWD")" "$(json_str "${MOGUI_RUNTIME_HINT:-unknown}")" "$(json_str "$session_kind")" "$(json_str "$VERDICT")" >> "$FIRE_LOG" 2>/dev/null || true
 }
-trap 'log_fire "${1:-UserPromptSubmit}"' EXIT
+fire_exit() {
+  local event="${1:-UserPromptSubmit}"
+  local recorded_verdict
+  if [ -r "$FIRE_EVENT_FILE" ]; then
+    event="$(cat "$FIRE_EVENT_FILE" 2>/dev/null)"
+  fi
+  if [ -r "$VERDICT_FILE" ]; then
+    recorded_verdict="$(cat "$VERDICT_FILE" 2>/dev/null)"
+    case "$recorded_verdict" in
+      pass|warn|skip) VERDICT="$recorded_verdict" ;;
+    esac
+  fi
+  log_fire "$event"
+  [ -z "$VERDICT_FILE" ] || rm -f "$VERDICT_FILE" 2>/dev/null || true
+  [ -z "$FIRE_EVENT_FILE" ] || rm -f "$FIRE_EVENT_FILE" 2>/dev/null || true
+}
+trap 'fire_exit "${1:-${CLAUDE_HOOK_EVENT:-UserPromptSubmit}}"' EXIT
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P)"
 if ! source "$SCRIPT_DIR/compact-rehydration-constants.inc" 2>/dev/null; then
   COMPACT_SESSION_ID_PATTERN='[A-Za-z0-9._:-]+'
@@ -47,6 +65,9 @@ pending_entries=("$PENDING_DIR"/* "$PENDING_DIR"/.[!.]* "$PENDING_DIR"/..?*)
 if [ "${#pending_entries[@]}" -eq 0 ]; then
   exit 0
 fi
+VERDICT="pass"
+VERDICT_FILE="$PENDING_DIR/.fire-verdict-$$"
+FIRE_EVENT_FILE="$PENDING_DIR/.fire-event-$$"
 
 OPS_REPO="$OPS_REPO" \
 STATE_DIR="$STATE_DIR" \
@@ -56,6 +77,8 @@ PENDING_DIR="$PENDING_DIR" \
 COMPACT_SESSION_ID_PATTERN="$COMPACT_SESSION_ID_PATTERN" \
 COMPACT_PENDING_DIR_NAME="$COMPACT_PENDING_DIR_NAME" \
 CONTEXT_LOG_WRITER="${CONTEXT_QUALITY_LOG_WRITER:-$SCRIPT_DIR/../context-quality-log.sh}" \
+VERDICT_FILE="$VERDICT_FILE" \
+FIRE_EVENT_FILE="$FIRE_EVENT_FILE" \
 python3 - "$@" 3<&0 <<'PY' 2>/dev/null || true
 from __future__ import annotations
 
@@ -84,6 +107,8 @@ SCRIPT_DIR = Path(os.environ.get("SCRIPT_DIR", "")).expanduser()
 PENDING_DIR = Path(os.environ.get("PENDING_DIR", "")).expanduser()
 CONTEXT_LOG_WRITER = Path(os.environ.get("CONTEXT_LOG_WRITER", "")).expanduser()
 SESSION_ID_PATTERN = os.environ.get("COMPACT_SESSION_ID_PATTERN", "")
+VERDICT_FILE = Path(os.environ.get("VERDICT_FILE", "")).expanduser()
+FIRE_EVENT_FILE = Path(os.environ.get("FIRE_EVENT_FILE", "")).expanduser()
 ACTIVE_TRACKER_COMMAND = ("bd", "list", "--status=in_progress", "--json", "--limit=0", "--flat")
 DECISION_TRACKER_COMMAND = ("bd", "list", "--status=open", "--type=decision", "--json", "--limit=0", "--flat")
 PANE_COMMAND = ("orca", "terminal", "list", "--json")
@@ -96,6 +121,14 @@ def display_command(command: tuple[str, ...]) -> str:
 
 def post_tool_payload(context: str) -> dict[str, Any]:
     return {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": context}}
+
+
+def write_fire_value(path: Path, value: str) -> None:
+    try:
+        if path:
+            path.write_text(value, encoding="utf-8")
+    except OSError:
+        pass
 
 
 def parse_payload() -> dict[str, Any] | None:
@@ -508,23 +541,29 @@ def main() -> None:
     session = session_name(payload)
     if session is None:
         return
+    event = event_name(payload, sys.argv[1:])
+    write_fire_value(FIRE_EVENT_FILE, event)
     path = marker_path(session)
     # Keep the no-marker path to one existence check and no output.
     if not path.is_file():
+        write_fire_value(VERDICT_FILE, "skip")
         return
     marker = read_marker(path)
     if marker is None:
+        write_fire_value(VERDICT_FILE, "skip")
         return
     compacted_at = parse_time(marker.get("compact_time"))
     if compacted_at is None or (dt.datetime.now(dt.timezone.utc) - compacted_at).total_seconds() > STALE_SECONDS:
+        write_fire_value(VERDICT_FILE, "skip")
         delete(path)
         return
-    event = event_name(payload, sys.argv[1:]).lower()
+    event = event.lower()
     recorded = recorded_recall(marker)
     skipped = False
     if not recorded:
         if event == "userpromptsubmit":
             if marker["post_tool_uses"] == 0:
+                write_fire_value(VERDICT_FILE, "warn")
                 print("[compact-rehydration] Recall check is owed; the work layer follows the recorded recall.")
                 return
             skipped = True
@@ -538,7 +577,10 @@ def main() -> None:
                 return
             skipped = True
         else:
+            write_fire_value(VERDICT_FILE, "skip")
             return
+    if skipped:
+        write_fire_value(VERDICT_FILE, "warn")
     claimed = claim(path)
     if claimed is None:
         return

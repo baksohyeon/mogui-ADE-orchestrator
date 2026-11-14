@@ -278,12 +278,13 @@ brief_model_measurement_test "$dispatch" || exit 1
 checkonly_ledger_test() (
   set +e
   set -u
-  local dispatch="$1" work jqf_fn tier_fn mark_fn block
+  local dispatch="$1" work jqf_fn tier_fn mark_fn resolve_fn block
   local gate ledger policy contract script_file status before after out mutant_block
 
   jqf_fn=$(awk '$0=="jqf() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   tier_fn=$(awk '$0=="tier_for_model() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   mark_fn=$(awk '$0=="mark_model_needs_measurement() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  resolve_fn=$(awk '$0=="resolve_token_budget() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   block=$(awk '
     $0=="TIER=$(tier_for_model \"$MODEL\" 2>/dev/null || echo unknown)"{f=1}
     f{print}
@@ -294,6 +295,7 @@ checkonly_ledger_test() (
   [ -n "$jqf_fn" ] || { echo "FAIL: could not extract jqf" >&2; return 1; }
   [ -n "$tier_fn" ] || { echo "FAIL: could not extract tier_for_model" >&2; return 1; }
   [ -n "$mark_fn" ] || { echo "FAIL: could not extract mark_model_needs_measurement" >&2; return 1; }
+  [ -n "$resolve_fn" ] || { echo "FAIL: could not extract resolve_token_budget" >&2; return 1; }
   [ -n "$block" ] || { echo "FAIL: could not extract the check-only gate block" >&2; return 1; }
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-checkonly-test.$$"
@@ -327,6 +329,7 @@ BIN
       printf '%s\n' "$jqf_fn"
       printf '%s\n' "$tier_fn"
       printf '%s\n' "$mark_fn"
+      printf '%s\n' "$resolve_fn"
       printf 'GATE=%s\n' "$gate"
       printf 'LEDGER=%s\n' "$ledger"
       printf 'POLICY=%s\n' "$policy"

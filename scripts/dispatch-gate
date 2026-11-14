@@ -34,6 +34,12 @@ from master_runtime.core.dispatch_gate import (  # noqa: E402
     normalize_tier_policy_path,
 )
 from master_runtime.core.watchdog import StallStatus, check_stall  # noqa: E402
+from master_runtime.core.token_budget import (  # noqa: E402
+    quota_status,
+    read_runtime,
+    tier_defaults,
+    unmeasured,
+)
 
 try:
     from mogui_log import emit as mogui_emit  # noqa: E402
@@ -69,6 +75,14 @@ def main(argv: list[str] | None = None) -> int:
         return _register(args)
     if args.command == "measure-model":
         return _measure_model(args)
+    if args.command == "measure-usage":
+        return _measure_usage(args)
+    if args.command == "settle":
+        return _settle(args)
+    if args.command == "quota":
+        return _quota(args)
+    if args.command == "budget":
+        return _budget(args)
     if args.command == "watch":
         return _watch(args)
     if args.command == "report":
@@ -159,6 +173,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "--card-reason",
         help="reason no tracker card id is present",
     )
+    register_parser.add_argument("--token-budget", type=int)
+    register_parser.add_argument("--tokens-basis", choices=("total", "uncached"), default="total")
+    register_parser.add_argument("--token-budget-source")
 
     measure_parser = subparsers.add_parser(
         "measure-model",
@@ -180,6 +197,33 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         help="raw JSONL line supplied in worker_done",
     )
+
+    usage_parser = subparsers.add_parser(
+        "measure-usage", help="read normalized token usage from one runtime record"
+    )
+    usage_parser.add_argument("--runtime", required=True)
+    usage_parser.add_argument("--record")
+
+    settle_parser = subparsers.add_parser(
+        "settle", help="attach measured usage to a registered dispatch"
+    )
+    settle_parser.add_argument("--dispatch-id", required=True)
+    settle_parser.add_argument("--runtime", required=True)
+    settle_parser.add_argument("--record")
+
+    quota_parser = subparsers.add_parser(
+        "quota", help="read the latest non-interactive account quota snapshot"
+    )
+    quota_parser.add_argument("--runtime", required=True)
+    quota_parser.add_argument("--root")
+    quota_parser.add_argument("--threshold", type=float, default=15.0)
+
+    budget_parser = subparsers.add_parser(
+        "budget", help="resolve a declared or measured per-tier token budget"
+    )
+    budget_parser.add_argument("--tier", required=True)
+    budget_parser.add_argument("--tier-policy", required=True)
+    budget_parser.add_argument("--front-matter")
 
     watch_parser = subparsers.add_parser("watch")
     watch_parser.add_argument("--log", required=True)
@@ -280,6 +324,9 @@ def _register(args: argparse.Namespace) -> int:
         pane=args.pane,
         card=args.card,
         card_reason=args.card_reason,
+        token_budget=args.token_budget,
+        tokens_basis=args.tokens_basis,
+        token_budget_source=args.token_budget_source,
     )
     mogui_emit(
         "info",
@@ -307,6 +354,74 @@ def _measure_model(args: argparse.Namespace) -> int:
         return 0
     _diagnose(_decision_error(decision))
     return 2
+
+
+def _measure_usage(args: argparse.Namespace) -> int:
+    if args.record:
+        usage = read_runtime(args.runtime, args.record)
+    else:
+        usage = unmeasured(args.runtime, "no record supplied")
+    print(json.dumps(usage, sort_keys=True, separators=(",", ":")))
+    return 0
+
+
+def _settle(args: argparse.Namespace) -> int:
+    usage = (
+        read_runtime(args.runtime, args.record)
+        if args.record
+        else unmeasured(args.runtime, "no record supplied")
+    )
+    decision = _gate(args).settle_usage(args.dispatch_id, usage)
+    _print_decision(decision)
+    if decision.allow:
+        return 0
+    _diagnose(_decision_error(decision))
+    return 2
+
+
+def _quota(args: argparse.Namespace) -> int:
+    status = quota_status(args.runtime, root=args.root)
+    status["threshold_percent"] = args.threshold
+    remaining = status.get("remaining_percent")
+    status["blocked"] = bool(
+        status.get("known") is True
+        and isinstance(remaining, (int, float))
+        and not isinstance(remaining, bool)
+        and remaining < args.threshold
+    )
+    print(json.dumps(status, sort_keys=True, separators=(",", ":")))
+    return 0
+
+
+def _budget(args: argparse.Namespace) -> int:
+    front_matter: object = {}
+    if args.front_matter:
+        try:
+            front_matter = json.loads(args.front_matter)
+        except json.JSONDecodeError:
+            front_matter = {}
+    budget = front_matter.get("budget") if isinstance(front_matter, dict) else None
+    if isinstance(budget, dict) and "tokens" in budget:
+        token_budget = budget.get("tokens")
+        basis = front_matter.get("tokens_basis", "total")
+        payload = {
+            "token_budget": token_budget,
+            "tokens_basis": basis,
+            "source": "declared",
+            "records": None,
+            "tier": args.tier,
+        }
+    else:
+        defaults, counts = tier_defaults(args.tier_policy)
+        payload = {
+            "token_budget": defaults.get(args.tier),
+            "tokens_basis": "total",
+            "source": "tier-p90" if args.tier in defaults else "unset:no-records",
+            "records": counts.get(args.tier, 0),
+            "tier": args.tier,
+        }
+    print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+    return 0
 
 
 def _watch(args: argparse.Namespace) -> int:

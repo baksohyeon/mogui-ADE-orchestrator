@@ -1385,24 +1385,56 @@ capture_codex_shared_git_surface() {
   snapshot=$(python3 - "$shared/config" "$shared/hooks" <<'EOF'
 import hashlib
 import json
+import os
+import stat
 import sys
 from pathlib import Path
 
 config, hooks = (Path(value) for value in sys.argv[1:])
-try:
-    config_hash = hashlib.sha256(config.read_bytes()).hexdigest()
-except FileNotFoundError:
-    config_hash = "<missing>"
-except OSError:
-    config_hash = "<unreadable>"
+MAX_SNAPSHOT_BYTES = 1024 * 1024
+
+def safe_snapshot(path):
+    try:
+        metadata = os.lstat(path)
+    except FileNotFoundError:
+        return ["<missing>"]
+    except OSError:
+        return ["<unreadable>"]
+
+    mode_bits = metadata.st_mode & 0o7777
+    if not stat.S_ISREG(metadata.st_mode):
+        return [f"<special:{stat.S_IFMT(metadata.st_mode):o}>", mode_bits]
+
+    flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError:
+        return ["<unreadable>", mode_bits]
+    try:
+        opened = os.fstat(descriptor)
+        opened_mode_bits = opened.st_mode & 0o7777
+        if not stat.S_ISREG(opened.st_mode):
+            return [f"<special:{stat.S_IFMT(opened.st_mode):o}>", opened_mode_bits]
+        if opened.st_size > MAX_SNAPSHOT_BYTES:
+            return ["<too-large>", opened_mode_bits, opened.st_size]
+        content = bytearray()
+        while len(content) <= MAX_SNAPSHOT_BYTES:
+            chunk = os.read(descriptor, min(65536, MAX_SNAPSHOT_BYTES + 1 - len(content)))
+            if not chunk:
+                return [hashlib.sha256(content).hexdigest(), opened_mode_bits]
+            content.extend(chunk)
+            if len(content) > MAX_SNAPSHOT_BYTES:
+                return ["<too-large>", opened_mode_bits, len(content)]
+    except OSError:
+        return ["<unreadable>", mode_bits]
+    finally:
+        os.close(descriptor)
+
+config_hash = json.dumps(safe_snapshot(config), separators=(",", ":"))
 try:
     hook_entries = []
     for path in sorted(hooks.iterdir(), key=lambda item: item.name):
-        try:
-            digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        except OSError:
-            digest = "<unreadable>"
-        hook_entries.append([path.name, digest])
+        hook_entries.append([path.name, safe_snapshot(path)])
     hooks_listing = json.dumps(hook_entries, separators=(",", ":"))
 except FileNotFoundError:
     hooks_listing = "<missing>"

@@ -197,12 +197,54 @@ check_shared_git_surface_warning() {
     printf '%s\n' "$vars" "$capture_fn" "$warn_fn"
     printf 'CODEX_SHARED_GIT_DIR=%q\n' "$shared"
     echo 'capture_codex_shared_git_surface "$CODEX_SHARED_GIT_DIR"'
+    echo 'chmod +x "$CODEX_SHARED_GIT_DIR/hooks/original"'
+    echo 'warn_codex_shared_git_surface_changes'
     echo 'printf "%s\\n" changed >> "$CODEX_SHARED_GIT_DIR/config"'
     echo 'printf "%s\\n" changed > "$CODEX_SHARED_GIT_DIR/hooks/original"'
     echo 'warn_codex_shared_git_surface_changes'
   } > "$work/run.sh"
   output=$(bash "$work/run.sh")
+  [ "$(printf '%s\n' "$output" | grep -c '^WARNING:')" -eq 2 ] || return 1
+  printf '%s\n' "$output" | grep -Fq 'hooks listing' || return 1
   printf '%s\n' "$output" | grep -Fq 'config hash and hooks listing' || return 1
+}
+
+check_shared_git_surface_fifo_safety() {
+  local dispatch="$1" work shared capture_fn vars
+  work="${TMPDIR:-/tmp}/mogui-dispatch-codex-git-fifo.$$"
+  mkdir -p "$work/shared/hooks"
+  trap 'rm -rf "$work"' RETURN
+  shared="$work/shared"
+  : > "$shared/config"
+  mkfifo "$shared/hooks/fifo"
+  capture_fn=$(extract_shell_function "$dispatch" "$CAPTURE_SURFACE_HEADER")
+  vars=$(grep -E '^CODEX_(SHARED_GIT_DIR|SHARED_GIT_CONFIG_HASH|SHARED_GIT_HOOKS_LISTING|SHARED_GIT_SURFACE_CAPTURED)=' "$dispatch")
+  [ -n "$capture_fn" ] || return 1
+  {
+    echo 'set -eu'
+    printf '%s\n' "$vars" "$capture_fn"
+    printf 'CODEX_SHARED_GIT_DIR=%q\n' "$shared"
+    echo 'capture_codex_shared_git_surface "$CODEX_SHARED_GIT_DIR"'
+  } > "$work/run.sh"
+  python3 - "$work/run.sh" <<'PY'
+import subprocess
+import sys
+
+process = subprocess.Popen(
+    ["bash", sys.argv[1]],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+)
+try:
+    stdout, stderr = process.communicate(timeout=2)
+except subprocess.TimeoutExpired:
+    process.kill()
+    process.communicate()
+    raise SystemExit("shared Git FIFO snapshot blocked")
+if process.returncode != 0:
+    raise SystemExit(stderr or stdout or "shared Git FIFO snapshot failed")
+PY
 }
 
 check_completion_warning_wiring() {
@@ -423,6 +465,12 @@ check_shared_git_surface_warning "$DISPATCH" || {
   exit 1
 }
 echo "✓ completed Codex dispatches warn when the shared Git config or hooks listing changes"
+
+check_shared_git_surface_fifo_safety "$DISPATCH" || {
+  echo "✗ shared Git FIFO snapshot was not bounded" >&2
+  exit 1
+}
+echo "✓ shared Git surface snapshots handle FIFO entries without blocking"
 
 check_completion_warning_wiring "$DISPATCH" || {
   echo "✗ completion path does not invoke the shared Git surface warning" >&2

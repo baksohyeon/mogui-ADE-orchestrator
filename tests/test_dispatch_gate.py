@@ -3738,6 +3738,34 @@ def test_register_under_a_v1_policy_warns_but_cannot_rank(tmp_path: Path) -> Non
     assert ReasonCode.MODEL_MISMATCH in decision.warnings
 
 
+def test_unknown_declared_model_does_not_escalate_registration(
+    tmp_path: Path,
+) -> None:
+    policy = _tier_policy_v2(tmp_path, caps={"top": 1, "unknown": 1})
+    gate = _gate(tmp_path, now=1_000, tier_policy_path=policy)
+    contract = _contract(tmp_path, "unknown declared registration")
+    checked = gate.check(
+        DispatchRequest(
+            runtime="codex",
+            model="future-model",
+            contract_path=contract,
+            est_input_chars=1_000,
+            n_agents=1,
+        )
+    )
+    assert checked.allow is True
+
+    registered = gate.register_job(
+        "job-unknown-declared",
+        lambda job_id: job_id == "job-unknown-declared",
+        declared_model="future-model",
+        measured_model="gpt-5.6-sol",
+    )
+
+    assert registered.allow is True
+    assert registered.warnings == (ReasonCode.MODEL_MISMATCH,)
+
+
 def _marked_registration(tmp_path: Path):
     policy = _tier_policy_v2(tmp_path, caps={})
     gate = _gate(tmp_path, now=1_000, tier_policy_path=policy)

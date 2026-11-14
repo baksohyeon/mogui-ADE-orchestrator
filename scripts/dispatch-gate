@@ -608,11 +608,7 @@ def _deny_unverified_orchestration(
     }
     if args.orchestration_task:
         entry["orchestration_task"] = args.orchestration_task
-    ledger_path = Path(gate.config.ledger_path)
-    ledger_path.parent.mkdir(parents=True, exist_ok=True)
-    with ledger_path.open("a", encoding="utf-8") as ledger:
-        ledger.write(json.dumps(entry, sort_keys=True, separators=(",", ":")))
-        ledger.write("\n")
+    gate.append_ledger_entry(entry)
     _print_decision(decision)
     _diagnose(_decision_error(decision))
     return 2

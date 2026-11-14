@@ -420,10 +420,10 @@ class DispatchGate:
                     tier_override = request.tier_override.strip()
             # An unlisted model resolves to the unknown tier rather than being
             # blocked outright, so a newer or cheaper model is usable before
-            # anyone edits the policy. It uses fanout_caps.unknown when set,
-            # else the same uncapped rule as any tier with no cap entry. It
-            # never passes silently: the tier lands in the ledger and the
-            # warning surfaces it in the rollup.
+            # anyone edits the policy. An unknown-tier fanout cap is ignored
+            # so this observation gap never blocks dispatch. It never passes
+            # silently: the tier lands in the ledger and the warning surfaces
+            # it in the rollup.
             if tier == UNKNOWN_TIER:
                 tier_warning = ReasonCode.TIER_UNKNOWN_MODEL
                 model_status = MODEL_NEEDS_MEASUREMENT

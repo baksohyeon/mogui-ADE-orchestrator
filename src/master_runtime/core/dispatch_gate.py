@@ -7,6 +7,7 @@ import json
 import math
 import os
 import re
+import sys
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -47,6 +48,8 @@ UNKNOWN_TIER = "unknown"
 MODEL_NEEDS_MEASUREMENT = "needs measurement"
 DEFAULT_TICKET_TTL_SECONDS = 600
 DEFAULT_EXPIRED_TICKET_GC_GRACE_SECONDS = 24 * 60 * 60
+MODEL_SESSION_ROOTS_ENV = "DISPATCH_MODEL_SESSION_ROOTS"
+MODEL_SESSION_MAX_BYTES = 5 * 1024 * 1024
 RUNTIME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 USERS_ABSOLUTE_PATH_PATTERN = re.compile(r"/Users/[^\s\"'`<>{}\[\](),;:]+")
 COMPLETION_CHANNELS = frozenset({"orchestration", "sentinel-log"})
@@ -89,6 +92,49 @@ def _default_ticket_dir() -> Path:
 
 def _default_known_roots_path() -> Path:
     return _dispatch_timeline_state_dir() / "known-roots.json"
+
+
+def _model_session_roots(
+    environ: Mapping[str, str] | None = None,
+) -> Mapping[str, tuple[Path, ...]]:
+    """Return the runtime session roots accepted as model evidence.
+
+    The wrapper's transcript and rollout globs all live below these four
+    runtime-owned trees. Tests can replace the complete allowlist with one
+    path-list value without changing the production layout.
+    """
+
+    env = environ if environ is not None else os.environ
+    override = env.get(MODEL_SESSION_ROOTS_ENV, "").strip()
+    if override:
+        roots = tuple(
+            Path(item).expanduser().resolve()
+            for item in override.split(os.pathsep)
+            if item.strip()
+        )
+        return {runtime: roots for runtime in ("codex", "claude", "agy", "grok")}
+    codex_accounts = env.get("CODEX_ACCOUNTS_DIR")
+    if not codex_accounts:
+        codex_accounts = (
+            Path.home() / "Library" / "Application Support" / "orca" / "codex-accounts"
+            if sys.platform == "darwin"
+            else Path.home() / ".local" / "share" / "orca" / "codex-accounts"
+        )
+    codex_root = Path(codex_accounts).expanduser()
+    try:
+        codex_sessions = tuple(
+            (account / "home" / "sessions").resolve()
+            for account in codex_root.iterdir()
+            if account.is_dir() and (account / "home" / "sessions").is_dir()
+        )
+    except OSError:
+        codex_sessions = ()
+    return {
+        "codex": codex_sessions,
+        "claude": ((Path.home() / ".claude" / "projects").resolve(),),
+        "agy": ((Path.home() / ".gemini" / "antigravity-cli" / "brain").resolve(),),
+        "grok": ((Path.home() / ".grok" / "sessions").resolve(),),
+    }
 
 
 def _default_tier_policy_path(
@@ -190,6 +236,10 @@ class ReasonCode(str, Enum):
     MODEL_PROBE_FAILED = "MODEL_PROBE_FAILED"
     MODEL_EVIDENCE_MISSING = "MODEL_EVIDENCE_MISSING"
     MODEL_EVIDENCE_INVALID = "MODEL_EVIDENCE_INVALID"
+    MODEL_EVIDENCE_OUTSIDE_ROOT = "MODEL_EVIDENCE_OUTSIDE_ROOT"
+    MODEL_EVIDENCE_STALE = "MODEL_EVIDENCE_STALE"
+    MODEL_EVIDENCE_TOO_LARGE = "MODEL_EVIDENCE_TOO_LARGE"
+    MODEL_EVIDENCE_UNBOUND = "MODEL_EVIDENCE_UNBOUND"
     MODEL_NOT_PENDING = "MODEL_NOT_PENDING"
     UNKNOWN_RUNTIME = "UNKNOWN_RUNTIME"
     CONTRACT_FRONT_MATTER = "CONTRACT_FRONT_MATTER"
@@ -881,39 +931,6 @@ class DispatchGate:
 
         if not dispatch_id.strip() or not evidence_line.strip():
             return GateDecision(False, ReasonCode.INVALID_REQUEST)
-        record_path = Path(session_record).expanduser()
-        try:
-            record_text = record_path.read_text(encoding="utf-8")
-        except (OSError, UnicodeError):
-            return GateDecision(
-                False,
-                ReasonCode.MODEL_EVIDENCE_MISSING,
-                message=f"session_record={record_path}",
-            )
-
-        normalized_line = evidence_line.rstrip("\r\n")
-        if not any(line == normalized_line for line in record_text.splitlines()):
-            return GateDecision(
-                False,
-                ReasonCode.MODEL_EVIDENCE_MISSING,
-                message="quoted model line is absent from session record",
-            )
-        try:
-            evidence = json.loads(normalized_line)
-        except json.JSONDecodeError:
-            return GateDecision(
-                False,
-                ReasonCode.MODEL_EVIDENCE_INVALID,
-                message="quoted model line is not JSON",
-            )
-        measured_model = _model_from_evidence(evidence)
-        if measured_model is None:
-            return GateDecision(
-                False,
-                ReasonCode.MODEL_EVIDENCE_INVALID,
-                message="quoted model line has no model field",
-            )
-
         with _ledger_lock(Path(self.config.ledger_path)), _ticket_lock(
             Path(self.config.ticket_dir)
         ):
@@ -940,6 +957,109 @@ class DispatchGate:
                     message=f"dispatch_id={dispatch_id}",
                 )
 
+            placement = _dispatch_placement(entries, dispatch_id, target)
+            record_path = Path(session_record).expanduser()
+            try:
+                record_path = record_path.resolve(strict=True)
+            except OSError:
+                return GateDecision(
+                    False,
+                    ReasonCode.MODEL_EVIDENCE_MISSING,
+                    message=f"session_record={record_path}",
+                )
+            runtime = _string_or_none(target.get("runtime"))
+            session_roots = _model_session_roots()
+            roots = session_roots.get(runtime, ()) if runtime else ()
+            if not any(_path_is_under(record_path, root) for root in roots):
+                return GateDecision(
+                    False,
+                    ReasonCode.MODEL_EVIDENCE_OUTSIDE_ROOT,
+                    message=f"session_record={record_path}",
+                )
+
+            dispatch_ts = _number_or_none(target.get("ts"))
+            if dispatch_ts is None:
+                return GateDecision(
+                    False,
+                    ReasonCode.MODEL_EVIDENCE_INVALID,
+                    message=f"dispatch_id={dispatch_id} has no timestamp",
+                )
+            try:
+                record_stat = record_path.stat()
+            except OSError:
+                return GateDecision(
+                    False,
+                    ReasonCode.MODEL_EVIDENCE_MISSING,
+                    message=f"session_record={record_path}",
+                )
+            if record_stat.st_mtime < dispatch_ts:
+                return GateDecision(
+                    False,
+                    ReasonCode.MODEL_EVIDENCE_STALE,
+                    message=f"session_record={record_path} predates dispatch",
+                )
+            if record_stat.st_size > MODEL_SESSION_MAX_BYTES:
+                return GateDecision(
+                    False,
+                    ReasonCode.MODEL_EVIDENCE_TOO_LARGE,
+                    message=(
+                        f"session_record={record_path} exceeds "
+                        f"{MODEL_SESSION_MAX_BYTES} bytes"
+                    ),
+                )
+            try:
+                record_text = record_path.read_bytes().decode("utf-8")
+            except (OSError, UnicodeError):
+                return GateDecision(
+                    False,
+                    ReasonCode.MODEL_EVIDENCE_INVALID,
+                    message=f"session_record={record_path}",
+                )
+
+            normalized_line = evidence_line.rstrip("\r\n")
+            record_lines = record_text.splitlines()
+            evidence_line_number = next(
+                (
+                    index
+                    for index, line in enumerate(record_lines, start=1)
+                    if line == normalized_line
+                ),
+                None,
+            )
+            if evidence_line_number is None:
+                return GateDecision(
+                    False,
+                    ReasonCode.MODEL_EVIDENCE_MISSING,
+                    message="quoted model line is absent from session record",
+                )
+            try:
+                evidence = json.loads(normalized_line)
+            except json.JSONDecodeError:
+                return GateDecision(
+                    False,
+                    ReasonCode.MODEL_EVIDENCE_INVALID,
+                    message="quoted model line is not JSON",
+                )
+            measured_model = _model_from_evidence(evidence)
+            if measured_model is None:
+                return GateDecision(
+                    False,
+                    ReasonCode.MODEL_EVIDENCE_INVALID,
+                    message="quoted model line has no model field",
+                )
+            if not _record_belongs_to_dispatch(
+                target,
+                placement,
+                record_path,
+                record_text,
+                session_roots,
+            ):
+                return GateDecision(
+                    False,
+                    ReasonCode.MODEL_EVIDENCE_UNBOUND,
+                    message=f"session_record={record_path} is not bound to dispatch",
+                )
+
             declared_model = _string_or_none(target.get("model_declared"))
             if declared_model is None:
                 declared_model = _string_or_none(target.get("model"))
@@ -949,7 +1069,10 @@ class DispatchGate:
             )
             target["model_measured"] = measured_model
             target["model_record"] = str(record_path)
-            target["model_evidence_line"] = normalized_line
+            target["model_evidence_line_number"] = evidence_line_number
+            target["model_evidence_sha256"] = hashlib.sha256(
+                normalized_line.encode("utf-8")
+            ).hexdigest()
             target.pop("model_status", None)
             target["model_verified"] = matches
             if matches:
@@ -1731,6 +1854,99 @@ def _model_from_evidence(value: object) -> str | None:
             if nested_model is not None:
                 return nested_model
     return None
+
+
+def _dispatch_placement(
+    entries: Sequence[Mapping[str, object]],
+    dispatch_id: str,
+    target: Mapping[str, object],
+) -> Mapping[str, object]:
+    """Join placement metadata recorded beside the dispatch row."""
+
+    placement = dict(target)
+    for entry in entries:
+        if entry.get("job_id") != dispatch_id:
+            continue
+        for key in ("worktree_path", "agent_session_id"):
+            if key not in placement and entry.get(key):
+                placement[key] = entry[key]
+    return placement
+
+
+def _record_context(record_text: str) -> tuple[set[str], set[str]]:
+    """Collect worktree and session identifiers from a runtime JSONL record."""
+
+    cwd_values: set[str] = set()
+    session_values: set[str] = set()
+
+    def visit(value: object, *, session_meta: bool = False) -> None:
+        if not isinstance(value, Mapping):
+            if isinstance(value, list):
+                for item in value:
+                    visit(item)
+            return
+        for key in ("cwd", "worktree", "worktree_path"):
+            candidate = value.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                cwd_values.add(candidate.strip())
+        for key in ("session_id", "sessionId", "conversation_id", "conversationId"):
+            candidate = value.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                session_values.add(candidate.strip())
+        if session_meta:
+            candidate = value.get("id")
+            if isinstance(candidate, str) and candidate.strip():
+                session_values.add(candidate.strip())
+        if value.get("type") == "session_meta":
+            visit(value.get("payload"), session_meta=True)
+        for nested in value.values():
+            if isinstance(nested, (Mapping, list)):
+                visit(nested)
+
+    for line in record_text.splitlines():
+        try:
+            visit(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return cwd_values, session_values
+
+
+def _paths_match(left: str, right: str) -> bool:
+    try:
+        return os.path.realpath(left) == os.path.realpath(right)
+    except (OSError, ValueError):
+        return False
+
+
+def _record_belongs_to_dispatch(
+    target: Mapping[str, object],
+    placement: Mapping[str, object],
+    record_path: Path,
+    record_text: str,
+    session_roots: Mapping[str, tuple[Path, ...]],
+) -> bool:
+    """Require the record's runtime context to identify this dispatch."""
+
+    worktree = _string_or_none(placement.get("worktree_path"))
+    session_id = _string_or_none(placement.get("agent_session_id"))
+    if not worktree and not session_id:
+        return False
+
+    cwd_values, session_values = _record_context(record_text)
+    if worktree and any(_paths_match(cwd, worktree) for cwd in cwd_values):
+        return True
+    if session_id and session_id in session_values:
+        return True
+
+    if _string_or_none(target.get("runtime")) == "agy" and session_id:
+        for brain_root in session_roots.get("agy", ()):
+            try:
+                relative = record_path.relative_to(brain_root)
+            except ValueError:
+                continue
+            if relative.parts and relative.parts[0] == session_id:
+                return True
+    return False
 
 
 def _replace_ledger_entries(

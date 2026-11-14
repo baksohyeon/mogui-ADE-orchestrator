@@ -136,31 +136,131 @@ BIN
   fi
   echo "ok   — failability: restoring the former cursor mismatch refusal fails"
 
-  # Restore an offered list for the existing mutant below.
-  cat > "$work/cursor-agent" <<'BIN'
-#!/bin/bash
-[ "$1" = models ] || exit 1
-printf 'claude-opus-5-thinking-high - Anthropic\ngpt-5.3-codex - OpenAI\n'
-BIN
-  chmod +x "$work/cursor-agent"
-
-  # Failability: dropping cursor from MULTI_VENDOR_HOSTS falls back to the
-  # single-vendor check, which rejects a model cursor legitimately offers.
-  mutant_fns=${multivendor_fns/'MULTI_VENDOR_HOSTS="cursor"'/'MULTI_VENDOR_HOSTS=""'}
-  if [ "$mutant_fns" = "$multivendor_fns" ]; then
-    echo "FAIL: MULTI_VENDOR_HOSTS mutant did not change the source" >&2
-    return 1
-  fi
-  write_script "$script_file" "$mutant_fns" "$if_block"
-  out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
-  status=$?
-  if [ "$status" -eq 0 ] && printf '%s\n' "$out" | grep -q '^ACCEPTED$'; then
-    echo "FAIL: failability — mutant with cursor dropped from MULTI_VENDOR_HOSTS still accepted the model" >&2
-    return 1
-  fi
-  echo "ok   — failability: dropping cursor from MULTI_VENDOR_HOSTS makes this case fail"
 )
 cursor_multivendor_test "$dispatch" || exit 1
+
+vendor_mismatch_measurement_test() (
+  set +e
+  set -u
+  local dispatch="$1" work model_vendor_fn multivendor_fns accepts_fn mark_fn if_block
+  local script_file out status refusal_mutant
+
+  model_vendor_fn=$(awk '$0=="model_vendor() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  multivendor_fns=$(awk '$0=="MULTI_VENDOR_HOSTS=\"cursor\""{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  accepts_fn=$(awk '$0=="runtime_accepts_vendor() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  mark_fn=$(awk '$0=="mark_model_needs_measurement() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  if_block=$(awk '$0=="if is_multi_vendor_host \"$RUNTIME\"; then"{f=1} f{print} f&&$0=="fi"{exit}' "$dispatch")
+  [ -n "$model_vendor_fn" ] || { echo "FAIL: could not extract model_vendor" >&2; return 1; }
+  [ -n "$multivendor_fns" ] || { echo "FAIL: could not extract host capability functions" >&2; return 1; }
+  [ -n "$accepts_fn" ] || { echo "FAIL: could not extract runtime_accepts_vendor" >&2; return 1; }
+  [ -n "$mark_fn" ] || { echo "FAIL: could not extract mark_model_needs_measurement" >&2; return 1; }
+  [ -n "$if_block" ] || { echo "FAIL: could not extract the vendor mismatch branch" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-vendor-mismatch-test.$$"
+  mkdir -p "$work"
+  trap 'rm -rf "$work"' EXIT
+  script_file="$work/run.sh"
+  {
+    echo 'set -u'
+    printf '%s\n' "$multivendor_fns"
+    printf '%s\n' "$accepts_fn"
+    printf '%s\n' "$mark_fn"
+    printf '%s\n' "$model_vendor_fn"
+    echo 'RUNTIME=codex'
+    echo 'MODEL=claude-opus-5'
+    echo 'MODEL_VENDOR=$(model_vendor "$MODEL")'
+    echo 'MODEL_NEEDS_MEASUREMENT=0'
+    echo 'MODEL_WARNING_REASON=""'
+    printf '%s\n' "$if_block"
+    echo 'echo MEASUREMENT=$MODEL_NEEDS_MEASUREMENT reason=$MODEL_WARNING_REASON'
+  } > "$script_file"
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^MEASUREMENT=1 reason=runtime=codex does not accept vendor=claude for model=claude-opus-5$'; then
+    echo "FAIL: cross-vendor model mismatch should warn and carry a measurement mark" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : cross-vendor mismatch proceeds with a measurement mark"
+
+  refusal_mutant=${if_block/'mark_model_needs_measurement "runtime=$RUNTIME does not accept vendor=$MODEL_VENDOR for model=$MODEL"'/'exit 2'}
+  if [ "$refusal_mutant" = "$if_block" ]; then
+    echo "FAIL: vendor mismatch refusal mutant did not change the source" >&2
+    return 1
+  fi
+  {
+    echo 'set -u'
+    printf '%s\n' "$multivendor_fns"
+    printf '%s\n' "$accepts_fn"
+    printf '%s\n' "$mark_fn"
+    printf '%s\n' "$model_vendor_fn"
+    echo 'RUNTIME=codex'
+    echo 'MODEL=claude-opus-5'
+    echo 'MODEL_VENDOR=$(model_vendor "$MODEL")'
+    echo 'MODEL_NEEDS_MEASUREMENT=0'
+    echo 'MODEL_WARNING_REASON=""'
+    printf '%s\n' "$refusal_mutant"
+    echo 'echo ACCEPTED'
+  } > "$script_file"
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ] && printf '%s\n' "$out" | grep -q '^ACCEPTED$'; then
+    echo "FAIL: restoring the vendor mismatch refusal should fail" >&2
+    return 1
+  fi
+  echo "ok   : failability: restoring the vendor mismatch refusal fails"
+)
+vendor_mismatch_measurement_test "$dispatch" || exit 1
+
+# --- Feature: model evidence brief only appears for marked dispatches --------
+brief_model_measurement_test() (
+  set +e
+  set -u
+  local dispatch="$1" block script_file out mutant
+  block=$(awk '
+    $0=="if [ \"$MODEL_NEEDS_MEASUREMENT\" = 1 ]; then"{count++}
+    count==2{f=1}
+    f{print}
+    f&&$0=="fi"{exit}
+  ' "$dispatch")
+  [ -n "$block" ] || { echo "FAIL: could not extract the model measurement brief block" >&2; return 1; }
+
+  script_file="${TMPDIR:-/tmp}/mogui-dispatch-brief-test.$$"
+  trap 'rm -f "$script_file"' EXIT
+  {
+    echo 'set -u'
+    echo 'SPEC="base spec"'
+    echo 'MODEL_NEEDS_MEASUREMENT=0'
+    printf '%s\n' "$block"
+    echo 'printf "%s\\n" "$SPEC"'
+  } > "$script_file"
+  out=$(bash "$script_file" 2>&1)
+  if printf '%s\n' "$out" | grep -qF 'Model measurement required'; then
+    echo "FAIL: an unmarked dispatch received the model measurement brief" >&2
+    return 1
+  fi
+  echo "ok   : unmarked dispatches omit the model measurement brief"
+
+  mutant=${block/'if [ "$MODEL_NEEDS_MEASUREMENT" = 1 ]; then'/'if true; then'}
+  if [ "$mutant" = "$block" ]; then
+    echo "FAIL: unmarked-brief mutant did not change the source" >&2
+    return 1
+  fi
+  {
+    echo 'set -u'
+    echo 'SPEC="base spec"'
+    echo 'MODEL_NEEDS_MEASUREMENT=0'
+    printf '%s\n' "$mutant"
+    echo 'printf "%s\\n" "$SPEC"'
+  } > "$script_file"
+  out=$(bash "$script_file" 2>&1)
+  if ! printf '%s\n' "$out" | grep -qF 'Model measurement required'; then
+    echo "FAIL: dropping the measurement mark guard should add the brief" >&2
+    return 1
+  fi
+  echo "ok   : failability: adding the brief to unmarked dispatches fails"
+)
+brief_model_measurement_test "$dispatch" || exit 1
 
 # --- Feature: --check-only does not consume the fanout cap ------------------
 #
@@ -2901,4 +3001,4 @@ RULES
 )
 standing_rules_append_test "$dispatch" || exit 1
 
-echo "dispatch multi-vendor / check-only / state-dir-seam / contract-delivery / cursor-pretrust / claude-pretrust / claude-pretrust-call-site / claude-hook-trust-marker / fresh-claude-prompt-marker / delivery-result / codex-launch / worker-settings / approval-markers / codex-start-screen / codex-start-screen-wiring / codex-hooks-vet / codex-hooks-vet-wiring / standing-rules-missing-file / standing-rules-append regression tests passed"
+echo "dispatch multi-vendor / vendor-mismatch / model-brief / check-only / state-dir-seam / contract-delivery / cursor-pretrust / claude-pretrust / claude-pretrust-call-site / claude-hook-trust-marker / fresh-claude-prompt-marker / delivery-result / codex-launch / worker-settings / approval-markers / codex-start-screen / codex-start-screen-wiring / codex-hooks-vet / codex-hooks-vet-wiring / standing-rules-missing-file / standing-rules-append regression tests passed"

@@ -2009,13 +2009,9 @@ if is_multi_vendor_host "$RUNTIME"; then
     mark_model_needs_measurement "$RUNTIME does not offer model=$MODEL"
   fi
 elif [ "$MODEL_VENDOR" != unknown ] && ! runtime_accepts_vendor "$RUNTIME" "$MODEL_VENDOR"; then
-  echo "✗ model/runtime mismatch · model=$MODEL (vendor $MODEL_VENDOR) runtime=$RUNTIME" >&2
-  echo "  A model id from one vendor cannot run on another host. Declaring it anyway writes a" >&2
-  echo "  false declared_model into the ledger and makes the register probe grep for a string" >&2
-  echo "  the worker will never emit." >&2
-  echo "  Pass --model with an id this runtime can run, or pass --runtime $MODEL_VENDOR." >&2
-  echo "  Installed runtimes here: ${INSTALLED_RUNTIMES:-none}. Allowed ids per tier: $POLICY" >&2
-  exit 2
+  # A cross-vendor declaration is an observation gap, not a dispatch gate:
+  # the worker session record is the authority for what actually ran.
+  mark_model_needs_measurement "runtime=$RUNTIME does not accept vendor=$MODEL_VENDOR for model=$MODEL"
 elif [ "$RUNTIME" = agy ] || [ "$RUNTIME" = grok ]; then
   HOST_IDS=$(host_model_ids "$RUNTIME") || {
     mark_model_needs_measurement "host model list unavailable for $RUNTIME"

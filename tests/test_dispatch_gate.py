@@ -3779,7 +3779,10 @@ def test_unknown_declared_model_does_not_escalate_registration(
     assert registered.warnings == (ReasonCode.MODEL_MISMATCH,)
 
 
-def _marked_registration(tmp_path: Path):
+def _marked_registration(tmp_path: Path, monkeypatch):
+    session_root = tmp_path / "session-root"
+    session_root.mkdir()
+    monkeypatch.setenv("DISPATCH_MODEL_SESSION_ROOTS", str(session_root))
     policy = _tier_policy_v2(tmp_path, caps={})
     gate = _gate(tmp_path, now=1_000, tier_policy_path=policy)
     contract = _contract(tmp_path, "marked model dispatch")
@@ -3800,16 +3803,31 @@ def _marked_registration(tmp_path: Path):
         measured_model="future-model",
     )
     assert registered.allow is True
-    assert _ledger_entries(tmp_path)[-1]["model_status"] == "needs measurement"
+    worktree = tmp_path / "worker"
+    worktree.mkdir()
+    entries = _ledger_entries(tmp_path)
+    entries[-1]["worktree_path"] = str(worktree)
+    gate.config.ledger_path.write_text(
+        "".join(json.dumps(entry) + "\n" for entry in entries),
+        encoding="utf-8",
+    )
+    assert entries[-1]["model_status"] == "needs measurement"
     return gate
 
 
 def test_measure_model_requires_the_quoted_line_to_be_in_the_record(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
-    gate = _marked_registration(tmp_path)
-    record = tmp_path / "session.jsonl"
-    present = json.dumps({"type": "response_item", "payload": {"model": "future-model"}})
+    gate = _marked_registration(tmp_path, monkeypatch)
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "session.jsonl"
+    present = json.dumps(
+        {
+            "cwd": str(tmp_path / "worker"),
+            "type": "response_item",
+            "payload": {"model": "future-model"},
+        }
+    )
     record.write_text(present + "\n", encoding="utf-8")
 
     measured = gate.measure_model("job-marked", record, present)
@@ -3819,12 +3837,16 @@ def test_measure_model_requires_the_quoted_line_to_be_in_the_record(
     assert entry["model_measured"] == "future-model"
     assert entry["model_verified"] is True
     assert "model_status" not in entry
+    assert "model_evidence_line" not in entry
+    assert entry["model_evidence_line_number"] == 1
+    assert len(entry["model_evidence_sha256"]) == 64
 
 
 def test_measure_model_clears_a_stale_mismatch_warning_when_model_matches(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
-    gate = _marked_registration(tmp_path)
+    gate = _marked_registration(tmp_path, monkeypatch)
     ledger_path = Path(gate.config.ledger_path)
     entries = _ledger_entries(tmp_path)
     entries[-1]["warnings"] = ["MODEL_MISMATCH"]
@@ -3832,8 +3854,8 @@ def test_measure_model_clears_a_stale_mismatch_warning_when_model_matches(
         "".join(json.dumps(entry) + "\n" for entry in entries),
         encoding="utf-8",
     )
-    record = tmp_path / "session.jsonl"
-    present = json.dumps({"model": "future-model"})
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "session.jsonl"
+    present = json.dumps({"cwd": str(tmp_path / "worker"), "model": "future-model"})
     record.write_text(present + "\n", encoding="utf-8")
 
     measured = gate.measure_model("job-marked", record, present)
@@ -3850,10 +3872,15 @@ def test_append_ledger_entry_rejects_allow_rows(tmp_path: Path) -> None:
         gate.append_ledger_entry({"decision": "ALLOW"})
 
 
-def test_measure_model_leaves_mark_when_the_line_is_absent(tmp_path: Path) -> None:
-    gate = _marked_registration(tmp_path)
-    record = tmp_path / "session.jsonl"
-    actual = json.dumps({"message": {"model": "future-model"}})
+def test_measure_model_leaves_mark_when_the_line_is_absent(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    gate = _marked_registration(tmp_path, monkeypatch)
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "session.jsonl"
+    actual = json.dumps(
+        {"cwd": str(tmp_path / "worker"), "message": {"model": "future-model"}}
+    )
     record.write_text(actual + "\n", encoding="utf-8")
 
     measured = gate.measure_model(
@@ -3867,10 +3894,15 @@ def test_measure_model_leaves_mark_when_the_line_is_absent(tmp_path: Path) -> No
     assert entry["model_measured"] is None
 
 
-def test_measure_model_records_a_declared_measured_mismatch(tmp_path: Path) -> None:
-    gate = _marked_registration(tmp_path)
-    record = tmp_path / "session.jsonl"
-    present = json.dumps({"message": {"model": "different-model"}})
+def test_measure_model_records_a_declared_measured_mismatch(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    gate = _marked_registration(tmp_path, monkeypatch)
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "session.jsonl"
+    present = json.dumps(
+        {"cwd": str(tmp_path / "worker"), "message": {"model": "different-model"}}
+    )
     record.write_text(present + "\n", encoding="utf-8")
 
     measured = gate.measure_model("job-marked", record, present)
@@ -3889,9 +3921,9 @@ def test_cli_measure_model_verifies_the_session_record_line(
     monkeypatch,
     capsys,
 ) -> None:
-    gate = _marked_registration(tmp_path)
-    record = tmp_path / "session.jsonl"
-    present = json.dumps({"model": "future-model"})
+    gate = _marked_registration(tmp_path, monkeypatch)
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "session.jsonl"
+    present = json.dumps({"cwd": str(tmp_path / "worker"), "model": "future-model"})
     record.write_text(present + "\n", encoding="utf-8")
     script = runpy.run_path(str(_script()), run_name="dispatch_gate_measure_model_test")
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
@@ -3912,6 +3944,88 @@ def test_cli_measure_model_verifies_the_session_record_line(
     output = capsys.readouterr().out
     assert '"model_status":"measured"' in output
     assert "model_status" not in _ledger_entries(tmp_path)[-1]
+
+
+def test_measure_model_rejects_a_record_outside_the_session_root(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    gate = _marked_registration(tmp_path, monkeypatch)
+    record = tmp_path / "outside.jsonl"
+    present = json.dumps({"cwd": str(tmp_path / "worker"), "model": "future-model"})
+    record.write_text(present + "\n", encoding="utf-8")
+
+    measured = gate.measure_model("job-marked", record, present)
+
+    assert measured.allow is False
+    assert measured.reason == ReasonCode.MODEL_EVIDENCE_OUTSIDE_ROOT
+    assert _ledger_entries(tmp_path)[-1]["model_status"] == "needs measurement"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlink creation may require elevation")
+def test_measure_model_rejects_a_symlink_resolving_outside_the_session_root(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    gate = _marked_registration(tmp_path, monkeypatch)
+    session_root = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"])
+    outside = tmp_path / "outside.jsonl"
+    present = json.dumps({"cwd": str(tmp_path / "worker"), "model": "future-model"})
+    outside.write_text(present + "\n", encoding="utf-8")
+    record = session_root / "linked.jsonl"
+    record.symlink_to(outside)
+
+    measured = gate.measure_model("job-marked", record, present)
+
+    assert measured.allow is False
+    assert measured.reason == ReasonCode.MODEL_EVIDENCE_OUTSIDE_ROOT
+
+
+def test_measure_model_rejects_a_record_older_than_dispatch(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    gate = _marked_registration(tmp_path, monkeypatch)
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "old.jsonl"
+    present = json.dumps({"cwd": str(tmp_path / "worker"), "model": "future-model"})
+    record.write_text(present + "\n", encoding="utf-8")
+    os.utime(record, (900, 900))
+
+    measured = gate.measure_model("job-marked", record, present)
+
+    assert measured.allow is False
+    assert measured.reason == ReasonCode.MODEL_EVIDENCE_STALE
+
+
+def test_measure_model_rejects_an_oversized_record(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    gate = _marked_registration(tmp_path, monkeypatch)
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "large.jsonl"
+    record.write_bytes(b"x" * (dispatch_gate.MODEL_SESSION_MAX_BYTES + 1))
+
+    measured = gate.measure_model("job-marked", record, "x")
+
+    assert measured.allow is False
+    assert measured.reason == ReasonCode.MODEL_EVIDENCE_TOO_LARGE
+
+
+def test_measure_model_rejects_a_record_from_another_worktree(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    gate = _marked_registration(tmp_path, monkeypatch)
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "other.jsonl"
+    present = json.dumps(
+        {"cwd": str(tmp_path / "other-worker"), "model": "future-model"}
+    )
+    record.write_text(present + "\n", encoding="utf-8")
+
+    measured = gate.measure_model("job-marked", record, present)
+
+    assert measured.allow is False
+    assert measured.reason == ReasonCode.MODEL_EVIDENCE_UNBOUND
 
 
 @skip_windows_exec_surface

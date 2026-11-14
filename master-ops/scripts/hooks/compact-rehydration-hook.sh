@@ -3,9 +3,36 @@
 # Every failure is silent so a context repair hook cannot block a tool call or prompt.
 set +e
 
+VERDICT="pass"
+FIRE_LOG="${MOGUI_HOOK_FIRE_LOG:-${HOME:-$(cd ~ 2>/dev/null && pwd)}/.mogui/hook-fire-log.jsonl}"
+json_str() {
+  local value="${1-}"
+  value=${value//\\/\\\\}
+  value=${value//\"/\\\"}
+  value=$(printf '%s' "$value" | tr -d '\000-\037\177')
+  printf '%s' "$value"
+}
+derive_session_kind() {
+  if [ -n "${ORCA_TASK_ID:-}" ] || [ -n "${ORCA_DISPATCH_ID:-}" ] || [[ "$PWD" == *".orca/worktrees"* ]]; then
+    printf 'worker'
+  elif [ -f "$PWD/docs/MASTER-OPERATIONS.md" ]; then
+    printf 'master'
+  else
+    printf 'unknown'
+  fi
+}
+log_fire() {
+  mkdir -p "$(dirname "$FIRE_LOG")" 2>/dev/null || return 0
+  local session_kind
+  session_kind="$(derive_session_kind)"
+  printf '{"ts":%d,"hook":"compact-rehydration-hook","event":"%s","cwd":"%s","runtime_hint":"%s","session_kind":"%s","verdict":"%s"}\n' \
+    "$(date +%s)" "$(json_str "${1:-UserPromptSubmit}")" "$(json_str "$PWD")" "$(json_str "${MOGUI_RUNTIME_HINT:-unknown}")" "$(json_str "$session_kind")" "$(json_str "$VERDICT")" >> "$FIRE_LOG" 2>/dev/null || true
+}
+trap 'log_fire "${1:-UserPromptSubmit}"' EXIT
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P)"
 if ! source "$SCRIPT_DIR/compact-rehydration-constants.inc" 2>/dev/null; then
-  exit 0
+  COMPACT_SESSION_ID_PATTERN='[A-Za-z0-9._:-]+'
+  COMPACT_PENDING_DIR_NAME='compact-pending'
 fi
 OPS_REPO_DEFAULT="{{OPS_REPO}}"
 OPS_REPO="${MOGUI_OPS_REPO:-$OPS_REPO_DEFAULT}"
@@ -516,6 +543,8 @@ def main() -> None:
     if claimed is None:
         return
     try:
+        if not path.is_file():
+            return
         if skipped:
             append_recall_skipped(marker)
         prefix = ""

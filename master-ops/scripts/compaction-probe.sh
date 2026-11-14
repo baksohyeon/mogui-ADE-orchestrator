@@ -15,7 +15,8 @@ STATE_DIR="${MOGUI_STATE_DIR:-${HOME:-$(cd ~ 2>/dev/null && pwd)}/.mogui}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P)"
 CONTEXT_LOG_SCRIPT="$SCRIPT_DIR/context-quality-log.sh"
 if ! source "$SCRIPT_DIR/hooks/compact-rehydration-constants.inc" 2>/dev/null; then
-  exit 0
+  COMPACT_SESSION_ID_PATTERN='[A-Za-z0-9._:-]+'
+  COMPACT_PENDING_DIR_NAME='compact-pending'
 fi
 
 PROBE_INPUT="$INPUT" \

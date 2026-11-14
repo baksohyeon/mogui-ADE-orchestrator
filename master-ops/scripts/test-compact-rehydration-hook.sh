@@ -92,6 +92,7 @@ run_hook_payload() {
     MOGUI_STATE_DIR="$STATE" MOGUI_OPS_REPO="$OPS" \
     MOGUI_INSTANCE_RUNTIME_CONFIG="$CONFIG" \
     CONTEXT_QUALITY_LOG_WRITER="$S/context-quality-log.sh" \
+    MOGUI_HOOK_FIRE_LOG="$T/hook-fire-log.jsonl" \
     TRACKS_FILE="$TRACKS" DECISIONS_FILE="$DECISIONS" PANES_FILE="$PANES" \
     PATH="$BIN:$PATH" bash "$hook" "$event"
 }
@@ -106,6 +107,9 @@ marker_exists() { [ -f "$STATE/compact-pending/$1" ]; }
 # No marker: silent and exits successfully.
 out="$(run_hook "$HOOK" PostToolUse no-marker)"
 [ -z "$out" ] && ok "no marker stays silent" || fail "no marker printed: $out"
+[ -s "$T/hook-fire-log.jsonl" ] \
+  && ok "no-marker path records a hook fire" \
+  || fail "no-marker path missed its hook fire record"
 
 fast_ms="$(python3 - "$HOOK" "$STATE" "$OPS" "$CONFIG" "$TRACKS" "$DECISIONS" "$PANES" "$BIN" <<'PY'
 import json
@@ -392,7 +396,7 @@ PY
 run_probe multibyte-cap
 append_record multibyte-cap
 multibyte_cap="$(run_hook "$HOOK" PostToolUse multibyte-cap)"
-MULTIBYTE_OUTPUT="$multibyte_cap" python3 - <<'PY'
+if MULTIBYTE_OUTPUT="$multibyte_cap" python3 - <<'PY'
 import json
 import os
 import re
@@ -425,7 +429,11 @@ decision_rows = sum(line.startswith("- decision-") for line in decisions)
 assert active_rows + active_more == 25, (active_rows, active_more)
 assert decision_rows + decision_more == 150, (decision_rows, decision_more)
 PY
-ok "multibyte cap keeps every section and reports each omitted-row count"
+then
+  ok "multibyte cap keeps every section and reports each omitted-row count"
+else
+  fail "multibyte cap assertions failed"
+fi
 
 cat > "$CONFIG" <<'EOF'
 {"work_layer_extra_lines":["extra-0 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","extra-1 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","extra-2 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"]}
@@ -548,7 +556,7 @@ active_end = context.index("## Open decisions")
 active = context[active_start:active_end]
 extras_start = context.index("## Seat-declared extra lines")
 extras = context[extras_start:]
-assert active.count("- trim-active-") < 25 or "extra-" in extras, context
+assert active.count("- trim-active-") < 25, active
 PY
 then
   ok "mutant-trim-order is caught"

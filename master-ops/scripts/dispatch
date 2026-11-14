@@ -975,15 +975,15 @@ refuse_unavailable_runtime() {
   return 1
 }
 
-# An explicit runtime must name an installed runtime from the supported set.
+# An explicit runtime must name a supported runtime from the candidate set.
 # A known runtime with a model from another vendor is still dispatchable: that
-# declaration is measured from the worker session below. This check only keeps
-# crafted runtime names from reaching model resolution and the gate.
+# declaration is measured from the worker session below. Host availability is
+# measured by the downstream runtime probe. This check only keeps crafted
+# runtime names from reaching model resolution and the gate.
 refuse_uninstalled_runtime() {
   local runtime="$1"
-  if ! printf '%s\n' $RUNTIME_CANDIDATES | grep -Fxq -- "$runtime" \
-      || ! command -v "$runtime" >/dev/null 2>&1; then
-    echo "✗ runtime $runtime is not installed or listed in RUNTIME_CANDIDATES" >&2
+  if ! printf '%s\n' $RUNTIME_CANDIDATES | grep -Fxq -- "$runtime"; then
+    echo "✗ runtime $runtime is not listed in RUNTIME_CANDIDATES" >&2
     return 1
   fi
 }

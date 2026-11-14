@@ -254,15 +254,14 @@ PY
 }
 
 check_shared_git_surface_symlink_safety() {
-  local dispatch="$1" work shared capture_fn warn_fn vars output
+  local dispatch="$1" work shared capture_fn warn_fn vars
   work="${TMPDIR:-/tmp}/mogui-dispatch-codex-git-symlink.$$"
   mkdir -p "$work/shared/hooks"
   trap 'rm -rf "$work"' RETURN
   shared="$work/shared"
   : > "$shared/config"
-  printf '%s\n' first > "$shared/hooks/target-a"
+  mkfifo "$work/fifo-target"
   printf '%s\n' second > "$shared/hooks/target-b"
-  ln -s target-a "$shared/hooks/linked"
   capture_fn=$(extract_shell_function "$dispatch" "$CAPTURE_SURFACE_HEADER")
   warn_fn=$(extract_shell_function "$dispatch" 'warn_codex_shared_git_surface_changes() {')
   vars=$(grep -E '^CODEX_(SHARED_GIT_DIR|SHARED_GIT_CONFIG_HASH|SHARED_GIT_HOOKS_LISTING|SHARED_GIT_SURFACE_CAPTURED)=' "$dispatch")
@@ -271,12 +270,38 @@ check_shared_git_surface_symlink_safety() {
     echo 'set -eu'
     printf '%s\n' "$vars" "$capture_fn" "$warn_fn"
     printf 'CODEX_SHARED_GIT_DIR=%q\n' "$shared"
+    printf 'ln -s %q "$CODEX_SHARED_GIT_DIR/hooks/linked"\n' "$work/fifo-target"
     echo 'capture_codex_shared_git_surface "$CODEX_SHARED_GIT_DIR"'
     echo 'ln -sf target-b "$CODEX_SHARED_GIT_DIR/hooks/linked"'
     echo 'warn_codex_shared_git_surface_changes'
   } > "$work/run.sh"
-  output=$(bash "$work/run.sh")
-  printf '%s\n' "$output" | grep -Fq 'hooks listing' || return 1
+  python3 - "$work/run.sh" <<'PY'
+import os
+import signal
+import subprocess
+import sys
+
+process = subprocess.Popen(
+    ["bash", sys.argv[1]],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+    start_new_session=True,
+)
+try:
+    stdout, stderr = process.communicate(timeout=2)
+except subprocess.TimeoutExpired:
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    process.communicate(timeout=2)
+    raise SystemExit("symlink target snapshot followed a FIFO")
+if process.returncode != 0:
+    raise SystemExit(stderr or stdout or "symlink target snapshot failed")
+if "hooks listing" not in stdout:
+    raise SystemExit("symlink retargeting did not produce a warning")
+PY
 }
 
 check_completion_warning_wiring() {

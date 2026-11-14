@@ -10,6 +10,8 @@ The dispatch lease lifecycle has five states: `issued` → `running` → `submit
 
 **Core principle:** A wrong reap is expensive (lost work); a skipped reap is cheap. Every ambiguous case resolves to "leave it and report."
 
+The compatibility wrapper remains the audited entry point. Follow Sections 2-4 and run `scripts/worker-reap`; only after those checks pass, and only when the installed binary help exposes `--worktree`, `--all`, and `--delete-branch`, does the wrapper route eligible cleanup through `orca terminal close --worktree <selector> --all`, then `orca worktree rm --worktree <selector> --delete-branch`.
+
 ## Prerequisites
 
 - The dispatch is in a settled state (completed, accepted, failed, or abandoned)
@@ -83,6 +85,12 @@ The reaper checks three conditions before removing the worktree:
 
 The worktree must also exist on disk to be a removal candidate at all.
 
+For an already ancestry-merged worktree, pull-request state is an additional
+measurement rather than the landing proof. `OPEN` leaves the worktree in place;
+an unavailable branch, origin URL, or `gh` query records
+`worktree_pr_reason:pr_state_unmeasured` and preserves the existing reclaim
+behavior because Git already proved the branch is contained in `origin/main`.
+
 If all three are true, the worktree is removed and `worktree_removed:<path>` is
 logged (`would_remove_worktree:<path>` on `--dry-run`).
 
@@ -94,14 +102,26 @@ If **any** condition fails, the worktree is left in place and the reason is logg
 
 ### 4. Retire the Local Branch After Worktree Removal
 
-Before a worktree is removed, the reaper captures its branch tip and repository
-and asks `gh pr view <branch> --repo <repository> --json state,headRefOid` for
-the pull request state. After removal, it rechecks the tip and runs `git branch
--D <branch>` through the shared git directory only when the pull request state
-is `MERGED` and its `headRefOid` equals the captured tip. This covers squash
-merges while keeping a branch when there is no pull request, the pull request is
-open or closed, the tip differs, the branch is `main` or `master`, or GitHub
+For selector-backed cleanup, `orca worktree rm --delete-branch` owns branch
+retirement and the wrapper records any warning that Orca returns. For the
+terminal-handle and Git fallback, the reaper captures the branch tip and
+repository, asks `gh pr view <branch> --repo <repository> --json state,headRefOid`
+for legacy branch evidence, then rechecks the tip through the shared Git
+directory before `git branch -D <branch>`. The default-branch, PR base, head
+repository, and exact-tip checks below apply to the merged-PR landing override
+used when the normal Git landing check cannot prove a squash merge.
+The legacy path keeps the branch when there is no pull request, the pull request
+is not merged, the tip differs, the branch is `main` or `master`, or GitHub
 cannot be measured.
+
+Before accepting that override, the reaper asks `gh repo view <repository>
+--json defaultBranchRef` plus `gh pr list --head <branch> --repo <repository>
+--state all --limit 100 --json
+state,headRefOid,baseRefName,headRepositoryOwner,headRepository`. The evidence
+must come from this repository, target its measured default branch, and match
+the captured tip. A full result page is treated as unmeasured. This covers
+squash merges while retaining the existing refusal when the merged-PR evidence
+does not match.
 
 The action is recorded as `branch_deleted:<branch>` on success. A dry run
 reports `would_delete_branch:<branch>`. Every refusal reports one

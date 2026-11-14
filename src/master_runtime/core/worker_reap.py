@@ -55,6 +55,19 @@ IGNORED_MEDIA_SUFFIXES = frozenset(
 MAX_WORKER_LIST_PAGES = 20
 WORKER_LIST_PAGE_LIMIT = 100
 
+ORCA_TERMINAL_CLOSE_WORKTREE_ARGS = (
+    "orca",
+    "terminal",
+    "close",
+    "--worktree",
+)
+ORCA_WORKTREE_RM_ARGS = (
+    "orca",
+    "worktree",
+    "rm",
+    "--worktree",
+)
+
 # A reaper may be given a worktree for the repository's primary branch by
 # mistake. Keep the branch-protection check independent of the PR lookup.
 PROTECTED_BRANCHES = frozenset({"main", "master"})
@@ -252,6 +265,7 @@ class WorkerReaper:
         self.remove_ignored_media = remove_ignored_media
         self.dispatch_ledger_path = dispatch_ledger_path or self._default_dispatch_ledger_path()
         self._last_landing_rule: Optional[str] = None
+        self._orca_cleanup_supported_cache: Optional[bool] = None
 
     def reap(
         self,
@@ -292,48 +306,51 @@ class WorkerReaper:
 
         actions = []
         measurements: dict[str, object] = {}
+        terminal_action: Optional[str] = None
         terminal_reclaim_allowed = True
 
-        terminal_action: Optional[str] = None
-        # Measure pane membership and state before inspecting the worktree, but
-        # defer the actual close whenever worktree cleanup is still conditional.
-        # A settled dispatch that has not landed must retain its resume pane.
-        if dispatch_state.worktree_selector:
+        # Legacy rows predate the worktree selector. Keep their terminal plan
+        # before the worktree verdict and preserve the established messages.
+        if not dispatch_state.worktree_selector and dispatch_state.terminal_id:
             terminal_action, terminal_measurements = self._plan_terminal_action(
-                dispatch_state, False
-            )
-            if not dispatch_state.worktree_path:
-                terminal_action = (
-                    f"terminal_left:{dispatch_state.worktree_selector}:"
-                    "worktree_path_unmeasured"
-                )
-                terminal_measurements["terminal_reclaim_allowed"] = False
-            measurements.update(terminal_measurements)
-            terminal_reclaim_allowed = bool(
-                terminal_measurements.get("terminal_reclaim_allowed")
-            )
-        elif dispatch_state.terminal_id:
-            # Older ledger rows predate the worktree selector. Keep their
-            # established fail-closed handle checks while new rows use the
-            # worktree-membership path above.
-            terminal_action, terminal_measurements = self._plan_terminal_action(
-                dispatch_state, execute if not dispatch_state.worktree_path else False
+                dispatch_state,
+                execute if not dispatch_state.worktree_path else False,
             )
             measurements.update(terminal_measurements)
-            # Legacy rows have no selector with which to prove worktree
-            # membership. Preserve their independent terminal/worktree
-            # decisions; selector-backed rows take the stricter gate above.
-            terminal_reclaim_allowed = True
-        if terminal_action and not dispatch_state.worktree_path:
-            actions.append(terminal_action)
+            terminal_reclaim_allowed = not (
+                terminal_action
+                and ":agent_process" in terminal_action
+            )
+            if not dispatch_state.worktree_path and terminal_action:
+                actions.append(terminal_action)
 
-        # Check and possibly remove worktree
         if dispatch_state.worktree_path:
             worktree_path = Path(dispatch_state.worktree_path)
             try:
                 wt_clean, wt_merged, reason = self._check_worktree_safe_to_remove(
                     worktree_path
                 )
+                if (
+                    not wt_merged
+                    and reason.startswith("Current branch ")
+                    and (
+                        " (virtual merge failed:" in reason
+                        or " (branch changes are not included in " in reason
+                    )
+                ):
+                    if self._squash_merge_pr_evidence(worktree_path):
+                        wt_clean = True
+                        wt_merged = True
+                        reason = ""
+                        self._last_landing_rule = "merged_pr"
+                if wt_clean and wt_merged:
+                    pr_state = self._worktree_pr_state(worktree_path)
+                    measurements["worktree_pr_state"] = pr_state
+                    if pr_state == "OPEN":
+                        wt_merged = False
+                        reason = "pull request is open"
+                    elif pr_state == "UNMEASURED":
+                        measurements["worktree_pr_reason"] = "pr_state_unmeasured"
                 measurements["worktree_clean"] = wt_clean
                 measurements["worktree_merged"] = wt_merged
                 if wt_clean and wt_merged:
@@ -343,108 +360,106 @@ class WorkerReaper:
                         None if ignored_media is None else len(ignored_media)
                     )
                     if ignored_media is None:
-                        if terminal_action:
-                            actions.append(terminal_action)
                         actions.append(
                             f"worktree_left:{worktree_path}:ignored_media_unmeasured"
                         )
                     elif ignored_media and not (
                         remove_ignored_media or self.remove_ignored_media
                     ):
-                        if terminal_action:
-                            actions.append(terminal_action)
                         actions.append(
                             f"worktree_left:{worktree_path}:ignored_media:"
                             f"{len(ignored_media)}"
                         )
-                    elif dispatch_state.worktree_selector and not terminal_reclaim_allowed:
-                        if terminal_action:
-                            actions.append(terminal_action)
-                        actions.append(
-                            f"worktree_left:{worktree_path}:pane_not_idle"
-                        )
-                    elif execute:
-                        terminals_closed = False
-                        if terminal_action and terminal_action.startswith("would_close_worktree:"):
-                            self._close_worktree_terminals(dispatch_state.worktree_selector or "")
-                            terminals_closed = True
-                            actions.append(
-                                f"terminal_closed_by_worktree:{dispatch_state.worktree_selector}"
-                            )
-                        elif terminal_action and terminal_action.startswith("would_close_terminal:"):
-                            self._close_terminal(dispatch_state.terminal_id)
-                            terminals_closed = True
-                            actions.append(f"terminal_closed:{dispatch_state.terminal_id}")
-                        if dispatch_state.worktree_selector:
-                            try:
-                                self._remove_worktree(
-                                    worktree_path, dispatch_state.worktree_selector
-                                )
-                            except ReapError as error:
-                                actions.append(
-                                    "cleanup_partial:"
-                                    f"{'terminals_closed' if terminals_closed else 'terminals_not_closed'}:"
-                                    f"worktree_remove_failed:{error}"
-                                )
-                                actions.append(
-                                    f"worktree_remove_failed:{dispatch_state.worktree_selector}:{error}"
-                                )
-                            else:
-                                actions.append(
-                                    f"worktree_remove_requested:{worktree_path}:branch_delete_requested"
-                                )
-                        else:
-                            (
-                                branch_name,
-                                branch_tip,
-                                common_dir,
-                                repository,
-                                branch_reason,
-                            ) = self._measure_branch_identity(worktree_path)
-                            branch_action = self._plan_branch_deletion(
-                                branch_name,
-                                branch_tip,
-                                common_dir,
-                                repository,
-                                execute=False,
-                                reason=branch_reason,
-                            )
-                            self._remove_worktree(worktree_path)
-                            actions.append(f"worktree_removed:{worktree_path}")
-                            if branch_action.startswith("would_delete_branch:"):
-                                actions.append(
-                                    self._delete_local_branch(
-                                        branch_name, branch_tip, common_dir
-                                    )
-                                )
-                            else:
-                                actions.append(branch_action)
                     else:
+                        use_orca_cleanup = bool(
+                            dispatch_state.worktree_selector
+                            and self._orca_cleanup_supported()
+                        )
                         if dispatch_state.worktree_selector:
+                            terminal_action, terminal_measurements = (
+                                self._plan_terminal_action(
+                                    dispatch_state,
+                                    False,
+                                    use_worktree_selector=use_orca_cleanup,
+                                )
+                            )
+                            measurements.update(terminal_measurements)
+                            terminal_reclaim_allowed = bool(
+                                terminal_measurements.get("terminal_reclaim_allowed")
+                            )
+
+                        if not terminal_reclaim_allowed:
                             if terminal_action:
                                 actions.append(terminal_action)
                             actions.append(
-                                f"would_remove_worktree:{worktree_path}:landed_by:{self._last_landing_rule}"
+                                f"worktree_left:{worktree_path}:pane_not_idle"
                             )
-                        else:
-                            actions.append(f"would_remove_worktree:{worktree_path}")
-                            (
-                                branch_name,
-                                branch_tip,
-                                common_dir,
-                                repository,
-                                branch_reason,
-                            ) = self._measure_branch_identity(worktree_path)
-                            actions.append(
-                                self._plan_branch_deletion(
-                                    branch_name,
-                                    branch_tip,
-                                    common_dir,
-                                    repository,
-                                    execute=False,
-                                    reason=branch_reason,
+                        elif execute:
+                            terminals_closed = False
+                            if terminal_action and terminal_action.startswith(
+                                "would_close_worktree:"
+                            ):
+                                self._close_worktree_terminals(
+                                    dispatch_state.worktree_selector or ""
                                 )
-                            )
+                                terminals_closed = True
+                                actions.append(
+                                    f"terminal_closed_by_worktree:{dispatch_state.worktree_selector}"
+                                )
+                            elif terminal_action and terminal_action.startswith(
+                                "would_close_terminal:"
+                            ):
+                                self._close_terminal(dispatch_state.terminal_id)
+                                terminals_closed = True
+                                actions.append(
+                                    f"terminal_closed:{dispatch_state.terminal_id}"
+                                )
+                            if use_orca_cleanup:
+                                try:
+                                    branch_warning = self._remove_worktree(
+                                        worktree_path, dispatch_state.worktree_selector
+                                    )
+                                except ReapError as error:
+                                    actions.append(
+                                        "cleanup_partial:"
+                                        f"{'terminals_closed' if terminals_closed else 'terminals_not_closed'}:"
+                                        f"worktree_remove_failed:{error}"
+                                    )
+                                    actions.append(
+                                        f"worktree_remove_failed:{dispatch_state.worktree_selector}:{error}"
+                                    )
+                                else:
+                                    actions.append(
+                                        f"worktree_remove_requested:{worktree_path}:branch_delete_requested"
+                                    )
+                                    if branch_warning:
+                                        actions.append(branch_warning)
+                            else:
+                                self._remove_worktree_with_branch_cleanup(
+                                    worktree_path, actions
+                                )
+                        else:
+                            if dispatch_state.worktree_selector:
+                                if terminal_action:
+                                    actions.append(terminal_action)
+                                if use_orca_cleanup:
+                                    actions.append(
+                                        f"would_remove_worktree:{worktree_path}:landed_by:{self._last_landing_rule}"
+                                    )
+                                else:
+                                    actions.append(
+                                        f"would_remove_worktree:{worktree_path}"
+                                    )
+                                    self._plan_legacy_branch_cleanup(
+                                        worktree_path, actions
+                                    )
+                            else:
+                                if terminal_action and terminal_action not in actions:
+                                    actions.append(terminal_action)
+                                actions.append(f"would_remove_worktree:{worktree_path}")
+                                self._plan_legacy_branch_cleanup(
+                                    worktree_path, actions
+                                )
                 else:
                     if terminal_action:
                         actions.append(terminal_action)
@@ -455,6 +470,19 @@ class WorkerReaper:
                 if terminal_action:
                     actions.append(terminal_action)
                 actions.append(f"worktree_left:{worktree_path}:Check failed: {e}")
+        elif dispatch_state.worktree_selector:
+            terminal_action, terminal_measurements = self._plan_terminal_action(
+                dispatch_state, False
+            )
+            terminal_measurements["terminal_reclaim_allowed"] = False
+            measurements.update(terminal_measurements)
+            if not dispatch_state.worktree_path:
+                terminal_action = (
+                    f"terminal_left:{dispatch_state.worktree_selector}:"
+                    "worktree_path_unmeasured"
+                )
+            if terminal_action:
+                actions.append(terminal_action)
 
         # Build record
         record = ReapRecord(
@@ -650,7 +678,11 @@ class WorkerReaper:
         return f"branch_deleted:{branch_name}"
 
     def _plan_terminal_action(
-        self, dispatch_state: DispatchState, execute: bool
+        self,
+        dispatch_state: DispatchState,
+        execute: bool,
+        *,
+        use_worktree_selector: bool = True,
     ) -> tuple[str, dict[str, object]]:
         """Measure the three pane preconditions and decide the terminal action.
 
@@ -660,7 +692,7 @@ class WorkerReaper:
         measurement that could not be taken (`None`) refuses, the same as a
         measurement that failed — a refusal is cheap, a wrong close is not.
         """
-        if dispatch_state.worktree_selector:
+        if dispatch_state.worktree_selector and use_worktree_selector:
             return self._plan_worktree_terminal_action(dispatch_state, execute)
 
         terminal_id = dispatch_state.terminal_id
@@ -672,6 +704,28 @@ class WorkerReaper:
         if present is None:
             return f"terminal_left:{terminal_id}:presence_unmeasured", measurements
         if not present:
+            reused_by = self._reused_by_dispatched(terminal_id, dispatch_state.dispatch_id)
+            if reused_by == "" and dispatch_state.worktree_path:
+                reused_by = self._reused_by_dispatched_worktree(
+                    "",
+                    dispatch_state.worktree_path,
+                    [terminal_id] if terminal_id else [],
+                    dispatch_state.dispatch_id,
+                )
+            measurements["terminal_reused_by"] = reused_by
+            if reused_by is None:
+                return f"terminal_left:{terminal_id}:reuse_unmeasured", measurements
+            if reused_by:
+                return f"terminal_left:{terminal_id}:reused_by:{reused_by}", measurements
+            if dispatch_state.worktree_path:
+                agent_process = self._agent_process_in_worktree(
+                    Path(dispatch_state.worktree_path)
+                )
+                measurements["agent_process"] = agent_process
+                if agent_process is None:
+                    return f"terminal_left:{terminal_id}:agent_process_unmeasured", measurements
+                if agent_process:
+                    return f"terminal_left:{terminal_id}:agent_process:{agent_process}", measurements
             measurements["terminal_reclaim_allowed"] = True
             return f"terminal_left:{terminal_id}:pane_absent", measurements
 
@@ -730,10 +784,6 @@ class WorkerReaper:
             )
         handles = [item["handle"] for item in members]
         measurements["worktree_terminal_handles"] = handles
-        if not handles:
-            measurements["terminal_reclaim_allowed"] = True
-            return f"terminal_left:{selector}:pane_absent", measurements
-
         reused_by = self._reused_by_dispatched_worktree(
             selector, dispatch_state.worktree_path, handles, dispatch_state.dispatch_id
         )
@@ -742,6 +792,20 @@ class WorkerReaper:
             return f"terminal_left:{selector}:reuse_unmeasured", measurements
         if reused_by:
             return f"terminal_left:{selector}:reused_by:{reused_by}", measurements
+        if not handles:
+            if not dispatch_state.worktree_path:
+                measurements["agent_process"] = None
+                return f"terminal_left:{selector}:worktree_path_unmeasured", measurements
+            agent_process = self._agent_process_in_worktree(
+                Path(dispatch_state.worktree_path)
+            )
+            measurements["agent_process"] = agent_process
+            if agent_process is None:
+                return f"terminal_left:{selector}:agent_process_unmeasured", measurements
+            if agent_process:
+                return f"terminal_left:{selector}:agent_process:{agent_process}", measurements
+            measurements["terminal_reclaim_allowed"] = True
+            return f"terminal_left:{selector}:pane_absent", measurements
 
         states = self._pane_states(handles)
         measurements["pane_states"] = states
@@ -752,6 +816,18 @@ class WorkerReaper:
             measurements["busy_panes"] = busy
             busy_text = ",".join(f"{handle}:{states.get(handle, 'unknown')}" for handle in busy)
             return f"terminal_left:{selector}:pane_not_idle:{busy_text}", measurements
+
+        if not dispatch_state.worktree_path:
+            measurements["agent_process"] = None
+            return f"terminal_left:{selector}:worktree_path_unmeasured", measurements
+        agent_process = self._agent_process_in_worktree(
+            Path(dispatch_state.worktree_path)
+        )
+        measurements["agent_process"] = agent_process
+        if agent_process is None:
+            return f"terminal_left:{selector}:agent_process_unmeasured", measurements
+        if agent_process:
+            return f"terminal_left:{selector}:agent_process:{agent_process}", measurements
 
         measurements["terminal_reclaim_allowed"] = True
         if execute:
@@ -1185,12 +1261,223 @@ class WorkerReaper:
     def _close_worktree_terminals(self, selector: str) -> None:
         """Close every pane in one measured worktree through Orca."""
         code, _stdout, stderr = self.orca_runner(
-            ["orca", "terminal", "close", "--worktree", selector, "--all", "--json"]
+            [*ORCA_TERMINAL_CLOSE_WORKTREE_ARGS, selector, "--all", "--json"]
         )
         if code != 0:
             raise ReapError(
                 f"Failed to close terminals for worktree {selector}: {stderr}", code
             )
+
+    def _orca_cleanup_supported(self) -> bool:
+        """Measure whether both selector-based cleanup verbs are available."""
+        if self._orca_cleanup_supported_cache is not None:
+            return self._orca_cleanup_supported_cache
+
+        terminal_code, terminal_stdout, terminal_stderr = self.orca_runner(
+            ["orca", "terminal", "close", "--help"]
+        )
+        worktree_code, worktree_stdout, worktree_stderr = self.orca_runner(
+            ["orca", "worktree", "rm", "--help"]
+        )
+        terminal_help = f"{terminal_stdout}\n{terminal_stderr}"
+        worktree_help = f"{worktree_stdout}\n{worktree_stderr}"
+        terminal_usage = any(
+            line.strip().startswith("Usage: orca terminal close")
+            for line in terminal_help.splitlines()
+        )
+        worktree_usage = any(
+            line.strip().startswith("Usage: orca worktree rm")
+            for line in worktree_help.splitlines()
+        )
+        self._orca_cleanup_supported_cache = (
+            terminal_code == 0
+            and worktree_code == 0
+            and terminal_usage
+            and worktree_usage
+            and "--worktree" in terminal_help
+            and "--all" in terminal_help
+            and "--worktree" in worktree_help
+            and "--delete-branch" in worktree_help
+        )
+        return self._orca_cleanup_supported_cache
+
+    def _squash_merge_pr_evidence(self, worktree_path: Path) -> bool:
+        """Prove a clean branch landed when the normal merge check cannot."""
+        (
+            branch_name,
+            branch_tip,
+            _common_dir,
+            repository,
+            _reason,
+        ) = self._measure_branch_identity(worktree_path)
+        if not branch_name or not branch_tip or not repository:
+            return False
+
+        default_branch = self._default_branch_for_repository(repository)
+        if not default_branch:
+            return False
+        prs = self._pull_requests_for_branch(branch_name, repository)
+        if prs is None:
+            return False
+        return any(
+            isinstance(pr, dict)
+            and str(pr.get("state", "")).upper() == "MERGED"
+            and pr.get("headRefOid") == branch_tip
+            and str(pr.get("baseRefName", "")) == default_branch
+            for pr in prs
+        )
+
+    def _worktree_pr_state(self, worktree_path: Path) -> str:
+        """Measure the current repository PR state without guessing on failure."""
+        code, branch_output, _stderr = self.orca_runner(
+            ["git", "-C", str(worktree_path), "branch", "--show-current"]
+        )
+        branch_name = branch_output.strip()
+        if code != 0 or not branch_name:
+            return "UNMEASURED"
+        code, repository_output, _stderr = self.orca_runner(
+            ["git", "-C", str(worktree_path), "remote", "get-url", "origin"]
+        )
+        repository = self._repository_from_remote(repository_output.strip())
+        if code != 0 or not repository:
+            return "UNMEASURED"
+
+        prs = self._pull_requests_for_branch(branch_name, repository)
+        if prs is None:
+            return "UNMEASURED"
+        return "OPEN" if any(
+            isinstance(pr, dict) and str(pr.get("state", "")).upper() == "OPEN"
+            for pr in prs
+        ) else "CLOSED"
+
+    def _pull_requests_for_branch(
+        self, branch_name: str, repository: str
+    ) -> Optional[list[dict]]:
+        """Read every PR for a branch, distinguishing no PR from API failure."""
+        code, stdout, _stderr = self.orca_runner(
+            [
+                "gh",
+                "pr",
+                "list",
+                "--head",
+                branch_name,
+                "--repo",
+                repository,
+                "--state",
+                "all",
+                "--limit",
+                "100",
+                "--json",
+                "state,headRefOid,baseRefName,headRepositoryOwner,headRepository",
+            ]
+        )
+        if code != 0:
+            return None
+        try:
+            payload = json.loads(stdout)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(payload, list) or len(payload) >= 100:
+            return None
+        return [
+            pr
+            for pr in payload
+            if isinstance(pr, dict)
+            and self._pr_head_repository_matches(pr, repository)
+        ]
+
+    @staticmethod
+    def _pr_head_repository_matches(pr: dict, repository: str) -> bool:
+        """Require PR head ownership to match the measured repository, not a fork."""
+        expected_path = repository.split("/", 1)[1] if "/" in repository else repository
+        head_repository = pr.get("headRepository")
+        if isinstance(head_repository, dict):
+            name_with_owner = head_repository.get("nameWithOwner")
+            if isinstance(name_with_owner, str) and name_with_owner == expected_path:
+                return True
+            repository_name = head_repository.get("name")
+        else:
+            repository_name = None
+        head_owner = pr.get("headRepositoryOwner")
+        owner_name = head_owner.get("login") if isinstance(head_owner, dict) else None
+        return (
+            isinstance(owner_name, str)
+            and isinstance(repository_name, str)
+            and f"{owner_name}/{repository_name}" == expected_path
+        )
+
+    def _default_branch_for_repository(self, repository: str) -> Optional[str]:
+        """Measure the repository default branch through the installed gh CLI."""
+        code, stdout, _stderr = self.orca_runner(
+            ["gh", "repo", "view", repository, "--json", "defaultBranchRef"]
+        )
+        if code != 0:
+            return None
+        try:
+            payload = json.loads(stdout)
+        except json.JSONDecodeError:
+            return None
+        default_ref = payload.get("defaultBranchRef") if isinstance(payload, dict) else None
+        name = default_ref.get("name") if isinstance(default_ref, dict) else None
+        return name if isinstance(name, str) and name else None
+
+    def _origin_default_ref(self, worktree_path: Path) -> str:
+        """Use the measured repository default branch for Git landing checks."""
+        code, remote_output, _stderr = self.orca_runner(
+            ["git", "-C", str(worktree_path), "remote", "get-url", "origin"]
+        )
+        repository = self._repository_from_remote(remote_output.strip())
+        if code == 0 and repository:
+            default_branch = self._default_branch_for_repository(repository)
+            if default_branch:
+                return f"origin/{default_branch}"
+        return "origin/main"
+
+    def _plan_legacy_branch_cleanup(
+        self, worktree_path: Path, actions: list[str]
+    ) -> None:
+        (
+            branch_name,
+            branch_tip,
+            common_dir,
+            repository,
+            branch_reason,
+        ) = self._measure_branch_identity(worktree_path)
+        actions.append(
+            self._plan_branch_deletion(
+                branch_name,
+                branch_tip,
+                common_dir,
+                repository,
+                execute=False,
+                reason=branch_reason,
+            )
+        )
+
+    def _remove_worktree_with_branch_cleanup(
+        self, worktree_path: Path, actions: list[str]
+    ) -> None:
+        (
+            branch_name,
+            branch_tip,
+            common_dir,
+            repository,
+            branch_reason,
+        ) = self._measure_branch_identity(worktree_path)
+        branch_action = self._plan_branch_deletion(
+            branch_name,
+            branch_tip,
+            common_dir,
+            repository,
+            execute=False,
+            reason=branch_reason,
+        )
+        self._remove_worktree(worktree_path)
+        actions.append(f"worktree_removed:{worktree_path}")
+        if branch_action.startswith("would_delete_branch:"):
+            actions.append(self._delete_local_branch(branch_name, branch_tip, common_dir))
+        else:
+            actions.append(branch_action)
 
     def _check_worktree_safe_to_remove(self, worktree_path: Path) -> tuple[bool, bool, str]:
         """
@@ -1234,9 +1521,19 @@ class WorkerReaper:
         if not current_branch:
             return False, False, "Could not get current branch: detached HEAD"
 
+        origin_default_ref = self._origin_default_ref(worktree_path)
+
         # Check if branch is topologically merged.
         code, stdout, stderr = self.orca_runner(
-            ["git", "-C", str(worktree_path), "branch", "-a", "--merged", "origin/main"]
+            [
+                "git",
+                "-C",
+                str(worktree_path),
+                "branch",
+                "-a",
+                "--merged",
+                origin_default_ref,
+            ]
         )
         if code != 0:
             return False, False, f"Could not check merge status: {stderr}"
@@ -1252,14 +1549,14 @@ class WorkerReaper:
             return True, True, ""
 
         squash_included, squash_reason = self._branch_changes_included_in_origin_main(
-            worktree_path
+            worktree_path, origin_default_ref
         )
         if squash_included:
             self._last_landing_rule = "content"
             return True, True, ""
 
         return False, False, (
-            f"Current branch {current_branch} is not merged to origin/main"
+            f"Current branch {current_branch} is not merged to {origin_default_ref}"
             f" ({squash_reason})"
         )
 
@@ -1295,14 +1592,14 @@ class WorkerReaper:
         ]
 
     def _branch_changes_included_in_origin_main(
-        self, worktree_path: Path
+        self, worktree_path: Path, origin_default_ref: str = "origin/main"
     ) -> tuple[bool, str]:
         """
-        True when the branch's changed paths have the same content in origin/main.
+        True when the branch's changed paths have the same content in the default branch.
 
-        Squash merges erase ancestry, so `git branch --merged origin/main` cannot
+        Squash merges erase ancestry, so `git branch --merged <default>` cannot
         prove inclusion. Compare only paths changed from the merge base. This
-        avoids treating unrelated changes that landed in origin/main as evidence
+        avoids treating unrelated changes that landed in the default branch as evidence
         that the worker branch landed.
         """
         code, branch_output, stderr = self.orca_runner(
@@ -1311,7 +1608,14 @@ class WorkerReaper:
         branch_name = branch_output.strip()
         if code == 0 and branch_name:
             code, merge_base_output, stderr = self.orca_runner(
-                ["git", "-C", str(worktree_path), "merge-base", "origin/main", branch_name]
+                [
+                    "git",
+                    "-C",
+                    str(worktree_path),
+                    "merge-base",
+                    origin_default_ref,
+                    branch_name,
+                ]
             )
             merge_base = merge_base_output.strip()
             if code == 0 and merge_base:
@@ -1332,7 +1636,10 @@ class WorkerReaper:
                 if code == 0:
                     changed_paths = [path for path in changed_output.split("\0") if path]
                     if not changed_paths:
-                        return True, "branch changes are already included in origin/main"
+                        return True, (
+                            "branch changes are already included in "
+                            f"{origin_default_ref}"
+                        )
                     diff_command = [
                         "git",
                         "--literal-pathspecs",
@@ -1340,18 +1647,21 @@ class WorkerReaper:
                         str(worktree_path),
                         "diff",
                         "--quiet",
-                        "origin/main",
+                        origin_default_ref,
                         branch_name,
                         "--",
                         *changed_paths,
                     ]
                     diff_code, diff_stdout, diff_stderr = self.orca_runner(diff_command)
                     if diff_code == 0:
-                        return True, "branch changes are already included in origin/main"
+                        return True, (
+                            "branch changes are already included in "
+                            f"{origin_default_ref}"
+                        )
                     if diff_code == 1:
                         return (
                             False,
-                            "branch changes are not included in origin/main "
+                            f"branch changes are not included in {origin_default_ref} "
                             f"(differing paths: {', '.join(changed_paths)})",
                         )
                     return False, f"content comparison failed: {diff_stderr or diff_stdout}"
@@ -1359,16 +1669,24 @@ class WorkerReaper:
         # Keep a compatibility fallback for older ledger fixtures that do not
         # expose a branch ref to the runner. Real dispatches take the measured
         # merge-base and path-scoped diff above.
-        return self._legacy_branch_changes_included_in_origin_main(worktree_path)
+        return self._legacy_branch_changes_included_in_origin_main(
+            worktree_path, origin_default_ref
+        )
 
     def _legacy_branch_changes_included_in_origin_main(
-        self, worktree_path: Path
+        self, worktree_path: Path, origin_default_ref: str = "origin/main"
     ) -> tuple[bool, str]:
         code, main_tree_stdout, stderr = self.orca_runner(
-            ["git", "-C", str(worktree_path), "rev-parse", "origin/main^{tree}"]
+            [
+                "git",
+                "-C",
+                str(worktree_path),
+                "rev-parse",
+                f"{origin_default_ref}^{{tree}}",
+            ]
         )
         if code != 0:
-            return False, f"could not resolve origin/main tree: {stderr}"
+            return False, f"could not resolve {origin_default_ref} tree: {stderr}"
 
         code, merge_tree_stdout, stderr = self.orca_runner(
             [
@@ -1377,7 +1695,7 @@ class WorkerReaper:
                 str(worktree_path),
                 "merge-tree",
                 "--write-tree",
-                "origin/main",
+                origin_default_ref,
                 "HEAD",
             ]
         )
@@ -1387,21 +1705,18 @@ class WorkerReaper:
         main_tree = main_tree_stdout.strip()
         merge_tree = merge_tree_stdout.splitlines()[0].strip() if merge_tree_stdout else ""
         if merge_tree == main_tree:
-            return True, "branch changes are already included in origin/main"
+            return True, f"branch changes are already included in {origin_default_ref}"
 
-        return False, "branch changes are not included in origin/main"
+        return False, f"branch changes are not included in {origin_default_ref}"
 
     def _remove_worktree(
         self, worktree_path: Path, worktree_selector: Optional[str] = None
-    ) -> None:
+    ) -> Optional[str]:
         """Remove a worktree through Orca when its selector was measured."""
         if worktree_selector:
             code, _stdout, stderr = self.orca_runner(
                 [
-                    "orca",
-                    "worktree",
-                    "rm",
-                    "--worktree",
+                    *ORCA_WORKTREE_RM_ARGS,
                     worktree_selector,
                     "--delete-branch",
                     "--json",
@@ -1411,7 +1726,11 @@ class WorkerReaper:
                 raise ReapError(
                     f"Failed to remove worktree {worktree_selector}: {stderr}", code
                 )
-            return
+            warning_text = f"{_stdout}\n{stderr}"
+            for line in warning_text.splitlines():
+                if "warning" in line.lower() and "branch" in line.lower():
+                    return line
+            return None
 
         # Legacy rows without a dispatch-time selector retain the old Git
         # cleanup path. New dispatch rows always use the Orca path above.
@@ -1435,6 +1754,7 @@ class WorkerReaper:
         )
         if code != 0:
             raise ReapError(f"Failed to remove worktree {worktree_path}: {stderr}", code)
+        return None
 
     def _append_reap_record(self, record: ReapRecord) -> None:
         """Append reap record to the ledger."""

@@ -19,6 +19,15 @@ sys.path.insert(0, str(MOGUI_LOG_ROOT))
 
 from master_runtime.core.worker_reap import ReapError, WorkerReaper  # noqa: E402
 
+
+DEPRECATION_NOTICE = (
+    "DEPRECATED: use `orca terminal close --worktree <selector> --all`, then "
+    "`orca worktree rm --worktree <selector> --delete-branch` only after "
+    "confirming the dispatch is settled, the pane is not reused, the worktree "
+    "is clean, pushed, and merged, with no open PR or ignored media; see "
+    "docs/runbooks/worker-reap.md. Direct Orca cleanup skips the reap ledger."
+)
+
 try:
     from mogui_log import emit as mogui_emit  # noqa: E402
 except ImportError:
@@ -31,6 +40,7 @@ except ImportError:
 
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
+    print(DEPRECATION_NOTICE, file=sys.stderr)
     args = parser.parse_args(argv)
 
     reap_ledger_path = None

@@ -504,7 +504,14 @@ def _reap_open_pane(task_id: str | None) -> dict:
     actions = str(record.get("actions_taken", "")) if isinstance(record, dict) else ""
     return {
         "reaped": any(
-            action.startswith(("terminal_closed:", "worktree_removed:"))
+            action.startswith(
+                (
+                    "terminal_closed:",
+                    "terminal_closed_by_worktree:",
+                    "worktree_removed:",
+                    "worktree_remove_requested:",
+                )
+            )
             for action in actions.split(";")
         ),
         "record": record,

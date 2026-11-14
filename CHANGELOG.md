@@ -20,6 +20,14 @@ you build on it.
 
 ## [Unreleased]
 
+### Deprecated
+
+- `scripts/worker-reap` is deprecated and remains available for compatibility; use `orca terminal close --worktree <selector> --all`, then `orca worktree rm --worktree <selector> --delete-branch` after the documented safety checks and when the installed help exposes both selector forms. Removal timing requires a separate owner decision.
+
+### Changed
+
+- `scripts/worker-reap` routes eligible worktree cleanup through Orca when supported, while retaining its safety checks, fallback, flags, exit codes, and reap ledger. An unavailable PR-state measurement is recorded without vetoing a worktree already proven merged by ancestry, while legacy cleanup still refuses an agent process or unmeasured cwd scan to avoid losing active work.
+
 ## [0.5.338] - 2026-11-14
 
 ### Added

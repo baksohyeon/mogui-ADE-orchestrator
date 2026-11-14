@@ -605,7 +605,7 @@ class DispatchGate:
                 ReasonCode.MODEL_TIER_ESCALATION,
                 message=escalation,
             )
-            with _ticket_lock(Path(self.config.ticket_dir)):
+            with _ledger_lock(Path(self.config.ledger_path)):
                 self._append_entry(
                     {
                         "ts": self._clock(),
@@ -623,107 +623,108 @@ class DispatchGate:
         if runtime is not None and runtime_filter is None:
             return GateDecision(False, ReasonCode.INVALID_REQUEST)
 
-        with _ticket_lock(Path(self.config.ticket_dir)):
-            candidate, denial = self._registration_candidate(
-                contract_sha,
-                runtime_filter,
-            )
-            if denial is not None:
-                return denial
-            assert candidate is not None
-            pending = candidate.pending
-            selected_ticket = candidate.selected_ticket
-            completion_channel = _string_or_none(pending.get("completion_channel"))
-            pending_model_status = _string_or_none(pending.get("model_status"))
-
-            if (
-                expected_completion_channel is not None
-                and completion_channel != expected_completion_channel
-            ):
-                actual_channel = (
-                    completion_channel if completion_channel is not None else "<none>"
+        with _ledger_lock(Path(self.config.ledger_path)):
+            with _ticket_lock(Path(self.config.ticket_dir)):
+                candidate, denial = self._registration_candidate(
+                    contract_sha,
+                    runtime_filter,
                 )
-                return GateDecision(
-                    False,
-                    ReasonCode.INVALID_REQUEST,
+                if denial is not None:
+                    return denial
+                assert candidate is not None
+                pending = candidate.pending
+                selected_ticket = candidate.selected_ticket
+                completion_channel = _string_or_none(pending.get("completion_channel"))
+                pending_model_status = _string_or_none(pending.get("model_status"))
+
+                if (
+                    expected_completion_channel is not None
+                    and completion_channel != expected_completion_channel
+                ):
+                    actual_channel = (
+                        completion_channel if completion_channel is not None else "<none>"
+                    )
+                    return GateDecision(
+                        False,
+                        ReasonCode.INVALID_REQUEST,
+                        message=(
+                            f"expected_completion_channel={expected_completion_channel} "
+                            f"actual_completion_channel={actual_channel}"
+                        ),
+                    )
+
+                if contract_sha is not None and selected_ticket is not None:
+                    try:
+                        selected_ticket.path.unlink()
+                    except FileNotFoundError:
+                        pass
+
+                decision = GateDecision(
+                    allow=True,
+                    reason=ReasonCode.OK,
+                    contract_sha=_string_or_none(pending.get("contract_sha")),
+                    cost_proxy=_int_or_zero(pending.get("est_chars")),
                     message=(
-                        f"expected_completion_channel={expected_completion_channel} "
-                        f"actual_completion_channel={actual_channel}"
+                        "ticket_absent"
+                        if contract_sha is not None and selected_ticket is None
+                        else ""
                     ),
+                    model_status=pending_model_status,
                 )
-
-            if contract_sha is not None and selected_ticket is not None:
-                try:
-                    selected_ticket.path.unlink()
-                except FileNotFoundError:
-                    pass
-
-            decision = GateDecision(
-                allow=True,
-                reason=ReasonCode.OK,
-                contract_sha=_string_or_none(pending.get("contract_sha")),
-                cost_proxy=_int_or_zero(pending.get("est_chars")),
-                message=(
-                    "ticket_absent"
-                    if contract_sha is not None and selected_ticket is None
-                    else ""
-                ),
-                model_status=pending_model_status,
-            )
-            entry: dict[str, object] = {
-                "ts": self._clock(),
-                "contract_sha": pending["contract_sha"],
-                "runtime": pending["runtime"],
-                "n_agents": pending["n_agents"],
-                "est_chars": pending["est_chars"],
-                "decision": "ALLOW",
-                "reason": ReasonCode.OK.value,
-                "job_id": job_id,
-                "completion_channel": completion_channel,
-            }
-            if orchestration_task is not None:
-                entry["orchestration_task"] = orchestration_task
-            contract_repo = pending.get("contract_repo")
-            if isinstance(contract_repo, str) and contract_repo:
-                entry["contract_repo"] = contract_repo
-            # A caller expanding an unset shell variable can pass an empty or
-            # whitespace-only value; worker-wait treats any present worker_pid
-            # as measured, and an empty one would read as a live-but-not-alive
-            # pid, i.e. DEAD, for a worker that was never actually recorded.
-            if worker_pid and worker_pid.strip():
-                entry["worker_pid"] = worker_pid.strip()
-            if pane and pane.strip():
-                entry["pane"] = pane.strip()
-            # The card fields are optional for the Python API so older callers
-            # and ledgers remain readable. The supervised wrapper supplies one
-            # of them for every new dispatch registration.
-            if card is not None or card_reason is not None:
-                entry["card"] = card.strip() if card is not None else ""
-                entry["card_reason"] = card_reason.strip() if card_reason is not None else ""
-            # Say what was verified and how, so a later reader can tell an
-            # unverified registration from a verified one instead of assuming.
-            entry["model_declared"] = declared_model
-            # A model mark comes from a dispatch whose declaration was not
-            # independently grounded in the host's policy or offered list.
-            # The register-time probe is useful context, but it is not the
-            # worker_done evidence pair that is allowed to clear the mark.
-            if pending_model_status == MODEL_NEEDS_MEASUREMENT:
-                entry["model_measured"] = None
-                entry["model_verified"] = False
-            else:
-                entry["model_measured"] = measured_model
-                entry["model_verified"] = bool(
-                    declared_model and measured_model and not model_probe_failed
-                )
-            if pending_model_status is not None:
-                entry["model_status"] = pending_model_status
-            if model_warning is not None:
-                entry["warnings"] = [
-                    *entry.get("warnings", []),
-                    model_warning.value,
-                ]
-            entry["attempt"] = self._next_attempt(str(pending["contract_sha"]))
-            self._append_entry(entry)
+                entry: dict[str, object] = {
+                    "ts": self._clock(),
+                    "contract_sha": pending["contract_sha"],
+                    "runtime": pending["runtime"],
+                    "n_agents": pending["n_agents"],
+                    "est_chars": pending["est_chars"],
+                    "decision": "ALLOW",
+                    "reason": ReasonCode.OK.value,
+                    "job_id": job_id,
+                    "completion_channel": completion_channel,
+                }
+                if orchestration_task is not None:
+                    entry["orchestration_task"] = orchestration_task
+                contract_repo = pending.get("contract_repo")
+                if isinstance(contract_repo, str) and contract_repo:
+                    entry["contract_repo"] = contract_repo
+                # A caller expanding an unset shell variable can pass an empty or
+                # whitespace-only value; worker-wait treats any present worker_pid
+                # as measured, and an empty one would read as a live-but-not-alive
+                # pid, i.e. DEAD, for a worker that was never actually recorded.
+                if worker_pid and worker_pid.strip():
+                    entry["worker_pid"] = worker_pid.strip()
+                if pane and pane.strip():
+                    entry["pane"] = pane.strip()
+                # The card fields are optional for the Python API so older callers
+                # and ledgers remain readable. The supervised wrapper supplies one
+                # of them for every new dispatch registration.
+                if card is not None or card_reason is not None:
+                    entry["card"] = card.strip() if card is not None else ""
+                    entry["card_reason"] = card_reason.strip() if card_reason is not None else ""
+                # Say what was verified and how, so a later reader can tell an
+                # unverified registration from a verified one instead of assuming.
+                entry["model_declared"] = declared_model
+                # A model mark comes from a dispatch whose declaration was not
+                # independently grounded in the host's policy or offered list.
+                # The register-time probe is useful context, but it is not the
+                # worker_done evidence pair that is allowed to clear the mark.
+                if pending_model_status == MODEL_NEEDS_MEASUREMENT:
+                    entry["model_measured"] = None
+                    entry["model_verified"] = False
+                else:
+                    entry["model_measured"] = measured_model
+                    entry["model_verified"] = bool(
+                        declared_model and measured_model and not model_probe_failed
+                    )
+                if pending_model_status is not None:
+                    entry["model_status"] = pending_model_status
+                if model_warning is not None:
+                    entry["warnings"] = [
+                        *entry.get("warnings", []),
+                        model_warning.value,
+                    ]
+                entry["attempt"] = self._next_attempt(str(pending["contract_sha"]))
+                self._append_entry(entry)
         if model_warning is not None:
             decision = GateDecision(
                 decision.allow,
@@ -911,7 +912,9 @@ class DispatchGate:
                 message="quoted model line has no model field",
             )
 
-        with _ticket_lock(Path(self.config.ticket_dir)):
+        with _ledger_lock(Path(self.config.ledger_path)), _ticket_lock(
+            Path(self.config.ticket_dir)
+        ):
             entries = list(self._read_entries())
             target_index: int | None = None
             for index, entry in enumerate(entries):
@@ -1106,17 +1109,18 @@ class DispatchGate:
         if getattr(self, "_tier_policy_digest", ""):
             entry["tier_policy_sha256"] = self._tier_policy_digest
         if decision.allow and decision.contract_sha is not None:
-            with _ticket_lock(Path(self.config.ticket_dir)):
-                entry["attempt"] = self._next_attempt(decision.contract_sha)
-                self._append_entry(entry)
+            with _ledger_lock(Path(self.config.ledger_path)):
+                with _ticket_lock(Path(self.config.ticket_dir)):
+                    entry["attempt"] = self._next_attempt(decision.contract_sha)
+                    self._append_entry(entry)
             return
-        with _ticket_lock(Path(self.config.ticket_dir)):
+        with _ledger_lock(Path(self.config.ledger_path)):
             self._append_entry(entry)
 
     def append_ledger_entry(self, entry: Mapping[str, object]) -> None:
         """Append an externally prepared ledger entry under the gate lock."""
 
-        with _ticket_lock(Path(self.config.ticket_dir)):
+        with _ledger_lock(Path(self.config.ledger_path)):
             self._append_entry(entry)
 
     def _append_entry(self, entry: Mapping[str, object]) -> None:
@@ -1824,6 +1828,22 @@ def _has_worktree_as_repo_root(contract_text: str) -> bool:
 def _ticket_lock(ticket_dir: Path) -> Iterator[None]:
     ticket_dir.mkdir(parents=True, exist_ok=True)
     lock_path = ticket_dir / ".dispatch-gate.lock"
+    with lock_path.open("a", encoding="utf-8") as lock_file:
+        if fcntl is not None:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def _ledger_lock(ledger_path: Path) -> Iterator[None]:
+    """Serialize ledger updates without creating the ticket directory."""
+
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = ledger_path.parent / ".dispatch-gate.lock"
     with lock_path.open("a", encoding="utf-8") as lock_file:
         if fcntl is not None:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)

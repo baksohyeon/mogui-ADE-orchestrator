@@ -2251,7 +2251,12 @@ def test_register_uses_ticket_flock(
     decision = gate.register_job("job-locked", lambda job_id: job_id == "job-locked")
 
     assert decision.allow is True
-    assert calls == [FakeFcntl.LOCK_EX, FakeFcntl.LOCK_UN]
+    assert calls == [
+        FakeFcntl.LOCK_EX,
+        FakeFcntl.LOCK_EX,
+        FakeFcntl.LOCK_UN,
+        FakeFcntl.LOCK_UN,
+    ]
 
 
 def test_register_denies_contract_sha_without_matching_pending_dispatch(

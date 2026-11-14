@@ -1710,11 +1710,11 @@ class BranchDeletionTests(unittest.TestCase):
             self.assertEqual(env.closed_commands, [])
             self.assertEqual(env.removed_commands, [])
             self.assertIn("would_close_worktree:id:repo:target", record.actions_taken)
-            self.assertIn("worktree_terminal_handles", record.measurements)
-            self.assertIn("pane_states", record.measurements)
-            self.assertIn("agent_process", record.measurements)
-            # Mutant proof: probing or routing through cleanup verbs before the
-            # unpushed check would discard the resume worktree.
+            self.assertEqual(record.measurements["worktree_terminal_handles"], ["term-target"])
+            self.assertEqual(record.measurements["pane_states"], {"term-target": "idle"})
+            self.assertEqual(record.measurements["agent_process"], "")
+            # Mutant proof: calling cleanup verbs before the unpushed check
+            # would discard the resume worktree.
 
     def test_squash_merge_pr_evidence_routes_through_orca(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

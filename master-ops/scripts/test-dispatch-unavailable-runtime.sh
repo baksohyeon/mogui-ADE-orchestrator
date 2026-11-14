@@ -55,9 +55,12 @@ real_gate_register_lock_test() (
   repo_root=$(cd "$dispatch_dir/../.." && pwd)
   gate="$repo_root/scripts/dispatch-gate"
   policy="$dispatch_dir/../model-tier-policy.json"
-  if [ ! -x "$gate" ]; then
+  if [ ! -e "$gate" ]; then
     echo "SKIP: real dispatch-gate source is not present in this rendered template"
     return 0
+  elif [ ! -x "$gate" ]; then
+    echo "FAIL: real dispatch-gate source is present but not executable" >&2
+    return 1
   fi
   contract="$work/contract.md"
   ledger="$work/state/dispatch-ledger.jsonl"

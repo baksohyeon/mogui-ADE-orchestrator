@@ -161,7 +161,7 @@ fi
 LEDGER="$STATE_DIR/dispatch-ledger.jsonl"
 
 resolve_shared_paths() {
-  LEDGER_LOCK="${LEDGER_LOCK:-$("$GATE" --ledger "$LEDGER" lock-path)}"
+  LEDGER_LOCK="$("$GATE" --ledger "$LEDGER" lock-path)"
   AGY_SESSION_ROOT="${DISPATCH_AGY_SESSION_ROOT:-$("$GATE" --ledger "$LEDGER" session-root --runtime agy)}"
   AGY_SESSION_ROOT="${AGY_SESSION_ROOT/#\~/$HOME}"
   CURSOR_SESSION_ROOT="${DISPATCH_CURSOR_SESSION_ROOT:-$("$GATE" --ledger "$LEDGER" session-root --runtime cursor)}"

@@ -1055,7 +1055,7 @@ class DispatchGate:
                     ReasonCode.MODEL_EVIDENCE_INVALID,
                     message=f"session_record={record_path}",
                 )
-            _, _, session_start = _record_context(record_text)
+            _, _, session_start = _record_context(record_text, runtime)
             if session_start is not None and session_start < dispatch_ts:
                 return GateDecision(
                     False,
@@ -2114,7 +2114,10 @@ def _dispatch_placement(
     return placement
 
 
-def _record_context(record_text: str) -> tuple[set[str], set[str], float | None]:
+def _record_context(
+    record_text: str,
+    runtime: str | None = None,
+) -> tuple[set[str], set[str], float | None]:
     """Collect identity only from session metadata or direct record fields.
 
     Tool events can mention another worktree while a session is operating on
@@ -2137,7 +2140,23 @@ def _record_context(record_text: str) -> tuple[set[str], set[str], float | None]
         if value.get("type") == "session_meta"
         and isinstance(value.get("payload"), Mapping)
     ]
-    authoritative = session_payloads[:1] or records
+    if session_payloads:
+        authoritative = session_payloads[:1]
+    elif (runtime or "").casefold() == "claude":
+        authoritative = [
+            value
+            for value in records
+            if not _is_sidechain_event(value)
+            and (
+                value.get("type") == "assistant"
+                or (
+                    isinstance(value.get("message"), Mapping)
+                    and value["message"].get("role") == "assistant"
+                )
+            )
+        ]
+    else:
+        authoritative = records
     cwd_values: set[str] = set()
     session_values: set[str] = set()
     session_start: float | None = None
@@ -2200,7 +2219,8 @@ def _record_belongs_to_dispatch(
     if not worktree and not session_id:
         return False
 
-    cwd_values, session_values, _ = _record_context(record_text)
+    runtime = _string_or_none(target.get("runtime"))
+    cwd_values, session_values, _ = _record_context(record_text, runtime)
     if session_id:
         if session_id not in session_values:
             if _string_or_none(target.get("runtime")) == "agy":
@@ -2355,8 +2375,8 @@ def _ticket_lock(ticket_dir: Path) -> Iterator[None]:
 def _ledger_lock(ledger_path: Path) -> Iterator[None]:
     """Serialize ledger updates without creating the ticket directory."""
 
-    ledger_path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = ledger_lock_path(ledger_path)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
     inherited_fd = os.environ.get(LEDGER_LOCK_FD_ENV, "")
     try:
         fd = int(inherited_fd)

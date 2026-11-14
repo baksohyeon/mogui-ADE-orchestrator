@@ -3960,6 +3960,20 @@ with lock_path.open('a', encoding='utf-8') as lock:
             holder.wait(timeout=2)
 
 
+def test_ledger_lock_expands_user_before_creating_parent(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    fake_home = tmp_path / "home"
+    _set_fake_home(monkeypatch, fake_home)
+    ledger_path = Path("~/nested/ledger.jsonl")
+    lock_path = dispatch_gate.ledger_lock_path(ledger_path)
+
+    with dispatch_gate._ledger_lock(ledger_path):
+        assert lock_path == fake_home / "nested" / "dispatch-ledger.lock"
+        assert lock_path.is_file()
+
+
 def test_measure_model_clears_a_stale_mismatch_warning_when_model_matches(
     tmp_path: Path,
     monkeypatch,
@@ -4407,6 +4421,51 @@ def test_measure_model_reads_claude_main_message_model_only(
 
     assert measured.allow is True
     assert measured.warnings == ()
+
+
+def test_measure_model_ignores_sidechain_context_without_session_meta(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    declared = "claude-haiku-4-5-20251001"
+    gate = _marked_registration(
+        tmp_path,
+        monkeypatch,
+        runtime="claude",
+        model=declared,
+    )
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "claude.jsonl"
+    main_line = json.dumps(
+        {
+            "type": "assistant",
+            "sessionId": "session-redacted",
+            "cwd": str(tmp_path / "other-worker"),
+            "message": {
+                "id": "msg-main",
+                "role": "assistant",
+                "model": declared,
+            },
+        }
+    )
+    sidechain_line = json.dumps(
+        {
+            "type": "assistant",
+            "sessionId": "session-redacted",
+            "isSidechain": True,
+            "cwd": str(tmp_path / "worker"),
+            "message": {
+                "id": "msg-sidechain",
+                "role": "assistant",
+                "model": "claude-sidechain",
+            },
+        }
+    )
+    record.write_text(main_line + "\n" + sidechain_line + "\n", encoding="utf-8")
+
+    measured = gate.measure_model("job-marked", record, main_line)
+
+    assert measured.allow is False
+    assert measured.reason == ReasonCode.MODEL_EVIDENCE_UNBOUND
 
 
 def test_measure_model_requires_a_same_turn_claude_alias(

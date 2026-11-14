@@ -69,7 +69,7 @@ real_gate_register_lock_test() (
   out=$(HOME="$work/home" MOGUI_STATE_DIR="$work/state" PYTHONPATH="$repo_root/src" \
     "$gate" --ledger "$ledger" check --runtime codex --model future-model \
     --contract "$contract" --agents 1 --est-chars 1000 \
-    --completion-channel sentinel-log 2>&1)
+    --completion-channel sentinel-log --tier-policy "$policy" 2>&1)
   status=$?
   if [ "$status" -ne 0 ]; then
     echo "FAIL: real dispatch-gate check did not prepare registration" >&2

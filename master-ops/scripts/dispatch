@@ -88,6 +88,7 @@ MODEL_WARNING_REASON=""
 TGLOB_EXPLICIT=0
 EST=3000
 TERMINAL="" WORKTREE="" CONTRACT="" SPEC="" RUNTIME="" SAME_HOST_REASON="" CHECK_ONLY=0
+RUNTIME_EXPLICIT=0
 TIER_POLICY_OVERRIDE=""
 # Tracker card choice. With neither flag, the wrapper creates and claims a card
 # from the contract's H1 title when bd resolves to an active tracker.
@@ -114,7 +115,7 @@ while [ $# -gt 0 ]; do
     --terminal) TERMINAL=$2; shift 2;;
     --worktree) WORKTREE=$2; shift 2;;
     --model) MODEL=$2; MODEL_EXPLICIT=1; shift 2;;
-    --runtime) RUNTIME=$2; shift 2;;
+    --runtime) RUNTIME=$2; RUNTIME_EXPLICIT=1; shift 2;;
     --same-host-reason) SAME_HOST_REASON=$2; shift 2;;
     --est-chars) EST=$2; shift 2;;
     --transcript-glob) TGLOB=$2; TGLOB_EXPLICIT=1; shift 2;;
@@ -972,6 +973,19 @@ refuse_unavailable_runtime() {
   until=$(printf '%s\n' "$entry" | sed -n 3p)
   echo "✗ runtime $runtime unavailable on this install since $since until $until: $why · alternatives: ${alternatives:-none}" >&2
   return 1
+}
+
+# An explicit runtime must name an installed runtime from the supported set.
+# A known runtime with a model from another vendor is still dispatchable: that
+# declaration is measured from the worker session below. This check only keeps
+# crafted runtime names from reaching model resolution and the gate.
+refuse_uninstalled_runtime() {
+  local runtime="$1"
+  if ! printf '%s\n' $RUNTIME_CANDIDATES | grep -Fxq -- "$runtime" \
+      || ! command -v "$runtime" >/dev/null 2>&1; then
+    echo "✗ runtime $runtime is not installed or listed in RUNTIME_CANDIDATES" >&2
+    return 1
+  fi
 }
 
 join_csv() {
@@ -1868,6 +1882,9 @@ UNAVAILABLE_RUNTIMES=$(unavailable_runtime_names | join_csv)
 # RUNTIME is final as of the block above; refuse here, before any model
 # resolution or gate check spends effort on a runtime the operator already
 # declared unusable on this install.
+if [ "$RUNTIME_EXPLICIT" = 1 ]; then
+  refuse_uninstalled_runtime "$RUNTIME" || exit 2
+fi
 refuse_unavailable_runtime "$RUNTIME" "$ALTERNATIVE_RUNTIMES" || exit 2
 
 [ "$RUNTIME" = codex ] && apply_codex_instance_launch_config

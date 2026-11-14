@@ -46,14 +46,15 @@ dispatch_with_gate() {  # fake-gate-path
 # satisfy this regression.
 real_gate_register_lock_test() (
   set +e
-  local work contract ledger policy gate repo_root contract_sha ledger_fn out status
+  local work contract ledger policy gate repo_root dispatch_dir contract_sha ledger_fn out status
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-real-register-lock.$$"
   mkdir -p "$work/state" "$work/home"
   trap 'rm -rf "$work"' EXIT
-  repo_root=$(cd "$(dirname "$dispatch")/../.." && pwd)
+  dispatch_dir=$(cd "$(dirname "$dispatch")" && pwd)
+  repo_root=$(cd "$dispatch_dir/../.." && pwd)
   gate="$repo_root/scripts/dispatch-gate"
-  policy="$repo_root/master-ops/model-tier-policy.json"
+  policy="$dispatch_dir/../model-tier-policy.json"
   contract="$work/contract.md"
   ledger="$work/state/dispatch-ledger.jsonl"
   printf '%s\n' 'scratch contract' > "$contract"

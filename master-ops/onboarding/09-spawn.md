@@ -20,7 +20,9 @@ The kickoff file also includes a warm resume note before the installer retiremen
 
 Before launching any worker, follow `docs/MASTER-OPERATIONS.md` §3: MEASURE the installed agent CLI's non-interactive approval flags from `--help` and never guess them.
 
-Confirm `{{RUNTIME_ROOT}}/config/instance-runtime.json` still carries the onboarding answers (`master_host_runtime`, `master_seat_path`, and `transcript_globs` when measured). Use that file (or `MOGUI_MASTER_HOST_RUNTIME` / `MOGUI_MASTER_SEAT_PATH` / `MOGUI_TRANSCRIPT_GLOB` env overrides) for launch, placement, and model-probe guidance; do not reintroduce a hardcoded host runtime, seat path, or transcript path. When a value is missing, treat it as unconfigured and measure or ask rather than guessing.
+Export the approved absolute ops repository path before calling the orchestrator checkout's Python entry points. They use `MOGUI_OPS_REPO` as their default instance-config root when `INSTANCE_RUNTIME_CONFIG` is not set; the explicit `INSTANCE_RUNTIME_CONFIG` override remains available for a deliberate path.
+
+Confirm `{{OPS_REPO}}/config/instance-runtime.json` still carries the onboarding answers (`master_host_runtime`, `master_seat_path`, and `transcript_globs` when measured). Use that file (or `MOGUI_MASTER_HOST_RUNTIME` / `MOGUI_MASTER_SEAT_PATH` / `MOGUI_TRANSCRIPT_GLOB` env overrides) for launch, placement, and model-probe guidance; do not reintroduce a hardcoded host runtime, seat path, or transcript path. When a value is missing, treat it as unconfigured and measure or ask rather than guessing.
 
 Before attaching a Codex worker, run `{{RUNTIME_ROOT}}/scripts/codex-worker-pretrust <worktree-path>` as the pre-trust step.
 
@@ -29,6 +31,7 @@ Before attaching a Codex worker, run `{{RUNTIME_ROOT}}/scripts/codex-worker-pret
 Run this supervised path with the resolved `ORCA` executable:
 
 ```bash
+export MOGUI_OPS_REPO="{{OPS_REPO}}"
 G={{RUNTIME_ROOT}}/scripts/dispatch-gate
 L=~/.mogui/dispatch-ledger.jsonl
 "$G" --ledger "$L" check \

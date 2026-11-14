@@ -14,6 +14,7 @@ import pytest
 from master_runtime.core import instance_runtime_config
 from master_runtime.core.instance_runtime_config import (
     CONFIG_PATH_ENV,
+    OPS_REPO_ENV,
     MASTER_HOST_RUNTIME_ENV,
     MASTER_HOST_RUNTIME_ENV_ALT,
     MASTER_SEAT_PATH_ENV,
@@ -605,3 +606,91 @@ def test_default_config_path_is_repo_relative_not_cwd(tmp_path: Path, monkeypatc
     monkeypatch.chdir(tmp_path)
     path = mod.default_config_path()
     assert path == (ROOT / "config" / "instance-runtime.json").resolve()
+
+
+def test_ops_repo_default_wins_when_orchestrator_and_ops_roots_differ(tmp_path: Path) -> None:
+    orchestrator = tmp_path / "orchestrator"
+    ops_repo = tmp_path / "ops"
+    (orchestrator / "config").mkdir(parents=True)
+    (ops_repo / "config").mkdir(parents=True)
+    _write_config(
+        orchestrator / "config" / "instance-runtime.json",
+        {"master_host_runtime": "wrong-root"},
+    )
+    ops_config = _write_config(
+        ops_repo / "config" / "instance-runtime.json",
+        {"master_host_runtime": "claude"},
+    )
+
+    loaded = load_instance_runtime_config(
+        repo_root=orchestrator,
+        environ={OPS_REPO_ENV: f"  {ops_repo}  "},
+    )
+
+    assert loaded.source_path == ops_config.resolve()
+    assert loaded.require_master_host_runtime() == "claude"
+
+
+def test_ops_repo_default_falls_back_to_orchestrator_when_missing(tmp_path: Path) -> None:
+    orchestrator = tmp_path / "orchestrator"
+    ops_repo = tmp_path / "ops"
+    (orchestrator / "config").mkdir(parents=True)
+    orchestrator_config = _write_config(
+        orchestrator / "config" / "instance-runtime.json",
+        {"master_host_runtime": "claude"},
+    )
+
+    loaded = load_instance_runtime_config(
+        repo_root=orchestrator,
+        environ={OPS_REPO_ENV: str(ops_repo)},
+    )
+
+    assert loaded.source_path == orchestrator_config.resolve()
+    assert loaded.require_master_host_runtime() == "claude"
+
+
+def test_ops_repo_default_warns_when_config_is_missing(tmp_path: Path, capsys) -> None:
+    orchestrator = tmp_path / "orchestrator"
+    ops_repo = tmp_path / "ops"
+    (orchestrator / "config").mkdir(parents=True)
+    orchestrator_config = _write_config(
+        orchestrator / "config" / "instance-runtime.json",
+        {"master_host_runtime": "claude"},
+    )
+
+    loaded = load_instance_runtime_config(
+        repo_root=orchestrator,
+        environ={OPS_REPO_ENV: str(ops_repo)},
+    )
+
+    assert loaded.source_path == orchestrator_config.resolve()
+    warning = capsys.readouterr().err
+    assert warning.count("WARNING:") == 1
+    assert str(ops_repo / "config" / "instance-runtime.json") in warning
+    assert str(orchestrator_config) in warning
+
+
+def test_relative_ops_repo_does_not_depend_on_cwd(tmp_path: Path, monkeypatch) -> None:
+    orchestrator = tmp_path / "orchestrator"
+    cwd = tmp_path / "caller"
+    relative_ops = cwd / "ops"
+    (orchestrator / "config").mkdir(parents=True)
+    cwd.mkdir()
+    (relative_ops / "config").mkdir(parents=True)
+    orchestrator_config = _write_config(
+        orchestrator / "config" / "instance-runtime.json",
+        {"master_host_runtime": "claude"},
+    )
+    _write_config(
+        relative_ops / "config" / "instance-runtime.json",
+        {"master_host_runtime": "codex"},
+    )
+    monkeypatch.chdir(cwd)
+
+    loaded = load_instance_runtime_config(
+        repo_root=orchestrator,
+        environ={OPS_REPO_ENV: "ops"},
+    )
+
+    assert loaded.source_path == orchestrator_config.resolve()
+    assert loaded.require_master_host_runtime() == "claude"

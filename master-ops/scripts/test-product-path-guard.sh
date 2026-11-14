@@ -819,7 +819,7 @@ NL_DENY_MUTANT_HOOK="$TMP/product-path-guard-newline-deny-mutant.sh"
 make_newline_mutant "$NL_DENY_MUTANT_HOOK" '        out.append(ch)
         i += 1
     return "".join(out)
-def mark_attached_cd_fds' '        if ch == "\n":
+def has_ansi_c_quote_opener' '        if ch == "\n":
             raise ValueError("quoted newline")
         out.append(ch)
         i += 1
@@ -896,12 +896,16 @@ expect_blocked both-fields-malformed-legacy-blocked run_file_config "$TMP/runtim
 expect_verdict block both-fields-malformed-legacy-blocked
 grep -q "cannot load product_repositories" "$TMP/stderr" || { echo "FAIL: both-fields-malformed-legacy-blocked missing load failure message" >&2; cat "$TMP/stderr" >&2; exit 1; }
 
-installed_runtime="$TMP/installed-runtime"
-installed_hook="$TMP/product-path-guard-installed.sh"
-mkdir -p "$installed_runtime/config"
-printf '{"master_host_runtime":"claude","product_repositories":["%s"]}\n' "$product" >"$installed_runtime/config/instance-runtime.json"
-runtime_root_token="{""{RUNTIME_ROOT}}"
-if ! runtime_root_anchor="$(python3 - "$HOOK" <<'PY'
+orchestrator_root="$TMP/orchestrator-root"
+stamped_ops="$TMP/stamped-ops"
+stamped_hook="$TMP/product-path-guard-stamped.sh"
+old_template_hook="$TMP/product-path-guard-old-template.sh"
+old_template_stamped_hook="$TMP/product-path-guard-old-template-stamped.sh"
+stamped_runtime_config="$stamped_ops/config/instance-runtime.json"
+mkdir -p "$orchestrator_root" "$stamped_ops/config"
+printf '{"master_host_runtime":"claude","product_repositories":["%s"]}\n' "$product" >"$stamped_runtime_config"
+ops_repo_token="{""{OPS_REPO}}"
+if ! ops_repo_anchor="$(python3 - "$HOOK" "$ops_repo_token" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -921,69 +925,146 @@ for line in text.splitlines():
     if in_default_branch:
         match = pattern.fullmatch(line)
         if match:
-            matches.append(match.group(1))
+            matches.append(line)
 
 if len(matches) != 1:
     raise SystemExit(1)
+captured_root = pattern.fullmatch(matches[0]).group(1)
+hook_path = Path(sys.argv[1])
+rendered_roots = {
+    str(hook_path.absolute().parents[2]),
+    str(hook_path.resolve().parents[2]),
+}
+if captured_root not in {sys.argv[2], *rendered_roots}:
+    raise SystemExit(
+        f"default INSTANCE_RUNTIME_CONFIG root is {captured_root!r}; "
+        f"expected the OPS_REPO token or rendered ops root in {sorted(rendered_roots)!r}"
+    )
 print(matches[0])
 PY
 )"; then
   echo "FAIL: expected exactly one default INSTANCE_RUNTIME_CONFIG line in hook" >&2
   exit 1
 fi
-runtime_root_sed_pattern=$(printf '%s\n' "$runtime_root_anchor" | sed 's/[.[\*^$\\|]/\\&/g')
-installed_runtime_sed_replacement=$(printf '%s\n' "$installed_runtime" | sed 's/[\\&|]/\\&/g')
-sed "s|$runtime_root_sed_pattern|$installed_runtime_sed_replacement|g" "$HOOK" >"$installed_hook"
-if cmp -s "$HOOK" "$installed_hook"; then
-  echo "FAIL: installed hook did not replace the runtime-root anchor" >&2
-  exit 1
-fi
-chmod +x "$installed_hook"
-expect_allowed substituted-runtime-root-default-config run_bash_default_config "ls" "$ops" "$installed_hook"
-expect_verdict pass substituted-runtime-root-default-config
-
-mutant_source="$TMP/product-path-guard-mutant-source.sh"
-mutant_installed_hook="$TMP/product-path-guard-mutant-installed.sh"
-python3 - "$HOOK" "$mutant_source" "$runtime_root_anchor" <<'PY'
+python3 - "$HOOK" "$stamped_hook" "$ops_repo_anchor" "$stamped_runtime_config" <<'PY'
 from pathlib import Path
 import sys
 
 source = Path(sys.argv[1]).read_text(encoding="utf-8")
-needle = 'if [[ "$INSTANCE_RUNTIME_CONFIG" == *"$runtime_root_token"* ]]; then'
-replacement = f'if [[ "$INSTANCE_RUNTIME_CONFIG" == *"{sys.argv[3]}"* ]]; then'
+anchor = sys.argv[3]
+if source.count(anchor) != 1:
+    raise SystemExit("stamped hook default anchor not found exactly once")
+indent = anchor[: len(anchor) - len(anchor.lstrip())]
+replacement = f'{indent}INSTANCE_RUNTIME_CONFIG="{sys.argv[4]}"'
+rendered = source.replace(anchor, replacement, 1)
+Path(sys.argv[2]).write_text(rendered, encoding="utf-8")
+PY
+if cmp -s "$HOOK" "$stamped_hook"; then
+  echo "FAIL: stamped hook did not replace its placeholder anchor" >&2
+  exit 1
+fi
+chmod +x "$stamped_hook"
+expect_allowed stamped-ops-root-default-config run_bash_default_config "ls" "$ops" "$stamped_hook"
+expect_verdict pass stamped-ops-root-default-config
+
+# The old template sent this lookup to the orchestrator checkout. Keep the
+# two roots separate so the old default demonstrably cannot find the ops copy.
+python3 - "$HOOK" "$old_template_hook" "$ops_repo_anchor" <<'PY'
+from pathlib import Path
+import sys
+
+source = Path(sys.argv[1]).read_text(encoding="utf-8")
+anchor = sys.argv[3]
+if source.count(anchor) != 1:
+    raise SystemExit("old-template hook default anchor not found exactly once")
+indent = anchor[: len(anchor) - len(anchor.lstrip())]
+runtime_root_token = "{" + "{RUNTIME_ROOT}" + "}"
+replacement = f'{indent}INSTANCE_RUNTIME_CONFIG="{runtime_root_token}/config/instance-runtime.json"'
+old = source.replace(anchor, replacement, 1)
+Path(sys.argv[2]).write_text(old, encoding="utf-8")
+PY
+python3 - "$old_template_hook" "$old_template_stamped_hook" "$orchestrator_root" <<'PY'
+from pathlib import Path
+import sys
+
+source = Path(sys.argv[1]).read_text(encoding="utf-8")
+runtime_root_token = "{" + "{RUNTIME_ROOT}" + "}"
+rendered = source.replace(runtime_root_token, sys.argv[3])
+Path(sys.argv[2]).write_text(rendered, encoding="utf-8")
+PY
+chmod +x "$old_template_stamped_hook"
+expect_blocked old-template-runtime-root-default-config run_bash_default_config "ls" "$ops" "$old_template_stamped_hook"
+expect_verdict block old-template-runtime-root-default-config
+grep -q "$orchestrator_root/config/instance-runtime.json" "$TMP/stderr" || {
+  echo "FAIL: old-template fixture did not show its orchestrator-root lookup" >&2
+  cat "$TMP/stderr" >&2
+  exit 1
+}
+echo "PASS: old-template runtime-root fixture was rejected with separate ops and orchestrator roots"
+
+mutant_source="$TMP/product-path-guard-mutant-source.sh"
+mutant_installed_hook="$TMP/product-path-guard-mutant-installed.sh"
+python3 - "$HOOK" "$mutant_source" "$ops_repo_anchor" <<'PY'
+from pathlib import Path
+import sys
+import re
+
+source = Path(sys.argv[1]).read_text(encoding="utf-8")
+needle = 'if [[ "$INSTANCE_RUNTIME_CONFIG" == *"$ops_repo_token"* ]]; then'
+match = re.fullmatch(r'[ \t]*INSTANCE_RUNTIME_CONFIG="(.+)/config/instance-runtime\.json"[ \t]*', sys.argv[3])
+if not match:
+    raise SystemExit("FAIL: ops-repo sentinel mutant default anchor is malformed")
+replacement = f'if [[ "$INSTANCE_RUNTIME_CONFIG" == *"{match.group(1)}"* ]]; then'
 if source.count(needle) != 1:
-    raise SystemExit("FAIL: runtime-root sentinel mutant anchor not found exactly once")
+    raise SystemExit("FAIL: ops-repo sentinel mutant anchor not found exactly once")
 Path(sys.argv[2]).write_text(source.replace(needle, replacement, 1), encoding="utf-8")
 PY
-sed "s|$runtime_root_sed_pattern|$installed_runtime_sed_replacement|g" "$mutant_source" >"$mutant_installed_hook"
+python3 - "$mutant_source" "$mutant_installed_hook" "$ops_repo_anchor" "$stamped_runtime_config" "$ops_repo_token" <<'PY'
+from pathlib import Path
+import sys
+import re
+
+source = Path(sys.argv[1]).read_text(encoding="utf-8")
+anchor = sys.argv[3]
+if source.count(anchor) != 1:
+    raise SystemExit("mutant installed hook default anchor not found exactly once")
+match = re.fullmatch(r'[ \t]*INSTANCE_RUNTIME_CONFIG="(.+)/config/instance-runtime\.json"[ \t]*', anchor)
+if not match:
+    raise SystemExit("mutant installed hook default anchor is malformed")
+indent = anchor[: len(anchor) - len(anchor.lstrip())]
+replacement = f'{indent}INSTANCE_RUNTIME_CONFIG="{sys.argv[4]}"'
+rendered = source.replace(anchor, replacement, 1)
+rendered = rendered.replace(sys.argv[5], sys.argv[4]).replace(match.group(1), sys.argv[4])
+Path(sys.argv[2]).write_text(rendered, encoding="utf-8")
+PY
 if cmp -s "$mutant_source" "$mutant_installed_hook"; then
-  echo "FAIL: mutant installed hook did not replace the runtime-root anchor" >&2
+  echo "FAIL: mutant installed hook did not replace its placeholder anchor" >&2
   exit 1
 fi
 chmod +x "$mutant_installed_hook"
 (
-  expect_allowed failability-substituted-runtime-root-default-config run_bash_default_config "ls" "$ops" "$mutant_installed_hook"
+  expect_allowed failability-substituted-ops-repo-default-config run_bash_default_config "ls" "$ops" "$mutant_installed_hook"
 )
 mutant_exit=$?
 (
-  expect_allowed failability-substituted-runtime-root-default-config run_bash_default_config "ls" "$ops" "$installed_hook"
+  expect_allowed failability-substituted-ops-repo-default-config run_bash_default_config "ls" "$ops" "$stamped_hook"
 )
 restored_exit=$?
-[ "$mutant_exit" -eq 1 ] || { echo "FAIL: failability runtime-root mutant exit expected 1 got $mutant_exit" >&2; exit 1; }
-[ "$restored_exit" -eq 0 ] || { echo "FAIL: failability runtime-root restored exit expected 0 got $restored_exit" >&2; exit 1; }
-echo "PASS: failability: substituted runtime-root mutant exit $mutant_exit, restored exit $restored_exit"
+[ "$mutant_exit" -eq 1 ] || { echo "FAIL: failability ops-repo mutant exit expected 1 got $mutant_exit" >&2; exit 1; }
+[ "$restored_exit" -eq 0 ] || { echo "FAIL: failability ops-repo restored exit expected 0 got $restored_exit" >&2; exit 1; }
+echo "PASS: failability: substituted ops-repo mutant exit $mutant_exit, restored exit $restored_exit"
 
 # $HOOK carries this sentinel unrendered only in the authoring checkout: a
-# whole-tree render substitutes it to a real path by design (issue #186), so
+# whole-tree render substitutes the default path by design (issue #186), so
 # there is no unsubstituted state left to provoke here: SKIP instead of
 # asserting, so this does not fail on the hook's own correct behavior.
-if grep -q "{""{RUNTIME_ROOT}}" "$HOOK"; then
-  expect_blocked unsubstituted-runtime-root-token run_bash_default_config "ls" "$ops"
-  expect_verdict block unsubstituted-runtime-root-token
-  grep -q "{""{RUNTIME_ROOT}}" "$TMP/stderr" || { echo "FAIL: unsubstituted-runtime-root-token missing token name" >&2; exit 1; }
-  grep -q "MOGUI_INSTANCE_RUNTIME_CONFIG" "$TMP/stderr" || { echo "FAIL: unsubstituted-runtime-root-token missing override name" >&2; exit 1; }
+if grep -q "{""{OPS_REPO}}" "$HOOK"; then
+  expect_blocked unsubstituted-ops-repo-token run_bash_default_config "ls" "$ops"
+  expect_verdict block unsubstituted-ops-repo-token
+  grep -q "{""{OPS_REPO}}" "$TMP/stderr" || { echo "FAIL: unsubstituted-ops-repo-token missing token name" >&2; exit 1; }
+  grep -q "MOGUI_INSTANCE_RUNTIME_CONFIG" "$TMP/stderr" || { echo "FAIL: unsubstituted-ops-repo-token missing override name" >&2; exit 1; }
 else
-  echo "SKIP: unsubstituted-runtime-root-token (scripts/hooks/product-path-guard.sh has its RUNTIME_ROOT token already substituted; rendered copy, sentinel replaced by design)"
+  echo "SKIP: unsubstituted-ops-repo-token (scripts/hooks/product-path-guard.sh has its OPS_REPO token already substituted; rendered copy, sentinel replaced by design)"
 fi
 
 # ANSI-C quoting: bash reads $' as an ANSI-C quote opener, where \' is an

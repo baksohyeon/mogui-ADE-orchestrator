@@ -27,9 +27,7 @@ def _filled_ops(tmp_path: Path) -> tuple[Path, Path]:
     ops = tmp_path / "ops"
     runtime = tmp_path / "runtime"
     (runtime / "config").mkdir(parents=True)
-    (runtime / "config" / "instance-runtime.json").write_text(
-        json.dumps({"master_host_runtime": "claude", "product_repositories": [str(tmp_path / "product")]})
-    )
+    (ops / "config").mkdir(parents=True)
     values = {
         "WORKSPACE_NAME": "fixture",
         "WORKSPACE_ROOT": str(tmp_path),
@@ -51,6 +49,9 @@ def _filled_ops(tmp_path: Path) -> tuple[Path, Path]:
         for key in PLACEHOLDERS:
             text = text.replace(key, values[key[2:-2]])
         dest.write_text(text, encoding="utf-8")
+    (ops / "config" / "instance-runtime.json").write_text(
+        json.dumps({"master_host_runtime": "claude", "product_repositories": [str(tmp_path / "product")]})
+    )
     return ops, runtime
 
 

@@ -117,6 +117,25 @@ def test_only_allowed_placeholders():
         assert not unknown, f"{path.name} uses placeholders outside the allowlist: {sorted(unknown)}"
 
 
+def test_onboarding_does_not_use_orchestrator_root_for_instance_runtime_config():
+    for path in [ROUTER, *STEP_DIR.glob("*.md")]:
+        text = path.read_text(encoding="utf-8")
+        assert "{{RUNTIME_ROOT}}/config/instance-runtime.json" not in text, path.name
+
+
+def test_rendered_settings_persist_ops_repo_for_fresh_master_sessions():
+    text = (STEP_DIR / "08-settings-and-skills.md").read_text(encoding="utf-8")
+    rendered = text.replace("{{OPS_REPO}}", "/absolute/ops-repository")
+    assert '"MOGUI_OPS_REPO": "/absolute/ops-repository"' in rendered
+
+
+def test_ops_repo_setup_canonicalizes_before_using_the_path_variable():
+    text = (STEP_DIR / "03-ops-repo.md").read_text(encoding="utf-8")
+    assert 'OPS_REPO_PATH="$(cd "{{OPS_REPO}}" && pwd -P)"' in text
+    assert 'test -f "$OPS_REPO_PATH/config/instance-runtime.json"' in text
+    assert "Record the canonical absolute path as `{{OPS_REPO}}`" in text
+
+
 def test_founder_spawn_hands_installer_retirement_switch_to_master():
     text = (STEP_DIR / "09-spawn.md").read_text(encoding="utf-8")
     kickoff = _section_between(

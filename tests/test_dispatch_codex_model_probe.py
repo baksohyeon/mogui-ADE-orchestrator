@@ -168,6 +168,7 @@ def test_unresolved_codex_rollout_falls_back_to_unavailable_probe_state() -> Non
 
     source = _source()
     assert 'PROBE_STATE="unavailable"' in source
+    assert 'CODEX_ROLLOUT_REASON="worktree path unavailable; cannot scope rollout"' in source
     fallback = re.search(
         r'if new_rollout_since "\$CODEX_ROLLOUT_BEFORE" "\$TGLOB"; then\s*\n'
         r'\s*PROBE_STATE="codex-new-rollout"\s*\n'

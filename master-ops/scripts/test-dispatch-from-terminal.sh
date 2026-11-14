@@ -15,6 +15,7 @@ contract="$work/contract.md"
 rules="$fixture/rules/standing-rules.md"
 gate="$work/dispatch-gate"
 mkdir -p "$fixture/scripts/lib" "$fixture/rules" "$fake_bin" "$tmp_home" "$state"
+: > "$state/dispatch-ledger.jsonl"
 cp "$dispatch" "$fixture/scripts/dispatch"
 cp "$(dirname "$dispatch")/lib/orca_json.py" "$fixture/scripts/lib/orca_json.py"
 cp "$(dirname "$dispatch")/mogui_log.py" "$fixture/scripts/mogui_log.py"
@@ -61,6 +62,7 @@ case "$1:$2" in
   orchestration:task-create) printf '{"ok":true,"result":{"taskId":"task_test"}}\n' ;;
   orchestration:dispatch) printf '{"ok":true,"result":{"dispatchId":"ctx_test"}}\n' ;;
   orchestration:dispatch-show) printf '{"ok":true,"result":{"status":"completed"}}\n' ;;
+  terminal:list) printf '{"result":{"terminals":[{"handle":"term_worker","worktreeId":"repo:test"}]}}\n' ;;
   terminal:read) printf 'unknown\n' ;;
   *) printf '{}\n' ;;
 esac

@@ -3960,6 +3960,64 @@ with lock_path.open('a', encoding='utf-8') as lock:
             holder.wait(timeout=2)
 
 
+@pytest.mark.skipif(
+    dispatch_gate.fcntl is None,
+    reason="ledger file locking is unavailable on this platform",
+)
+def test_ledger_lock_does_not_trust_an_unheld_inherited_fd(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    lock_path = dispatch_gate.ledger_lock_path(tmp_path / "ledger.jsonl")
+    holder_script = """
+import fcntl, sys
+from pathlib import Path
+lock_path = Path(sys.argv[1])
+with lock_path.open('a', encoding='utf-8') as lock:
+    fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+    print('ready', flush=True)
+    sys.stdin.read(1)
+"""
+    holder = subprocess.Popen(
+        [sys.executable, "-c", holder_script, str(lock_path)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    separate_fd = None
+    try:
+        assert holder.stdout is not None
+        assert holder.stdout.readline().strip() == "ready"
+        separate_fd = lock_path.open("a", encoding="utf-8")
+        monkeypatch.setenv(
+            dispatch_gate.LEDGER_LOCK_FD_ENV,
+            str(separate_fd.fileno()),
+        )
+        entered = threading.Event()
+
+        def acquire_lock() -> None:
+            with dispatch_gate._ledger_lock(tmp_path / "ledger.jsonl"):
+                entered.set()
+
+        worker = threading.Thread(target=acquire_lock)
+        worker.start()
+        assert not entered.wait(0.1)
+        assert holder.stdin is not None
+        holder.stdin.write("release")
+        holder.stdin.flush()
+        worker.join(timeout=2)
+        assert not worker.is_alive()
+        assert entered.is_set()
+    finally:
+        if separate_fd is not None:
+            separate_fd.close()
+        if holder.poll() is None:
+            if holder.stdin is not None:
+                holder.stdin.write("release")
+                holder.stdin.flush()
+            holder.wait(timeout=2)
+
+
 def test_ledger_lock_expands_user_before_creating_parent(
     tmp_path: Path,
     monkeypatch,
@@ -4588,6 +4646,50 @@ def test_measure_model_reads_codex_session_and_turn_context_models(
     record.write_text("\n".join((session, turn, response)) + "\n", encoding="utf-8")
 
     measured = gate.measure_model("job-marked", record, turn)
+
+    assert measured.allow is True
+    assert measured.warnings == ()
+
+
+def test_measure_model_reads_codex_payload_turn_id_for_same_turn_alias(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    declared = "gpt-5.6-luna-20261114"
+    alias = "gpt-5.6-luna"
+    gate = _marked_registration(
+        tmp_path,
+        monkeypatch,
+        runtime="codex",
+        model=declared,
+        model_needs_measurement=True,
+    )
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "codex.jsonl"
+    cwd = str(tmp_path / "worker")
+    session = json.dumps(
+        {
+            "type": "session_meta",
+            "payload": {"id": "sess-codex", "cwd": cwd},
+        }
+    )
+    dated = json.dumps(
+        {
+            "type": "turn_context",
+            "payload": {"model": declared, "turn_id": "turn-1"},
+        }
+    )
+    undated = json.dumps(
+        {
+            "type": "turn_context",
+            "payload": {"model": alias, "turn_id": "turn-1"},
+        }
+    )
+    record.write_text(
+        "\n".join((session, dated, undated)) + "\n",
+        encoding="utf-8",
+    )
+
+    measured = gate.measure_model("job-marked", record, undated)
 
     assert measured.allow is True
     assert measured.warnings == ()

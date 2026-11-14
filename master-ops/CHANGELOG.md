@@ -48,6 +48,71 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+## v0.5.338
+
+Release v0.5.338 (2026-11-14): master-ops/TEMPLATE-VERSION and master-ops/MANIFEST.json move to v0.5.338 alongside the changelog fold, and the root CHANGELOG.md rolls its Unreleased section into 0.5.338.
+
+# docs: check web pages headless or in Orca's browser first
+
+Contracts that name `headless-browser-first` now direct workers to use Orca's
+embedded browser first, then headless capture or `curl`, with Computer Use
+requiring a coordinator ask when a visible GUI is necessary. Issue #281.
+
+# Installed hooks resolve from the workspace
+
+Hook wiring now uses rendered operations-repository paths, and the harness
+self-check parses quoted command paths without depending on the session cwd.
+Worktree coverage proves the listed installed hook paths resolve from a worker
+worktree, while the tracker hook reports a clean skip when workspace-root data
+is unavailable.
+
+Instance runtime configuration now lives under the generated operations
+repository across the product-path guard, onboarding guidance, and rehearsal
+check. Existing installs with a hand-edited hook should re-stamp the template;
+the rendered default then matches the seat's ops repository and the local hook
+edit can be dropped.
+
+- Added a prose contract clause requiring evidence for every judgment in research and design deliverables, with a grade-count regression test.
+
+`dispatch` now lets unknown or unoffered model ids proceed with a visible
+measurement mark. A worker_done session-record path and raw model line can be
+verified by `dispatch-gate measure-model`; the mark remains visible until that
+evidence is confirmed, and a declared/measured difference is recorded as a
+mismatch. The template Grok ids now match the measured `grok models` output:
+`grok-4.6` and `grok-4.5`, replacing the legacy `grok-4-heavy` and
+`grok-4.5-fast`. Released installs need a template restamp to receive this
+policy update.
+
+`agy` dispatches now pre-trust each worktree through its measured
+`trustedWorkspaces` settings entry, and onboarding documents the contract
+command allowlist for git, GitHub, Orca orchestration, and the repository test
+commands. Issue #264.
+
+# feat: restore tracker work after compact recall
+
+The compact probe records its session, log offset, and state marker. A paired
+PostToolUse and UserPromptSubmit hook waits for the matching recall record,
+restores the Role State, tracker work, decisions, live panes, repository status,
+and configured seat lines once, and records a bounded recall skip when the
+continuation does not append the record. The probe now prints a runnable
+`CONTEXT_QUALITY_LOG=... context-quality-log.sh ...` command.
+
+Harness inventory merges an optional install-owned `docs/evals/evidence.instance.json` ledger,
+so instance-specific hooks can satisfy `--check` without changing template evidence.
+
+- Fixed the product-path-guard regression test so installed-hook fixtures derive the runtime-root replacement anchor from the hook's default configuration line.
+
+- Added workspace-card routing guidance so template pull requests receive a review skill pass before merge alongside review bots, with a shell checklist for repeated paths and hardcoded absolute paths.
+
+# Worker reclaim resumes by worktree
+
+`worker-reap` records the Orca worktree selector and available agent session id
+at dispatch time, selects panes by worktree membership, and closes them through
+Orca only after the existing `worker-pane-sweep` reports every member idle.
+Landing accepts squash merges through a path-scoped content comparison and
+reports whether ancestry or content decided the result. The dispatch runbook
+now routes abnormal worker exits through session resume before re-dispatch.
+
 ## v0.5.326
 
 Release v0.5.326 (2026-11-12): master-ops/TEMPLATE-VERSION and master-ops/MANIFEST.json move to v0.5.326 alongside the changelog fold, and the root CHANGELOG.md rolls its Unreleased section into 0.5.326.

@@ -1510,11 +1510,15 @@ class WorkerReaper:
     @staticmethod
     def _pr_head_repository_matches(pr: dict, repository: str) -> bool:
         """Require PR head ownership to match the measured repository, not a fork."""
-        expected_path = repository.split("/", 1)[1] if "/" in repository else repository
+        repository_parts = repository.rstrip("/").split("/")
+        expected_path = "/".join(repository_parts[-2:]).casefold()
         head_repository = pr.get("headRepository")
         if isinstance(head_repository, dict):
             name_with_owner = head_repository.get("nameWithOwner")
-            if isinstance(name_with_owner, str) and name_with_owner == expected_path:
+            if (
+                isinstance(name_with_owner, str)
+                and name_with_owner.casefold() == expected_path
+            ):
                 return True
             repository_name = head_repository.get("name")
         else:
@@ -1524,7 +1528,7 @@ class WorkerReaper:
         return (
             isinstance(owner_name, str)
             and isinstance(repository_name, str)
-            and f"{owner_name}/{repository_name}" == expected_path
+            and f"{owner_name}/{repository_name}".casefold() == expected_path
         )
 
     def _default_branch_for_repository(self, repository: str) -> Optional[str]:

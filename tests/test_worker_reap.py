@@ -1920,13 +1920,18 @@ class BranchDeletionTests(unittest.TestCase):
             self.assertEqual(env.legacy_removed_commands, [])
 
     def test_open_pr_skips_orca_cleanup(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            env = _SelectorEnvironment(tmp, open_pr=True)
-            record = WorkerReaper(orca_runner=env).reap(task_id="t1", execute=True)
+        for repository in ("example/worker-reap", "EXAMPLE/WORKER-REAP"):
+            with self.subTest(repository=repository), tempfile.TemporaryDirectory() as tmp:
+                env = _SelectorEnvironment(
+                    tmp, open_pr=True, merged_pr_repository=repository
+                )
+                record = WorkerReaper(orca_runner=env).reap(
+                    task_id="t1", execute=True
+                )
 
-            self.assertIn("pull request is open", record.actions_taken)
-            self.assertEqual(env.closed_commands, [])
-            self.assertEqual(env.removed_commands, [])
+                self.assertIn("pull request is open", record.actions_taken)
+                self.assertEqual(env.closed_commands, [])
+                self.assertEqual(env.removed_commands, [])
 
     def test_selector_resolution_mismatch_refuses_worktree_removal(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

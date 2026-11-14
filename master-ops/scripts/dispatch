@@ -159,14 +159,18 @@ else
   STATE_DIR=~/.mogui
 fi
 LEDGER="$STATE_DIR/dispatch-ledger.jsonl"
-LEDGER_LOCK="$STATE_DIR/dispatch-ledger.lock"
-AGY_SESSION_ROOT="${DISPATCH_AGY_SESSION_ROOT:-$HOME/.gemini/antigravity-cli/brain}"
-AGY_SESSION_ROOT="${AGY_SESSION_ROOT/#\~/$HOME}"
-CURSOR_SESSION_ROOT="${DISPATCH_CURSOR_SESSION_ROOT:-$HOME/.cursor/projects}"
-export DISPATCH_AGY_SESSION_ROOT="$AGY_SESSION_ROOT"
-export DISPATCH_CURSOR_SESSION_ROOT="$CURSOR_SESSION_ROOT"
+
+resolve_shared_paths() {
+  LEDGER_LOCK="${LEDGER_LOCK:-$("$GATE" --ledger "$LEDGER" lock-path)}"
+  AGY_SESSION_ROOT="${DISPATCH_AGY_SESSION_ROOT:-$("$GATE" --ledger "$LEDGER" session-root --runtime agy)}"
+  AGY_SESSION_ROOT="${AGY_SESSION_ROOT/#\~/$HOME}"
+  CURSOR_SESSION_ROOT="${DISPATCH_CURSOR_SESSION_ROOT:-$("$GATE" --ledger "$LEDGER" session-root --runtime cursor)}"
+  export DISPATCH_AGY_SESSION_ROOT="$AGY_SESSION_ROOT"
+  export DISPATCH_CURSOR_SESSION_ROOT="$CURSOR_SESSION_ROOT"
+}
 
 if [ -n "$LEDGER_EVENT" ]; then
+  resolve_shared_paths
   if [ -z "$LEDGER_EVENT_DISPATCH_ID" ]; then
     echo "✗ --ledger-event requires --dispatch-id" >&2
     exit 1
@@ -1743,7 +1747,7 @@ codex_hooks_vet_homes() {
 
 record_host_diversity_audit() {
   [ "$CHECK_ONLY" = 1 ] && return 0
-  python3 - "$LEDGER" "$RUNTIME" "$MASTER_HOST_RUNTIME" "$INSTALLED_RUNTIMES" "$ALTERNATIVE_RUNTIMES" "$UNAVAILABLE_RUNTIMES" "$SAME_HOST_REASON" "$TASK" "$DISP" "$SHA" "${CODEX_BYPASS_FLAG:-}" "${LEDGER_LOCK:-$LEDGER.lock}" <<'EOF'
+  python3 - "$LEDGER" "$RUNTIME" "$MASTER_HOST_RUNTIME" "$INSTALLED_RUNTIMES" "$ALTERNATIVE_RUNTIMES" "$UNAVAILABLE_RUNTIMES" "$SAME_HOST_REASON" "$TASK" "$DISP" "$SHA" "${CODEX_BYPASS_FLAG:-}" "$LEDGER_LOCK" <<'EOF'
 import fcntl
 import json
 import os
@@ -1776,7 +1780,7 @@ EOF
 
 record_codex_effort() {
   [ "$CHECK_ONLY" = 1 ] && return 0
-  python3 - "$LEDGER" "$DISP" "$1" "${LEDGER_LOCK:-$LEDGER.lock}" <<'EOF'
+  python3 - "$LEDGER" "$DISP" "$1" "$LEDGER_LOCK" <<'EOF'
 import fcntl
 import json
 import os
@@ -1895,6 +1899,7 @@ if [ "$RUNTIME_EXPLICIT" = 1 ]; then
   validate_supported_runtime "$RUNTIME" || exit 2
 fi
 refuse_unavailable_runtime "$RUNTIME" "$ALTERNATIVE_RUNTIMES" || exit 2
+resolve_shared_paths
 
 [ "$RUNTIME" = codex ] && apply_codex_instance_launch_config
 
@@ -2432,8 +2437,8 @@ if [ "$PROBE_STATE" != unavailable ]; then
 fi
 
 # Wrapper-owned ledger writers share this lock. The child gate also writes the
-# register row, so it receives an explicit held-lock marker while this wrapper
-# keeps the lock across that call.
+# register row, so it receives the held lock's inherited file descriptor while
+# this wrapper keeps the lock across that call.
 ledger_locked_command() {
   python3 -c '
 import fcntl
@@ -2447,7 +2452,7 @@ os.makedirs(os.path.dirname(os.path.abspath(lock_path)), exist_ok=True)
 with open(lock_path, "a", encoding="utf-8") as lock:
     fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
     child_env = os.environ.copy()
-    child_env["DISPATCH_LEDGER_LOCK_HELD"] = "1"
+    child_env["DISPATCH_LEDGER_LOCK_FD"] = str(lock.fileno())
     process = subprocess.Popen(
         command,
         stdout=subprocess.PIPE,
@@ -2455,6 +2460,7 @@ with open(lock_path, "a", encoding="utf-8") as lock:
         text=True,
         env=child_env,
         start_new_session=True,
+        pass_fds=(lock.fileno(),),
     )
     try:
         stdout, stderr = process.communicate(timeout=120)
@@ -2467,7 +2473,7 @@ with open(lock_path, "a", encoding="utf-8") as lock:
 sys.stdout.write(stdout)
 sys.stderr.write(stderr)
 sys.exit(process.returncode)
-' "${LEDGER_LOCK:-$LEDGER.lock}" "$@"
+' "$LEDGER_LOCK" "$@"
 }
 
 record_claim_failure_reason() {
@@ -2528,7 +2534,7 @@ record_dispatch_placement() {
   placement_raw=$(orca terminal list --json 2>/dev/null || true)
   PLACEMENT_JSON="$placement_raw" AGY_BRAIN_BEFORE="${AGY_BRAIN_BEFORE:-}" \
     python3 - "$LEDGER" "$DISP" "$TERMINAL" "$WORKTREE" "$RUNTIME" \
-    "${CODEX_ROLLOUT:-}" "$CONTRACT" "${LEDGER_LOCK:-$LEDGER.lock}" <<'EOF'
+    "${CODEX_ROLLOUT:-}" "$CONTRACT" "$LEDGER_LOCK" <<'EOF'
 import fcntl
 import json
 import os
@@ -2598,10 +2604,7 @@ if not session_id and runtime == "agy":
         for path in os.environ.get("AGY_BRAIN_BEFORE", "").splitlines()
         if path
     }
-    brain_root_value = os.environ.get("DISPATCH_AGY_SESSION_ROOT", "")
-    brain_root = Path(
-        brain_root_value or Path.home() / ".gemini" / "antigravity-cli" / "brain"
-    ).expanduser()
+    brain_root = Path(os.environ["DISPATCH_AGY_SESSION_ROOT"]).expanduser()
     contract_paths = (
         {str(Path(contract)), str(Path(contract).resolve())} if contract else set()
     )

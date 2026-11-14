@@ -4,6 +4,8 @@ This reference summarizes the executable scripts in this repository. The table i
 
 Use this page for command discovery. The lifecycle and delegation guides explain when to use each entry point.
 
+The table lists the public command surface only. Local host routing, private paths, and sensitive-lane details are outside this reference.
+
 <!-- COMMAND TABLE: rows are checked against scripts/ --help by tests/test_reference_command_table.py -->
 | Script | Command | Purpose | Key options |
 | --- | --- | --- | --- |
@@ -23,6 +25,8 @@ Use this page for command discovery. The lifecycle and delegation guides explain
 | `scripts/dispatch-gate` | `dispatch-gate measure-model` | Verify the raw model line supplied with a worker completion against its session record, then clear the pending model measurement mark or record a mismatch. | Global `--ledger`; command options `--dispatch-id`, `--session-record`, `--model-line`. |
 | `scripts/dispatch-gate` | `dispatch-gate watch` | Check a worker log for stall conditions. | Global `--ledger`; command options `--log`, `--max-idle`. |
 | `scripts/dispatch-gate` | `dispatch-gate report` | Aggregate the ledger into denial, override, tier, and model counts, so the gate's own record can be read back. | Global `--ledger`; command option `--today` limits it to the current UTC day. |
+| `scripts/dispatch-gate` | `dispatch-gate lock-path` | Print the shared ledger lock path used by wrapper and gate writers. | Global `--ledger`. |
+| `scripts/dispatch-gate` | `dispatch-gate session-root` | Print the first configured model session root for a runtime. | `--runtime`. |
 | `scripts/dispatch-timeline` | `dispatch-timeline` | Join the dispatch ledger, the event log, and the current `dispatch-show` record for one task or dispatch into a single time-ordered table; a source with no matching rows is named, not silently dropped. | Positional `id` (a `task_*` id or a dispatch id), `--since <hours>` (list every dispatch seen in the window with its last event, no id needed), `--ledger`, `--event-log`, `--json`. |
 | `scripts/generate-manifest` | `generate-manifest` | Walk the Stage 1 skeleton, apply the install exclusion list, enforce frame hygiene, and write `master-ops/MANIFEST.json` (version stamp plus required paths). | `--skeleton`, `--out`, `--check` (exit 1 on drift), `--stdout`. |
 | `scripts/l1-digest` | `l1-digest tick` | Run one read-only L1 digest observation tick from a config file. | `--config`. |
@@ -50,7 +54,5 @@ Use this page for command discovery. The lifecycle and delegation guides explain
 ## Model evidence limit
 
 Session-record path confinement proves the location and binding metadata available in the record. A worker running as the same operating-system user can create a record inside an allowlisted runtime root, so path checks cannot establish who wrote it. Treat this as a measurement limit and retain independent review of the worker completion context.
-
-The table lists the public command surface only. Local host routing, private paths, and sensitive-lane details are outside this reference.
 
 Exit codes are not shared vocabulary across these scripts. `model-identity-probe` reports both drift and undecidable as 2; `model-drift-audit` separates them. Read each script's codes from its own row rather than assuming a convention.

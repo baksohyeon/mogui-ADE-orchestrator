@@ -3886,13 +3886,19 @@ def test_measure_model_preserves_an_append_waiting_on_the_ledger_lock(
 import fcntl, json, sys
 from pathlib import Path
 ledger = Path(sys.argv[1])
-with (ledger.parent / 'dispatch-ledger.lock').open('a', encoding='utf-8') as lock:
+with Path(sys.argv[2]).open('a', encoding='utf-8') as lock:
     fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
     with ledger.open('a', encoding='utf-8') as stream:
         stream.write(json.dumps({'job_id': 'job-concurrent', 'decision': 'DENY'}) + '\\n')
 """
     subprocess.run(
-        [sys.executable, "-c", append_script, str(gate.config.ledger_path)],
+        [
+            sys.executable,
+            "-c",
+            append_script,
+            str(gate.config.ledger_path),
+            str(dispatch_gate.ledger_lock_path(gate.config.ledger_path)),
+        ],
         check=True,
     )
     measurement.join(timeout=2)
@@ -3900,6 +3906,58 @@ with (ledger.parent / 'dispatch-ledger.lock').open('a', encoding='utf-8') as loc
     assert not measurement.is_alive()
     assert result[0].allow is True
     assert any(entry.get("job_id") == "job-concurrent" for entry in _ledger_entries(tmp_path))
+
+
+@pytest.mark.skipif(
+    dispatch_gate.fcntl is None,
+    reason="ledger file locking is unavailable on this platform",
+)
+def test_ledger_lock_does_not_trust_a_marker_without_a_held_fd(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    lock_path = dispatch_gate.ledger_lock_path(tmp_path / "ledger.jsonl")
+    holder_script = """
+import fcntl, sys
+from pathlib import Path
+lock_path = Path(sys.argv[1])
+with lock_path.open('a', encoding='utf-8') as lock:
+    fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+    print('ready', flush=True)
+    sys.stdin.read(1)
+"""
+    holder = subprocess.Popen(
+        [sys.executable, "-c", holder_script, str(lock_path)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert holder.stdout is not None
+        assert holder.stdout.readline().strip() == "ready"
+        monkeypatch.setenv("DISPATCH_LEDGER_LOCK_HELD", "1")
+        monkeypatch.delenv(dispatch_gate.LEDGER_LOCK_FD_ENV, raising=False)
+        entered = threading.Event()
+
+        def acquire_lock() -> None:
+            with dispatch_gate._ledger_lock(tmp_path / "ledger.jsonl"):
+                entered.set()
+
+        worker = threading.Thread(target=acquire_lock)
+        worker.start()
+        assert not entered.wait(0.1)
+        assert holder.stdin is not None
+        holder.stdin.write("release")
+        holder.stdin.flush()
+        worker.join(timeout=2)
+        assert not worker.is_alive()
+        assert entered.is_set()
+    finally:
+        if holder.poll() is None:
+            if holder.stdin is not None:
+                holder.stdin.write("release")
+                holder.stdin.flush()
+            holder.wait(timeout=2)
 
 
 def test_measure_model_clears_a_stale_mismatch_warning_when_model_matches(
@@ -4176,7 +4234,7 @@ def test_measure_model_binds_to_the_first_session_identity(
     assert measured.reason == ReasonCode.MODEL_EVIDENCE_UNBOUND
 
 
-def test_measure_model_allows_a_record_with_an_older_session_start(
+def test_measure_model_rejects_a_record_with_an_older_session_start(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -4197,33 +4255,8 @@ def test_measure_model_allows_a_record_with_an_older_session_start(
 
     measured = gate.measure_model("job-marked", record, present)
 
-    assert measured.allow is True
-    assert measured.warnings == ()
-
-
-def test_measure_model_allows_a_reused_session_with_fresh_record(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    gate = _marked_registration(tmp_path, monkeypatch)
-    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "reused.jsonl"
-    session_meta = json.dumps(
-        {
-            "type": "session_meta",
-            "payload": {
-                "id": "sess-reused",
-                "cwd": str(tmp_path / "worker"),
-                "timestamp": 900,
-            },
-        }
-    )
-    present = json.dumps({"cwd": str(tmp_path / "worker"), "model": "future-model"})
-    record.write_text(session_meta + "\n" + present + "\n", encoding="utf-8")
-
-    measured = gate.measure_model("job-marked", record, present)
-
-    assert measured.allow is True
-    assert measured.warnings == ()
+    assert measured.allow is False
+    assert measured.reason == ReasonCode.MODEL_EVIDENCE_STALE
 
 
 def test_measure_model_uses_dispatch_start_before_registration_timestamp(
@@ -4336,10 +4369,11 @@ def test_measure_model_reads_claude_main_message_model_only(
     first = json.dumps(
         {
             "type": "assistant",
-            "turn_id": "turn-1",
+            "sessionId": "session-redacted",
             "cwd": cwd,
             "isSidechain": False,
             "message": {
+                "id": "msg-turn-1",
                 "role": "assistant",
                 "model": declared,
                 "content": [{"type": "tool_use", "input": {"model": "haiku"}}],
@@ -4349,9 +4383,13 @@ def test_measure_model_reads_claude_main_message_model_only(
     alias = json.dumps(
         {
             "type": "assistant",
-            "turn_id": "turn-1",
+            "sessionId": "session-redacted",
             "isSidechain": False,
-            "message": {"role": "assistant", "model": "claude-haiku-4-5"},
+            "message": {
+                "id": "msg-turn-1",
+                "role": "assistant",
+                "model": "claude-haiku-4-5",
+            },
         }
     )
     sidechain = json.dumps(
@@ -4369,6 +4407,50 @@ def test_measure_model_reads_claude_main_message_model_only(
 
     assert measured.allow is True
     assert measured.warnings == ()
+
+
+def test_measure_model_requires_a_same_turn_claude_alias(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    declared = "claude-haiku-4-5-20251001"
+    gate = _marked_registration(
+        tmp_path,
+        monkeypatch,
+        runtime="claude",
+        model=declared,
+    )
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "claude.jsonl"
+    cwd = str(tmp_path / "worker")
+    first = json.dumps(
+        {
+            "type": "assistant",
+            "sessionId": "session-redacted",
+            "cwd": cwd,
+            "message": {
+                "id": "msg-turn-1",
+                "role": "assistant",
+                "model": declared,
+            },
+        }
+    )
+    other_turn = json.dumps(
+        {
+            "type": "assistant",
+            "sessionId": "session-redacted",
+            "message": {
+                "id": "msg-turn-2",
+                "role": "assistant",
+                "model": "claude-haiku-4-5",
+            },
+        }
+    )
+    record.write_text(first + "\n" + other_turn + "\n", encoding="utf-8")
+
+    measured = gate.measure_model("job-marked", record, first)
+
+    assert measured.allow is True
+    assert measured.warnings == (ReasonCode.MODEL_MISMATCH,)
 
 
 def test_measure_model_reads_codex_session_and_turn_context_models(
@@ -4392,7 +4474,10 @@ def test_measure_model_reads_codex_session_and_turn_context_models(
         }
     )
     turn = json.dumps(
-        {"type": "turn_context", "payload": {"model": declared, "turn": 1}}
+        {
+            "type": "turn_context",
+            "payload": {"model": declared, "turn_id": "turn-redacted"},
+        }
     )
     response = json.dumps(
         {
@@ -4458,16 +4543,24 @@ def test_measure_model_rejects_two_dated_ids_in_one_claude_turn(
     first = json.dumps(
         {
             "type": "assistant",
-            "turn_id": "turn-1",
+            "sessionId": "session-redacted",
             "cwd": cwd,
-            "message": {"role": "assistant", "model": declared},
+            "message": {
+                "id": "msg-turn-1",
+                "role": "assistant",
+                "model": declared,
+            },
         }
     )
     other = json.dumps(
         {
             "type": "assistant",
-            "turn_id": "turn-1",
-            "message": {"role": "assistant", "model": "claude-example-20260201"},
+            "sessionId": "session-redacted",
+            "message": {
+                "id": "msg-turn-1",
+                "role": "assistant",
+                "model": "claude-example-20260201",
+            },
         }
     )
     record.write_text(first + "\n" + other + "\n", encoding="utf-8")

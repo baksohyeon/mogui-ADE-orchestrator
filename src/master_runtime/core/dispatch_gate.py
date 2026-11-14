@@ -52,7 +52,7 @@ DEFAULT_EXPIRED_TICKET_GC_GRACE_SECONDS = 24 * 60 * 60
 MODEL_SESSION_ROOTS_ENV = "DISPATCH_MODEL_SESSION_ROOTS"
 MODEL_SESSION_MAX_BYTES = 5 * 1024 * 1024
 LEDGER_LOCK_FILENAME = "dispatch-ledger.lock"
-LEDGER_LOCK_HELD_ENV = "DISPATCH_LEDGER_LOCK_HELD"
+LEDGER_LOCK_FD_ENV = "DISPATCH_LEDGER_LOCK_FD"
 RUNTIME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 USERS_ABSOLUTE_PATH_PATTERN = re.compile(r"/Users/[^\s\"'`<>{}\[\](),;:]+")
 COMPLETION_CHANNELS = frozenset({"orchestration", "sentinel-log"})
@@ -154,6 +154,22 @@ def _model_session_roots(
         ),
         "grok": ((Path.home() / ".grok" / "sessions").resolve(),),
     }
+
+
+def ledger_lock_path(ledger_path: str | Path) -> Path:
+    """Return the one lock path shared by wrapper and gate writers."""
+
+    return Path(ledger_path).expanduser().parent / LEDGER_LOCK_FILENAME
+
+
+def model_session_root(
+    runtime: str,
+    environ: Mapping[str, str] | None = None,
+) -> Path | None:
+    """Return the first configured session root for a runtime."""
+
+    roots = _model_session_roots(environ).get(runtime.casefold(), ())
+    return roots[0] if roots else None
 
 
 def _default_tier_policy_path(
@@ -1038,6 +1054,13 @@ class DispatchGate:
                     False,
                     ReasonCode.MODEL_EVIDENCE_INVALID,
                     message=f"session_record={record_path}",
+                )
+            _, _, session_start = _record_context(record_text)
+            if session_start is not None and session_start < dispatch_ts:
+                return GateDecision(
+                    False,
+                    ReasonCode.MODEL_EVIDENCE_STALE,
+                    message=f"session_record={record_path} session predates dispatch",
                 )
             normalized_line = evidence_line.rstrip("\r\n")
             record_lines = record_text.splitlines()
@@ -2010,6 +2033,17 @@ def _record_turn_key(event: Mapping[str, object], line_number: int) -> str | int
         value = event.get(key)
         if isinstance(value, (str, int)) and not isinstance(value, bool):
             return f"turn:{value}"
+    payload = event.get("payload")
+    if isinstance(payload, Mapping):
+        for key in ("turn_id", "turnId", "conversation_turn_id", "conversationTurnId"):
+            value = payload.get(key)
+            if isinstance(value, (str, int)) and not isinstance(value, bool):
+                return f"turn:{value}"
+    message = event.get("message")
+    if isinstance(message, Mapping):
+        value = message.get("id")
+        if isinstance(value, str) and value.strip():
+            return f"message:{value}"
     return line_number
 
 
@@ -2322,10 +2356,30 @@ def _ledger_lock(ledger_path: Path) -> Iterator[None]:
     """Serialize ledger updates without creating the ticket directory."""
 
     ledger_path.parent.mkdir(parents=True, exist_ok=True)
-    if os.environ.get(LEDGER_LOCK_HELD_ENV) == "1":
-        yield
-        return
-    lock_path = ledger_path.parent / LEDGER_LOCK_FILENAME
+    lock_path = ledger_lock_path(ledger_path)
+    inherited_fd = os.environ.get(LEDGER_LOCK_FD_ENV, "")
+    try:
+        fd = int(inherited_fd)
+    except ValueError:
+        fd = -1
+    if fcntl is not None and fd >= 0:
+        try:
+            fd_stat = os.fstat(fd)
+            lock_stat = lock_path.stat()
+            same_file = (fd_stat.st_dev, fd_stat.st_ino) == (
+                lock_stat.st_dev,
+                lock_stat.st_ino,
+            )
+        except OSError:
+            same_file = False
+        if same_file:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                pass
+            else:
+                yield
+                return
     with lock_path.open("a", encoding="utf-8") as lock_file:
         if fcntl is not None:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)

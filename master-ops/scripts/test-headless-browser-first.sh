@@ -37,9 +37,9 @@ write_script() {
   chat_json="{\"allow\": true, \"front_matter\": {\"standing_rules\": [\"$rule_name\"]}}"
   {
     echo 'set -u'
-    printf 'SCRIPTS_DIR=%s\n' "$work/scripts"
-    printf 'export DISPATCH_STANDING_RULES=%s\n' "$rules_path"
-    printf 'export DISPATCH_STANDING_RULES_LOCAL=%s\n' "$work/config/standing-rules.overlay.md"
+    printf 'SCRIPTS_DIR=%q\n' "$work/scripts"
+    printf 'export DISPATCH_STANDING_RULES=%q\n' "$rules_path"
+    printf 'export DISPATCH_STANDING_RULES_LOCAL=%q\n' "$work/config/standing-rules.overlay.md"
     printf '%s\n' "$jqf_fn"
     printf '%s\n' "$block_fn"
     printf 'CHK=%s\n' "$(printf '%q' "$chat_json")"

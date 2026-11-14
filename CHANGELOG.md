@@ -20,6 +20,8 @@ you build on it.
 
 ## [Unreleased]
 
+- Dispatch contracts can declare token budgets and basis, receive a visible budget line, record per-runtime usage, and guard against a measured low Codex weekly quota.
+
 ## [0.5.338] - 2026-11-14
 
 ### Added

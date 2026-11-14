@@ -250,6 +250,73 @@ def test_known_standing_rules_and_budget_and_writes_are_recorded(
     assert decision.front_matter["standing_rules"] == ["headless", "ack-token"]
 
 
+def test_token_budget_defaults_basis_to_total_and_is_recorded(tmp_path: Path) -> None:
+    contract = _contract(
+        tmp_path,
+        "---\ntier: efficient\nruntime: claude\nrepo: example-repo\n"
+        "budget: [rounds=2, tokens=400000]\n---\n",
+    )
+    decision = _gate(tmp_path).check(_request(contract))
+
+    assert decision.allow is True
+    assert decision.front_matter["budget"]["tokens"] == 400000
+    assert decision.front_matter["tokens_basis"] == "total"
+
+
+def test_uncached_token_basis_is_accepted(tmp_path: Path) -> None:
+    contract = _contract(
+        tmp_path,
+        "---\ntier: efficient\nruntime: claude\nrepo: example-repo\n"
+        "budget: [tokens=400000]\ntokens_basis: uncached\n---\n",
+    )
+    decision = _gate(tmp_path).check(_request(contract))
+
+    assert decision.allow is True
+    assert decision.front_matter["tokens_basis"] == "uncached"
+
+
+def test_basis_without_declared_tokens_applies_to_the_measured_default(
+    tmp_path: Path,
+) -> None:
+    contract = _contract(
+        tmp_path,
+        "---\ntier: efficient\nruntime: claude\nrepo: example-repo\n"
+        "tokens_basis: uncached\n---\n",
+    )
+    decision = _gate(tmp_path).check(_request(contract))
+
+    assert decision.allow is True
+    assert decision.front_matter["tokens_basis"] == "uncached"
+
+
+def test_negative_and_non_integer_tokens_are_refused(tmp_path: Path) -> None:
+    for value in ("-1", "1.5", "nope"):
+        contract = _contract(
+            tmp_path,
+            "---\ntier: efficient\nruntime: claude\nrepo: example-repo\n"
+            f"budget: [tokens={value}]\n---\n",
+            name=f"contract-{value.replace('.', '-')}.md",
+        )
+        decision = _gate(tmp_path).check(_request(contract))
+
+        assert decision.allow is False
+        assert decision.reason == ReasonCode.CONTRACT_FRONT_MATTER
+        assert "tokens" in decision.message
+
+
+def test_unknown_token_basis_is_refused(tmp_path: Path) -> None:
+    contract = _contract(
+        tmp_path,
+        "---\ntier: efficient\nruntime: claude\nrepo: example-repo\n"
+        "budget: [tokens=400000]\ntokens_basis: cached\n---\n",
+    )
+    decision = _gate(tmp_path).check(_request(contract))
+
+    assert decision.allow is False
+    assert decision.reason == ReasonCode.CONTRACT_FRONT_MATTER
+    assert "tokens_basis" in decision.message
+
+
 def test_missing_front_matter_block_warns_and_still_allows(
     tmp_path: Path,
 ) -> None:

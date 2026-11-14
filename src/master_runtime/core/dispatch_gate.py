@@ -672,6 +672,9 @@ class DispatchGate:
         pane: str | None = None,
         card: str | None = None,
         card_reason: str | None = None,
+        token_budget: int | None = None,
+        tokens_basis: str = "total",
+        token_budget_source: str | None = None,
     ) -> GateDecision:
         """Register a job only after independent probe verification succeeds."""
 
@@ -708,6 +711,20 @@ class DispatchGate:
         runtime_filter = _normalize_runtime_filter(runtime)
         if runtime is not None and runtime_filter is None:
             return GateDecision(False, ReasonCode.INVALID_REQUEST)
+        if token_budget is not None and (
+            isinstance(token_budget, bool) or not isinstance(token_budget, int) or token_budget < 0
+        ):
+            return GateDecision(
+                False,
+                ReasonCode.INVALID_REQUEST,
+                message="token_budget must be a non-negative integer",
+            )
+        if not isinstance(tokens_basis, str) or tokens_basis not in {"total", "uncached"}:
+            return GateDecision(
+                False,
+                ReasonCode.INVALID_REQUEST,
+                message="tokens_basis must be total or uncached",
+            )
 
         with _ledger_lock(Path(self.config.ledger_path)):
             with _ticket_lock(Path(self.config.ticket_dir)):
@@ -790,6 +807,13 @@ class DispatchGate:
                 if card is not None or card_reason is not None:
                     entry["card"] = card.strip() if card is not None else ""
                     entry["card_reason"] = card_reason.strip() if card_reason is not None else ""
+                # Keep the declared budget beside the measured usage. ``None``
+                # is deliberate for a tier with no measured default; it is
+                # different from an observed zero.
+                entry["token_budget"] = token_budget
+                entry["tokens_basis"] = tokens_basis
+                if token_budget_source:
+                    entry["token_budget_source"] = token_budget_source
                 # Say what was verified and how, so a later reader can tell an
                 # unverified registration from a verified one instead of assuming.
                 entry["model_declared"] = declared_model
@@ -826,6 +850,80 @@ class DispatchGate:
                 model_status=decision.model_status,
             )
         return decision
+
+    def settle_usage(
+        self,
+        dispatch_id: str,
+        usage: Mapping[str, object],
+    ) -> GateDecision:
+        """Attach one measured or explicitly unmeasured usage result.
+
+        Settlement is safe to call from both a worker-done path and a reap
+        path.  The first result wins, so a late duplicate observation cannot
+        replace the evidence already recorded for the dispatch.
+        """
+
+        if not dispatch_id or not isinstance(usage, Mapping):
+            return GateDecision(False, ReasonCode.INVALID_REQUEST, message="dispatch_id and usage are required")
+        source = usage.get("source")
+        if not isinstance(source, str) or not source:
+            return GateDecision(False, ReasonCode.INVALID_REQUEST, message="usage.source is required")
+        normalized = dict(usage)
+        with _ledger_lock(Path(self.config.ledger_path)):
+            entries = list(self._read_entries())
+            registered = [
+                entry
+                for entry in entries
+                if entry.get("job_id") == dispatch_id and entry.get("decision") == "ALLOW"
+            ]
+            orphaned = (
+                []
+                if registered
+                else [entry for entry in entries if entry.get("settlement_dispatch_id") == dispatch_id]
+            )
+            targets = registered or orphaned
+            found = bool(targets)
+            changed = False
+            replaced_unmeasured = False
+            for entry in targets:
+                if "token_usage" in entry:
+                    existing = entry.get("token_usage")
+                    existing_source = (
+                        existing.get("source")
+                        if isinstance(existing, Mapping)
+                        else None
+                    )
+                    if existing_source == "unmeasured" and source != "unmeasured":
+                        entry["token_usage"] = normalized
+                        entry["token_usage_settled"] = True
+                        changed = True
+                        replaced_unmeasured = True
+                    break
+                entry["token_usage"] = normalized
+                entry["token_usage_settled"] = True
+                changed = True
+                break
+            if not found:
+                entries.append(
+                    {
+                        "ts": self._clock(),
+                        "kind": "token_usage_settlement",
+                        "settlement_dispatch_id": dispatch_id,
+                        "token_usage": normalized,
+                        "token_usage_settled": True,
+                        "settlement_without_registration": True,
+                    }
+                )
+                changed = True
+            if changed:
+                _replace_ledger_entries(Path(self.config.ledger_path), entries)
+        if replaced_unmeasured:
+            message = "usage upgraded from unmeasured"
+        elif changed:
+            message = "usage recorded without registration" if not found else "usage recorded"
+        else:
+            message = "usage already settled"
+        return GateDecision(True, ReasonCode.OK, message=message)
 
     def completion_channel_for_registration(
         self,
@@ -1537,10 +1635,10 @@ def _validate_request(request: DispatchRequest) -> ReasonCode | None:
 
 FRONT_MATTER_DELIMITER = "---"
 FRONT_MATTER_KNOWN_KEYS = frozenset(
-    {"tier", "runtime", "repo", "budget", "writes", "standing_rules"}
+    {"tier", "runtime", "repo", "budget", "tokens_basis", "writes", "standing_rules"}
 )
 FRONT_MATTER_REQUIRED_KEYS = ("tier", "runtime", "repo")
-FRONT_MATTER_BUDGET_INT_NAMES = frozenset({"rounds", "hours"})
+FRONT_MATTER_BUDGET_INT_NAMES = frozenset({"rounds", "hours", "tokens"})
 
 
 def _parse_front_matter(text: str) -> tuple[dict[str, object] | None, str | None]:
@@ -1732,6 +1830,21 @@ def _validate_front_matter(
                     f"budget: unknown item name: {name}",
                 )
         normalized["budget"] = budget
+
+    if "tokens_basis" in front_matter:
+        tokens_basis = front_matter["tokens_basis"]
+        if not isinstance(tokens_basis, str) or tokens_basis.strip() not in {
+            "total",
+            "uncached",
+        }:
+            return (
+                None,
+                ReasonCode.CONTRACT_FRONT_MATTER,
+                "tokens_basis must be total or uncached",
+            )
+        normalized["tokens_basis"] = tokens_basis.strip()
+    elif isinstance(normalized.get("budget"), dict) and "tokens" in normalized["budget"]:
+        normalized["tokens_basis"] = "total"
 
     if "writes" in front_matter:
         writes = front_matter["writes"]

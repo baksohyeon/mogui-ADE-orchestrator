@@ -259,6 +259,7 @@ printf '{"tiers":{"efficient":["claude-haiku-4-5-20251001"],"top":[]}}\n' > "$T/
 printf '# production check-only fixture\n' > "$T/contract-production.md"
 cat > "$T/runtime/scripts/dispatch-gate" <<'EOF'
 #!/usr/bin/env bash
+printf '%s\n' "$*" >> "${GATE_CALLS:-/dev/null}"
 printf '{"allow":true,"contract_sha":"0123456789abcdef"}\n'
 EOF
 chmod +x "$T/runtime/scripts/dispatch-gate"
@@ -274,7 +275,7 @@ sed -e "s|{{OPS_REPO}}|$T/ops|g" -e "s|{{RUNTIME_ROOT}}|$T/runtime|g" \
   "$DISPATCH" > "$T/harness/dispatch-production"
 chmod +x "$T/harness/dispatch-production"
 : > "$T/bd.log"
-out=$(MOGUI_STATE_DIR="$T/state" CARD_LOG="$T/bd.log" \
+out=$(MOGUI_STATE_DIR="$T/state" CARD_LOG="$T/bd.log" GATE_CALLS="$T/unused-gate-calls" \
   DISPATCH_STANDING_RULES="$S/../rules/standing-rules.md" PATH="$T/bin:$PATH" \
   bash "$T/harness/dispatch-production" \
     --contract "$T/contract-production.md" --spec production-check-only \
@@ -307,6 +308,31 @@ if [ "$event_status" -eq 0 ] && [ -s "$event_ledger" ] && grep -q '"kind":"resum
   ok "--ledger-event writes resume_attempt to the configured temporary ledger"
 else
   fail "ledger-event case: rc=$event_status out=$event_out ledger=$(cat "$event_ledger" 2>/dev/null || true)"
+fi
+gate_calls="$T/gate-calls"
+done_status=0
+settle_call=""
+done_out=$(MOGUI_STATE_DIR="$T/state" GATE_CALLS="$gate_calls" DISPATCH_STANDING_RULES="$S/../rules/standing-rules.md" \
+  PATH="$T/bin:$PATH" bash "$T/harness/dispatch-production" \
+  --ledger-event worker_done --dispatch-id disp-no-runtime 2>&1) || done_status=$?
+settle_call=$(grep ' settle --dispatch-id disp-no-runtime' "$gate_calls" 2>/dev/null || true)
+if [ "$done_status" -eq 0 ] \
+    && [ -n "$settle_call" ] \
+    && ! printf '%s\n' "$settle_call" | grep -q -- '--runtime'; then
+  ok "worker_done ledger-event settles without a runtime"
+else
+  fail "worker_done without runtime case: rc=$done_status out=$done_out gate=$(cat "$gate_calls" 2>/dev/null || true)"
+fi
+printf '{}\n' > "$T/session-record.jsonl"
+record_status=0
+record_out=$(MOGUI_STATE_DIR="$T/state" DISPATCH_STANDING_RULES="$S/../rules/standing-rules.md" \
+  PATH="$T/bin:$PATH" bash "$T/harness/dispatch-production" \
+  --ledger-event worker_done --dispatch-id disp-record-without-runtime \
+  --session-record "$T/session-record.jsonl" 2>&1) || record_status=$?
+if [ "$record_status" -ne 0 ] && printf '%s\n' "$record_out" | grep -qF -- '--session-record requires --runtime'; then
+  ok "worker_done rejects a session record without a runtime"
+else
+  fail "worker_done accepted a session record without runtime: rc=$record_status out=$record_out"
 fi
 set +e
 MOGUI_STATE_DIR="$T/state" DISPATCH_STANDING_RULES="$S/../rules/standing-rules.md" \

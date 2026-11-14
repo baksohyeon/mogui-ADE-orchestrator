@@ -481,7 +481,7 @@ JSON
       printf '%s\n' "$join_fn"
       echo 'unavailable_runtimes_guard'
       echo 'echo "default=$(choose_default_runtime)"'
-      echo 'echo "alternatives=$(dispatchable_runtimes | grep -vx "$MASTER_HOST_RUNTIME" | join_csv)"'
+      echo 'echo "alternatives=$(dispatchable_runtimes | awk -v master="$MASTER_HOST_RUNTIME" '\''$0 != master'\'' | join_csv)"'
     } > "$outfile"
   }
 
@@ -531,7 +531,7 @@ alternatives=codex, grok' ]; then
     printf '%s\n' "$choose_fn"
     printf '%s\n' "$join_fn"
     echo 'unavailable_runtimes_guard'
-    echo 'echo "alternatives=$(dispatchable_runtimes | grep -vx "$MASTER_HOST_RUNTIME" | join_csv)"'
+    echo 'echo "alternatives=$(dispatchable_runtimes | awk -v master="$MASTER_HOST_RUNTIME" '\''$0 != master'\'' | join_csv)"'
   } > "$script_file"
   out_with=$(PATH="$work/bin:/usr/bin:/bin" bash "$script_file" 2>&1)
   status=$?
@@ -628,7 +628,7 @@ BIN
     printf '%s\n' "$join_fn"
     echo 'unavailable_runtimes_guard'
     echo 'echo "default=$(choose_default_runtime)"'
-    echo 'echo "alternatives=$(dispatchable_runtimes | grep -vx "$MASTER_HOST_RUNTIME" | join_csv)"'
+    echo 'echo "alternatives=$(dispatchable_runtimes | awk -v master="$MASTER_HOST_RUNTIME" '\''$0 != master'\'' | join_csv)"'
   } > "$script_file"
   out_alts=$(PATH="$work/bin:/usr/bin:/bin" bash "$script_file" 2>&1)
   status=$?
@@ -764,7 +764,7 @@ JSON
       printf '%s\n' "$join_fn"
       echo 'unavailable_runtimes_guard'
       echo 'echo "default=$(choose_default_runtime)"'
-      echo 'echo "alternatives=$(dispatchable_runtimes | grep -vx "$MASTER_HOST_RUNTIME" | join_csv)"'
+      echo 'echo "alternatives=$(dispatchable_runtimes | awk -v master="$MASTER_HOST_RUNTIME" '\''$0 != master'\'' | join_csv)"'
     } > "$outfile"
   }
 

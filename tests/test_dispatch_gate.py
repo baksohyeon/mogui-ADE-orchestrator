@@ -3789,7 +3789,14 @@ def test_unknown_declared_model_does_not_escalate_registration(
     assert registered.warnings == (ReasonCode.MODEL_MISMATCH,)
 
 
-def _marked_registration(tmp_path: Path, monkeypatch):
+def _marked_registration(
+    tmp_path: Path,
+    monkeypatch,
+    *,
+    runtime: str = "codex",
+    model: str = "future-model",
+    model_needs_measurement: bool = False,
+):
     session_root = tmp_path / "session-root"
     session_root.mkdir()
     monkeypatch.setenv("DISPATCH_MODEL_SESSION_ROOTS", str(session_root))
@@ -3798,19 +3805,20 @@ def _marked_registration(tmp_path: Path, monkeypatch):
     contract = _contract(tmp_path, "marked model dispatch")
     checked = gate.check(
         DispatchRequest(
-            runtime="codex",
-            model="future-model",
+            runtime=runtime,
+            model=model,
             contract_path=contract,
             est_input_chars=1_000,
             n_agents=1,
+            model_needs_measurement=model_needs_measurement,
         )
     )
     assert checked.allow is True
     registered = gate.register_job(
         "job-marked",
         lambda job_id: job_id == "job-marked",
-        declared_model="future-model",
-        measured_model="future-model",
+        declared_model=model,
+        measured_model=model,
     )
     assert registered.allow is True
     worktree = tmp_path / "worker"
@@ -4141,6 +4149,40 @@ def test_measure_model_ignores_nested_worktree_context(
     assert measured.reason == ReasonCode.MODEL_EVIDENCE_UNBOUND
 
 
+def test_measure_model_binds_to_the_first_session_identity(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    gate = _marked_registration(tmp_path, monkeypatch)
+    ledger_path = Path(gate.config.ledger_path)
+    entries = _ledger_entries(tmp_path)
+    entries[-1]["agent_session_id"] = "sess-A"
+    ledger_path.write_text(
+        "".join(json.dumps(entry) + "\n" for entry in entries),
+        encoding="utf-8",
+    )
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "session.jsonl"
+    first = json.dumps(
+        {
+            "type": "session_meta",
+            "payload": {"id": "sess-B", "cwd": str(tmp_path / "worker")},
+        }
+    )
+    later = json.dumps(
+        {
+            "type": "session_meta",
+            "payload": {"id": "sess-A", "cwd": str(tmp_path / "worker")},
+        }
+    )
+    present = json.dumps({"model": "future-model"})
+    record.write_text("\n".join((first, later, present)) + "\n", encoding="utf-8")
+
+    measured = gate.measure_model("job-marked", record, present)
+
+    assert measured.allow is False
+    assert measured.reason == ReasonCode.MODEL_EVIDENCE_UNBOUND
+
+
 def test_measure_model_rejects_a_record_with_an_older_session_start(
     tmp_path: Path,
     monkeypatch,
@@ -4166,15 +4208,89 @@ def test_measure_model_rejects_a_record_with_an_older_session_start(
     assert measured.reason == ReasonCode.MODEL_EVIDENCE_STALE
 
 
+def test_measure_model_uses_dispatch_start_before_registration_timestamp(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    session_root = tmp_path / "session-root"
+    session_root.mkdir()
+    monkeypatch.setenv("DISPATCH_MODEL_SESSION_ROOTS", str(session_root))
+    policy = _tier_policy_v2(tmp_path, caps={})
+    timestamps = iter((1_000, 1_000, 1_100))
+    clock = lambda: next(timestamps, 1_100)
+    gate = _gate(
+        tmp_path,
+        clock=clock,
+        tier_policy_path=policy,
+    )
+    contract = _contract(tmp_path, "session started before registration row")
+    checked = gate.check(
+        DispatchRequest(
+            runtime="codex",
+            model="future-model",
+            contract_path=contract,
+            est_input_chars=1_000,
+            n_agents=1,
+        )
+    )
+    assert checked.allow is True
+    registered = gate.register_job(
+        "job-between-timestamps",
+        lambda job_id: job_id == "job-between-timestamps",
+        declared_model="future-model",
+        measured_model="future-model",
+    )
+    assert registered.allow is True
+    worktree = tmp_path / "worker"
+    worktree.mkdir()
+    entries = _ledger_entries(tmp_path)
+    entries[-1]["worktree_path"] = str(worktree)
+    gate.config.ledger_path.write_text(
+        "".join(json.dumps(entry) + "\n" for entry in entries),
+        encoding="utf-8",
+    )
+    present = json.dumps(
+        {
+            "type": "session_meta",
+            "payload": {
+                "id": "sess-between-timestamps",
+                "cwd": str(worktree),
+                "timestamp": 1_050,
+            },
+        }
+    )
+    record = session_root / "session.jsonl"
+    evidence = json.dumps({"model": "future-model"})
+    record.write_text(present + "\n" + evidence + "\n")
+
+    measured = gate.measure_model("job-between-timestamps", record, evidence)
+
+    assert measured.allow is True
+    assert _ledger_entries(tmp_path)[-1]["dispatch_started_ts"] == 1_000
+
+
 def test_measure_model_marks_any_other_model_in_the_record_as_a_mismatch(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     gate = _marked_registration(tmp_path, monkeypatch)
     record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "session.jsonl"
-    first = json.dumps({"cwd": str(tmp_path / "worker"), "model": "future-model"})
-    second = json.dumps({"model": "other-model"})
-    record.write_text(first + "\n" + second + "\n", encoding="utf-8")
+    first = json.dumps(
+        {
+            "type": "turn_context",
+            "payload": {"cwd": str(tmp_path / "worker"), "model": "future-model"},
+        }
+    )
+    second = json.dumps(
+        {"type": "turn_context", "payload": {"model": "other-model"}}
+    )
+    session = json.dumps(
+        {
+            "type": "session_meta",
+            "payload": {"id": "sess-marked", "cwd": str(tmp_path / "worker")},
+        }
+    )
+    record.write_text(session + "\n" + first + "\n" + second + "\n", encoding="utf-8")
 
     measured = gate.measure_model("job-marked", record, first)
 
@@ -4184,6 +4300,94 @@ def test_measure_model_marks_any_other_model_in_the_record_as_a_mismatch(
     assert entry["model_measured"] == "future-model"
     assert entry["model_verified"] is False
     assert entry["model_mismatch"] is True
+
+
+def test_measure_model_reads_claude_main_message_model_only(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    declared = "claude-haiku-4-5-20251001"
+    gate = _marked_registration(
+        tmp_path,
+        monkeypatch,
+        runtime="claude",
+        model=declared,
+    )
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "claude.jsonl"
+    cwd = str(tmp_path / "worker")
+    first = json.dumps(
+        {
+            "type": "assistant",
+            "turn_id": "turn-1",
+            "cwd": cwd,
+            "isSidechain": False,
+            "message": {
+                "role": "assistant",
+                "model": declared,
+                "content": [{"type": "tool_use", "input": {"model": "haiku"}}],
+            },
+        }
+    )
+    alias = json.dumps(
+        {
+            "type": "assistant",
+            "turn_id": "turn-1",
+            "isSidechain": False,
+            "message": {"role": "assistant", "model": "claude-haiku-4-5"},
+        }
+    )
+    sidechain = json.dumps(
+        {
+            "type": "assistant",
+            "cwd": cwd,
+            "isSidechain": True,
+            "message": {"role": "assistant", "model": "other-sidechain-model"},
+        }
+    )
+    attachment = json.dumps({"type": "tool_result", "model": "attachment-model"})
+    record.write_text("\n".join((first, alias, sidechain, attachment)) + "\n", encoding="utf-8")
+
+    measured = gate.measure_model("job-marked", record, first)
+
+    assert measured.allow is True
+    assert measured.warnings == ()
+
+
+def test_measure_model_reads_codex_session_and_turn_context_models(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    declared = "gpt-5.6-luna"
+    gate = _marked_registration(
+        tmp_path,
+        monkeypatch,
+        runtime="codex",
+        model=declared,
+        model_needs_measurement=True,
+    )
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "codex.jsonl"
+    cwd = str(tmp_path / "worker")
+    session = json.dumps(
+        {
+            "type": "session_meta",
+            "payload": {"id": "sess-codex", "cwd": cwd, "model": declared},
+        }
+    )
+    turn = json.dumps(
+        {"type": "turn_context", "payload": {"model": declared, "turn": 1}}
+    )
+    response = json.dumps(
+        {
+            "type": "response_item",
+            "payload": {"type": "message", "role": "assistant", "model": "tool-model"},
+        }
+    )
+    record.write_text("\n".join((session, turn, response)) + "\n", encoding="utf-8")
+
+    measured = gate.measure_model("job-marked", record, turn)
+
+    assert measured.allow is True
+    assert measured.warnings == ()
 
 
 def test_measure_model_rejects_a_parent_traversal_record_path(

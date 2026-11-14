@@ -2427,8 +2427,9 @@ if [ "$PROBE_STATE" != unavailable ]; then
   fi
 fi
 
-# All wrapper ledger writers share this lock. The gate itself writes the register
-# row, so hold the lock while it runs and while later appends or updates run.
+# Wrapper-owned ledger writers share this lock. The child gate also writes the
+# register row, so it receives an explicit held-lock marker while this wrapper
+# keeps the lock across that call.
 ledger_locked_command() {
   python3 -c '
 import fcntl
@@ -2440,7 +2441,19 @@ lock_path, *command = sys.argv[1:]
 os.makedirs(os.path.dirname(os.path.abspath(lock_path)), exist_ok=True)
 with open(lock_path, "a", encoding="utf-8") as lock:
     fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-    result = subprocess.run(command, capture_output=True, text=True)
+    child_env = os.environ.copy()
+    child_env["DISPATCH_LEDGER_LOCK_HELD"] = "1"
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            env=child_env,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        sys.stderr.write("ledger-locked command timed out after 120 seconds\n")
+        sys.exit(124)
 sys.stdout.write(result.stdout)
 sys.stderr.write(result.stderr)
 sys.exit(result.returncode)
@@ -2575,31 +2588,30 @@ if not session_id and runtime == "agy":
         for path in os.environ.get("AGY_BRAIN_BEFORE", "").splitlines()
         if path
     }
-    brain_root = Path(
-        os.environ.get("DISPATCH_AGY_SESSION_ROOT", "")
-        or Path.home() / ".gemini" / "antigravity-cli" / "brain"
-    )
+    brain_root_value = os.environ.get("DISPATCH_AGY_SESSION_ROOT", "")
+    brain_root = Path(brain_root_value).expanduser() if brain_root_value else None
     contract_paths = (
         {str(Path(contract)), str(Path(contract).resolve())} if contract else set()
     )
     placement_markers = [worktree_path] if worktree_path else []
     candidates = []
-    try:
-        brain_dirs = sorted(brain_root.iterdir(), key=lambda item: item.name)
-    except OSError:
-        brain_dirs = []
-    for brain_dir in brain_dirs:
-        if not brain_dir.is_dir() or os.path.realpath(str(brain_dir)) in before:
-            continue
-        transcript = brain_dir / ".system_generated" / "logs" / "transcript_full.jsonl"
+    if brain_root is not None:
         try:
-            text = transcript.read_text(encoding="utf-8")
+            brain_dirs = sorted(brain_root.iterdir(), key=lambda item: item.name)
         except OSError:
-            continue
-        contract_matches = any(path in text for path in contract_paths)
-        placement_matches = any(marker in text for marker in placement_markers)
-        if contract_matches and (placement_matches or not placement_markers):
-            candidates.append(brain_dir.name)
+            brain_dirs = []
+        for brain_dir in brain_dirs:
+            if not brain_dir.is_dir() or os.path.realpath(str(brain_dir)) in before:
+                continue
+            transcript = brain_dir / ".system_generated" / "logs" / "transcript_full.jsonl"
+            try:
+                text = transcript.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            contract_matches = any(path in text for path in contract_paths)
+            placement_matches = any(marker in text for marker in placement_markers)
+            if contract_matches and (placement_matches or not placement_markers):
+                candidates.append(brain_dir.name)
     if len(candidates) == 1:
         session_id = candidates[0]
 

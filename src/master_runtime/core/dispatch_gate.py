@@ -52,6 +52,7 @@ DEFAULT_EXPIRED_TICKET_GC_GRACE_SECONDS = 24 * 60 * 60
 MODEL_SESSION_ROOTS_ENV = "DISPATCH_MODEL_SESSION_ROOTS"
 MODEL_SESSION_MAX_BYTES = 5 * 1024 * 1024
 LEDGER_LOCK_FILENAME = "dispatch-ledger.lock"
+LEDGER_LOCK_HELD_ENV = "DISPATCH_LEDGER_LOCK_HELD"
 RUNTIME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 USERS_ABSOLUTE_PATH_PATTERN = re.compile(r"/Users/[^\s\"'`<>{}\[\](),;:]+")
 COMPLETION_CHANNELS = frozenset({"orchestration", "sentinel-log"})
@@ -750,6 +751,9 @@ class DispatchGate:
                     "job_id": job_id,
                     "completion_channel": completion_channel,
                 }
+                dispatch_started_ts = _number_or_none(pending.get("ts"))
+                if dispatch_started_ts is not None:
+                    entry["dispatch_started_ts"] = dispatch_started_ts
                 if orchestration_task is not None:
                     entry["orchestration_task"] = orchestration_task
                 contract_repo = pending.get("contract_repo")
@@ -995,7 +999,9 @@ class DispatchGate:
                     message=f"session_record={record_path}",
                 )
 
-            dispatch_ts = _number_or_none(target.get("ts"))
+            dispatch_ts = _number_or_none(target.get("dispatch_started_ts"))
+            if dispatch_ts is None:
+                dispatch_ts = _number_or_none(target.get("ts"))
             if dispatch_ts is None:
                 return GateDecision(
                     False,
@@ -1088,12 +1094,17 @@ class DispatchGate:
             declared_model = _string_or_none(target.get("model_declared"))
             if declared_model is None:
                 declared_model = _string_or_none(target.get("model"))
-            record_models = _record_model_ids(record_text)
+            record_model_turns = _record_model_turns(record_text, runtime)
+            record_models = tuple(
+                model for turn in record_model_turns for model in turn
+            )
             matches = (
                 declared_model is not None
-                and measured_model.casefold() == declared_model.casefold()
+                and _model_matches_declared(
+                    measured_model, declared_model, record_model_turns
+                )
                 and all(
-                    model.casefold() == declared_model.casefold()
+                    _model_matches_declared(model, declared_model, record_model_turns)
                     for model in record_models
                 )
             )
@@ -1888,31 +1899,130 @@ def _model_from_evidence(value: object) -> str | None:
     return None
 
 
-def _record_model_ids(record_text: str) -> tuple[str, ...]:
-    """Collect every model id named by the session record."""
+def _record_model_ids(
+    record_text: str,
+    runtime: str | None = None,
+) -> tuple[str, ...]:
+    """Collect main-session model ids from a runtime-shaped JSONL record."""
 
-    models: list[str] = []
+    return tuple(
+        model
+        for turn in _record_model_turns(record_text, runtime)
+        for model in turn
+    )
 
-    def visit(value: object) -> None:
-        if isinstance(value, Mapping):
-            model = value.get("model")
-            if isinstance(model, str) and model.strip():
-                normalized = model.strip()
-                if normalized not in models:
-                    models.append(normalized)
-            for nested in value.values():
-                if isinstance(nested, (Mapping, list)):
-                    visit(nested)
-        elif isinstance(value, list):
-            for item in value:
-                visit(item)
 
-    for line in record_text.splitlines():
+def _record_model_turns(
+    record_text: str,
+    runtime: str | None,
+) -> tuple[tuple[str, ...], ...]:
+    """Return model ids grouped by the record's explicit turn identity."""
+
+    turns: list[tuple[str | int, list[str]]] = []
+    for line_number, line in enumerate(record_text.splitlines(), start=1):
         try:
-            visit(json.loads(line))
+            event = json.loads(line)
         except json.JSONDecodeError:
             continue
-    return tuple(models)
+        if not isinstance(event, Mapping):
+            continue
+        models = _main_session_models(event, runtime)
+        if not models:
+            continue
+        turn_key = _record_turn_key(event, line_number)
+        if turns and turns[-1][0] == turn_key:
+            for model in models:
+                if model not in turns[-1][1]:
+                    turns[-1][1].append(model)
+        else:
+            turns.append((turn_key, list(dict.fromkeys(models))))
+    return tuple(tuple(models) for _, models in turns)
+
+
+def _main_session_models(
+    event: Mapping[str, object],
+    runtime: str | None,
+) -> tuple[str, ...]:
+    """Read only the model fields owned by a runtime's main session."""
+
+    runtime_name = (runtime or "").casefold()
+    if runtime_name == "codex":
+        if event.get("type") not in {"session_meta", "turn_context"}:
+            return ()
+        payload = event.get("payload")
+        source = payload if isinstance(payload, Mapping) else event
+        model = source.get("model")
+        return (model.strip(),) if isinstance(model, str) and model.strip() else ()
+
+    if _is_sidechain_event(event):
+        return ()
+    if runtime_name == "claude":
+        message = event.get("message")
+        if not isinstance(message, Mapping):
+            return ()
+        if event.get("type") != "assistant" and message.get("role") != "assistant":
+            return ()
+        model = message.get("model")
+        return (model.strip(),) if isinstance(model, str) and model.strip() else ()
+
+    candidates: list[Mapping[str, object]] = [event]
+    for key in ("message", "item", "payload", "response"):
+        nested = event.get(key)
+        if isinstance(nested, Mapping):
+            candidates.append(nested)
+    saw_assistant = False
+    for candidate in candidates:
+        if candidate.get("role") == "assistant" or candidate.get("type") == "assistant":
+            saw_assistant = True
+        model = candidate.get("model")
+        if saw_assistant and isinstance(model, str) and model.strip():
+            return (model.strip(),)
+    return ()
+
+
+def _is_sidechain_event(event: Mapping[str, object]) -> bool:
+    return any(
+        event.get(key) is True
+        for key in ("is_sidechain", "isSidechain", "sidechain")
+    )
+
+
+def _record_turn_key(event: Mapping[str, object], line_number: int) -> str | int:
+    for key in ("turn_id", "turnId", "conversation_turn_id", "conversationTurnId"):
+        value = event.get(key)
+        if isinstance(value, (str, int)) and not isinstance(value, bool):
+            return f"turn:{value}"
+    return line_number
+
+
+def _model_matches_declared(
+    model: str,
+    declared: str,
+    turns: Sequence[Sequence[str]],
+) -> bool:
+    if model.casefold() == declared.casefold():
+        return True
+    model_base = _undated_model_id(model)
+    declared_base = _undated_model_id(declared)
+    if model_base is None:
+        model_base = model.strip().casefold()
+    if declared_base is None:
+        declared_base = declared.strip().casefold()
+    if model_base != declared_base:
+        return False
+    if _undated_model_id(model) is None and _undated_model_id(declared) is None:
+        return False
+    return any(
+        model.casefold() in {item.casefold() for item in turn}
+        and declared.casefold() in {item.casefold() for item in turn}
+        for turn in turns
+    )
+
+
+def _undated_model_id(model: str) -> str | None:
+    normalized = model.strip().casefold()
+    undated = re.sub(r"-\d{8}$", "", normalized)
+    return undated if undated != normalized else None
 
 
 def _relative_model_record_path(
@@ -1973,7 +2083,7 @@ def _record_context(record_text: str) -> tuple[set[str], set[str], float | None]
         if value.get("type") == "session_meta"
         and isinstance(value.get("payload"), Mapping)
     ]
-    authoritative = session_payloads or records
+    authoritative = session_payloads[:1] or records
     cwd_values: set[str] = set()
     session_values: set[str] = set()
     session_start: float | None = None
@@ -2185,6 +2295,9 @@ def _ledger_lock(ledger_path: Path) -> Iterator[None]:
     """Serialize ledger updates without creating the ticket directory."""
 
     ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    if os.environ.get(LEDGER_LOCK_HELD_ENV) == "1":
+        yield
+        return
     lock_path = ledger_path.parent / LEDGER_LOCK_FILENAME
     with lock_path.open("a", encoding="utf-8") as lock_file:
         if fcntl is not None:

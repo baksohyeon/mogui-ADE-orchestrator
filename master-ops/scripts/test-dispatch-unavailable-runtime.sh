@@ -39,6 +39,84 @@ dispatch_with_gate() {  # fake-gate-path
   printf '%s' "$out"
 }
 
+# --- Case: the real gate registers under the wrapper's held ledger lock. ----
+# The wrapper helper owns the lock while the child gate writes its register
+# row, so this must complete within a bounded timeout instead of hanging on a
+# second flock. The real check and register commands are used; no gate stub can
+# satisfy this regression.
+real_gate_register_lock_test() (
+  set +e
+  local work contract ledger policy gate repo_root contract_sha ledger_fn out status
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-real-register-lock.$$"
+  mkdir -p "$work/state" "$work/home"
+  trap 'rm -rf "$work"' EXIT
+  repo_root=$(cd "$(dirname "$dispatch")/../.." && pwd)
+  gate="$repo_root/scripts/dispatch-gate"
+  policy="$repo_root/master-ops/model-tier-policy.json"
+  contract="$work/contract.md"
+  ledger="$work/state/dispatch-ledger.jsonl"
+  printf '%s\n' 'scratch contract' > "$contract"
+
+  out=$(HOME="$work/home" MOGUI_STATE_DIR="$work/state" PYTHONPATH="$repo_root/src" \
+    "$gate" --ledger "$ledger" check --runtime codex --model future-model \
+    --contract "$contract" --agents 1 --est-chars 1000 \
+    --completion-channel sentinel-log 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: real dispatch-gate check did not prepare registration" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  contract_sha=$(python3 - "$contract" <<'PY'
+import hashlib
+import pathlib
+import sys
+print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
+PY
+)
+  ledger_fn=$(awk '$0=="ledger_locked_command() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  [ -n "$ledger_fn" ] || { echo "FAIL: could not extract ledger lock helper" >&2; return 1; }
+  cat > "$work/run.sh" <<EOF
+#!/bin/bash
+set -eu
+LEDGER="$ledger"
+LEDGER_LOCK="$work/state/dispatch-ledger.lock"
+export MOGUI_STATE_DIR="$work/state"
+GATE="$gate"
+$ledger_fn
+ledger_locked_command "\$GATE" --ledger "\$LEDGER" register \\
+  --job-id job-real-register --contract-sha "$contract_sha" --runtime codex \\
+  --tier-policy "$policy" --declared-model future-model \\
+  --probe-cmd 'printf job-real-register'
+EOF
+  chmod +x "$work/run.sh"
+  out=$(python3 - "$work/run.sh" <<'PY'
+import subprocess
+import sys
+
+try:
+    result = subprocess.run(
+        ["bash", sys.argv[1]], capture_output=True, text=True, timeout=5
+    )
+except subprocess.TimeoutExpired:
+    print("FAIL: real register remained blocked on the wrapper ledger lock", file=sys.stderr)
+    raise SystemExit(124)
+print(result.stdout, end="")
+print(result.stderr, end="", file=sys.stderr)
+raise SystemExit(result.returncode)
+PY
+)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: real dispatch-gate register under wrapper lock failed · rc=$status" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : real dispatch-gate register completes under the wrapper ledger lock"
+)
+real_gate_register_lock_test || exit 1
+
 # --- Case: --check-only refuses an unavailable runtime, with reason and alternatives ---
 check_only_refusal_test() (
   set +e

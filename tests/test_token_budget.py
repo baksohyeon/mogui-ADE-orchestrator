@@ -504,6 +504,26 @@ def test_settle_usage_is_idempotent_and_stores_unmeasured_state(tmp_path: Path) 
     assert pre_pr[0]["settlement_without_registration"] is True
     assert pre_pr[0]["token_usage"] == measured
 
+    denied_ledger = tmp_path / "denied-ledger.jsonl"
+    denied_ledger.write_text(
+        json.dumps({"job_id": "denied-job", "decision": "DENY"}) + "\n",
+        encoding="utf-8",
+    )
+    denied_gate = DispatchGate(
+        DispatchGateConfig(
+            ledger_path=denied_ledger,
+            ticket_dir=tmp_path / "denied-tickets",
+            tier_policy_path=policy,
+            known_roots_path=tmp_path / "denied-roots.json",
+        )
+    )
+    assert denied_gate.settle_usage("denied-job", measured).allow
+    denied_entries = [
+        entry for entry in denied_gate.ledger_entries() if entry.get("settlement_dispatch_id") == "denied-job"
+    ]
+    assert len(denied_entries) == 1
+    assert "job_id" not in denied_entries[0]
+
 
 def test_settle_cli_accepts_omitted_runtime(tmp_path: Path) -> None:
     ledger = tmp_path / "ledger.jsonl"

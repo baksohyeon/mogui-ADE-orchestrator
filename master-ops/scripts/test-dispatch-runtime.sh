@@ -727,7 +727,7 @@ BIN
 
   : > "$work/args.log"
   write_script "$script_file" codex blocked
-  out=$(HOME="$work/home" CODEX_HOME= CODEX_ACCOUNTS_DIR="$work/accounts" bash "$script_file" 2>&1)
+  out=$(HOME="$work/home" DISPATCH_CODEX_SESSION_ROOT= CODEX_HOME= CODEX_ACCOUNTS_DIR="$work/accounts" bash "$script_file" 2>&1)
   status=$?
   if [ "$status" -ne 2 ] \
       || ! grep -qF -- "--root $work/accounts/dispatch/home/sessions" "$work/args.log"; then

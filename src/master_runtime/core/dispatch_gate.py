@@ -871,7 +871,11 @@ class DispatchGate:
         normalized = dict(usage)
         with _ledger_lock(Path(self.config.ledger_path)):
             entries = list(self._read_entries())
-            registered = [entry for entry in entries if entry.get("job_id") == dispatch_id]
+            registered = [
+                entry
+                for entry in entries
+                if entry.get("job_id") == dispatch_id and entry.get("decision") == "ALLOW"
+            ]
             orphaned = (
                 []
                 if registered

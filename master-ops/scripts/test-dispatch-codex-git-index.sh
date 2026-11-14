@@ -215,7 +215,7 @@ check_shared_git_surface_fifo_safety() {
   mkdir -p "$work/shared/hooks"
   trap 'rm -rf "$work"' RETURN
   shared="$work/shared"
-  : > "$shared/config"
+  mkfifo "$shared/config"
   mkfifo "$shared/hooks/fifo"
   capture_fn=$(extract_shell_function "$dispatch" "$CAPTURE_SURFACE_HEADER")
   vars=$(grep -E '^CODEX_(SHARED_GIT_DIR|SHARED_GIT_CONFIG_HASH|SHARED_GIT_HOOKS_LISTING|SHARED_GIT_SURFACE_CAPTURED)=' "$dispatch")
@@ -227,6 +227,8 @@ check_shared_git_surface_fifo_safety() {
     echo 'capture_codex_shared_git_surface "$CODEX_SHARED_GIT_DIR"'
   } > "$work/run.sh"
   python3 - "$work/run.sh" <<'PY'
+import os
+import signal
 import subprocess
 import sys
 
@@ -235,16 +237,46 @@ process = subprocess.Popen(
     stdout=subprocess.PIPE,
     stderr=subprocess.PIPE,
     text=True,
+    start_new_session=True,
 )
 try:
     stdout, stderr = process.communicate(timeout=2)
 except subprocess.TimeoutExpired:
-    process.kill()
-    process.communicate()
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    process.communicate(timeout=2)
     raise SystemExit("shared Git FIFO snapshot blocked")
 if process.returncode != 0:
     raise SystemExit(stderr or stdout or "shared Git FIFO snapshot failed")
 PY
+}
+
+check_shared_git_surface_symlink_safety() {
+  local dispatch="$1" work shared capture_fn warn_fn vars output
+  work="${TMPDIR:-/tmp}/mogui-dispatch-codex-git-symlink.$$"
+  mkdir -p "$work/shared/hooks"
+  trap 'rm -rf "$work"' RETURN
+  shared="$work/shared"
+  : > "$shared/config"
+  printf '%s\n' first > "$shared/hooks/target-a"
+  printf '%s\n' second > "$shared/hooks/target-b"
+  ln -s target-a "$shared/hooks/linked"
+  capture_fn=$(extract_shell_function "$dispatch" "$CAPTURE_SURFACE_HEADER")
+  warn_fn=$(extract_shell_function "$dispatch" 'warn_codex_shared_git_surface_changes() {')
+  vars=$(grep -E '^CODEX_(SHARED_GIT_DIR|SHARED_GIT_CONFIG_HASH|SHARED_GIT_HOOKS_LISTING|SHARED_GIT_SURFACE_CAPTURED)=' "$dispatch")
+  [ -n "$capture_fn" ] && [ -n "$warn_fn" ] || return 1
+  {
+    echo 'set -eu'
+    printf '%s\n' "$vars" "$capture_fn" "$warn_fn"
+    printf 'CODEX_SHARED_GIT_DIR=%q\n' "$shared"
+    echo 'capture_codex_shared_git_surface "$CODEX_SHARED_GIT_DIR"'
+    echo 'ln -sf target-b "$CODEX_SHARED_GIT_DIR/hooks/linked"'
+    echo 'warn_codex_shared_git_surface_changes'
+  } > "$work/run.sh"
+  output=$(bash "$work/run.sh")
+  printf '%s\n' "$output" | grep -Fq 'hooks listing' || return 1
 }
 
 check_completion_warning_wiring() {
@@ -471,6 +503,12 @@ check_shared_git_surface_fifo_safety "$DISPATCH" || {
   exit 1
 }
 echo "✓ shared Git surface snapshots handle FIFO entries without blocking"
+
+check_shared_git_surface_symlink_safety "$DISPATCH" || {
+  echo "✗ shared Git symlink retargeting did not produce a warning" >&2
+  exit 1
+}
+echo "✓ shared Git surface snapshots record symlink targets without opening them"
 
 check_completion_warning_wiring "$DISPATCH" || {
   echo "✗ completion path does not invoke the shared Git surface warning" >&2

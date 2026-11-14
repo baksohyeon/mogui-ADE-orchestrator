@@ -1402,6 +1402,12 @@ def safe_snapshot(path):
         return ["<unreadable>"]
 
     mode_bits = metadata.st_mode & 0o7777
+    if stat.S_ISLNK(metadata.st_mode):
+        try:
+            target = os.readlink(path)
+        except OSError:
+            target = "<unreadable>"
+        return [f"<symlink:{target}>", mode_bits]
     if not stat.S_ISREG(metadata.st_mode):
         return [f"<special:{stat.S_IFMT(metadata.st_mode):o}>", mode_bits]
 

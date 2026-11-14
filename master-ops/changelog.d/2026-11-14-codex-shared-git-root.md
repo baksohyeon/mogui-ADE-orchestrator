@@ -10,5 +10,6 @@ When the wrapper observes a completed dispatch, it compares the shared config ha
 the hooks directory listing with each hook's bounded content digest and mode bits
 against the dispatch-time snapshot and prints one warning line if either changed.
 Special hook entries are recorded without reading them, so the snapshot remains
-bounded even when a writable hooks directory contains a FIFO. The warning is
-informational and does not block completion.
+bounded even when a writable hooks directory contains a FIFO. Symlink targets are
+recorded with `readlink` without opening the target. The warning is informational
+and does not block completion.

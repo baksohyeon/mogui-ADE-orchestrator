@@ -5146,6 +5146,34 @@ def test_measure_model_scopes_codex_alias_to_the_evidence_turn(
     assert _ledger_entries(tmp_path)[-1]["model_verified"] is False
 
 
+def test_measure_model_rejects_array_evidence_lines(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    declared = "future-model"
+    gate = _marked_registration(
+        tmp_path,
+        monkeypatch,
+        runtime="codex",
+        model=declared,
+    )
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "codex.jsonl"
+    cwd = str(tmp_path / "worker")
+    session = json.dumps(
+        {
+            "type": "session_meta",
+            "payload": {"id": "sess-codex", "cwd": cwd},
+        }
+    )
+    evidence = json.dumps([{"model": declared}])
+    record.write_text(session + "\n" + evidence + "\n", encoding="utf-8")
+
+    measured = gate.measure_model("job-marked", record, evidence)
+
+    assert measured.allow is False
+    assert measured.reason == ReasonCode.MODEL_EVIDENCE_INVALID
+
+
 def test_default_ledger_path_env_override_wins(tmp_path: Path, monkeypatch) -> None:
     override = tmp_path / "custom-ledger.jsonl"
     monkeypatch.setenv("DISPATCH_GATE_LEDGER", str(override))

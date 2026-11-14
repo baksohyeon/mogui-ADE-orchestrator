@@ -1100,6 +1100,12 @@ class DispatchGate:
                     ReasonCode.MODEL_EVIDENCE_INVALID,
                     message="quoted model line has no model field",
                 )
+            if not isinstance(evidence, Mapping):
+                return GateDecision(
+                    False,
+                    ReasonCode.MODEL_EVIDENCE_INVALID,
+                    message="quoted model line is not a JSON object",
+                )
             if not _record_belongs_to_dispatch(
                 target,
                 placement,

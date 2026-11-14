@@ -308,6 +308,7 @@ class WorkerReaper:
         measurements: dict[str, object] = {}
         terminal_action: Optional[str] = None
         terminal_reclaim_allowed = True
+        orca_cleanup_supported = False
 
         # Preserve the selector-row measurement and planned terminal action
         # even when the worktree safety check later keeps the row.  The action
@@ -346,26 +347,31 @@ class WorkerReaper:
                 if (
                     not wt_merged
                     and reason.startswith("Current branch ")
-                    and " (virtual merge failed:" in reason
+                    and self._is_virtual_merge_failure_reason(reason)
                     and dispatch_state.worktree_selector
-                    and self._orca_cleanup_supported()
                 ):
-                    if self._squash_merge_pr_evidence(worktree_path):
+                    orca_cleanup_supported = self._orca_cleanup_supported()
+                    if orca_cleanup_supported and self._squash_merge_pr_evidence(
+                        worktree_path
+                    ):
                         wt_clean = True
                         wt_merged = True
                         reason = ""
                         self._last_landing_rule = "merged_pr"
                 if wt_clean and wt_merged:
-                    pr_state = self._worktree_pr_state(worktree_path)
-                    measurements["worktree_pr_state"] = pr_state
-                    if pr_state == "OPEN":
-                        wt_merged = False
-                        reason = "pull request is open"
-                    elif pr_state == "UNMEASURED":
-                        measurements["worktree_pr_reason"] = "pr_state_unmeasured"
-                        if self._last_landing_rule != "ancestry":
+                    if dispatch_state.worktree_selector and not orca_cleanup_supported:
+                        orca_cleanup_supported = self._orca_cleanup_supported()
+                    if orca_cleanup_supported:
+                        pr_state = self._worktree_pr_state(worktree_path)
+                        measurements["worktree_pr_state"] = pr_state
+                        if pr_state == "OPEN":
                             wt_merged = False
-                            reason = "pull request state unmeasured"
+                            reason = "pull request is open"
+                        elif pr_state == "UNMEASURED":
+                            measurements["worktree_pr_reason"] = "pr_state_unmeasured"
+                            if self._last_landing_rule != "ancestry":
+                                wt_merged = False
+                                reason = "pull request state unmeasured"
                 measurements["worktree_clean"] = wt_clean
                 measurements["worktree_merged"] = wt_merged
                 if wt_clean and wt_merged:
@@ -390,10 +396,7 @@ class WorkerReaper:
                             f"{len(ignored_media)}"
                         )
                     else:
-                        use_orca_cleanup = bool(
-                            dispatch_state.worktree_selector
-                            and self._orca_cleanup_supported()
-                        )
+                        use_orca_cleanup = orca_cleanup_supported
                         if dispatch_state.worktree_selector:
                             terminal_action, terminal_measurements = (
                                 self._plan_terminal_action(
@@ -415,48 +418,73 @@ class WorkerReaper:
                             )
                         elif execute:
                             terminals_closed = False
-                            if terminal_action and terminal_action.startswith(
-                                "would_close_worktree:"
-                            ):
-                                self._close_worktree_terminals(
-                                    dispatch_state.worktree_selector or ""
-                                )
-                                terminals_closed = True
-                                actions.append(
-                                    f"terminal_closed_by_worktree:{dispatch_state.worktree_selector}"
-                                )
-                            elif terminal_action and terminal_action.startswith(
-                                "would_close_terminal:"
-                            ):
-                                self._close_terminal(dispatch_state.terminal_id)
-                                terminals_closed = True
-                                actions.append(
-                                    f"terminal_closed:{dispatch_state.terminal_id}"
-                                )
+                            resolved_worktree_path: Optional[str] = None
+                            resolution_error: Optional[ReapError] = None
                             if use_orca_cleanup:
                                 try:
-                                    branch_warning = self._remove_worktree(
-                                        worktree_path, dispatch_state.worktree_selector
+                                    resolved_worktree_path = self._resolve_worktree_path(
+                                        dispatch_state.worktree_selector or ""
+                                    )
+                                    self._validate_worktree_selector_path(
+                                        worktree_path,
+                                        dispatch_state.worktree_selector or "",
+                                        resolved_worktree_path,
                                     )
                                 except ReapError as error:
-                                    actions.append(
-                                        "cleanup_partial:"
-                                        f"{'terminals_closed' if terminals_closed else 'terminals_not_closed'}:"
-                                        f"worktree_remove_failed:{error}"
-                                    )
-                                    actions.append(
-                                        f"worktree_remove_failed:{dispatch_state.worktree_selector}:{error}"
-                                    )
-                                else:
-                                    actions.append(
-                                        f"worktree_remove_requested:{worktree_path}:branch_delete_requested"
-                                    )
-                                    if branch_warning:
-                                        actions.append(branch_warning)
-                            else:
-                                self._remove_worktree_with_branch_cleanup(
-                                    worktree_path, actions
+                                    resolution_error = error
+                            if resolution_error is not None:
+                                actions.append(
+                                    "cleanup_partial:terminals_not_closed:"
+                                    f"worktree_remove_failed:{resolution_error}"
                                 )
+                                actions.append(
+                                    f"worktree_remove_failed:{dispatch_state.worktree_selector}:{resolution_error}"
+                                )
+                            else:
+                                if terminal_action and terminal_action.startswith(
+                                    "would_close_worktree:"
+                                ):
+                                    self._close_worktree_terminals(
+                                        dispatch_state.worktree_selector or ""
+                                    )
+                                    terminals_closed = True
+                                    actions.append(
+                                        f"terminal_closed_by_worktree:{dispatch_state.worktree_selector}"
+                                    )
+                                elif terminal_action and terminal_action.startswith(
+                                    "would_close_terminal:"
+                                ):
+                                    self._close_terminal(dispatch_state.terminal_id)
+                                    terminals_closed = True
+                                    actions.append(
+                                        f"terminal_closed:{dispatch_state.terminal_id}"
+                                    )
+                                if use_orca_cleanup:
+                                    try:
+                                        branch_warning = self._remove_worktree(
+                                            worktree_path,
+                                            dispatch_state.worktree_selector,
+                                            resolved_worktree_path=resolved_worktree_path,
+                                        )
+                                    except ReapError as error:
+                                        actions.append(
+                                            "cleanup_partial:"
+                                            f"{'terminals_closed' if terminals_closed else 'terminals_not_closed'}:"
+                                            f"worktree_remove_failed:{error}"
+                                        )
+                                        actions.append(
+                                            f"worktree_remove_failed:{dispatch_state.worktree_selector}:{error}"
+                                        )
+                                    else:
+                                        actions.append(
+                                            f"worktree_remove_requested:{worktree_path}:branch_delete_requested"
+                                        )
+                                        if branch_warning:
+                                            actions.append(branch_warning)
+                                else:
+                                    self._remove_worktree_with_branch_cleanup(
+                                        worktree_path, actions
+                                    )
                         else:
                             if dispatch_state.worktree_selector:
                                 if terminal_action:
@@ -915,6 +943,33 @@ class WorkerReaper:
             )
             return measured_path or None
         return None
+
+    @staticmethod
+    def _is_virtual_merge_failure_reason(reason: str) -> bool:
+        """Match only the reason shape emitted by the landing check."""
+        return bool(
+            re.fullmatch(
+                r"Current branch .+ is not merged to \S+ \(virtual merge failed:.*\)",
+                reason,
+            )
+        )
+
+    @staticmethod
+    def _validate_worktree_selector_path(
+        worktree_path: Path,
+        selector: str,
+        resolved_path: Optional[str],
+    ) -> None:
+        """Refuse selector cleanup unless Orca resolves to the safety path."""
+        if not resolved_path:
+            raise ReapError(f"Could not resolve worktree selector {selector}")
+        expected_path = os.path.normcase(os.path.realpath(str(worktree_path)))
+        measured_path = os.path.normcase(os.path.realpath(resolved_path))
+        if measured_path != expected_path:
+            raise ReapError(
+                f"Worktree selector {selector} resolved to {resolved_path}, "
+                f"expected {worktree_path}"
+            )
 
     @staticmethod
     def _normalize_worktree_selector(value: str) -> str:
@@ -1775,22 +1830,19 @@ class WorkerReaper:
         return False, f"branch changes are not included in {origin_default_ref}"
 
     def _remove_worktree(
-        self, worktree_path: Path, worktree_selector: Optional[str] = None
+        self,
+        worktree_path: Path,
+        worktree_selector: Optional[str] = None,
+        *,
+        resolved_worktree_path: Optional[str] = None,
     ) -> Optional[str]:
         """Remove a worktree through Orca when its selector was measured."""
         if worktree_selector:
-            resolved_path = self._resolve_worktree_path(worktree_selector)
-            if not resolved_path:
-                raise ReapError(
-                    f"Could not resolve worktree selector {worktree_selector}"
-                )
-            expected_path = os.path.normcase(os.path.realpath(str(worktree_path)))
-            measured_path = os.path.normcase(os.path.realpath(resolved_path))
-            if measured_path != expected_path:
-                raise ReapError(
-                    f"Worktree selector {worktree_selector} resolved to {resolved_path}, "
-                    f"expected {worktree_path}"
-                )
+            if resolved_worktree_path is None:
+                resolved_worktree_path = self._resolve_worktree_path(worktree_selector)
+            self._validate_worktree_selector_path(
+                worktree_path, worktree_selector, resolved_worktree_path
+            )
             code, _stdout, stderr = self.orca_runner(
                 [
                     *ORCA_WORKTREE_RM_ARGS,

@@ -94,3 +94,84 @@ def test_legacy_agent_process_refusal_keeps_message_and_success_exit(monkeypatch
         payload = json.loads(stdout.getvalue())
         assert exit_code == 0
         assert "terminal_left:term1:agent_process:4242:claude" in payload["record"]["actions_taken"]
+
+
+def test_unsupported_orca_host_keeps_legacy_content_landing_and_success_exit(
+    monkeypatch,
+) -> None:
+    module = _load_cli()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        def runner(cmd: list[str]) -> tuple[int, str, str]:
+            if "dispatch-show" in cmd:
+                return 0, json.dumps(
+                    {
+                        "dispatch_id": "d1",
+                        "task_id": "t1",
+                        "terminal_id": "term1",
+                        "status": "COMPLETED",
+                        "worktree_path": tmp,
+                        "worktree_selector": "id:repo:target",
+                    }
+                ), ""
+            if cmd == ["orca", "terminal", "close", "--help"]:
+                return 0, "usage: orca terminal close\n", ""
+            if cmd == ["orca", "worktree", "rm", "--help"]:
+                return 0, "usage: orca worktree rm\n", ""
+            if cmd[:4] == ["orca", "terminal", "list", "--json"]:
+                return 0, json.dumps(
+                    {"result": {"terminals": [{"handle": "term1", "worktreeId": "repo:target"}]}}
+                ), ""
+            if cmd[:4] == ["orca", "orchestration", "worker-list", "--limit"]:
+                return 0, json.dumps({"result": {"workers": [], "page": {"hasMore": False}}}), ""
+            if cmd and cmd[0].endswith("worker-pane-sweep"):
+                return 0, "ok idle term1 worker\n", ""
+            if cmd[:2] == ["ps", "-axo"]:
+                return 0, "", ""
+            if cmd[:3] == ["gh", "repo", "view"]:
+                return 0, json.dumps({"defaultBranchRef": {"name": "main"}}), ""
+            if cmd and cmd[0] == "gh" and cmd[1:3] == ["pr", "view"]:
+                return 1, "", "no pull request found"
+            if "git" in cmd and "status" in cmd:
+                return 0, "", ""
+            if "git" in cmd and "branch" in cmd and "--show-current" in cmd:
+                return 0, "feature-x\n", ""
+            if "git" in cmd and "rev-parse" in cmd and "HEAD" in cmd:
+                return 0, "tip\n", ""
+            if "git" in cmd and "--git-common-dir" in cmd:
+                return 0, "/repo/.git\n", ""
+            if "git" in cmd and cmd[3:] == ["remote", "get-url", "origin"]:
+                return 0, "https://github.com/example/worker-reap.git\n", ""
+            if "git" in cmd and "branch" in cmd and "--merged" in cmd:
+                return 0, "* main\n", ""
+            if "git" in cmd and "merge-base" in cmd:
+                return 0, "base\n", ""
+            if "git" in cmd and "--name-only" in cmd:
+                return 0, "src/worker.py\0", ""
+            if "git" in cmd and "--quiet" in cmd:
+                return 0, "", ""
+            if cmd[:4] == ["orca", "terminal", "close", "--terminal"]:
+                return 0, "", ""
+            if cmd and cmd[0] == "git" and "worktree" in cmd and "remove" in cmd:
+                return 0, "", ""
+            return 0, "", ""
+
+        class LegacyHostReaper:
+            def __init__(self, **_kwargs):
+                self.reaper = WorkerReaper(orca_runner=runner)
+
+            def reap(self, **kwargs):
+                return self.reaper.reap(**kwargs)
+
+        monkeypatch.setattr(module, "WorkerReaper", LegacyHostReaper)
+        monkeypatch.setattr(module, "mogui_emit", lambda *_args, **_kwargs: None)
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            exit_code = module.main(["--task-id", "t1", "--json"])
+
+        payload = json.loads(stdout.getvalue())
+        assert exit_code == 0
+        assert "worktree_removed:" in payload["record"]["actions_taken"]
+        assert not any(
+            key.startswith("worktree_pr_") for key in payload["record"]["measurements"]
+        )

@@ -212,7 +212,7 @@ audit_case() {
   printf '%s\n' "$2" > "$config"
   {
     echo 'set -u'
-    printf 'INSTANCE_RUNTIME_CONFIG=%s\nLEDGER=%s\n' "$config" "$ledger"
+    printf 'INSTANCE_RUNTIME_CONFIG=%s\nLEDGER=%s\nLEDGER_LOCK=%s\n' "$config" "$ledger" "$work/dispatch-ledger.lock"
     printf '%s\n' "$vars" "$read_fn" "$apply_fn" "$1"
     echo 'CHECK_ONLY=0 RUNTIME=codex MASTER_HOST_RUNTIME=claude INSTALLED_RUNTIMES=codex ALTERNATIVE_RUNTIMES= UNAVAILABLE_RUNTIMES='
     echo 'SAME_HOST_REASON= TASK=task_x DISP=ctx_x SHA=abc'

@@ -1,2 +1,2 @@
 {"timestamp":"2026-06-13T05:08:51.398Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100000,"cached_input_tokens":80000,"output_tokens":4000,"total_tokens":104000}}}}
-{"timestamp":"2026-06-13T05:09:36.486Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":107091,"cached_input_tokens":88704,"output_tokens":4966,"total_tokens":112057}}}}
+{"timestamp":"2026-06-13T05:09:36.486Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":107091,"cached_input_tokens":88704,"output_tokens":4966,"total_tokens":112057}},"rate_limits":{"primary":{"used_percent":17.0,"window_minutes":10080,"resets_at":1781327376}}}}

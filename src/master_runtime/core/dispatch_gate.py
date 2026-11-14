@@ -711,6 +711,20 @@ class DispatchGate:
         runtime_filter = _normalize_runtime_filter(runtime)
         if runtime is not None and runtime_filter is None:
             return GateDecision(False, ReasonCode.INVALID_REQUEST)
+        if token_budget is not None and (
+            isinstance(token_budget, bool) or not isinstance(token_budget, int) or token_budget < 0
+        ):
+            return GateDecision(
+                False,
+                ReasonCode.INVALID_REQUEST,
+                message="token_budget must be a non-negative integer",
+            )
+        if not isinstance(tokens_basis, str) or tokens_basis not in {"total", "uncached"}:
+            return GateDecision(
+                False,
+                ReasonCode.INVALID_REQUEST,
+                message="tokens_basis must be total or uncached",
+            )
 
         with _ledger_lock(Path(self.config.ledger_path)):
             with _ticket_lock(Path(self.config.ticket_dir)):
@@ -793,20 +807,6 @@ class DispatchGate:
                 if card is not None or card_reason is not None:
                     entry["card"] = card.strip() if card is not None else ""
                     entry["card_reason"] = card_reason.strip() if card_reason is not None else ""
-                if token_budget is not None and (
-                    isinstance(token_budget, bool) or not isinstance(token_budget, int) or token_budget < 0
-                ):
-                    return GateDecision(
-                        False,
-                        ReasonCode.INVALID_REQUEST,
-                        message="token_budget must be a non-negative integer",
-                    )
-                if tokens_basis not in {"total", "uncached"}:
-                    return GateDecision(
-                        False,
-                        ReasonCode.INVALID_REQUEST,
-                        message="tokens_basis must be total or uncached",
-                    )
                 # Keep the declared budget beside the measured usage. ``None``
                 # is deliberate for a tier with no measured default; it is
                 # different from an observed zero.

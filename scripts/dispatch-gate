@@ -401,9 +401,11 @@ def _budget(args: argparse.Namespace) -> int:
         except json.JSONDecodeError:
             front_matter = {}
     budget = front_matter.get("budget") if isinstance(front_matter, dict) else None
+    basis = front_matter.get("tokens_basis", "total") if isinstance(front_matter, dict) else "total"
+    if basis not in {"total", "uncached"}:
+        basis = "total"
     if isinstance(budget, dict) and "tokens" in budget:
         token_budget = budget.get("tokens")
-        basis = front_matter.get("tokens_basis", "total")
         payload = {
             "token_budget": token_budget,
             "tokens_basis": basis,
@@ -412,10 +414,10 @@ def _budget(args: argparse.Namespace) -> int:
             "tier": args.tier,
         }
     else:
-        defaults, counts = tier_defaults(args.tier_policy)
+        defaults, counts = tier_defaults(args.tier_policy, basis=basis)
         payload = {
             "token_budget": defaults.get(args.tier),
-            "tokens_basis": "total",
+            "tokens_basis": basis,
             "source": "tier-p90" if args.tier in defaults else "unset:no-records",
             "records": counts.get(args.tier, 0),
             "tier": args.tier,

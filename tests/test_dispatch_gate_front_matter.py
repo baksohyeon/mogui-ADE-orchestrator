@@ -275,6 +275,20 @@ def test_uncached_token_basis_is_accepted(tmp_path: Path) -> None:
     assert decision.front_matter["tokens_basis"] == "uncached"
 
 
+def test_basis_without_declared_tokens_applies_to_the_measured_default(
+    tmp_path: Path,
+) -> None:
+    contract = _contract(
+        tmp_path,
+        "---\ntier: efficient\nruntime: claude\nrepo: example-repo\n"
+        "tokens_basis: uncached\n---\n",
+    )
+    decision = _gate(tmp_path).check(_request(contract))
+
+    assert decision.allow is True
+    assert decision.front_matter["tokens_basis"] == "uncached"
+
+
 def test_negative_and_non_integer_tokens_are_refused(tmp_path: Path) -> None:
     for value in ("-1", "1.5", "nope"):
         contract = _contract(

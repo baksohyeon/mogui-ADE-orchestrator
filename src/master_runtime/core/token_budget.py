@@ -59,11 +59,6 @@ def _integer(value: object) -> int | None:
     return number if number >= 0 else None
 
 
-def _sum(values: Iterable[int | None]) -> int | None:
-    numbers = [value for value in values if value is not None]
-    return sum(numbers) if numbers else None
-
-
 def _read_jsonl(path: str | Path) -> Iterable[Mapping[str, object]]:
     try:
         with Path(path).open(encoding="utf-8") as stream:
@@ -107,9 +102,9 @@ def read_claude_transcript(path: str | Path) -> dict[str, object]:
     """Sum per-message Claude ``usage`` fields.
 
     Claude separates new input, cache creation, and cache reads.  The
-    normalized input includes new input plus cache creation; cached_input keeps
-    cache reads visible, and total counts all three input components plus
-    output.
+    normalized input includes all three input components; cached_input keeps
+    cache reads visible, and total counts input plus output.  This keeps the
+    ``uncached`` basis as input minus cached_input plus output.
     """
 
     input_tokens = 0
@@ -135,6 +130,7 @@ def read_claude_transcript(path: str | Path) -> dict[str, object]:
         seen = True
         input_tokens += values["input_tokens"] or 0
         input_tokens += values["cache_creation_input_tokens"] or 0
+        input_tokens += values["cache_read_input_tokens"] or 0
         cached += values["cache_read_input_tokens"] or 0
         output += values["output_tokens"] or 0
     if not seen:
@@ -143,7 +139,7 @@ def read_claude_transcript(path: str | Path) -> dict[str, object]:
         input_tokens,
         cached,
         output,
-        input_tokens + cached + output,
+        input_tokens + output,
         "claude:usage",
     ).as_dict()
 
@@ -257,6 +253,7 @@ def tier_defaults(
     *,
     codex_root: str | Path | None = None,
     claude_root: str | Path | None = None,
+    basis: str = "total",
 ) -> tuple[dict[str, int], dict[str, int]]:
     """Compute per-tier p90 totals from existing Codex and Claude records.
 
@@ -264,6 +261,8 @@ def tier_defaults(
     A missing tier is deliberately absent from both mappings.
     """
 
+    if basis not in {"total", "uncached"}:
+        raise ValueError("tokens_basis must be total or uncached")
     try:
         policy = json.loads(Path(tier_policy).read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError):
@@ -277,16 +276,15 @@ def tier_defaults(
         if isinstance(models, list)
         for model in models
     }
+    claude_value = (
+        str(claude_root).strip()
+        if claude_root is not None
+        else os.environ.get("DISPATCH_CLAUDE_SESSION_ROOT", "").strip()
+    )
+    claude_path = Path(claude_value).expanduser() if claude_value else Path.home() / ".claude" / "projects"
     roots: dict[str, tuple[Path, ...]] = {
         "codex": _codex_roots(codex_root),
-        "claude": (
-            Path(
-                claude_root
-                or os.environ.get(
-                    "DISPATCH_CLAUDE_SESSION_ROOT", Path.home() / ".claude" / "projects"
-                )
-            ).expanduser(),
-        ),
+        "claude": (claude_path,),
     }
     totals: dict[str, list[int]] = {}
     counts: dict[str, int] = {}
@@ -300,7 +298,7 @@ def tier_defaults(
                 if tier is None:
                     continue
                 usage = read_runtime(runtime, path)
-                total = cap_total(usage, "total")
+                total = cap_total(usage, basis)
                 if total is None:
                     continue
                 totals.setdefault(tier, []).append(total)
@@ -328,7 +326,9 @@ def latest_codex_quota(
                 payload = event.get("payload")
                 if not isinstance(payload, Mapping) or payload.get("type") != "token_count":
                     continue
-                rate_limits = event.get("rate_limits")
+                rate_limits = payload.get("rate_limits")
+                if not isinstance(rate_limits, Mapping):
+                    rate_limits = event.get("rate_limits")
                 if not isinstance(rate_limits, Mapping):
                     continue
                 weekly = None

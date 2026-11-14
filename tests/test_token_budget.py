@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from master_runtime.core.dispatch_gate import (
@@ -44,7 +45,7 @@ def test_claude_reader_sums_message_usage_and_preserves_cache_reads() -> None:
     usage = read_claude_transcript(FIXTURES / "claude-real-sample.jsonl")
 
     assert usage == {
-        "input": 102,
+        "input": 402,
         "cached_input": 300,
         "output": 20,
         "total": 422,
@@ -72,7 +73,7 @@ def test_p90_is_rounded_up_and_empty_tier_has_no_default() -> None:
     assert p90([]) is None
 
 
-def test_tier_defaults_only_use_measured_records(tmp_path: Path, monkeypatch) -> None:
+def test_tier_defaults_only_use_measured_records(tmp_path: Path) -> None:
     policy = tmp_path / "policy.json"
     policy.write_text(
         json.dumps({"tiers": {"efficient": ["gpt-5.6-luna"], "top": ["claude-opus-5"]}}),
@@ -104,10 +105,60 @@ def test_tier_defaults_only_use_measured_records(tmp_path: Path, monkeypatch) ->
         + "\n",
         encoding="utf-8",
     )
+    (codex / "incomplete.jsonl").write_text(
+        json.dumps({"type": "session_meta", "payload": {"model": "gpt-5.6-luna"}})
+        + "\n"
+        + json.dumps(
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {"total_token_usage": {"input_tokens": 20}},
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
     defaults, counts = tier_defaults(policy, codex_root=codex, claude_root=claude)
 
     assert defaults == {"efficient": 13}
+    assert counts == {"efficient": 1}
+
+
+def test_tier_defaults_apply_uncached_basis(tmp_path: Path) -> None:
+    policy = tmp_path / "policy.json"
+    policy.write_text(json.dumps({"tiers": {"efficient": ["gpt-5.6-luna"]}}), encoding="utf-8")
+    codex = tmp_path / "codex"
+    codex.mkdir()
+    (codex / "one.jsonl").write_text(
+        json.dumps({"type": "session_meta", "payload": {"model": "gpt-5.6-luna"}})
+        + "\n"
+        + json.dumps(
+            {
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "total_token_usage": {
+                            "input_tokens": 10,
+                            "cached_input_tokens": 2,
+                            "output_tokens": 3,
+                            "total_tokens": 13,
+                        }
+                    },
+                }
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    defaults, counts = tier_defaults(
+        policy, codex_root=codex, claude_root=tmp_path / "claude", basis="uncached"
+    )
+
+    assert defaults == {"efficient": 11}
     assert counts == {"efficient": 1}
 
 
@@ -116,14 +167,16 @@ def test_quota_guard_marks_14_percent_remaining_as_known(tmp_path: Path) -> None
     path.write_text(
         json.dumps(
             {
-                "timestamp": "2026-11-15T00:00:00Z",
+                "timestamp": 1_000,
                 "type": "event_msg",
-                "payload": {"type": "token_count"},
-                "rate_limits": {
-                    "secondary": {
-                        "used_percent": 86,
-                        "resets_at": 1_800_000_000,
-                    }
+                "payload": {
+                    "type": "token_count",
+                    "rate_limits": {
+                        "secondary": {
+                            "used_percent": 86,
+                            "resets_at": 5_000,
+                        }
+                    },
                 },
             }
         )
@@ -131,7 +184,7 @@ def test_quota_guard_marks_14_percent_remaining_as_known(tmp_path: Path) -> None
         encoding="utf-8",
     )
 
-    status = latest_codex_quota(tmp_path, now=1_763_164_800)
+    status = latest_codex_quota(tmp_path, now=1_100)
 
     assert status["known"] is True
     assert status["remaining_percent"] == 14.0
@@ -142,14 +195,16 @@ def test_quota_guard_16_percent_remaining_passes_threshold(tmp_path: Path) -> No
     path.write_text(
         json.dumps(
             {
-                "timestamp": "2026-11-15T00:00:00Z",
+                "timestamp": 1_000,
                 "type": "event_msg",
-                "payload": {"type": "token_count"},
-                "rate_limits": {
-                    "secondary": {
-                        "used_percent": 84,
-                        "resets_at": 1_800_000_000,
-                    }
+                "payload": {
+                    "type": "token_count",
+                    "rate_limits": {
+                        "secondary": {
+                            "used_percent": 84,
+                            "resets_at": 5_000,
+                        }
+                    },
                 },
             }
         )
@@ -157,7 +212,25 @@ def test_quota_guard_16_percent_remaining_passes_threshold(tmp_path: Path) -> No
         encoding="utf-8",
     )
 
-    assert latest_codex_quota(tmp_path, now=1_763_164_800)["remaining_percent"] == 16.0
+    script = Path(__file__).parents[1] / "scripts" / "dispatch-gate"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "quota",
+            "--runtime",
+            "codex",
+            "--root",
+            str(tmp_path),
+            "--threshold",
+            "15",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")},
+    )
+    assert json.loads(result.stdout)["blocked"] is False
 
 
 def test_quota_guard_treats_a_stale_snapshot_as_unknown(tmp_path: Path) -> None:
@@ -165,14 +238,16 @@ def test_quota_guard_treats_a_stale_snapshot_as_unknown(tmp_path: Path) -> None:
     path.write_text(
         json.dumps(
             {
-                "timestamp": "2020-01-01T00:00:00Z",
+                "timestamp": 1_000,
                 "type": "event_msg",
-                "payload": {"type": "token_count"},
-                "rate_limits": {
-                    "secondary": {
-                        "used_percent": 99,
-                        "resets_at": 1_900_000_000,
-                    }
+                "payload": {
+                    "type": "token_count",
+                    "rate_limits": {
+                        "secondary": {
+                            "used_percent": 99,
+                            "resets_at": 5_000,
+                        }
+                    },
                 },
             }
         )
@@ -180,22 +255,25 @@ def test_quota_guard_treats_a_stale_snapshot_as_unknown(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    assert latest_codex_quota(tmp_path, now=1_763_164_800)["known"] is False
+    assert latest_codex_quota(tmp_path, now=1_000 + 10080 * 60 + 1)["known"] is False
 
 
 def test_quota_cli_applies_the_threshold_guard(tmp_path: Path) -> None:
+    now = time.time()
     (tmp_path / "quota.jsonl").write_text(
         json.dumps(
             {
-                "timestamp": "2026-11-15T00:00:00Z",
+                "timestamp": now,
                 "type": "event_msg",
-                "payload": {"type": "token_count"},
-                "rate_limits": {
-                    "primary": {
-                        "used_percent": 86,
-                        "window_minutes": 10080,
-                        "resets_at": 1_800_000_000,
-                    }
+                "payload": {
+                    "type": "token_count",
+                    "rate_limits": {
+                        "primary": {
+                            "used_percent": 86,
+                            "window_minutes": 10080,
+                            "resets_at": now + 3_600,
+                        }
+                    },
                 },
             }
         )
@@ -248,6 +326,9 @@ def test_settle_usage_is_idempotent_and_stores_unmeasured_state(tmp_path: Path) 
             completion_channel="sentinel-log",
         )
     ).allow
+    invalid = gate.register_job("bad", lambda value: value == "bad", tokens_basis=[])
+    assert invalid.allow is False
+    assert invalid.reason.value == "INVALID_REQUEST"
     assert gate.register_job("job-1", lambda value: value == "job-1", token_budget=100).allow
     usage = {"source": "unmeasured", "why": "cursor has no reader"}
     assert gate.settle_usage("job-1", usage).allow
@@ -255,3 +336,8 @@ def test_settle_usage_is_idempotent_and_stores_unmeasured_state(tmp_path: Path) 
     row = json.loads((tmp_path / "ledger.jsonl").read_text(encoding="utf-8").splitlines()[-1])
     assert row["token_budget"] == 100
     assert row["token_usage"] == usage
+    entries = [
+        json.loads(line)
+        for line in (tmp_path / "ledger.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert sum(entry.get("job_id") == "job-1" and "token_usage" in entry for entry in entries) == 1

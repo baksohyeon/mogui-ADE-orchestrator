@@ -121,6 +121,23 @@ QUOTA_THRESHOLD_PERCENT="${MOGUI_QUOTA_THRESHOLD_PERCENT:-15}"
 if CONFIGURED_QUOTA_THRESHOLD=$(configured_quota_threshold); then
   QUOTA_THRESHOLD_PERCENT=$CONFIGURED_QUOTA_THRESHOLD
 fi
+validate_quota_threshold() {
+  python3 - "$QUOTA_THRESHOLD_PERCENT" <<'PY'
+import math
+import sys
+
+try:
+    value = float(sys.argv[1])
+except (TypeError, ValueError):
+    raise SystemExit(1)
+if not math.isfinite(value) or not 0 <= value <= 100:
+    raise SystemExit(1)
+PY
+}
+if ! validate_quota_threshold; then
+  echo "✗ invalid quota threshold: $QUOTA_THRESHOLD_PERCENT (expected a finite number from 0 to 100)" >&2
+  exit 2
+fi
 # Tracker card choice. With neither flag, the wrapper creates and claims a card
 # from the contract's H1 title when bd resolves to an active tracker.
 CARD=""
@@ -412,8 +429,14 @@ resolve_token_budget() {
 }
 
 quota_guard() {
-  QUOTA_JSON=$("$GATE" quota --runtime "$RUNTIME" --threshold "$QUOTA_THRESHOLD_PERCENT" 2>/dev/null || true)
-  QUOTA_KNOWN=$(printf '%s' "$QUOTA_JSON" | jqf "d.get('known',False)" 2>/dev/null || echo False)
+  if ! QUOTA_JSON=$("$GATE" quota --runtime "$RUNTIME" --threshold "$QUOTA_THRESHOLD_PERCENT" 2>/dev/null); then
+    echo "✗ quota guard failed for $RUNTIME; ask the master before dispatching" >&2
+    return 2
+  fi
+  if ! QUOTA_KNOWN=$(printf '%s' "$QUOTA_JSON" | jqf "d.get('known',False)" 2>/dev/null); then
+    echo "✗ quota guard returned unreadable data for $RUNTIME; ask the master before dispatching" >&2
+    return 2
+  fi
   if [ "$QUOTA_KNOWN" != "True" ]; then
     echo "quota: unknown ($RUNTIME)"
     return 0
@@ -424,17 +447,6 @@ quota_guard() {
   QUOTA_BLOCKED=$(printf '%s' "$QUOTA_JSON" | jqf "d.get('blocked',False)")
   echo "quota: $RUNTIME ${QUOTA_REMAINING}% remaining · age ${QUOTA_AGE}s${QUOTA_RESETS:+ · resets_at $QUOTA_RESETS}"
   if [ "$QUOTA_BLOCKED" = True ]; then
-    :
-  elif python3 - "$QUOTA_REMAINING" "$QUOTA_THRESHOLD_PERCENT" <<'PY'
-import sys
-try:
-    remaining = float(sys.argv[1])
-    threshold = float(sys.argv[2])
-except (TypeError, ValueError):
-    raise SystemExit(1)
-raise SystemExit(0 if remaining < threshold else 1)
-PY
-  then
     echo "✗ quota guard · $RUNTIME has ${QUOTA_REMAINING}% remaining, below threshold ${QUOTA_THRESHOLD_PERCENT}%; ask the master before dispatching"
     return 2
   fi

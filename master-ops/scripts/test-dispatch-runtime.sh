@@ -309,6 +309,10 @@ checkonly_ledger_test() (
   printf '# fake contract\n' > "$contract"
   cat > "$gate" <<'BIN'
 #!/bin/bash
+if [ "${1:-}" = budget ]; then
+  printf '{"token_budget":123,"tokens_basis":"total","source":"declared","records":null}\n'
+  exit 0
+fi
 no_record=0
 for a in "$@"; do [ "$a" = --no-record ] && no_record=1; done
 if [ "$no_record" -eq 0 ]; then
@@ -361,6 +365,11 @@ BIN
   fi
   if [ "$before" -ne "$after" ]; then
     echo "FAIL: --check-only changed the real ledger's line count ($before -> $after)" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF 'token budget · 123 tokens · basis=total · source=declared'; then
+    echo "FAIL: --check-only did not print the resolved token budget" >&2
+    printf '%s\n' "$out" >&2
     return 1
   fi
   echo "ok   — --check-only leaves the real ledger's line count unchanged"

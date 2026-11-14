@@ -1039,14 +1039,6 @@ class DispatchGate:
                     ReasonCode.MODEL_EVIDENCE_INVALID,
                     message=f"session_record={record_path}",
                 )
-            _, _, session_start = _record_context(record_text)
-            if session_start is not None and session_start < dispatch_ts:
-                return GateDecision(
-                    False,
-                    ReasonCode.MODEL_EVIDENCE_STALE,
-                    message=f"session_record={record_path} session predates dispatch",
-                )
-
             normalized_line = evidence_line.rstrip("\r\n")
             record_lines = record_text.splitlines()
             evidence_line_number = next(
@@ -1071,7 +1063,7 @@ class DispatchGate:
                     ReasonCode.MODEL_EVIDENCE_INVALID,
                     message="quoted model line is not JSON",
                 )
-            measured_model = _model_from_evidence(evidence)
+            measured_model = _model_from_evidence(evidence, runtime)
             if measured_model is None:
                 return GateDecision(
                     False,
@@ -1098,6 +1090,16 @@ class DispatchGate:
             record_models = tuple(
                 model for turn in record_model_turns for model in turn
             )
+            if runtime in {"codex", "claude"} and record_model_turns:
+                authoritative_models = {
+                    model.casefold() for model in record_models
+                }
+                if measured_model.casefold() not in authoritative_models:
+                    return GateDecision(
+                        False,
+                        ReasonCode.MODEL_EVIDENCE_INVALID,
+                        message="quoted model line is not a runtime-authoritative model field",
+                    )
             matches = (
                 declared_model is not None
                 and _model_matches_declared(
@@ -1880,20 +1882,36 @@ def _string_or_none(value: object) -> str | None:
     return None
 
 
-def _model_from_evidence(value: object) -> str | None:
+def _model_from_evidence(
+    value: object,
+    runtime: str | None = None,
+) -> str | None:
     """Extract a model id from one raw JSONL evidence line."""
 
     if isinstance(value, Mapping):
+        runtime_name = (runtime or "").casefold()
+        if runtime_name == "codex":
+            models = _main_session_models(value, runtime_name)
+            if models:
+                return models[0]
+            if "type" in value:
+                return None
+        elif runtime_name == "claude":
+            models = _main_session_models(value, runtime_name)
+            if models:
+                return models[0]
+            if "type" in value:
+                return None
         model = value.get("model")
         if isinstance(model, str) and model.strip():
             return model.strip()
         for nested_key in ("message", "payload", "item", "response"):
-            nested_model = _model_from_evidence(value.get(nested_key))
+            nested_model = _model_from_evidence(value.get(nested_key), runtime)
             if nested_model is not None:
                 return nested_model
     elif isinstance(value, list):
         for item in value:
-            nested_model = _model_from_evidence(item)
+            nested_model = _model_from_evidence(item, runtime)
             if nested_model is not None:
                 return nested_model
     return None
@@ -2010,7 +2028,9 @@ def _model_matches_declared(
         declared_base = declared.strip().casefold()
     if model_base != declared_base:
         return False
-    if _undated_model_id(model) is None and _undated_model_id(declared) is None:
+    model_is_dated = _undated_model_id(model) is not None
+    declared_is_dated = _undated_model_id(declared) is not None
+    if model_is_dated == declared_is_dated:
         return False
     return any(
         model.casefold() in {item.casefold() for item in turn}
@@ -2155,8 +2175,15 @@ def _record_belongs_to_dispatch(
                         relative = record_path.relative_to(brain_root)
                     except ValueError:
                         continue
-                    if relative.parts and relative.parts[0] == session_id:
-                        return True
+                    if not relative.parts or relative.parts[0] != session_id:
+                        continue
+                    if session_values:
+                        return False
+                    if worktree and cwd_values and not any(
+                        _paths_match(cwd, worktree) for cwd in cwd_values
+                    ):
+                        return False
+                    return True
             return False
         if worktree and cwd_values:
             return any(_paths_match(cwd, worktree) for cwd in cwd_values)

@@ -3850,15 +3850,8 @@ def test_measure_model_requires_the_quoted_line_to_be_in_the_record(
 
     measured = gate.measure_model("job-marked", record, present)
 
-    assert measured.allow is True
-    entry = _ledger_entries(tmp_path)[-1]
-    assert entry["model_measured"] == "future-model"
-    assert entry["model_verified"] is True
-    assert "model_status" not in entry
-    assert "model_evidence_line" not in entry
-    assert entry["model_evidence_line_number"] == 1
-    assert len(entry["model_evidence_sha256"]) == 64
-    assert entry["model_record"] == "session.jsonl"
+    assert measured.allow is False
+    assert measured.reason == ReasonCode.MODEL_EVIDENCE_INVALID
 
 
 @pytest.mark.skipif(
@@ -4183,7 +4176,7 @@ def test_measure_model_binds_to_the_first_session_identity(
     assert measured.reason == ReasonCode.MODEL_EVIDENCE_UNBOUND
 
 
-def test_measure_model_rejects_a_record_with_an_older_session_start(
+def test_measure_model_allows_a_record_with_an_older_session_start(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -4204,8 +4197,33 @@ def test_measure_model_rejects_a_record_with_an_older_session_start(
 
     measured = gate.measure_model("job-marked", record, present)
 
-    assert measured.allow is False
-    assert measured.reason == ReasonCode.MODEL_EVIDENCE_STALE
+    assert measured.allow is True
+    assert measured.warnings == ()
+
+
+def test_measure_model_allows_a_reused_session_with_fresh_record(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    gate = _marked_registration(tmp_path, monkeypatch)
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "reused.jsonl"
+    session_meta = json.dumps(
+        {
+            "type": "session_meta",
+            "payload": {
+                "id": "sess-reused",
+                "cwd": str(tmp_path / "worker"),
+                "timestamp": 900,
+            },
+        }
+    )
+    present = json.dumps({"cwd": str(tmp_path / "worker"), "model": "future-model"})
+    record.write_text(session_meta + "\n" + present + "\n", encoding="utf-8")
+
+    measured = gate.measure_model("job-marked", record, present)
+
+    assert measured.allow is True
+    assert measured.warnings == ()
 
 
 def test_measure_model_uses_dispatch_start_before_registration_timestamp(
@@ -4388,6 +4406,105 @@ def test_measure_model_reads_codex_session_and_turn_context_models(
 
     assert measured.allow is True
     assert measured.warnings == ()
+
+
+def test_measure_model_rejects_codex_response_only_model_evidence(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    declared = "gpt-5.6-luna"
+    gate = _marked_registration(
+        tmp_path,
+        monkeypatch,
+        runtime="codex",
+        model=declared,
+        model_needs_measurement=True,
+    )
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "codex.jsonl"
+    cwd = str(tmp_path / "worker")
+    session = json.dumps(
+        {
+            "type": "session_meta",
+            "payload": {"id": "sess-codex", "cwd": cwd},
+        }
+    )
+    response = json.dumps(
+        {
+            "type": "response_item",
+            "payload": {"type": "message", "role": "assistant", "model": declared},
+        }
+    )
+    record.write_text(session + "\n" + response + "\n", encoding="utf-8")
+
+    measured = gate.measure_model("job-marked", record, response)
+
+    assert measured.allow is False
+    assert measured.reason == ReasonCode.MODEL_EVIDENCE_INVALID
+
+
+def test_measure_model_rejects_two_dated_ids_in_one_claude_turn(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    declared = "claude-example-20260101"
+    gate = _marked_registration(
+        tmp_path,
+        monkeypatch,
+        runtime="claude",
+        model=declared,
+    )
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "claude.jsonl"
+    cwd = str(tmp_path / "worker")
+    first = json.dumps(
+        {
+            "type": "assistant",
+            "turn_id": "turn-1",
+            "cwd": cwd,
+            "message": {"role": "assistant", "model": declared},
+        }
+    )
+    other = json.dumps(
+        {
+            "type": "assistant",
+            "turn_id": "turn-1",
+            "message": {"role": "assistant", "model": "claude-example-20260201"},
+        }
+    )
+    record.write_text(first + "\n" + other + "\n", encoding="utf-8")
+
+    measured = gate.measure_model("job-marked", record, first)
+
+    assert measured.allow is True
+    assert measured.warnings == (ReasonCode.MODEL_MISMATCH,)
+    assert _ledger_entries(tmp_path)[-1]["model_mismatch"] is True
+
+
+def test_agy_directory_fallback_rejects_conflicting_session_context(
+    tmp_path: Path,
+) -> None:
+    session_root = tmp_path / "agy"
+    record = session_root / "sess-A" / "transcript.jsonl"
+    record.parent.mkdir(parents=True)
+    record.write_text("{}\n", encoding="utf-8")
+    record_text = json.dumps(
+        {
+            "type": "session_meta",
+            "payload": {"id": "sess-B", "cwd": str(tmp_path / "other")},
+        }
+    )
+    target = {"runtime": "agy"}
+    placement = {
+        "agent_session_id": "sess-A",
+        "worktree_path": str(tmp_path / "worker"),
+    }
+
+    assert dispatch_gate._record_belongs_to_dispatch(
+        target,
+        placement,
+        record,
+        record_text,
+        {"agy": (session_root,)},
+    ) is False
 
 
 def test_measure_model_rejects_a_parent_traversal_record_path(

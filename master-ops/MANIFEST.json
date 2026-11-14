@@ -106,6 +106,7 @@
     "scripts/test-bash-output-size-warn.sh",
     "scripts/test-codex-hooks-review-answer.sh",
     "scripts/test-compact-rehydration-hook.sh",
+    "scripts/test-contract-conventions-grade.sh",
     "scripts/test-contributing-shell-loop.sh",
     "scripts/test-conversation-redaction-scan-glob-guard.sh",
     "scripts/test-dispatch-agy-pretrust.sh",

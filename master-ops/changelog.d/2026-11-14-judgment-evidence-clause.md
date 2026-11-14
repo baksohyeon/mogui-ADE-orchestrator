@@ -1,0 +1,1 @@
+- Added a prose contract clause requiring evidence for every judgment in research and design deliverables, with a grade-count regression test.

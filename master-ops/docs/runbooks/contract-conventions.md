@@ -495,11 +495,31 @@ that the worker opened the delivered copy, because it exists only there; a token
 found in a commit proves only that it was committed, so the completion message is
 where the proof belongs. The gate's closure is measured, not assumed.
 
-## Grade distribution (2026-10-23, clause 15 added; 2026-11-09, clause 16 added)
+## 17. Judgment evidence clause: evidence for each judgment in research and design work [prose]
+
+Measured on 2026-11-14 in the case recorded by issue #277: a research document's
+"what to adopt and what to defer" table gave one reason per decision but omitted what
+each item did, the source and retrieval date for each cell, and the relation to the
+owner's work; three of four "defer" rows cited only a missing field in the
+installation's tracker. The owner could not review the judgments until those details
+were added.
+
+Every judgment row ("adopt", "defer", "drop", or any verdict) in a research or
+design deliverable carries:
+
+- what the item does, in one sentence;
+- the source of each cell and its retrieval date;
+- how it relates to the owner's stated work;
+- the reason for the verdict.
+
+When the only reason for a verdict is a missing field in the installation's own
+tooling, say that explicitly and name the field.
+
+## Grade distribution (2026-10-23, clause 15 added; 2026-11-09, clause 16 added; 2026-11-14, clause 17 added)
 
 - machine-enforced: 2
 - measured: 11
-- prose: 3
+- prose: 4
 
 Distribution is non-uniform, so these grades are based on enforceability and
 observable evidence rather than intent.

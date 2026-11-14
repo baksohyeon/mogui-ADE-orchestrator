@@ -1396,7 +1396,14 @@ except FileNotFoundError:
 except OSError:
     config_hash = "<unreadable>"
 try:
-    hooks_listing = json.dumps(sorted(path.name for path in hooks.iterdir()), separators=(",", ":"))
+    hook_entries = []
+    for path in sorted(hooks.iterdir(), key=lambda item: item.name):
+        try:
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError:
+            digest = "<unreadable>"
+        hook_entries.append([path.name, digest])
+    hooks_listing = json.dumps(hook_entries, separators=(",", ":"))
 except FileNotFoundError:
     hooks_listing = "<missing>"
 except OSError:
@@ -1605,29 +1612,14 @@ resolve_codex_shared_git_roots() {
 # leaves the trust prompt in place, so proceeding would hand the worker a gate.
 ensure_codex_pretrust() {
   [ "$1" = "codex" ] || return 0
-  local selector="${2:-}" wt_path out summary
-  case "$selector" in
-    path:*)
-      wt_path="${selector#path:}"
-      if [ -z "$wt_path" ] || [ "${wt_path#/}" = "$wt_path" ]; then
-        echo "✗ codex needs an absolute worktree path to pre-trust; received '$selector'" >&2
-        echo "  codex has no launch approval flag by registry decision, so an untrusted worktree" >&2
-        echo "  will stop the worker on a trust prompt that reads as idle. Dispatch with --worktree" >&2
-        echo "  path:<absolute-path>, or choose a runtime whose approval flag is measured." >&2
-        return 1
-      fi
-      ;;
-    "")
-      echo "✗ codex needs an absolute worktree path to pre-trust; received '<none>'" >&2
-      echo "  codex has no launch approval flag by registry decision, so an untrusted worktree" >&2
-      echo "  will stop the worker on a trust prompt that reads as idle. Dispatch with --worktree" >&2
-      echo "  path:<absolute-path>, or choose a runtime whose approval flag is measured." >&2
-      return 1
-      ;;
-    *)
-      return 0
-      ;;
-  esac
+  local selector="${2:-}" wt_path="${2#path:}" out summary
+  if [ -z "$wt_path" ] || [ "${wt_path#/}" = "$wt_path" ]; then
+    echo "✗ codex needs an absolute worktree path to pre-trust; received '${selector:-<none>}'" >&2
+    echo "  codex has no launch approval flag by registry decision, so an untrusted worktree" >&2
+    echo "  will stop the worker on a trust prompt that reads as idle. Dispatch with --worktree" >&2
+    echo "  path:<absolute-path>, or choose a runtime whose approval flag is measured." >&2
+    return 1
+  fi
   if [ ! -x "$PRETRUST_BIN" ]; then
     echo "✗ codex pre-trust script not executable: $PRETRUST_BIN" >&2
     return 1

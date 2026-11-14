@@ -17,6 +17,7 @@ CAPTURE_SURFACE_HEADER='capture_codex_shared_git_surface() {'
 RESOLVE_ROOT_HEADER='resolve_codex_shared_git_roots() {'
 RUNTIME_COMMAND_HEADER='runtime_command() {'
 SHELL_QUOTE_HEADER='shell_quote() {'
+CODEX_PRETRUST_HEADER='ensure_codex_pretrust() {'
 
 extract_shell_function() {
   local dispatch="$1" header="$2"
@@ -197,11 +198,46 @@ check_shared_git_surface_warning() {
     printf 'CODEX_SHARED_GIT_DIR=%q\n' "$shared"
     echo 'capture_codex_shared_git_surface "$CODEX_SHARED_GIT_DIR"'
     echo 'printf "%s\\n" changed >> "$CODEX_SHARED_GIT_DIR/config"'
-    echo ': > "$CODEX_SHARED_GIT_DIR/hooks/added"'
+    echo 'printf "%s\\n" changed > "$CODEX_SHARED_GIT_DIR/hooks/original"'
     echo 'warn_codex_shared_git_surface_changes'
   } > "$work/run.sh"
   output=$(bash "$work/run.sh")
   printf '%s\n' "$output" | grep -Fq 'config hash and hooks listing' || return 1
+}
+
+check_completion_warning_wiring() {
+  local dispatch="$1" completion_block status_line call_line
+  completion_block=$(awk '
+    index($0, "if [ \"$DISPATCH_STATUS\" = completed ]") { inside=1 }
+    inside {
+      if ($0 ~ /^[[:space:]]*if([[:space:]]|$)/) depth++
+      print
+      if ($0 ~ /^[[:space:]]*fi[[:space:]]*$/) {
+        depth--
+        if (depth == 0) exit
+      }
+    }
+  ' "$dispatch")
+  printf '%s\n' "$completion_block" | grep -Fq 'warn_codex_shared_git_surface_changes' || return 1
+  status_line=$(grep -nF 'if [ "$DISPATCH_STATUS" = completed ]' "$dispatch" | cut -d: -f1 | tail -1)
+  call_line=$(grep -nF 'warn_codex_shared_git_surface_changes' "$dispatch" | cut -d: -f1 | tail -1)
+  [ -n "$status_line" ] && [ -n "$call_line" ] && [ "$status_line" -lt "$call_line" ] || return 1
+}
+
+check_non_path_pretrust_behavior() {
+  local dispatch="$1" work pretrust_fn output
+  work="${TMPDIR:-/tmp}/mogui-dispatch-codex-pretrust-selector.$$"
+  mkdir -p "$work"
+  trap 'rm -rf "$work"' RETURN
+  pretrust_fn=$(extract_shell_function "$dispatch" "$CODEX_PRETRUST_HEADER")
+  [ -n "$pretrust_fn" ] || return 1
+  {
+    echo 'set -eu'
+    printf '%s\n' "$pretrust_fn"
+    echo 'if ensure_codex_pretrust codex id:worker-271; then exit 1; fi'
+  } > "$work/run.sh"
+  output=$(bash "$work/run.sh" 2>&1)
+  printf '%s\n' "$output" | grep -Fq "received 'id:worker-271'" || return 1
 }
 
 check_git_escalation_event() {
@@ -387,6 +423,18 @@ check_shared_git_surface_warning "$DISPATCH" || {
   exit 1
 }
 echo "✓ completed Codex dispatches warn when the shared Git config or hooks listing changes"
+
+check_completion_warning_wiring "$DISPATCH" || {
+  echo "✗ completion path does not invoke the shared Git surface warning" >&2
+  exit 1
+}
+echo "✓ completion path invokes the shared Git surface warning after reading completion status"
+
+check_non_path_pretrust_behavior "$DISPATCH" || {
+  echo "✗ fresh Codex pre-trust did not fail closed for a non-path selector" >&2
+  exit 1
+}
+echo "✓ fresh Codex pre-trust fails closed for a non-path selector and names the input"
 
 check_git_escalation_event "$DISPATCH" || {
   echo "✗ one git escalation did not produce one five-field ledger event" >&2

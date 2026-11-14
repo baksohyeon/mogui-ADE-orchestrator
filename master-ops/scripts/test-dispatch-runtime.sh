@@ -44,19 +44,21 @@ echo "dispatch agy capability regression test passed"
 cursor_multivendor_test() (
   set +e
   set -u
-  local dispatch="$1" work model_vendor_fn multivendor_fns accepts_fn mark_fn if_block
+  local dispatch="$1" work model_vendor_fn multivendor_fns accepts_fn mark_fn capability_fn if_block
   local script_file out status mutant_fns
 
   model_vendor_fn=$(awk '$0=="model_vendor() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   multivendor_fns=$(awk '$0=="MULTI_VENDOR_HOSTS=\"cursor\""{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   accepts_fn=$(awk '$0=="runtime_accepts_vendor() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   mark_fn=$(awk '$0=="mark_model_needs_measurement() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  capability_fn=$(awk '$0=="check_host_model_capability() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   if_block=$(awk '$0=="if is_multi_vendor_host \"$RUNTIME\"; then"{f=1} f{print} f&&$0=="fi"{exit}' "$dispatch")
 
   [ -n "$model_vendor_fn" ] || { echo "FAIL: could not extract model_vendor" >&2; return 1; }
   [ -n "$multivendor_fns" ] || { echo "FAIL: could not extract MULTI_VENDOR_HOSTS/is_multi_vendor_host/host_model_ids" >&2; return 1; }
   [ -n "$accepts_fn" ] || { echo "FAIL: could not extract runtime_accepts_vendor" >&2; return 1; }
   [ -n "$mark_fn" ] || { echo "FAIL: could not extract mark_model_needs_measurement" >&2; return 1; }
+  [ -n "$capability_fn" ] || { echo "FAIL: could not extract check_host_model_capability" >&2; return 1; }
   [ -n "$if_block" ] || { echo "FAIL: could not extract the multi-vendor mismatch-check branch" >&2; return 1; }
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-cursor-test.$$"
@@ -70,12 +72,13 @@ BIN
   chmod +x "$work/cursor-agent"
 
   write_script() {
-    local outfile="$1" fns="$2" branch="$3"
+    local outfile="$1" fns="$2" branch="$3" capability="${4:-$capability_fn}"
     {
       echo 'set -u'
       printf '%s\n' "$fns"
       printf '%s\n' "$accepts_fn"
       printf '%s\n' "$mark_fn"
+      printf '%s\n' "$capability"
       echo 'RUNTIME=cursor'
       echo 'MODEL=gpt-5.3-codex'
       echo 'POLICY=/dev/null'
@@ -121,13 +124,13 @@ BIN
   echo "ok   — cursor model-list mismatch proceeds with a measurement mark"
 
   # Failability: restoring the former hard refusal must fail this case.
-  local refusal_mutant
-  refusal_mutant=${if_block/'mark_model_needs_measurement "$RUNTIME does not offer model=$MODEL"'/'exit 2'}
-  if [ "$refusal_mutant" = "$if_block" ]; then
+  local capability_mutant
+  capability_mutant=${capability_fn/'mark_model_needs_measurement "$runtime does not offer model=$model"'/'exit 2'}
+  if [ "$capability_mutant" = "$capability_fn" ]; then
     echo "FAIL: former cursor mismatch refusal mutant did not change the source" >&2
     return 1
   fi
-  write_script "$script_file" "$multivendor_fns" "$refusal_mutant"
+  write_script "$script_file" "$multivendor_fns" "$if_block" "$capability_mutant"
   out=$(PATH="$work:$PATH" bash "$script_file" 2>&1)
   status=$?
   if [ "$status" -eq 0 ]; then

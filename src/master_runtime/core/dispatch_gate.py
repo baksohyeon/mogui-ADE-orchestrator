@@ -11,6 +11,7 @@ import sys
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Callable, Iterator, Mapping, Sequence
@@ -50,6 +51,7 @@ DEFAULT_TICKET_TTL_SECONDS = 600
 DEFAULT_EXPIRED_TICKET_GC_GRACE_SECONDS = 24 * 60 * 60
 MODEL_SESSION_ROOTS_ENV = "DISPATCH_MODEL_SESSION_ROOTS"
 MODEL_SESSION_MAX_BYTES = 5 * 1024 * 1024
+LEDGER_LOCK_FILENAME = "dispatch-ledger.lock"
 RUNTIME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 USERS_ABSOLUTE_PATH_PATTERN = re.compile(r"/Users/[^\s\"'`<>{}\[\](),;:]+")
 COMPLETION_CHANNELS = frozenset({"orchestration", "sentinel-log"})
@@ -132,11 +134,23 @@ def _model_session_roots(
         )
     except OSError:
         codex_sessions = ()
+    cursor_projects = env.get("DISPATCH_CURSOR_SESSION_ROOT")
+    agy_brain = env.get("DISPATCH_AGY_SESSION_ROOT")
     return {
         "codex": codex_sessions,
         "claude": ((Path.home() / ".claude" / "projects").resolve(),),
-        "cursor": ((Path.home() / ".cursor" / "projects").resolve(),),
-        "agy": ((Path.home() / ".gemini" / "antigravity-cli" / "brain").resolve(),),
+        "cursor": (
+            (Path(cursor_projects).expanduser().resolve(),)
+            if cursor_projects
+            else ((Path.home() / ".cursor" / "projects").resolve(),)
+        ),
+        "agy": (
+            (Path(agy_brain).expanduser().resolve(),)
+            if agy_brain
+            else (
+                (Path.home() / ".gemini" / "antigravity-cli" / "brain").resolve(),
+            )
+        ),
         "grok": ((Path.home() / ".grok" / "sessions").resolve(),),
     }
 
@@ -1019,6 +1033,13 @@ class DispatchGate:
                     ReasonCode.MODEL_EVIDENCE_INVALID,
                     message=f"session_record={record_path}",
                 )
+            _, _, session_start = _record_context(record_text)
+            if session_start is not None and session_start < dispatch_ts:
+                return GateDecision(
+                    False,
+                    ReasonCode.MODEL_EVIDENCE_STALE,
+                    message=f"session_record={record_path} session predates dispatch",
+                )
 
             normalized_line = evidence_line.rstrip("\r\n")
             record_lines = record_text.splitlines()
@@ -1067,12 +1088,19 @@ class DispatchGate:
             declared_model = _string_or_none(target.get("model_declared"))
             if declared_model is None:
                 declared_model = _string_or_none(target.get("model"))
+            record_models = _record_model_ids(record_text)
             matches = (
                 declared_model is not None
                 and measured_model.casefold() == declared_model.casefold()
+                and all(
+                    model.casefold() == declared_model.casefold()
+                    for model in record_models
+                )
             )
             target["model_measured"] = measured_model
-            target["model_record"] = str(record_path)
+            target["model_record"] = _relative_model_record_path(
+                record_path, roots
+            )
             target["model_evidence_line_number"] = evidence_line_number
             target["model_evidence_sha256"] = hashlib.sha256(
                 normalized_line.encode("utf-8")
@@ -1860,6 +1888,51 @@ def _model_from_evidence(value: object) -> str | None:
     return None
 
 
+def _record_model_ids(record_text: str) -> tuple[str, ...]:
+    """Collect every model id named by the session record."""
+
+    models: list[str] = []
+
+    def visit(value: object) -> None:
+        if isinstance(value, Mapping):
+            model = value.get("model")
+            if isinstance(model, str) and model.strip():
+                normalized = model.strip()
+                if normalized not in models:
+                    models.append(normalized)
+            for nested in value.values():
+                if isinstance(nested, (Mapping, list)):
+                    visit(nested)
+        elif isinstance(value, list):
+            for item in value:
+                visit(item)
+
+    for line in record_text.splitlines():
+        try:
+            visit(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return tuple(models)
+
+
+def _relative_model_record_path(
+    record_path: Path,
+    roots: Sequence[Path],
+) -> str:
+    """Store evidence location relative to its accepted runtime root."""
+
+    candidates: list[tuple[int, str]] = []
+    for root in roots:
+        try:
+            relative = record_path.relative_to(root)
+        except ValueError:
+            continue
+        candidates.append((len(root.parts), str(relative)))
+    if candidates:
+        return max(candidates, key=lambda candidate: candidate[0])[1]
+    return record_path.name
+
+
 def _dispatch_placement(
     entries: Sequence[Mapping[str, object]],
     dispatch_id: str,
@@ -1877,42 +1950,69 @@ def _dispatch_placement(
     return placement
 
 
-def _record_context(record_text: str) -> tuple[set[str], set[str]]:
-    """Collect worktree and session identifiers from a runtime JSONL record."""
+def _record_context(record_text: str) -> tuple[set[str], set[str], float | None]:
+    """Collect identity only from session metadata or direct record fields.
 
+    Tool events can mention another worktree while a session is operating on
+    it. They are evidence of a command, not evidence of the session's own
+    identity, so nested mappings are deliberately ignored here.
+    """
+
+    records: list[Mapping[str, object]] = []
+    for line in record_text.splitlines():
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, Mapping):
+            records.append(value)
+
+    session_payloads = [
+        value.get("payload")
+        for value in records
+        if value.get("type") == "session_meta"
+        and isinstance(value.get("payload"), Mapping)
+    ]
+    authoritative = session_payloads or records
     cwd_values: set[str] = set()
     session_values: set[str] = set()
+    session_start: float | None = None
 
-    def visit(value: object, *, session_meta: bool = False) -> None:
+    for value in authoritative:
         if not isinstance(value, Mapping):
-            if isinstance(value, list):
-                for item in value:
-                    visit(item)
-            return
+            continue
         for key in ("cwd", "worktree", "worktree_path"):
             candidate = value.get(key)
             if isinstance(candidate, str) and candidate.strip():
                 cwd_values.add(candidate.strip())
-        for key in ("session_id", "sessionId", "conversation_id", "conversationId"):
+        for key in (
+            "id",
+            "session_id",
+            "sessionId",
+            "conversation_id",
+            "conversationId",
+        ):
             candidate = value.get(key)
             if isinstance(candidate, str) and candidate.strip():
                 session_values.add(candidate.strip())
-        if session_meta:
-            candidate = value.get("id")
-            if isinstance(candidate, str) and candidate.strip():
-                session_values.add(candidate.strip())
-        if value.get("type") == "session_meta":
-            visit(value.get("payload"), session_meta=True)
-        for nested in value.values():
-            if isinstance(nested, (Mapping, list)):
-                visit(nested)
-
-    for line in record_text.splitlines():
-        try:
-            visit(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return cwd_values, session_values
+        for key in (
+            "timestamp",
+            "created_at",
+            "createdAt",
+            "start_time",
+            "startTime",
+            "started_at",
+            "startedAt",
+            "ts",
+        ):
+            candidate = _session_timestamp(value.get(key))
+            if candidate is not None:
+                session_start = (
+                    candidate
+                    if session_start is None
+                    else min(session_start, candidate)
+                )
+    return cwd_values, session_values, session_start
 
 
 def _paths_match(left: str, right: str) -> bool:
@@ -1936,20 +2036,24 @@ def _record_belongs_to_dispatch(
     if not worktree and not session_id:
         return False
 
-    cwd_values, session_values = _record_context(record_text)
+    cwd_values, session_values, _ = _record_context(record_text)
+    if session_id:
+        if session_id not in session_values:
+            if _string_or_none(target.get("runtime")) == "agy":
+                for brain_root in session_roots.get("agy", ()):
+                    try:
+                        relative = record_path.relative_to(brain_root)
+                    except ValueError:
+                        continue
+                    if relative.parts and relative.parts[0] == session_id:
+                        return True
+            return False
+        if worktree and cwd_values:
+            return any(_paths_match(cwd, worktree) for cwd in cwd_values)
+        return True
     if worktree and any(_paths_match(cwd, worktree) for cwd in cwd_values):
         return True
-    if session_id and session_id in session_values:
-        return True
 
-    if _string_or_none(target.get("runtime")) == "agy" and session_id:
-        for brain_root in session_roots.get("agy", ()):
-            try:
-                relative = record_path.relative_to(brain_root)
-            except ValueError:
-                continue
-            if relative.parts and relative.parts[0] == session_id:
-                return True
     return False
 
 
@@ -2081,7 +2185,7 @@ def _ledger_lock(ledger_path: Path) -> Iterator[None]:
     """Serialize ledger updates without creating the ticket directory."""
 
     ledger_path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = ledger_path.parent / ".dispatch-gate-ledger.lock"
+    lock_path = ledger_path.parent / LEDGER_LOCK_FILENAME
     with lock_path.open("a", encoding="utf-8") as lock_file:
         if fcntl is not None:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
@@ -2129,6 +2233,22 @@ def _number_or_none(value: object) -> float | None:
     if isinstance(value, (int, float)):
         return float(value)
     return None
+
+
+def _session_timestamp(value: object) -> float | None:
+    numeric = _number_or_none(value)
+    if numeric is not None and math.isfinite(numeric):
+        return numeric
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.timestamp()
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
 
 
 def _positive_int_or_none(value: object) -> int | None:

@@ -23,6 +23,10 @@ set -eu
 
 dispatch=$(cd "$(dirname "$0")" && pwd)/dispatch
 dispatch=${1:-$dispatch}
+grep -Fq 'validate_supported_runtime() {' "$dispatch" || {
+  echo "FAIL: dispatch has no supported-runtime validation function" >&2
+  exit 1
+}
 
 extract_fn() {  # fn-name
   awk -v fn="$1() {" '$0==fn{f=1} f{print} f&&$0=="}"{exit}' "$dispatch"

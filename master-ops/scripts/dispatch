@@ -160,6 +160,10 @@ else
 fi
 LEDGER="$STATE_DIR/dispatch-ledger.jsonl"
 LEDGER_LOCK="$STATE_DIR/dispatch-ledger.lock"
+AGY_SESSION_ROOT="${DISPATCH_AGY_SESSION_ROOT:-$HOME/.gemini/antigravity-cli/brain}"
+CURSOR_SESSION_ROOT="${DISPATCH_CURSOR_SESSION_ROOT:-$HOME/.cursor/projects}"
+export DISPATCH_AGY_SESSION_ROOT="$AGY_SESSION_ROOT"
+export DISPATCH_CURSOR_SESSION_ROOT="$CURSOR_SESSION_ROOT"
 
 if [ -n "$LEDGER_EVENT" ]; then
   if [ -z "$LEDGER_EVENT_DISPATCH_ID" ]; then
@@ -606,7 +610,7 @@ snapshot_codex_rollouts() {
 }
 
 snapshot_agy_brain_dirs() {
-  local brain_dir="$HOME/.gemini/antigravity-cli/brain"
+  local brain_dir="$AGY_SESSION_ROOT"
   [ -d "$brain_dir" ] || return 0
   find "$brain_dir" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null | sort
 }
@@ -980,7 +984,7 @@ refuse_unavailable_runtime() {
 # declaration is measured from the worker session below. Host availability is
 # measured by the downstream runtime probe. This check only keeps crafted
 # runtime names from reaching model resolution and the gate.
-refuse_uninstalled_runtime() {
+validate_supported_runtime() {
   local runtime="$1"
   if ! printf '%s\n' $RUNTIME_CANDIDATES | grep -Fxq -- "$runtime"; then
     echo "✗ runtime $runtime is not listed in RUNTIME_CANDIDATES" >&2
@@ -1883,7 +1887,7 @@ UNAVAILABLE_RUNTIMES=$(unavailable_runtime_names | join_csv)
 # resolution or gate check spends effort on a runtime the operator already
 # declared unusable on this install.
 if [ "$RUNTIME_EXPLICIT" = 1 ]; then
-  refuse_uninstalled_runtime "$RUNTIME" || exit 2
+  validate_supported_runtime "$RUNTIME" || exit 2
 fi
 refuse_unavailable_runtime "$RUNTIME" "$ALTERNATIVE_RUNTIMES" || exit 2
 
@@ -1939,6 +1943,15 @@ host_model_ids() {
 mark_model_needs_measurement() {
   MODEL_NEEDS_MEASUREMENT=1
   [ -n "$MODEL_WARNING_REASON" ] || MODEL_WARNING_REASON="$1"
+}
+check_host_model_capability() {
+  local runtime="$1" model="$2"
+  HOST_IDS=$(host_model_ids "$runtime") || HOST_IDS=""
+  if [ -z "$HOST_IDS" ]; then
+    mark_model_needs_measurement "host model list unavailable for $runtime"
+  elif ! printf '%s\n' "$HOST_IDS" | grep -Fxq -- "$model"; then
+    mark_model_needs_measurement "$runtime does not offer model=$model"
+  fi
 }
 # When the caller did not name a model, derive one for the chosen runtime from
 # the tier policy instead of leaving the claude-shaped default in place. No new
@@ -2018,27 +2031,13 @@ runtime_accepts_vendor() {
 # This is the minimal runtime capability mapping needed for host model probes. A
 # complete capability table is intentionally a separate contract.
 if is_multi_vendor_host "$RUNTIME"; then
-  HOST_IDS=$(host_model_ids "$RUNTIME") || {
-    mark_model_needs_measurement "host model list unavailable for $RUNTIME"
-    HOST_IDS=""
-  }
-  if ! printf '%s\n' "$HOST_IDS" | grep -Fxq -- "$MODEL"; then
-    mark_model_needs_measurement "$RUNTIME does not offer model=$MODEL"
-  fi
+  check_host_model_capability "$RUNTIME" "$MODEL"
 elif [ "$MODEL_VENDOR" != unknown ] && ! runtime_accepts_vendor "$RUNTIME" "$MODEL_VENDOR"; then
   # A cross-vendor declaration is an observation gap, not a dispatch gate:
   # the worker session record is the authority for what actually ran.
   mark_model_needs_measurement "runtime=$RUNTIME does not accept vendor=$MODEL_VENDOR for model=$MODEL"
 elif [ "$RUNTIME" = agy ] || [ "$RUNTIME" = grok ]; then
-  HOST_IDS=$(host_model_ids "$RUNTIME") || {
-    mark_model_needs_measurement "host model list unavailable for $RUNTIME"
-    HOST_IDS=""
-  }
-  if [ -z "$HOST_IDS" ]; then
-    mark_model_needs_measurement "host model list unavailable for $RUNTIME"
-  elif ! printf '%s\n' "$HOST_IDS" | grep -Fxq -- "$MODEL"; then
-    mark_model_needs_measurement "$RUNTIME does not offer model=$MODEL"
-  fi
+  check_host_model_capability "$RUNTIME" "$MODEL"
 fi
 
 if [ "$RUNTIME" = "$MASTER_HOST_RUNTIME" ]; then
@@ -2575,7 +2574,10 @@ if not session_id and runtime == "agy":
         for path in os.environ.get("AGY_BRAIN_BEFORE", "").splitlines()
         if path
     }
-    brain_root = Path.home() / ".gemini" / "antigravity-cli" / "brain"
+    brain_root = Path(
+        os.environ.get("DISPATCH_AGY_SESSION_ROOT", "")
+        or Path.home() / ".gemini" / "antigravity-cli" / "brain"
+    )
     contract_paths = (
         {str(Path(contract)), str(Path(contract).resolve())} if contract else set()
     )

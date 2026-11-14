@@ -366,6 +366,9 @@ def _measure_usage(args: argparse.Namespace) -> int:
 
 
 def _settle(args: argparse.Namespace) -> int:
+    if args.record and not args.runtime:
+        _diagnose("--record requires --runtime")
+        return 2
     runtime = args.runtime or "unknown"
     usage = (
         read_runtime(runtime, args.record)

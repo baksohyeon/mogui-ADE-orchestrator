@@ -312,6 +312,10 @@ if [ -n "$LEDGER_EVENT" ]; then
   fi
   case "$LEDGER_EVENT" in
     worker_done|reap)
+      if [ -n "$LEDGER_EVENT_SESSION_RECORD" ] && [ -z "$RUNTIME" ]; then
+        echo "✗ $LEDGER_EVENT with --session-record requires --runtime" >&2
+        exit 1
+      fi
       SETTLE_ARGS=(--ledger "$LEDGER" settle --dispatch-id "$LEDGER_EVENT_DISPATCH_ID")
       [ -n "$RUNTIME" ] && SETTLE_ARGS+=(--runtime "$RUNTIME")
       [ -n "$LEDGER_EVENT_SESSION_RECORD" ] && SETTLE_ARGS+=(--record "$LEDGER_EVENT_SESSION_RECORD")
@@ -429,9 +433,12 @@ resolve_token_budget() {
 quota_guard_codex_root() {
   [ "${RUNTIME:-}" = codex ] || return 1
   local candidate account_root account_count=0 selected=""
-  if [ -n "${DISPATCH_CODEX_SESSION_ROOT:-}" ] && [ -d "$DISPATCH_CODEX_SESSION_ROOT" ]; then
-    printf '%s\n' "$DISPATCH_CODEX_SESSION_ROOT"
-    return 0
+  if [ -n "${DISPATCH_CODEX_SESSION_ROOT:-}" ]; then
+    if [ -d "$DISPATCH_CODEX_SESSION_ROOT" ]; then
+      printf '%s\n' "$DISPATCH_CODEX_SESSION_ROOT"
+      return 0
+    fi
+    return 1
   fi
   if [ -n "${CODEX_HOME:-}" ]; then
     for candidate in "$CODEX_HOME/sessions" "$CODEX_HOME/home/sessions"; do
@@ -443,10 +450,6 @@ quota_guard_codex_root() {
     [ "$account_count" -eq 1 ] && { printf '%s\n' "$selected"; return 0; }
     return 1
   fi
-  if [ -d "$HOME/.codex/sessions" ]; then
-    printf '%s\n' "$HOME/.codex/sessions"
-    return 0
-  fi
   account_root=$(codex_accounts_dir)
   for candidate in "$account_root"/*/home/sessions; do
     if [ -d "$candidate" ]; then
@@ -454,8 +457,17 @@ quota_guard_codex_root() {
       selected=$candidate
     fi
   done
-  [ "$account_count" -eq 1 ] || return 1
-  printf '%s\n' "$selected"
+  if [ "$account_count" -eq 1 ]; then
+    printf '%s\n' "$selected"
+    return 0
+  fi
+  [ "$account_count" -gt 1 ] && return 1
+  [ -n "${CODEX_ACCOUNTS_DIR:-}" ] && return 1
+  if [ -d "$HOME/.codex/sessions" ]; then
+    printf '%s\n' "$HOME/.codex/sessions"
+    return 0
+  fi
+  return 1
 }
 
 quota_guard() {

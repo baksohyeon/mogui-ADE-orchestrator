@@ -311,15 +311,28 @@ else
 fi
 gate_calls="$T/gate-calls"
 done_status=0
+settle_call=""
 done_out=$(MOGUI_STATE_DIR="$T/state" GATE_CALLS="$gate_calls" DISPATCH_STANDING_RULES="$S/../rules/standing-rules.md" \
   PATH="$T/bin:$PATH" bash "$T/harness/dispatch-production" \
   --ledger-event worker_done --dispatch-id disp-no-runtime 2>&1) || done_status=$?
+settle_call=$(grep ' settle --dispatch-id disp-no-runtime' "$gate_calls" 2>/dev/null || true)
 if [ "$done_status" -eq 0 ] \
-    && grep -q 'settle --dispatch-id disp-no-runtime' "$gate_calls" \
-    && ! grep -q 'settle --dispatch-id disp-no-runtime --runtime' "$gate_calls"; then
+    && [ -n "$settle_call" ] \
+    && ! printf '%s\n' "$settle_call" | grep -q -- '--runtime'; then
   ok "worker_done ledger-event settles without a runtime"
 else
   fail "worker_done without runtime case: rc=$done_status out=$done_out gate=$(cat "$gate_calls" 2>/dev/null || true)"
+fi
+printf '{}\n' > "$T/session-record.jsonl"
+record_status=0
+record_out=$(MOGUI_STATE_DIR="$T/state" DISPATCH_STANDING_RULES="$S/../rules/standing-rules.md" \
+  PATH="$T/bin:$PATH" bash "$T/harness/dispatch-production" \
+  --ledger-event worker_done --dispatch-id disp-record-without-runtime \
+  --session-record "$T/session-record.jsonl" 2>&1) || record_status=$?
+if [ "$record_status" -ne 0 ] && printf '%s\n' "$record_out" | grep -qF -- '--session-record requires --runtime'; then
+  ok "worker_done rejects a session record without a runtime"
+else
+  fail "worker_done accepted a session record without runtime: rc=$record_status out=$record_out"
 fi
 set +e
 MOGUI_STATE_DIR="$T/state" DISPATCH_STANDING_RULES="$S/../rules/standing-rules.md" \

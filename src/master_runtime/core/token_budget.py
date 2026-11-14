@@ -312,6 +312,14 @@ def _tier_defaults_cache_path(cache_path: str | Path | None) -> Path:
     return Path.home() / ".mogui" / "token-budget-defaults.json"
 
 
+def _file_signature(path: Path) -> dict[str, object] | None:
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return {"path": str(path), "mtime": stat.st_mtime, "size": stat.st_size}
+
+
 def tier_defaults(
     tier_policy: str | Path,
     *,
@@ -396,6 +404,11 @@ def tier_defaults(
             runtime: {
                 "count": len(paths),
                 "newest_mtime": newest_mtimes[runtime],
+                "files": [
+                    file_info
+                    for path in paths
+                    if (file_info := _file_signature(path)) is not None
+                ],
             }
             for runtime, paths in candidate_paths.items()
         },
@@ -490,6 +503,9 @@ def latest_codex_quota(
                     continue
                 weekly = None
                 weekly_name = ""
+                # The dispatch design defines the primary 10080-minute window
+                # as the weekly account guard. A secondary window, or a limit
+                # without an explicit window, is not assumed to be weekly.
                 candidate_limit = rate_limits.get("primary")
                 if isinstance(candidate_limit, Mapping) and _integer(candidate_limit.get("window_minutes")) == 10080:
                     weekly = candidate_limit

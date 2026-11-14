@@ -871,13 +871,17 @@ class DispatchGate:
         normalized = dict(usage)
         with _ledger_lock(Path(self.config.ledger_path)):
             entries = list(self._read_entries())
-            found = False
+            registered = [entry for entry in entries if entry.get("job_id") == dispatch_id]
+            orphaned = (
+                []
+                if registered
+                else [entry for entry in entries if entry.get("settlement_dispatch_id") == dispatch_id]
+            )
+            targets = registered or orphaned
+            found = bool(targets)
             changed = False
             replaced_unmeasured = False
-            for entry in entries:
-                if entry.get("job_id") != dispatch_id:
-                    continue
-                found = True
+            for entry in targets:
                 if "token_usage" in entry:
                     existing = entry.get("token_usage")
                     existing_source = (
@@ -899,7 +903,8 @@ class DispatchGate:
                 entries.append(
                     {
                         "ts": self._clock(),
-                        "job_id": dispatch_id,
+                        "kind": "token_usage_settlement",
+                        "settlement_dispatch_id": dispatch_id,
                         "token_usage": normalized,
                         "token_usage_settled": True,
                         "settlement_without_registration": True,

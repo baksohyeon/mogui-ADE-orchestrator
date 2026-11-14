@@ -641,7 +641,7 @@ quota_guard_test() (
   [ -n "$jqf_fn" ] || { echo "FAIL: could not extract jqf" >&2; return 1; }
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-quota-test.$$"
-  mkdir -p "$work/home" "$work/accounts"
+  mkdir -p "$work/home" "$work/accounts/dispatch/home/sessions"
   trap 'rm -rf "$work"' EXIT
   gate="$work/gate"
   cat > "$gate" <<'BIN'
@@ -725,6 +725,19 @@ BIN
   fi
   echo "ok   : failability: dropping the threshold changes the guard result"
 
+  : > "$work/args.log"
+  write_script "$script_file" codex blocked
+  out=$(HOME="$work/home" CODEX_HOME= CODEX_ACCOUNTS_DIR="$work/accounts" bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 2 ] \
+      || ! grep -qF -- "--root $work/accounts/dispatch/home/sessions" "$work/args.log"; then
+    echo "FAIL: a resolvable Codex account must be passed to the quota reader as --root" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : resolvable Codex account is passed to the quota reader"
+
+  rm -rf "$work/accounts/dispatch"
   write_script "$script_file" codex blocked
   out=$(HOME="$work/home" CODEX_HOME= CODEX_ACCOUNTS_DIR= bash "$script_file" 2>&1)
   status=$?

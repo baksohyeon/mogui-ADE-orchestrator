@@ -210,6 +210,15 @@ def test_tier_defaults_require_recent_minimum_and_recompute_cache(tmp_path: Path
     assert defaults == {"efficient": 13}
     assert counts == {"efficient": 10}
 
+    larger = complete.replace('"total_tokens": 13', '"total_tokens": 100')
+    for index in range(5):
+        (codex / f"recent-{index}.jsonl").write_text(larger, encoding="utf-8")
+    defaults, counts = tier_defaults(
+        policy, codex_root=codex, claude_root=tmp_path / "claude", cache_path=cache
+    )
+    assert defaults == {"efficient": 100}
+    assert counts == {"efficient": 10}
+
 
 def test_quota_uses_only_the_dispatch_account(monkeypatch, tmp_path: Path) -> None:
     accounts = tmp_path / "accounts"
@@ -486,7 +495,11 @@ def test_settle_usage_is_idempotent_and_stores_unmeasured_state(tmp_path: Path) 
 
     assert gate.settle_usage("pre-pr-job", usage).allow
     assert gate.settle_usage("pre-pr-job", measured).allow
-    pre_pr = [entry for entry in gate.ledger_entries() if entry.get("job_id") == "pre-pr-job"]
+    pre_pr = [
+        entry
+        for entry in gate.ledger_entries()
+        if entry.get("settlement_dispatch_id") == "pre-pr-job"
+    ]
     assert len(pre_pr) == 1
     assert pre_pr[0]["settlement_without_registration"] is True
     assert pre_pr[0]["token_usage"] == measured
@@ -513,6 +526,28 @@ def test_settle_cli_accepts_omitted_runtime(tmp_path: Path) -> None:
 
     assert result.returncode == 0
     assert json.loads(result.stdout)["allow"] is True
+
+    record = tmp_path / "record.jsonl"
+    record.write_text("{}\n", encoding="utf-8")
+    with_record = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--ledger",
+            str(tmp_path / "with-record-ledger.jsonl"),
+            "settle",
+            "--dispatch-id",
+            "pre-pr-cli-record",
+            "--record",
+            str(record),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")},
+    )
+    assert with_record.returncode == 2
+    assert "--record requires --runtime" in with_record.stderr
 
 
 def test_budget_cli_revalidates_declared_tokens(tmp_path: Path) -> None:

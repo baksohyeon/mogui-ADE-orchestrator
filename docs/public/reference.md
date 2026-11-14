@@ -4,6 +4,8 @@ This reference summarizes the executable scripts in this repository. The table i
 
 Use this page for command discovery. The lifecycle and delegation guides explain when to use each entry point.
 
+The table lists the public command surface only. Local host routing, private paths, and sensitive-lane details are outside this reference.
+
 <!-- COMMAND TABLE: rows are checked against scripts/ --help by tests/test_reference_command_table.py -->
 | Script | Command | Purpose | Key options |
 | --- | --- | --- | --- |
@@ -18,10 +20,13 @@ Use this page for command discovery. The lifecycle and delegation guides explain
 | `scripts/codex-worker-pretrust` | `codex-worker-pretrust` | Mark a worktree as trusted in every Orca-managed Codex account config, so a dispatched worker does not stop on a trust prompt. | Positional absolute worktree path; `--accounts-dir`. Finds its own TOML-capable interpreter (`python3`, newer versioned names, `python`) and, when none has `tomllib`, skips loudly without touching any config. |
 | `scripts/cursor-worker-pretrust` | `cursor-worker-pretrust` | Mark a worktree as trusted in Cursor Agent's measured trust storage, so a dispatched worker does not stop on the workspace-trust prompt. | Positional absolute worktree path; `--projects-dir`. Writes the measured `.workspace-trusted` marker under `~/.cursor/projects/<project-key>/` after validating existing JSON; when no Python 3.6+ JSON interpreter is available, skips loudly without touching any marker. |
 | `scripts/agy-worker-pretrust` | `agy-worker-pretrust` | Mark a worktree as trusted in Antigravity CLI's measured trust storage, so a dispatched agy worker does not stop on the folder-trust prompt. | Positional absolute existing directory; one trailing slash is stripped, while literal root and home paths, nonexistent paths, dot components, and glob characters are refused. The path is kept as typed and is not canonicalized, so symlink and repeated-slash equivalents are outside this safety check. `AGY_SETTINGS_PATH` or `AGY_CONFIG_HOME` overrides the settings location. Requires `python3`. Writes one exact path to `trustedWorkspaces` in `~/.gemini/antigravity-cli/settings.json`, preserves unrelated settings, and refuses malformed JSON without writing. |
-| `scripts/dispatch-gate` | `dispatch-gate check` | Evaluate a worker contract and record an allow or deny decision in the dispatch ledger. | Global `--ledger`; command options `--runtime`, `--model`, `--tier-policy`, `--tier-override`, `--contract`, `--agents`, `--est-chars`, `--completion-channel`. |
+| `scripts/dispatch-gate` | `dispatch-gate check` | Evaluate a worker contract and record an allow or deny decision in the dispatch ledger. | Global `--ledger`; command options `--runtime`, `--model`, `--model-needs-measurement`, `--tier-policy`, `--tier-override`, `--contract`, `--agents`, `--est-chars`, `--completion-channel`. |
 | `scripts/dispatch-gate` | `dispatch-gate register` | Register a worker job only after a probe exits 0 and confirms the job id appears in stdout from an expected artifact. | Global `--ledger`; command options `--job-id`, `--probe-cmd`, `--contract-sha`, `--runtime`. |
+| `scripts/dispatch-gate` | `dispatch-gate measure-model` | Verify the raw model line supplied with a worker completion against its session record, then clear the pending model measurement mark or record a mismatch. | Global `--ledger`; command options `--dispatch-id`, `--session-record`, `--model-line`. |
 | `scripts/dispatch-gate` | `dispatch-gate watch` | Check a worker log for stall conditions. | Global `--ledger`; command options `--log`, `--max-idle`. |
 | `scripts/dispatch-gate` | `dispatch-gate report` | Aggregate the ledger into denial, override, tier, and model counts, so the gate's own record can be read back. | Global `--ledger`; command option `--today` limits it to the current UTC day. |
+| `scripts/dispatch-gate` | `dispatch-gate lock-path` | Print the shared ledger lock path used by wrapper and gate writers. | Global `--ledger`. |
+| `scripts/dispatch-gate` | `dispatch-gate session-root` | Print the first configured model session root for a runtime. | `--runtime`. |
 | `scripts/dispatch-timeline` | `dispatch-timeline` | Join the dispatch ledger, the event log, and the current `dispatch-show` record for one task or dispatch into a single time-ordered table; a source with no matching rows is named, not silently dropped. | Positional `id` (a `task_*` id or a dispatch id), `--since <hours>` (list every dispatch seen in the window with its last event, no id needed), `--ledger`, `--event-log`, `--json`. |
 | `scripts/generate-manifest` | `generate-manifest` | Walk the Stage 1 skeleton, apply the install exclusion list, enforce frame hygiene, and write `master-ops/MANIFEST.json` (version stamp plus required paths). | `--skeleton`, `--out`, `--check` (exit 1 on drift), `--stdout`. |
 | `scripts/l1-digest` | `l1-digest tick` | Run one read-only L1 digest observation tick from a config file. | `--config`. |
@@ -46,6 +51,8 @@ Use this page for command discovery. The lifecycle and delegation guides explain
 | `scripts/worker-reap` | `worker-reap` | Close settled worker terminals and clean up worktrees whose branch changes are included in `origin/main`, including squash-merged branches. Verifies dispatch is settled, closes terminal, removes clean included worktrees, leaves ambiguous ones with reasons logged, and appends a reap record when `--ledger` supplies the audit path. | `--task-id` or `--dispatch-id` (one required), `--ledger` (path for audit trail; required when a procedure calls for a ledger record), `--dry-run` (preview without executing), `--remove-ignored-media` (remove a clean, merged worktree even when it holds ignored media), `--json` (compact JSON output). Exit 0 success, 2 missing arguments, 3 dispatch not settled, 4 parse error, 1 other failure. |
 <!-- END COMMAND TABLE -->
 
-The table lists the public command surface only. Local host routing, private paths, and sensitive-lane details are outside this reference.
+## Model evidence limit
+
+Session-record path confinement proves the location and binding metadata available in the record. A worker running as the same operating-system user can create a record inside an allowlisted runtime root, so path checks cannot establish who wrote it. Treat this as a measurement limit and retain independent review of the worker completion context.
 
 Exit codes are not shared vocabulary across these scripts. `model-identity-probe` reports both drift and undecidable as 2; `model-drift-audit` separates them. Read each script's codes from its own row rather than assuming a convention.

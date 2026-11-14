@@ -324,6 +324,28 @@ def test_valid_unavailable_runtimes_entry_parses(tmp_path: Path) -> None:
     }
 
 
+def test_agy_is_a_known_unavailable_runtime(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path / "instance-runtime.json",
+        {
+            "unavailable_runtimes": {
+                "agy": {
+                    "since": "2026-11-14",
+                    "why": "test fixture",
+                    "until": "2999-12-31",
+                }
+            }
+        },
+    )
+
+    loaded = load_instance_runtime_config(config_path, environ={})
+    assert loaded.unavailable_runtimes["agy"] == UnavailableRuntime(
+        since="2026-11-14",
+        why="test fixture",
+        until="2999-12-31",
+    )
+
+
 def test_malformed_unavailable_runtimes_entry_raises(tmp_path: Path) -> None:
     config_path = _write_config(
         tmp_path / "instance-runtime.json",

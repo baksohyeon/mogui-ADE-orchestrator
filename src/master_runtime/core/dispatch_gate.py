@@ -7,9 +7,12 @@ import json
 import math
 import os
 import re
+import stat
+import sys
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Callable, Iterator, Mapping, Sequence
@@ -44,8 +47,13 @@ INSTANCE_TIER_POLICY_RELATIVE_PATH = Path("config") / "model-tier-policy.json"
 # dispatches, so the cap counts agents inside a window rather than at once.
 DEFAULT_TIER_WINDOW_SECONDS = 24 * 60 * 60
 UNKNOWN_TIER = "unknown"
+MODEL_NEEDS_MEASUREMENT = "needs measurement"
 DEFAULT_TICKET_TTL_SECONDS = 600
 DEFAULT_EXPIRED_TICKET_GC_GRACE_SECONDS = 24 * 60 * 60
+MODEL_SESSION_ROOTS_ENV = "DISPATCH_MODEL_SESSION_ROOTS"
+MODEL_SESSION_MAX_BYTES = 5 * 1024 * 1024
+LEDGER_LOCK_FILENAME = "dispatch-ledger.lock"
+LEDGER_LOCK_FD_ENV = "DISPATCH_LEDGER_LOCK_FD"
 RUNTIME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 USERS_ABSOLUTE_PATH_PATTERN = re.compile(r"/Users/[^\s\"'`<>{}\[\](),;:]+")
 COMPLETION_CHANNELS = frozenset({"orchestration", "sentinel-log"})
@@ -88,6 +96,81 @@ def _default_ticket_dir() -> Path:
 
 def _default_known_roots_path() -> Path:
     return _dispatch_timeline_state_dir() / "known-roots.json"
+
+
+def _model_session_roots(
+    environ: Mapping[str, str] | None = None,
+) -> Mapping[str, tuple[Path, ...]]:
+    """Return the runtime session roots accepted as model evidence.
+
+    The wrapper's transcript and rollout globs all live below these five
+    runtime-owned trees. Tests can replace the complete allowlist with one
+    path-list value without changing the production layout.
+    """
+
+    env = environ if environ is not None else os.environ
+    override = env.get(MODEL_SESSION_ROOTS_ENV, "").strip()
+    if override:
+        roots = tuple(
+            Path(item).expanduser().resolve()
+            for item in override.split(os.pathsep)
+            if item.strip()
+        )
+        return {
+            runtime: roots
+            for runtime in ("codex", "claude", "cursor", "agy", "grok")
+        }
+    codex_accounts = env.get("CODEX_ACCOUNTS_DIR")
+    if not codex_accounts:
+        codex_accounts = (
+            Path.home() / "Library" / "Application Support" / "orca" / "codex-accounts"
+            if sys.platform == "darwin"
+            else Path.home() / ".local" / "share" / "orca" / "codex-accounts"
+        )
+    codex_root = Path(codex_accounts).expanduser()
+    try:
+        codex_sessions = tuple(
+            (account / "home" / "sessions").resolve()
+            for account in codex_root.iterdir()
+            if account.is_dir() and (account / "home" / "sessions").is_dir()
+        )
+    except OSError:
+        codex_sessions = ()
+    cursor_projects = env.get("DISPATCH_CURSOR_SESSION_ROOT")
+    agy_brain = env.get("DISPATCH_AGY_SESSION_ROOT")
+    return {
+        "codex": codex_sessions,
+        "claude": ((Path.home() / ".claude" / "projects").resolve(),),
+        "cursor": (
+            (Path(cursor_projects).expanduser().resolve(),)
+            if cursor_projects
+            else ((Path.home() / ".cursor" / "projects").resolve(),)
+        ),
+        "agy": (
+            (Path(agy_brain).expanduser().resolve(),)
+            if agy_brain
+            else (
+                (Path.home() / ".gemini" / "antigravity-cli" / "brain").resolve(),
+            )
+        ),
+        "grok": ((Path.home() / ".grok" / "sessions").resolve(),),
+    }
+
+
+def ledger_lock_path(ledger_path: str | Path) -> Path:
+    """Return the one lock path shared by wrapper and gate writers."""
+
+    return Path(ledger_path).expanduser().parent / LEDGER_LOCK_FILENAME
+
+
+def model_session_root(
+    runtime: str,
+    environ: Mapping[str, str] | None = None,
+) -> Path | None:
+    """Return the first configured session root for a runtime."""
+
+    roots = _model_session_roots(environ).get(runtime.casefold(), ())
+    return roots[0] if roots else None
 
 
 def _default_tier_policy_path(
@@ -187,6 +270,13 @@ class ReasonCode(str, Enum):
     MODEL_MISMATCH = "MODEL_MISMATCH"
     MODEL_UNVERIFIED = "MODEL_UNVERIFIED"
     MODEL_PROBE_FAILED = "MODEL_PROBE_FAILED"
+    MODEL_EVIDENCE_MISSING = "MODEL_EVIDENCE_MISSING"
+    MODEL_EVIDENCE_INVALID = "MODEL_EVIDENCE_INVALID"
+    MODEL_EVIDENCE_OUTSIDE_ROOT = "MODEL_EVIDENCE_OUTSIDE_ROOT"
+    MODEL_EVIDENCE_STALE = "MODEL_EVIDENCE_STALE"
+    MODEL_EVIDENCE_TOO_LARGE = "MODEL_EVIDENCE_TOO_LARGE"
+    MODEL_EVIDENCE_UNBOUND = "MODEL_EVIDENCE_UNBOUND"
+    MODEL_NOT_PENDING = "MODEL_NOT_PENDING"
     UNKNOWN_RUNTIME = "UNKNOWN_RUNTIME"
     CONTRACT_FRONT_MATTER = "CONTRACT_FRONT_MATTER"
     CONTRACT_FRONT_MATTER_MISSING = "CONTRACT_FRONT_MATTER_MISSING"
@@ -208,6 +298,7 @@ class DispatchRequest:
     completion_channel: str | None = None
     model: str | None = None
     tier_override: str | None = None
+    model_needs_measurement: bool = False
 
 
 @dataclass(frozen=True)
@@ -222,6 +313,7 @@ class GateDecision:
     message: str = ""
     tier_override: str | None = None
     front_matter: Mapping[str, object] | None = None
+    model_status: str | None = None
 
 
 @dataclass(frozen=True)
@@ -384,6 +476,9 @@ class DispatchGate:
             return decision
 
         tier_warning: ReasonCode | None = None
+        model_status = (
+            MODEL_NEEDS_MEASUREMENT if request.model_needs_measurement else None
+        )
         tier_override: str | None = None
         model = request.model.strip() if request.model is not None else ""
         # Casefolded: a denied tier spelled in another case is the same tier.
@@ -393,7 +488,7 @@ class DispatchGate:
             tier = tier_policy.tier_of(model_key)
             self._tier = tier
             cap = tier_policy.cap_for(tier)
-            if cap is not None:
+            if cap is not None and tier != UNKNOWN_TIER:
                 used = self._tier_window_agents(tier, tier_policy)
                 if used + request.n_agents > cap:
                     if request.tier_override is None:
@@ -411,18 +506,20 @@ class DispatchGate:
                     tier_override = request.tier_override.strip()
             # An unlisted model resolves to the unknown tier rather than being
             # blocked outright, so a newer or cheaper model is usable before
-            # anyone edits the policy. It uses fanout_caps.unknown when set,
-            # else the same uncapped rule as any tier with no cap entry. It
-            # never passes silently: the tier lands in the ledger and the
-            # warning surfaces it in the rollup.
+            # anyone edits the policy. An unknown-tier fanout cap is ignored
+            # so this observation gap never blocks dispatch. It never passes
+            # silently: the tier lands in the ledger and the warning surfaces
+            # it in the rollup.
             if tier == UNKNOWN_TIER:
                 tier_warning = ReasonCode.TIER_UNKNOWN_MODEL
+                model_status = MODEL_NEEDS_MEASUREMENT
 
         elif model_key not in tier_policy.worker_allowed:
-            policy_denies = (
-                model_key in tier_policy.worker_denied_tiers
-                or tier_policy.unknown_model == "deny"
-            )
+            # An id absent from the policy is an observation gap. The legacy
+            # v1 `unknown_model=deny` switch predates the current rule that a
+            # newer id must remain dispatchable, so only an explicitly named
+            # denied id can still refuse here.
+            policy_denies = model_key in tier_policy.worker_denied_tiers
             if policy_denies:
                 if request.tier_override is None:
                     decision = GateDecision(
@@ -435,6 +532,7 @@ class DispatchGate:
                 tier_override = request.tier_override.strip()
             else:
                 tier_warning = ReasonCode.TIER_POLICY
+                model_status = MODEL_NEEDS_MEASUREMENT
 
         try:
             contract_content = _contract_content(request.contract_path)
@@ -552,6 +650,7 @@ class DispatchGate:
             cost_proxy=cost_proxy,
             tier_override=tier_override,
             front_matter=front_matter_result,
+            model_status=model_status,
         )
         append_decision(decision)
         if record:
@@ -592,112 +691,129 @@ class DispatchGate:
                 ReasonCode.MODEL_TIER_ESCALATION,
                 message=escalation,
             )
-            self._append_entry(
-                {
-                    "ts": self._clock(),
-                    "decision": "DENY",
-                    "reason": decision.reason.value,
-                    "job_id": job_id,
-                    "model_declared": declared_model,
-                    "model_measured": measured_model,
-                    "model_verified": True,
-                }
-            )
+            with _ledger_lock(Path(self.config.ledger_path)):
+                self._append_entry(
+                    {
+                        "ts": self._clock(),
+                        "decision": "DENY",
+                        "reason": decision.reason.value,
+                        "job_id": job_id,
+                        "model_declared": declared_model,
+                        "model_measured": measured_model,
+                        "model_verified": True,
+                    }
+                )
             return decision
 
         runtime_filter = _normalize_runtime_filter(runtime)
         if runtime is not None and runtime_filter is None:
             return GateDecision(False, ReasonCode.INVALID_REQUEST)
 
-        with _ticket_lock(Path(self.config.ticket_dir)):
-            candidate, denial = self._registration_candidate(
-                contract_sha,
-                runtime_filter,
-            )
-            if denial is not None:
-                return denial
-            assert candidate is not None
-            pending = candidate.pending
-            selected_ticket = candidate.selected_ticket
-            completion_channel = _string_or_none(pending.get("completion_channel"))
-
-            if (
-                expected_completion_channel is not None
-                and completion_channel != expected_completion_channel
-            ):
-                actual_channel = (
-                    completion_channel if completion_channel is not None else "<none>"
+        with _ledger_lock(Path(self.config.ledger_path)):
+            with _ticket_lock(Path(self.config.ticket_dir)):
+                candidate, denial = self._registration_candidate(
+                    contract_sha,
+                    runtime_filter,
                 )
-                return GateDecision(
-                    False,
-                    ReasonCode.INVALID_REQUEST,
+                if denial is not None:
+                    return denial
+                assert candidate is not None
+                pending = candidate.pending
+                selected_ticket = candidate.selected_ticket
+                completion_channel = _string_or_none(pending.get("completion_channel"))
+                pending_model_status = _string_or_none(pending.get("model_status"))
+
+                if (
+                    expected_completion_channel is not None
+                    and completion_channel != expected_completion_channel
+                ):
+                    actual_channel = (
+                        completion_channel if completion_channel is not None else "<none>"
+                    )
+                    return GateDecision(
+                        False,
+                        ReasonCode.INVALID_REQUEST,
+                        message=(
+                            f"expected_completion_channel={expected_completion_channel} "
+                            f"actual_completion_channel={actual_channel}"
+                        ),
+                    )
+
+                if contract_sha is not None and selected_ticket is not None:
+                    try:
+                        selected_ticket.path.unlink()
+                    except FileNotFoundError:
+                        pass
+
+                decision = GateDecision(
+                    allow=True,
+                    reason=ReasonCode.OK,
+                    contract_sha=_string_or_none(pending.get("contract_sha")),
+                    cost_proxy=_int_or_zero(pending.get("est_chars")),
                     message=(
-                        f"expected_completion_channel={expected_completion_channel} "
-                        f"actual_completion_channel={actual_channel}"
+                        "ticket_absent"
+                        if contract_sha is not None and selected_ticket is None
+                        else ""
                     ),
+                    model_status=pending_model_status,
                 )
-
-            if contract_sha is not None and selected_ticket is not None:
-                try:
-                    selected_ticket.path.unlink()
-                except FileNotFoundError:
-                    pass
-
-            decision = GateDecision(
-                allow=True,
-                reason=ReasonCode.OK,
-                contract_sha=_string_or_none(pending.get("contract_sha")),
-                cost_proxy=_int_or_zero(pending.get("est_chars")),
-                message=(
-                    "ticket_absent"
-                    if contract_sha is not None and selected_ticket is None
-                    else ""
-                ),
-            )
-            entry: dict[str, object] = {
-                "ts": self._clock(),
-                "contract_sha": pending["contract_sha"],
-                "runtime": pending["runtime"],
-                "n_agents": pending["n_agents"],
-                "est_chars": pending["est_chars"],
-                "decision": "ALLOW",
-                "reason": ReasonCode.OK.value,
-                "job_id": job_id,
-                "completion_channel": completion_channel,
-            }
-            if orchestration_task is not None:
-                entry["orchestration_task"] = orchestration_task
-            contract_repo = pending.get("contract_repo")
-            if isinstance(contract_repo, str) and contract_repo:
-                entry["contract_repo"] = contract_repo
-            # A caller expanding an unset shell variable can pass an empty or
-            # whitespace-only value; worker-wait treats any present worker_pid
-            # as measured, and an empty one would read as a live-but-not-alive
-            # pid, i.e. DEAD, for a worker that was never actually recorded.
-            if worker_pid and worker_pid.strip():
-                entry["worker_pid"] = worker_pid.strip()
-            if pane and pane.strip():
-                entry["pane"] = pane.strip()
-            # The card fields are optional for the Python API so older callers
-            # and ledgers remain readable. The supervised wrapper supplies one
-            # of them for every new dispatch registration.
-            if card is not None or card_reason is not None:
-                entry["card"] = card.strip() if card is not None else ""
-                entry["card_reason"] = card_reason.strip() if card_reason is not None else ""
-            # Say what was verified and how, so a later reader can tell an
-            # unverified registration from a verified one instead of assuming.
-            entry["model_declared"] = declared_model
-            entry["model_measured"] = measured_model
-            entry["model_verified"] = bool(
-                declared_model and measured_model and not model_probe_failed
-            )
-            if model_warning is not None:
-                entry["warnings"] = [
-                    *entry.get("warnings", []),
-                    model_warning.value,
-                ]
-            entry["attempt"] = self._next_attempt(str(pending["contract_sha"]))
-            self._append_entry(entry)
+                entry: dict[str, object] = {
+                    "ts": self._clock(),
+                    "contract_sha": pending["contract_sha"],
+                    "runtime": pending["runtime"],
+                    "n_agents": pending["n_agents"],
+                    "est_chars": pending["est_chars"],
+                    "decision": "ALLOW",
+                    "reason": ReasonCode.OK.value,
+                    "job_id": job_id,
+                    "completion_channel": completion_channel,
+                }
+                dispatch_started_ts = _number_or_none(pending.get("ts"))
+                if dispatch_started_ts is not None:
+                    entry["dispatch_started_ts"] = dispatch_started_ts
+                if orchestration_task is not None:
+                    entry["orchestration_task"] = orchestration_task
+                contract_repo = pending.get("contract_repo")
+                if isinstance(contract_repo, str) and contract_repo:
+                    entry["contract_repo"] = contract_repo
+                # A caller expanding an unset shell variable can pass an empty or
+                # whitespace-only value; worker-wait treats any present worker_pid
+                # as measured, and an empty one would read as a live-but-not-alive
+                # pid, i.e. DEAD, for a worker that was never actually recorded.
+                if worker_pid and worker_pid.strip():
+                    entry["worker_pid"] = worker_pid.strip()
+                if pane and pane.strip():
+                    entry["pane"] = pane.strip()
+                # The card fields are optional for the Python API so older callers
+                # and ledgers remain readable. The supervised wrapper supplies one
+                # of them for every new dispatch registration.
+                if card is not None or card_reason is not None:
+                    entry["card"] = card.strip() if card is not None else ""
+                    entry["card_reason"] = card_reason.strip() if card_reason is not None else ""
+                # Say what was verified and how, so a later reader can tell an
+                # unverified registration from a verified one instead of assuming.
+                entry["model_declared"] = declared_model
+                # A model mark comes from a dispatch whose declaration was not
+                # independently grounded in the host's policy or offered list.
+                # The register-time probe is useful context, but it is not the
+                # worker_done evidence pair that is allowed to clear the mark.
+                if pending_model_status == MODEL_NEEDS_MEASUREMENT:
+                    entry["model_measured"] = None
+                    entry["model_verified"] = False
+                else:
+                    entry["model_measured"] = measured_model
+                    entry["model_verified"] = bool(
+                        declared_model and measured_model and not model_probe_failed
+                    )
+                if pending_model_status is not None:
+                    entry["model_status"] = pending_model_status
+                if model_warning is not None:
+                    entry["warnings"] = [
+                        *entry.get("warnings", []),
+                        model_warning.value,
+                    ]
+                entry["attempt"] = self._next_attempt(str(pending["contract_sha"]))
+                self._append_entry(entry)
         if model_warning is not None:
             decision = GateDecision(
                 decision.allow,
@@ -707,6 +823,7 @@ class DispatchGate:
                 cost_proxy=decision.cost_proxy,
                 message=decision.message,
                 tier_override=decision.tier_override,
+                model_status=decision.model_status,
             )
         return decision
 
@@ -721,7 +838,9 @@ class DispatchGate:
         if runtime is not None and runtime_filter is None:
             return None
 
-        with _ticket_lock(Path(self.config.ticket_dir)):
+        with _ledger_lock(Path(self.config.ledger_path)), _ticket_lock(
+            Path(self.config.ticket_dir)
+        ):
             candidate, denial = self._registration_candidate(
                 contract_sha,
                 runtime_filter,
@@ -835,6 +954,251 @@ class DispatchGate:
 
         return tuple(self._read_entries())
 
+    def measure_model(
+        self,
+        dispatch_id: str,
+        session_record: str | Path,
+        evidence_line: str,
+    ) -> GateDecision:
+        """Verify a worker-reported session line and clear its model mark.
+
+        The worker's path and line are pointers supplied by the worker. They
+        are claims until this method opens the record, finds the exact line,
+        and extracts a model id from that line. A missing or malformed line
+        leaves ``model_status=needs measurement`` in place.
+        """
+
+        if not dispatch_id.strip() or not evidence_line.strip():
+            return GateDecision(False, ReasonCode.INVALID_REQUEST)
+        with _ledger_lock(Path(self.config.ledger_path)), _ticket_lock(
+            Path(self.config.ticket_dir)
+        ):
+            entries = list(self._read_entries())
+            target_index: int | None = None
+            for index, entry in enumerate(entries):
+                if (
+                    isinstance(entry, Mapping)
+                    and entry.get("job_id") == dispatch_id
+                    and entry.get("decision") == "ALLOW"
+                ):
+                    target_index = index
+            if target_index is None:
+                return GateDecision(
+                    False,
+                    ReasonCode.NO_MATCHING_TICKET,
+                    message=f"dispatch_id={dispatch_id}",
+                )
+            target = dict(entries[target_index])
+            if target.get("model_status") != MODEL_NEEDS_MEASUREMENT:
+                return GateDecision(
+                    False,
+                    ReasonCode.MODEL_NOT_PENDING,
+                    message=f"dispatch_id={dispatch_id}",
+                )
+
+            placement = _dispatch_placement(entries, dispatch_id, target)
+            record_path = Path(session_record).expanduser()
+            try:
+                record_path = record_path.resolve(strict=True)
+            except OSError:
+                return GateDecision(
+                    False,
+                    ReasonCode.MODEL_EVIDENCE_MISSING,
+                    message=f"session_record={record_path}",
+                )
+            runtime = _string_or_none(target.get("runtime"))
+            session_roots = _model_session_roots()
+            roots = session_roots.get(runtime, ()) if runtime else ()
+            if not any(_path_is_under(record_path, root) for root in roots):
+                return GateDecision(
+                    False,
+                    ReasonCode.MODEL_EVIDENCE_OUTSIDE_ROOT,
+                    message=f"session_record={record_path}",
+                )
+
+            dispatch_ts = _number_or_none(target.get("dispatch_started_ts"))
+            if dispatch_ts is None:
+                dispatch_ts = _number_or_none(target.get("ts"))
+            if dispatch_ts is None:
+                return GateDecision(
+                    False,
+                    ReasonCode.MODEL_EVIDENCE_INVALID,
+                    message=f"dispatch_id={dispatch_id} has no timestamp",
+                )
+            try:
+                record_stat = record_path.stat()
+            except OSError:
+                return GateDecision(
+                    False,
+                    ReasonCode.MODEL_EVIDENCE_MISSING,
+                    message=f"session_record={record_path}",
+                )
+            if not stat.S_ISREG(record_stat.st_mode):
+                return GateDecision(
+                    False,
+                    ReasonCode.MODEL_EVIDENCE_INVALID,
+                    message=f"session_record={record_path} is not a regular file",
+                )
+            if record_stat.st_mtime < dispatch_ts:
+                return GateDecision(
+                    False,
+                    ReasonCode.MODEL_EVIDENCE_STALE,
+                    message=f"session_record={record_path} predates dispatch",
+                )
+            if record_stat.st_size > MODEL_SESSION_MAX_BYTES:
+                return GateDecision(
+                    False,
+                    ReasonCode.MODEL_EVIDENCE_TOO_LARGE,
+                    message=(
+                        f"session_record={record_path} exceeds "
+                        f"{MODEL_SESSION_MAX_BYTES} bytes"
+                    ),
+                )
+            try:
+                record_text = record_path.read_bytes().decode("utf-8")
+            except (OSError, UnicodeError):
+                return GateDecision(
+                    False,
+                    ReasonCode.MODEL_EVIDENCE_INVALID,
+                    message=f"session_record={record_path}",
+                )
+            _, _, session_start = _record_context(record_text, runtime)
+            if session_start is not None and session_start < dispatch_ts:
+                return GateDecision(
+                    False,
+                    ReasonCode.MODEL_EVIDENCE_STALE,
+                    message=f"session_record={record_path} session predates dispatch",
+                )
+            normalized_line = evidence_line.rstrip("\r\n")
+            record_lines = record_text.splitlines()
+            evidence_line_number = next(
+                (
+                    index
+                    for index, line in enumerate(record_lines, start=1)
+                    if line == normalized_line
+                ),
+                None,
+            )
+            if evidence_line_number is None:
+                return GateDecision(
+                    False,
+                    ReasonCode.MODEL_EVIDENCE_MISSING,
+                    message="quoted model line is absent from session record",
+                )
+            try:
+                evidence = json.loads(normalized_line)
+            except json.JSONDecodeError:
+                return GateDecision(
+                    False,
+                    ReasonCode.MODEL_EVIDENCE_INVALID,
+                    message="quoted model line is not JSON",
+                )
+            measured_model = _model_from_evidence(evidence, runtime)
+            if measured_model is None:
+                return GateDecision(
+                    False,
+                    ReasonCode.MODEL_EVIDENCE_INVALID,
+                    message="quoted model line has no model field",
+                )
+            if not isinstance(evidence, Mapping):
+                return GateDecision(
+                    False,
+                    ReasonCode.MODEL_EVIDENCE_INVALID,
+                    message="quoted model line is not a JSON object",
+                )
+            if not _record_belongs_to_dispatch(
+                target,
+                placement,
+                record_path,
+                record_text,
+                session_roots,
+            ):
+                return GateDecision(
+                    False,
+                    ReasonCode.MODEL_EVIDENCE_UNBOUND,
+                    message=f"session_record={record_path} is not bound to dispatch",
+                )
+
+            declared_model = _string_or_none(target.get("model_declared"))
+            if declared_model is None:
+                declared_model = _string_or_none(target.get("model"))
+            record_model_turns_with_keys = _record_model_turns_with_keys(
+                record_text, runtime
+            )
+            record_model_turns = tuple(
+                models for _, models in record_model_turns_with_keys
+            )
+            record_models = tuple(
+                model for turn in record_model_turns for model in turn
+            )
+            if runtime in {"codex", "claude"} and record_model_turns:
+                authoritative_models = {
+                    model.casefold() for model in record_models
+                }
+                if measured_model.casefold() not in authoritative_models:
+                    return GateDecision(
+                        False,
+                        ReasonCode.MODEL_EVIDENCE_INVALID,
+                        message="quoted model line is not a runtime-authoritative model field",
+                    )
+            evidence_turn_key = _record_turn_key(evidence, evidence_line_number)
+            evidence_model_turns = tuple(
+                turn
+                for key, turn in record_model_turns_with_keys
+                if key == evidence_turn_key
+            )
+            matches = (
+                declared_model is not None
+                and _model_matches_declared(
+                    measured_model, declared_model, evidence_model_turns
+                )
+                and all(
+                    _model_matches_declared(model, declared_model, record_model_turns)
+                    for model in record_models
+                )
+            )
+            target["model_measured"] = measured_model
+            target["model_record"] = _relative_model_record_path(
+                record_path, roots
+            )
+            target["model_evidence_line_number"] = evidence_line_number
+            target["model_evidence_sha256"] = hashlib.sha256(
+                normalized_line.encode("utf-8")
+            ).hexdigest()
+            target.pop("model_status", None)
+            target["model_verified"] = matches
+            if matches:
+                target.pop("model_mismatch", None)
+                warnings = target.get("warnings")
+                if isinstance(warnings, list):
+                    warning_values = [
+                        warning
+                        for warning in warnings
+                        if warning != ReasonCode.MODEL_MISMATCH.value
+                    ]
+                    if warning_values:
+                        target["warnings"] = warning_values
+                    else:
+                        target.pop("warnings", None)
+            else:
+                target["model_mismatch"] = True
+                warnings = target.get("warnings")
+                warning_values = list(warnings) if isinstance(warnings, list) else []
+                if ReasonCode.MODEL_MISMATCH.value not in warning_values:
+                    warning_values.append(ReasonCode.MODEL_MISMATCH.value)
+                target["warnings"] = warning_values
+            entries[target_index] = target
+            _replace_ledger_entries(Path(self.config.ledger_path), entries)
+
+        warnings = (ReasonCode.MODEL_MISMATCH,) if not matches else ()
+        return GateDecision(
+            True,
+            ReasonCode.OK,
+            warnings=warnings,
+            message=("model mismatch" if not matches else "model measured"),
+            model_status=("mismatch" if not matches else "measured"),
+        )
+
     def _model_verification(
         self,
         declared_model: str | None,
@@ -872,6 +1236,8 @@ class DispatchGate:
 
         declared_tier = policy.tier_of(declared_model.strip().casefold())
         measured_tier = policy.tier_of(measured_model.strip().casefold())
+        if declared_tier == UNKNOWN_TIER:
+            return ReasonCode.MODEL_MISMATCH, None
         if policy.strictness_of(measured_tier) < policy.strictness_of(declared_tier):
             return None, (
                 f"declared={declared_model} tier={declared_tier} "
@@ -939,6 +1305,11 @@ class DispatchGate:
             "completion_channel": request.completion_channel,
             "model": request.model,
         }
+        model_status = decision.model_status
+        if model_status is None and request.model_needs_measurement:
+            model_status = MODEL_NEEDS_MEASUREMENT
+        if model_status is not None:
+            entry["model_status"] = model_status
         if decision.warnings:
             entry["warnings"] = [warning.value for warning in decision.warnings]
         if decision.tier_override is not None:
@@ -966,11 +1337,22 @@ class DispatchGate:
         if getattr(self, "_tier_policy_digest", ""):
             entry["tier_policy_sha256"] = self._tier_policy_digest
         if decision.allow and decision.contract_sha is not None:
-            with _ticket_lock(Path(self.config.ticket_dir)):
-                entry["attempt"] = self._next_attempt(decision.contract_sha)
-                self._append_entry(entry)
+            with _ledger_lock(Path(self.config.ledger_path)):
+                with _ticket_lock(Path(self.config.ticket_dir)):
+                    entry["attempt"] = self._next_attempt(decision.contract_sha)
+                    self._append_entry(entry)
             return
-        self._append_entry(entry)
+        with _ledger_lock(Path(self.config.ledger_path)):
+            self._append_entry(entry)
+
+    def append_ledger_entry(self, entry: Mapping[str, object]) -> None:
+        """Append an externally prepared denial entry under the gate lock."""
+
+        if entry.get("decision") != "DENY":
+            raise ValueError("append_ledger_entry accepts DENY entries only")
+
+        with _ledger_lock(Path(self.config.ledger_path)):
+            self._append_entry(entry)
 
     def _append_entry(self, entry: Mapping[str, object]) -> None:
         ledger_path = Path(self.config.ledger_path)
@@ -1547,6 +1929,391 @@ def _string_or_none(value: object) -> str | None:
     return None
 
 
+def _model_from_evidence(
+    value: object,
+    runtime: str | None = None,
+) -> str | None:
+    """Extract a model id from one raw JSONL evidence line."""
+
+    if isinstance(value, Mapping):
+        runtime_name = (runtime or "").casefold()
+        if runtime_name == "codex":
+            models = _main_session_models(value, runtime_name)
+            if models:
+                return models[0]
+            if "type" in value:
+                return None
+        elif runtime_name == "claude":
+            models = _main_session_models(value, runtime_name)
+            if models:
+                return models[0]
+            if "type" in value:
+                return None
+        model = value.get("model")
+        if isinstance(model, str) and model.strip():
+            return model.strip()
+        for nested_key in ("message", "payload", "item", "response"):
+            nested_model = _model_from_evidence(value.get(nested_key), runtime)
+            if nested_model is not None:
+                return nested_model
+    elif isinstance(value, list):
+        for item in value:
+            nested_model = _model_from_evidence(item, runtime)
+            if nested_model is not None:
+                return nested_model
+    return None
+
+
+def _record_model_ids(
+    record_text: str,
+    runtime: str | None = None,
+) -> tuple[str, ...]:
+    """Collect main-session model ids from a runtime-shaped JSONL record."""
+
+    return tuple(
+        model
+        for turn in _record_model_turns(record_text, runtime)
+        for model in turn
+    )
+
+
+def _record_model_turns(
+    record_text: str,
+    runtime: str | None,
+) -> tuple[tuple[str, ...], ...]:
+    """Return model ids grouped by the record's explicit turn identity."""
+
+    return tuple(models for _, models in _record_model_turns_with_keys(record_text, runtime))
+
+
+def _record_model_turns_with_keys(
+    record_text: str,
+    runtime: str | None,
+) -> tuple[tuple[str | int, tuple[str, ...]], ...]:
+    """Return model ids grouped by turn key, preserving first-seen key order."""
+
+    turns: dict[str | int, list[str]] = {}
+    turn_order: list[str | int] = []
+    for line_number, line in enumerate(record_text.splitlines(), start=1):
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, Mapping):
+            continue
+        models = _main_session_models(event, runtime)
+        if not models:
+            continue
+        turn_key = _record_turn_key(event, line_number)
+        if turn_key not in turns:
+            turns[turn_key] = []
+            turn_order.append(turn_key)
+        for model in models:
+            if model not in turns[turn_key]:
+                turns[turn_key].append(model)
+    return tuple((key, tuple(turns[key])) for key in turn_order)
+
+
+def _main_session_models(
+    event: Mapping[str, object],
+    runtime: str | None,
+) -> tuple[str, ...]:
+    """Read only the model fields owned by a runtime's main session."""
+
+    runtime_name = (runtime or "").casefold()
+    if runtime_name == "codex":
+        if event.get("type") not in {"session_meta", "turn_context"}:
+            return ()
+        payload = event.get("payload")
+        source = payload if isinstance(payload, Mapping) else event
+        model = source.get("model")
+        return (model.strip(),) if isinstance(model, str) and model.strip() else ()
+
+    if _is_sidechain_event(event):
+        return ()
+    if runtime_name == "claude":
+        message = event.get("message")
+        if not isinstance(message, Mapping):
+            return ()
+        if event.get("type") != "assistant" and message.get("role") != "assistant":
+            return ()
+        model = message.get("model")
+        return (model.strip(),) if isinstance(model, str) and model.strip() else ()
+
+    candidates: list[Mapping[str, object]] = [event]
+    for key in ("message", "item", "payload", "response"):
+        nested = event.get(key)
+        if isinstance(nested, Mapping):
+            candidates.append(nested)
+    saw_assistant = False
+    for candidate in candidates:
+        if candidate.get("role") == "assistant" or candidate.get("type") == "assistant":
+            saw_assistant = True
+        model = candidate.get("model")
+        if saw_assistant and isinstance(model, str) and model.strip():
+            return (model.strip(),)
+    return ()
+
+
+def _is_sidechain_event(event: Mapping[str, object]) -> bool:
+    return any(
+        event.get(key) is True
+        for key in ("is_sidechain", "isSidechain", "sidechain")
+    )
+
+
+def _record_turn_key(event: Mapping[str, object], line_number: int) -> str | int:
+    for key in ("turn_id", "turnId", "conversation_turn_id", "conversationTurnId"):
+        value = event.get(key)
+        if isinstance(value, (str, int)) and not isinstance(value, bool):
+            return f"turn:{value}"
+    payload = event.get("payload")
+    if isinstance(payload, Mapping):
+        for key in ("turn_id", "turnId", "conversation_turn_id", "conversationTurnId"):
+            value = payload.get(key)
+            if isinstance(value, (str, int)) and not isinstance(value, bool):
+                return f"turn:{value}"
+    message = event.get("message")
+    if isinstance(message, Mapping):
+        value = message.get("id")
+        if isinstance(value, str) and value.strip():
+            return f"message:{value}"
+    return line_number
+
+
+def _model_matches_declared(
+    model: str,
+    declared: str,
+    turns: Sequence[Sequence[str]],
+) -> bool:
+    if model.casefold() == declared.casefold():
+        return True
+    model_base = _undated_model_id(model)
+    declared_base = _undated_model_id(declared)
+    if model_base is None:
+        model_base = model.strip().casefold()
+    if declared_base is None:
+        declared_base = declared.strip().casefold()
+    if model_base != declared_base:
+        return False
+    model_is_dated = _undated_model_id(model) is not None
+    declared_is_dated = _undated_model_id(declared) is not None
+    if model_is_dated == declared_is_dated:
+        return False
+    return any(
+        model.casefold() in {item.casefold() for item in turn}
+        and declared.casefold() in {item.casefold() for item in turn}
+        for turn in turns
+    )
+
+
+def _undated_model_id(model: str) -> str | None:
+    normalized = model.strip().casefold()
+    undated = re.sub(r"-\d{8}$", "", normalized)
+    return undated if undated != normalized else None
+
+
+def _relative_model_record_path(
+    record_path: Path,
+    roots: Sequence[Path],
+) -> str:
+    """Store evidence location relative to its accepted runtime root."""
+
+    candidates: list[tuple[int, str]] = []
+    for root in roots:
+        try:
+            relative = record_path.relative_to(root)
+        except ValueError:
+            continue
+        candidates.append((len(root.parts), str(relative)))
+    if candidates:
+        return max(candidates, key=lambda candidate: candidate[0])[1]
+    return record_path.name
+
+
+def _dispatch_placement(
+    entries: Sequence[Mapping[str, object]],
+    dispatch_id: str,
+    target: Mapping[str, object],
+) -> Mapping[str, object]:
+    """Join placement metadata recorded beside the dispatch row."""
+
+    placement = dict(target)
+    for entry in entries:
+        if entry.get("job_id") != dispatch_id:
+            continue
+        for key in ("worktree_path", "agent_session_id"):
+            if key not in placement and entry.get(key):
+                placement[key] = entry[key]
+    return placement
+
+
+def _record_context(
+    record_text: str,
+    runtime: str | None = None,
+) -> tuple[set[str], set[str], float | None]:
+    """Collect identity only from session metadata or direct record fields.
+
+    Tool events can mention another worktree while a session is operating on
+    it. They are evidence of a command, not evidence of the session's own
+    identity, so nested mappings are deliberately ignored here.
+    """
+
+    records: list[Mapping[str, object]] = []
+    for line in record_text.splitlines():
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, Mapping):
+            records.append(value)
+
+    session_payloads = [
+        value.get("payload")
+        for value in records
+        if value.get("type") == "session_meta"
+        and isinstance(value.get("payload"), Mapping)
+    ]
+    if session_payloads:
+        authoritative = session_payloads[:1]
+        timestamp_sources = authoritative
+    elif (runtime or "").casefold() == "claude":
+        timestamp_sources = [
+            value for value in records if not _is_sidechain_event(value)
+        ]
+        authoritative = [
+            value
+            for value in timestamp_sources
+            if (
+                value.get("type") == "assistant"
+                or (
+                    isinstance(value.get("message"), Mapping)
+                    and value["message"].get("role") == "assistant"
+                )
+            )
+        ]
+    else:
+        authoritative = records
+        timestamp_sources = authoritative
+    cwd_values: set[str] = set()
+    session_values: set[str] = set()
+    session_start: float | None = None
+
+    for value in authoritative:
+        if not isinstance(value, Mapping):
+            continue
+        for key in ("cwd", "worktree", "worktree_path"):
+            candidate = value.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                cwd_values.add(candidate.strip())
+        for key in (
+            "id",
+            "session_id",
+            "sessionId",
+            "conversation_id",
+            "conversationId",
+        ):
+            candidate = value.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                session_values.add(candidate.strip())
+    for value in timestamp_sources:
+        if not isinstance(value, Mapping):
+            continue
+        for key in (
+            "timestamp",
+            "created_at",
+            "createdAt",
+            "start_time",
+            "startTime",
+            "started_at",
+            "startedAt",
+            "ts",
+        ):
+            candidate = _session_timestamp(value.get(key))
+            if candidate is not None:
+                session_start = (
+                    candidate
+                    if session_start is None
+                    else min(session_start, candidate)
+                )
+    return cwd_values, session_values, session_start
+
+
+def _paths_match(left: str, right: str) -> bool:
+    try:
+        return os.path.realpath(left) == os.path.realpath(right)
+    except (OSError, ValueError):
+        return False
+
+
+def _record_belongs_to_dispatch(
+    target: Mapping[str, object],
+    placement: Mapping[str, object],
+    record_path: Path,
+    record_text: str,
+    session_roots: Mapping[str, tuple[Path, ...]],
+) -> bool:
+    """Require the record's runtime context to identify this dispatch."""
+
+    worktree = _string_or_none(placement.get("worktree_path"))
+    session_id = _string_or_none(placement.get("agent_session_id"))
+    if not worktree and not session_id:
+        return False
+
+    runtime = _string_or_none(target.get("runtime"))
+    cwd_values, session_values, _ = _record_context(record_text, runtime)
+    if session_id:
+        if session_id not in session_values:
+            if _string_or_none(target.get("runtime")) == "agy":
+                for brain_root in session_roots.get("agy", ()):
+                    try:
+                        relative = record_path.relative_to(brain_root)
+                    except ValueError:
+                        continue
+                    if not relative.parts or relative.parts[0] != session_id:
+                        continue
+                    if session_values:
+                        return False
+                    if worktree and cwd_values and not any(
+                        _paths_match(cwd, worktree) for cwd in cwd_values
+                    ):
+                        return False
+                    return True
+            return False
+        if worktree and cwd_values:
+            return any(_paths_match(cwd, worktree) for cwd in cwd_values)
+        return True
+    if worktree and any(_paths_match(cwd, worktree) for cwd in cwd_values):
+        return True
+
+    return False
+
+
+def _replace_ledger_entries(
+    ledger_path: Path,
+    entries: Sequence[Mapping[str, object]],
+) -> None:
+    """Atomically rewrite the ledger after a verified model measurement."""
+
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = ledger_path.with_name(
+        f".{ledger_path.name}.{os.getpid()}.measurement.tmp"
+    )
+    try:
+        with temporary_path.open("w", encoding="utf-8") as ledger:
+            for entry in entries:
+                ledger.write(json.dumps(entry, sort_keys=True, separators=(",", ":")))
+                ledger.write("\n")
+            ledger.flush()
+            os.fsync(ledger.fileno())
+        os.replace(temporary_path, ledger_path)
+    finally:
+        try:
+            temporary_path.unlink()
+        except FileNotFoundError:
+            pass
+
+
 def _contract_lint_warnings(
     contract_text: str,
     known_roots_path: Path,
@@ -1645,6 +2412,45 @@ def _ticket_lock(ticket_dir: Path) -> Iterator[None]:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
+@contextmanager
+def _ledger_lock(ledger_path: Path) -> Iterator[None]:
+    """Serialize ledger updates without creating the ticket directory."""
+
+    lock_path = ledger_lock_path(ledger_path)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    inherited_fd = os.environ.get(LEDGER_LOCK_FD_ENV, "")
+    try:
+        fd = int(inherited_fd)
+    except ValueError:
+        fd = -1
+    if fcntl is not None and fd >= 0:
+        try:
+            fd_stat = os.fstat(fd)
+            lock_stat = lock_path.stat()
+            same_file = (fd_stat.st_dev, fd_stat.st_ino) == (
+                lock_stat.st_dev,
+                lock_stat.st_ino,
+            )
+        except OSError:
+            same_file = False
+        if same_file:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                pass
+            else:
+                yield
+                return
+    with lock_path.open("a", encoding="utf-8") as lock_file:
+        if fcntl is not None:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
 def _decode_dispatch_ticket(path: Path) -> DispatchTicket | None:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -1682,6 +2488,22 @@ def _number_or_none(value: object) -> float | None:
     if isinstance(value, (int, float)):
         return float(value)
     return None
+
+
+def _session_timestamp(value: object) -> float | None:
+    numeric = _number_or_none(value)
+    if numeric is not None and math.isfinite(numeric):
+        return numeric
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.timestamp()
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
 
 
 def _positive_int_or_none(value: object) -> int | None:

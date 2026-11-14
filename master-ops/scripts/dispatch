@@ -63,7 +63,7 @@ else
   MASTER_HOST_RUNTIME=$DEFAULT_MASTER_HOST_RUNTIME
   MASTER_HOST_SOURCE=fallback
 fi
-RUNTIME_CANDIDATES="claude codex cursor grok gemini opencode"
+RUNTIME_CANDIDATES="claude codex cursor grok gemini agy opencode"
 
 usage() {
   echo "usage: dispatch --contract FILE --spec TEXT (--terminal HANDLE | --worktree SELECTOR) \\"
@@ -83,9 +83,12 @@ MODEL=claude-haiku-4-5-20251001
 # 1 when the caller named the model. An explicit id is never silently replaced;
 # an unnamed one is derived for the chosen runtime from the tier policy.
 MODEL_EXPLICIT=0
+MODEL_NEEDS_MEASUREMENT=0
+MODEL_WARNING_REASON=""
 TGLOB_EXPLICIT=0
 EST=3000
 TERMINAL="" WORKTREE="" CONTRACT="" SPEC="" RUNTIME="" SAME_HOST_REASON="" CHECK_ONLY=0
+RUNTIME_EXPLICIT=0
 TIER_POLICY_OVERRIDE=""
 # Tracker card choice. With neither flag, the wrapper creates and claims a card
 # from the contract's H1 title when bd resolves to an active tracker.
@@ -112,7 +115,7 @@ while [ $# -gt 0 ]; do
     --terminal) TERMINAL=$2; shift 2;;
     --worktree) WORKTREE=$2; shift 2;;
     --model) MODEL=$2; MODEL_EXPLICIT=1; shift 2;;
-    --runtime) RUNTIME=$2; shift 2;;
+    --runtime) RUNTIME=$2; RUNTIME_EXPLICIT=1; shift 2;;
     --same-host-reason) SAME_HOST_REASON=$2; shift 2;;
     --est-chars) EST=$2; shift 2;;
     --transcript-glob) TGLOB=$2; TGLOB_EXPLICIT=1; shift 2;;
@@ -156,9 +159,18 @@ else
   STATE_DIR=~/.mogui
 fi
 LEDGER="$STATE_DIR/dispatch-ledger.jsonl"
-LEDGER_LOCK="$STATE_DIR/dispatch-ledger.lock"
+
+resolve_shared_paths() {
+  LEDGER_LOCK="$("$GATE" --ledger "$LEDGER" lock-path)"
+  AGY_SESSION_ROOT="${DISPATCH_AGY_SESSION_ROOT:-$("$GATE" --ledger "$LEDGER" session-root --runtime agy)}"
+  AGY_SESSION_ROOT="${AGY_SESSION_ROOT/#\~/$HOME}"
+  CURSOR_SESSION_ROOT="${DISPATCH_CURSOR_SESSION_ROOT:-$("$GATE" --ledger "$LEDGER" session-root --runtime cursor)}"
+  export DISPATCH_AGY_SESSION_ROOT="$AGY_SESSION_ROOT"
+  export DISPATCH_CURSOR_SESSION_ROOT="$CURSOR_SESSION_ROOT"
+}
 
 if [ -n "$LEDGER_EVENT" ]; then
+  resolve_shared_paths
   if [ -z "$LEDGER_EVENT_DISPATCH_ID" ]; then
     echo "✗ --ledger-event requires --dispatch-id" >&2
     exit 1
@@ -603,7 +615,7 @@ snapshot_codex_rollouts() {
 }
 
 snapshot_agy_brain_dirs() {
-  local brain_dir="$HOME/.gemini/antigravity-cli/brain"
+  local brain_dir="$AGY_SESSION_ROOT"
   [ -d "$brain_dir" ] || return 0
   find "$brain_dir" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null | sort
 }
@@ -972,16 +984,33 @@ refuse_unavailable_runtime() {
   return 1
 }
 
+# An explicit runtime must name a supported runtime from the candidate set.
+# A known runtime with a model from another vendor is still dispatchable: that
+# declaration is measured from the worker session below. Host availability is
+# measured by the downstream runtime probe. This check only keeps crafted
+# runtime names from reaching model resolution and the gate.
+validate_supported_runtime() {
+  local runtime="$1"
+  if ! printf '%s\n' $RUNTIME_CANDIDATES | grep -Fxq -- "$runtime"; then
+    echo "✗ runtime $runtime is not listed in RUNTIME_CANDIDATES" >&2
+    return 1
+  fi
+}
+
 join_csv() {
   python3 -c "import sys; print(', '.join([x.strip() for x in sys.stdin if x.strip()]))"
 }
 
 choose_default_runtime() {
-  dispatchable_runtimes | while IFS= read -r runtime; do
-    [ "$runtime" = "$MASTER_HOST_RUNTIME" ] && continue
-    echo "$runtime"
-    break
-  done
+  local runtime chosen=""
+  while IFS= read -r runtime; do
+    if [ "$runtime" != "$MASTER_HOST_RUNTIME" ] && [ -z "$chosen" ]; then
+      chosen="$runtime"
+    fi
+  done < <(dispatchable_runtimes)
+  if [ -n "$chosen" ]; then
+    printf '%s\n' "$chosen"
+  fi
 }
 
 # Pane classification markers, per agent host. A start screen is IDLE, so
@@ -1718,7 +1747,7 @@ codex_hooks_vet_homes() {
 
 record_host_diversity_audit() {
   [ "$CHECK_ONLY" = 1 ] && return 0
-  python3 - "$LEDGER" "$RUNTIME" "$MASTER_HOST_RUNTIME" "$INSTALLED_RUNTIMES" "$ALTERNATIVE_RUNTIMES" "$UNAVAILABLE_RUNTIMES" "$SAME_HOST_REASON" "$TASK" "$DISP" "$SHA" "${CODEX_BYPASS_FLAG:-}" "${LEDGER_LOCK:-$LEDGER.lock}" <<'EOF'
+  python3 - "$LEDGER" "$RUNTIME" "$MASTER_HOST_RUNTIME" "$INSTALLED_RUNTIMES" "$ALTERNATIVE_RUNTIMES" "$UNAVAILABLE_RUNTIMES" "$SAME_HOST_REASON" "$TASK" "$DISP" "$SHA" "${CODEX_BYPASS_FLAG:-}" "$LEDGER_LOCK" <<'EOF'
 import fcntl
 import json
 import os
@@ -1751,7 +1780,7 @@ EOF
 
 record_codex_effort() {
   [ "$CHECK_ONLY" = 1 ] && return 0
-  python3 - "$LEDGER" "$DISP" "$1" "${LEDGER_LOCK:-$LEDGER.lock}" <<'EOF'
+  python3 - "$LEDGER" "$DISP" "$1" "$LEDGER_LOCK" <<'EOF'
 import fcntl
 import json
 import os
@@ -1866,7 +1895,11 @@ UNAVAILABLE_RUNTIMES=$(unavailable_runtime_names | join_csv)
 # RUNTIME is final as of the block above; refuse here, before any model
 # resolution or gate check spends effort on a runtime the operator already
 # declared unusable on this install.
+if [ "$RUNTIME_EXPLICIT" = 1 ]; then
+  validate_supported_runtime "$RUNTIME" || exit 2
+fi
 refuse_unavailable_runtime "$RUNTIME" "$ALTERNATIVE_RUNTIMES" || exit 2
+resolve_shared_paths
 
 [ "$RUNTIME" = codex ] && apply_codex_instance_launch_config
 
@@ -1906,8 +1939,29 @@ host_model_ids() {
       command -v cursor-agent >/dev/null 2>&1 || return 1
       cursor-agent models 2>/dev/null | sed -n 's/^\([A-Za-z0-9._-][A-Za-z0-9._-]*\) - .*$/\1/p'
       ;;
+    agy)
+      command -v agy >/dev/null 2>&1 || return 1
+      agy models 2>/dev/null | sed -n 's/^\([A-Za-z0-9._-][A-Za-z0-9._-]*\)[[:space:]].*$/\1/p'
+      ;;
+    grok)
+      command -v grok >/dev/null 2>&1 || return 1
+      grok models 2>/dev/null | sed -n 's/^[[:space:]]*[-*][[:space:]]*\([A-Za-z0-9._-][A-Za-z0-9._-]*\).*/\1/p'
+      ;;
     *) return 1;;
   esac
+}
+mark_model_needs_measurement() {
+  MODEL_NEEDS_MEASUREMENT=1
+  [ -n "$MODEL_WARNING_REASON" ] || MODEL_WARNING_REASON="$1"
+}
+check_host_model_capability() {
+  local runtime="$1" model="$2"
+  HOST_IDS=$(host_model_ids "$runtime") || HOST_IDS=""
+  if [ -z "$HOST_IDS" ]; then
+    mark_model_needs_measurement "host model list unavailable for $runtime"
+  elif ! printf '%s\n' "$HOST_IDS" | grep -Fxq -- "$model"; then
+    mark_model_needs_measurement "$runtime does not offer model=$model"
+  fi
 }
 # When the caller did not name a model, derive one for the chosen runtime from
 # the tier policy instead of leaving the claude-shaped default in place. No new
@@ -1984,35 +2038,16 @@ runtime_accepts_vendor() {
     *) return 1 ;;
   esac
 }
-# This is the minimal runtime capability mapping needed for agy in this PR. A
+# This is the minimal runtime capability mapping needed for host model probes. A
 # complete capability table is intentionally a separate contract.
 if is_multi_vendor_host "$RUNTIME"; then
-  HOST_IDS=$(host_model_ids "$RUNTIME") || {
-    echo "✗ cannot ask $RUNTIME which models it offers; refusing to guess" >&2
-    echo "  A declared model this host cannot run writes a false declared_model into the" >&2
-    echo "  ledger and makes the register probe grep for a string that never appears." >&2
-    exit 2
-  }
-  if ! printf '%s\n' "$HOST_IDS" | grep -Fxq -- "$MODEL"; then
-    echo "✗ $RUNTIME does not offer model=$MODEL" >&2
-    echo "  This host runs several vendors' models, so the check is its own list rather" >&2
-    echo "  than a vendor prefix. Ids it offers that the tier policy also allows:" >&2
-    python3 -c "
-import json,sys
-ids=set(sys.stdin.read().split())
-tiers=json.load(open('$POLICY'))['tiers']
-ok=[m for t in ('efficient','top') for m in tiers.get(t,[]) if m in ids]
-print('   ', ', '.join(ok) if ok else '(none)')" <<<"$HOST_IDS" >&2
-    exit 2
-  fi
+  check_host_model_capability "$RUNTIME" "$MODEL"
 elif [ "$MODEL_VENDOR" != unknown ] && ! runtime_accepts_vendor "$RUNTIME" "$MODEL_VENDOR"; then
-  echo "✗ model/runtime mismatch · model=$MODEL (vendor $MODEL_VENDOR) runtime=$RUNTIME" >&2
-  echo "  A model id from one vendor cannot run on another host. Declaring it anyway writes a" >&2
-  echo "  false declared_model into the ledger and makes the register probe grep for a string" >&2
-  echo "  the worker will never emit." >&2
-  echo "  Pass --model with an id this runtime can run, or pass --runtime $MODEL_VENDOR." >&2
-  echo "  Installed runtimes here: ${INSTALLED_RUNTIMES:-none}. Allowed ids per tier: $POLICY" >&2
-  exit 2
+  # A cross-vendor declaration is an observation gap, not a dispatch gate:
+  # the worker session record is the authority for what actually ran.
+  mark_model_needs_measurement "runtime=$RUNTIME does not accept vendor=$MODEL_VENDOR for model=$MODEL"
+elif [ "$RUNTIME" = agy ] || [ "$RUNTIME" = grok ]; then
+  check_host_model_capability "$RUNTIME" "$MODEL"
 fi
 
 if [ "$RUNTIME" = "$MASTER_HOST_RUNTIME" ]; then
@@ -2033,6 +2068,12 @@ fi
 # card tells the operator to dry-run first, so following the procedure was what
 # exhausted the cap.
 TIER=$(tier_for_model "$MODEL" 2>/dev/null || echo unknown)
+if [ "$TIER" = unknown ]; then
+  mark_model_needs_measurement "model is absent from the tier policy"
+fi
+if [ "$MODEL_NEEDS_MEASUREMENT" = 1 ]; then
+  echo "WARNING: unknown model · model=$MODEL · reason=$MODEL_WARNING_REASON · dispatch proceeds; ledger mark: model=needs measurement"
+fi
 # Top tier asks the owner, once, per dispatch.
 #
 # This replaced a counting cap on 2026-08-05 by owner directive. The cap needed a
@@ -2051,6 +2092,7 @@ fi
 GATE_ARGS=(--ledger "$LEDGER" check --runtime "$RUNTIME" --model "$MODEL" \
       --tier-policy "$POLICY" --contract "$CONTRACT" --agents 1 \
       --est-chars "$EST" --completion-channel orchestration)
+[ "$MODEL_NEEDS_MEASUREMENT" = 1 ] && GATE_ARGS+=(--model-needs-measurement)
 CHK=$("$GATE" "${GATE_ARGS[@]}" --no-record 2>/dev/null)
 ALLOW=$(echo "$CHK" | jqf "d['allow']")
 SHA=$(echo "$CHK" | jqf "d.get('contract_sha') or ''")
@@ -2179,6 +2221,12 @@ fi
 SPEC="$SPEC
 
 Tracker card: ${CARD:-none}"
+if [ "$MODEL_NEEDS_MEASUREMENT" = 1 ]; then
+  SPEC="$SPEC
+
+Model measurement required: attach to worker_done the path of your own session record and the raw line from it that names the model (codex rollout model, claude transcript message.model, agy brain transcript, or grok session record)."
+  echo "📎 model measurement · worker_done must include the session record path and raw model line"
+fi
 
 # Snapshot this dispatch's codex rollout candidates right before the
 # worker's pane is created or reused, so new_rollout_since (step 5, below)
@@ -2388,12 +2436,14 @@ if [ "$PROBE_STATE" != unavailable ]; then
   fi
 fi
 
-# All wrapper ledger writers share this lock. The gate itself writes the register
-# row, so hold the lock while it runs and while later appends or updates run.
+# Wrapper-owned ledger writers share this lock. The child gate also writes the
+# register row, so it receives the held lock's inherited file descriptor while
+# this wrapper keeps the lock across that call.
 ledger_locked_command() {
   python3 -c '
 import fcntl
 import os
+import signal
 import subprocess
 import sys
 
@@ -2401,11 +2451,29 @@ lock_path, *command = sys.argv[1:]
 os.makedirs(os.path.dirname(os.path.abspath(lock_path)), exist_ok=True)
 with open(lock_path, "a", encoding="utf-8") as lock:
     fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-    result = subprocess.run(command, capture_output=True, text=True)
-sys.stdout.write(result.stdout)
-sys.stderr.write(result.stderr)
-sys.exit(result.returncode)
-' "${LEDGER_LOCK:-$LEDGER.lock}" "$@"
+    child_env = os.environ.copy()
+    child_env["DISPATCH_LEDGER_LOCK_FD"] = str(lock.fileno())
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=child_env,
+        start_new_session=True,
+        pass_fds=(lock.fileno(),),
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=120)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        stdout, stderr = process.communicate()
+        sys.stderr.write("ledger-locked command timed out after 120 seconds\n")
+        sys.stderr.write(stderr)
+        sys.exit(124)
+sys.stdout.write(stdout)
+sys.stderr.write(stderr)
+sys.exit(process.returncode)
+' "$LEDGER_LOCK" "$@"
 }
 
 record_claim_failure_reason() {
@@ -2466,7 +2534,7 @@ record_dispatch_placement() {
   placement_raw=$(orca terminal list --json 2>/dev/null || true)
   PLACEMENT_JSON="$placement_raw" AGY_BRAIN_BEFORE="${AGY_BRAIN_BEFORE:-}" \
     python3 - "$LEDGER" "$DISP" "$TERMINAL" "$WORKTREE" "$RUNTIME" \
-    "${CODEX_ROLLOUT:-}" "$CONTRACT" "${LEDGER_LOCK:-$LEDGER.lock}" <<'EOF'
+    "${CODEX_ROLLOUT:-}" "$CONTRACT" "$LEDGER_LOCK" <<'EOF'
 import fcntl
 import json
 import os
@@ -2536,7 +2604,7 @@ if not session_id and runtime == "agy":
         for path in os.environ.get("AGY_BRAIN_BEFORE", "").splitlines()
         if path
     }
-    brain_root = Path.home() / ".gemini" / "antigravity-cli" / "brain"
+    brain_root = Path(os.environ["DISPATCH_AGY_SESSION_ROOT"]).expanduser()
     contract_paths = (
         {str(Path(contract)), str(Path(contract).resolve())} if contract else set()
     )

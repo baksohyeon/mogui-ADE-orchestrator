@@ -59,7 +59,7 @@ run_case() {
   {
     echo 'set -u'
     printf 'export FAKE_COUNT=%q FAKE_START=%q FAKE_RECHECK=%q\n' "$work/count" "$work/start-pane" "$work/recheck-pane"
-    printf 'LEDGER=%q\nDISP=ctx_fake\nCHECK_ONLY=0\n' "$ledger"
+    printf 'LEDGER=%q\nLEDGER_LOCK=%q\nDISP=ctx_fake\nCHECK_ONLY=0\n' "$ledger" "$work/dispatch-ledger.lock"
     echo 'RUNTIME=codex MODEL=gpt-5.5 CODEX_REASONING_EFFORT=xhigh TERMINAL=term_fake'
     echo 'HOOKS_ANSWERED=0 HOOKS_ANSWER_BIN=missing'
     printf '%s\n' "$markers" "$start_fn" "$recheck_fn" "$record_fn"

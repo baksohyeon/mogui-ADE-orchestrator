@@ -28,6 +28,8 @@ from master_runtime.core.dispatch_gate import (  # noqa: E402
     DispatchGateConfig,
     DispatchRequest,
     GateDecision,
+    ledger_lock_path,
+    model_session_root,
     ReasonCode,
     normalize_tier_policy_path,
 )
@@ -65,10 +67,28 @@ def main(argv: list[str] | None = None) -> int:
         return _check(args)
     if args.command == "register":
         return _register(args)
+    if args.command == "measure-model":
+        return _measure_model(args)
     if args.command == "watch":
         return _watch(args)
     if args.command == "report":
         return _report(args)
+    if args.command == "lock-path":
+        if not args.ledger:
+            print("dispatch-gate: lock-path requires --ledger", file=sys.stderr)
+            return 2
+        print(ledger_lock_path(args.ledger))
+        return 0
+    if args.command == "session-root":
+        root = model_session_root(args.runtime)
+        if root is None:
+            print(
+                f"dispatch-gate: no session root for runtime {args.runtime}",
+                file=sys.stderr,
+            )
+            return 1
+        print(root)
+        return 0
 
     parser.print_help(sys.stderr)
     return 2
@@ -78,6 +98,16 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="dispatch-gate")
     parser.add_argument("--ledger", help="JSONL ledger path")
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    subparsers.add_parser(
+        "lock-path",
+        help="print the shared ledger lock path for the selected ledger",
+    )
+    session_root_parser = subparsers.add_parser(
+        "session-root",
+        help="print the first configured model session root for a runtime",
+    )
+    session_root_parser.add_argument("--runtime", required=True)
 
     check_parser = subparsers.add_parser("check")
     check_parser.add_argument("--runtime", required=True)
@@ -95,6 +125,11 @@ def _build_parser() -> argparse.ArgumentParser:
     check_parser.add_argument(
         "--completion-channel",
         choices=("orchestration", "sentinel-log"),
+    )
+    check_parser.add_argument(
+        "--model-needs-measurement",
+        action="store_true",
+        help="carry an external host/model capability warning into the ledger",
     )
 
     register_parser = subparsers.add_parser("register")
@@ -123,6 +158,27 @@ def _build_parser() -> argparse.ArgumentParser:
     register_parser.add_argument(
         "--card-reason",
         help="reason no tracker card id is present",
+    )
+
+    measure_parser = subparsers.add_parser(
+        "measure-model",
+        help="verify a worker_done session-record line and clear its model mark",
+    )
+    measure_parser.add_argument("--dispatch-id", required=True)
+    measure_parser.add_argument(
+        "--session-record",
+        "--model-record",
+        dest="session_record",
+        required=True,
+        help="session record path supplied in worker_done",
+    )
+    measure_parser.add_argument(
+        "--model-line",
+        "--quoted-line",
+        "--evidence-line",
+        dest="evidence_line",
+        required=True,
+        help="raw JSONL line supplied in worker_done",
     )
 
     watch_parser = subparsers.add_parser("watch")
@@ -170,6 +226,7 @@ def _check(args: argparse.Namespace) -> int:
             n_agents=args.agents,
             completion_channel=args.completion_channel,
             tier_override=args.tier_override,
+            model_needs_measurement=args.model_needs_measurement,
         ),
         record=not args.no_record,
     )
@@ -239,6 +296,19 @@ def _register(args: argparse.Namespace) -> int:
     return 2
 
 
+def _measure_model(args: argparse.Namespace) -> int:
+    decision = _gate(args).measure_model(
+        args.dispatch_id,
+        args.session_record,
+        args.evidence_line,
+    )
+    _print_decision(decision)
+    if decision.allow:
+        return 0
+    _diagnose(_decision_error(decision))
+    return 2
+
+
 def _watch(args: argparse.Namespace) -> int:
     decision = check_stall(args.log, max_idle_seconds=args.max_idle)
     payload = {
@@ -280,6 +350,7 @@ def _report(args: argparse.Namespace) -> int:
     override_counts: Counter[tuple[str, str]] = Counter()
     policy_counts: Counter[tuple[str, str]] = Counter()
     tier_stats: dict[str, list[int]] = {}
+    model_measurement_counts: Counter[str] = Counter()
     timestamps: list[float] = []
     for entry in entries:
         policy_path = entry.get("tier_policy_path")
@@ -299,6 +370,18 @@ def _report(args: argparse.Namespace) -> int:
         reason = entry.get("reason")
         if decision == "DENY" and isinstance(reason, str):
             denial_counts[reason] += 1
+
+        if entry.get("job_id"):
+            model_status = entry.get("model_status")
+            if isinstance(model_status, str) and model_status:
+                model_measurement_counts[model_status] += 1
+            warnings = entry.get("warnings")
+            mismatch_warning = (
+                isinstance(warnings, list)
+                and ReasonCode.MODEL_MISMATCH.value in warnings
+            )
+            if entry.get("model_mismatch") is True or mismatch_warning:
+                model_measurement_counts["mismatch"] += 1
 
         model = entry.get("model")
         if decision != "ALLOW" or not isinstance(model, str) or not model:
@@ -348,6 +431,10 @@ def _report(args: argparse.Namespace) -> int:
             )
     else:
         print("  <none>")
+
+    print("Model measurement:")
+    print(f"  unmeasured: {model_measurement_counts.get('needs measurement', 0)}")
+    print(f"  mismatch: {model_measurement_counts.get('mismatch', 0)}")
 
     print("Denials:")
     if denial_counts:
@@ -554,11 +641,7 @@ def _deny_unverified_orchestration(
     }
     if args.orchestration_task:
         entry["orchestration_task"] = args.orchestration_task
-    ledger_path = Path(gate.config.ledger_path)
-    ledger_path.parent.mkdir(parents=True, exist_ok=True)
-    with ledger_path.open("a", encoding="utf-8") as ledger:
-        ledger.write(json.dumps(entry, sort_keys=True, separators=(",", ":")))
-        ledger.write("\n")
+    gate.append_ledger_entry(entry)
     _print_decision(decision)
     _diagnose(_decision_error(decision))
     return 2
@@ -587,6 +670,8 @@ def _print_decision(decision: GateDecision) -> None:
         payload["message"] = decision.message
     if decision.tier_override is not None:
         payload["tier_override"] = decision.tier_override
+    if decision.model_status is not None:
+        payload["model_status"] = decision.model_status
     if decision.front_matter is not None:
         payload["front_matter"] = decision.front_matter
     print(json.dumps(payload, sort_keys=True, separators=(",", ":")))

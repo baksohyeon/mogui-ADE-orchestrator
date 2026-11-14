@@ -7,6 +7,7 @@ import os
 import re
 import runpy
 import subprocess
+import sys
 import threading
 from pathlib import Path
 
@@ -109,6 +110,15 @@ def test_check_without_model_records_denial_in_ledger(tmp_path: Path) -> None:
     assert decision.allow is False
     assert decision.reason == ReasonCode.NO_MODEL
     assert _ledger_entries(tmp_path)[-1]["reason"] == "NO_MODEL"
+
+
+def test_model_session_roots_cover_supported_runtimes(tmp_path: Path) -> None:
+    roots = dispatch_gate._model_session_roots(
+        {dispatch_gate.MODEL_SESSION_ROOTS_ENV: str(tmp_path)}
+    )
+
+    assert set(roots) == {"codex", "claude", "cursor", "agy", "grok"}
+    assert roots["cursor"] == (tmp_path.resolve(),)
 
 
 def test_check_records_model(tmp_path: Path) -> None:
@@ -419,7 +429,7 @@ def test_noncanonical_requested_model_is_invalid_request(tmp_path: Path) -> None
     assert not (tmp_path / "dispatch-tickets").exists()
 
 
-def test_unknown_model_follows_policy_setting(tmp_path: Path) -> None:
+def test_unknown_model_is_warned_even_by_legacy_deny_setting(tmp_path: Path) -> None:
     deny_dir = tmp_path / "deny"
     deny_dir.mkdir()
     deny_contract = _contract(deny_dir, "unknown model denied")
@@ -456,8 +466,10 @@ def test_unknown_model_follows_policy_setting(tmp_path: Path) -> None:
         )
     )
 
-    assert deny_decision.allow is False
-    assert deny_decision.reason == ReasonCode.TIER_POLICY
+    assert deny_decision.allow is True
+    assert deny_decision.reason == ReasonCode.OK
+    assert deny_decision.warnings[0] == ReasonCode.TIER_POLICY
+    assert _ledger_entries(deny_dir)[-1]["model_status"] == "needs measurement"
     assert warn_decision.allow is True
     assert warn_decision.warnings == (
         ReasonCode.TIER_POLICY,
@@ -2227,7 +2239,7 @@ def test_concurrent_repeated_checks_receive_distinct_attempts(
     assert sorted(entry["attempt"] for entry in _ledger_entries(tmp_path)) == [1, 2]
 
 
-def test_register_uses_ticket_flock(
+def test_register_uses_ledger_and_ticket_flocks(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -2249,7 +2261,12 @@ def test_register_uses_ticket_flock(
     decision = gate.register_job("job-locked", lambda job_id: job_id == "job-locked")
 
     assert decision.allow is True
-    assert calls == [FakeFcntl.LOCK_EX, FakeFcntl.LOCK_UN]
+    assert calls == [
+        FakeFcntl.LOCK_EX,
+        FakeFcntl.LOCK_EX,
+        FakeFcntl.LOCK_UN,
+        FakeFcntl.LOCK_UN,
+    ]
 
 
 def test_register_denies_contract_sha_without_matching_pending_dispatch(
@@ -2559,6 +2576,58 @@ def test_cli_report_rolls_up_models_denials_and_overrides(
     assert (
         'gpt-5.6-sol: reason="owner approved benchmark" count=1' in output
     )
+    assert "Model measurement:" in output
+    assert "  unmeasured: 0" in output
+    assert "  mismatch: 0" in output
+
+
+def test_cli_report_counts_unmeasured_and_mismatched_models(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_measurement_report_test")
+    ledger = tmp_path / "measurement-report-ledger.jsonl"
+    rows = (
+        {
+            "ts": 1_785_000_000,
+            "decision": "ALLOW",
+            "reason": "OK",
+            "job_id": "job-unmeasured",
+            "model": "future-model",
+            "model_status": "needs measurement",
+        },
+        {
+            "ts": 1_785_000_001,
+            "decision": "ALLOW",
+            "reason": "OK",
+            "job_id": "job-mismatch",
+            "model": "future-model",
+            "model_mismatch": True,
+        },
+        {
+            "ts": 1_785_000_002,
+            "decision": "ALLOW",
+            "reason": "OK",
+            "job_id": "job-warning-mismatch",
+            "model": "known-model",
+            "warnings": ["MODEL_MISMATCH"],
+        },
+        {
+            "ts": 1_785_000_003,
+            "decision": "ALLOW",
+            "reason": "OK",
+            "model": "future-model",
+            "model_status": "needs measurement",
+        },
+    )
+    with ledger.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row) + "\n")
+
+    assert script["main"](["--ledger", str(ledger), "report"]) == 0
+    output = capsys.readouterr().out
+    assert "  unmeasured: 1" in output
+    assert "  mismatch: 2" in output
 
 
 def test_cli_report_shows_every_policy_a_day_was_judged_against(
@@ -3232,8 +3301,10 @@ def test_v2_override_passes_the_cap_and_still_consumes_it(tmp_path: Path) -> Non
     assert "used=2" in blocked.message
 
 
-def test_v2_unknown_model_is_capped_not_denied(tmp_path: Path) -> None:
-    """A model the policy has never heard of is usable once, and never silently."""
+def test_v2_unknown_model_ignores_any_legacy_cap_and_stays_dispatchable(
+    tmp_path: Path,
+) -> None:
+    """A model the policy has never heard of never blocks the dispatch."""
 
     policy = _tier_policy_v2(tmp_path)
     gate = _gate(tmp_path, now=1_000, tier_policy_path=policy)
@@ -3253,19 +3324,21 @@ def test_v2_unknown_model_is_capped_not_denied(tmp_path: Path) -> None:
     assert ReasonCode.TIER_POLICY not in allowed.warnings
     entry = _ledger_entries(tmp_path)[-1]
     assert entry["tier"] == "unknown"
+    assert entry["model_status"] == "needs measurement"
     assert entry["warnings"] == ["TIER_UNKNOWN_MODEL", "CONTRACT_FRONT_MATTER_MISSING"]
 
-    denied = gate.check(
-        DispatchRequest(
-            runtime="codex",
-            model="gpt-6-released-yesterday",
-            contract_path=_contract(tmp_path, "unknown model twice"),
-            est_input_chars=1_000,
-            n_agents=1,
+    for index in range(3):
+        repeated = gate.check(
+            DispatchRequest(
+                runtime="codex",
+                model="gpt-6-released-yesterday",
+                contract_path=_contract(tmp_path, f"unknown model repeat {index}"),
+                est_input_chars=1_000,
+                n_agents=1,
+            )
         )
-    )
-    assert denied.allow is False
-    assert denied.reason == ReasonCode.TIER_FANOUT_CAP
+        assert repeated.allow is True
+        assert ReasonCode.TIER_UNKNOWN_MODEL in repeated.warnings
 
 
 def test_v2_uncapped_tier_allows_a_large_fanout(tmp_path: Path) -> None:
@@ -3532,7 +3605,9 @@ def test_template_policy_resolves_claude_sonnet_5_as_efficient() -> None:
     assert policy.tier_of("claude-sonnet-5") == "efficient"
     assert policy.tier_of("claude-opus-5") == "top"
     assert policy.tier_of("claude-haiku-4-5") == "efficient"
-    assert policy.tier_of("grok-4.5-fast") == "efficient"
+    assert policy.tier_of("grok-4.6") == "top"
+    assert policy.tier_of("grok-4.5") == "efficient"
+    assert policy.tier_of("grok-4.5-fast") == "unknown"
     assert policy.tier_of("never-listed-anywhere") == "unknown"
     assert policy.cap_for("top") is None
     assert policy.cap_for("unknown") is None
@@ -3684,6 +3759,1065 @@ def test_register_under_a_v1_policy_warns_but_cannot_rank(tmp_path: Path) -> Non
 
     assert decision.allow is True
     assert ReasonCode.MODEL_MISMATCH in decision.warnings
+
+
+def test_unknown_declared_model_does_not_escalate_registration(
+    tmp_path: Path,
+) -> None:
+    policy = _tier_policy_v2(tmp_path, caps={"top": 1, "unknown": 0})
+    gate = _gate(tmp_path, now=1_000, tier_policy_path=policy)
+    contract = _contract(tmp_path, "unknown declared registration")
+    checked = gate.check(
+        DispatchRequest(
+            runtime="codex",
+            model="future-model",
+            contract_path=contract,
+            est_input_chars=1_000,
+            n_agents=1,
+        )
+    )
+    assert checked.allow is True
+
+    registered = gate.register_job(
+        "job-unknown-declared",
+        lambda job_id: job_id == "job-unknown-declared",
+        declared_model="future-model",
+        measured_model="gpt-5.6-sol",
+    )
+
+    assert registered.allow is True
+    assert registered.warnings == (ReasonCode.MODEL_MISMATCH,)
+
+
+def _marked_registration(
+    tmp_path: Path,
+    monkeypatch,
+    *,
+    runtime: str = "codex",
+    model: str = "future-model",
+    model_needs_measurement: bool = False,
+):
+    session_root = tmp_path / "session-root"
+    session_root.mkdir()
+    monkeypatch.setenv("DISPATCH_MODEL_SESSION_ROOTS", str(session_root))
+    policy = _tier_policy_v2(tmp_path, caps={})
+    gate = _gate(tmp_path, now=1_000, tier_policy_path=policy)
+    contract = _contract(tmp_path, "marked model dispatch")
+    checked = gate.check(
+        DispatchRequest(
+            runtime=runtime,
+            model=model,
+            contract_path=contract,
+            est_input_chars=1_000,
+            n_agents=1,
+            model_needs_measurement=model_needs_measurement,
+        )
+    )
+    assert checked.allow is True
+    registered = gate.register_job(
+        "job-marked",
+        lambda job_id: job_id == "job-marked",
+        declared_model=model,
+        measured_model=model,
+    )
+    assert registered.allow is True
+    worktree = tmp_path / "worker"
+    worktree.mkdir()
+    entries = _ledger_entries(tmp_path)
+    entries[-1]["worktree_path"] = str(worktree)
+    gate.config.ledger_path.write_text(
+        "".join(json.dumps(entry) + "\n" for entry in entries),
+        encoding="utf-8",
+    )
+    assert entries[-1]["model_status"] == "needs measurement"
+    return gate
+
+
+def test_measure_model_requires_the_quoted_line_to_be_in_the_record(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    gate = _marked_registration(tmp_path, monkeypatch)
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "session.jsonl"
+    present = json.dumps(
+        {
+            "cwd": str(tmp_path / "worker"),
+            "type": "response_item",
+            "payload": {"model": "future-model"},
+        }
+    )
+    record.write_text(present + "\n", encoding="utf-8")
+
+    measured = gate.measure_model("job-marked", record, present)
+
+    assert measured.allow is False
+    assert measured.reason == ReasonCode.MODEL_EVIDENCE_INVALID
+
+
+@pytest.mark.skipif(
+    dispatch_gate.fcntl is None,
+    reason="ledger file locking is unavailable on this platform",
+)
+def test_measure_model_preserves_an_append_waiting_on_the_ledger_lock(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    gate = _marked_registration(tmp_path, monkeypatch)
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "session.jsonl"
+    present = json.dumps({"cwd": str(tmp_path / "worker"), "model": "future-model"})
+    record.write_text(present + "\n", encoding="utf-8")
+    replace_started = threading.Event()
+    real_replace = dispatch_gate._replace_ledger_entries
+
+    def delayed_replace(path: Path, entries) -> None:
+        replace_started.set()
+        threading.Event().wait(0.2)
+        real_replace(path, entries)
+
+    monkeypatch.setattr(dispatch_gate, "_replace_ledger_entries", delayed_replace)
+    result = []
+    measurement = threading.Thread(
+        target=lambda: result.append(gate.measure_model("job-marked", record, present))
+    )
+    measurement.start()
+    assert replace_started.wait(2)
+
+    append_script = """
+import fcntl, json, sys
+from pathlib import Path
+ledger = Path(sys.argv[1])
+with Path(sys.argv[2]).open('a', encoding='utf-8') as lock:
+    fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+    with ledger.open('a', encoding='utf-8') as stream:
+        stream.write(json.dumps({'job_id': 'job-concurrent', 'decision': 'DENY'}) + '\\n')
+"""
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            append_script,
+            str(gate.config.ledger_path),
+            str(dispatch_gate.ledger_lock_path(gate.config.ledger_path)),
+        ],
+        check=True,
+    )
+    measurement.join(timeout=2)
+
+    assert not measurement.is_alive()
+    assert result[0].allow is True
+    assert any(entry.get("job_id") == "job-concurrent" for entry in _ledger_entries(tmp_path))
+
+
+@pytest.mark.skipif(
+    dispatch_gate.fcntl is None,
+    reason="ledger file locking is unavailable on this platform",
+)
+def test_ledger_lock_does_not_trust_a_marker_without_a_held_fd(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    lock_path = dispatch_gate.ledger_lock_path(tmp_path / "ledger.jsonl")
+    holder_script = """
+import fcntl, sys
+from pathlib import Path
+lock_path = Path(sys.argv[1])
+with lock_path.open('a', encoding='utf-8') as lock:
+    fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+    print('ready', flush=True)
+    sys.stdin.read(1)
+"""
+    holder = subprocess.Popen(
+        [sys.executable, "-c", holder_script, str(lock_path)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert holder.stdout is not None
+        assert holder.stdout.readline().strip() == "ready"
+        monkeypatch.setenv("DISPATCH_LEDGER_LOCK_HELD", "1")
+        monkeypatch.delenv(dispatch_gate.LEDGER_LOCK_FD_ENV, raising=False)
+        entered = threading.Event()
+
+        def acquire_lock() -> None:
+            with dispatch_gate._ledger_lock(tmp_path / "ledger.jsonl"):
+                entered.set()
+
+        worker = threading.Thread(target=acquire_lock)
+        worker.start()
+        assert not entered.wait(0.1)
+        assert holder.stdin is not None
+        holder.stdin.write("release")
+        holder.stdin.flush()
+        worker.join(timeout=2)
+        assert not worker.is_alive()
+        assert entered.is_set()
+    finally:
+        if holder.poll() is None:
+            if holder.stdin is not None:
+                holder.stdin.write("release")
+                holder.stdin.flush()
+            holder.wait(timeout=2)
+
+
+@pytest.mark.skipif(
+    dispatch_gate.fcntl is None,
+    reason="ledger file locking is unavailable on this platform",
+)
+def test_ledger_lock_does_not_trust_an_unheld_inherited_fd(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    lock_path = dispatch_gate.ledger_lock_path(tmp_path / "ledger.jsonl")
+    holder_script = """
+import fcntl, sys
+from pathlib import Path
+lock_path = Path(sys.argv[1])
+with lock_path.open('a', encoding='utf-8') as lock:
+    fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+    print('ready', flush=True)
+    sys.stdin.read(1)
+"""
+    holder = subprocess.Popen(
+        [sys.executable, "-c", holder_script, str(lock_path)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    separate_fd = None
+    try:
+        assert holder.stdout is not None
+        assert holder.stdout.readline().strip() == "ready"
+        separate_fd = lock_path.open("a", encoding="utf-8")
+        monkeypatch.setenv(
+            dispatch_gate.LEDGER_LOCK_FD_ENV,
+            str(separate_fd.fileno()),
+        )
+        entered = threading.Event()
+
+        def acquire_lock() -> None:
+            with dispatch_gate._ledger_lock(tmp_path / "ledger.jsonl"):
+                entered.set()
+
+        worker = threading.Thread(target=acquire_lock)
+        worker.start()
+        assert not entered.wait(0.1)
+        assert holder.stdin is not None
+        holder.stdin.write("release")
+        holder.stdin.flush()
+        worker.join(timeout=2)
+        assert not worker.is_alive()
+        assert entered.is_set()
+    finally:
+        if separate_fd is not None:
+            separate_fd.close()
+        if holder.poll() is None:
+            if holder.stdin is not None:
+                holder.stdin.write("release")
+                holder.stdin.flush()
+            holder.wait(timeout=2)
+
+
+def test_ledger_lock_expands_user_before_creating_parent(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    fake_home = tmp_path / "home"
+    _set_fake_home(monkeypatch, fake_home)
+    ledger_path = Path("~/nested/ledger.jsonl")
+    lock_path = dispatch_gate.ledger_lock_path(ledger_path)
+
+    with dispatch_gate._ledger_lock(ledger_path):
+        assert lock_path == fake_home / "nested" / "dispatch-ledger.lock"
+        assert lock_path.is_file()
+
+
+def test_measure_model_clears_a_stale_mismatch_warning_when_model_matches(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    gate = _marked_registration(tmp_path, monkeypatch)
+    ledger_path = Path(gate.config.ledger_path)
+    entries = _ledger_entries(tmp_path)
+    entries[-1]["warnings"] = ["MODEL_MISMATCH"]
+    ledger_path.write_text(
+        "".join(json.dumps(entry) + "\n" for entry in entries),
+        encoding="utf-8",
+    )
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "session.jsonl"
+    present = json.dumps({"cwd": str(tmp_path / "worker"), "model": "future-model"})
+    record.write_text(present + "\n", encoding="utf-8")
+
+    measured = gate.measure_model("job-marked", record, present)
+
+    assert measured.allow is True
+    entry = _ledger_entries(tmp_path)[-1]
+    assert "warnings" not in entry
+
+
+def test_append_ledger_entry_rejects_allow_rows(tmp_path: Path) -> None:
+    gate = _gate(tmp_path, now=1_000)
+
+    with pytest.raises(ValueError, match="DENY entries only"):
+        gate.append_ledger_entry({"decision": "ALLOW"})
+
+
+def test_measure_model_leaves_mark_when_the_line_is_absent(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    gate = _marked_registration(tmp_path, monkeypatch)
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "session.jsonl"
+    actual = json.dumps(
+        {"cwd": str(tmp_path / "worker"), "message": {"model": "future-model"}}
+    )
+    record.write_text(actual + "\n", encoding="utf-8")
+
+    measured = gate.measure_model(
+        "job-marked", record, json.dumps({"message": {"model": "other-model"}})
+    )
+
+    assert measured.allow is False
+    assert measured.reason == ReasonCode.MODEL_EVIDENCE_MISSING
+    entry = _ledger_entries(tmp_path)[-1]
+    assert entry["model_status"] == "needs measurement"
+    assert entry["model_measured"] is None
+
+
+def test_measure_model_records_a_declared_measured_mismatch(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    gate = _marked_registration(tmp_path, monkeypatch)
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "session.jsonl"
+    present = json.dumps(
+        {"cwd": str(tmp_path / "worker"), "message": {"model": "different-model"}}
+    )
+    record.write_text(present + "\n", encoding="utf-8")
+
+    measured = gate.measure_model("job-marked", record, present)
+
+    assert measured.allow is True
+    assert measured.warnings == (ReasonCode.MODEL_MISMATCH,)
+    entry = _ledger_entries(tmp_path)[-1]
+    assert entry["model_measured"] == "different-model"
+    assert entry["model_verified"] is False
+    assert entry["model_mismatch"] is True
+    assert "model_status" not in entry
+
+
+def test_cli_measure_model_verifies_the_session_record_line(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    gate = _marked_registration(tmp_path, monkeypatch)
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "session.jsonl"
+    present = json.dumps({"cwd": str(tmp_path / "worker"), "model": "future-model"})
+    record.write_text(present + "\n", encoding="utf-8")
+    script = runpy.run_path(str(_script()), run_name="dispatch_gate_measure_model_test")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+    assert script["main"](
+        [
+            "--ledger",
+            str(gate.config.ledger_path),
+            "measure-model",
+            "--dispatch-id",
+            "job-marked",
+            "--session-record",
+            str(record),
+            "--model-line",
+            present,
+        ]
+    ) == 0
+    output = capsys.readouterr().out
+    assert '"model_status":"measured"' in output
+    assert "model_status" not in _ledger_entries(tmp_path)[-1]
+
+
+def test_measure_model_rejects_a_record_outside_the_session_root(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    gate = _marked_registration(tmp_path, monkeypatch)
+    record = tmp_path / "outside.jsonl"
+    present = json.dumps({"cwd": str(tmp_path / "worker"), "model": "future-model"})
+    record.write_text(present + "\n", encoding="utf-8")
+
+    measured = gate.measure_model("job-marked", record, present)
+
+    assert measured.allow is False
+    assert measured.reason == ReasonCode.MODEL_EVIDENCE_OUTSIDE_ROOT
+    assert _ledger_entries(tmp_path)[-1]["model_status"] == "needs measurement"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlink creation may require elevation")
+def test_measure_model_rejects_a_symlink_resolving_outside_the_session_root(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    gate = _marked_registration(tmp_path, monkeypatch)
+    session_root = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"])
+    outside = tmp_path / "outside.jsonl"
+    present = json.dumps({"cwd": str(tmp_path / "worker"), "model": "future-model"})
+    outside.write_text(present + "\n", encoding="utf-8")
+    record = session_root / "linked.jsonl"
+    record.symlink_to(outside)
+
+    measured = gate.measure_model("job-marked", record, present)
+
+    assert measured.allow is False
+    assert measured.reason == ReasonCode.MODEL_EVIDENCE_OUTSIDE_ROOT
+
+
+def test_measure_model_rejects_a_record_older_than_dispatch(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    gate = _marked_registration(tmp_path, monkeypatch)
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "old.jsonl"
+    present = json.dumps({"cwd": str(tmp_path / "worker"), "model": "future-model"})
+    record.write_text(present + "\n", encoding="utf-8")
+    os.utime(record, (900, 900))
+
+    measured = gate.measure_model("job-marked", record, present)
+
+    assert measured.allow is False
+    assert measured.reason == ReasonCode.MODEL_EVIDENCE_STALE
+
+
+def test_measure_model_rejects_an_oversized_record(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    gate = _marked_registration(tmp_path, monkeypatch)
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "large.jsonl"
+    record.write_bytes(b"x" * (dispatch_gate.MODEL_SESSION_MAX_BYTES + 1))
+
+    measured = gate.measure_model("job-marked", record, "x")
+
+    assert measured.allow is False
+    assert measured.reason == ReasonCode.MODEL_EVIDENCE_TOO_LARGE
+
+
+def test_measure_model_rejects_a_record_from_another_worktree(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    gate = _marked_registration(tmp_path, monkeypatch)
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "other.jsonl"
+    present = json.dumps(
+        {"cwd": str(tmp_path / "other-worker"), "model": "future-model"}
+    )
+    record.write_text(present + "\n", encoding="utf-8")
+
+    measured = gate.measure_model("job-marked", record, present)
+
+    assert measured.allow is False
+    assert measured.reason == ReasonCode.MODEL_EVIDENCE_UNBOUND
+
+
+def test_measure_model_rejects_a_mismatched_session_identity(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    gate = _marked_registration(tmp_path, monkeypatch)
+    ledger_path = Path(gate.config.ledger_path)
+    entries = _ledger_entries(tmp_path)
+    entries[-1]["agent_session_id"] = "sess-A"
+    ledger_path.write_text(
+        "".join(json.dumps(entry) + "\n" for entry in entries),
+        encoding="utf-8",
+    )
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "session.jsonl"
+    session_meta = json.dumps(
+        {
+            "type": "session_meta",
+            "payload": {"id": "sess-B", "cwd": str(tmp_path / "worker")},
+        }
+    )
+    present = json.dumps({"model": "future-model"})
+    record.write_text(session_meta + "\n" + present + "\n", encoding="utf-8")
+
+    measured = gate.measure_model("job-marked", record, present)
+
+    assert measured.allow is False
+    assert measured.reason == ReasonCode.MODEL_EVIDENCE_UNBOUND
+
+
+def test_measure_model_ignores_nested_worktree_context(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    gate = _marked_registration(tmp_path, monkeypatch)
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "session.jsonl"
+    session_meta = json.dumps(
+        {
+            "type": "session_meta",
+            "payload": {"id": "sess-B", "cwd": str(tmp_path / "other-worker")},
+        }
+    )
+    nested = json.dumps(
+        {"type": "exec_command_begin", "cwd": str(tmp_path / "worker")}
+    )
+    present = json.dumps({"model": "future-model"})
+    record.write_text(
+        session_meta + "\n" + nested + "\n" + present + "\n", encoding="utf-8"
+    )
+
+    measured = gate.measure_model("job-marked", record, present)
+
+    assert measured.allow is False
+    assert measured.reason == ReasonCode.MODEL_EVIDENCE_UNBOUND
+
+
+def test_measure_model_binds_to_the_first_session_identity(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    gate = _marked_registration(tmp_path, monkeypatch)
+    ledger_path = Path(gate.config.ledger_path)
+    entries = _ledger_entries(tmp_path)
+    entries[-1]["agent_session_id"] = "sess-A"
+    ledger_path.write_text(
+        "".join(json.dumps(entry) + "\n" for entry in entries),
+        encoding="utf-8",
+    )
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "session.jsonl"
+    first = json.dumps(
+        {
+            "type": "session_meta",
+            "payload": {"id": "sess-B", "cwd": str(tmp_path / "worker")},
+        }
+    )
+    later = json.dumps(
+        {
+            "type": "session_meta",
+            "payload": {"id": "sess-A", "cwd": str(tmp_path / "worker")},
+        }
+    )
+    present = json.dumps({"model": "future-model"})
+    record.write_text("\n".join((first, later, present)) + "\n", encoding="utf-8")
+
+    measured = gate.measure_model("job-marked", record, present)
+
+    assert measured.allow is False
+    assert measured.reason == ReasonCode.MODEL_EVIDENCE_UNBOUND
+
+
+def test_measure_model_rejects_a_record_with_an_older_session_start(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    gate = _marked_registration(tmp_path, monkeypatch)
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "session.jsonl"
+    session_meta = json.dumps(
+        {
+            "type": "session_meta",
+            "payload": {
+                "id": "sess-old",
+                "cwd": str(tmp_path / "worker"),
+                "timestamp": 900,
+            },
+        }
+    )
+    present = json.dumps({"model": "future-model"})
+    record.write_text(session_meta + "\n" + present + "\n", encoding="utf-8")
+
+    measured = gate.measure_model("job-marked", record, present)
+
+    assert measured.allow is False
+    assert measured.reason == ReasonCode.MODEL_EVIDENCE_STALE
+
+
+def test_measure_model_uses_dispatch_start_before_registration_timestamp(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    session_root = tmp_path / "session-root"
+    session_root.mkdir()
+    monkeypatch.setenv("DISPATCH_MODEL_SESSION_ROOTS", str(session_root))
+    policy = _tier_policy_v2(tmp_path, caps={})
+    timestamps = iter((1_000, 1_000, 1_100))
+    clock = lambda: next(timestamps, 1_100)
+    gate = _gate(
+        tmp_path,
+        clock=clock,
+        tier_policy_path=policy,
+    )
+    contract = _contract(tmp_path, "session started before registration row")
+    checked = gate.check(
+        DispatchRequest(
+            runtime="codex",
+            model="future-model",
+            contract_path=contract,
+            est_input_chars=1_000,
+            n_agents=1,
+        )
+    )
+    assert checked.allow is True
+    registered = gate.register_job(
+        "job-between-timestamps",
+        lambda job_id: job_id == "job-between-timestamps",
+        declared_model="future-model",
+        measured_model="future-model",
+    )
+    assert registered.allow is True
+    worktree = tmp_path / "worker"
+    worktree.mkdir()
+    entries = _ledger_entries(tmp_path)
+    entries[-1]["worktree_path"] = str(worktree)
+    gate.config.ledger_path.write_text(
+        "".join(json.dumps(entry) + "\n" for entry in entries),
+        encoding="utf-8",
+    )
+    present = json.dumps(
+        {
+            "type": "session_meta",
+            "payload": {
+                "id": "sess-between-timestamps",
+                "cwd": str(worktree),
+                "timestamp": 1_050,
+            },
+        }
+    )
+    record = session_root / "session.jsonl"
+    evidence = json.dumps({"model": "future-model"})
+    record.write_text(present + "\n" + evidence + "\n")
+
+    measured = gate.measure_model("job-between-timestamps", record, evidence)
+
+    assert measured.allow is True
+    assert _ledger_entries(tmp_path)[-1]["dispatch_started_ts"] == 1_000
+
+
+def test_measure_model_marks_any_other_model_in_the_record_as_a_mismatch(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    gate = _marked_registration(tmp_path, monkeypatch)
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "session.jsonl"
+    first = json.dumps(
+        {
+            "type": "turn_context",
+            "payload": {"cwd": str(tmp_path / "worker"), "model": "future-model"},
+        }
+    )
+    second = json.dumps(
+        {"type": "turn_context", "payload": {"model": "other-model"}}
+    )
+    session = json.dumps(
+        {
+            "type": "session_meta",
+            "payload": {"id": "sess-marked", "cwd": str(tmp_path / "worker")},
+        }
+    )
+    record.write_text(session + "\n" + first + "\n" + second + "\n", encoding="utf-8")
+
+    measured = gate.measure_model("job-marked", record, first)
+
+    assert measured.allow is True
+    assert measured.warnings == (ReasonCode.MODEL_MISMATCH,)
+    entry = _ledger_entries(tmp_path)[-1]
+    assert entry["model_measured"] == "future-model"
+    assert entry["model_verified"] is False
+    assert entry["model_mismatch"] is True
+
+
+def test_measure_model_reads_claude_main_message_model_only(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    declared = "claude-haiku-4-5-20251001"
+    gate = _marked_registration(
+        tmp_path,
+        monkeypatch,
+        runtime="claude",
+        model=declared,
+    )
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "claude.jsonl"
+    cwd = str(tmp_path / "worker")
+    first = json.dumps(
+        {
+            "type": "assistant",
+            "sessionId": "session-redacted",
+            "cwd": cwd,
+            "isSidechain": False,
+            "message": {
+                "id": "msg-turn-1",
+                "role": "assistant",
+                "model": declared,
+                "content": [{"type": "tool_use", "input": {"model": "haiku"}}],
+            },
+        }
+    )
+    alias = json.dumps(
+        {
+            "type": "assistant",
+            "sessionId": "session-redacted",
+            "isSidechain": False,
+            "message": {
+                "id": "msg-turn-1",
+                "role": "assistant",
+                "model": "claude-haiku-4-5",
+            },
+        }
+    )
+    sidechain = json.dumps(
+        {
+            "type": "assistant",
+            "cwd": cwd,
+            "isSidechain": True,
+            "message": {"role": "assistant", "model": "other-sidechain-model"},
+        }
+    )
+    attachment = json.dumps({"type": "tool_result", "model": "attachment-model"})
+    record.write_text("\n".join((first, alias, sidechain, attachment)) + "\n", encoding="utf-8")
+
+    measured = gate.measure_model("job-marked", record, first)
+
+    assert measured.allow is True
+    assert measured.warnings == ()
+
+
+def test_measure_model_ignores_sidechain_context_without_session_meta(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    declared = "claude-haiku-4-5-20251001"
+    gate = _marked_registration(
+        tmp_path,
+        monkeypatch,
+        runtime="claude",
+        model=declared,
+    )
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "claude.jsonl"
+    main_line = json.dumps(
+        {
+            "type": "assistant",
+            "sessionId": "session-redacted",
+            "cwd": str(tmp_path / "other-worker"),
+            "message": {
+                "id": "msg-main",
+                "role": "assistant",
+                "model": declared,
+            },
+        }
+    )
+    sidechain_line = json.dumps(
+        {
+            "type": "assistant",
+            "sessionId": "session-redacted",
+            "isSidechain": True,
+            "cwd": str(tmp_path / "worker"),
+            "message": {
+                "id": "msg-sidechain",
+                "role": "assistant",
+                "model": "claude-sidechain",
+            },
+        }
+    )
+    record.write_text(main_line + "\n" + sidechain_line + "\n", encoding="utf-8")
+
+    measured = gate.measure_model("job-marked", record, main_line)
+
+    assert measured.allow is False
+    assert measured.reason == ReasonCode.MODEL_EVIDENCE_UNBOUND
+
+
+def test_measure_model_uses_pre_dispatch_claude_user_event_timestamp(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    declared = "claude-haiku-4-5-20251001"
+    gate = _marked_registration(
+        tmp_path,
+        monkeypatch,
+        runtime="claude",
+        model=declared,
+    )
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "claude.jsonl"
+    cwd = str(tmp_path / "worker")
+    user_line = json.dumps(
+        {
+            "type": "user",
+            "timestamp": 900,
+            "cwd": cwd,
+        }
+    )
+    assistant_line = json.dumps(
+        {
+            "type": "assistant",
+            "timestamp": 1_100,
+            "sessionId": "session-redacted",
+            "cwd": cwd,
+            "message": {
+                "id": "msg-main",
+                "role": "assistant",
+                "model": declared,
+            },
+        }
+    )
+    record.write_text(user_line + "\n" + assistant_line + "\n", encoding="utf-8")
+
+    measured = gate.measure_model("job-marked", record, assistant_line)
+
+    assert measured.allow is False
+    assert measured.reason == ReasonCode.MODEL_EVIDENCE_STALE
+
+
+def test_measure_model_requires_a_same_turn_claude_alias(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    declared = "claude-haiku-4-5-20251001"
+    gate = _marked_registration(
+        tmp_path,
+        monkeypatch,
+        runtime="claude",
+        model=declared,
+    )
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "claude.jsonl"
+    cwd = str(tmp_path / "worker")
+    first = json.dumps(
+        {
+            "type": "assistant",
+            "sessionId": "session-redacted",
+            "cwd": cwd,
+            "message": {
+                "id": "msg-turn-1",
+                "role": "assistant",
+                "model": declared,
+            },
+        }
+    )
+    other_turn = json.dumps(
+        {
+            "type": "assistant",
+            "sessionId": "session-redacted",
+            "message": {
+                "id": "msg-turn-2",
+                "role": "assistant",
+                "model": "claude-haiku-4-5",
+            },
+        }
+    )
+    record.write_text(first + "\n" + other_turn + "\n", encoding="utf-8")
+
+    measured = gate.measure_model("job-marked", record, first)
+
+    assert measured.allow is True
+    assert measured.warnings == (ReasonCode.MODEL_MISMATCH,)
+
+
+def test_measure_model_reads_codex_session_and_turn_context_models(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    declared = "gpt-5.6-luna"
+    gate = _marked_registration(
+        tmp_path,
+        monkeypatch,
+        runtime="codex",
+        model=declared,
+        model_needs_measurement=True,
+    )
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "codex.jsonl"
+    cwd = str(tmp_path / "worker")
+    session = json.dumps(
+        {
+            "type": "session_meta",
+            "payload": {"id": "sess-codex", "cwd": cwd, "model": declared},
+        }
+    )
+    turn = json.dumps(
+        {
+            "type": "turn_context",
+            "payload": {"model": declared, "turn_id": "turn-redacted"},
+        }
+    )
+    response = json.dumps(
+        {
+            "type": "response_item",
+            "payload": {"type": "message", "role": "assistant", "model": "tool-model"},
+        }
+    )
+    record.write_text("\n".join((session, turn, response)) + "\n", encoding="utf-8")
+
+    measured = gate.measure_model("job-marked", record, turn)
+
+    assert measured.allow is True
+    assert measured.warnings == ()
+
+
+def test_measure_model_reads_codex_payload_turn_id_for_same_turn_alias(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    declared = "gpt-5.6-luna-20261114"
+    alias = "gpt-5.6-luna"
+    gate = _marked_registration(
+        tmp_path,
+        monkeypatch,
+        runtime="codex",
+        model=declared,
+        model_needs_measurement=True,
+    )
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "codex.jsonl"
+    cwd = str(tmp_path / "worker")
+    session = json.dumps(
+        {
+            "type": "session_meta",
+            "payload": {"id": "sess-codex", "cwd": cwd},
+        }
+    )
+    dated = json.dumps(
+        {
+            "type": "turn_context",
+            "payload": {"model": declared, "turn_id": "turn-1"},
+        }
+    )
+    undated = json.dumps(
+        {
+            "type": "turn_context",
+            "payload": {"model": alias, "turn_id": "turn-1"},
+        }
+    )
+    record.write_text(
+        "\n".join((session, dated, undated)) + "\n",
+        encoding="utf-8",
+    )
+
+    measured = gate.measure_model("job-marked", record, undated)
+
+    assert measured.allow is True
+    assert measured.warnings == ()
+
+
+def test_measure_model_rejects_codex_response_only_model_evidence(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    declared = "gpt-5.6-luna"
+    gate = _marked_registration(
+        tmp_path,
+        monkeypatch,
+        runtime="codex",
+        model=declared,
+        model_needs_measurement=True,
+    )
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "codex.jsonl"
+    cwd = str(tmp_path / "worker")
+    session = json.dumps(
+        {
+            "type": "session_meta",
+            "payload": {"id": "sess-codex", "cwd": cwd},
+        }
+    )
+    response = json.dumps(
+        {
+            "type": "response_item",
+            "payload": {"type": "message", "role": "assistant", "model": declared},
+        }
+    )
+    record.write_text(session + "\n" + response + "\n", encoding="utf-8")
+
+    measured = gate.measure_model("job-marked", record, response)
+
+    assert measured.allow is False
+    assert measured.reason == ReasonCode.MODEL_EVIDENCE_INVALID
+
+
+def test_measure_model_rejects_two_dated_ids_in_one_claude_turn(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    declared = "claude-example-20260101"
+    gate = _marked_registration(
+        tmp_path,
+        monkeypatch,
+        runtime="claude",
+        model=declared,
+    )
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "claude.jsonl"
+    cwd = str(tmp_path / "worker")
+    first = json.dumps(
+        {
+            "type": "assistant",
+            "sessionId": "session-redacted",
+            "cwd": cwd,
+            "message": {
+                "id": "msg-turn-1",
+                "role": "assistant",
+                "model": declared,
+            },
+        }
+    )
+    other = json.dumps(
+        {
+            "type": "assistant",
+            "sessionId": "session-redacted",
+            "message": {
+                "id": "msg-turn-1",
+                "role": "assistant",
+                "model": "claude-example-20260201",
+            },
+        }
+    )
+    record.write_text(first + "\n" + other + "\n", encoding="utf-8")
+
+    measured = gate.measure_model("job-marked", record, first)
+
+    assert measured.allow is True
+    assert measured.warnings == (ReasonCode.MODEL_MISMATCH,)
+    assert _ledger_entries(tmp_path)[-1]["model_mismatch"] is True
+
+
+def test_agy_directory_fallback_rejects_conflicting_session_context(
+    tmp_path: Path,
+) -> None:
+    session_root = tmp_path / "agy"
+    record = session_root / "sess-A" / "transcript.jsonl"
+    record.parent.mkdir(parents=True)
+    record.write_text("{}\n", encoding="utf-8")
+    record_text = json.dumps(
+        {
+            "type": "session_meta",
+            "payload": {"id": "sess-B", "cwd": str(tmp_path / "other")},
+        }
+    )
+    target = {"runtime": "agy"}
+    placement = {
+        "agent_session_id": "sess-A",
+        "worktree_path": str(tmp_path / "worker"),
+    }
+
+    assert dispatch_gate._record_belongs_to_dispatch(
+        target,
+        placement,
+        record,
+        record_text,
+        {"agy": (session_root,)},
+    ) is False
+
+
+def test_measure_model_rejects_a_parent_traversal_record_path(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    gate = _marked_registration(tmp_path, monkeypatch)
+    session_root = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"])
+    record = tmp_path / "outside-dotdot.jsonl"
+    present = json.dumps({"cwd": str(tmp_path / "worker"), "model": "future-model"})
+    record.write_text(present + "\n", encoding="utf-8")
+
+    measured = gate.measure_model(
+        "job-marked", session_root / ".." / record.name, present
+    )
+
+    assert measured.allow is False
+    assert measured.reason == ReasonCode.MODEL_EVIDENCE_OUTSIDE_ROOT
 
 
 @skip_windows_exec_surface
@@ -3881,6 +5015,163 @@ def test_default_ledger_path_matches_timeline_and_worker_wait_doc(
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     assert dispatch_gate._default_ledger_path() == dispatch_timeline.default_ledger_path()
     assert dispatch_gate._default_ledger_path() == tmp_path / ".mogui" / "dispatch-ledger.jsonl"
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "mkfifo"),
+    reason="FIFO files are unavailable on this platform",
+)
+def test_measure_model_rejects_a_non_regular_session_record(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    gate = _marked_registration(tmp_path, monkeypatch)
+    session_root = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"])
+    record = session_root / "session.fifo"
+    os.mkfifo(record)
+    present = json.dumps({"cwd": str(tmp_path / "worker"), "model": "future-model"})
+    finished = threading.Event()
+    result = []
+
+    def measure() -> None:
+        result.append(gate.measure_model("job-marked", record, present))
+        finished.set()
+
+    worker = threading.Thread(target=measure, daemon=True)
+    worker.start()
+
+    assert finished.wait(1)
+    assert result[0].allow is False
+    assert result[0].reason == ReasonCode.MODEL_EVIDENCE_INVALID
+
+
+def test_measure_model_groups_interleaved_codex_turns(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    declared = "gpt-5.6-luna-20261114"
+    alias = "gpt-5.6-luna"
+    gate = _marked_registration(
+        tmp_path,
+        monkeypatch,
+        runtime="codex",
+        model=declared,
+        model_needs_measurement=True,
+    )
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "codex.jsonl"
+    cwd = str(tmp_path / "worker")
+    session = json.dumps(
+        {
+            "type": "session_meta",
+            "payload": {"id": "sess-codex", "cwd": cwd},
+        }
+    )
+    turn_a_dated = json.dumps(
+        {
+            "type": "turn_context",
+            "payload": {"model": declared, "turn_id": "turn-a"},
+        }
+    )
+    turn_b = json.dumps(
+        {
+            "type": "turn_context",
+            "payload": {"model": declared, "turn_id": "turn-b"},
+        }
+    )
+    turn_a_alias = json.dumps(
+        {
+            "type": "turn_context",
+            "payload": {"model": alias, "turn_id": "turn-a"},
+        }
+    )
+    record.write_text(
+        "\n".join((session, turn_a_dated, turn_b, turn_a_alias)) + "\n",
+        encoding="utf-8",
+    )
+
+    measured = gate.measure_model("job-marked", record, turn_a_alias)
+
+    assert measured.allow is True
+    assert measured.warnings == ()
+
+
+def test_measure_model_scopes_codex_alias_to_the_evidence_turn(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    declared = "gpt-5.6-luna-20261114"
+    alias = "gpt-5.6-luna"
+    gate = _marked_registration(
+        tmp_path,
+        monkeypatch,
+        runtime="codex",
+        model=declared,
+        model_needs_measurement=True,
+    )
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "codex.jsonl"
+    cwd = str(tmp_path / "worker")
+    session = json.dumps(
+        {
+            "type": "session_meta",
+            "payload": {"id": "sess-codex", "cwd": cwd},
+        }
+    )
+    paired_dated = json.dumps(
+        {
+            "type": "turn_context",
+            "payload": {"model": declared, "turn_id": "turn-1"},
+        }
+    )
+    paired_alias = json.dumps(
+        {
+            "type": "turn_context",
+            "payload": {"model": alias, "turn_id": "turn-1"},
+        }
+    )
+    alias_only = json.dumps(
+        {
+            "type": "turn_context",
+            "payload": {"model": alias, "turn_id": "turn-2"},
+        }
+    )
+    record.write_text(
+        "\n".join((session, paired_dated, paired_alias, alias_only)) + "\n",
+        encoding="utf-8",
+    )
+
+    measured = gate.measure_model("job-marked", record, alias_only)
+
+    assert measured.allow is True
+    assert measured.warnings == (ReasonCode.MODEL_MISMATCH,)
+    assert _ledger_entries(tmp_path)[-1]["model_verified"] is False
+
+
+def test_measure_model_rejects_array_evidence_lines(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    declared = "future-model"
+    gate = _marked_registration(
+        tmp_path,
+        monkeypatch,
+        runtime="codex",
+        model=declared,
+    )
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "codex.jsonl"
+    cwd = str(tmp_path / "worker")
+    session = json.dumps(
+        {
+            "type": "session_meta",
+            "payload": {"id": "sess-codex", "cwd": cwd},
+        }
+    )
+    evidence = json.dumps([{"model": declared}])
+    record.write_text(session + "\n" + evidence + "\n", encoding="utf-8")
+
+    measured = gate.measure_model("job-marked", record, evidence)
+
+    assert measured.allow is False
+    assert measured.reason == ReasonCode.MODEL_EVIDENCE_INVALID
 
 
 def test_default_ledger_path_env_override_wins(tmp_path: Path, monkeypatch) -> None:

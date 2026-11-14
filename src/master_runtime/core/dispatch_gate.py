@@ -7,6 +7,7 @@ import json
 import math
 import os
 import re
+import stat
 import sys
 import time
 from contextlib import contextmanager
@@ -1032,6 +1033,12 @@ class DispatchGate:
                     ReasonCode.MODEL_EVIDENCE_MISSING,
                     message=f"session_record={record_path}",
                 )
+            if not stat.S_ISREG(record_stat.st_mode):
+                return GateDecision(
+                    False,
+                    ReasonCode.MODEL_EVIDENCE_INVALID,
+                    message=f"session_record={record_path} is not a regular file",
+                )
             if record_stat.st_mtime < dispatch_ts:
                 return GateDecision(
                     False,
@@ -1109,7 +1116,12 @@ class DispatchGate:
             declared_model = _string_or_none(target.get("model_declared"))
             if declared_model is None:
                 declared_model = _string_or_none(target.get("model"))
-            record_model_turns = _record_model_turns(record_text, runtime)
+            record_model_turns_with_keys = _record_model_turns_with_keys(
+                record_text, runtime
+            )
+            record_model_turns = tuple(
+                models for _, models in record_model_turns_with_keys
+            )
             record_models = tuple(
                 model for turn in record_model_turns for model in turn
             )
@@ -1123,10 +1135,16 @@ class DispatchGate:
                         ReasonCode.MODEL_EVIDENCE_INVALID,
                         message="quoted model line is not a runtime-authoritative model field",
                     )
+            evidence_turn_key = _record_turn_key(evidence, evidence_line_number)
+            evidence_model_turns = tuple(
+                turn
+                for key, turn in record_model_turns_with_keys
+                if key == evidence_turn_key
+            )
             matches = (
                 declared_model is not None
                 and _model_matches_declared(
-                    measured_model, declared_model, record_model_turns
+                    measured_model, declared_model, evidence_model_turns
                 )
                 and all(
                     _model_matches_declared(model, declared_model, record_model_turns)
@@ -1959,7 +1977,17 @@ def _record_model_turns(
 ) -> tuple[tuple[str, ...], ...]:
     """Return model ids grouped by the record's explicit turn identity."""
 
-    turns: list[tuple[str | int, list[str]]] = []
+    return tuple(models for _, models in _record_model_turns_with_keys(record_text, runtime))
+
+
+def _record_model_turns_with_keys(
+    record_text: str,
+    runtime: str | None,
+) -> tuple[tuple[str | int, tuple[str, ...]], ...]:
+    """Return model ids grouped by turn key, preserving first-seen key order."""
+
+    turns: dict[str | int, list[str]] = {}
+    turn_order: list[str | int] = []
     for line_number, line in enumerate(record_text.splitlines(), start=1):
         try:
             event = json.loads(line)
@@ -1971,13 +1999,13 @@ def _record_model_turns(
         if not models:
             continue
         turn_key = _record_turn_key(event, line_number)
-        if turns and turns[-1][0] == turn_key:
-            for model in models:
-                if model not in turns[-1][1]:
-                    turns[-1][1].append(model)
-        else:
-            turns.append((turn_key, list(dict.fromkeys(models))))
-    return tuple(tuple(models) for _, models in turns)
+        if turn_key not in turns:
+            turns[turn_key] = []
+            turn_order.append(turn_key)
+        for model in models:
+            if model not in turns[turn_key]:
+                turns[turn_key].append(model)
+    return tuple((key, tuple(turns[key])) for key in turn_order)
 
 
 def _main_session_models(

@@ -5017,6 +5017,135 @@ def test_default_ledger_path_matches_timeline_and_worker_wait_doc(
     assert dispatch_gate._default_ledger_path() == tmp_path / ".mogui" / "dispatch-ledger.jsonl"
 
 
+@pytest.mark.skipif(
+    not hasattr(os, "mkfifo"),
+    reason="FIFO files are unavailable on this platform",
+)
+def test_measure_model_rejects_a_non_regular_session_record(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    gate = _marked_registration(tmp_path, monkeypatch)
+    session_root = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"])
+    record = session_root / "session.fifo"
+    os.mkfifo(record)
+    present = json.dumps({"cwd": str(tmp_path / "worker"), "model": "future-model"})
+    finished = threading.Event()
+    result = []
+
+    def measure() -> None:
+        result.append(gate.measure_model("job-marked", record, present))
+        finished.set()
+
+    worker = threading.Thread(target=measure, daemon=True)
+    worker.start()
+
+    assert finished.wait(1)
+    assert result[0].allow is False
+    assert result[0].reason == ReasonCode.MODEL_EVIDENCE_INVALID
+
+
+def test_measure_model_groups_interleaved_codex_turns(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    declared = "gpt-5.6-luna-20261114"
+    alias = "gpt-5.6-luna"
+    gate = _marked_registration(
+        tmp_path,
+        monkeypatch,
+        runtime="codex",
+        model=declared,
+        model_needs_measurement=True,
+    )
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "codex.jsonl"
+    cwd = str(tmp_path / "worker")
+    session = json.dumps(
+        {
+            "type": "session_meta",
+            "payload": {"id": "sess-codex", "cwd": cwd},
+        }
+    )
+    turn_a_dated = json.dumps(
+        {
+            "type": "turn_context",
+            "payload": {"model": declared, "turn_id": "turn-a"},
+        }
+    )
+    turn_b = json.dumps(
+        {
+            "type": "turn_context",
+            "payload": {"model": declared, "turn_id": "turn-b"},
+        }
+    )
+    turn_a_alias = json.dumps(
+        {
+            "type": "turn_context",
+            "payload": {"model": alias, "turn_id": "turn-a"},
+        }
+    )
+    record.write_text(
+        "\n".join((session, turn_a_dated, turn_b, turn_a_alias)) + "\n",
+        encoding="utf-8",
+    )
+
+    measured = gate.measure_model("job-marked", record, turn_a_alias)
+
+    assert measured.allow is True
+    assert measured.warnings == ()
+
+
+def test_measure_model_scopes_codex_alias_to_the_evidence_turn(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    declared = "gpt-5.6-luna-20261114"
+    alias = "gpt-5.6-luna"
+    gate = _marked_registration(
+        tmp_path,
+        monkeypatch,
+        runtime="codex",
+        model=declared,
+        model_needs_measurement=True,
+    )
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "codex.jsonl"
+    cwd = str(tmp_path / "worker")
+    session = json.dumps(
+        {
+            "type": "session_meta",
+            "payload": {"id": "sess-codex", "cwd": cwd},
+        }
+    )
+    paired_dated = json.dumps(
+        {
+            "type": "turn_context",
+            "payload": {"model": declared, "turn_id": "turn-1"},
+        }
+    )
+    paired_alias = json.dumps(
+        {
+            "type": "turn_context",
+            "payload": {"model": alias, "turn_id": "turn-1"},
+        }
+    )
+    alias_only = json.dumps(
+        {
+            "type": "turn_context",
+            "payload": {"model": alias, "turn_id": "turn-2"},
+        }
+    )
+    record.write_text(
+        "\n".join((session, paired_dated, paired_alias, alias_only)) + "\n",
+        encoding="utf-8",
+    )
+
+    measured = gate.measure_model("job-marked", record, alias_only)
+
+    assert measured.allow is True
+    assert measured.warnings == (ReasonCode.MODEL_MISMATCH,)
+    assert _ledger_entries(tmp_path)[-1]["model_verified"] is False
+
+
 def test_default_ledger_path_env_override_wins(tmp_path: Path, monkeypatch) -> None:
     override = tmp_path / "custom-ledger.jsonl"
     monkeypatch.setenv("DISPATCH_GATE_LEDGER", str(override))

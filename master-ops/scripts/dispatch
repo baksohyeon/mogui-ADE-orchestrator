@@ -73,6 +73,8 @@ usage() {
   echo "                [--tier-policy FILE]"
   echo "                [--est-chars N] [--transcript-glob GLOB] [--check-only]"
   echo "       dispatch --ledger-event TYPE --dispatch-id ID [event options]"
+  echo "         git_escalation: --worktree-path PATH --operation add|commit|fetch|push"
+  echo "           --escalated yes|no --refusal TEXT"
   echo "  --transcript-glob: worker transcript location for the model probe"
   echo "                     (default: derived for claude from --worktree when possible)"
   echo "  DISPATCH_FROM_TERMINAL=<handle>: sender terminal for callers that have no ORCA_TERMINAL_HANDLE (launchd, cron)"
@@ -108,6 +110,9 @@ LEDGER_EVENT_REASON=""
 LEDGER_EVENT_QUERY=""
 LEDGER_EVENT_SESSION_ID=""
 LEDGER_EVENT_WORKTREE_PATH=""
+LEDGER_EVENT_OPERATION=""
+LEDGER_EVENT_ESCALATED=""
+LEDGER_EVENT_REFUSAL=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --contract) CONTRACT=$2; shift 2;;
@@ -131,6 +136,9 @@ while [ $# -gt 0 ]; do
     --search-query) LEDGER_EVENT_QUERY=$2; shift 2;;
     --session-id) LEDGER_EVENT_SESSION_ID=$2; shift 2;;
     --worktree-path) LEDGER_EVENT_WORKTREE_PATH=$2; shift 2;;
+    --operation) LEDGER_EVENT_OPERATION=$2; shift 2;;
+    --escalated) LEDGER_EVENT_ESCALATED=$2; shift 2;;
+    --refusal) LEDGER_EVENT_REFUSAL=$2; shift 2;;
     *) usage;;
   esac
 done
@@ -169,6 +177,53 @@ resolve_shared_paths() {
   export DISPATCH_CURSOR_SESSION_ROOT="$CURSOR_SESSION_ROOT"
 }
 
+record_ledger_event() {
+  python3 - "$LEDGER" "$LEDGER_LOCK" "$LEDGER_EVENT" \
+    "$LEDGER_EVENT_DISPATCH_ID" "$LEDGER_EVENT_RESULT" "$LEDGER_EVENT_REASON" \
+    "$LEDGER_EVENT_QUERY" "$LEDGER_EVENT_SESSION_ID" "$WORKTREE" \
+    "$LEDGER_EVENT_WORKTREE_PATH" "$LEDGER_EVENT_OPERATION" \
+    "$LEDGER_EVENT_ESCALATED" "$LEDGER_EVENT_REFUSAL" <<'EOF'
+import fcntl
+import json
+import os
+import sys
+import time
+
+ledger, lock_path, kind, dispatch_id, result, reason, query, session_id, selector, worktree_path, operation, escalated, refusal = sys.argv[1:]
+entry = {
+    "ts": time.time(),
+    "kind": kind,
+    "job_id": dispatch_id,
+}
+if kind == "git_escalation":
+    entry.update({
+        "worktree": worktree_path or selector,
+        "operation": operation,
+        "escalated": escalated == "yes",
+        "refusal": (refusal.splitlines() or [""])[0],
+    })
+else:
+    if result:
+        entry["resume_result"] = result
+    if reason:
+        entry["failure_reason"] = reason
+    if query:
+        entry["resume_query"] = query
+    if session_id:
+        entry["agent_session_id"] = session_id
+    if selector:
+        entry["worktree_selector"] = selector
+    if worktree_path:
+        entry["worktree_path"] = worktree_path
+
+os.makedirs(os.path.dirname(os.path.abspath(lock_path)), exist_ok=True)
+with open(lock_path, "a", encoding="utf-8") as lock:
+    fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+    with open(ledger, "a", encoding="utf-8") as stream:
+        stream.write(json.dumps(entry, sort_keys=True, separators=(",", ":")) + "\n")
+EOF
+}
+
 if [ -n "$LEDGER_EVENT" ]; then
   resolve_shared_paths
   if [ -z "$LEDGER_EVENT_DISPATCH_ID" ]; then
@@ -193,46 +248,38 @@ if [ -n "$LEDGER_EVENT" ]; then
         exit 1
       }
       ;;
+    git_escalation)
+      [ -n "$LEDGER_EVENT_REFUSAL" ] || LEDGER_EVENT_REFUSAL="$LEDGER_EVENT_REASON"
+      case "$LEDGER_EVENT_OPERATION" in
+        add|commit|fetch|push) ;;
+        *)
+          echo "✗ git_escalation requires --operation add|commit|fetch|push" >&2
+          exit 1
+          ;;
+      esac
+      case "$LEDGER_EVENT_ESCALATED" in
+        yes|no) ;;
+        *)
+          echo "✗ git_escalation requires --escalated yes|no" >&2
+          exit 1
+          ;;
+      esac
+      if [ "$LEDGER_EVENT_ESCALATED" = yes ] \
+          && [ -z "${LEDGER_EVENT_REFUSAL//[[:space:]]/}" ]; then
+        echo "✗ an escalated git_escalation requires --refusal" >&2
+        exit 1
+      fi
+      if [ -z "$LEDGER_EVENT_WORKTREE_PATH" ] && [ -z "$WORKTREE" ]; then
+        echo "✗ git_escalation requires --worktree or --worktree-path" >&2
+        exit 1
+      fi
+      ;;
     *)
       echo "✗ unsupported ledger event: $LEDGER_EVENT" >&2
       exit 1
       ;;
   esac
-  python3 - "$LEDGER" "$LEDGER_LOCK" "$LEDGER_EVENT" \
-    "$LEDGER_EVENT_DISPATCH_ID" "$LEDGER_EVENT_RESULT" "$LEDGER_EVENT_REASON" \
-    "$LEDGER_EVENT_QUERY" "$LEDGER_EVENT_SESSION_ID" "$WORKTREE" \
-    "$LEDGER_EVENT_WORKTREE_PATH" <<'EOF'
-import fcntl
-import json
-import os
-import sys
-import time
-
-ledger, lock_path, kind, dispatch_id, result, reason, query, session_id, selector, worktree_path = sys.argv[1:]
-entry = {
-    "ts": time.time(),
-    "kind": kind,
-    "job_id": dispatch_id,
-}
-if result:
-    entry["resume_result"] = result
-if reason:
-    entry["failure_reason"] = reason
-if query:
-    entry["resume_query"] = query
-if session_id:
-    entry["agent_session_id"] = session_id
-if selector:
-    entry["worktree_selector"] = selector
-if worktree_path:
-    entry["worktree_path"] = worktree_path
-
-os.makedirs(os.path.dirname(os.path.abspath(lock_path)), exist_ok=True)
-with open(lock_path, "a", encoding="utf-8") as lock:
-    fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-    with open(ledger, "a", encoding="utf-8") as stream:
-        stream.write(json.dumps(entry, sort_keys=True, separators=(",", ":")) + "\n")
-EOF
+  record_ledger_event
   exit $?
 fi
 
@@ -1232,6 +1279,8 @@ codex_effort_recheck() {
 CODEX_REASONING_EFFORT=xhigh
 CODEX_MIGRATION_ACK='notice.model_migrations={"gpt-5.5"="gpt-6.1-sol"}'
 CODEX_BYPASS_FLAG=
+CODEX_SHARED_GIT_DIR=
+CODEX_WORKTREE_GIT_DIR=
 
 # Optional codex_reasoning_effort and codex_bypass_approvals_and_sandbox from the
 # instance runtime config. Effort list from codex-cli 0.163.0 (2026-10-17); an
@@ -1357,7 +1406,7 @@ runtime_command() {
     # written as an inline table: the dotted form reads the dot inside the
     # model id as a nesting separator and fails with "invalid type: map,
     # expected a string".
-    codex) echo "codex --model $model_arg -c $(shell_quote "model_reasoning_effort=\"$CODEX_REASONING_EFFORT\"") -c check_for_update_on_startup=false -c $(shell_quote "$CODEX_MIGRATION_ACK")${CODEX_BYPASS_FLAG:- --approve-for-me -c sandbox_workspace_write.network_access=true}";;
+    codex) [ -n "${CODEX_SHARED_GIT_DIR:-}" ] || { echo "✗ codex shared git dir was not resolved before launch" >&2; return 2; }; echo "codex --model $model_arg -c $(shell_quote "model_reasoning_effort=\"$CODEX_REASONING_EFFORT\"") -c check_for_update_on_startup=false -c $(shell_quote "$CODEX_MIGRATION_ACK") --add-dir $(shell_quote "$CODEX_SHARED_GIT_DIR")${CODEX_BYPASS_FLAG:- --approve-for-me -c sandbox_workspace_write.network_access=true}";;
     gemini) echo "gemini";;
     opencode) echo "opencode";;
     # agy is the Gemini host; `agy models` reports gemini-* ids. Its approval flag
@@ -2260,15 +2309,26 @@ fi
 # the index, allowing all subsequent sandboxed git operations in this session
 # to succeed. Mechanism unknown; observed pattern: after the first git write
 # outside the sandbox, sandboxed git works.
-if [ "$RUNTIME" = codex ]; then
+if [ "$RUNTIME" = codex ] && [ -z "$TERMINAL" ]; then
   wt_path="${WORKTREE-}"
   wt_path="${wt_path#path:}"
   if [ -n "$wt_path" ] && [ -e "$wt_path/.git" ]; then
+    if CODEX_WORKTREE_GIT_DIR=$(git -C "$wt_path" rev-parse --git-dir 2>/dev/null) \
+        && CODEX_SHARED_GIT_DIR=$(git -C "$wt_path" rev-parse --git-common-dir 2>/dev/null) \
+        && case "$CODEX_WORKTREE_GIT_DIR:$CODEX_SHARED_GIT_DIR" in /*:/*) ;; *) false;; esac; then
+      :
+    else
+      echo "✗ codex shared git dir could not be resolved · worktree=$wt_path" >&2
+      fail_after_tracker_claim "codex shared git dir resolution failed" 2
+    fi
     if git -C "$wt_path" status --porcelain >/dev/null 2>&1; then
       :
     else
       echo "WARNING: codex worktree git index preflight failed · path=$wt_path" >&2
     fi
+  else
+    echo "✗ codex needs an absolute worktree path to resolve its shared git dir" >&2
+    fail_after_tracker_claim "codex worktree path missing" 2
   fi
 fi
 

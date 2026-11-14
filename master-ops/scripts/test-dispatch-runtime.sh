@@ -1330,11 +1330,11 @@ codex_launch_flags_test() (
 
   shell_quote_fn=$(awk '$0=="shell_quote() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   runtime_command_fn=$(awk '$0=="runtime_command() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
-  vars=$(grep -E '^CODEX_(REASONING_EFFORT|MIGRATION_ACK)=' "$dispatch")
+  vars=$(grep -E '^CODEX_(REASONING_EFFORT|MIGRATION_ACK|SHARED_GIT_DIR)=' "$dispatch")
 
   [ -n "$shell_quote_fn" ] || { echo "FAIL: could not extract shell_quote" >&2; return 1; }
   [ -n "$runtime_command_fn" ] || { echo "FAIL: could not extract runtime_command" >&2; return 1; }
-  [ "$(printf '%s\n' "$vars" | grep -c .)" = 2 ] || { echo "FAIL: could not extract both CODEX_ launch variables" >&2; return 1; }
+  [ "$(printf '%s\n' "$vars" | grep -c .)" = 3 ] || { echo "FAIL: could not extract CODEX_ launch variables" >&2; return 1; }
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-codex-launch-test.$$"
   mkdir -p "$work"
@@ -1348,11 +1348,12 @@ codex_launch_flags_test() (
       printf '%s\n' "$shell_quote_fn"
       printf '%s\n' "$fn"
       echo 'MODEL=gpt-5.5'
+      echo 'CODEX_SHARED_GIT_DIR=/repo/.git'
       echo 'runtime_command codex'
     } > "$outfile"
   }
 
-  want='codex --model gpt-5.5 -c '"'"'model_reasoning_effort="xhigh"'"'"' -c check_for_update_on_startup=false -c '"'"'notice.model_migrations={"gpt-5.5"="gpt-6.1-sol"}'"'"' --approve-for-me -c sandbox_workspace_write.network_access=true'
+  want="codex --model gpt-5.5 -c 'model_reasoning_effort=\"xhigh\"' -c check_for_update_on_startup=false -c 'notice.model_migrations={\"gpt-5.5\"=\"gpt-6.1-sol\"}' --add-dir /repo/.git --approve-for-me -c sandbox_workspace_write.network_access=true"
 
   script_file="$work/run.sh"
   write_script "$script_file" "$runtime_command_fn"
@@ -1374,7 +1375,7 @@ codex_launch_flags_test() (
     *sandbox_workspace_write.network_access=true*) ;;
     *) echo "FAIL: default codex launch is missing sandbox_workspace_write.network_access=true" >&2; return 1;;
   esac
-  echo "ok   : codex launch carries --model, reasoning effort, update-check off, the migration ack, --approve-for-me, and sandbox_workspace_write.network_access=true · rc=0"
+  echo "ok   : codex launch carries --model, reasoning effort, update-check off, the migration ack, the shared Git directory, --approve-for-me, and sandbox_workspace_write.network_access=true · rc=0"
 
   # Failability: dropping check_for_update_on_startup=false must break the exact-string match.
   mutant_fn=${runtime_command_fn/' -c check_for_update_on_startup=false'/}

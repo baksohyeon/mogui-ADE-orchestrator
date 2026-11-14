@@ -20,6 +20,22 @@ you build on it.
 
 ## [Unreleased]
 
+## [0.5.338] - 2026-11-14
+
+### Added
+
+- `scripts/agy-worker-pretrust` trusts Antigravity worktrees in the measured settings store, and dispatch can pre-approve the contract commands needed by that runtime (#269).
+- Harness inventory can merge an install-owned evidence ledger for instance-specific rows (#270).
+
+### Changed
+
+- `worker-reap` reclaims worker terminals by worktree membership, accepts squash-merged content, and resumes sessions before redispatch (#273).
+- Instance runtime configuration resolves from the generated operations repository when it is exported, keeping probes and guards aligned with installed workspace facts (#280).
+
+### Fixed
+
+- Dispatch can continue with unknown or unoffered model ids under a visible measurement mark, then verify the model from a worker session record (#278).
+
 ## [0.5.326] - 2026-11-12
 
 ### Changed
@@ -479,7 +495,8 @@ tests pass, 1 skipped.
 There is no CI at this tag. Tests and the redaction scanners run locally before
 a push, so a passing count in a pull request is the author's word.
 
-[Unreleased]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.326...HEAD
+[Unreleased]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.338...HEAD
+[0.5.338]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.326...v0.5.338
 [0.5.326]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.319...v0.5.326
 [0.5.319]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.312...v0.5.319
 [0.5.312]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.304...v0.5.312

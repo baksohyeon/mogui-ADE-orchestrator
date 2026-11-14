@@ -347,7 +347,12 @@ def _report(args: argparse.Namespace) -> int:
             model_status = entry.get("model_status")
             if isinstance(model_status, str) and model_status:
                 model_measurement_counts[model_status] += 1
-            if entry.get("model_mismatch") is True:
+            warnings = entry.get("warnings")
+            mismatch_warning = (
+                isinstance(warnings, list)
+                and ReasonCode.MODEL_MISMATCH.value in warnings
+            )
+            if entry.get("model_mismatch") is True or mismatch_warning:
                 model_measurement_counts["mismatch"] += 1
 
         model = entry.get("model")

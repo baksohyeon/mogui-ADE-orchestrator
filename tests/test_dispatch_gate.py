@@ -2593,6 +2593,14 @@ def test_cli_report_counts_unmeasured_and_mismatched_models(
             "ts": 1_785_000_002,
             "decision": "ALLOW",
             "reason": "OK",
+            "job_id": "job-warning-mismatch",
+            "model": "known-model",
+            "warnings": ["MODEL_MISMATCH"],
+        },
+        {
+            "ts": 1_785_000_003,
+            "decision": "ALLOW",
+            "reason": "OK",
             "model": "future-model",
             "model_status": "needs measurement",
         },
@@ -2604,7 +2612,7 @@ def test_cli_report_counts_unmeasured_and_mismatched_models(
     assert script["main"](["--ledger", str(ledger), "report"]) == 0
     output = capsys.readouterr().out
     assert "  unmeasured: 1" in output
-    assert "  mismatch: 1" in output
+    assert "  mismatch: 2" in output
 
 
 def test_cli_report_shows_every_policy_a_day_was_judged_against(

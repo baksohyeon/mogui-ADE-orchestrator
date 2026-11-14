@@ -605,17 +605,18 @@ class DispatchGate:
                 ReasonCode.MODEL_TIER_ESCALATION,
                 message=escalation,
             )
-            self._append_entry(
-                {
-                    "ts": self._clock(),
-                    "decision": "DENY",
-                    "reason": decision.reason.value,
-                    "job_id": job_id,
-                    "model_declared": declared_model,
-                    "model_measured": measured_model,
-                    "model_verified": True,
-                }
-            )
+            with _ticket_lock(Path(self.config.ticket_dir)):
+                self._append_entry(
+                    {
+                        "ts": self._clock(),
+                        "decision": "DENY",
+                        "reason": decision.reason.value,
+                        "job_id": job_id,
+                        "model_declared": declared_model,
+                        "model_measured": measured_model,
+                        "model_verified": True,
+                    }
+                )
             return decision
 
         runtime_filter = _normalize_runtime_filter(runtime)
@@ -1109,7 +1110,14 @@ class DispatchGate:
                 entry["attempt"] = self._next_attempt(decision.contract_sha)
                 self._append_entry(entry)
             return
-        self._append_entry(entry)
+        with _ticket_lock(Path(self.config.ticket_dir)):
+            self._append_entry(entry)
+
+    def append_ledger_entry(self, entry: Mapping[str, object]) -> None:
+        """Append an externally prepared ledger entry under the gate lock."""
+
+        with _ticket_lock(Path(self.config.ticket_dir)):
+            self._append_entry(entry)
 
     def _append_entry(self, entry: Mapping[str, object]) -> None:
         ledger_path = Path(self.config.ledger_path)

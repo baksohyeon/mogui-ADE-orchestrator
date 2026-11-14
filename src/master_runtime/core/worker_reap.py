@@ -309,6 +309,19 @@ class WorkerReaper:
         terminal_action: Optional[str] = None
         terminal_reclaim_allowed = True
 
+        # Preserve the selector-row measurement and planned terminal action
+        # even when the worktree safety check later keeps the row.  The action
+        # is planned with execute=False, so this does not close a pane or
+        # remove a worktree on a safety skip.
+        if dispatch_state.worktree_selector:
+            terminal_action, terminal_measurements = self._plan_terminal_action(
+                dispatch_state, False
+            )
+            measurements.update(terminal_measurements)
+            terminal_reclaim_allowed = bool(
+                terminal_measurements.get("terminal_reclaim_allowed")
+            )
+
         # Legacy rows predate the worktree selector. Keep their terminal plan
         # before the worktree verdict and preserve the established messages.
         if not dispatch_state.worktree_selector and dispatch_state.terminal_id:
@@ -333,10 +346,9 @@ class WorkerReaper:
                 if (
                     not wt_merged
                     and reason.startswith("Current branch ")
-                    and (
-                        " (virtual merge failed:" in reason
-                        or " (branch changes are not included in " in reason
-                    )
+                    and " (virtual merge failed:" in reason
+                    and dispatch_state.worktree_selector
+                    and self._orca_cleanup_supported()
                 ):
                     if self._squash_merge_pr_evidence(worktree_path):
                         wt_clean = True
@@ -351,6 +363,9 @@ class WorkerReaper:
                         reason = "pull request is open"
                     elif pr_state == "UNMEASURED":
                         measurements["worktree_pr_reason"] = "pr_state_unmeasured"
+                        if self._last_landing_rule != "ancestry":
+                            wt_merged = False
+                            reason = "pull request state unmeasured"
                 measurements["worktree_clean"] = wt_clean
                 measurements["worktree_merged"] = wt_merged
                 if wt_clean and wt_merged:
@@ -360,12 +375,16 @@ class WorkerReaper:
                         None if ignored_media is None else len(ignored_media)
                     )
                     if ignored_media is None:
+                        if terminal_action and terminal_action not in actions:
+                            actions.append(terminal_action)
                         actions.append(
                             f"worktree_left:{worktree_path}:ignored_media_unmeasured"
                         )
                     elif ignored_media and not (
                         remove_ignored_media or self.remove_ignored_media
                     ):
+                        if terminal_action and terminal_action not in actions:
+                            actions.append(terminal_action)
                         actions.append(
                             f"worktree_left:{worktree_path}:ignored_media:"
                             f"{len(ignored_media)}"
@@ -850,6 +869,52 @@ class WorkerReaper:
         ):
             return None
         return terminals
+
+    def _worktree_entries(self) -> Optional[list[dict]]:
+        """Read Orca's measured worktree listing, or ``None`` on failure."""
+        code, stdout, _stderr = self.orca_runner(["orca", "worktree", "list", "--json"])
+        if code != 0:
+            return None
+        try:
+            payload = json.loads(stdout)
+        except json.JSONDecodeError:
+            return None
+        result = payload.get("result") if isinstance(payload, dict) else None
+        worktrees = result.get("worktrees") if isinstance(result, dict) else None
+        if worktrees is None and isinstance(result, list):
+            worktrees = result
+        if not isinstance(worktrees, list) or not all(
+            isinstance(worktree, dict) for worktree in worktrees
+        ):
+            return None
+        return worktrees
+
+    def _resolve_worktree_path(self, selector: str) -> Optional[str]:
+        """Resolve a selector through Orca before allowing destructive cleanup."""
+        worktrees = self._worktree_entries()
+        if worktrees is None:
+            return None
+        expected_selector = self._normalize_worktree_selector(selector)
+        for worktree in worktrees:
+            measured_selector = str(
+                worktree.get("worktreeId")
+                or worktree.get("worktree_id")
+                or worktree.get("selector")
+                or worktree.get("id")
+                or ""
+            )
+            if not measured_selector:
+                continue
+            if self._normalize_worktree_selector(measured_selector) != expected_selector:
+                continue
+            measured_path = str(
+                worktree.get("worktreePath")
+                or worktree.get("worktree_path")
+                or worktree.get("path")
+                or ""
+            )
+            return measured_path or None
+        return None
 
     @staticmethod
     def _normalize_worktree_selector(value: str) -> str:
@@ -1714,6 +1779,18 @@ class WorkerReaper:
     ) -> Optional[str]:
         """Remove a worktree through Orca when its selector was measured."""
         if worktree_selector:
+            resolved_path = self._resolve_worktree_path(worktree_selector)
+            if not resolved_path:
+                raise ReapError(
+                    f"Could not resolve worktree selector {worktree_selector}"
+                )
+            expected_path = os.path.normcase(os.path.realpath(str(worktree_path)))
+            measured_path = os.path.normcase(os.path.realpath(resolved_path))
+            if measured_path != expected_path:
+                raise ReapError(
+                    f"Worktree selector {worktree_selector} resolved to {resolved_path}, "
+                    f"expected {worktree_path}"
+                )
             code, _stdout, stderr = self.orca_runner(
                 [
                     *ORCA_WORKTREE_RM_ARGS,

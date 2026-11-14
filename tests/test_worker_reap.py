@@ -1709,10 +1709,10 @@ class BranchDeletionTests(unittest.TestCase):
             self.assertIn("branch changes are not included", record.actions_taken)
             self.assertEqual(env.closed_commands, [])
             self.assertEqual(env.removed_commands, [])
-            self.assertEqual(
-                [cmd for cmd in env.commands if cmd and cmd[0] == "orca"],
-                [["orca", "orchestration", "dispatch-show", "--json", "--task", "t1"]],
-            )
+            self.assertIn("would_close_worktree:id:repo:target", record.actions_taken)
+            self.assertIn("worktree_terminal_handles", record.measurements)
+            self.assertIn("pane_states", record.measurements)
+            self.assertIn("agent_process", record.measurements)
             # Mutant proof: probing or routing through cleanup verbs before the
             # unpushed check would discard the resume worktree.
 
@@ -1732,13 +1732,31 @@ class BranchDeletionTests(unittest.TestCase):
             # Mutant proof: treating a failed virtual/content landing check as
             # final would leave the squash-merged #285 worktree behind.
 
-    def test_squash_merge_pr_evidence_accepts_content_mismatch(self) -> None:
+    def test_squash_merge_pr_evidence_keeps_content_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             env = _SelectorEnvironment(tmp, content_equal=False, merged_pr=True)
             record = WorkerReaper(orca_runner=env).reap(task_id="t1", execute=True)
 
-            self.assertEqual(record.measurements["worktree_landed_by"], "merged_pr")
-            self.assertEqual(len(env.removed_commands), 1)
+            self.assertIn("branch changes are not included", record.actions_taken)
+            self.assertNotIn("worktree_landed_by", record.measurements)
+            self.assertEqual(env.closed_commands, [])
+            self.assertEqual(env.removed_commands, [])
+
+    def test_squash_merge_override_requires_orca_verbs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _SelectorEnvironment(
+                tmp,
+                content_equal=False,
+                merged_pr=True,
+                virtual_merge_fails=True,
+                orca_cleanup_supported=False,
+            )
+            record = WorkerReaper(orca_runner=env).reap(task_id="t1", execute=True)
+
+            self.assertIn("virtual merge failed", record.actions_taken)
+            self.assertEqual(env.closed_commands, [])
+            self.assertEqual(env.removed_commands, [])
+            self.assertEqual(env.legacy_removed_commands, [])
 
     def test_squash_merge_tip_mismatch_keeps_worktree(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1847,7 +1865,7 @@ class BranchDeletionTests(unittest.TestCase):
 
             self.assertEqual(record.measurements["worktree_pr_state"], "UNMEASURED")
             self.assertEqual(record.measurements["worktree_pr_reason"], "pr_state_unmeasured")
-            self.assertEqual(len(env.removed_commands), 1)
+            self.assertEqual(env.removed_commands, [])
             self.assertEqual(env.legacy_removed_commands, [])
 
     def test_open_pr_skips_orca_cleanup(self) -> None:
@@ -1858,6 +1876,34 @@ class BranchDeletionTests(unittest.TestCase):
             self.assertIn("pull request is open", record.actions_taken)
             self.assertEqual(env.closed_commands, [])
             self.assertEqual(env.removed_commands, [])
+
+    def test_selector_resolution_mismatch_refuses_worktree_removal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            other = str(Path(tmp) / "other")
+            env = _SelectorEnvironment(tmp, resolved_worktree_path=other)
+            record = WorkerReaper(orca_runner=env).reap(task_id="t1", execute=True)
+
+            self.assertIn("resolved to", record.actions_taken)
+            self.assertEqual(env.removed_commands, [])
+            self.assertNotIn("--force", " ".join(" ".join(cmd) for cmd in env.commands))
+
+    def test_selector_cleanup_never_passes_force(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _SelectorEnvironment(tmp)
+            WorkerReaper(orca_runner=env).reap(task_id="t1", execute=True)
+
+            self.assertTrue(env.removed_commands)
+            self.assertTrue(all("--force" not in cmd for cmd in env.removed_commands))
+
+    def test_pr_list_size_guard_is_unmeasured(self) -> None:
+        def runner(cmd: list[str]) -> tuple[int, str, str]:
+            return 0, json.dumps([{} for _ in range(100)]), ""
+
+        self.assertIsNone(
+            WorkerReaper(orca_runner=runner)._pull_requests_for_branch(
+                "feature-x", "github.com/example/worker-reap"
+            )
+        )
 
     def test_selector_reports_orca_branch_warning_verbatim(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2046,6 +2092,7 @@ class _SelectorEnvironment:
         no_terminal_id: bool = False,
         agent_pid: str | None = None,
         ps_fails: bool = False,
+        resolved_worktree_path: str | None = None,
     ) -> None:
         self.worktree_path = worktree_path
         self.content_equal = content_equal
@@ -2072,6 +2119,7 @@ class _SelectorEnvironment:
         self.no_terminal_id = no_terminal_id
         self.agent_pid = agent_pid
         self.ps_fails = ps_fails
+        self.resolved_worktree_path = resolved_worktree_path or worktree_path
         self.commands: list[list[str]] = []
         self.closed_commands: list[list[str]] = []
         self.removed_commands: list[list[str]] = []
@@ -2090,6 +2138,19 @@ class _SelectorEnvironment:
             if self.orca_cleanup_supported:
                 return 0, "Usage: orca worktree rm --worktree <selector> --delete-branch\n", ""
             return 0, "usage: orca worktree rm\n", ""
+        if cmd[:4] == ["orca", "worktree", "list", "--json"]:
+            return 0, json.dumps(
+                {
+                    "result": {
+                        "worktrees": [
+                            {
+                                "worktreeId": "repo:target",
+                                "worktreePath": self.resolved_worktree_path,
+                            }
+                        ]
+                    }
+                }
+            ), ""
         if cmd[:3] == ["gh", "repo", "view"]:
             return 0, json.dumps({"defaultBranchRef": {"name": self.default_branch}}), ""
         if "dispatch-show" in cmd:

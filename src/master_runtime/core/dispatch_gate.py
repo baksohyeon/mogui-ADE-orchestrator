@@ -2142,12 +2142,15 @@ def _record_context(
     ]
     if session_payloads:
         authoritative = session_payloads[:1]
+        timestamp_sources = authoritative
     elif (runtime or "").casefold() == "claude":
+        timestamp_sources = [
+            value for value in records if not _is_sidechain_event(value)
+        ]
         authoritative = [
             value
-            for value in records
-            if not _is_sidechain_event(value)
-            and (
+            for value in timestamp_sources
+            if (
                 value.get("type") == "assistant"
                 or (
                     isinstance(value.get("message"), Mapping)
@@ -2157,6 +2160,7 @@ def _record_context(
         ]
     else:
         authoritative = records
+        timestamp_sources = authoritative
     cwd_values: set[str] = set()
     session_values: set[str] = set()
     session_start: float | None = None
@@ -2178,6 +2182,9 @@ def _record_context(
             candidate = value.get(key)
             if isinstance(candidate, str) and candidate.strip():
                 session_values.add(candidate.strip())
+    for value in timestamp_sources:
+        if not isinstance(value, Mapping):
+            continue
         for key in (
             "timestamp",
             "created_at",

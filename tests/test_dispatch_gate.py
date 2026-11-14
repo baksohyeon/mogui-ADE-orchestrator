@@ -4468,6 +4468,47 @@ def test_measure_model_ignores_sidechain_context_without_session_meta(
     assert measured.reason == ReasonCode.MODEL_EVIDENCE_UNBOUND
 
 
+def test_measure_model_uses_pre_dispatch_claude_user_event_timestamp(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    declared = "claude-haiku-4-5-20251001"
+    gate = _marked_registration(
+        tmp_path,
+        monkeypatch,
+        runtime="claude",
+        model=declared,
+    )
+    record = Path(os.environ["DISPATCH_MODEL_SESSION_ROOTS"]) / "claude.jsonl"
+    cwd = str(tmp_path / "worker")
+    user_line = json.dumps(
+        {
+            "type": "user",
+            "timestamp": 900,
+            "cwd": cwd,
+        }
+    )
+    assistant_line = json.dumps(
+        {
+            "type": "assistant",
+            "timestamp": 1_100,
+            "sessionId": "session-redacted",
+            "cwd": cwd,
+            "message": {
+                "id": "msg-main",
+                "role": "assistant",
+                "model": declared,
+            },
+        }
+    )
+    record.write_text(user_line + "\n" + assistant_line + "\n", encoding="utf-8")
+
+    measured = gate.measure_model("job-marked", record, assistant_line)
+
+    assert measured.allow is False
+    assert measured.reason == ReasonCode.MODEL_EVIDENCE_STALE
+
+
 def test_measure_model_requires_a_same_turn_claude_alias(
     tmp_path: Path,
     monkeypatch,

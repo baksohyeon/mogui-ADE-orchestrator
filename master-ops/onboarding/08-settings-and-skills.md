@@ -46,12 +46,21 @@ fragment, not a complete settings object; the exact host settings file remains
 owner-managed:
 
 ```json
+"env": {
+  "MOGUI_OPS_REPO": "{{OPS_REPO}}"
+},
 "bashOutputMaxChars": 6000,
 "PreToolUse": [
   {"matcher": "Edit|Write|NotebookEdit", "hooks": [{"type": "command", "command": "bash \"{{OPS_REPO}}/scripts/hooks/product-path-guard.sh\""}]},
   {"matcher": "Bash", "hooks": [{"type": "command", "command": "bash \"{{OPS_REPO}}/scripts/hooks/product-path-guard.sh\""}]}
 ]
 ```
+
+Merge the `MOGUI_OPS_REPO` entry into the host settings' existing `env` object,
+preserving unrelated entries. This persistent setting reaches fresh master
+sessions and their tools, including `master-succeed`, `model-identity-probe`,
+and the product-path hooks. Codex workers do not need this variable: `dispatch`
+exports `INSTANCE_RUNTIME_CONFIG` itself when it launches them.
 
 Register the compact rehydration hook in the existing `hooks` object. Append the
 PostToolUse entry to its event array and merge the UserPromptSubmit entry with
@@ -131,7 +140,7 @@ Never re-introduce per-item opt-out questions into this onboarding step. Disable
 
 ### Land host answers in the instance runtime config
 
-`transcript_globs` is keyed by **runtime name** (agent CLI name such as `claude` or `codex`), not by machine or host nickname. The optional product repositories are the array `product_repositories` (or the one-entry string `product_repo`) in `{{RUNTIME_ROOT}}/config/instance-runtime.json`. For each runtime name the master or a worker probe will use — at minimum the current `master_host_runtime`, plus any other runtime the owner names for master sessions or that the preflight measured on `PATH` and expects to probe — ensure `transcript_globs.<runtime>` in `{{RUNTIME_ROOT}}/config/instance-runtime.json` is either measured on this machine or explicitly supplied. Prefer measurement: locate that runtime's session JSONL tree when the host exposes one; do not paste another workspace's encoded path. Keep `master_host_runtime` equal to the preflight agent CLI, and update the matching glob key if the owner explicitly changes it. Verify that the configured keys are the runtime names the probe will look up (including `master_host_runtime` itself).
+`transcript_globs` is keyed by **runtime name** (agent CLI name such as `claude` or `codex`), not by machine or host nickname. The optional product repositories are the array `product_repositories` (or the one-entry string `product_repo`) in `{{OPS_REPO}}/config/instance-runtime.json`. For each runtime name the master or a worker probe will use — at minimum the current `master_host_runtime`, plus any other runtime the owner names for master sessions or that the preflight measured on `PATH` and expects to probe — ensure `transcript_globs.<runtime>` in `{{OPS_REPO}}/config/instance-runtime.json` is either measured on this machine or explicitly supplied. Prefer measurement: locate that runtime's session JSONL tree when the host exposes one; do not paste another workspace's encoded path. Keep `master_host_runtime` equal to the preflight agent CLI, and update the matching glob key if the owner explicitly changes it. Verify that the configured keys are the runtime names the probe will look up (including `master_host_runtime` itself).
 
 When `--transcript` is omitted, consumers such as `{{RUNTIME_ROOT}}/scripts/model-identity-probe` resolve transcript location with environment override (`MOGUI_TRANSCRIPT_GLOB`) → this config file → unconfigured (exit 2 with an honest message). An explicit `--transcript` still wins over both. They must never fall back to a baked default glob.
 
@@ -140,7 +149,7 @@ When `--transcript` is omitted, consumers such as `{{RUNTIME_ROOT}}/scripts/mode
 - shipped hooks and skills are treated as default-on; no per-item enable questions were asked
 - the owner heard the single sentence that everything is on and any piece can be disabled later by asking the master
 - the hook spec is documented, no sensitive implementation was added, and its owner is explicit or unresolved
-- `config/instance-runtime.json` has a `transcript_globs` entry for `master_host_runtime` (and any other runtime names the owner expects to probe) when measurement or an explicit owner value exists; keys are runtime names, not host nicknames; missing globs are left unset rather than guessed
+- `{{OPS_REPO}}/config/instance-runtime.json` has a `transcript_globs` entry for `master_host_runtime` (and any other runtime names the owner expects to probe) when measurement or an explicit owner value exists; keys are runtime names, not host nicknames; missing globs are left unset rather than guessed
 
 ## Step 7.5. Skill layer (default-on shipped stack; single approval)
 

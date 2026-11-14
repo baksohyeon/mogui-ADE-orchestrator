@@ -15,7 +15,7 @@ VERDICT="pass"
 if [ -n "${MOGUI_INSTANCE_RUNTIME_CONFIG:-}" ]; then
   INSTANCE_RUNTIME_CONFIG="$MOGUI_INSTANCE_RUNTIME_CONFIG"
 else
-  INSTANCE_RUNTIME_CONFIG="{{RUNTIME_ROOT}}/config/instance-runtime.json"
+  INSTANCE_RUNTIME_CONFIG="{{OPS_REPO}}/config/instance-runtime.json"
 fi
 HOOK_DIR=$(cd "$(dirname "$0")" && pwd)
 ALLOWLIST="${MOGUI_PRODUCT_GUARD_ALLOWLIST:-$HOOK_DIR/product-path-guard-readonly-allowlist.txt}"
@@ -93,10 +93,10 @@ if [ -n "${MOGUI_WORKER_WRITE_ROOT:-}" ]; then
   INSTANCE_RUNTIME_CONFIG="unused in worker mode"
 fi
 
-runtime_root_token="{""{RUNTIME_ROOT}}"
-if [[ "$INSTANCE_RUNTIME_CONFIG" == *"$runtime_root_token"* ]]; then
+ops_repo_token="{""{OPS_REPO}}"
+if [[ "$INSTANCE_RUNTIME_CONFIG" == *"$ops_repo_token"* ]]; then
   VERDICT="block"
-  printf '[product-path-guard] BLOCKED: unsubstituted %s token in INSTANCE_RUNTIME_CONFIG; set MOGUI_INSTANCE_RUNTIME_CONFIG to a real runtime config path\n' "$runtime_root_token" >&2
+  printf '[product-path-guard] BLOCKED: unsubstituted %s token in INSTANCE_RUNTIME_CONFIG; set MOGUI_INSTANCE_RUNTIME_CONFIG to a real runtime config path\n' "$ops_repo_token" >&2
   exit 2
 fi
 

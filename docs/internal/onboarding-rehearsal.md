@@ -36,7 +36,7 @@ On Windows, use `python` in place of `python3`.
 | P03 | Ops host instructions agree | `CLAUDE.md` and `AGENTS.md` | Byte-identical |
 | P04 | Live workspace card equals canonical card | root `CLAUDE.md` and `workspace-card/CLAUDE.md` | Byte-identical |
 | P05 | Workspace descriptor satisfies loader rules | `config/workspace-descriptor.json` | JSON has the requested root, `workspace_root_is_plain_folder: true`, a nonempty `master_seat`, and a nonempty repository list |
-| P06 | Host runtime is durable | `config/instance-runtime.json` | JSON exists and has `master_host_runtime` |
+| P06 | Host runtime is durable | ops repository `config/instance-runtime.json` | JSON exists and has `master_host_runtime` |
 | P07 | Role state is present | `docs/runbooks/role-state.md` | File exists |
 | P08 | Lineage is present | `docs/lineage/MASTER-LINEAGE.md` | File exists |
 | L01 | A live terminal occupies the recorded seat | `orca terminal list --worktree ... --json` | Exactly one terminal; unavailable measurement is GAP |

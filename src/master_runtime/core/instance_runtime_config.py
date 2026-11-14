@@ -7,11 +7,15 @@ values with a fixed fallback order and refuse to invent defaults.
 
 Fallback order for every value:
   1. environment override
-  2. instance config file
-  3. honest "unconfigured" (never a baked guess)
+  2. instance config file under the exported ops repository
+  3. instance config file under the orchestrator repository
+  4. honest "unconfigured" (never a baked guess)
 
-Default config path is ``<repo>/config/instance-runtime.json``. Override the
-path with ``INSTANCE_RUNTIME_CONFIG``. The template ships only
+The default config path is ``$MOGUI_OPS_REPO/config/instance-runtime.json``
+when ``MOGUI_OPS_REPO`` is exported as an absolute path and that file exists;
+otherwise it is ``<repo>/config/instance-runtime.json``. Relative ops-repo
+values do not depend on the caller's cwd. Override the path with
+``INSTANCE_RUNTIME_CONFIG``. The template ships only
 ``config/instance-runtime.example.json``.
 """
 
@@ -19,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -27,6 +32,7 @@ from typing import Any, Mapping
 
 DEFAULT_RELATIVE_CONFIG_PATH = Path("config") / "instance-runtime.json"
 CONFIG_PATH_ENV = "INSTANCE_RUNTIME_CONFIG"
+OPS_REPO_ENV = "MOGUI_OPS_REPO"
 MASTER_HOST_RUNTIME_ENV = "MOGUI_MASTER_HOST_RUNTIME"
 # Alternate name used by some instance wrappers (measured 2026-08-04).
 MASTER_HOST_RUNTIME_ENV_ALT = "MASTER_HOST_RUNTIME"
@@ -138,13 +144,42 @@ class InstanceRuntimeConfig:
         )
 
 
-def default_config_path(repo_root: Path | None = None) -> Path:
-    # Prefer an explicit root. When omitted, locate the repository from this
-    # module path (src/master_runtime/core/...) rather than Path.cwd(), so a
-    # probe launched from another directory still finds config/instance-runtime.json.
+def default_config_path(
+    repo_root: Path | None = None,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> Path:
+    """Return the default config path for an installed or source checkout.
+
+    An installed seat exports ``MOGUI_OPS_REPO`` because the Python entry
+    points live in the orchestrator checkout while their instance facts live
+    in the generated operations repository. ``INSTANCE_RUNTIME_CONFIG`` is
+    still the explicit path override handled by :func:`resolve_config_path`.
+    """
+
+    env = environ if environ is not None else os.environ
+    fallback_config = _orchestrator_config_path(repo_root)
+    ops_repo = env.get(OPS_REPO_ENV)
+    if ops_repo is not None and ops_repo.strip():
+        ops_root = Path(ops_repo.strip()).expanduser()
+        ops_config = ops_root / DEFAULT_RELATIVE_CONFIG_PATH
+        if ops_root.is_absolute() and ops_config.is_file():
+            return ops_config.resolve()
+        print(
+            "WARNING: MOGUI_OPS_REPO config is missing at "
+            f"{ops_config}; falling back to orchestrator config at {fallback_config}",
+            file=sys.stderr,
+        )
+    return fallback_config
+
+
+def _orchestrator_config_path(repo_root: Path | None) -> Path:
     if repo_root is not None:
         root = repo_root
     else:
+        # Locate the repository from this module path (src/master_runtime/core/...)
+        # rather than Path.cwd(), so a probe launched from another directory
+        # still finds config/instance-runtime.json.
         root = Path(__file__).resolve().parents[3]
     return (root / DEFAULT_RELATIVE_CONFIG_PATH).resolve()
 
@@ -161,7 +196,7 @@ def resolve_config_path(
     from_env = env.get(CONFIG_PATH_ENV)
     if from_env is not None and from_env.strip():
         return Path(from_env).expanduser().resolve()
-    return default_config_path(repo_root)
+    return default_config_path(repo_root, environ=env)
 
 
 def load_instance_runtime_config(

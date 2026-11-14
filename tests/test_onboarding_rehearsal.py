@@ -33,7 +33,8 @@ def make_install(tmp_path: Path) -> tuple[Path, Path]:
         "repositories": [{"name": "ops", "path": ".", "remote": "", "role": "ops",
                            "capabilities": [], "prohibited": []}],
     }), encoding="utf-8")
-    (workspace / "config/instance-runtime.json").write_text(json.dumps({
+    (ops / "config").mkdir(parents=True, exist_ok=True)
+    (ops / "config/instance-runtime.json").write_text(json.dumps({
         "master_host_runtime": "codex",
     }), encoding="utf-8")
     (ops / "docs/runbooks/role-state.md").parent.mkdir(parents=True, exist_ok=True)
@@ -134,7 +135,7 @@ def test_rehearsal_rejects_incomplete_descriptor_and_blank_runtime(tmp_path: Pat
     descriptor = json.loads((workspace / "config/workspace-descriptor.json").read_text())
     descriptor["workspace_root_is_plain_folder"] = False
     (workspace / "config/workspace-descriptor.json").write_text(json.dumps(descriptor))
-    (workspace / "config/instance-runtime.json").write_text(json.dumps({"master_host_runtime": "  "}))
+    (ops / "config/instance-runtime.json").write_text(json.dumps({"master_host_runtime": "  "}))
     payload = report(run(workspace, ops, "--json"))
     statuses = {row["id"]: row["status"] for row in payload["results"]}
     assert statuses["P05"] == "FAIL"

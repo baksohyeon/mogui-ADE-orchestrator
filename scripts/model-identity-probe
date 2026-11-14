@@ -53,7 +53,9 @@ def main(argv: list[str] | None = None) -> int:
         "--config",
         help=(
             "path to instance runtime config JSON "
-            "(default: INSTANCE_RUNTIME_CONFIG or config/instance-runtime.json)"
+            "(resolution order: --config, INSTANCE_RUNTIME_CONFIG, "
+            "absolute MOGUI_OPS_REPO/config/instance-runtime.json, or the "
+            "orchestrator checkout's config/instance-runtime.json)"
         ),
     )
     parser.add_argument("--expect", default=os.environ.get("MODEL_IDENTITY_EXPECT") or DEFAULT_EXPECTED_MODEL)

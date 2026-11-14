@@ -159,7 +159,7 @@ def main() -> int:
            "<workspace-root>" if descriptor_ok else "missing or invalid",
            "PASS" if descriptor_ok else "FAIL", "~/path/config/workspace-descriptor.json")
 
-    runtime_path = root / "config" / "instance-runtime.json"
+    runtime_path = ops / "config" / "instance-runtime.json"
     runtime = read_json(runtime_path)
     runtime_ok = (
         isinstance(runtime, dict)
@@ -168,7 +168,7 @@ def main() -> int:
     )
     result(results, "P06", "instance runtime names the master host runtime",
            str(runtime.get("master_host_runtime")) if isinstance(runtime, dict) else "missing or invalid",
-           "PASS" if runtime_ok else "FAIL", "~/path/config/instance-runtime.json")
+           "PASS" if runtime_ok else "FAIL", "~/path/ops/config/instance-runtime.json")
 
     for ident, rel in (("P07", "docs/runbooks/role-state.md"),
                        ("P08", "docs/lineage/MASTER-LINEAGE.md")):

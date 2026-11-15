@@ -773,7 +773,7 @@ quota_threshold_warning_test() (
   local dispatch="$1" validator fallback work script_file out status
 
   validator=$(awk '$0=="validate_quota_threshold() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
-  fallback=$(sed -n '190,193p' "$dispatch")
+  fallback=$(awk '$0=="if ! validate_quota_threshold; then"{f=1} f{print} f&&$0=="fi"{exit}' "$dispatch")
   [ -n "$validator" ] || { echo "FAIL: could not extract quota threshold validator" >&2; return 1; }
   [ -n "$fallback" ] || { echo "FAIL: could not extract quota threshold fallback" >&2; return 1; }
   work="${TMPDIR:-/tmp}/mogui-dispatch-quota-threshold-test.$$"

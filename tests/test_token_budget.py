@@ -318,10 +318,10 @@ def test_tier_defaults_cache_ignores_changing_non_worker_history(tmp_path: Path,
     inspected = 0
     original = token_budget._inspect_default_record
 
-    def counting_inspect(runtime: str, path: Path):
+    def counting_inspect(runtime: str, path: Path, **kwargs):
         nonlocal inspected
         inspected += 1
-        return original(runtime, path)
+        return original(runtime, path, **kwargs)
 
     monkeypatch.setattr(token_budget, "_inspect_default_record", counting_inspect)
     first, first_counts = tier_defaults(policy, codex_root=codex, claude_root=tmp_path / "claude", cache_path=cache)
@@ -378,10 +378,10 @@ def test_tier_defaults_cache_ignores_new_non_worker_history(tmp_path: Path, monk
     inspected = 0
     original = token_budget._inspect_default_record
 
-    def counting_inspect(runtime: str, path: Path):
+    def counting_inspect(runtime: str, path: Path, **kwargs):
         nonlocal inspected
         inspected += 1
-        return original(runtime, path)
+        return original(runtime, path, **kwargs)
 
     monkeypatch.setattr(token_budget, "_inspect_default_record", counting_inspect)
     first, first_counts = tier_defaults(policy, codex_root=codex, claude_root=tmp_path / "claude", cache_path=cache)
@@ -510,6 +510,7 @@ def test_quota_scans_newest_file_then_stops_at_first_valid_snapshot(tmp_path: Pa
 
 
 def test_quota_caps_files_examined_and_reads_a_bounded_tail(tmp_path: Path) -> None:
+    assert CODEX_QUOTA_MAX_BYTES_PER_FILE == 64 * 1024
     now = time.time()
     for index in range(21):
         path = tmp_path / f"empty-{index:02d}.jsonl"
@@ -531,6 +532,25 @@ def test_quota_caps_files_examined_and_reads_a_bounded_tail(tmp_path: Path) -> N
     )
     os.utime(older, (now - 21, now - 21))
     assert latest_codex_quota(tmp_path, now=now + 1)["known"] is False
+
+    before_tail_dir = tmp_path / "before-tail"
+    before_tail_dir.mkdir()
+    before_tail = before_tail_dir / "rollout.jsonl"
+    before_tail.write_bytes(
+        json.dumps(
+            {
+                "timestamp": now,
+                "payload": {
+                    "type": "token_count",
+                    "rate_limits": {"primary": {"used_percent": 10, "window_minutes": 10080}},
+                },
+            }
+        ).encode("utf-8")
+        + b"\n"
+        + b"x" * (64 * 1024 + 1024)
+        + b"\n"
+    )
+    assert latest_codex_quota(before_tail.parent, now=now + 1)["known"] is False
 
     tail = tmp_path / "tail.jsonl"
     tail.write_bytes(b"x" * (CODEX_QUOTA_MAX_BYTES_PER_FILE + 1024) + b"\n" + json.dumps(

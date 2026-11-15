@@ -27,6 +27,10 @@ CODEX_QUOTA_MAX_FILES = 20
 CODEX_QUOTA_MAX_BYTES_PER_FILE = 64 * 1024
 
 
+class _TierDefaultReadTimeout(Exception):
+    """Signal that a transcript read crossed the bounded default deadline."""
+
+
 @dataclass(frozen=True)
 class TokenUsage:
     """Normalized usage from one worker session."""
@@ -65,10 +69,14 @@ def _integer(value: object) -> int | None:
     return number if number >= 0 else None
 
 
-def _read_jsonl(path: str | Path) -> Iterable[Mapping[str, object]]:
+def _read_jsonl(
+    path: str | Path, *, deadline: float | None = None
+) -> Iterable[Mapping[str, object]]:
     try:
         with Path(path).open(encoding="utf-8") as stream:
             for line in stream:
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise _TierDefaultReadTimeout
                 try:
                     value = json.loads(line)
                 except (TypeError, json.JSONDecodeError):
@@ -79,10 +87,15 @@ def _read_jsonl(path: str | Path) -> Iterable[Mapping[str, object]]:
         return
 
 
-def _read_events(path: str | Path) -> tuple[Mapping[str, object], ...]:
+def _read_events(
+    path: str | Path, *, deadline: float | None = None
+) -> tuple[Mapping[str, object], ...] | None:
     """Materialize one record so a default recompute can inspect it once."""
 
-    return tuple(_read_jsonl(path))
+    try:
+        return tuple(_read_jsonl(path, deadline=deadline))
+    except _TierDefaultReadTimeout:
+        return None
 
 
 def _codex_usage_from_events(events: Iterable[Mapping[str, object]]) -> dict[str, object]:
@@ -310,11 +323,13 @@ def _record_is_worker(path: Path) -> bool:
 
 
 def _inspect_default_record(
-    runtime: str, path: Path
-) -> tuple[bool, str | None, dict[str, object]]:
+    runtime: str, path: Path, *, deadline: float | None = None
+) -> tuple[bool, str | None, dict[str, object]] | None:
     """Read one transcript once for worker evidence, model, and usage."""
 
-    events = _read_events(path)
+    events = _read_events(path, deadline=deadline)
+    if events is None:
+        return None
     return (
         _record_is_worker_events(events),
         _record_model_from_events(runtime, events),
@@ -353,7 +368,7 @@ def _codex_roots(root: str | Path | None = None) -> tuple[Path, ...]:
             if account.is_dir() and (account / "home" / "sessions").is_dir()
         )
     except OSError:
-        return ()
+        account_roots = ()
     if account_roots:
         return account_roots
     if configured_accounts is None and (Path.home() / ".codex" / "sessions").is_dir():
@@ -744,7 +759,13 @@ def tier_defaults_with_status(
                         base_signature=base_signature,
                         status="timeout",
                     )
-                inspected = _inspect_default_record(runtime, Path(path))
+                inspected = _inspect_default_record(runtime, Path(path), deadline=deadline)
+                if inspected is None:
+                    return _tier_defaults_timeout(
+                        cached_mapping,
+                        base_signature=base_signature,
+                        status="timeout",
+                    )
                 preinspected[(runtime, path)] = inspected
                 if inspected[0]:
                     worker_changed = True
@@ -773,7 +794,13 @@ def tier_defaults_with_status(
                 )
             inspected = preinspected.get((runtime, str(path)))
             if inspected is None:
-                inspected = _inspect_default_record(runtime, path)
+                inspected = _inspect_default_record(runtime, path, deadline=deadline)
+            if inspected is None or time.monotonic() >= deadline:
+                return _tier_defaults_timeout(
+                    cached_mapping,
+                    base_signature=base_signature,
+                    status="timeout",
+                )
             is_worker, model, usage = inspected
             if not is_worker:
                 continue

@@ -22,6 +22,8 @@ you build on it.
 
 ## [0.5.345] - 2026-11-15
 
+### Changed
+
 - Dispatch contracts can declare token budgets and basis, receive a visible budget line, and record per-runtime usage; tier-default computation and the account quota guard are deferred to a later design for issue #263.
 - `worker-reap` proves squash-merged worker branches through a matching same-repository pull request and keeps worktrees when unpushed commits remain or landing cannot be measured (#295).
 - Preflight and surface checks measure the declared minimum Orca app version, report `UNKNOWN` for unavailable or unparsable values, and fail only for a parseable version below the minimum (#300).

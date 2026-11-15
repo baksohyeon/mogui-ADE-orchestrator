@@ -221,10 +221,17 @@ brief_model_measurement_test() (
   set -u
   local dispatch="$1" block script_file out mutant
   block=$(awk '
-    $0=="if [ \"$MODEL_NEEDS_MEASUREMENT\" = 1 ]; then"{count++}
-    count==2{f=1}
-    f{print}
-    f&&$0=="fi"{exit}
+    $0=="if [ \"$MODEL_NEEDS_MEASUREMENT\" = 1 ]; then" {candidate=$0 "\n"; collecting=1; next}
+    collecting {
+      candidate = candidate $0 "\n"
+      if ($0 ~ /Model measurement required:/) {
+        printf "%s", candidate
+        collecting=0
+        f=1
+      }
+      next
+    }
+    f {print; if ($0=="fi") exit}
   ' "$dispatch")
   [ -n "$block" ] || { echo "FAIL: could not extract the model measurement brief block" >&2; return 1; }
 
@@ -415,7 +422,12 @@ brief_token_budget_test() (
   set +e
   set -u
   local dispatch="$1" block script_file out
-  block=$(awk '$0=="if [ -n \"$TOKEN_BUDGET\" ]; then"{count++} count==2{f=1} f{print} f&&$0=="fi"{exit}' "$dispatch")
+  block=$(awk '
+    /# Keep this line in the prepared worker prompt/ {armed=1}
+    armed && /^if \[ -n "\$TOKEN_BUDGET" \]; then$/ {f=1}
+    f{print}
+    f&&$0=="fi"{exit}
+  ' "$dispatch")
   [ -n "$block" ] || { echo "FAIL: could not extract the token budget brief block" >&2; return 1; }
   script_file="${TMPDIR:-/tmp}/mogui-dispatch-token-budget-brief.$$"
   trap 'rm -f "$script_file"' EXIT

@@ -210,6 +210,9 @@ def _build_parser() -> argparse.ArgumentParser:
     budget_parser = subparsers.add_parser(
         "budget", help="resolve a declared token budget"
     )
+    # Keep the legacy selector accepted for callers that have not refreshed
+    # their wrapper yet; declared budgets no longer depend on tier policy.
+    budget_parser.add_argument("--tier")
     budget_parser.add_argument("--front-matter")
 
     watch_parser = subparsers.add_parser("watch")

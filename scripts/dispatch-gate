@@ -210,7 +210,6 @@ def _build_parser() -> argparse.ArgumentParser:
     budget_parser = subparsers.add_parser(
         "budget", help="resolve a declared token budget"
     )
-    budget_parser.add_argument("--tier", required=True)
     budget_parser.add_argument("--front-matter")
 
     watch_parser = subparsers.add_parser("watch")
@@ -392,14 +391,12 @@ def _budget(args: argparse.Namespace) -> int:
             "token_budget": token_budget,
             "tokens_basis": basis,
             "source": "declared",
-            "tier": args.tier,
         }
     else:
         payload = {
             "token_budget": None,
             "tokens_basis": basis,
             "source": "unset:no-cap",
-            "tier": args.tier,
         }
     print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
     return 0

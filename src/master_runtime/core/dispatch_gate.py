@@ -808,8 +808,7 @@ class DispatchGate:
                     entry["card"] = card.strip() if card is not None else ""
                     entry["card_reason"] = card_reason.strip() if card_reason is not None else ""
                 # Keep the declared budget beside the measured usage. ``None``
-                # is deliberate for a tier with no measured default; it is
-                # different from an observed zero.
+                # records that the contract declared no cap, not an observed zero.
                 entry["token_budget"] = token_budget
                 entry["tokens_basis"] = tokens_basis
                 if token_budget_source:

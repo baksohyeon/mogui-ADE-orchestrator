@@ -14,7 +14,6 @@ from master_runtime.core.dispatch_gate import (
     DispatchRequest,
 )
 from master_runtime.core.token_budget import (
-    cap_total,
     read_agy_transcript,
     read_claude_transcript,
     read_codex_rollout,
@@ -61,7 +60,35 @@ def test_cursor_is_unmeasured_and_never_a_zero() -> None:
 
     assert usage["source"] == "unmeasured"
     assert "input" not in usage
-    assert cap_total(usage) is None
+
+
+def test_invalid_utf8_does_not_stop_claude_usage_sum(tmp_path: Path) -> None:
+    transcript = tmp_path / "claude.jsonl"
+    first = {"message": {"id": "first", "usage": {
+        "input_tokens": 10,
+        "cache_creation_input_tokens": 2,
+        "cache_read_input_tokens": 3,
+        "output_tokens": 4,
+    }}}
+    second = {"message": {"id": "second", "usage": {
+        "input_tokens": 20,
+        "cache_creation_input_tokens": 1,
+        "cache_read_input_tokens": 5,
+        "output_tokens": 6,
+    }}}
+    transcript.write_bytes(
+        (json.dumps(first) + "\n").encode()
+        + b"{\xff\n"
+        + (json.dumps(second) + "\n").encode()
+    )
+
+    assert read_claude_transcript(transcript) == {
+        "input": 41,
+        "cached_input": 8,
+        "output": 10,
+        "total": 51,
+        "source": "claude:usage",
+    }
 
 
 def test_settle_usage_is_idempotent_and_stores_unmeasured_state(tmp_path: Path) -> None:
@@ -107,7 +134,13 @@ def test_settle_usage_is_idempotent_and_stores_unmeasured_state(tmp_path: Path) 
     invalid = gate.register_job("bad", lambda value: value == "bad", tokens_basis=[])
     assert invalid.allow is False
     assert invalid.reason.value == "INVALID_REQUEST"
-    assert gate.register_job("job-1", lambda value: value == "job-1", token_budget=100).allow
+    assert gate.register_job(
+        "job-1",
+        lambda value: value == "job-1",
+        token_budget=100,
+        tokens_basis="uncached",
+        token_budget_source="declared",
+    ).allow
     usage = {"source": "unmeasured", "why": "cursor has no reader"}
     assert gate.settle_usage("job-1", usage).allow
     measured = {
@@ -118,9 +151,18 @@ def test_settle_usage_is_idempotent_and_stores_unmeasured_state(tmp_path: Path) 
         "source": "codex:token_count",
     }
     assert gate.settle_usage("job-1", measured).allow
-    assert gate.settle_usage("job-1", {"source": "unmeasured", "why": "late"}).allow
+    later_measured = {
+        "input": 40,
+        "cached_input": 10,
+        "output": 20,
+        "total": 60,
+        "source": "claude:usage",
+    }
+    assert gate.settle_usage("job-1", later_measured).allow
     row = json.loads((tmp_path / "ledger.jsonl").read_text(encoding="utf-8").splitlines()[-1])
     assert row["token_budget"] == 100
+    assert row["tokens_basis"] == "uncached"
+    assert row["token_budget_source"] == "declared"
     assert row["token_usage"] == measured
     entries = [
         json.loads(line)
@@ -150,6 +192,52 @@ def test_settle_unknown_dispatch_does_not_append_an_orphan(tmp_path: Path) -> No
     assert decision.allow is False
     assert decision.reason.value == "NO_MATCHING_TICKET"
     assert not ledger.exists()
+
+
+def test_register_no_cap_columns_are_explicitly_unset(tmp_path: Path) -> None:
+    contract = tmp_path / "contract.md"
+    contract.write_text("dispatch contract", encoding="utf-8")
+    policy = tmp_path / "policy.json"
+    policy.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "runtimes": ["codex"],
+                "tiers": {"efficient": ["gpt-5.6-luna"]},
+                "fanout_caps": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    ledger = tmp_path / "ledger.jsonl"
+    gate = DispatchGate(
+        DispatchGateConfig(
+            ledger_path=ledger,
+            ticket_dir=tmp_path / "tickets",
+            tier_policy_path=policy,
+            known_roots_path=tmp_path / "roots.json",
+        )
+    )
+    assert gate.check(
+        DispatchRequest(
+            runtime="codex",
+            model="gpt-5.6-luna",
+            contract_path=contract,
+            est_input_chars=10,
+            n_agents=1,
+            completion_channel="sentinel-log",
+        )
+    ).allow
+    assert gate.register_job(
+        "job-no-cap",
+        lambda value: value == "job-no-cap",
+        tokens_basis="total",
+        token_budget_source="unset:no-cap",
+    ).allow
+    row = json.loads(ledger.read_text(encoding="utf-8").splitlines()[-1])
+    assert row["token_budget"] is None
+    assert row["tokens_basis"] == "total"
+    assert row["token_budget_source"] == "unset:no-cap"
 
 
 def test_settle_cli_accepts_omitted_runtime(tmp_path: Path) -> None:
@@ -204,8 +292,6 @@ def test_budget_cli_revalidates_declared_tokens(tmp_path: Path) -> None:
             sys.executable,
             str(script),
             "budget",
-            "--tier",
-            "efficient",
             "--front-matter",
             '{"budget":{"tokens":true}}',
         ],
@@ -226,8 +312,6 @@ def test_budget_cli_leaves_undeclared_cap_unset() -> None:
             sys.executable,
             str(script),
             "budget",
-            "--tier",
-            "efficient",
             "--front-matter",
             '{"tokens_basis":"uncached"}',
         ],
@@ -240,7 +324,6 @@ def test_budget_cli_leaves_undeclared_cap_unset() -> None:
     assert result.returncode == 0
     assert json.loads(result.stdout) == {
         "source": "unset:no-cap",
-        "tier": "efficient",
         "token_budget": None,
         "tokens_basis": "uncached",
     }

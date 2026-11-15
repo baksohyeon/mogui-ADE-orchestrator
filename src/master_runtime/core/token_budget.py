@@ -54,7 +54,7 @@ def _integer(value: object) -> int | None:
 
 def _read_jsonl(path: str | Path) -> Iterable[Mapping[str, object]]:
     try:
-        with Path(path).open(encoding="utf-8") as stream:
+        with Path(path).open(encoding="utf-8", errors="replace") as stream:
             for line in stream:
                 try:
                     value = json.loads(line)
@@ -180,21 +180,3 @@ def read_runtime(runtime: str, path: str | Path) -> dict[str, object]:
     if normalized == "agy":
         return read_agy_transcript(path)
     return unmeasured(normalized, "runtime has no usage reader")
-
-
-def cap_total(usage: Mapping[str, object], basis: str = "total") -> int | None:
-    """Return the amount counted by a contract's token basis."""
-
-    if usage.get("source") == "unmeasured":
-        return None
-    total = _integer(usage.get("total"))
-    if basis == "total":
-        return total
-    if basis != "uncached":
-        raise ValueError("tokens_basis must be total or uncached")
-    input_tokens = _integer(usage.get("input"))
-    cached = _integer(usage.get("cached_input"))
-    output = _integer(usage.get("output"))
-    if input_tokens is None or cached is None or output is None:
-        return None
-    return max(input_tokens - cached, 0) + output

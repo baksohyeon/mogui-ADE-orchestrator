@@ -383,9 +383,9 @@ print($1)
 
 resolve_token_budget() {
   FRONT_MATTER_JSON=$(printf '%s' "$CHK" | jqf "json.dumps(d.get('front_matter') or {}, separators=(',',':'))") || return 1
-  TOKEN_FIELDS=$("$GATE" budget --tier "$TIER" \
-    --front-matter "$FRONT_MATTER_JSON" 2>/dev/null) || {
-    TOKEN_FIELDS='{"token_budget":null,"tokens_basis":"total","source":"unset:no-cap","records":null}'
+  TOKEN_FIELDS=$("$GATE" budget --front-matter "$FRONT_MATTER_JSON" 2>&1) || {
+    printf '%s\n' "$TOKEN_FIELDS" >&2
+    return 2
   }
   TOKEN_BUDGET=$(printf '%s' "$TOKEN_FIELDS" | jqf "d.get('token_budget') if d.get('token_budget') is not None else ''")
   TOKENS_BASIS=$(printf '%s' "$TOKEN_FIELDS" | jqf "d.get('tokens_basis','total')")

@@ -310,7 +310,11 @@ checkonly_ledger_test() (
   cat > "$gate" <<'BIN'
 #!/bin/bash
 if [ "${1:-}" = budget ]; then
-  printf '{"token_budget":123,"tokens_basis":"total","source":"declared","records":null}\n'
+  if [ "${BUDGET_MODE:-}" = refusal ]; then
+    printf 'budget.tokens must be a nonnegative integer\n' >&2
+    exit 2
+  fi
+  printf '{"token_budget":123,"tokens_basis":"total","source":"declared"}\n'
   exit 0
 fi
 no_record=0
@@ -374,6 +378,18 @@ BIN
   fi
   echo "ok   — --check-only leaves the real ledger's line count unchanged"
 
+  printf '{"kind":"seed1"}\n{"kind":"seed2"}\n' > "$ledger"
+  out=$(BUDGET_MODE=refusal bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 2 ] \
+      || ! printf '%s\n' "$out" | grep -qF 'budget.tokens must be a nonnegative integer' \
+      || printf '%s\n' "$out" | grep -qF 'token budget · unset'; then
+    echo "FAIL: budget refusal must stop before the uncapped fallback" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   — budget refusal stops dispatch before any pane work"
+
   # Failability: if dispatch stopped passing --no-record under --check-only,
   # this fake gate would append to the real ledger and the case above would fail.
   mutant_block=${block/'"${GATE_ARGS[@]}" --no-record'/'"${GATE_ARGS[@]}"'}
@@ -393,6 +409,47 @@ BIN
   echo "ok   — failability: dropping --no-record under --check-only would consume the fanout cap"
 )
 checkonly_ledger_test "$dispatch" || exit 1
+
+# --- Feature: token budget brief text matches declared and no-cap forms ------
+brief_token_budget_test() (
+  set +e
+  set -u
+  local dispatch="$1" block script_file out
+  block=$(awk '$0=="if [ -n \"$TOKEN_BUDGET\" ]; then"{count++} count==2{f=1} f{print} f&&$0=="fi"{exit}' "$dispatch")
+  [ -n "$block" ] || { echo "FAIL: could not extract the token budget brief block" >&2; return 1; }
+  script_file="${TMPDIR:-/tmp}/mogui-dispatch-token-budget-brief.$$"
+  trap 'rm -f "$script_file"' EXIT
+
+  {
+    echo 'set -u'
+    echo 'SPEC="base spec"'
+    echo 'TOKEN_BUDGET=123 TOKENS_BASIS=uncached TOKEN_BUDGET_SOURCE=declared'
+    printf '%s\n' "$block"
+    echo 'printf "%s\\n" "$SPEC"'
+  } > "$script_file"
+  out=$(bash "$script_file" 2>&1)
+  if ! printf '%s\n' "$out" | grep -qF 'Worker token budget: 123 tokens on the uncached basis.'; then
+    echo "FAIL: declared token budget brief is missing" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+
+  {
+    echo 'set -u'
+    echo 'SPEC="base spec"'
+    echo 'TOKEN_BUDGET="" TOKENS_BASIS=total TOKEN_BUDGET_SOURCE=unset:no-cap'
+    printf '%s\n' "$block"
+    echo 'printf "%s\\n" "$SPEC"'
+  } > "$script_file"
+  out=$(bash "$script_file" 2>&1)
+  if ! printf '%s\n' "$out" | grep -qF 'Worker token budget: unset because no cap was declared.'; then
+    echo "FAIL: no-cap token budget brief is missing" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   — token budget brief states declared and no-cap forms"
+)
+brief_token_budget_test "$dispatch" || exit 1
 
 # --- Feature: MOGUI_STATE_DIR state-root seam --------------------------------
 #

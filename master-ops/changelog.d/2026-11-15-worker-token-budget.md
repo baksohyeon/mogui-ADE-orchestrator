@@ -1,1 +1,0 @@
-Added declared worker token budgets, provider usage readers, and settlement for measured or explicitly unmeasured runtime usage. A contract without a tokens entry reports that no cap was declared; tier-default computation and the account quota guard are deferred to a later design for issue #263.

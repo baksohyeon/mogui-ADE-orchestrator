@@ -1414,7 +1414,7 @@ class WorkerReaper:
         self, worktree_path: Path
     ) -> LandingCheck:
         """
-        True when the branch's changed paths have the same content in origin/main.
+        Return a ``LandingCheck`` describing inclusion, reason, and landing rule.
 
         Squash merges erase ancestry, so `git branch --merged origin/main` cannot
         prove inclusion. Compare only paths changed from the merge base. This

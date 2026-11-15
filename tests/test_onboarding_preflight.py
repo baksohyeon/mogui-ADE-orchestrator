@@ -247,6 +247,18 @@ def test_orca_version_above_the_surface_minimum_passes_comparison(
 
 
 @skip_windows_exec_surface
+def test_unparsable_orca_runtime_version_is_reported_as_unknown(
+    tmp_path: Path,
+) -> None:
+    env = _host(tmp_path)
+    env["STUB_RUNTIME_VERSION"] = "runtime unavailable"
+    result = _run(env, tmp_path)
+    assert "orca-runtime-version" in _labels(result.stdout, "FAIL"), result.stdout
+    assert "runtime Orca version is unknown" in result.stdout, result.stdout
+    assert result.returncode == 1
+
+
+@skip_windows_exec_surface
 def test_missing_surface_minimum_blocks_preflight(tmp_path: Path) -> None:
     env = _host(tmp_path)
     baseline = tmp_path / "baseline.json"

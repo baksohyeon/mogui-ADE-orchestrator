@@ -249,7 +249,7 @@ if [[ "$orca_supported" == true ]]; then
     fi
   fi
   status_output=""
-  if status_output=$("$orca_command" status --json 2>&1); then
+  if status_output=$("$orca_command" status --json); then
     if grep -Eq '"ok"[[:space:]]*:[[:space:]]*true' <<<"$status_output"; then
       pass "orca" "$orca_command status --json returned ok:true"
       orca_ready=true
@@ -269,7 +269,9 @@ if [[ "$orca_supported" == true ]]; then
       fail "orca" "$orca_command status --json did not return ok:true; $(orca_install_hint)"
     fi
   else
-    fail "orca" "$orca_command status --json failed; $(orca_install_hint)"
+    status_error=""
+    status_error=$("$orca_command" status --json 2>&1 >/dev/null) || true
+    fail "orca" "$orca_command status --json failed${status_error:+: $status_error}; $(orca_install_hint)"
   fi
 fi
 

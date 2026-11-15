@@ -1,6 +1,6 @@
 # Standing rules
 
-Six named rule blocks, each a `## <name>` heading. A contract's front matter
+Seven named rule blocks, each a `## <name>` heading. A contract's front matter
 may name any subset of these under `standing_rules: [...]`; `scripts/dispatch`
 reads the named blocks and appends their text to the dispatched spec, so a
 worker receives the rule as part of its own task text instead of needing a
@@ -8,6 +8,14 @@ human to paste it in by hand. A seat may add further blocks in the overlay
 `config/standing-rules.overlay.md`, which this file ships none of. This file
 refreshes on every template re-stamp; the overlay, in the instance-owned
 `config/` directory, never does.
+
+`mail-before-done` is the one exception to "named under `standing_rules`":
+`scripts/dispatch` appends it to every brief whether or not a contract's
+front matter names it, the same way it always appends the worker token
+budget line below the standing-rule blocks. Naming it explicitly in
+`standing_rules` is harmless (the gate accepts it as a known block, same as
+the other six) but has no further effect, since the wrapper was going to add
+it anyway.
 
 ## headless
 
@@ -29,6 +37,12 @@ name why.
 
 The worker types the acknowledgement token bare in its completion message. The
 token never appears in a commit, a pull request body, or a review reply.
+
+## mail-before-done
+
+Before `worker_done`, run `orca orchestration check` once. If it returns
+coordinator mail for this task, apply it before reporting, or say in the
+completion message why not.
 
 ## placement
 

@@ -38,6 +38,12 @@ Hooks can run outside the sandbox after you trust them.
 Press enter to confirm or esc to go back'
 expect "codex hook-trust modal" "$MODAL" approval 1
 expect "proceed question" 'Do you want to proceed?' approval 1
+# An approval verdict names the re-read check to run after answering (#286);
+# no other verdict carries that line.
+out=$(run "$MODAL")
+printf '%s\n' "$out" | grep -qF 'orca terminal read --screen' && ok "approval row names the re-read check" || fail "approval row does not name the re-read check"
+out=$(run '❯ ')
+printf '%s\n' "$out" | grep -qF 'orca terminal read --screen' && fail "idle row should not carry the approval re-read check" || ok "idle row carries no re-read check"
 # Each new marker alone, so removing any one of them fails here and not only in the modal sample.
 expect "marker alone: hooks need review" 'Hooks need review' approval 1
 expect "marker alone: trust all and continue" 'Trust all and continue' approval 1

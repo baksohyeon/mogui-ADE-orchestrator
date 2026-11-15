@@ -26,10 +26,10 @@ Every literature index row carries:
 - a stable key and title;
 - the source URL;
 - the date the source was read, in `YYYY-MM-DD` form;
-- `read_how`, recorded as `fetched` or `search summary only`;
+- `read_how`, recorded as `fetched` when the source URL was fetched and checked, or `search summary only` when the search-summary record itself is the verified source for the claim;
 - topics and a concise claim supported by the source.
 
-Record a source in `literature/index.csv` only when the claim is verified to the level stated in the row. A source seen only in a search summary remains in the investigation's `coverage/` record until it is checked. Do not turn an unverified hit into a literature claim.
+Record a source in `literature/index.csv` only when the claim is verified to the level stated in the row. A search-summary-only entry is valid when the summary itself is the verified source for the recorded claim. A source merely named by a search summary remains in the investigation's `coverage/` record until it is checked. Do not turn an unverified hit into a literature claim.
 
 ## Investigation flow
 

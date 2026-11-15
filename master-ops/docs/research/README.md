@@ -2,7 +2,7 @@
 
 Reusable research records for this workspace. The layout generalizes the research harness originated in the QFUDS repository and keeps evidence records separate from owner decisions.
 
-Within `{{WORKSPACE_ROOT}}`, this directory uses the following layout:
+Within `{{OPS_REPO}}`, this directory uses the following layout:
 
 ```text
 docs/research/
@@ -26,8 +26,6 @@ The operational rules live in [Research workflow](../runbooks/research-workflow.
 
 The stage 1 layout keeps the literature index header-only until a verified source is recorded. A commented example shows the row shape without becoming a source record:
 
-```csv
-# example-source,"Example source",https://example.org/source,2026-11-15,fetched,example-topic,"Verified claim supported by the source"
-```
+<!-- Example literature row: key=example-source; title="Example source"; url=https://example.org/source; read_date=2026-11-15; read_how=fetched; topics=example-topic; claim="Verified claim supported by the source". -->
 
 Stage 1 adds the workflow and layout. It adds no commit guard, hook, or execution script. A later owner-approved stage can evaluate those additions after both seats have used this layout.

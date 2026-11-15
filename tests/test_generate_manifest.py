@@ -183,6 +183,8 @@ def test_manifest_writes_instance_owned_and_leaves_blame_records_out():
     assert list(data) == ["template_version", "files", "instance_owned"]
     assert "docs/blame/" in data["instance_owned"]
     assert not any(p.startswith("docs/blame/") for p in data["files"])
+    assert "docs/research/literature/index.csv" in data["instance_owned"]
+    assert "docs/research/literature/index.csv" in data["files"]
     # The template ships the genre README, but it is not installed.
     assert (SKELETON / "docs" / "blame" / "README.md").is_file()
     assert not list((SKELETON / "docs" / "blame").glob("BLAME-*.md"))

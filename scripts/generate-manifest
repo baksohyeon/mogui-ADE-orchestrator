@@ -62,6 +62,7 @@ INSTANCE_OWNED = (
     "AGENTS.md",
     "CLAUDE.md",
     "docs/MASTER-OPERATIONS.md",
+    "docs/research/literature/index.csv",
     "docs/decisions/closed-decisions-and-facts.md",
     "docs/runbooks/boot-comparison-set.md",
     "docs/runbooks/role-state.md",

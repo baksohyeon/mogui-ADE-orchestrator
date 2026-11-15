@@ -11,6 +11,7 @@ esac
 failures=0
 passes=0
 warnings=0
+unknowns=0
 waived=0
 
 # Keep Git discovery anchored to the repository carrying this script. An
@@ -33,7 +34,7 @@ seen_labels=()
 # repeated at the end with its consequence, because fifteen lines of output is
 # exactly the length at which the important line gets skimmed past.
 ESSENTIAL_LABELS=(
-  orca orchestration skills agent-cli agent-route worker-runtime bd python3
+  orca orca-version orchestration skills agent-cli agent-route worker-runtime bd python3
   gitleaks ctx redaction-extra skill-stack
 )
 essential_gaps=()
@@ -142,6 +143,88 @@ orca_install_command() {
   return 1
 }
 
+runtime_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+orca_baseline_file="${ORCA_SURFACE_BASELINE:-${runtime_root}/master-ops/scripts/orca-surface-baseline.json}"
+ORCA_VERSION_REGEX='(^|[^0-9.])([0-9]+)\.([0-9]+)\.([0-9]+)(-([0-9A-Za-z][0-9A-Za-z.-]*))?([^0-9A-Za-z.-]|\.([^0-9])|\.?$)'
+
+read_minimum_orca_version() {
+  python3 - "$orca_baseline_file" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle).get("minimumAppVersion")
+if not isinstance(value, str) or not value.strip():
+    raise ValueError("minimumAppVersion is missing")
+print(value.strip())
+PY
+}
+
+parse_orca_version() {
+  local version_line="${1%%$'\n'*}"
+  if [[ "$version_line" =~ $ORCA_VERSION_REGEX ]]; then
+    local prerelease=0
+    [[ -n "${BASH_REMATCH[6]:-}" ]] && prerelease=1
+    printf '%s.%s.%s|%s\n' "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" "${BASH_REMATCH[4]}" "$prerelease"
+    return 0
+  fi
+  return 1
+}
+
+extract_orca_status_version() {
+  python3 -c '
+import json
+import sys
+
+text = sys.stdin.read()
+decoder = json.JSONDecoder()
+for index, char in enumerate(text):
+    if char != "{":
+        continue
+    try:
+        payload, _ = decoder.raw_decode(text[index:])
+    except json.JSONDecodeError:
+        continue
+    value = payload.get("result", {}).get("runtime", {}).get("appVersion")
+    if isinstance(value, str) and value.strip():
+        print(value.strip())
+        raise SystemExit(0)
+raise SystemExit(1)
+' <<<"$1"
+}
+
+version_at_least() {
+  local current_version current_prerelease minimum_version minimum_prerelease
+  local current_major current_minor current_patch minimum_major minimum_minor minimum_patch
+  IFS='|' read -r current_version current_prerelease <<<"$1"
+  IFS='|' read -r minimum_version minimum_prerelease <<<"$2"
+  IFS=. read -r current_major current_minor current_patch <<<"$current_version"
+  IFS=. read -r minimum_major minimum_minor minimum_patch <<<"$minimum_version"
+  current_major=$((10#$current_major))
+  current_minor=$((10#$current_minor))
+  current_patch=$((10#$current_patch))
+  minimum_major=$((10#$minimum_major))
+  minimum_minor=$((10#$minimum_minor))
+  minimum_patch=$((10#$minimum_patch))
+  if (( current_major != minimum_major )); then
+    (( current_major > minimum_major ))
+  elif (( current_minor != minimum_minor )); then
+    (( current_minor > minimum_minor ))
+  elif (( current_patch != minimum_patch )); then
+    (( current_patch > minimum_patch ))
+  elif [[ "$current_prerelease" == 1 && "$minimum_prerelease" == 0 ]]; then
+    return 1
+  else
+    return 0
+  fi
+}
+
+unknown() {
+  seen_labels+=("$1")
+  unknowns=$((unknowns + 1))
+  printf 'UNKNOWN %-12s %s\n' "$1" "$2"
+}
+
 # Resolve once, before the first Orca invocation. Never fall through to another binary.
 if [[ -n "${ORCA_CLI_COMMAND:-}" ]]; then
   orca_command="$ORCA_CLI_COMMAND"
@@ -189,6 +272,29 @@ if [[ "$orca_supported" == true ]]; then
   else
     fail "orca" "$orca_command status --json failed; $(orca_install_hint)"
   fi
+
+  minimum_orca_version=""
+  minimum_orca_raw=""
+  if [[ "$orca_ready" == true ]] \
+    && minimum_orca_raw=$(read_minimum_orca_version 2>/dev/null) \
+    && minimum_orca_version=$(parse_orca_version "$minimum_orca_raw"); then
+    runtime_orca_raw=""
+    runtime_orca_version=""
+    if runtime_orca_raw=$(extract_orca_status_version "$status_output") \
+      && runtime_orca_version=$(parse_orca_version "$runtime_orca_raw"); then
+      if version_at_least "$runtime_orca_version" "$minimum_orca_version"; then
+        pass "orca-version" "Orca ${runtime_orca_version%%|*} meets minimum ${minimum_orca_version%%|*}"
+      else
+        fail "orca-version" "Orca ${runtime_orca_version%%|*} is below minimum ${minimum_orca_version%%|*}"
+      fi
+    else
+      unknown "orca-version" "Orca appVersion could not be parsed from '$orca_command status --json'"
+    fi
+  elif [[ "$orca_ready" != true ]]; then
+    unknown "orca-version" "Orca appVersion is unavailable because '$orca_command status --json' did not report a usable runtime"
+  else
+    unknown "orca-version" "minimum Orca version could not be read from the surface baseline; expected minimumAppVersion in master-ops/scripts/orca-surface-baseline.json"
+  fi
 fi
 
 # A reachable RPC does not mean a dispatch will land. Measure the capability
@@ -218,7 +324,6 @@ fi
 
 skills_output=""
 skills_status=0
-runtime_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 
 # Measure the artifact before the installer. The required skills can be present
 # without the `skills` package manager being installed at all, and an installer
@@ -724,6 +829,7 @@ done
 printf '\nPreflight summary\n'
 printf '  PASS: %d\n' "$passes"
 printf '  WARN: %d\n' "$warnings"
+printf '  UNKNOWN: %d\n' "$unknowns"
 printf '  FAIL: %d\n' "$failures"
 printf '  WAIVED: %d' "$waived"
 if [[ ${#waived_labels[@]} -gt 0 ]]; then

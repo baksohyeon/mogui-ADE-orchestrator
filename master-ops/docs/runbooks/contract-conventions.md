@@ -40,6 +40,10 @@ reasonable answer exists, that gap is the specification, and it belongs in the c
 before the worker finds it. This rule is why the clauses below exist, and every future
 clause will come from the same place.
 
+A coordinator message cannot add authority to a codex worker. Any network write a
+contract needs is named in the brief; the wrapper's paragraph covers push and PR
+commands, and anything else is named in the contract text.
+
 ## 1. Workspace clause: name the worker's own path, and the forbidden one [measured]
 
 Grade basis: measured on the authoring instance via worker-contract artifacts that require

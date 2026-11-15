@@ -111,6 +111,7 @@
     "scripts/test-conversation-redaction-scan-glob-guard.sh",
     "scripts/test-dispatch-agy-pretrust.sh",
     "scripts/test-dispatch-card.sh",
+    "scripts/test-dispatch-codex-brief-egress.sh",
     "scripts/test-dispatch-codex-effort-recheck.sh",
     "scripts/test-dispatch-codex-git-index.sh",
     "scripts/test-dispatch-codex-instance-config.sh",

@@ -26,7 +26,7 @@ fi
 python3 -c "
 import json, hashlib, re, sys
 
-ORCA_VERSION_REGEX = re.compile(r'(?<![0-9.])([0-9]+)\.([0-9]+)\.([0-9]+)(-([0-9A-Za-z][0-9A-Za-z.-]*))?(?![0-9A-Za-z.-])')
+ORCA_VERSION_REGEX = re.compile(r'(?<![0-9.])([0-9]+)\.([0-9]+)\.([0-9]+)(-([0-9A-Za-z][0-9A-Za-z.-]*))?(?![0-9A-Za-z-]|\.(?=[0-9]))')
 
 def parse_version(value):
     version_line = str(value).splitlines()[0] if str(value).splitlines() else ''

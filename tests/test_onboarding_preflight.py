@@ -12,6 +12,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -30,7 +31,11 @@ PREFLIGHT = REPO_ROOT / "scripts" / "onboarding-preflight.sh"
 
 ORCA_STUB = """#!/usr/bin/env bash
 case "$*" in
-  "--version") [[ -z "${STUB_ORCA_STDERR:-}" ]] || printf '%s\\n' "$STUB_ORCA_STDERR" >&2; printf '%s\\n' "${STUB_ORCA_VERSION-0.0.0}" ;;
+  "--version")
+    [[ -z "${STUB_ORCA_SLEEP:-}" ]] || sleep "$STUB_ORCA_SLEEP"
+    [[ -z "${STUB_ORCA_STDERR:-}" ]] || printf '%s\\n' "$STUB_ORCA_STDERR" >&2
+    printf '%s\\n' "${STUB_ORCA_VERSION-0.0.0}"
+    ;;
   "status --json")
     [[ -z "${STUB_STATUS_STDERR:-}" ]] || printf '%s\\n' "$STUB_STATUS_STDERR" >&2
     [[ -z "${STUB_STATUS_CALL_LOG:-}" ]] || printf '%s\\n' status >> "$STUB_STATUS_CALL_LOG"
@@ -287,7 +292,9 @@ def test_cli_version_ignores_stderr_noise(tmp_path: Path) -> None:
 
 
 @skip_windows_exec_surface
-def test_status_failure_preserves_error_without_a_second_call(tmp_path: Path) -> None:
+def test_status_failure_keeps_original_message_without_a_second_call(
+    tmp_path: Path,
+) -> None:
     env = _host(tmp_path)
     status_log = tmp_path / "status-calls.log"
     env["STUB_STATUS_EXIT"] = "1"
@@ -295,7 +302,8 @@ def test_status_failure_preserves_error_without_a_second_call(tmp_path: Path) ->
     env["STUB_STATUS_CALL_LOG"] = str(status_log)
     result = _run(env, tmp_path)
     assert "orca" in _labels(result.stdout, "FAIL"), result.stdout
-    assert "status diagnosis" in result.stdout, result.stdout
+    assert "orca status --json failed; install guidance:" in result.stdout, result.stdout
+    assert "status diagnosis" not in result.stdout, result.stdout
     assert status_log.read_text(encoding="utf-8").splitlines() == ["status"]
 
 
@@ -324,7 +332,9 @@ def test_unparsable_orca_runtime_version_is_reported_as_unknown(
 
 
 @skip_windows_exec_surface
-def test_missing_surface_minimum_blocks_preflight(tmp_path: Path) -> None:
+def test_missing_surface_minimum_is_unknown_without_blocking_preflight(
+    tmp_path: Path,
+) -> None:
     env = _host(tmp_path)
     baseline = tmp_path / "baseline.json"
     baseline.write_text(
@@ -332,9 +342,50 @@ def test_missing_surface_minimum_blocks_preflight(tmp_path: Path) -> None:
     )
     env["ORCA_SURFACE_BASELINE"] = str(baseline)
     result = _run(env, tmp_path)
-    assert "orca-version" in _labels(result.stdout, "FAIL"), result.stdout
+    assert "orca-version" in _labels(result.stdout, "UNKNOWN"), result.stdout
     assert "minimum Orca version could not be read" in result.stdout, result.stdout
-    assert result.returncode == 1
+    assert result.returncode == 0, result.stdout
+
+
+@skip_windows_exec_surface
+def test_unreadable_surface_minimum_is_unknown_without_blocking_preflight(
+    tmp_path: Path,
+) -> None:
+    env = _host(tmp_path)
+    baseline = tmp_path / "baseline-directory"
+    baseline.mkdir()
+    env["ORCA_SURFACE_BASELINE"] = str(baseline)
+    result = _run(env, tmp_path)
+    assert "orca-version" in _labels(result.stdout, "UNKNOWN"), result.stdout
+    assert "minimum Orca version could not be read" in result.stdout, result.stdout
+    assert result.returncode == 0, result.stdout
+
+
+@skip_windows_exec_surface
+def test_orca_version_timeout_without_timeout_commands_is_bounded(
+    tmp_path: Path,
+) -> None:
+    env = _host(tmp_path, sanitized_path=True)
+    system_shim = tmp_path / "system-shim"
+    system_shim.mkdir()
+    for system_dir in (Path("/usr/bin"), Path("/bin")):
+        for tool in system_dir.iterdir():
+            if tool.name in {"timeout", "gtimeout"} or os.path.lexists(
+                system_shim / tool.name
+            ):
+                continue
+            (system_shim / tool.name).symlink_to(tool)
+    env["PATH"] = f"{tmp_path / 'bin'}:{Path(sys.executable).parent}:{system_shim}"
+    env["STUB_ORCA_SLEEP"] = "4"
+    env["ORCA_VERSION_TIMEOUT_SECONDS"] = "1"
+    started = time.monotonic()
+    result = _run(env, tmp_path)
+    elapsed = time.monotonic() - started
+
+    assert "orca-version" in _labels(result.stdout, "UNKNOWN"), result.stdout
+    assert "timed out after 1s" in result.stdout, result.stdout
+    assert result.returncode == 0, result.stdout
+    assert elapsed < 3, f"watchdog took {elapsed:.2f}s: {result.stdout}"
 
 
 @skip_windows_exec_surface

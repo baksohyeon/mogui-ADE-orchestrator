@@ -30,6 +30,7 @@ VERSION_CASES = (
         f"orca version {MINIMUM_ORCA_VERSION} (build 123)",
         False,
     ),
+    ("trailing_punctuation", f"Orca {MINIMUM_ORCA_VERSION}.", False),
 )
 
 MALFORMED_VERSION_CASES = ("four_part", f"{MINIMUM_PARTS[0]}.{MINIMUM_PARTS[1]}.999.1")

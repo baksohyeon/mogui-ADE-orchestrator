@@ -92,6 +92,9 @@ EST=3000
 TERMINAL="" WORKTREE="" CONTRACT="" SPEC="" RUNTIME="" SAME_HOST_REASON="" CHECK_ONLY=0
 RUNTIME_EXPLICIT=0
 TIER_POLICY_OVERRIDE=""
+TOKEN_BUDGET=""
+TOKENS_BASIS="total"
+TOKEN_BUDGET_SOURCE=""
 # Tracker card choice. With neither flag, the wrapper creates and claims a card
 # from the contract's H1 title when bd resolves to an active tracker.
 CARD=""
@@ -109,6 +112,7 @@ LEDGER_EVENT_RESULT=""
 LEDGER_EVENT_REASON=""
 LEDGER_EVENT_QUERY=""
 LEDGER_EVENT_SESSION_ID=""
+LEDGER_EVENT_SESSION_RECORD=""
 LEDGER_EVENT_WORKTREE_PATH=""
 LEDGER_EVENT_OPERATION=""
 LEDGER_EVENT_ESCALATED=""
@@ -135,6 +139,7 @@ while [ $# -gt 0 ]; do
     --reason) LEDGER_EVENT_REASON=$2; shift 2;;
     --search-query) LEDGER_EVENT_QUERY=$2; shift 2;;
     --session-id) LEDGER_EVENT_SESSION_ID=$2; shift 2;;
+    --session-record) LEDGER_EVENT_SESSION_RECORD=$2; shift 2;;
     --worktree-path) LEDGER_EVENT_WORKTREE_PATH=$2; shift 2;;
     --operation) LEDGER_EVENT_OPERATION=$2; shift 2;;
     --escalated) LEDGER_EVENT_ESCALATED=$2; shift 2;;
@@ -257,11 +262,26 @@ EOF
 
 if [ -n "$LEDGER_EVENT" ]; then
   resolve_shared_paths
+  SETTLE_STATUS=0
   if [ -z "$LEDGER_EVENT_DISPATCH_ID" ]; then
     echo "✗ --ledger-event requires --dispatch-id" >&2
     exit 1
   fi
   case "$LEDGER_EVENT" in
+    worker_done|reap)
+      if [ -n "$LEDGER_EVENT_SESSION_RECORD" ] && [ -z "$RUNTIME" ]; then
+        echo "✗ $LEDGER_EVENT with --session-record requires --runtime" >&2
+        exit 1
+      fi
+      SETTLE_ARGS=(--ledger "$LEDGER" settle --dispatch-id "$LEDGER_EVENT_DISPATCH_ID")
+      [ -n "$RUNTIME" ] && SETTLE_ARGS+=(--runtime "$RUNTIME")
+      [ -n "$LEDGER_EVENT_SESSION_RECORD" ] && SETTLE_ARGS+=(--record "$LEDGER_EVENT_SESSION_RECORD")
+      SETTLE_STATUS=0
+      "$GATE" "${SETTLE_ARGS[@]}" >/dev/null || {
+        SETTLE_STATUS=$?
+        echo "⚠ $LEDGER_EVENT settlement failed; recording the event" >&2
+      }
+      ;;
     resume_attempt)
       if [ "$LEDGER_EVENT_RESULT" = resumed ]; then
         :
@@ -311,7 +331,12 @@ if [ -n "$LEDGER_EVENT" ]; then
       ;;
   esac
   record_ledger_event
-  exit $?
+  RECORD_STATUS=$?
+  if [ "$SETTLE_STATUS" -ne 0 ] && [ "$RECORD_STATUS" -eq 0 ]; then
+    exit 0
+  fi
+  [ "$SETTLE_STATUS" -ne 0 ] && exit "$SETTLE_STATUS"
+  exit "$RECORD_STATUS"
 fi
 
 [ -z "$CONTRACT" ] || [ ! -f "$CONTRACT" ] && { echo "✗ contract file missing: $CONTRACT" >&2; exit 1; }
@@ -357,6 +382,17 @@ if json_line is None:
 d = json.loads(json_line)
 print($1)
 "
+}
+
+resolve_token_budget() {
+  FRONT_MATTER_JSON=$(printf '%s' "$CHK" | jqf "json.dumps(d.get('front_matter') or {}, separators=(',',':'))") || return 1
+  TOKEN_FIELDS=$("$GATE" budget --front-matter "$FRONT_MATTER_JSON" 2>&1) || {
+    printf '%s\n' "$TOKEN_FIELDS" >&2
+    return 2
+  }
+  TOKEN_BUDGET=$(printf '%s' "$TOKEN_FIELDS" | jqf "d.get('token_budget') if d.get('token_budget') is not None else ''")
+  TOKENS_BASIS=$(printf '%s' "$TOKEN_FIELDS" | jqf "d.get('tokens_basis','total')")
+  TOKEN_BUDGET_SOURCE=$(printf '%s' "$TOKEN_FIELDS" | jqf "d.get('source','unset')")
 }
 
 # The tracker title is the contract's first level-one Markdown heading. Keep
@@ -2326,6 +2362,15 @@ if [ "$ALLOW" != "True" ]; then
   echo "✗ gate DENY · $(echo "$CHK" | jqf "d['reason']") · model=$MODEL tier=$TIER"
   echo "$CHK"; exit 2
 fi
+resolve_token_budget || {
+  echo "✗ token budget resolution failed; dispatch cannot determine the budget" >&2
+  exit 2
+}
+if [ -n "$TOKEN_BUDGET" ]; then
+  echo "token budget · ${TOKEN_BUDGET} tokens · basis=${TOKENS_BASIS} · source=${TOKEN_BUDGET_SOURCE}"
+else
+  echo "token budget · unset · basis=${TOKENS_BASIS} · source=${TOKEN_BUDGET_SOURCE}"
+fi
 if [ "$CHECK_ONLY" = 1 ]; then
   [ "$TIER" = "top" ] && [ -n "$TOP_APPROVED_TEXT" ] && echo "🔓 top tier approved by owner · $TOP_APPROVED"
   COLLISION_WARN=$(MOGUI_PRODUCT_REPO="${PRODUCT_REPO_ARG:-}" "$COLLISION_CHECK" "$CONTRACT" "$LEDGER" 2>/dev/null || true)
@@ -2447,6 +2492,16 @@ fi
 SPEC="$SPEC
 
 Tracker card: ${CARD:-none}"
+if [ -n "$TOKEN_BUDGET" ]; then
+  SPEC="$SPEC
+
+Worker token budget: ${TOKEN_BUDGET} tokens on the ${TOKENS_BASIS} basis. This cap is declared in the contract. Usage is measured from the session record at worker_done or reap. Send an ask message to the coordinator before you expect to exceed the cap."
+else
+  SPEC="$SPEC
+
+Worker token budget: unset because no cap was declared. Usage is measured from the session record at worker_done or reap."
+fi
+echo "📎 worker token budget · ${TOKEN_BUDGET:-unset} · basis=${TOKENS_BASIS}"
 if [ "$MODEL_NEEDS_MEASUREMENT" = 1 ]; then
   SPEC="$SPEC
 
@@ -2922,11 +2977,16 @@ elif [ -n "$CARD_REASON" ]; then
 elif [ -n "$CARD" ]; then
   REGISTER_CARD_ARGS+=(--card "$CARD")
 fi
+REGISTER_TOKEN_ARGS=(--tokens-basis "$TOKENS_BASIS" --token-budget-source "$TOKEN_BUDGET_SOURCE")
+if [ -n "$TOKEN_BUDGET" ]; then
+  REGISTER_TOKEN_ARGS+=(--token-budget "$TOKEN_BUDGET")
+fi
 REG=$(ledger_locked_command "$GATE" --ledger "$LEDGER" register --job-id "$DISP" --contract-sha "$SHA" \
       --runtime "$RUNTIME" --tier-policy "$POLICY" \
       --probe-cmd "orca orchestration dispatch-show --task $TASK --json 2>/dev/null | grep -o $DISP | head -1" \
       --orchestration-task "$TASK" --declared-model "$MODEL" --pane "$TERMINAL" \
       "${MODEL_PROBE_ARGS[@]+"${MODEL_PROBE_ARGS[@]}"}" \
+      "${REGISTER_TOKEN_ARGS[@]+"${REGISTER_TOKEN_ARGS[@]}"}" \
       "${REGISTER_CARD_ARGS[@]+"${REGISTER_CARD_ARGS[@]}"}" 2>/dev/null)
 if [ "$(echo "$REG" | jqf "d['allow']")" != "True" ]; then
   if ! record_dispatch_placement; then

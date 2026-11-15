@@ -221,10 +221,17 @@ brief_model_measurement_test() (
   set -u
   local dispatch="$1" block script_file out mutant
   block=$(awk '
-    $0=="if [ \"$MODEL_NEEDS_MEASUREMENT\" = 1 ]; then"{count++}
-    count==2{f=1}
-    f{print}
-    f&&$0=="fi"{exit}
+    $0=="if [ \"$MODEL_NEEDS_MEASUREMENT\" = 1 ]; then" {candidate=$0 "\n"; collecting=1; next}
+    collecting {
+      candidate = candidate $0 "\n"
+      if ($0 ~ /Model measurement required:/) {
+        printf "%s", candidate
+        collecting=0
+        f=1
+      }
+      next
+    }
+    f {print; if ($0=="fi") exit}
   ' "$dispatch")
   [ -n "$block" ] || { echo "FAIL: could not extract the model measurement brief block" >&2; return 1; }
 
@@ -278,12 +285,13 @@ brief_model_measurement_test "$dispatch" || exit 1
 checkonly_ledger_test() (
   set +e
   set -u
-  local dispatch="$1" work jqf_fn tier_fn mark_fn block
+  local dispatch="$1" work jqf_fn tier_fn mark_fn resolve_fn block
   local gate ledger policy contract script_file status before after out mutant_block
 
   jqf_fn=$(awk '$0=="jqf() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   tier_fn=$(awk '$0=="tier_for_model() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   mark_fn=$(awk '$0=="mark_model_needs_measurement() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  resolve_fn=$(awk '$0=="resolve_token_budget() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   block=$(awk '
     $0=="TIER=$(tier_for_model \"$MODEL\" 2>/dev/null || echo unknown)"{f=1}
     f{print}
@@ -294,6 +302,7 @@ checkonly_ledger_test() (
   [ -n "$jqf_fn" ] || { echo "FAIL: could not extract jqf" >&2; return 1; }
   [ -n "$tier_fn" ] || { echo "FAIL: could not extract tier_for_model" >&2; return 1; }
   [ -n "$mark_fn" ] || { echo "FAIL: could not extract mark_model_needs_measurement" >&2; return 1; }
+  [ -n "$resolve_fn" ] || { echo "FAIL: could not extract resolve_token_budget" >&2; return 1; }
   [ -n "$block" ] || { echo "FAIL: could not extract the check-only gate block" >&2; return 1; }
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-checkonly-test.$$"
@@ -307,6 +316,14 @@ checkonly_ledger_test() (
   printf '# fake contract\n' > "$contract"
   cat > "$gate" <<'BIN'
 #!/bin/bash
+if [ "${1:-}" = budget ]; then
+  if [ "${BUDGET_MODE:-}" = refusal ]; then
+    printf 'budget.tokens must be a nonnegative integer\n' >&2
+    exit 2
+  fi
+  printf '{"token_budget":123,"tokens_basis":"total","source":"declared"}\n'
+  exit 0
+fi
 no_record=0
 for a in "$@"; do [ "$a" = --no-record ] && no_record=1; done
 if [ "$no_record" -eq 0 ]; then
@@ -327,6 +344,7 @@ BIN
       printf '%s\n' "$jqf_fn"
       printf '%s\n' "$tier_fn"
       printf '%s\n' "$mark_fn"
+      printf '%s\n' "$resolve_fn"
       printf 'GATE=%s\n' "$gate"
       printf 'LEDGER=%s\n' "$ledger"
       printf 'POLICY=%s\n' "$policy"
@@ -360,7 +378,24 @@ BIN
     echo "FAIL: --check-only changed the real ledger's line count ($before -> $after)" >&2
     return 1
   fi
+  if ! printf '%s\n' "$out" | grep -qF 'token budget · 123 tokens · basis=total · source=declared'; then
+    echo "FAIL: --check-only did not print the resolved token budget" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
   echo "ok   — --check-only leaves the real ledger's line count unchanged"
+
+  printf '{"kind":"seed1"}\n{"kind":"seed2"}\n' > "$ledger"
+  out=$(BUDGET_MODE=refusal bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 2 ] \
+      || ! printf '%s\n' "$out" | grep -qF 'budget.tokens must be a nonnegative integer' \
+      || printf '%s\n' "$out" | grep -qF 'token budget · unset'; then
+    echo "FAIL: budget refusal must stop before the uncapped fallback" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   — budget refusal stops dispatch before any pane work"
 
   # Failability: if dispatch stopped passing --no-record under --check-only,
   # this fake gate would append to the real ledger and the case above would fail.
@@ -381,6 +416,52 @@ BIN
   echo "ok   — failability: dropping --no-record under --check-only would consume the fanout cap"
 )
 checkonly_ledger_test "$dispatch" || exit 1
+
+# --- Feature: token budget brief text matches declared and no-cap forms ------
+brief_token_budget_test() (
+  set +e
+  set -u
+  local dispatch="$1" block script_file out
+  block=$(awk '
+    /# Keep this line in the prepared worker prompt/ {armed=1}
+    armed && /^if \[ -n "\$TOKEN_BUDGET" \]; then$/ {f=1}
+    f{print}
+    f&&$0=="fi"{exit}
+  ' "$dispatch")
+  [ -n "$block" ] || { echo "FAIL: could not extract the token budget brief block" >&2; return 1; }
+  script_file="${TMPDIR:-/tmp}/mogui-dispatch-token-budget-brief.$$"
+  trap 'rm -f "$script_file"' EXIT
+
+  {
+    echo 'set -u'
+    echo 'SPEC="base spec"'
+    echo 'TOKEN_BUDGET=123 TOKENS_BASIS=uncached TOKEN_BUDGET_SOURCE=declared'
+    printf '%s\n' "$block"
+    echo 'printf "%s\\n" "$SPEC"'
+  } > "$script_file"
+  out=$(bash "$script_file" 2>&1)
+  if ! printf '%s\n' "$out" | grep -qF 'Worker token budget: 123 tokens on the uncached basis. This cap is declared in the contract. Usage is measured from the session record at worker_done or reap. Send an ask message to the coordinator before you expect to exceed the cap.'; then
+    echo "FAIL: declared token budget brief is missing" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+
+  {
+    echo 'set -u'
+    echo 'SPEC="base spec"'
+    echo 'TOKEN_BUDGET="" TOKENS_BASIS=total TOKEN_BUDGET_SOURCE=unset:no-cap'
+    printf '%s\n' "$block"
+    echo 'printf "%s\\n" "$SPEC"'
+  } > "$script_file"
+  out=$(bash "$script_file" 2>&1)
+  if ! printf '%s\n' "$out" | grep -qF 'Worker token budget: unset because no cap was declared. Usage is measured from the session record at worker_done or reap.'; then
+    echo "FAIL: no-cap token budget brief is missing" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   — token budget brief states declared and no-cap forms"
+)
+brief_token_budget_test "$dispatch" || exit 1
 
 # --- Feature: MOGUI_STATE_DIR state-root seam --------------------------------
 #

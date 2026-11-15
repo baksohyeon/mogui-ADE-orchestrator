@@ -337,16 +337,20 @@ class WorkerReaper:
                 measurements["worktree_clean"] = wt_clean
                 measurements["worktree_merged"] = wt_merged
                 if wt_clean and wt_merged:
-                    remote_contains_tip = self._remote_tracking_contains_tip(worktree_path)
-                    measurements["worktree_tip_remote"] = remote_contains_tip
-                    if remote_contains_tip is None:
-                        wt_clean = False
-                        wt_merged = False
-                        reason = "unpushed status unmeasured"
-                    elif not remote_contains_tip:
-                        wt_clean = False
-                        wt_merged = False
-                        reason = "unpushed commits"
+                    if self._last_landing_rule == "merged_pr":
+                        measurements["worktree_unpushed"] = False
+                    else:
+                        remote_contains_tip = self._remote_tracking_contains_tip(worktree_path)
+                        measurements["worktree_tip_remote"] = remote_contains_tip
+                        measurements["worktree_unpushed"] = remote_contains_tip is not True
+                        if remote_contains_tip is None:
+                            wt_clean = False
+                            wt_merged = False
+                            reason = "unpushed status unmeasured"
+                        elif not remote_contains_tip:
+                            wt_clean = False
+                            wt_merged = False
+                            reason = "unpushed commits"
                 if wt_clean and wt_merged:
                     measurements["worktree_landed_by"] = self._last_landing_rule
                     ignored_media = self._ignored_media(worktree_path)
@@ -1266,8 +1270,9 @@ class WorkerReaper:
             worktree_path
         )
         if squash_included:
-            if self._last_landing_rule is None:
-                self._last_landing_rule = "content"
+            self._last_landing_rule = (
+                "merged_pr" if squash_reason == "merged_pr" else "content"
+            )
             return True, True, ""
 
         return False, False, (
@@ -1490,8 +1495,7 @@ class WorkerReaper:
         if code != 0:
             reason = f"virtual merge failed: {stderr or merge_tree_stdout}"
             if self._squash_landing_proof(worktree_path):
-                self._last_landing_rule = "merged_pr"
-                return True, ""
+                return True, "merged_pr"
             return False, reason
 
         main_tree = main_tree_stdout.strip()

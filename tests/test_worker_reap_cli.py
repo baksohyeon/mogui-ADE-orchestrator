@@ -56,8 +56,11 @@ class WorkerReapCliTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         lines = stderr.getvalue().splitlines()
         self.assertEqual(len(lines), 1)
+        self.assertIn("deprecated", lines[0].lower())
         self.assertIn("orca terminal close --worktree <sel> --all", lines[0])
         self.assertIn("orca worktree rm --worktree <sel> --delete-branch", lines[0])
+        self.assertNotIn("template", lines[0].lower())
+        self.assertNotIn("minimum", lines[0].lower())
 
     def test_deprecation_line_does_not_change_failure_exit_code(self) -> None:
         stderr = io.StringIO()
@@ -69,6 +72,7 @@ class WorkerReapCliTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 7)
         self.assertEqual(len(stderr.getvalue().splitlines()), 2)
+        self.assertIn("deprecated", stderr.getvalue().lower())
         self.assertIn("orca terminal close --worktree <sel> --all", stderr.getvalue())
 
 

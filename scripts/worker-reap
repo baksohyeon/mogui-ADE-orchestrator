@@ -34,9 +34,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     print(
-        "Deprecation: worker-reap uses orca terminal close --worktree <sel> --all "
-        "and orca worktree rm --worktree <sel> --delete-branch; removal is planned "
-        "after two template releases following declaration of the Orca minimum.",
+        "Deprecated: worker-reap uses orca terminal close --worktree <sel> --all "
+        "and orca worktree rm --worktree <sel> --delete-branch.",
         file=sys.stderr,
     )
 

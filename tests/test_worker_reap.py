@@ -1920,6 +1920,39 @@ class RevisionTwoWorkerReapTests(unittest.TestCase):
                         self.assertEqual(len(runner.git_removed_commands), 1)
                     self.assertEqual(len(runner.closed_commands), 1)
 
+    def test_matching_squash_pr_reclaims_pruned_remote_tip(self) -> None:
+        for selector in (True, False):
+            for pr_case in ("match", "tip"):
+                with (
+                    self.subTest(selector=selector, pr_case=pr_case),
+                    tempfile.TemporaryDirectory() as tmp,
+                ):
+                    runner = _RevisionTwoRunner(
+                        tmp,
+                        selector=selector,
+                        pr_case=pr_case,
+                        unpushed=True,
+                    )
+                    record = WorkerReaper(orca_runner=runner).reap(task_id="t1")
+
+                    if pr_case == "match":
+                        self.assertEqual(
+                            record.measurements["worktree_landed_by"], "merged_pr"
+                        )
+                        self.assertFalse(record.measurements["worktree_unpushed"])
+                        self.assertEqual(len(runner.closed_commands), 1)
+                        if selector:
+                            self.assertEqual(len(runner.removed_commands), 1)
+                            self.assertEqual(runner.git_removed_commands, [])
+                        else:
+                            self.assertEqual(runner.removed_commands, [])
+                            self.assertEqual(len(runner.git_removed_commands), 1)
+                    else:
+                        self.assertIn("virtual merge failed", record.actions_taken)
+                        self.assertEqual(runner.closed_commands, [])
+                        self.assertEqual(runner.removed_commands, [])
+                        self.assertEqual(runner.git_removed_commands, [])
+
     def test_squash_proof_rejects_tip_fork_base_and_gh_failures(self) -> None:
         for case in ("tip", "fork", "base", "gh-fail"):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
@@ -1942,10 +1975,35 @@ class RevisionTwoWorkerReapTests(unittest.TestCase):
     def test_unpushed_worktree_is_kept_for_both_row_shapes(self) -> None:
         for selector in (True, False):
             with self.subTest(selector=selector), tempfile.TemporaryDirectory() as tmp:
-                runner = _RevisionTwoRunner(tmp, selector=selector, unpushed=True)
+                runner = _RevisionTwoRunner(
+                    tmp,
+                    selector=selector,
+                    pr_case="tip",
+                    unpushed=True,
+                    virtual_failure_mode="content",
+                )
                 record = WorkerReaper(orca_runner=runner).reap(task_id="t1")
 
                 self.assertIn("unpushed commits", record.actions_taken)
+                self.assertTrue(record.measurements["worktree_unpushed"])
+                self.assertEqual(runner.closed_commands, [])
+                self.assertEqual(runner.removed_commands, [])
+                self.assertEqual(runner.git_removed_commands, [])
+
+    def test_unmeasured_remote_tip_is_kept(self) -> None:
+        for selector in (True, False):
+            with self.subTest(selector=selector), tempfile.TemporaryDirectory() as tmp:
+                runner = _RevisionTwoRunner(
+                    tmp,
+                    selector=selector,
+                    pr_case="tip",
+                    remote_unmeasured=True,
+                    virtual_failure_mode="content",
+                )
+                record = WorkerReaper(orca_runner=runner).reap(task_id="t1")
+
+                self.assertIn("unpushed status unmeasured", record.actions_taken)
+                self.assertTrue(record.measurements["worktree_unpushed"])
                 self.assertEqual(runner.closed_commands, [])
                 self.assertEqual(runner.removed_commands, [])
                 self.assertEqual(runner.git_removed_commands, [])
@@ -1975,6 +2033,7 @@ class _RevisionTwoRunner:
         selector: bool = True,
         pr_case: str = "match",
         unpushed: bool = False,
+        remote_unmeasured: bool = False,
         content_difference: bool = False,
         virtual_failure_mode: str = "merge-base",
     ) -> None:
@@ -1982,6 +2041,7 @@ class _RevisionTwoRunner:
         self.selector = selector
         self.pr_case = pr_case
         self.unpushed = unpushed
+        self.remote_unmeasured = remote_unmeasured
         self.content_difference = content_difference
         self.virtual_failure_mode = virtual_failure_mode
         self.commands: list[list[str]] = []
@@ -2035,11 +2095,16 @@ class _RevisionTwoRunner:
         if "git" in cmd and "rev-parse" in cmd and cmd[-1] == "HEAD":
             return 0, "tip\n", ""
         if "git" in cmd and "branch" in cmd and "-r" in cmd and "--contains" in cmd:
+            if self.remote_unmeasured:
+                return 1, "", "remote tracking unavailable"
             return 0, "" if self.unpushed else "  origin/feature-x\n", ""
         if "git" in cmd and "branch" in cmd and "--merged" in cmd:
             return 0, "* main\n", ""
         if "git" in cmd and "merge-base" in cmd:
-            if self.content_difference or self.virtual_failure_mode == "name-only":
+            if self.content_difference or self.virtual_failure_mode in (
+                "content",
+                "name-only",
+            ):
                 return 0, "base\n", ""
             return 1, "", "merge base unavailable"
         if "git" in cmd and "--name-only" in cmd:

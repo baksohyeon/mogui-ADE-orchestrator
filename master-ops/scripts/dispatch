@@ -560,7 +560,15 @@ elif remote.startswith(("https://", "ssh://")):
     if (parsed.hostname or "").lower() != "github.com":
         raise SystemExit(1)
     path = parsed.path
-    display = urlunsplit((parsed.scheme, "github.com", parsed.path, "", ""))
+    try:
+        port = parsed.port
+    except ValueError:
+        raise SystemExit(1)
+    validated_url = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+    display_netloc = parsed.hostname
+    if port is not None:
+        display_netloc = f"{display_netloc}:{port}"
+    display = urlunsplit((parsed.scheme, display_netloc, parsed.path, "", ""))
 else:
     raise SystemExit(1)
 parts = [part for part in path.strip("/").split("/") if part]
@@ -569,10 +577,31 @@ if len(parts) != 2:
 owner, repository = parts
 if repository.endswith(".git"):
     repository = repository[:-4]
-slug_pattern = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
-if not slug_pattern.fullmatch(owner) or not slug_pattern.fullmatch(repository):
+owner_pattern = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+repository_pattern = re.compile(r"^[A-Za-z0-9_.-]+$")
+if not owner_pattern.fullmatch(owner) or not repository_pattern.fullmatch(repository):
     raise SystemExit(1)
-print(f"{display}\t{owner}/{repository}")
+if repository in {".", ".."}:
+    raise SystemExit(1)
+print(f"{display}\t{owner}/{repository}\t{validated_url if 'validated_url' in locals() else display}")
+PY
+}
+
+markdown_code_span() {
+  python3 - "$1" <<'PY'
+import sys
+
+content = sys.argv[1]
+longest = 0
+current = 0
+for char in content:
+    if char == "`":
+        current += 1
+        longest = max(longest, current)
+    else:
+        current = 0
+delimiter = "`" * (longest + 1)
+print(f"{delimiter}{content}{delimiter}")
 PY
 }
 
@@ -583,7 +612,7 @@ PY
 append_codex_authorized_egress() {
   [ "$RUNTIME" = codex ] || return 0
   local worktree_selector="${WORKTREE:-}"
-  local worktree_path branch_name branch_arg origin_url origin_metadata origin_display_url owner_repo
+  local worktree_path branch_name branch_arg push_command push_command_code origin_url origin_metadata origin_display_url owner_repo
   local push_urls push_url push_metadata push_url_display push_repo push_url_list push_measurement_failed
   local unmeasured="Authorized egress for this worker (owner's repository): the destination is unmeasured and no push is authorized."
 
@@ -604,6 +633,7 @@ append_codex_authorized_egress() {
   if [ -n "$origin_metadata" ]; then
     origin_display_url="${origin_metadata%%$'\t'*}"
     owner_repo="${origin_metadata#*$'\t'}"
+    owner_repo="${owner_repo%%$'\t'*}"
   else
     origin_display_url=""
     owner_repo=""
@@ -619,6 +649,7 @@ append_codex_authorized_egress() {
     fi
     push_url_display="${push_metadata%%$'\t'*}"
     push_repo="${push_metadata#*$'\t'}"
+    push_repo="${push_repo%%$'\t'*}"
     [ "$push_repo" = "$owner_repo" ] || push_measurement_failed=1
     push_url_list="${push_url_list}${push_url_list:+, }$push_url_display"
   done <<< "$push_urls"
@@ -632,9 +663,11 @@ $unmeasured"
     return 0
   fi
   branch_arg=$(printf '%q' "$branch_name")
+  push_command="git push origin -- $branch_arg"
+  push_command_code=$(markdown_code_span "$push_command")
   SPEC="$SPEC
 
-Authorized egress for this worker (owner's repository): The owner authorizes this worker to run \`git push origin -- $branch_arg\` to \`$origin_display_url\`, with configured push destination(s) \`$push_url_list\`, which is the owner's own repository and this worktree's \`origin\`, and \`gh pr create\`, \`gh pr edit\`, \`gh pr comment\` and \`gh api graphql\` (read) on \`$owner_repo\`. No other network write is authorized."
+Authorized egress for this worker (owner's repository): The owner authorizes this worker to run $push_command_code to \`$origin_display_url\`, with configured push destination(s) \`$push_url_list\`, which is the owner's own repository and this worktree's \`origin\`, and \`gh pr create\`, \`gh pr edit\`, \`gh pr comment\` and \`gh api graphql\` (read) on \`$owner_repo\`. No other network write is authorized."
 }
 
 # Resolve product_repositories (or product_repo) from the instance runtime
@@ -670,6 +703,7 @@ for r in repos:
     metadata=$(github_remote_metadata "$remote_url" 2>/dev/null || true)
     if [ -n "$metadata" ]; then
       slug="${metadata#*$'\t'}"
+      slug="${slug%%$'\t'*}"
     else
       slug=""
     fi

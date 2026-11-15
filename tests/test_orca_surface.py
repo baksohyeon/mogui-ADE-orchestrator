@@ -7,9 +7,11 @@ import os
 import subprocess
 from pathlib import Path
 
+from windows_exec_surface import skip_windows_exec_surface
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SURFACE_CHECK = REPO_ROOT / "master-ops" / "scripts" / "orca-surface-check.sh"
+pytestmark = skip_windows_exec_surface
 
 
 def _fake_orca(path: Path, app_version: str) -> None:

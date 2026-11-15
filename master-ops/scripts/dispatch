@@ -867,7 +867,7 @@ EOF
 }
 
 validate_reused_worktree_alignment() {
-  local selected_path terminal_path selected_identity terminal_identity
+  local selected_path="" terminal_path="" selected_identity="" terminal_identity=""
   [ -n "$TERMINAL" ] || return 0
   [ -n "$WORKTREE" ] || return 0
   case "$WORKTREE" in

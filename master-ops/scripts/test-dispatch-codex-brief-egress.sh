@@ -13,11 +13,18 @@ remote_fn=$(awk '$0=="github_remote_metadata() {"{f=1} f{print} f&&$0=="}"{exit}
 [ -n "$remote_fn" ] || { echo "FAIL: could not extract GitHub remote parser" >&2; exit 1; }
 markdown_fn=$(awk '$0=="markdown_code_span() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
 [ -n "$markdown_fn" ] || { echo "FAIL: could not extract Markdown code-span helper" >&2; exit 1; }
+alignment_fn=$(awk '$0=="validate_reused_worktree_alignment() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+[ -n "$alignment_fn" ] || { echo "FAIL: could not extract reused-terminal alignment helper" >&2; exit 1; }
+call_site=$(awk '$0=="validate_reused_worktree_alignment"{f=1} f{print} f&&$0=="append_codex_authorized_egress"{exit}' "$dispatch")
+[ -n "$call_site" ] || { echo "FAIL: could not extract reused-terminal alignment call site" >&2; exit 1; }
+case "$call_site" in
+  *fail_after_tracker_claim*) echo "FAIL: reused-terminal alignment call site still blocks dispatch" >&2; exit 1;;
+esac
 resolve_fn=$(awk '$0=="resolve_product_repo_arg() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
 [ -n "$resolve_fn" ] || { echo "FAIL: could not extract product-repository resolver" >&2; exit 1; }
 
 work="${TMPDIR:-/tmp}/mogui-dispatch-codex-brief-egress.$$"
-mkdir -p "$work/repo"
+mkdir -p "$work/repo" "$work/other"
 trap 'rm -rf "$work"' EXIT
 
 git -C "$work/repo" init -q
@@ -41,10 +48,30 @@ run_case() {
   bash "$script_file" 2>"$stderr_file"
 }
 
+run_call_site() {
+  local runtime="$1" terminal_path="$2" terminal_identity="$3" stderr_file="$work/call-site-stderr"
+  local script_file="$work/call-site.sh"
+  {
+    echo 'set -u'
+    printf 'RUNTIME=%q\n' "$runtime"
+    printf 'TERMINAL=term_x\nWORKTREE=%q\n' "path:$work/repo"
+    echo 'SPEC="base brief"'
+    printf 'terminal_worktree_path() { printf "%%s\\n" %q; }\n' "$terminal_path"
+    printf 'terminal_worktree_identity() { printf "%%s\\n" %q; }\n' "$terminal_identity"
+    printf '%s\n' "$remote_fn"
+    printf '%s\n' "$markdown_fn"
+    printf '%s\n' "$alignment_fn"
+    printf '%s\n' "$egress_fn"
+    printf '%s\n' "$call_site"
+    printf 'printf "SPEC=<%%s>\\n" "$SPEC"\n'
+  } > "$script_file"
+  bash "$script_file" 2>"$stderr_file"
+}
+
 measured=$(run_case codex "path:$work/repo")
 expected="SPEC=<base brief
 
-Authorized egress for this worker (owner's repository): The owner authorizes this worker to run \`git push origin -- worker-push-authorization\` to \`https://github.com/baksohyeon/mogui-ADE-orchestrator.git\`, with configured push destination(s) \`https://github.com/baksohyeon/mogui-ADE-orchestrator.git\`, which is the owner's own repository and this worktree's \`origin\`, and \`gh pr create\`, \`gh pr edit\`, \`gh pr comment\` and \`gh api graphql\` (read) on \`baksohyeon/mogui-ADE-orchestrator\`. No other network write is authorized.>"
+Authorized egress for this worker (owner's repository): The owner authorizes this worker to run \`git push origin -- worker-push-authorization\` to \`https://github.com/baksohyeon/mogui-ADE-orchestrator.git\`, with configured push destination(s) \`https://github.com/baksohyeon/mogui-ADE-orchestrator.git\`, which is the owner's own repository and this worktree's \`origin\`, and \`gh pr create\`, \`gh pr edit\`, \`gh pr comment\` and read-only \`gh api graphql\` queries on \`baksohyeon/mogui-ADE-orchestrator\`. GraphQL mutations and other network writes are not authorized.>"
 [ "$measured" = "$expected" ] || {
   echo "FAIL: measured codex dispatch did not include the branch, origin URL, and owner/repo" >&2
   printf '  got: %s\n' "$measured" >&2
@@ -61,6 +88,45 @@ printf '%s' "$measured" | grep -Fq 'token:secret' && {
   exit 1
 }
 echo "ok   : codex brief names the measured push and PR destination"
+
+alignment_unmeasured="SPEC=<base brief
+
+Authorized egress for this worker (owner's repository): the destination is unmeasured and no push is authorized.>"
+claude_call_site=$(run_call_site claude "$work/other" "")
+[ "$claude_call_site" = 'SPEC=<base brief>' ] || {
+  echo "FAIL: unmatched Claude redispatch was blocked or changed its brief" >&2
+  printf '  got: %s\n' "$claude_call_site" >&2
+  exit 1
+}
+[ -z "$(cat "$work/call-site-stderr")" ] || {
+  echo "FAIL: unmatched Claude redispatch printed a Codex egress warning" >&2
+  exit 1
+}
+echo "ok   : unmatched Claude redispatch proceeds without egress output"
+
+codex_unmatched_call_site=$(run_call_site codex "$work/other" "")
+[ "$codex_unmatched_call_site" = "$alignment_unmeasured" ] || {
+  echo "FAIL: unmatched Codex redispatch did not deny push authorization" >&2
+  printf '  got: %s\n' "$codex_unmatched_call_site" >&2
+  exit 1
+}
+[ "$(cat "$work/call-site-stderr")" = 'WARNING: codex authorized egress destination is unmeasured; no push is authorized.' ] || {
+  echo "FAIL: unmatched Codex redispatch did not print exactly one warning" >&2
+  exit 1
+}
+echo "ok   : unmatched Codex redispatch proceeds with one unmeasured warning"
+
+codex_matched_call_site=$(run_call_site codex "$work/repo" "")
+printf '%s' "$codex_matched_call_site" | grep -Fq 'Authorized egress for this worker' || {
+  echo "FAIL: matched Codex redispatch did not include the measured paragraph" >&2
+  printf '  got: %s\n' "$codex_matched_call_site" >&2
+  exit 1
+}
+[ -z "$(cat "$work/call-site-stderr")" ] || {
+  echo "FAIL: matched Codex redispatch printed an unmeasured warning" >&2
+  exit 1
+}
+echo "ok   : matched Codex redispatch receives the measured egress paragraph"
 
 run_remote_parser() {
   local remote="$1"

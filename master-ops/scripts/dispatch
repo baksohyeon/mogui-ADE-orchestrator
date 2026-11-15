@@ -618,6 +618,14 @@ append_codex_authorized_egress() {
   local push_urls push_url push_metadata push_url_display push_repo push_repo_compare push_url_list push_measurement_failed
   local unmeasured="Authorized egress for this worker (owner's repository): the destination is unmeasured and no push is authorized."
 
+  if [ "${REUSED_WORKTREE_ALIGNMENT_UNMEASURED:-0}" = 1 ]; then
+    SPEC="$SPEC
+
+$unmeasured"
+    echo "WARNING: codex authorized egress destination is unmeasured; no push is authorized." >&2
+    return 0
+  fi
+
   case "$worktree_selector" in
     path:*) worktree_path="${worktree_selector#path:}";;
     *) worktree_path="";;
@@ -671,7 +679,7 @@ $unmeasured"
   push_command_code=$(markdown_code_span "$push_command")
   SPEC="$SPEC
 
-Authorized egress for this worker (owner's repository): The owner authorizes this worker to run $push_command_code to \`$origin_display_url\`, with configured push destination(s) \`$push_url_list\`, which is the owner's own repository and this worktree's \`origin\`, and \`gh pr create\`, \`gh pr edit\`, \`gh pr comment\` and \`gh api graphql\` (read) on \`$owner_repo\`. No other network write is authorized."
+Authorized egress for this worker (owner's repository): The owner authorizes this worker to run $push_command_code to \`$origin_display_url\`, with configured push destination(s) \`$push_url_list\`, which is the owner's own repository and this worktree's \`origin\`, and \`gh pr create\`, \`gh pr edit\`, \`gh pr comment\` and read-only \`gh api graphql\` queries on \`$owner_repo\`. GraphQL mutations and other network writes are not authorized."
 }
 
 # Resolve product_repositories (or product_repo) from the instance runtime
@@ -868,23 +876,26 @@ EOF
 
 validate_reused_worktree_alignment() {
   local selected_path="" terminal_path="" selected_identity="" terminal_identity=""
+  REUSED_WORKTREE_ALIGNMENT_UNMEASURED=0
+  [ "$RUNTIME" = codex ] || return 0
   [ -n "$TERMINAL" ] || return 0
   [ -n "$WORKTREE" ] || return 0
   case "$WORKTREE" in
     path:*) selected_path="${WORKTREE#path:}";;
-    id:|id:*) selected_identity="${WORKTREE#id:}";;
+    id:) REUSED_WORKTREE_ALIGNMENT_UNMEASURED=1; return 0;;
+    id:*) selected_identity="${WORKTREE#id:}";;
     folder:*) selected_identity="$WORKTREE";;
     *)
-      echo "dispatch: cannot verify reused terminal against worktree selector '$WORKTREE'" >&2
-      return 1
+      REUSED_WORKTREE_ALIGNMENT_UNMEASURED=1
+      return 0
       ;;
   esac
   terminal_path=$(terminal_worktree_path "$TERMINAL")
   if [ -n "$selected_identity" ]; then
     terminal_identity=$(terminal_worktree_identity "$TERMINAL")
     if [ -z "$terminal_identity" ]; then
-      echo "dispatch: reused terminal worktree identity is unavailable; cannot verify selected worktree" >&2
-      return 1
+      REUSED_WORKTREE_ALIGNMENT_UNMEASURED=1
+      return 0
     fi
     if ! python3 - "$selected_identity" "$terminal_identity" <<'PY'
 import sys
@@ -897,14 +908,14 @@ if normalize(sys.argv[1]) != normalize(sys.argv[2]):
     raise SystemExit(1)
 PY
     then
-      echo "dispatch: reused terminal worktree does not match selected worktree" >&2
-      return 1
+      REUSED_WORKTREE_ALIGNMENT_UNMEASURED=1
+      return 0
     fi
     return 0
   fi
   if [ -z "$terminal_path" ]; then
-    echo "dispatch: reused terminal worktree path is unavailable; cannot verify selected worktree" >&2
-    return 1
+    REUSED_WORKTREE_ALIGNMENT_UNMEASURED=1
+    return 0
   fi
   if ! python3 - "$selected_path" "$terminal_path" <<'PY'
 import os
@@ -914,8 +925,8 @@ if os.path.realpath(sys.argv[1]) != os.path.realpath(sys.argv[2]):
     raise SystemExit(1)
 PY
   then
-    echo "dispatch: reused terminal worktree does not match selected worktree" >&2
-    return 1
+    REUSED_WORKTREE_ALIGNMENT_UNMEASURED=1
+    return 0
   fi
 }
 
@@ -2640,7 +2651,7 @@ $block"
   echo "📎 standing rules · $STANDING_RULE_NAMES"
 fi
 
-validate_reused_worktree_alignment || fail_after_tracker_claim "reused terminal worktree validation failed" 3
+validate_reused_worktree_alignment
 append_codex_authorized_egress
 
 # Keep this line in the prepared worker prompt so the card survives a later

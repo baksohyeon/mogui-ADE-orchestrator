@@ -928,9 +928,9 @@ pretrust_pane_reuse_skip_test "$dispatch" || exit 1
 #
 # An existing pane can be paired with a different selected worktree. The
 # egress paragraph is authoritative only when both selections describe the
-# same path, so the wrapper rejects mismatches and unavailable terminal
-# placement data before delivery. A fresh launch and a reused pane without a
-# selected worktree keep their existing paths.
+# same path. Mismatches and unavailable terminal placement data mark Codex
+# egress as unmeasured while every dispatch path continues. A fresh launch and
+# a reused pane without a selected worktree keep their existing paths.
 reused_worktree_alignment_test() (
   set +e
   set -u
@@ -946,15 +946,17 @@ reused_worktree_alignment_test() (
   trap 'rm -rf "$work"' EXIT
 
   write_script() {
-    local outfile="$1" terminal="$2" worktree="$3" terminal_worktree="$4" terminal_identity="${5:-}"
+    local outfile="$1" terminal="$2" worktree="$3" terminal_worktree="$4" terminal_identity="${5:-}" runtime="${6:-codex}"
     {
       echo 'set -u'
       printf 'TERMINAL=%q\n' "$terminal"
       printf 'WORKTREE=%q\n' "$worktree"
+      printf 'RUNTIME=%q\n' "$runtime"
       printf 'terminal_worktree_path() { printf "%%s\\n" %q; }\n' "$terminal_worktree"
       printf 'terminal_worktree_identity() { printf "%%s\\n" %q; }\n' "$terminal_identity"
       printf '%s\n' "$alignment_fn"
       echo 'if validate_reused_worktree_alignment; then echo ALIGNED; else exit $?; fi'
+      echo 'printf "ALIGNMENT=%s\\n" "${REUSED_WORKTREE_ALIGNMENT_UNMEASURED:-unset}"'
     } > "$outfile"
   }
 
@@ -962,7 +964,8 @@ reused_worktree_alignment_test() (
   write_script "$script_file" term_x "path:$selected" "$selected"
   out=$(bash "$script_file" 2>&1)
   status=$?
-  if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^ALIGNED$'; then
+  if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^ALIGNED$' \
+      || ! printf '%s\n' "$out" | grep -q '^ALIGNMENT=0$'; then
     echo "FAIL: matching reused terminal worktree should pass alignment" >&2
     printf '%s\n' "$out" >&2
     return 1
@@ -972,24 +975,24 @@ reused_worktree_alignment_test() (
   write_script "$script_file" term_x "path:$selected" "$other"
   out=$(bash "$script_file" 2>&1)
   status=$?
-  if [ "$status" -ne 1 ] || printf '%s\n' "$out" | grep -q '^ALIGNED$' \
-      || ! printf '%s\n' "$out" | grep -q 'does not match selected worktree'; then
-    echo "FAIL: mismatched reused terminal worktree should fail alignment" >&2
+  if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^ALIGNED$' \
+      || ! printf '%s\n' "$out" | grep -q '^ALIGNMENT=1$'; then
+    echo "FAIL: mismatched reused terminal worktree should mark alignment unmeasured and proceed" >&2
     printf '%s\n' "$out" >&2
     return 1
   fi
-  echo "ok   : mismatched reused terminal worktree fails alignment"
+  echo "ok   : mismatched reused terminal worktree proceeds as unmeasured"
 
   write_script "$script_file" term_x "path:$selected" ""
   out=$(bash "$script_file" 2>&1)
   status=$?
-  if [ "$status" -ne 1 ] || printf '%s\n' "$out" | grep -q '^ALIGNED$' \
-      || ! printf '%s\n' "$out" | grep -q 'path is unavailable'; then
-    echo "FAIL: unavailable reused terminal worktree should fail closed" >&2
+  if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^ALIGNED$' \
+      || ! printf '%s\n' "$out" | grep -q '^ALIGNMENT=1$'; then
+    echo "FAIL: unavailable reused terminal worktree should proceed as unmeasured" >&2
     printf '%s\n' "$out" >&2
     return 1
   fi
-  echo "ok   : unavailable reused terminal worktree fails closed"
+  echo "ok   : unavailable reused terminal worktree proceeds as unmeasured"
 
   write_script "$script_file" term_x "id:repo::$selected" "$selected" "repo::$selected"
   out=$(bash "$script_file" 2>&1)
@@ -1014,13 +1017,13 @@ reused_worktree_alignment_test() (
   write_script "$script_file" term_x "not-path:$selected" "$selected" "$selected"
   out=$(bash "$script_file" 2>&1)
   status=$?
-  if [ "$status" -ne 1 ] || printf '%s\n' "$out" | grep -q '^ALIGNED$' \
-      || ! printf '%s\n' "$out" | grep -q 'cannot verify reused terminal against worktree selector'; then
-    echo "FAIL: unrecognized worktree selector should fail closed" >&2
+  if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^ALIGNED$' \
+      || ! printf '%s\n' "$out" | grep -q '^ALIGNMENT=1$'; then
+    echo "FAIL: unrecognized worktree selector should proceed as unmeasured" >&2
     printf '%s\n' "$out" >&2
     return 1
   fi
-  echo "ok   : unrecognized worktree selector fails closed"
+  echo "ok   : unrecognized worktree selector proceeds as unmeasured"
 
   write_script "$script_file" "" "path:$selected" ""
   out=$(bash "$script_file" 2>&1)
@@ -1041,6 +1044,17 @@ reused_worktree_alignment_test() (
     return 1
   fi
   echo "ok   : reused pane without a selected worktree skips alignment"
+
+  write_script "$script_file" term_x "path:$selected" "$other" "" claude
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^ALIGNED$' \
+      || ! printf '%s\n' "$out" | grep -q '^ALIGNMENT=0$'; then
+    echo "FAIL: non-Codex mismatch should proceed without marking egress" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : non-Codex mismatch proceeds without an alignment mark"
 )
 reused_worktree_alignment_test "$dispatch" || exit 1
 

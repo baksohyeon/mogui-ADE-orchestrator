@@ -4018,6 +4018,73 @@ with lock_path.open('a', encoding='utf-8') as lock:
             holder.wait(timeout=2)
 
 
+@pytest.mark.skipif(
+    dispatch_gate.fcntl is None,
+    reason="ledger file locking is unavailable on this platform",
+)
+def test_ledger_lock_times_out_when_an_older_wrapper_holds_it_without_the_fd(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """A holder that never passes DISPATCH_LEDGER_LOCK_FD must not wedge the gate forever.
+
+    Without the timeout this introduces, the worker thread below blocks in
+    `flock(LOCK_EX)` for good: this is the deadlock issue #290 reports. The
+    thread is started as a daemon so an unpatched build still lets this test
+    process exit instead of hanging the suite.
+    """
+
+    lock_path = dispatch_gate.ledger_lock_path(tmp_path / "ledger.jsonl")
+    holder_script = """
+import fcntl, sys
+from pathlib import Path
+lock_path = Path(sys.argv[1])
+with lock_path.open('a', encoding='utf-8') as lock:
+    fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+    print('ready', flush=True)
+    sys.stdin.read(1)
+"""
+    holder = subprocess.Popen(
+        [sys.executable, "-c", holder_script, str(lock_path)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert holder.stdout is not None
+        assert holder.stdout.readline().strip() == "ready"
+        monkeypatch.delenv(dispatch_gate.LEDGER_LOCK_FD_ENV, raising=False)
+        monkeypatch.setenv(dispatch_gate.LEDGER_LOCK_TIMEOUT_ENV, "1")
+
+        outcome: list[BaseException | None] = []
+
+        def acquire_lock() -> None:
+            try:
+                with dispatch_gate._ledger_lock(tmp_path / "ledger.jsonl"):
+                    pass
+            except BaseException as exc:  # noqa: BLE001 - captured for the main thread
+                outcome.append(exc)
+            else:
+                outcome.append(None)
+
+        worker = threading.Thread(target=acquire_lock, daemon=True)
+        worker.start()
+        worker.join(timeout=5)
+
+        assert not worker.is_alive(), "ledger lock wait did not time out"
+        assert len(outcome) == 1
+        error = outcome[0]
+        assert isinstance(error, dispatch_gate.LedgerLockTimeout)
+        assert str(lock_path) in str(error)
+        assert error.reason is dispatch_gate.ReasonCode.LEDGER_LOCK_TIMEOUT
+    finally:
+        if holder.poll() is None:
+            if holder.stdin is not None:
+                holder.stdin.write("release")
+                holder.stdin.flush()
+            holder.wait(timeout=2)
+
+
 def test_ledger_lock_expands_user_before_creating_parent(
     tmp_path: Path,
     monkeypatch,

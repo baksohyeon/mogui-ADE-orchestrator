@@ -54,6 +54,9 @@ MODEL_SESSION_ROOTS_ENV = "DISPATCH_MODEL_SESSION_ROOTS"
 MODEL_SESSION_MAX_BYTES = 5 * 1024 * 1024
 LEDGER_LOCK_FILENAME = "dispatch-ledger.lock"
 LEDGER_LOCK_FD_ENV = "DISPATCH_LEDGER_LOCK_FD"
+LEDGER_LOCK_TIMEOUT_ENV = "DISPATCH_LEDGER_LOCK_TIMEOUT_SECONDS"
+DEFAULT_LEDGER_LOCK_TIMEOUT_SECONDS = 60.0
+LEDGER_LOCK_POLL_INTERVAL_SECONDS = 0.1
 RUNTIME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 USERS_ABSOLUTE_PATH_PATTERN = re.compile(r"/Users/[^\s\"'`<>{}\[\](),;:]+")
 COMPLETION_CHANNELS = frozenset({"orchestration", "sentinel-log"})
@@ -284,6 +287,7 @@ class ReasonCode(str, Enum):
     CONTRACT_RUNTIME_MISMATCH = "CONTRACT_RUNTIME_MISMATCH"
     RUNTIME_NOT_ELIGIBLE = "RUNTIME_NOT_ELIGIBLE"
     STANDING_RULE_UNKNOWN = "STANDING_RULE_UNKNOWN"
+    LEDGER_LOCK_TIMEOUT = "LEDGER_LOCK_TIMEOUT"
 
 
 @dataclass(frozen=True)
@@ -2521,6 +2525,34 @@ def _ticket_lock(ticket_dir: Path) -> Iterator[None]:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
+class LedgerLockTimeout(RuntimeError):
+    """Raised when the ledger lock cannot be acquired within its timeout.
+
+    A parent process that already holds the lock file's flock without passing
+    its descriptor via `DISPATCH_LEDGER_LOCK_FD` (an older wrapper) is the
+    known cause: this gate never finds out and would otherwise wait forever.
+    """
+
+    def __init__(self, lock_path: Path, timeout_seconds: float) -> None:
+        self.lock_path = lock_path
+        self.timeout_seconds = timeout_seconds
+        self.reason = ReasonCode.LEDGER_LOCK_TIMEOUT
+        super().__init__(
+            f"timed out after {timeout_seconds:g}s waiting for the ledger lock at "
+            f"{lock_path}; a caller may already hold this lock without passing "
+            f"{LEDGER_LOCK_FD_ENV}, for example a wrapper older than the gate."
+        )
+
+
+def _ledger_lock_timeout_seconds() -> float:
+    raw_value = os.environ.get(LEDGER_LOCK_TIMEOUT_ENV, "")
+    try:
+        value = float(raw_value)
+    except ValueError:
+        return DEFAULT_LEDGER_LOCK_TIMEOUT_SECONDS
+    return value if value > 0 else DEFAULT_LEDGER_LOCK_TIMEOUT_SECONDS
+
+
 @contextmanager
 def _ledger_lock(ledger_path: Path) -> Iterator[None]:
     """Serialize ledger updates without creating the ticket directory."""
@@ -2552,7 +2584,20 @@ def _ledger_lock(ledger_path: Path) -> Iterator[None]:
                 return
     with lock_path.open("a", encoding="utf-8") as lock_file:
         if fcntl is not None:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            timeout_seconds = _ledger_lock_timeout_seconds()
+            # getattr tolerates a test double that stands in for the fcntl
+            # module but only defines LOCK_EX/LOCK_UN: it degrades to a
+            # single plain LOCK_EX attempt rather than raising AttributeError.
+            non_blocking_flag = getattr(fcntl, "LOCK_NB", 0)
+            deadline = time.monotonic() + timeout_seconds
+            while True:
+                try:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | non_blocking_flag)
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        raise LedgerLockTimeout(lock_path, timeout_seconds) from None
+                    time.sleep(LEDGER_LOCK_POLL_INTERVAL_SECONDS)
         try:
             yield
         finally:

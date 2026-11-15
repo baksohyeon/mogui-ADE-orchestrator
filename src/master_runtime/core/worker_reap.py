@@ -586,6 +586,13 @@ class WorkerReaper:
                         reason = f"ignored media:{len(ignored_media)}"
                         merged = False
 
+                terminal_reclaim_allowed = bool(
+                    measurements.get("terminal_reclaim_allowed", True)
+                )
+                if clean and merged and not terminal_reclaim_allowed:
+                    reason = "pane_not_idle"
+                    merged = False
+
                 if not clean or not merged:
                     if terminal_action:
                         actions.append(terminal_action)

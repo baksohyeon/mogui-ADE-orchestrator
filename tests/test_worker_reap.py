@@ -2027,6 +2027,24 @@ class Round5OrcaPathTests(unittest.TestCase):
                 self.assertEqual(runner.removed, [])
                 self.assertTrue(all("--force" not in command for command in runner.commands))
 
+    def test_refused_pane_keeps_orca_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = _Round5OrcaRunner(tmp, virtual_merge_failure=True)
+            reaper = WorkerReaper(orca_runner=runner)
+            with mock.patch.object(
+                reaper,
+                "_plan_worktree_terminal_action",
+                return_value=(
+                    "terminal_left:id:repo:target:pane_not_idle",
+                    {"terminal_reclaim_allowed": False},
+                ),
+            ):
+                record = reaper.reap(task_id="t1", execute=True)
+
+            self.assertIn("pane_not_idle", record.actions_taken)
+            self.assertEqual(runner.closed, [])
+            self.assertEqual(runner.removed, [])
+
 
 class _Round5OrcaRunner:
     def __init__(

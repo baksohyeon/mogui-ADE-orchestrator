@@ -106,13 +106,17 @@ delivery, for the coordinator to act and then re-run `worker-wait`.
   the host's codex homes; it refuses when nothing was measured, so the
   manual path above is for the vet failing or an uncleared answer. An
   unenumerated source beside a passing enumerated file is still answered
-  on faith, the documented gap. After answering a prompt in the pane, use
-  `--wait-submit <seconds>` and re-read the pane with `orca terminal read
-  --terminal <pane> --screen`: if the prompt text is still on screen, the
-  answer did not land. A runbook example here keeps `orca terminal send`'s
-  own output; it is the receipt that the send was even accepted. For a
-  structured approval that should be refused, use `orca orchestration deny
-  --dispatch <id> --prompt <approval_id> --reason <text>`.
+  on faith, the documented gap. The confirming send above carries
+  `--wait-submit <seconds>` too (`orca terminal send --terminal <pane> --text
+  '' --enter --wait-submit <seconds>`), and its output is kept, not
+  discarded: it is the receipt that the input was even accepted. Re-read the
+  pane afterward with `orca terminal read --terminal <pane> --screen`; if the
+  prompt text is still on screen, the answer did not land and the send has
+  to be retried. For a structured approval that should be refused, use `orca
+  orchestration deny --dispatch <id> --prompt <approval_id> --reason <text>`
+  (flag shapes read from the installed Orca CLI's own `orca orchestration
+  deny --help`, 1.4.258, since this template's own grounding docs do not
+  cover `deny` yet).
 - **`STALL`** with sweep class `limit` or `shell` — redispatch elsewhere; the
   worktree and terminal are not reusable as-is.
 - **`STALL`** with sweep class `start-screen` or `update` — dismiss/restart
@@ -125,11 +129,12 @@ delivery, for the coordinator to act and then re-run `worker-wait`.
   contract's own answer for a case it cannot resolve from measured state.
 
 More work for a pane whose dispatch already sent `worker_done` goes as a new
-dispatch to the same pane (`scripts/dispatch --terminal <handle> ...`); text
-typed into the pane is outside any dispatch, so Orca sends no stop alerts for
-it. Messages to a running worker use `orca orchestration send --to
-dispatch:<id>`; because these workers are unsupervised, delivery depends on
-the worker running `orca orchestration check` before `worker_done` (the
+dispatch to the same pane (`scripts/dispatch --terminal <handle> --contract
+<path> ...`, or `--spec "<task>"` for an inline one); text typed into the
+pane is outside any dispatch, so Orca sends no stop alerts for it. Messages
+to a running worker use `orca orchestration send --to dispatch:<id>`;
+because these workers are unsupervised, delivery depends on the worker
+running `orca orchestration check` before `worker_done` (the
 `mail-before-done` standing rule).
 
 Without `--reap`, `worker-wait` never closes a pane, never abandons a

@@ -385,8 +385,11 @@ def _budget(args: argparse.Namespace) -> int:
         _diagnose("front matter must be a JSON object")
         return 2
     budget = front_matter.get("budget")
+    if budget is not None and not isinstance(budget, dict):
+        _diagnose("budget must be an object")
+        return 2
     basis = front_matter.get("tokens_basis", "total")
-    if basis not in {"total", "uncached"}:
+    if not isinstance(basis, str) or basis not in {"total", "uncached"}:
         _diagnose("tokens_basis must be total or uncached")
         return 2
     if isinstance(budget, dict) and "tokens" in budget:

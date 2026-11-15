@@ -345,6 +345,46 @@ def test_budget_cli_rejects_malformed_front_matter() -> None:
     assert "front matter must be valid JSON" in result.stderr
 
 
+def test_budget_cli_rejects_non_object_budget() -> None:
+    script = Path(__file__).parents[1] / "scripts" / "dispatch-gate"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "budget",
+            "--front-matter",
+            '{"budget":[]}',
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")},
+    )
+
+    assert result.returncode == 2
+    assert "budget must be an object" in result.stderr
+
+
+def test_budget_cli_rejects_non_string_tokens_basis() -> None:
+    script = Path(__file__).parents[1] / "scripts" / "dispatch-gate"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "budget",
+            "--front-matter",
+            '{"tokens_basis":[]}',
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")},
+    )
+
+    assert result.returncode == 2
+    assert "tokens_basis must be total or uncached" in result.stderr
+
+
 def test_budget_cli_leaves_undeclared_cap_unset() -> None:
     script = Path(__file__).parents[1] / "scripts" / "dispatch-gate"
     result = subprocess.run(

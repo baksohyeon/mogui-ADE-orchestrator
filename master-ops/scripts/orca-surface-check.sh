@@ -24,7 +24,11 @@ fi
 
 # Run comparison in python.
 python3 -c "
-import json, hashlib, sys
+import json, hashlib, re, sys
+
+def parse_version(value):
+    match = re.search(r'(?<![0-9])([0-9]+)\.([0-9]+)\.([0-9]+)(?![0-9])', str(value))
+    return tuple(int(part) for part in match.groups()) if match else None
 
 try:
     with open('/tmp/orca-status.json') as f:
@@ -39,9 +43,17 @@ try:
     command_count = context['commandCount']
 
     baseline_app = baseline['appVersion']
+    minimum_app = baseline['minimumAppVersion']
     baseline_count = baseline['commandCount']
     baseline_digests = baseline['commandDigests']
     watched_cmds = baseline['watchedCommands']
+
+    current_version = parse_version(app_version)
+    minimum_version = parse_version(minimum_app)
+    if current_version is None:
+        raise ValueError('installed appVersion is unparsable: %s' % app_version)
+    if minimum_version is None:
+        raise ValueError('minimumAppVersion is unparsable: %s' % minimum_app)
 
     commands = {cmd['command']: cmd for cmd in context.get('commands', [])}
     current_digests = {}
@@ -57,6 +69,7 @@ try:
             digest = hashlib.sha256(digest_input.encode()).hexdigest()[:16]
             current_digests[watch_cmd] = digest
 
+    below_minimum = current_version < minimum_version
     drift = False
     drift_reasons = []
 
@@ -74,13 +87,15 @@ try:
         drift_reasons.append('watched-command digest changed for: ' + ', '.join(drifted_cmds))
 
     quiet = int('$QUIET') == 1
-    if not drift:
+    if below_minimum:
+        print('[orca-surface] BELOW-MINIMUM: appVersion %s is below minimumAppVersion %s.' % (app_version, minimum_app), file=sys.stderr)
+    if drift:
+        print('[orca-surface] DRIFT: %s. Re-verify these before relying on remembered flags.' % ', '.join(drift_reasons), file=sys.stderr)
+    if not drift and not below_minimum:
         if not quiet:
             print('[orca-surface] %s · schema v%d · %d watched commands verified' % (app_version, schema_version, len(watched_cmds)))
         sys.exit(0)
-    else:
-        print('[orca-surface] DRIFT: %s. Re-verify these before relying on remembered flags.' % ', '.join(drift_reasons), file=sys.stderr)
-        sys.exit(1)
+    sys.exit(1)
 
 except Exception as e:
     print('[orca-surface] WARNING: could not measure the Orca surface (%s).' % str(e), file=sys.stderr)

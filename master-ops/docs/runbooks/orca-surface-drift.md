@@ -40,6 +40,8 @@ If the check exits 2:
 
 The check does not print the unchanged line on exit 2, so a green-looking pass during a measurement failure is impossible.
 
+Raise `minimumAppVersion` in `scripts/orca-surface-baseline.json` only after measuring every command the template calls on the candidate Orca build and updating the preflight and documentation evidence.
+
 ## Integration with Dispatch and Runbooks
 
 This check is run at instance-harness boot to detect Orca upgrades or mid-session surface changes before they break a script mid-call. If the check reports drift, the master should re-verify the affected commands before dispatching new work that depends on them.

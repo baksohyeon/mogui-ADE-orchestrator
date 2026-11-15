@@ -23,6 +23,7 @@ PREFLIGHT = REPO_ROOT / "scripts" / "onboarding-preflight.sh"
 
 ORCA_STUB = """#!/usr/bin/env bash
 case "$*" in
+  "--version") printf '%s\\n' "${STUB_ORCA_VERSION:-1.4.258}" ;;
   "status --json") printf '%s\\n' '{"ok":true}' ;;
   "orchestration run-current --json") printf '%s\\n' "$STUB_RUN_CURRENT" ;;
   *) printf '%s\\n' '{"ok":false}' ; exit 1 ;;
@@ -128,6 +129,7 @@ def _host(
             "ORCA_CLI_COMMAND": "",
             "ORCA_DEV_REPO_ROOT": "",
             "STUB_RUN_CURRENT": RUN_BOUND,
+            "STUB_ORCA_VERSION": "1.4.258",
             "STUB_OPS_REPO": str(ops_repo),
             "DISPATCH_GATE_LEDGER": str(tmp_path / "ledger" / "dispatch.jsonl"),
             "REDACTION_EXTRA_PATTERNS": str(
@@ -172,6 +174,14 @@ def _copied_preflight(tmp_path: Path) -> Path:
     script.parent.mkdir(parents=True)
     script.write_text(PREFLIGHT.read_text(encoding="utf-8"), encoding="utf-8")
     script.chmod(0o755)
+    baseline = script.parent.parent / "master-ops" / "scripts" / "orca-surface-baseline.json"
+    baseline.parent.mkdir(parents=True)
+    baseline.write_text(
+        (REPO_ROOT / "master-ops" / "scripts" / "orca-surface-baseline.json").read_text(
+            encoding="utf-8"
+        ),
+        encoding="utf-8",
+    )
     return script
 
 
@@ -191,12 +201,33 @@ def test_provisioned_host_reports_no_failure_it_can_act_on(tmp_path: Path) -> No
     assert not _labels(result.stdout, "FAIL"), result.stdout
     assert {
         "orchestration",
+        "orca-version",
         "skills",
         "redaction-extra",
         "agent-cli",
         "gate-ledger",
         "bd",
     } <= _labels(result.stdout, "PASS"), result.stdout
+
+
+@skip_windows_exec_surface
+def test_orca_below_the_surface_minimum_blocks_preflight(tmp_path: Path) -> None:
+    env = _host(tmp_path)
+    env["STUB_ORCA_VERSION"] = "1.4.257"
+    result = _run(env, tmp_path)
+    assert "orca-version" in _labels(result.stdout, "FAIL"), result.stdout
+    assert "below minimum 1.4.258" in result.stdout, result.stdout
+    assert result.returncode == 1
+
+
+@skip_windows_exec_surface
+def test_unparsable_orca_version_is_reported_as_unknown(tmp_path: Path) -> None:
+    env = _host(tmp_path)
+    env["STUB_ORCA_VERSION"] = "version unavailable"
+    result = _run(env, tmp_path)
+    assert "orca-version" in _labels(result.stdout, "FAIL"), result.stdout
+    assert "version is unknown" in result.stdout, result.stdout
+    assert result.returncode == 1
 
 
 @skip_windows_exec_surface

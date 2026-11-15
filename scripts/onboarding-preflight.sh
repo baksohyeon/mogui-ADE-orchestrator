@@ -33,7 +33,7 @@ seen_labels=()
 # repeated at the end with its consequence, because fifteen lines of output is
 # exactly the length at which the important line gets skimmed past.
 ESSENTIAL_LABELS=(
-  orca orchestration skills agent-cli agent-route worker-runtime bd python3
+  orca orca-version orchestration skills agent-cli agent-route worker-runtime bd python3
   gitleaks ctx redaction-extra skill-stack
 )
 essential_gaps=()
@@ -142,6 +142,44 @@ orca_install_command() {
   return 1
 }
 
+runtime_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+orca_baseline_file="${ORCA_SURFACE_BASELINE:-${runtime_root}/master-ops/scripts/orca-surface-baseline.json}"
+
+read_minimum_orca_version() {
+  python3 - "$orca_baseline_file" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle).get("minimumAppVersion")
+if not isinstance(value, str) or not value.strip():
+    raise ValueError("minimumAppVersion is missing")
+print(value.strip())
+PY
+}
+
+parse_orca_version() {
+  local raw="$1"
+  if [[ "$raw" =~ (^|[^0-9])([0-9]+)\.([0-9]+)\.([0-9]+)([^0-9]|$) ]]; then
+    printf '%s.%s.%s\n' "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" "${BASH_REMATCH[4]}"
+    return 0
+  fi
+  return 1
+}
+
+version_at_least() {
+  local current_major current_minor current_patch minimum_major minimum_minor minimum_patch
+  IFS=. read -r current_major current_minor current_patch <<<"$1"
+  IFS=. read -r minimum_major minimum_minor minimum_patch <<<"$2"
+  if (( current_major != minimum_major )); then
+    (( current_major > minimum_major ))
+  elif (( current_minor != minimum_minor )); then
+    (( current_minor > minimum_minor ))
+  else
+    (( current_patch >= minimum_patch ))
+  fi
+}
+
 # Resolve once, before the first Orca invocation. Never fall through to another binary.
 if [[ -n "${ORCA_CLI_COMMAND:-}" ]]; then
   orca_command="$ORCA_CLI_COMMAND"
@@ -178,6 +216,23 @@ if command -v "$orca_command" >/dev/null 2>&1; then
 fi
 
 if [[ "$orca_supported" == true ]]; then
+  minimum_orca_version=""
+  if ! minimum_orca_version=$(read_minimum_orca_version 2>/dev/null); then
+    fail "orca-version" "minimum Orca version could not be read from the surface baseline; expected minimumAppVersion in master-ops/scripts/orca-surface-baseline.json"
+  else
+    installed_orca_output=""
+    installed_orca_version=""
+    if installed_orca_output=$("$orca_command" --version 2>&1) \
+      && installed_orca_version=$(parse_orca_version "$installed_orca_output"); then
+      if version_at_least "$installed_orca_version" "$minimum_orca_version"; then
+        pass "orca-version" "installed Orca $installed_orca_version meets minimum $minimum_orca_version"
+      else
+        fail "orca-version" "installed Orca $installed_orca_version is below minimum $minimum_orca_version"
+      fi
+    else
+      fail "orca-version" "installed Orca version is unknown; '$orca_command --version' did not contain a parseable major.minor.patch version"
+    fi
+  fi
   status_output=""
   if status_output=$("$orca_command" status --json 2>&1); then
     if grep -Eq '"ok"[[:space:]]*:[[:space:]]*true' <<<"$status_output"; then
@@ -218,7 +273,6 @@ fi
 
 skills_output=""
 skills_status=0
-runtime_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 
 # Measure the artifact before the installer. The required skills can be present
 # without the `skills` package manager being installed at all, and an installer

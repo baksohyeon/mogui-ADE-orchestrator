@@ -145,7 +145,7 @@ orca_install_command() {
 
 runtime_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 orca_baseline_file="${ORCA_SURFACE_BASELINE:-${runtime_root}/master-ops/scripts/orca-surface-baseline.json}"
-ORCA_VERSION_REGEX='(^|[^0-9])([0-9]+)\.([0-9]+)\.([0-9]+)(-([0-9A-Za-z][0-9A-Za-z.-]*))?([^0-9A-Za-z.-]|$)'
+ORCA_VERSION_REGEX='(^|[^0-9.])([0-9]+)\.([0-9]+)\.([0-9]+)(-([0-9A-Za-z][0-9A-Za-z.-]*))?([^0-9A-Za-z.-]|$)'
 
 read_minimum_orca_version() {
   python3 - "$orca_baseline_file" <<'PY'
@@ -313,7 +313,8 @@ if [[ "$orca_supported" == true ]]; then
       fail "orca" "$orca_command status --json did not return ok:true; $(orca_install_hint)"
     fi
   else
-    fail "orca" "$orca_command status --json failed; $(orca_install_hint)"
+    status_error="${status_output//$'\n'/ }"
+    fail "orca" "$orca_command status --json failed${status_error:+: $status_error}; $(orca_install_hint)"
   fi
 fi
 

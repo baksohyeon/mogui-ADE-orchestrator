@@ -19,6 +19,7 @@ import pytest
 from windows_exec_surface import skip_windows_exec_surface
 from orca_version_cases import (
     BELOW_VERSION,
+    MALFORMED_VERSION_CASES,
     MINIMUM_ORCA_VERSION,
     MINIMUM_PARTS,
     VERSION_CASES,
@@ -30,7 +31,12 @@ PREFLIGHT = REPO_ROOT / "scripts" / "onboarding-preflight.sh"
 ORCA_STUB = """#!/usr/bin/env bash
 case "$*" in
   "--version") [[ -z "${STUB_ORCA_STDERR:-}" ]] || printf '%s\\n' "$STUB_ORCA_STDERR" >&2; printf '%s\\n' "${STUB_ORCA_VERSION-0.0.0}" ;;
-  "status --json") [[ -z "${STUB_STATUS_STDERR:-}" ]] || printf '%s\\n' "$STUB_STATUS_STDERR" >&2; printf '%s\\n' '{"ok":true,"result":{"runtime":{"appVersion":"'"${STUB_RUNTIME_VERSION-0.0.0}"'"}}}' ;;
+  "status --json")
+    [[ -z "${STUB_STATUS_STDERR:-}" ]] || printf '%s\\n' "$STUB_STATUS_STDERR" >&2
+    [[ -z "${STUB_STATUS_CALL_LOG:-}" ]] || printf '%s\\n' status >> "$STUB_STATUS_CALL_LOG"
+    if [[ "${STUB_STATUS_EXIT:-0}" -ne 0 ]]; then exit "$STUB_STATUS_EXIT"; fi
+    printf '%s\\n' '{"ok":true,"result":{"runtime":{"appVersion":"'"${STUB_RUNTIME_VERSION-0.0.0}"'"}}}'
+    ;;
   "orchestration run-current --json") printf '%s\\n' "$STUB_RUN_CURRENT" ;;
   *) printf '%s\\n' '{"ok":false}' ; exit 1 ;;
 esac
@@ -277,6 +283,31 @@ def test_cli_version_ignores_stderr_noise(tmp_path: Path) -> None:
     env["STUB_STATUS_STDERR"] = "warning from status 9.9.9"
     result = _run(env, tmp_path)
     assert "orca-version" in _labels(result.stdout, "PASS"), result.stdout
+    assert result.returncode == 0, result.stdout
+
+
+@skip_windows_exec_surface
+def test_status_failure_preserves_error_without_a_second_call(tmp_path: Path) -> None:
+    env = _host(tmp_path)
+    status_log = tmp_path / "status-calls.log"
+    env["STUB_STATUS_EXIT"] = "1"
+    env["STUB_STATUS_STDERR"] = "status diagnosis"
+    env["STUB_STATUS_CALL_LOG"] = str(status_log)
+    result = _run(env, tmp_path)
+    assert "orca" in _labels(result.stdout, "FAIL"), result.stdout
+    assert "status diagnosis" in result.stdout, result.stdout
+    assert status_log.read_text(encoding="utf-8").splitlines() == ["status"]
+
+
+@skip_windows_exec_surface
+def test_four_part_version_is_unknown_in_cli_and_runtime(tmp_path: Path) -> None:
+    name, version = MALFORMED_VERSION_CASES
+    env = _host(tmp_path)
+    env["STUB_ORCA_VERSION"] = version
+    env["STUB_RUNTIME_VERSION"] = version
+    result = _run(env, tmp_path)
+    assert "orca-version" in _labels(result.stdout, "UNKNOWN"), f"{name}: {result.stdout}"
+    assert "orca-runtime-version" in _labels(result.stdout, "UNKNOWN"), f"{name}: {result.stdout}"
     assert result.returncode == 0, result.stdout
 
 

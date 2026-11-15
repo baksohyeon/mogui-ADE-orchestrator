@@ -10,7 +10,12 @@ from pathlib import Path
 import pytest
 
 from windows_exec_surface import skip_windows_exec_surface
-from orca_version_cases import BELOW_VERSION, MINIMUM_ORCA_VERSION, VERSION_CASES
+from orca_version_cases import (
+    BELOW_VERSION,
+    MALFORMED_VERSION_CASES,
+    MINIMUM_ORCA_VERSION,
+    VERSION_CASES,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SURFACE_CHECK = REPO_ROOT / "master-ops" / "scripts" / "orca-surface-check.sh"
@@ -142,6 +147,19 @@ def test_surface_uses_shared_version_cases(
     else:
         assert "BELOW-MINIMUM" not in result.stderr, result.stderr
     assert "UNKNOWN:" not in result.stderr, result.stderr
+    assert "DRIFT:" not in result.stderr, result.stderr
+
+
+def test_surface_reports_four_part_version_as_unknown(tmp_path: Path) -> None:
+    _, version = MALFORMED_VERSION_CASES
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _fake_orca(bin_dir / "orca", version)
+    baseline_path = _baseline(tmp_path, app_version=MINIMUM_ORCA_VERSION)
+    result = _run_surface(tmp_path, bin_dir, baseline_path)
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "UNKNOWN:" in result.stderr, result.stderr
     assert "DRIFT:" not in result.stderr, result.stderr
 
 

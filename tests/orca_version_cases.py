@@ -31,3 +31,5 @@ VERSION_CASES = (
         False,
     ),
 )
+
+MALFORMED_VERSION_CASES = ("four_part", f"{MINIMUM_PARTS[0]}.{MINIMUM_PARTS[1]}.999.1")

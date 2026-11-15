@@ -547,6 +547,7 @@ EOF
 
 github_remote_metadata() {
   python3 - "$1" <<'PY'
+import re
 import sys
 from urllib.parse import urlsplit, urlunsplit
 
@@ -568,7 +569,8 @@ if len(parts) != 2:
 owner, repository = parts
 if repository.endswith(".git"):
     repository = repository[:-4]
-if not owner or not repository:
+slug_pattern = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+if not slug_pattern.fullmatch(owner) or not slug_pattern.fullmatch(repository):
     raise SystemExit(1)
 print(f"{display}\t{owner}/{repository}")
 PY
@@ -642,7 +644,7 @@ Authorized egress for this worker (owner's repository): The owner authorizes thi
 # default repository, missing collisions in every other configured product
 # repository.
 resolve_product_repo_arg() {
-  local paths path slug slugs=()
+  local paths path remote_url metadata slug slugs=()
   paths=$(python3 -c "
 import json
 try:
@@ -665,20 +667,12 @@ for r in repos:
       echo "dispatch: '$path' has no git remote 'origin'; excluded from the collision scan" >&2
       continue
     fi
-    slug=$(printf '%s' "$remote_url" | python3 -c "
-import re, sys
-remote = sys.stdin.read().strip()
-for pattern in (
-    r'^git@github\.com:([^/]+/[^/]+?)(?:\.git)?\$',
-    r'^https://github\.com/([^/]+/[^/]+?)(?:\.git)?\$',
-    r'^ssh://git@github\.com/([^/]+/[^/]+?)(?:\.git)?\$',
-):
-    match = re.match(pattern, remote)
-    if match:
-        print(match.group(1))
-        sys.exit(0)
-sys.exit(1)
-" 2>/dev/null)
+    metadata=$(github_remote_metadata "$remote_url" 2>/dev/null || true)
+    if [ -n "$metadata" ]; then
+      slug="${metadata#*$'\t'}"
+    else
+      slug=""
+    fi
     if [ -n "$slug" ]; then
       slugs+=("$slug")
     else

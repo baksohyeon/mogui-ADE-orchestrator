@@ -25,6 +25,10 @@ grep -Fq 'git push origin -- $branch_arg' "$dispatch" || {
   echo "FAIL: measured push command does not use the quoted branch and --" >&2
   exit 1
 }
+grep -Fq 'metadata=$(github_remote_metadata "$remote_url"' "$dispatch" || {
+  echo "FAIL: product-repository discovery does not reuse the GitHub remote parser" >&2
+  exit 1
+}
 
 work="${TMPDIR:-/tmp}/mogui-dispatch-codex-brief-egress.$$"
 mkdir -p "$work/repo"
@@ -98,6 +102,15 @@ Authorized egress for this worker (owner's repository): the destination is unmea
   exit 1
 }
 echo "ok   : non-GitHub origin is unmeasured"
+
+git -C "$work/repo" remote set-url origin https://github.com/owner/repo%20name.git
+invalid_slug=$(run_case codex "path:$work/repo")
+[ "$invalid_slug" = "$expected_foreign" ] || {
+  echo "FAIL: unsafe GitHub slug did not remove push authorization" >&2
+  printf '  got: %s\n' "$invalid_slug" >&2
+  exit 1
+}
+echo "ok   : unsafe GitHub slug is unmeasured"
 
 git -C "$work/repo" remote remove origin
 unmeasured=$(run_case codex "path:$work/repo")

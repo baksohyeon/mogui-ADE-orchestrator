@@ -1002,6 +1002,11 @@ reused_worktree_alignment_test() (
     printf '%s\n' "$out" >&2
     return 1
   fi
+  if ! printf '%s\n' "$out" | grep -q '^ALIGNMENT=0$'; then
+    echo "FAIL: matching id worktree selector should remain measured" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
   echo "ok   : matching id worktree selector passes alignment"
 
   write_script "$script_file" term_x folder:folder-id "$selected" folder:folder-id
@@ -1009,6 +1014,11 @@ reused_worktree_alignment_test() (
   status=$?
   if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^ALIGNED$'; then
     echo "FAIL: matching folder worktree selector should pass alignment" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -q '^ALIGNMENT=0$'; then
+    echo "FAIL: matching folder worktree selector should remain measured" >&2
     printf '%s\n' "$out" >&2
     return 1
   fi

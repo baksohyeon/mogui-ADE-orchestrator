@@ -117,7 +117,7 @@ codex_unmatched_call_site=$(run_call_site codex "$work/other" "")
 echo "ok   : unmatched Codex redispatch proceeds with one unmeasured warning"
 
 codex_matched_call_site=$(run_call_site codex "$work/repo" "")
-printf '%s' "$codex_matched_call_site" | grep -Fq 'Authorized egress for this worker' || {
+printf '%s' "$codex_matched_call_site" | grep -Fq 'to `https://github.com/baksohyeon/mogui-ADE-orchestrator.git`' || {
   echo "FAIL: matched Codex redispatch did not include the measured paragraph" >&2
   printf '  got: %s\n' "$codex_matched_call_site" >&2
   exit 1

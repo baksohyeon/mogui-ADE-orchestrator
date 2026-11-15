@@ -51,11 +51,6 @@ The table lists the public command surface only. Local host routing, private pat
 | `scripts/worker-reap` | `worker-reap` | Close settled worker terminals and clean up worktrees whose branch changes are included in `origin/main`, including squash-merged branches. Verifies dispatch is settled, closes terminal, removes clean included worktrees, leaves ambiguous ones with reasons logged, and appends a reap record when `--ledger` supplies the audit path. | `--task-id` or `--dispatch-id` (one required), `--ledger` (path for audit trail; required when a procedure calls for a ledger record), `--dry-run` (preview without executing), `--remove-ignored-media` (remove a clean, merged worktree even when it holds ignored media), `--json` (compact JSON output). Exit 0 success, 2 missing arguments, 3 dispatch not settled, 4 parse error, 1 other failure. |
 <!-- END COMMAND TABLE -->
 
-The `scripts/worker-reap` Orca cleanup path requires Orca 1.4.258 or newer. It
-measures `orca --version` and the usage lines for `orca terminal close
---worktree <sel> --all` and `orca worktree rm --worktree <sel> --delete-branch`;
-older or unmeasured hosts keep the legacy behavior.
-
 ## Model evidence limit
 
 Session-record path confinement proves the location and binding metadata available in the record. A worker running as the same operating-system user can create a record inside an allowlisted runtime root, so path checks cannot establish who wrote it. Treat this as a measurement limit and retain independent review of the worker completion context.

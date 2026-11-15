@@ -19,13 +19,6 @@ sys.path.insert(0, str(MOGUI_LOG_ROOT))
 
 from master_runtime.core.worker_reap import ReapError, WorkerReaper  # noqa: E402
 
-
-DEPRECATION_NOTICE = (
-    "DEPRECATED: use `orca terminal close --worktree <sel> --all`, then "
-    "`orca worktree rm --worktree <sel> --delete-branch` after the documented "
-    "settled, clean, pushed, and merged safety checks."
-)
-
 try:
     from mogui_log import emit as mogui_emit  # noqa: E402
 except ImportError:
@@ -38,7 +31,6 @@ except ImportError:
 
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
-    print(DEPRECATION_NOTICE, file=sys.stderr)
     args = parser.parse_args(argv)
 
     reap_ledger_path = None

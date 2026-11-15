@@ -1900,14 +1900,25 @@ class _FakeRunner:
 
 class RevisionTwoWorkerReapTests(unittest.TestCase):
     def test_matching_squash_pr_reclaims_both_row_shapes(self) -> None:
-        for selector in (True, False):
-            with self.subTest(selector=selector), tempfile.TemporaryDirectory() as tmp:
-                runner = _RevisionTwoRunner(tmp, selector=selector)
-                record = WorkerReaper(orca_runner=runner).reap(task_id="t1")
+        for failure_mode in ("merge-base", "name-only"):
+            for selector in (True, False):
+                with (
+                    self.subTest(failure_mode=failure_mode, selector=selector),
+                    tempfile.TemporaryDirectory() as tmp,
+                ):
+                    runner = _RevisionTwoRunner(
+                        tmp, selector=selector, virtual_failure_mode=failure_mode
+                    )
+                    record = WorkerReaper(orca_runner=runner).reap(task_id="t1")
 
-                self.assertEqual(record.measurements["worktree_landed_by"], "merged_pr")
-                self.assertTrue(runner.removed_commands or runner.git_removed_commands)
-                self.assertTrue(runner.closed_commands)
+                    self.assertEqual(record.measurements["worktree_landed_by"], "merged_pr")
+                    if selector:
+                        self.assertEqual(len(runner.removed_commands), 1)
+                        self.assertEqual(runner.git_removed_commands, [])
+                    else:
+                        self.assertEqual(runner.removed_commands, [])
+                        self.assertEqual(len(runner.git_removed_commands), 1)
+                    self.assertEqual(len(runner.closed_commands), 1)
 
     def test_squash_proof_rejects_tip_fork_base_and_gh_failures(self) -> None:
         for case in ("tip", "fork", "base", "gh-fail"):
@@ -1937,6 +1948,7 @@ class RevisionTwoWorkerReapTests(unittest.TestCase):
                 self.assertIn("unpushed commits", record.actions_taken)
                 self.assertEqual(runner.closed_commands, [])
                 self.assertEqual(runner.removed_commands, [])
+                self.assertEqual(runner.git_removed_commands, [])
 
     def test_main_verdict_is_kept_for_both_row_shapes_when_github_fails(self) -> None:
         for selector in (True, False):
@@ -1964,12 +1976,14 @@ class _RevisionTwoRunner:
         pr_case: str = "match",
         unpushed: bool = False,
         content_difference: bool = False,
+        virtual_failure_mode: str = "merge-base",
     ) -> None:
         self.worktree_path = worktree_path
         self.selector = selector
         self.pr_case = pr_case
         self.unpushed = unpushed
         self.content_difference = content_difference
+        self.virtual_failure_mode = virtual_failure_mode
         self.commands: list[list[str]] = []
         self.closed_commands: list[list[str]] = []
         self.removed_commands: list[list[str]] = []
@@ -2025,10 +2039,12 @@ class _RevisionTwoRunner:
         if "git" in cmd and "branch" in cmd and "--merged" in cmd:
             return 0, "* main\n", ""
         if "git" in cmd and "merge-base" in cmd:
-            if self.content_difference:
+            if self.content_difference or self.virtual_failure_mode == "name-only":
                 return 0, "base\n", ""
             return 1, "", "merge base unavailable"
         if "git" in cmd and "--name-only" in cmd:
+            if self.virtual_failure_mode == "name-only":
+                return 1, "", "changed paths unavailable"
             return 0, "src/worker.py\0", ""
         if "git" in cmd and "--quiet" in cmd:
             return (1 if self.content_difference else 0), "", ""

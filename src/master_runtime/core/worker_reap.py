@@ -1266,13 +1266,8 @@ class WorkerReaper:
             worktree_path
         )
         if squash_included:
-            self._last_landing_rule = "content"
-            return True, True, ""
-
-        if squash_reason.startswith("virtual merge failed:") and self._squash_landing_proof(
-            worktree_path
-        ):
-            self._last_landing_rule = "merged_pr"
+            if self._last_landing_rule is None:
+                self._last_landing_rule = "content"
             return True, True, ""
 
         return False, False, (
@@ -1493,7 +1488,11 @@ class WorkerReaper:
             ]
         )
         if code != 0:
-            return False, f"virtual merge failed: {stderr or merge_tree_stdout}"
+            reason = f"virtual merge failed: {stderr or merge_tree_stdout}"
+            if self._squash_landing_proof(worktree_path):
+                self._last_landing_rule = "merged_pr"
+                return True, ""
+            return False, reason
 
         main_tree = main_tree_stdout.strip()
         merge_tree = merge_tree_stdout.splitlines()[0].strip() if merge_tree_stdout else ""

@@ -379,16 +379,20 @@ def _budget(args: argparse.Namespace) -> int:
         try:
             front_matter = json.loads(args.front_matter)
         except json.JSONDecodeError:
-            front_matter = {}
-    budget = front_matter.get("budget") if isinstance(front_matter, dict) else None
-    basis = front_matter.get("tokens_basis", "total") if isinstance(front_matter, dict) else "total"
+            _diagnose("front matter must be valid JSON")
+            return 2
+    if not isinstance(front_matter, dict):
+        _diagnose("front matter must be a JSON object")
+        return 2
+    budget = front_matter.get("budget")
+    basis = front_matter.get("tokens_basis", "total")
     if basis not in {"total", "uncached"}:
         _diagnose("tokens_basis must be total or uncached")
         return 2
     if isinstance(budget, dict) and "tokens" in budget:
         token_budget = budget.get("tokens")
-        if isinstance(token_budget, bool) or not isinstance(token_budget, int) or token_budget < 0:
-            _diagnose("budget.tokens must be a nonnegative integer")
+        if isinstance(token_budget, bool) or not isinstance(token_budget, int) or token_budget < 1:
+            _diagnose("budget.tokens must be a positive integer")
             return 2
         payload = {
             "token_budget": token_budget,

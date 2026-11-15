@@ -1795,9 +1795,18 @@ def _validate_front_matter(
                     return (
                         None,
                         ReasonCode.CONTRACT_FRONT_MATTER,
-                        f"budget.{name} must be a non-negative integer",
+                        f"budget.{name} must be a positive integer"
+                        if name == "tokens"
+                        else f"budget.{name} must be a non-negative integer",
                     )
-                budget[name] = int(value)
+                parsed_value = int(value)
+                if name == "tokens" and parsed_value < 1:
+                    return (
+                        None,
+                        ReasonCode.CONTRACT_FRONT_MATTER,
+                        "budget.tokens must be a positive integer",
+                    )
+                budget[name] = parsed_value
             elif name == "cost_usd":
                 try:
                     cost = float(value)

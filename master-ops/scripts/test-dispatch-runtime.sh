@@ -440,7 +440,7 @@ brief_token_budget_test() (
     echo 'printf "%s\\n" "$SPEC"'
   } > "$script_file"
   out=$(bash "$script_file" 2>&1)
-  if ! printf '%s\n' "$out" | grep -qF 'Worker token budget: 123 tokens on the uncached basis.'; then
+  if ! printf '%s\n' "$out" | grep -qF 'Worker token budget: 123 tokens on the uncached basis. This cap is declared in the contract. Usage is measured from the session record at worker_done or reap. Send an ask message to the coordinator before you expect to exceed the cap.'; then
     echo "FAIL: declared token budget brief is missing" >&2
     printf '%s\n' "$out" >&2
     return 1
@@ -454,7 +454,7 @@ brief_token_budget_test() (
     echo 'printf "%s\\n" "$SPEC"'
   } > "$script_file"
   out=$(bash "$script_file" 2>&1)
-  if ! printf '%s\n' "$out" | grep -qF 'Worker token budget: unset because no cap was declared.'; then
+  if ! printf '%s\n' "$out" | grep -qF 'Worker token budget: unset because no cap was declared. Usage is measured from the session record at worker_done or reap.'; then
     echo "FAIL: no-cap token budget brief is missing" >&2
     printf '%s\n' "$out" >&2
     return 1

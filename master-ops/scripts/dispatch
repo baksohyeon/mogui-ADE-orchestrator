@@ -332,6 +332,9 @@ if [ -n "$LEDGER_EVENT" ]; then
   esac
   record_ledger_event
   RECORD_STATUS=$?
+  if [ "$SETTLE_STATUS" -ne 0 ] && [ "$RECORD_STATUS" -eq 0 ]; then
+    exit 0
+  fi
   [ "$SETTLE_STATUS" -ne 0 ] && exit "$SETTLE_STATUS"
   exit "$RECORD_STATUS"
 fi
@@ -2360,7 +2363,7 @@ if [ "$ALLOW" != "True" ]; then
   echo "$CHK"; exit 2
 fi
 resolve_token_budget || {
-  echo "✗ token budget resolution failed; dispatch has no measured or declared cap" >&2
+  echo "✗ token budget resolution failed; dispatch cannot determine the budget" >&2
   exit 2
 }
 if [ -n "$TOKEN_BUDGET" ]; then
@@ -2492,11 +2495,11 @@ Tracker card: ${CARD:-none}"
 if [ -n "$TOKEN_BUDGET" ]; then
   SPEC="$SPEC
 
-Worker token budget: ${TOKEN_BUDGET} tokens on the ${TOKENS_BASIS} basis. The supervisor counts this cap. At 80%, send an ask message to the coordinator stating what remains to do and the tokens left."
+Worker token budget: ${TOKEN_BUDGET} tokens on the ${TOKENS_BASIS} basis. This cap is declared in the contract. Usage is measured from the session record at worker_done or reap. Send an ask message to the coordinator before you expect to exceed the cap."
 else
   SPEC="$SPEC
 
-Worker token budget: unset because no cap was declared. The supervisor will record usage when the runtime provides it."
+Worker token budget: unset because no cap was declared. Usage is measured from the session record at worker_done or reap."
 fi
 echo "📎 worker token budget · ${TOKEN_BUDGET:-unset} · basis=${TOKENS_BASIS}"
 if [ "$MODEL_NEEDS_MEASUREMENT" = 1 ]; then

@@ -337,7 +337,7 @@ failure_out=$(MOGUI_STATE_DIR="$T/state" GATE_CALLS="$gate_calls" GATE_SETTLE_FA
   DISPATCH_STANDING_RULES="$S/../rules/standing-rules.md" PATH="$T/bin:$PATH" \
   bash "$T/harness/dispatch-production" \
   --ledger-event worker_done --dispatch-id unknown-settlement 2>&1) || failure_status=$?
-if [ "$failure_status" -eq 2 ] \
+if [ "$failure_status" -eq 0 ] \
     && printf '%s\n' "$failure_out" | grep -qF 'settlement failed; recording the event' \
     && grep -q '"kind":"worker_done"' "$failure_ledger" \
     && grep -q '"job_id":"unknown-settlement"' "$failure_ledger"; then

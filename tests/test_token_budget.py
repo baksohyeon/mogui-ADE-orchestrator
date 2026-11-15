@@ -302,7 +302,47 @@ def test_budget_cli_revalidates_declared_tokens(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 2
-    assert "budget.tokens must be a nonnegative integer" in result.stderr
+    assert "budget.tokens must be a positive integer" in result.stderr
+
+
+def test_budget_cli_rejects_zero_tokens() -> None:
+    script = Path(__file__).parents[1] / "scripts" / "dispatch-gate"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "budget",
+            "--front-matter",
+            '{"budget":{"tokens":0}}',
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")},
+    )
+
+    assert result.returncode == 2
+    assert "budget.tokens must be a positive integer" in result.stderr
+
+
+def test_budget_cli_rejects_malformed_front_matter() -> None:
+    script = Path(__file__).parents[1] / "scripts" / "dispatch-gate"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "budget",
+            "--front-matter",
+            '{"budget":',
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")},
+    )
+
+    assert result.returncode == 2
+    assert "front matter must be valid JSON" in result.stderr
 
 
 def test_budget_cli_leaves_undeclared_cap_unset() -> None:

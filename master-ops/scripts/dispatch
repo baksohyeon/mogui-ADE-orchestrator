@@ -187,9 +187,9 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-if [ -z "$LEDGER_EVENT" ] && ! validate_quota_threshold; then
-  echo "✗ invalid quota threshold: $QUOTA_THRESHOLD_PERCENT (expected a finite number from 0 to 100)" >&2
-  exit 2
+if ! validate_quota_threshold; then
+  echo "WARNING: invalid quota threshold '$QUOTA_THRESHOLD_PERCENT'; using default 15" >&2
+  QUOTA_THRESHOLD_PERCENT=15
 fi
 
 if [ "$CARD_ARG_SET" = 1 ] && [ "$NO_CARD_ARG_SET" = 1 ]; then
@@ -448,6 +448,7 @@ quota_guard_codex_root() {
       fi
     done
     [ "$account_count" -eq 1 ] && { printf '%s\n' "$selected"; return 0; }
+    [ "$account_count" -gt 1 ] && { printf 'MULTI:%s\n' "$account_count"; return 2; }
     return 1
   fi
   account_root=$(codex_accounts_dir)
@@ -461,7 +462,7 @@ quota_guard_codex_root() {
     printf '%s\n' "$selected"
     return 0
   fi
-  [ "$account_count" -gt 1 ] && return 1
+  [ "$account_count" -gt 1 ] && { printf 'MULTI:%s\n' "$account_count"; return 2; }
   [ -n "${CODEX_ACCOUNTS_DIR:-}" ] && return 1
   if [ -d "$HOME/.codex/sessions" ]; then
     printf '%s\n' "$HOME/.codex/sessions"
@@ -472,10 +473,16 @@ quota_guard_codex_root() {
 
 quota_guard() {
   local quota_args=(quota --runtime "$RUNTIME" --threshold "$QUOTA_THRESHOLD_PERCENT")
-  local quota_root=""
+  local quota_root="" quota_root_status
   case "$RUNTIME" in codex)
-    if ! quota_root=$(quota_guard_codex_root); then
-      echo "quota: unknown (codex, account unresolved)"
+    quota_root=$(quota_guard_codex_root)
+    quota_root_status=$?
+    if [ "$quota_root_status" -ne 0 ]; then
+      if [ "$quota_root_status" -eq 2 ] && [[ "$quota_root" == MULTI:* ]]; then
+        echo "quota: unknown (codex, account unresolved: ${quota_root#MULTI:} accounts)"
+      else
+        echo "quota: unknown (codex, account unresolved)"
+      fi
       return 0
     fi
     quota_args+=(--root "$quota_root")

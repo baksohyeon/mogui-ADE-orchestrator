@@ -38,6 +38,7 @@ from master_runtime.core.token_budget import (  # noqa: E402
     quota_status,
     read_runtime,
     tier_defaults,
+    tier_defaults_with_status,
     unmeasured,
 )
 
@@ -422,13 +423,22 @@ def _budget(args: argparse.Namespace) -> int:
             "tier": args.tier,
         }
     else:
-        defaults, counts = tier_defaults(args.tier_policy, basis=basis)
+        defaults, counts, default_status = tier_defaults_with_status(args.tier_policy, basis=basis)
+        if args.tier in defaults:
+            source = "tier-p90-cached-timeout" if default_status == "timeout-cache" else "tier-p90"
+        elif default_status == "timeout-cache":
+            source = "unset:default-timeout-cache"
+        elif default_status == "timeout-no-default":
+            source = "unset:default-timeout"
+        else:
+            source = "unset:no-default"
         payload = {
             "token_budget": defaults.get(args.tier),
             "tokens_basis": basis,
-            "source": "tier-p90" if args.tier in defaults else "unset:no-default",
+            "source": source,
             "records": counts.get(args.tier, 0),
             "tier": args.tier,
+            "default_status": default_status,
         }
     print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
     return 0

@@ -737,7 +737,19 @@ BIN
   fi
   echo "ok   : resolvable Codex account is passed to the quota reader"
 
-  rm -rf "$work/accounts/dispatch"
+  mkdir -p "$work/accounts/second/home/sessions"
+  write_script "$script_file" codex blocked
+  out=$(HOME="$work/home" CODEX_HOME= CODEX_ACCOUNTS_DIR="$work/accounts" bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] \
+      || [ "$(printf '%s\n' "$out" | grep -cF 'quota: unknown (codex, account unresolved: 2 accounts)')" -ne 1 ]; then
+    echo "FAIL: multiple Codex accounts must report the count and remain dispatchable" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : multiple Codex accounts report the unresolved count"
+
+  rm -rf "$work/accounts/dispatch" "$work/accounts/second"
   write_script "$script_file" codex blocked
   out=$(HOME="$work/home" CODEX_HOME= CODEX_ACCOUNTS_DIR= bash "$script_file" 2>&1)
   status=$?
@@ -749,6 +761,42 @@ BIN
   echo "ok   : unresolved Codex account remains unknown and dispatchable"
 )
 quota_guard_test "$dispatch" || exit 1
+
+# --- Feature: invalid quota thresholds fall back without blocking -------------
+#
+# Exercise the production validator and fallback branch in isolation so an
+# invalid environment value remains an advisory warning instead of a dispatch
+# refusal.
+quota_threshold_warning_test() (
+  set +e
+  set -u
+  local dispatch="$1" validator fallback work script_file out status
+
+  validator=$(awk '$0=="validate_quota_threshold() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  fallback=$(sed -n '190,193p' "$dispatch")
+  [ -n "$validator" ] || { echo "FAIL: could not extract quota threshold validator" >&2; return 1; }
+  [ -n "$fallback" ] || { echo "FAIL: could not extract quota threshold fallback" >&2; return 1; }
+  work="${TMPDIR:-/tmp}/mogui-dispatch-quota-threshold-test.$$"
+  mkdir -p "$work"
+  trap 'rm -rf "$work"' EXIT
+  script_file="$work/run.sh"
+  {
+    echo 'set -u'
+    printf '%s\n' "$validator"
+    echo 'QUOTA_THRESHOLD_PERCENT=invalid'
+    printf '%s\n' "$fallback"
+    echo 'printf "threshold=%s\\n" "$QUOTA_THRESHOLD_PERCENT"'
+  } > "$script_file"
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -qF "WARNING: invalid quota threshold 'invalid'; using default 15" || ! printf '%s\n' "$out" | grep -qF 'threshold=15'; then
+    echo "FAIL: invalid quota threshold should warn and use 15" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : invalid quota threshold warns and uses the default"
+)
+quota_threshold_warning_test "$dispatch" || exit 1
 
 # --- Feature: cursor pre-trust before launch --------------------------------
 #

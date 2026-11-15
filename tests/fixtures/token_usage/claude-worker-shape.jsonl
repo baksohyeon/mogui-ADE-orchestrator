@@ -1,0 +1,2 @@
+{"type":"attachment","cwd":"/workspace/.orca/worktrees/worker-token-budget","attachment":{"type":"command"}}
+{"type":"assistant","message":{"id":"worker-msg","model":"claude-sonnet-5","usage":{"input_tokens":42,"cache_creation_input_tokens":60,"cache_read_input_tokens":100,"output_tokens":8}}}

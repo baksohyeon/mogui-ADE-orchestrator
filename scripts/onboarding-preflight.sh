@@ -34,7 +34,7 @@ seen_labels=()
 # repeated at the end with its consequence, because fifteen lines of output is
 # exactly the length at which the important line gets skimmed past.
 ESSENTIAL_LABELS=(
-  orca orca-version orca-runtime-version orchestration skills agent-cli agent-route worker-runtime bd python3
+  orca orca-version orchestration skills agent-cli agent-route worker-runtime bd python3
   gitleaks ctx redaction-extra skill-stack
 )
 essential_gaps=()
@@ -146,10 +146,6 @@ orca_install_command() {
 runtime_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 orca_baseline_file="${ORCA_SURFACE_BASELINE:-${runtime_root}/master-ops/scripts/orca-surface-baseline.json}"
 ORCA_VERSION_REGEX='(^|[^0-9.])([0-9]+)\.([0-9]+)\.([0-9]+)(-([0-9A-Za-z][0-9A-Za-z.-]*))?([^0-9A-Za-z.-]|\.([^0-9])|\.?$)'
-orca_version_timeout_seconds="${ORCA_VERSION_TIMEOUT_SECONDS:-10}"
-case "$orca_version_timeout_seconds" in
-  ''|*[!0-9]*|0) orca_version_timeout_seconds=10 ;;
-esac
 
 read_minimum_orca_version() {
   python3 - "$orca_baseline_file" <<'PY'
@@ -223,39 +219,6 @@ version_at_least() {
   fi
 }
 
-run_orca_version() {
-  if command -v timeout >/dev/null 2>&1; then
-    timeout "$orca_version_timeout_seconds" "$orca_command" --version
-  elif command -v gtimeout >/dev/null 2>&1; then
-    gtimeout "$orca_version_timeout_seconds" "$orca_command" --version
-  else
-    local child_pid elapsed
-    set -m
-    "$orca_command" --version &
-    child_pid=$!
-    set +m
-    for ((elapsed = 0; elapsed < orca_version_timeout_seconds; elapsed++)); do
-      if ! kill -0 "$child_pid" 2>/dev/null; then
-        wait "$child_pid"
-        return $?
-      fi
-      sleep 1
-    done
-    if ! kill -0 "$child_pid" 2>/dev/null; then
-      wait "$child_pid"
-      return $?
-    fi
-    if ! kill -KILL -- "-$child_pid" 2>/dev/null; then
-      if command -v pkill >/dev/null 2>&1; then
-        pkill -KILL -P "$child_pid" 2>/dev/null || true
-      fi
-      kill -KILL "$child_pid" 2>/dev/null || true
-    fi
-    wait "$child_pid" 2>/dev/null || true
-    return 124
-  fi
-}
-
 unknown() {
   seen_labels+=("$1")
   unknowns=$((unknowns + 1))
@@ -298,29 +261,6 @@ if command -v "$orca_command" >/dev/null 2>&1; then
 fi
 
 if [[ "$orca_supported" == true ]]; then
-  minimum_orca_version=""
-  minimum_orca_raw=""
-  if ! minimum_orca_raw=$(read_minimum_orca_version 2>/dev/null) \
-    || ! minimum_orca_version=$(parse_orca_version "$minimum_orca_raw"); then
-    unknown "orca-version" "minimum Orca version could not be read from the surface baseline; expected minimumAppVersion in master-ops/scripts/orca-surface-baseline.json"
-  else
-    installed_orca_output=""
-    installed_orca_version=""
-    installed_orca_status=0
-    installed_orca_output=$(run_orca_version 2>/dev/null) || installed_orca_status=$?
-    if [[ $installed_orca_status -eq 124 ]]; then
-      unknown "orca-version" "installed Orca version check timed out after ${orca_version_timeout_seconds}s"
-    elif [[ $installed_orca_status -eq 0 ]] \
-      && installed_orca_version=$(parse_orca_version "$installed_orca_output"); then
-      if version_at_least "$installed_orca_version" "$minimum_orca_version"; then
-        pass "orca-version" "installed Orca ${installed_orca_version%%|*} meets minimum ${minimum_orca_version%%|*}"
-      else
-        fail "orca-version" "installed Orca ${installed_orca_version%%|*} is below minimum ${minimum_orca_version%%|*}"
-      fi
-    else
-      unknown "orca-version" "installed Orca version could not be parsed from '$orca_command --version'"
-    fi
-  fi
   status_output=""
   if status_output=$("$orca_command" status --json 2>&1); then
     if grep -Eq '"ok"[[:space:]]*:[[:space:]]*true' <<<"$status_output"; then
@@ -332,19 +272,28 @@ if [[ "$orca_supported" == true ]]; then
   else
     fail "orca" "$orca_command status --json failed; $(orca_install_hint)"
   fi
-  if [[ "$orca_ready" == true && -n "$minimum_orca_version" ]]; then
+
+  minimum_orca_version=""
+  minimum_orca_raw=""
+  if [[ "$orca_ready" == true ]] \
+    && minimum_orca_raw=$(read_minimum_orca_version 2>/dev/null) \
+    && minimum_orca_version=$(parse_orca_version "$minimum_orca_raw"); then
     runtime_orca_raw=""
     runtime_orca_version=""
     if runtime_orca_raw=$(extract_orca_status_version "$status_output") \
       && runtime_orca_version=$(parse_orca_version "$runtime_orca_raw"); then
       if version_at_least "$runtime_orca_version" "$minimum_orca_version"; then
-        pass "orca-runtime-version" "runtime Orca ${runtime_orca_version%%|*} meets minimum ${minimum_orca_version%%|*}"
+        pass "orca-version" "Orca ${runtime_orca_version%%|*} meets minimum ${minimum_orca_version%%|*}"
       else
-        fail "orca-runtime-version" "runtime Orca ${runtime_orca_version%%|*} is below minimum ${minimum_orca_version%%|*}"
+        fail "orca-version" "Orca ${runtime_orca_version%%|*} is below minimum ${minimum_orca_version%%|*}"
       fi
     else
-      unknown "orca-runtime-version" "runtime Orca version could not be parsed from '$orca_command status --json'"
+      unknown "orca-version" "Orca appVersion could not be parsed from '$orca_command status --json'"
     fi
+  elif [[ "$orca_ready" != true ]]; then
+    unknown "orca-version" "Orca appVersion is unavailable because '$orca_command status --json' did not report a usable runtime"
+  else
+    unknown "orca-version" "minimum Orca version could not be read from the surface baseline; expected minimumAppVersion in master-ops/scripts/orca-surface-baseline.json"
   fi
 fi
 

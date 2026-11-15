@@ -33,6 +33,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
+    print(
+        "Deprecated: worker-reap uses orca terminal close --worktree <sel> --all "
+        "and orca worktree rm --worktree <sel> --delete-branch.",
+        file=sys.stderr,
+    )
+
     reap_ledger_path = None
     if args.ledger:
         reap_ledger_path = Path(args.ledger)

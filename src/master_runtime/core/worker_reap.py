@@ -98,6 +98,15 @@ class ReapRecord:
         }
 
 
+@dataclass(frozen=True)
+class LandingCheck:
+    """Result of checking whether a branch landed in the default branch."""
+
+    included: bool
+    reason: str
+    landing_rule: Optional[str] = None
+
+
 class ReapError(Exception):
     """Reap operation failed."""
 
@@ -336,6 +345,21 @@ class WorkerReaper:
                 )
                 measurements["worktree_clean"] = wt_clean
                 measurements["worktree_merged"] = wt_merged
+                if wt_clean and wt_merged:
+                    if self._last_landing_rule == "merged_pr":
+                        measurements["worktree_unpushed"] = False
+                    else:
+                        remote_contains_tip = self._remote_tracking_contains_tip(worktree_path)
+                        measurements["worktree_tip_remote"] = remote_contains_tip
+                        measurements["worktree_unpushed"] = remote_contains_tip is not True
+                        if remote_contains_tip is None:
+                            wt_clean = False
+                            wt_merged = False
+                            reason = "unpushed status unmeasured"
+                        elif not remote_contains_tip:
+                            wt_clean = False
+                            wt_merged = False
+                            reason = "unpushed commits"
                 if wt_clean and wt_merged:
                     measurements["worktree_landed_by"] = self._last_landing_rule
                     ignored_media = self._ignored_media(worktree_path)
@@ -1251,17 +1275,109 @@ class WorkerReaper:
             self._last_landing_rule = "ancestry"
             return True, True, ""
 
-        squash_included, squash_reason = self._branch_changes_included_in_origin_main(
-            worktree_path
-        )
-        if squash_included:
-            self._last_landing_rule = "content"
+        squash_result = self._branch_changes_included_in_origin_main(worktree_path)
+        if squash_result.included:
+            self._last_landing_rule = squash_result.landing_rule or "content"
             return True, True, ""
 
         return False, False, (
             f"Current branch {current_branch} is not merged to origin/main"
-            f" ({squash_reason})"
+            f" ({squash_result.reason})"
         )
+
+    def _remote_tracking_contains_tip(self, worktree_path: Path) -> Optional[bool]:
+        """Return whether a remote-tracking ref contains the worktree tip."""
+        code, tip_output, _stderr = self.orca_runner(
+            ["git", "-C", str(worktree_path), "rev-parse", "HEAD"]
+        )
+        tip = tip_output.strip()
+        if code != 0 or not tip:
+            return None
+        code, remote_output, _stderr = self.orca_runner(
+            ["git", "-C", str(worktree_path), "branch", "-r", "--contains", tip]
+        )
+        if code != 0:
+            return None
+        return bool(remote_output.strip())
+
+    def _squash_landing_proof(self, worktree_path: Path) -> bool:
+        """Prove a virtual-merge failure landed through a same-repository PR."""
+        branch, tip, _common_dir, repository, _reason = self._measure_branch_identity(
+            worktree_path
+        )
+        if not branch or not tip or not repository:
+            return False
+
+        code, stdout, _stderr = self.orca_runner(
+            ["gh", "repo", "view", repository, "--json", "defaultBranchRef"]
+        )
+        if code != 0:
+            return False
+        try:
+            payload = json.loads(stdout)
+        except json.JSONDecodeError:
+            return False
+        default_ref = payload.get("defaultBranchRef") if isinstance(payload, dict) else None
+        default_branch = default_ref.get("name") if isinstance(default_ref, dict) else None
+        if not isinstance(default_branch, str) or not default_branch:
+            return False
+
+        code, stdout, _stderr = self.orca_runner(
+            [
+                "gh",
+                "pr",
+                "list",
+                "--repo",
+                repository,
+                "--head",
+                branch,
+                "--state",
+                "merged",
+                "--limit",
+                "100",
+                "--json",
+                "state,headRefOid,baseRefName,headRepositoryOwner,headRepository,isCrossRepository",
+            ]
+        )
+        if code != 0:
+            return False
+        try:
+            prs = json.loads(stdout)
+        except json.JSONDecodeError:
+            return False
+        if not isinstance(prs, list):
+            return False
+
+        expected_repository = "/".join(repository.rstrip("/").split("/")[-2:]).casefold()
+        for pr in prs:
+            if not isinstance(pr, dict) or str(pr.get("state", "")).upper() != "MERGED":
+                continue
+            if pr.get("isCrossRepository") is True:
+                continue
+            head_repository = pr.get("headRepository")
+            name_with_owner = (
+                head_repository.get("nameWithOwner")
+                if isinstance(head_repository, dict)
+                else None
+            )
+            owner = pr.get("headRepositoryOwner")
+            name = head_repository.get("name") if isinstance(head_repository, dict) else None
+            same_repository = (
+                isinstance(name_with_owner, str)
+                and name_with_owner.casefold() == expected_repository
+            ) or (
+                isinstance(owner, dict)
+                and isinstance(owner.get("login"), str)
+                and isinstance(name, str)
+                and f"{owner['login']}/{name}".casefold() == expected_repository
+            )
+            if (
+                same_repository
+                and pr.get("headRefOid") == tip
+                and pr.get("baseRefName") == default_branch
+            ):
+                return True
+        return False
 
     def _ignored_media(self, worktree_path: Path) -> Optional[list[str]]:
         """Ignored paths under `worktree_path` whose suffix is in
@@ -1296,9 +1412,9 @@ class WorkerReaper:
 
     def _branch_changes_included_in_origin_main(
         self, worktree_path: Path
-    ) -> tuple[bool, str]:
+    ) -> LandingCheck:
         """
-        True when the branch's changed paths have the same content in origin/main.
+        Return a ``LandingCheck`` describing inclusion, reason, and landing rule.
 
         Squash merges erase ancestry, so `git branch --merged origin/main` cannot
         prove inclusion. Compare only paths changed from the merge base. This
@@ -1332,7 +1448,11 @@ class WorkerReaper:
                 if code == 0:
                     changed_paths = [path for path in changed_output.split("\0") if path]
                     if not changed_paths:
-                        return True, "branch changes are already included in origin/main"
+                        return LandingCheck(
+                            True,
+                            "branch changes are already included in origin/main",
+                            "content",
+                        )
                     diff_command = [
                         "git",
                         "--literal-pathspecs",
@@ -1347,14 +1467,20 @@ class WorkerReaper:
                     ]
                     diff_code, diff_stdout, diff_stderr = self.orca_runner(diff_command)
                     if diff_code == 0:
-                        return True, "branch changes are already included in origin/main"
+                        return LandingCheck(
+                            True,
+                            "branch changes are already included in origin/main",
+                            "content",
+                        )
                     if diff_code == 1:
-                        return (
+                        return LandingCheck(
                             False,
                             "branch changes are not included in origin/main "
                             f"(differing paths: {', '.join(changed_paths)})",
                         )
-                    return False, f"content comparison failed: {diff_stderr or diff_stdout}"
+                    return LandingCheck(
+                        False, f"content comparison failed: {diff_stderr or diff_stdout}"
+                    )
 
         # Keep a compatibility fallback for older ledger fixtures that do not
         # expose a branch ref to the runner. Real dispatches take the measured
@@ -1363,12 +1489,12 @@ class WorkerReaper:
 
     def _legacy_branch_changes_included_in_origin_main(
         self, worktree_path: Path
-    ) -> tuple[bool, str]:
+    ) -> LandingCheck:
         code, main_tree_stdout, stderr = self.orca_runner(
             ["git", "-C", str(worktree_path), "rev-parse", "origin/main^{tree}"]
         )
         if code != 0:
-            return False, f"could not resolve origin/main tree: {stderr}"
+            return LandingCheck(False, f"could not resolve origin/main tree: {stderr}")
 
         code, merge_tree_stdout, stderr = self.orca_runner(
             [
@@ -1382,14 +1508,21 @@ class WorkerReaper:
             ]
         )
         if code != 0:
-            return False, f"virtual merge failed: {stderr or merge_tree_stdout}"
+            reason = f"virtual merge failed: {stderr or merge_tree_stdout}"
+            if self._squash_landing_proof(worktree_path):
+                return LandingCheck(True, "", "merged_pr")
+            return LandingCheck(False, reason)
 
         main_tree = main_tree_stdout.strip()
         merge_tree = merge_tree_stdout.splitlines()[0].strip() if merge_tree_stdout else ""
         if merge_tree == main_tree:
-            return True, "branch changes are already included in origin/main"
+            return LandingCheck(
+                True,
+                "branch changes are already included in origin/main",
+                "content",
+            )
 
-        return False, "branch changes are not included in origin/main"
+        return LandingCheck(False, "branch changes are not included in origin/main")
 
     def _remove_worktree(
         self, worktree_path: Path, worktree_selector: Optional[str] = None

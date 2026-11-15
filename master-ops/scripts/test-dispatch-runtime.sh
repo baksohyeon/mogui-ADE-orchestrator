@@ -946,12 +946,13 @@ reused_worktree_alignment_test() (
   trap 'rm -rf "$work"' EXIT
 
   write_script() {
-    local outfile="$1" terminal="$2" worktree="$3" terminal_worktree="$4"
+    local outfile="$1" terminal="$2" worktree="$3" terminal_worktree="$4" terminal_identity="${5:-}"
     {
       echo 'set -u'
       printf 'TERMINAL=%q\n' "$terminal"
       printf 'WORKTREE=%q\n' "$worktree"
       printf 'terminal_worktree_path() { printf "%%s\\n" %q; }\n' "$terminal_worktree"
+      printf 'terminal_worktree_identity() { printf "%%s\\n" %q; }\n' "$terminal_identity"
       printf '%s\n' "$alignment_fn"
       echo 'if validate_reused_worktree_alignment; then echo ALIGNED; else exit $?; fi'
     } > "$outfile"
@@ -989,6 +990,37 @@ reused_worktree_alignment_test() (
     return 1
   fi
   echo "ok   : unavailable reused terminal worktree fails closed"
+
+  write_script "$script_file" term_x "id:repo::$selected" "$selected" "repo::$selected"
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^ALIGNED$'; then
+    echo "FAIL: matching id worktree selector should pass alignment" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : matching id worktree selector passes alignment"
+
+  write_script "$script_file" term_x folder:folder-id "$selected" folder:folder-id
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^ALIGNED$'; then
+    echo "FAIL: matching folder worktree selector should pass alignment" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : matching folder worktree selector passes alignment"
+
+  write_script "$script_file" term_x "not-path:$selected" "$selected" "$selected"
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 1 ] || printf '%s\n' "$out" | grep -q '^ALIGNED$' \
+      || ! printf '%s\n' "$out" | grep -q 'cannot verify reused terminal against worktree selector'; then
+    echo "FAIL: unrecognized worktree selector should fail closed" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : unrecognized worktree selector fails closed"
 
   write_script "$script_file" "" "path:$selected" ""
   out=$(bash "$script_file" 2>&1)

@@ -843,18 +843,65 @@ if isinstance(terminals, list):
 EOF
 }
 
+terminal_worktree_identity() {
+  local terminal="$1" placement_raw
+  placement_raw=$(orca terminal list --json 2>/dev/null || true)
+  PLACEMENT_JSON="$placement_raw" python3 - "$terminal" <<'EOF'
+import json
+import os
+import sys
+
+terminal = sys.argv[1]
+try:
+    payload = json.loads(os.environ.get("PLACEMENT_JSON", ""))
+except json.JSONDecodeError:
+    payload = {}
+result = payload.get("result") if isinstance(payload, dict) else None
+terminals = result.get("terminals") if isinstance(result, dict) else None
+if isinstance(terminals, list):
+    for item in terminals:
+        if isinstance(item, dict) and str(item.get("handle") or "") == terminal:
+            print(str(item.get("worktreeId") or item.get("worktree_id") or ""))
+            break
+EOF
+}
+
 validate_reused_worktree_alignment() {
-  local selected_path terminal_path
+  local selected_path terminal_path selected_identity terminal_identity
   [ -n "$TERMINAL" ] || return 0
   [ -n "$WORKTREE" ] || return 0
   case "$WORKTREE" in
     path:*) selected_path="${WORKTREE#path:}";;
+    id:|id:*) selected_identity="${WORKTREE#id:}";;
+    folder:*) selected_identity="$WORKTREE";;
     *)
       echo "dispatch: cannot verify reused terminal against worktree selector '$WORKTREE'" >&2
       return 1
       ;;
   esac
   terminal_path=$(terminal_worktree_path "$TERMINAL")
+  if [ -n "$selected_identity" ]; then
+    terminal_identity=$(terminal_worktree_identity "$TERMINAL")
+    if [ -z "$terminal_identity" ]; then
+      echo "dispatch: reused terminal worktree identity is unavailable; cannot verify selected worktree" >&2
+      return 1
+    fi
+    if ! python3 - "$selected_identity" "$terminal_identity" <<'PY'
+import sys
+
+def normalize(value):
+    value = value.strip()
+    return value[3:] if value.startswith("id:") else value
+
+if normalize(sys.argv[1]) != normalize(sys.argv[2]):
+    raise SystemExit(1)
+PY
+    then
+      echo "dispatch: reused terminal worktree does not match selected worktree" >&2
+      return 1
+    fi
+    return 0
+  fi
   if [ -z "$terminal_path" ]; then
     echo "dispatch: reused terminal worktree path is unavailable; cannot verify selected worktree" >&2
     return 1

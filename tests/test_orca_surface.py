@@ -7,7 +7,10 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from windows_exec_surface import skip_windows_exec_surface
+from orca_version_cases import BELOW_VERSION, MINIMUM_ORCA_VERSION, VERSION_CASES
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SURFACE_CHECK = REPO_ROOT / "master-ops" / "scripts" / "orca-surface-check.sh"
@@ -44,7 +47,9 @@ def _run_surface(
     )
 
 
-def _baseline(tmp_path: Path, *, app_version: str, minimum: str) -> Path:
+def _baseline(
+    tmp_path: Path, *, app_version: str, minimum: str = MINIMUM_ORCA_VERSION
+) -> Path:
     baseline = {
         "appVersion": app_version,
         "minimumAppVersion": minimum,
@@ -62,24 +67,25 @@ def _baseline(tmp_path: Path, *, app_version: str, minimum: str) -> Path:
 def test_surface_check_reports_below_minimum_alongside_drift(tmp_path: Path) -> None:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    _fake_orca(bin_dir / "orca", "1.4.257")
-    baseline_path = _baseline(
-        tmp_path, app_version="1.4.258", minimum="1.4.258"
-    )
+    _fake_orca(bin_dir / "orca", BELOW_VERSION)
+    baseline_path = _baseline(tmp_path, app_version=MINIMUM_ORCA_VERSION)
     result = _run_surface(tmp_path, bin_dir, baseline_path)
 
     assert result.returncode == 1, result.stdout + result.stderr
     assert "BELOW-MINIMUM" in result.stderr, result.stderr
     assert "DRIFT:" in result.stderr, result.stderr
-    assert "appVersion 1.4.258 -> 1.4.257" in result.stderr, result.stderr
+    assert (
+        "appVersion %s -> %s" % (MINIMUM_ORCA_VERSION, BELOW_VERSION)
+        in result.stderr
+    ), result.stderr
 
 
 def test_surface_check_isolates_below_minimum_from_drift(tmp_path: Path) -> None:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    _fake_orca(bin_dir / "orca", "1.4.257")
+    _fake_orca(bin_dir / "orca", BELOW_VERSION)
     baseline_path = _baseline(
-        tmp_path, app_version="1.4.257", minimum="1.4.258"
+        tmp_path, app_version=BELOW_VERSION
     )
     result = _run_surface(tmp_path, bin_dir, baseline_path)
 
@@ -91,9 +97,9 @@ def test_surface_check_isolates_below_minimum_from_drift(tmp_path: Path) -> None
 def test_surface_check_passes_at_minimum(tmp_path: Path) -> None:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    _fake_orca(bin_dir / "orca", "1.4.258")
+    _fake_orca(bin_dir / "orca", MINIMUM_ORCA_VERSION)
     baseline_path = _baseline(
-        tmp_path, app_version="1.4.258", minimum="1.4.258"
+        tmp_path, app_version=MINIMUM_ORCA_VERSION
     )
     result = _run_surface(tmp_path, bin_dir, baseline_path)
 
@@ -102,27 +108,50 @@ def test_surface_check_passes_at_minimum(tmp_path: Path) -> None:
     assert "DRIFT:" not in result.stderr, result.stderr
 
 
-def test_surface_check_reports_unparsable_version_as_drift(tmp_path: Path) -> None:
+def test_surface_check_reports_unknown_version_without_drift(tmp_path: Path) -> None:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     _fake_orca(bin_dir / "orca", "version unavailable")
     baseline_path = _baseline(
-        tmp_path, app_version="1.4.258", minimum="1.4.258"
+        tmp_path, app_version=MINIMUM_ORCA_VERSION
     )
     result = _run_surface(tmp_path, bin_dir, baseline_path)
 
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "DRIFT:" in result.stderr, result.stderr
-    assert "installed appVersion is unparsable" in result.stderr, result.stderr
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "UNKNOWN:" in result.stderr, result.stderr
+    assert "DRIFT:" not in result.stderr, result.stderr
+
+
+@pytest.mark.parametrize(
+    "name,version,below", VERSION_CASES, ids=[case[0] for case in VERSION_CASES]
+)
+def test_surface_uses_shared_version_cases(
+    tmp_path: Path, name: str, version: str, below: bool
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _fake_orca(bin_dir / "orca", version)
+    baseline_path = _baseline(tmp_path, app_version=version)
+    result = _run_surface(tmp_path, bin_dir, baseline_path)
+
+    assert result.returncode == (1 if below else 0), (
+        f"{name}: {result.stdout}{result.stderr}"
+    )
+    if below:
+        assert "BELOW-MINIMUM" in result.stderr, result.stderr
+    else:
+        assert "BELOW-MINIMUM" not in result.stderr, result.stderr
+    assert "UNKNOWN:" not in result.stderr, result.stderr
+    assert "DRIFT:" not in result.stderr, result.stderr
 
 
 def test_surface_check_explains_missing_minimum_version(tmp_path: Path) -> None:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    _fake_orca(bin_dir / "orca", "1.4.258")
+    _fake_orca(bin_dir / "orca", MINIMUM_ORCA_VERSION)
     baseline_path = tmp_path / "orca-surface-baseline.json"
     baseline_path.write_text(
-        json.dumps({"appVersion": "1.4.258"}), encoding="utf-8"
+        json.dumps({"appVersion": MINIMUM_ORCA_VERSION}), encoding="utf-8"
     )
     result = _run_surface(tmp_path, bin_dir, baseline_path)
 

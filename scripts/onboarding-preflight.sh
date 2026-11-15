@@ -11,6 +11,7 @@ esac
 failures=0
 passes=0
 warnings=0
+unknowns=0
 waived=0
 
 # Keep Git discovery anchored to the repository carrying this script. An
@@ -144,55 +145,94 @@ orca_install_command() {
 
 runtime_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 orca_baseline_file="${ORCA_SURFACE_BASELINE:-${runtime_root}/master-ops/scripts/orca-surface-baseline.json}"
+ORCA_VERSION_REGEX='(^|[^0-9])([0-9]+)\.([0-9]+)\.([0-9]+)(-([0-9A-Za-z][0-9A-Za-z.-]*))?([^0-9A-Za-z.-]|$)'
 
 read_minimum_orca_version() {
   python3 - "$orca_baseline_file" <<'PY'
 import json
-import re
 import sys
 
 with open(sys.argv[1], encoding="utf-8") as handle:
     value = json.load(handle).get("minimumAppVersion")
-if not isinstance(value, str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", value.strip()):
-    raise ValueError("minimumAppVersion must match major.minor.patch")
+if not isinstance(value, str) or not value.strip():
+    raise ValueError("minimumAppVersion is missing")
 print(value.strip())
 PY
 }
 
 parse_orca_version() {
-  local raw="$1"
-  if [[ "$raw" =~ (^|[^0-9])([0-9]+)\.([0-9]+)\.([0-9]+)([^0-9]|$) ]]; then
-    printf '%s.%s.%s\n' "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" "${BASH_REMATCH[4]}"
+  local version_line="${1%%$'\n'*}"
+  if [[ "$version_line" =~ $ORCA_VERSION_REGEX ]]; then
+    local prerelease=0
+    [[ -n "${BASH_REMATCH[6]:-}" ]] && prerelease=1
+    printf '%s.%s.%s|%s\n' "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" "${BASH_REMATCH[4]}" "$prerelease"
     return 0
   fi
   return 1
 }
 
-parse_orca_status_version() {
+extract_orca_status_version() {
   python3 -c '
 import json
-import re
 import sys
 
-status = json.load(sys.stdin)
-value = status.get("result", {}).get("runtime", {}).get("appVersion")
-if not isinstance(value, str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", value.strip()):
-    raise SystemExit(1)
-print(value.strip())
+text = sys.stdin.read()
+decoder = json.JSONDecoder()
+for index, char in enumerate(text):
+    if char != "{":
+        continue
+    try:
+        payload, _ = decoder.raw_decode(text[index:])
+    except json.JSONDecodeError:
+        continue
+    value = payload.get("result", {}).get("runtime", {}).get("appVersion")
+    if isinstance(value, str) and value.strip():
+        print(value.strip())
+        raise SystemExit(0)
+raise SystemExit(1)
 ' <<<"$1"
 }
 
 version_at_least() {
+  local current_version current_prerelease minimum_version minimum_prerelease
   local current_major current_minor current_patch minimum_major minimum_minor minimum_patch
-  IFS=. read -r current_major current_minor current_patch <<<"$1"
-  IFS=. read -r minimum_major minimum_minor minimum_patch <<<"$2"
+  IFS='|' read -r current_version current_prerelease <<<"$1"
+  IFS='|' read -r minimum_version minimum_prerelease <<<"$2"
+  IFS=. read -r current_major current_minor current_patch <<<"$current_version"
+  IFS=. read -r minimum_major minimum_minor minimum_patch <<<"$minimum_version"
+  current_major=$((10#$current_major))
+  current_minor=$((10#$current_minor))
+  current_patch=$((10#$current_patch))
+  minimum_major=$((10#$minimum_major))
+  minimum_minor=$((10#$minimum_minor))
+  minimum_patch=$((10#$minimum_patch))
   if (( current_major != minimum_major )); then
     (( current_major > minimum_major ))
   elif (( current_minor != minimum_minor )); then
     (( current_minor > minimum_minor ))
+  elif (( current_patch != minimum_patch )); then
+    (( current_patch > minimum_patch ))
+  elif [[ "$current_prerelease" == 1 && "$minimum_prerelease" == 0 ]]; then
+    return 1
   else
-    (( current_patch >= minimum_patch ))
+    return 0
   fi
+}
+
+run_orca_version() {
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 10 "$orca_command" --version
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout 10 "$orca_command" --version
+  else
+    "$orca_command" --version
+  fi
+}
+
+unknown() {
+  seen_labels+=("$1")
+  unknowns=$((unknowns + 1))
+  printf 'UNKNOWN %-12s %s\n' "$1" "$2"
 }
 
 # Resolve once, before the first Orca invocation. Never fall through to another binary.
@@ -232,46 +272,48 @@ fi
 
 if [[ "$orca_supported" == true ]]; then
   minimum_orca_version=""
-  if ! minimum_orca_version=$(read_minimum_orca_version 2>/dev/null); then
+  minimum_orca_raw=""
+  if ! minimum_orca_raw=$(read_minimum_orca_version 2>/dev/null) \
+    || ! minimum_orca_version=$(parse_orca_version "$minimum_orca_raw"); then
     fail "orca-version" "minimum Orca version could not be read from the surface baseline; expected minimumAppVersion in master-ops/scripts/orca-surface-baseline.json"
   else
     installed_orca_output=""
     installed_orca_version=""
-    if installed_orca_output=$("$orca_command" --version 2>&1) \
+    if installed_orca_output=$(run_orca_version 2>/dev/null) \
       && installed_orca_version=$(parse_orca_version "$installed_orca_output"); then
       if version_at_least "$installed_orca_version" "$minimum_orca_version"; then
-        pass "orca-version" "installed Orca $installed_orca_version meets minimum $minimum_orca_version"
+        pass "orca-version" "installed Orca ${installed_orca_version%%|*} meets minimum ${minimum_orca_version%%|*}"
       else
-        fail "orca-version" "installed Orca $installed_orca_version is below minimum $minimum_orca_version"
+        fail "orca-version" "installed Orca ${installed_orca_version%%|*} is below minimum ${minimum_orca_version%%|*}"
       fi
     else
-      fail "orca-version" "installed Orca version is unknown; '$orca_command --version' did not contain a parseable major.minor.patch version"
+      unknown "orca-version" "installed Orca version could not be parsed from '$orca_command --version'"
     fi
   fi
   status_output=""
-  if status_output=$("$orca_command" status --json); then
+  if status_output=$("$orca_command" status --json 2>&1); then
     if grep -Eq '"ok"[[:space:]]*:[[:space:]]*true' <<<"$status_output"; then
       pass "orca" "$orca_command status --json returned ok:true"
       orca_ready=true
       if [[ -n "$minimum_orca_version" ]]; then
+        runtime_orca_raw=""
         runtime_orca_version=""
-        if runtime_orca_version=$(parse_orca_status_version "$status_output"); then
+        if runtime_orca_raw=$(extract_orca_status_version "$status_output") \
+          && runtime_orca_version=$(parse_orca_version "$runtime_orca_raw"); then
           if version_at_least "$runtime_orca_version" "$minimum_orca_version"; then
-            pass "orca-runtime-version" "runtime Orca $runtime_orca_version meets minimum $minimum_orca_version"
+            pass "orca-runtime-version" "runtime Orca ${runtime_orca_version%%|*} meets minimum ${minimum_orca_version%%|*}"
           else
-            fail "orca-runtime-version" "runtime Orca $runtime_orca_version is below minimum $minimum_orca_version"
+            fail "orca-runtime-version" "runtime Orca ${runtime_orca_version%%|*} is below minimum ${minimum_orca_version%%|*}"
           fi
         else
-          fail "orca-runtime-version" "runtime Orca version is unknown; '$orca_command status --json' did not contain result.runtime.appVersion as major.minor.patch"
+          unknown "orca-runtime-version" "runtime Orca version could not be parsed from '$orca_command status --json'"
         fi
       fi
     else
       fail "orca" "$orca_command status --json did not return ok:true; $(orca_install_hint)"
     fi
   else
-    status_error=""
-    status_error=$("$orca_command" status --json 2>&1 >/dev/null) || true
-    fail "orca" "$orca_command status --json failed${status_error:+: $status_error}; $(orca_install_hint)"
+    fail "orca" "$orca_command status --json failed; $(orca_install_hint)"
   fi
 fi
 
@@ -807,6 +849,7 @@ done
 printf '\nPreflight summary\n'
 printf '  PASS: %d\n' "$passes"
 printf '  WARN: %d\n' "$warnings"
+printf '  UNKNOWN: %d\n' "$unknowns"
 printf '  FAIL: %d\n' "$failures"
 printf '  WAIVED: %d' "$waived"
 if [[ ${#waived_labels[@]} -gt 0 ]]; then

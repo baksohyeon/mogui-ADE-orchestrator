@@ -17,14 +17,20 @@ from pathlib import Path
 import pytest
 
 from windows_exec_surface import skip_windows_exec_surface
+from orca_version_cases import (
+    BELOW_VERSION,
+    MINIMUM_ORCA_VERSION,
+    MINIMUM_PARTS,
+    VERSION_CASES,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PREFLIGHT = REPO_ROOT / "scripts" / "onboarding-preflight.sh"
 
 ORCA_STUB = """#!/usr/bin/env bash
 case "$*" in
-  "--version") printf '%s\\n' "${STUB_ORCA_VERSION:-1.4.258}" ;;
-  "status --json") printf '%s\\n' '{"ok":true,"result":{"runtime":{"appVersion":"'"${STUB_RUNTIME_VERSION:-1.4.258}"'"}}}' ;;
+  "--version") [[ -z "${STUB_ORCA_STDERR:-}" ]] || printf '%s\\n' "$STUB_ORCA_STDERR" >&2; printf '%s\\n' "${STUB_ORCA_VERSION-0.0.0}" ;;
+  "status --json") [[ -z "${STUB_STATUS_STDERR:-}" ]] || printf '%s\\n' "$STUB_STATUS_STDERR" >&2; printf '%s\\n' '{"ok":true,"result":{"runtime":{"appVersion":"'"${STUB_RUNTIME_VERSION-0.0.0}"'"}}}' ;;
   "orchestration run-current --json") printf '%s\\n' "$STUB_RUN_CURRENT" ;;
   *) printf '%s\\n' '{"ok":false}' ; exit 1 ;;
 esac
@@ -129,8 +135,8 @@ def _host(
             "ORCA_CLI_COMMAND": "",
             "ORCA_DEV_REPO_ROOT": "",
             "STUB_RUN_CURRENT": RUN_BOUND,
-            "STUB_ORCA_VERSION": "1.4.258",
-            "STUB_RUNTIME_VERSION": "1.4.258",
+            "STUB_ORCA_VERSION": MINIMUM_ORCA_VERSION,
+            "STUB_RUNTIME_VERSION": MINIMUM_ORCA_VERSION,
             "STUB_OPS_REPO": str(ops_repo),
             "DISPATCH_GATE_LEDGER": str(tmp_path / "ledger" / "dispatch.jsonl"),
             "REDACTION_EXTRA_PATTERNS": str(
@@ -214,10 +220,10 @@ def test_provisioned_host_reports_no_failure_it_can_act_on(tmp_path: Path) -> No
 @skip_windows_exec_surface
 def test_orca_below_the_surface_minimum_blocks_preflight(tmp_path: Path) -> None:
     env = _host(tmp_path)
-    env["STUB_ORCA_VERSION"] = "1.4.257"
+    env["STUB_ORCA_VERSION"] = BELOW_VERSION
     result = _run(env, tmp_path)
     assert "orca-version" in _labels(result.stdout, "FAIL"), result.stdout
-    assert "below minimum 1.4.258" in result.stdout, result.stdout
+    assert f"below minimum {MINIMUM_ORCA_VERSION}" in result.stdout, result.stdout
     assert result.returncode == 1
 
 
@@ -226,10 +232,11 @@ def test_orca_runtime_below_the_surface_minimum_blocks_preflight(
     tmp_path: Path,
 ) -> None:
     env = _host(tmp_path)
-    env["STUB_RUNTIME_VERSION"] = "1.4.257"
+    below = BELOW_VERSION
+    env["STUB_RUNTIME_VERSION"] = below
     result = _run(env, tmp_path)
     assert "orca-runtime-version" in _labels(result.stdout, "FAIL"), result.stdout
-    assert "runtime Orca 1.4.257 is below minimum 1.4.258" in result.stdout
+    assert f"runtime Orca {below} is below minimum {MINIMUM_ORCA_VERSION}" in result.stdout
     assert result.returncode == 1
 
 
@@ -238,11 +245,38 @@ def test_orca_version_above_the_surface_minimum_passes_comparison(
     tmp_path: Path,
 ) -> None:
     env = _host(tmp_path)
-    env["STUB_ORCA_VERSION"] = "1.4.259"
-    env["STUB_RUNTIME_VERSION"] = "1.5.0"
+    env["STUB_ORCA_VERSION"] = f"{MINIMUM_PARTS[0]}.{MINIMUM_PARTS[1]}.{MINIMUM_PARTS[2] + 1}"
+    env["STUB_RUNTIME_VERSION"] = f"{MINIMUM_PARTS[0] + 1}.0.0"
     result = _run(env, tmp_path)
     assert "orca-version" in _labels(result.stdout, "PASS"), result.stdout
     assert "orca-runtime-version" in _labels(result.stdout, "PASS"), result.stdout
+    assert result.returncode == 0, result.stdout
+
+
+@pytest.mark.parametrize(
+    "name,version,below", VERSION_CASES, ids=[case[0] for case in VERSION_CASES]
+)
+@skip_windows_exec_surface
+def test_cli_and_runtime_share_version_cases(
+    tmp_path: Path, name: str, version: str, below: bool
+) -> None:
+    env = _host(tmp_path)
+    env["STUB_ORCA_VERSION"] = version
+    env["STUB_RUNTIME_VERSION"] = version
+    result = _run(env, tmp_path)
+    verdict = "FAIL" if below else "PASS"
+    assert "orca-version" in _labels(result.stdout, verdict), f"{name}: {result.stdout}"
+    assert "orca-runtime-version" in _labels(result.stdout, verdict), f"{name}: {result.stdout}"
+    assert result.returncode == (1 if below else 0), result.stdout
+
+
+@skip_windows_exec_surface
+def test_cli_version_ignores_stderr_noise(tmp_path: Path) -> None:
+    env = _host(tmp_path)
+    env["STUB_ORCA_STDERR"] = "warning from launcher 9.9.9"
+    env["STUB_STATUS_STDERR"] = "warning from status 9.9.9"
+    result = _run(env, tmp_path)
+    assert "orca-version" in _labels(result.stdout, "PASS"), result.stdout
     assert result.returncode == 0, result.stdout
 
 
@@ -253,9 +287,9 @@ def test_unparsable_orca_runtime_version_is_reported_as_unknown(
     env = _host(tmp_path)
     env["STUB_RUNTIME_VERSION"] = "runtime unavailable"
     result = _run(env, tmp_path)
-    assert "orca-runtime-version" in _labels(result.stdout, "FAIL"), result.stdout
-    assert "runtime Orca version is unknown" in result.stdout, result.stdout
-    assert result.returncode == 1
+    assert "orca-runtime-version" in _labels(result.stdout, "UNKNOWN"), result.stdout
+    assert "runtime Orca version could not be parsed" in result.stdout, result.stdout
+    assert result.returncode == 0
 
 
 @skip_windows_exec_surface
@@ -263,7 +297,7 @@ def test_missing_surface_minimum_blocks_preflight(tmp_path: Path) -> None:
     env = _host(tmp_path)
     baseline = tmp_path / "baseline.json"
     baseline.write_text(
-        json.dumps({"appVersion": "1.4.258"}), encoding="utf-8"
+        json.dumps({"appVersion": MINIMUM_ORCA_VERSION}), encoding="utf-8"
     )
     env["ORCA_SURFACE_BASELINE"] = str(baseline)
     result = _run(env, tmp_path)
@@ -277,9 +311,18 @@ def test_unparsable_orca_version_is_reported_as_unknown(tmp_path: Path) -> None:
     env = _host(tmp_path)
     env["STUB_ORCA_VERSION"] = "version unavailable"
     result = _run(env, tmp_path)
-    assert "orca-version" in _labels(result.stdout, "FAIL"), result.stdout
-    assert "version is unknown" in result.stdout, result.stdout
-    assert result.returncode == 1
+    assert "orca-version" in _labels(result.stdout, "UNKNOWN"), result.stdout
+    assert "installed Orca version could not be parsed" in result.stdout, result.stdout
+    assert result.returncode == 0
+
+
+@skip_windows_exec_surface
+def test_missing_orca_version_is_reported_as_unknown(tmp_path: Path) -> None:
+    env = _host(tmp_path)
+    env["STUB_ORCA_VERSION"] = ""
+    result = _run(env, tmp_path)
+    assert "orca-version" in _labels(result.stdout, "UNKNOWN"), result.stdout
+    assert result.returncode == 0
 
 
 @skip_windows_exec_surface

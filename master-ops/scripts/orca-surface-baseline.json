@@ -1,6 +1,7 @@
 {
   "appVersion": "1.4.258",
   "minimumAppVersion": "1.4.258",
+  "minimumAppVersionNote": "lowest measured, 2026-11-14",
   "schemaVersion": 1,
   "commandCount": 328,
   "watchedCommands": [

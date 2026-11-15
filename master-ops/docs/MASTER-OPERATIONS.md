@@ -25,3 +25,5 @@ The charter consists of eleven sections covering the master's role, execution, a
 | §9 | Incident-Derived Rules | Understanding a safety measure | [charter/09-incident-derived-rules.md](charter/09-incident-derived-rules.md) — records rules from production incidents with measurement criteria |
 | §10 | Closed Principles Pointer | Architecture or scope questions | [charter/10-closed-principles-pointer.md](charter/10-closed-principles-pointer.md) — references closed decisions and where to find them |
 | §11 | Earn Its Place | Adding or reviewing a card section, skill, hook, memory file, or dispatch artifact | [charter/11-earn-its-place.md](charter/11-earn-its-place.md) — governs how a harness part justifies its ongoing cost, and where its measurement lives |
+
+Research records: [runbooks/research-workflow.md](runbooks/research-workflow.md) and [research/README.md](research/README.md): preserve source coverage, verified literature, and owner-open conclusions.

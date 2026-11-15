@@ -339,7 +339,8 @@ failure_out=$(MOGUI_STATE_DIR="$T/state" GATE_CALLS="$gate_calls" GATE_SETTLE_FA
   --ledger-event worker_done --dispatch-id unknown-settlement 2>&1) || failure_status=$?
 if [ "$failure_status" -eq 2 ] \
     && printf '%s\n' "$failure_out" | grep -qF 'settlement failed; recording the event' \
-    && grep -q '"kind":"worker_done"' "$failure_ledger"; then
+    && grep -q '"kind":"worker_done"' "$failure_ledger" \
+    && grep -q '"job_id":"unknown-settlement"' "$failure_ledger"; then
   ok "settle failure still records the worker_done event"
 else
   fail "settle failure event case: rc=$failure_status out=$failure_out ledger=$(cat "$failure_ledger" 2>/dev/null || true)"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import math
@@ -2550,7 +2551,15 @@ def _ledger_lock_timeout_seconds() -> float:
         value = float(raw_value)
     except ValueError:
         return DEFAULT_LEDGER_LOCK_TIMEOUT_SECONDS
-    return value if value > 0 else DEFAULT_LEDGER_LOCK_TIMEOUT_SECONDS
+    if not math.isfinite(value) or value <= 0:
+        return DEFAULT_LEDGER_LOCK_TIMEOUT_SECONDS
+    return value
+
+
+# flock(LOCK_NB) reports contention through one of these on the platforms the
+# gate runs on; anything else (a bad fd, no lock support) is a real failure
+# that a retry loop must not mask as "still waiting".
+_LEDGER_LOCK_CONTENTION_ERRNOS = frozenset({errno.EACCES, errno.EAGAIN})
 
 
 @contextmanager
@@ -2594,10 +2603,13 @@ def _ledger_lock(ledger_path: Path) -> Iterator[None]:
                 try:
                     fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | non_blocking_flag)
                     break
-                except OSError:
-                    if time.monotonic() >= deadline:
+                except OSError as exc:
+                    if exc.errno not in _LEDGER_LOCK_CONTENTION_ERRNOS:
+                        raise
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
                         raise LedgerLockTimeout(lock_path, timeout_seconds) from None
-                    time.sleep(LEDGER_LOCK_POLL_INTERVAL_SECONDS)
+                    time.sleep(min(LEDGER_LOCK_POLL_INTERVAL_SECONDS, remaining))
         try:
             yield
         finally:

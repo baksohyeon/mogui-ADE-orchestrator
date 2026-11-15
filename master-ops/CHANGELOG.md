@@ -48,6 +48,52 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+## v0.5.345
+
+Release v0.5.345 (2026-11-15): master-ops/TEMPLATE-VERSION and master-ops/MANIFEST.json move to v0.5.345 alongside the changelog fold, and the root CHANGELOG.md rolls its Unreleased section into 0.5.345.
+
+Codex dispatch briefs now include the measured branch, origin URL, and owner/repo
+for authorized push and pull-request commands. An unmeasured destination is called
+out explicitly and leaves push unauthorized. Product-repository discovery accepts
+credential-bearing HTTPS and user/port SSH remotes while briefs display sanitized
+GitHub URLs without remote userinfo. Repository components such as `.github` remain
+valid, and branch names with Markdown delimiters receive safe code spans with
+boundary padding when needed. Reused-terminal alignment no longer blocks dispatch.
+When alignment is unavailable or mismatched, Codex receives an unmeasured no-push
+paragraph and dispatch prints one warning, while other runtimes proceed without an
+egress warning.
+The authorized GraphQL scope is stated as read-only queries, with mutations and
+other network writes explicitly unauthorized.
+
+The template records a measured minimum Orca app version in the surface baseline, watches the worker and cleanup commands it calls, and reports below-minimum installations during preflight and surface checks.
+Existing template installations need a restamp to receive the new minimum-version gate.
+Missing or unparsable versions are reported as UNKNOWN so onboarding can distinguish an unavailable version from a parseable version below the minimum.
+Preflight derives the version verdict from the existing `orca status --json` response, and missing or unparsable appVersion remains UNKNOWN without stopping onboarding.
+
+Stage 1 promotes the research workflow and layout into the template.
+
+- Adds `docs/runbooks/research-workflow.md`, `docs/research/README.md`, and the header-only `docs/research/literature/index.csv`.
+- Adds the runbook and master-operations index links.
+- Stage 1 adds no commit guard, hook, or execution script. A later owner-approved stage can evaluate those additions after both seats have used the workflow.
+
+Added declared worker token budgets, provider usage readers, and settlement for measured or explicitly unmeasured runtime usage. A contract without a tokens entry reports that no cap was declared; tier-default computation and the account quota guard are deferred to a later design for issue #263.
+
+Codex workers launched in linked worktrees now receive the repository's shared Git
+directory as the only extra writable root. The dispatch ledger accepts one locked
+`git_escalation` event per reported retry with the dispatch id, worktree, operation,
+escalation state, and first refusal line.
+
+The shared Git directory includes `.git/hooks` and `.git/config`, so this owner-chosen
+scope allows a worker to plant a hook or change `core.hooksPath`, `core.fsmonitor`, or
+an alias that could run later when the owner or master runs Git in the main checkout.
+When the wrapper observes a completed dispatch, it compares the shared config hash and
+the hooks directory listing with each hook's bounded content digest and mode bits
+against the dispatch-time snapshot and prints one warning line if either changed.
+Special hook entries are recorded without reading them, so the snapshot remains
+bounded even when a writable hooks directory contains a FIFO. Symlink targets are
+recorded with `readlink` without opening the target. The warning is informational
+and does not block completion.
+
 ## v0.5.338
 
 Release v0.5.338 (2026-11-14): master-ops/TEMPLATE-VERSION and master-ops/MANIFEST.json move to v0.5.338 alongside the changelog fold, and the root CHANGELOG.md rolls its Unreleased section into 0.5.338.

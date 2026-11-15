@@ -20,7 +20,11 @@ you build on it.
 
 ## [Unreleased]
 
+## [0.5.345] - 2026-11-15
+
 - Dispatch contracts can declare token budgets and basis, receive a visible budget line, and record per-runtime usage; tier-default computation and the account quota guard are deferred to a later design for issue #263.
+- `worker-reap` proves squash-merged worker branches through a matching same-repository pull request and keeps worktrees when unpushed commits remain or landing cannot be measured (#295).
+- Preflight and surface checks measure the declared minimum Orca app version, report `UNKNOWN` for unavailable or unparsable values, and fail only for a parseable version below the minimum (#300).
 
 ## [0.5.338] - 2026-11-14
 
@@ -497,7 +501,8 @@ tests pass, 1 skipped.
 There is no CI at this tag. Tests and the redaction scanners run locally before
 a push, so a passing count in a pull request is the author's word.
 
-[Unreleased]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.338...HEAD
+[Unreleased]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.345...HEAD
+[0.5.345]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.338...v0.5.345
 [0.5.338]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.326...v0.5.338
 [0.5.326]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.319...v0.5.326
 [0.5.319]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.312...v0.5.319

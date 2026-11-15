@@ -130,7 +130,7 @@ delivery, for the coordinator to act and then re-run `worker-wait`.
 
 More work for a pane whose dispatch already sent `worker_done` goes as a new
 dispatch to the same pane (`scripts/dispatch --terminal <handle> --contract
-<path> ...`, or `--spec "<task>"` for an inline one); text typed into the
+<path> --spec "<task>" ...`, both required together); text typed into the
 pane is outside any dispatch, so Orca sends no stop alerts for it. Messages
 to a running worker use `orca orchestration send --to dispatch:<id>`;
 because these workers are unsupervised, delivery depends on the worker

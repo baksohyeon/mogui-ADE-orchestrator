@@ -243,6 +243,21 @@ claude=$(run_case claude "path:$work/repo")
 echo "ok   : non-codex brief is unchanged"
 
 git -C "$work/repo" config --unset-all remote.origin.pushurl 2>/dev/null || true
+git -C "$work/repo" remote set-url origin 'https://token:secret@github.com/Owner/Repo.git'
+git -C "$work/repo" remote set-url --add --push origin git@github.com:owner/repo.git
+casefold_measured=$(run_case codex "path:$work/repo")
+printf '%s' "$casefold_measured" | grep -Fq 'configured push destination(s) `git@github.com:owner/repo.git`' || {
+  echo "FAIL: case-insensitive GitHub identities were rejected" >&2
+  printf '  got: %s\n' "$casefold_measured" >&2
+  exit 1
+}
+[ -z "$(cat "$work/stderr")" ] || {
+  echo "FAIL: case-insensitive GitHub identities printed an unmeasured warning" >&2
+  exit 1
+}
+echo "ok   : GitHub owner and repository identities compare case-insensitively"
+
+git -C "$work/repo" config --unset-all remote.origin.pushurl 2>/dev/null || true
 git -C "$work/repo" remote set-url origin 'https://token:secret@github.com/owner/repo.git'
 git -C "$work/repo" remote set-url --add --push origin git@github.com:owner/other.git
 mismatched_push=$(run_case codex "path:$work/repo")

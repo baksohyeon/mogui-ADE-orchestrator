@@ -924,6 +924,94 @@ BIN
 )
 pretrust_pane_reuse_skip_test "$dispatch" || exit 1
 
+# --- Feature: reused terminal worktree alignment ---------------------------
+#
+# An existing pane can be paired with a different selected worktree. The
+# egress paragraph is authoritative only when both selections describe the
+# same path, so the wrapper rejects mismatches and unavailable terminal
+# placement data before delivery. A fresh launch and a reused pane without a
+# selected worktree keep their existing paths.
+reused_worktree_alignment_test() (
+  set +e
+  set -u
+  local dispatch="$1" alignment_fn work selected other script_file out status
+
+  alignment_fn=$(awk '$0=="validate_reused_worktree_alignment() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  [ -n "$alignment_fn" ] || { echo "FAIL: could not extract reused-worktree alignment function" >&2; return 1; }
+
+  work="${TMPDIR:-/tmp}/mogui-dispatch-reused-worktree-alignment-test.$$"
+  selected="$work/selected"
+  other="$work/other"
+  mkdir -p "$selected" "$other"
+  trap 'rm -rf "$work"' EXIT
+
+  write_script() {
+    local outfile="$1" terminal="$2" worktree="$3" terminal_worktree="$4"
+    {
+      echo 'set -u'
+      printf 'TERMINAL=%q\n' "$terminal"
+      printf 'WORKTREE=%q\n' "$worktree"
+      printf 'terminal_worktree_path() { printf "%%s\\n" %q; }\n' "$terminal_worktree"
+      printf '%s\n' "$alignment_fn"
+      echo 'if validate_reused_worktree_alignment; then echo ALIGNED; else exit $?; fi'
+    } > "$outfile"
+  }
+
+  script_file="$work/run.sh"
+  write_script "$script_file" term_x "path:$selected" "$selected"
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^ALIGNED$'; then
+    echo "FAIL: matching reused terminal worktree should pass alignment" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : matching reused terminal worktree passes alignment"
+
+  write_script "$script_file" term_x "path:$selected" "$other"
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 1 ] || printf '%s\n' "$out" | grep -q '^ALIGNED$' \
+      || ! printf '%s\n' "$out" | grep -q 'does not match selected worktree'; then
+    echo "FAIL: mismatched reused terminal worktree should fail alignment" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : mismatched reused terminal worktree fails alignment"
+
+  write_script "$script_file" term_x "path:$selected" ""
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 1 ] || printf '%s\n' "$out" | grep -q '^ALIGNED$' \
+      || ! printf '%s\n' "$out" | grep -q 'path is unavailable'; then
+    echo "FAIL: unavailable reused terminal worktree should fail closed" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : unavailable reused terminal worktree fails closed"
+
+  write_script "$script_file" "" "path:$selected" ""
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^ALIGNED$'; then
+    echo "FAIL: a fresh launch should skip reused-terminal alignment" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : fresh launch skips reused-terminal alignment"
+
+  write_script "$script_file" term_x "" ""
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^ALIGNED$'; then
+    echo "FAIL: a reused pane without a selected worktree should skip alignment" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : reused pane without a selected worktree skips alignment"
+)
+reused_worktree_alignment_test "$dispatch" || exit 1
+
 # --- Feature: claude folder-trust dialog classifies as hook-trust ----------
 #
 # 2026-10-02: claude's "Quick safety check..." folder-trust dialog had no

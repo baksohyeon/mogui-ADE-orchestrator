@@ -614,8 +614,8 @@ PY
 append_codex_authorized_egress() {
   [ "$RUNTIME" = codex ] || return 0
   local worktree_selector="${WORKTREE:-}"
-  local worktree_path branch_name branch_arg push_command push_command_code origin_url origin_metadata origin_display_url owner_repo
-  local push_urls push_url push_metadata push_url_display push_repo push_url_list push_measurement_failed
+  local worktree_path branch_name branch_arg push_command push_command_code origin_url origin_metadata origin_display_url owner_repo owner_repo_compare
+  local push_urls push_url push_metadata push_url_display push_repo push_repo_compare push_url_list push_measurement_failed
   local unmeasured="Authorized egress for this worker (owner's repository): the destination is unmeasured and no push is authorized."
 
   case "$worktree_selector" in
@@ -640,6 +640,7 @@ append_codex_authorized_egress() {
     origin_display_url=""
     owner_repo=""
   fi
+  owner_repo_compare=$(printf '%s' "$owner_repo" | tr '[:upper:]' '[:lower:]')
   push_url_list=""
   push_measurement_failed=0
   while IFS= read -r push_url; do
@@ -652,7 +653,8 @@ append_codex_authorized_egress() {
     push_url_display="${push_metadata%%$'\t'*}"
     push_repo="${push_metadata#*$'\t'}"
     push_repo="${push_repo%%$'\t'*}"
-    [ "$push_repo" = "$owner_repo" ] || push_measurement_failed=1
+    push_repo_compare=$(printf '%s' "$push_repo" | tr '[:upper:]' '[:lower:]')
+    [ "$push_repo_compare" = "$owner_repo_compare" ] || push_measurement_failed=1
     push_url_list="${push_url_list}${push_url_list:+, }$push_url_display"
   done <<< "$push_urls"
 
@@ -839,6 +841,35 @@ if isinstance(terminals, list):
             print(str(item.get("worktreePath") or item.get("worktree_path") or ""))
             break
 EOF
+}
+
+validate_reused_worktree_alignment() {
+  local selected_path terminal_path
+  [ -n "$TERMINAL" ] || return 0
+  [ -n "$WORKTREE" ] || return 0
+  case "$WORKTREE" in
+    path:*) selected_path="${WORKTREE#path:}";;
+    *)
+      echo "dispatch: cannot verify reused terminal against worktree selector '$WORKTREE'" >&2
+      return 1
+      ;;
+  esac
+  terminal_path=$(terminal_worktree_path "$TERMINAL")
+  if [ -z "$terminal_path" ]; then
+    echo "dispatch: reused terminal worktree path is unavailable; cannot verify selected worktree" >&2
+    return 1
+  fi
+  if ! python3 - "$selected_path" "$terminal_path" <<'PY'
+import os
+import sys
+
+if os.path.realpath(sys.argv[1]) != os.path.realpath(sys.argv[2]):
+    raise SystemExit(1)
+PY
+  then
+    echo "dispatch: reused terminal worktree does not match selected worktree" >&2
+    return 1
+  fi
 }
 
 codex_rollout_session_for_worktree() {
@@ -2562,6 +2593,7 @@ $block"
   echo "📎 standing rules · $STANDING_RULE_NAMES"
 fi
 
+validate_reused_worktree_alignment || fail_after_tracker_claim "reused terminal worktree validation failed" 3
 append_codex_authorized_egress
 
 # Keep this line in the prepared worker prompt so the card survives a later

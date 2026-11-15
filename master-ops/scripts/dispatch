@@ -545,6 +545,35 @@ print(text)
 EOF
 }
 
+github_remote_metadata() {
+  python3 - "$1" <<'PY'
+import sys
+from urllib.parse import urlsplit, urlunsplit
+
+remote = sys.argv[1].strip()
+if remote.startswith("git@github.com:"):
+    path = remote.split(":", 1)[1]
+    display = remote
+elif remote.startswith(("https://", "ssh://")):
+    parsed = urlsplit(remote)
+    if (parsed.hostname or "").lower() != "github.com":
+        raise SystemExit(1)
+    path = parsed.path
+    display = urlunsplit((parsed.scheme, "github.com", parsed.path, "", ""))
+else:
+    raise SystemExit(1)
+parts = [part for part in path.strip("/").split("/") if part]
+if len(parts) != 2:
+    raise SystemExit(1)
+owner, repository = parts
+if repository.endswith(".git"):
+    repository = repository[:-4]
+if not owner or not repository:
+    raise SystemExit(1)
+print(f"{display}\t{owner}/{repository}")
+PY
+}
+
 # Add the push and pull-request destination to codex briefs from the selected
 # worker worktree. The master supplies a selector, but the branch and remote
 # are measured here so the authority follows the worktree that will receive
@@ -552,7 +581,8 @@ EOF
 append_codex_authorized_egress() {
   [ "$RUNTIME" = codex ] || return 0
   local worktree_selector="${WORKTREE:-}"
-  local worktree_path branch_name origin_url owner_repo
+  local worktree_path branch_name branch_arg origin_url origin_metadata origin_display_url owner_repo
+  local push_urls push_url push_metadata push_url_display push_repo push_url_list push_measurement_failed
   local unmeasured="Authorized egress for this worker (owner's repository): the destination is unmeasured and no push is authorized."
 
   case "$worktree_selector" in
@@ -562,42 +592,47 @@ append_codex_authorized_egress() {
   if [ -n "$worktree_path" ] && [ -d "$worktree_path" ]; then
     branch_name=$(git -C "$worktree_path" branch --show-current 2>/dev/null || true)
     origin_url=$(git -C "$worktree_path" remote get-url origin 2>/dev/null || true)
+    push_urls=$(git -C "$worktree_path" remote get-url --push --all origin 2>/dev/null || true)
   else
     branch_name=""
     origin_url=""
+    push_urls=""
   fi
-  owner_repo=$(printf '%s\n' "$origin_url" | python3 -c '
-import sys
-from urllib.parse import urlparse
+  origin_metadata=$(github_remote_metadata "$origin_url" 2>/dev/null || true)
+  if [ -n "$origin_metadata" ]; then
+    origin_display_url="${origin_metadata%%$'\t'*}"
+    owner_repo="${origin_metadata#*$'\t'}"
+  else
+    origin_display_url=""
+    owner_repo=""
+  fi
+  push_url_list=""
+  push_measurement_failed=0
+  while IFS= read -r push_url; do
+    [ -n "$push_url" ] || continue
+    push_metadata=$(github_remote_metadata "$push_url" 2>/dev/null || true)
+    if [ -z "$push_metadata" ]; then
+      push_measurement_failed=1
+      continue
+    fi
+    push_url_display="${push_metadata%%$'\t'*}"
+    push_repo="${push_metadata#*$'\t'}"
+    [ "$push_repo" = "$owner_repo" ] || push_measurement_failed=1
+    push_url_list="${push_url_list}${push_url_list:+, }$push_url_display"
+  done <<< "$push_urls"
 
-remote = sys.stdin.read().strip()
-if "://" in remote:
-    path = urlparse(remote).path
-elif ":" in remote:
-    path = remote.split(":", 1)[1]
-else:
-    path = remote
-parts = [part for part in path.strip("/").split("/") if part]
-if len(parts) != 2:
-    raise SystemExit(1)
-owner, repository = parts
-if repository.endswith(".git"):
-    repository = repository[:-4]
-if not owner or not repository:
-    raise SystemExit(1)
-print(f"{owner}/{repository}")
-' 2>/dev/null || true)
-
-  if [ -z "$branch_name" ] || [ -z "$origin_url" ] || [ -z "$owner_repo" ]; then
+  if [ -z "$branch_name" ] || [ -z "$origin_display_url" ] || [ -z "$owner_repo" ] \
+      || [ -z "$push_url_list" ] || [ "$push_measurement_failed" = 1 ]; then
     SPEC="$SPEC
 
 $unmeasured"
     echo "WARNING: codex authorized egress destination is unmeasured; no push is authorized." >&2
     return 0
   fi
+  branch_arg=$(printf '%q' "$branch_name")
   SPEC="$SPEC
 
-Authorized egress for this worker (owner's repository): The owner authorizes this worker to run \`git push origin $branch_name\` to \`$origin_url\`, which is the owner's own repository and this worktree's \`origin\`, and \`gh pr create\`, \`gh pr edit\`, \`gh pr comment\` and \`gh api graphql\` (read) on \`$owner_repo\`. No other network write is authorized."
+Authorized egress for this worker (owner's repository): The owner authorizes this worker to run \`git push origin -- $branch_arg\` to \`$origin_display_url\`, with configured push destination(s) \`$push_url_list\`, which is the owner's own repository and this worktree's \`origin\`, and \`gh pr create\`, \`gh pr edit\`, \`gh pr comment\` and \`gh api graphql\` (read) on \`$owner_repo\`. No other network write is authorized."
 }
 
 # Resolve product_repositories (or product_repo) from the instance runtime

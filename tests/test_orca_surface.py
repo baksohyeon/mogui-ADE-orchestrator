@@ -28,26 +28,13 @@ esac
     path.chmod(0o755)
 
 
-def test_surface_check_reports_below_minimum_separately_from_drift(tmp_path: Path) -> None:
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    _fake_orca(bin_dir / "orca", "1.4.257")
-    baseline = {
-        "appVersion": "1.4.258",
-        "minimumAppVersion": "1.4.258",
-        "schemaVersion": 1,
-        "commandCount": 0,
-        "watchedCommands": [],
-        "commandDigests": {},
-        "generatedAt": "2026-11-14T00:00:00Z",
-    }
-    baseline_path = tmp_path / "orca-surface-baseline.json"
-    baseline_path.write_text(json.dumps(baseline), encoding="utf-8")
-
+def _run_surface(
+    tmp_path: Path, bin_dir: Path, baseline_path: Path
+) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
     env["PATH"] = f"{bin_dir}:{env['PATH']}"
     env["BASELINE_FILE"] = str(baseline_path)
-    result = subprocess.run(
+    return subprocess.run(
         ["bash", str(SURFACE_CHECK), "."],
         cwd=tmp_path,
         env=env,
@@ -56,7 +43,88 @@ def test_surface_check_reports_below_minimum_separately_from_drift(tmp_path: Pat
         check=False,
     )
 
+
+def _baseline(tmp_path: Path, *, app_version: str, minimum: str) -> Path:
+    baseline = {
+        "appVersion": app_version,
+        "minimumAppVersion": minimum,
+        "schemaVersion": 1,
+        "commandCount": 0,
+        "watchedCommands": [],
+        "commandDigests": {},
+        "generatedAt": "2026-11-14T00:00:00Z",
+    }
+    path = tmp_path / "orca-surface-baseline.json"
+    path.write_text(json.dumps(baseline), encoding="utf-8")
+    return path
+
+
+def test_surface_check_reports_below_minimum_alongside_drift(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _fake_orca(bin_dir / "orca", "1.4.257")
+    baseline_path = _baseline(
+        tmp_path, app_version="1.4.258", minimum="1.4.258"
+    )
+    result = _run_surface(tmp_path, bin_dir, baseline_path)
+
     assert result.returncode == 1, result.stdout + result.stderr
     assert "BELOW-MINIMUM" in result.stderr, result.stderr
     assert "DRIFT:" in result.stderr, result.stderr
     assert "appVersion 1.4.258 -> 1.4.257" in result.stderr, result.stderr
+
+
+def test_surface_check_isolates_below_minimum_from_drift(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _fake_orca(bin_dir / "orca", "1.4.257")
+    baseline_path = _baseline(
+        tmp_path, app_version="1.4.257", minimum="1.4.258"
+    )
+    result = _run_surface(tmp_path, bin_dir, baseline_path)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "BELOW-MINIMUM" in result.stderr, result.stderr
+    assert "DRIFT:" not in result.stderr, result.stderr
+
+
+def test_surface_check_passes_at_minimum(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _fake_orca(bin_dir / "orca", "1.4.258")
+    baseline_path = _baseline(
+        tmp_path, app_version="1.4.258", minimum="1.4.258"
+    )
+    result = _run_surface(tmp_path, bin_dir, baseline_path)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "BELOW-MINIMUM" not in result.stderr, result.stderr
+    assert "DRIFT:" not in result.stderr, result.stderr
+
+
+def test_surface_check_reports_unparsable_version_as_drift(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _fake_orca(bin_dir / "orca", "version unavailable")
+    baseline_path = _baseline(
+        tmp_path, app_version="1.4.258", minimum="1.4.258"
+    )
+    result = _run_surface(tmp_path, bin_dir, baseline_path)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "DRIFT:" in result.stderr, result.stderr
+    assert "installed appVersion is unparsable" in result.stderr, result.stderr
+
+
+def test_surface_check_explains_missing_minimum_version(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _fake_orca(bin_dir / "orca", "1.4.258")
+    baseline_path = tmp_path / "orca-surface-baseline.json"
+    baseline_path.write_text(
+        json.dumps({"appVersion": "1.4.258"}), encoding="utf-8"
+    )
+    result = _run_surface(tmp_path, bin_dir, baseline_path)
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "baseline missing minimumAppVersion" in result.stderr, result.stderr

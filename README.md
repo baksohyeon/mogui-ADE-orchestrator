@@ -49,7 +49,7 @@ The workspace layer addresses three failures in long-lived coordination. Session
 
 The harness accepts any agent behind a master that can reason. `AGENTS.md` and `CLAUDE.md` ship byte-identical, and a repository test asserts it on every change. `claude` is one example CLI; Claude Code is the exercised host.
 
-The template depends on Orca by design as the required execution substrate for live operation. It supplies session lifetime that outlives a window, stable terminal handles, worktree-scoped placement, a durable Run mailbox that survives restarts, a background receiver, supervised dispatch, and pane identity tied to a worktree. Step 0 preflight refuses to proceed until `orca status` reports a usable runtime and meets the minimum declared in `master-ops/scripts/orca-surface-baseline.json`.
+The template depends on Orca by design as the required execution substrate for live operation. It supplies session lifetime that outlives a window, stable terminal handles, worktree-scoped placement, a durable Run mailbox that survives restarts, a background receiver, supervised dispatch, and pane identity tied to a worktree. Step 0 preflight refuses to proceed until `orca status` reports a usable runtime, `orca --version` meets the minimum declared in `master-ops/scripts/orca-surface-baseline.json`, and the connected runtime version meets that same minimum.
 
 The Orca decision is also a labelled preference. It came from building this harness for a month and running it against other agent development environments. What they offered read as a subset of what Orca offers. That is a preference and it is recorded as one.
 

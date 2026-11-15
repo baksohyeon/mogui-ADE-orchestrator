@@ -24,7 +24,7 @@ PREFLIGHT = REPO_ROOT / "scripts" / "onboarding-preflight.sh"
 ORCA_STUB = """#!/usr/bin/env bash
 case "$*" in
   "--version") printf '%s\\n' "${STUB_ORCA_VERSION:-1.4.258}" ;;
-  "status --json") printf '%s\\n' '{"ok":true}' ;;
+  "status --json") printf '%s\\n' '{"ok":true,"result":{"runtime":{"appVersion":"'"${STUB_RUNTIME_VERSION:-1.4.258}"'"}}}' ;;
   "orchestration run-current --json") printf '%s\\n' "$STUB_RUN_CURRENT" ;;
   *) printf '%s\\n' '{"ok":false}' ; exit 1 ;;
 esac
@@ -130,6 +130,7 @@ def _host(
             "ORCA_DEV_REPO_ROOT": "",
             "STUB_RUN_CURRENT": RUN_BOUND,
             "STUB_ORCA_VERSION": "1.4.258",
+            "STUB_RUNTIME_VERSION": "1.4.258",
             "STUB_OPS_REPO": str(ops_repo),
             "DISPATCH_GATE_LEDGER": str(tmp_path / "ledger" / "dispatch.jsonl"),
             "REDACTION_EXTRA_PATTERNS": str(
@@ -217,6 +218,45 @@ def test_orca_below_the_surface_minimum_blocks_preflight(tmp_path: Path) -> None
     result = _run(env, tmp_path)
     assert "orca-version" in _labels(result.stdout, "FAIL"), result.stdout
     assert "below minimum 1.4.258" in result.stdout, result.stdout
+    assert result.returncode == 1
+
+
+@skip_windows_exec_surface
+def test_orca_runtime_below_the_surface_minimum_blocks_preflight(
+    tmp_path: Path,
+) -> None:
+    env = _host(tmp_path)
+    env["STUB_RUNTIME_VERSION"] = "1.4.257"
+    result = _run(env, tmp_path)
+    assert "orca-runtime-version" in _labels(result.stdout, "FAIL"), result.stdout
+    assert "runtime Orca 1.4.257 is below minimum 1.4.258" in result.stdout
+    assert result.returncode == 1
+
+
+@skip_windows_exec_surface
+def test_orca_version_above_the_surface_minimum_passes_comparison(
+    tmp_path: Path,
+) -> None:
+    env = _host(tmp_path)
+    env["STUB_ORCA_VERSION"] = "1.4.259"
+    env["STUB_RUNTIME_VERSION"] = "1.5.0"
+    result = _run(env, tmp_path)
+    assert "orca-version" in _labels(result.stdout, "PASS"), result.stdout
+    assert "orca-runtime-version" in _labels(result.stdout, "PASS"), result.stdout
+    assert result.returncode == 0, result.stdout
+
+
+@skip_windows_exec_surface
+def test_missing_surface_minimum_blocks_preflight(tmp_path: Path) -> None:
+    env = _host(tmp_path)
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(
+        json.dumps({"appVersion": "1.4.258"}), encoding="utf-8"
+    )
+    env["ORCA_SURFACE_BASELINE"] = str(baseline)
+    result = _run(env, tmp_path)
+    assert "orca-version" in _labels(result.stdout, "FAIL"), result.stdout
+    assert "minimum Orca version could not be read" in result.stdout, result.stdout
     assert result.returncode == 1
 
 

@@ -33,7 +33,7 @@ seen_labels=()
 # repeated at the end with its consequence, because fifteen lines of output is
 # exactly the length at which the important line gets skimmed past.
 ESSENTIAL_LABELS=(
-  orca orca-version orchestration skills agent-cli agent-route worker-runtime bd python3
+  orca orca-version orca-runtime-version orchestration skills agent-cli agent-route worker-runtime bd python3
   gitleaks ctx redaction-extra skill-stack
 )
 essential_gaps=()
@@ -148,12 +148,13 @@ orca_baseline_file="${ORCA_SURFACE_BASELINE:-${runtime_root}/master-ops/scripts/
 read_minimum_orca_version() {
   python3 - "$orca_baseline_file" <<'PY'
 import json
+import re
 import sys
 
 with open(sys.argv[1], encoding="utf-8") as handle:
     value = json.load(handle).get("minimumAppVersion")
-if not isinstance(value, str) or not value.strip():
-    raise ValueError("minimumAppVersion is missing")
+if not isinstance(value, str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", value.strip()):
+    raise ValueError("minimumAppVersion must match major.minor.patch")
 print(value.strip())
 PY
 }
@@ -165,6 +166,20 @@ parse_orca_version() {
     return 0
   fi
   return 1
+}
+
+parse_orca_status_version() {
+  python3 -c '
+import json
+import re
+import sys
+
+status = json.load(sys.stdin)
+value = status.get("result", {}).get("runtime", {}).get("appVersion")
+if not isinstance(value, str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", value.strip()):
+    raise SystemExit(1)
+print(value.strip())
+' <<<"$1"
 }
 
 version_at_least() {
@@ -238,6 +253,18 @@ if [[ "$orca_supported" == true ]]; then
     if grep -Eq '"ok"[[:space:]]*:[[:space:]]*true' <<<"$status_output"; then
       pass "orca" "$orca_command status --json returned ok:true"
       orca_ready=true
+      if [[ -n "$minimum_orca_version" ]]; then
+        runtime_orca_version=""
+        if runtime_orca_version=$(parse_orca_status_version "$status_output"); then
+          if version_at_least "$runtime_orca_version" "$minimum_orca_version"; then
+            pass "orca-runtime-version" "runtime Orca $runtime_orca_version meets minimum $minimum_orca_version"
+          else
+            fail "orca-runtime-version" "runtime Orca $runtime_orca_version is below minimum $minimum_orca_version"
+          fi
+        else
+          fail "orca-runtime-version" "runtime Orca version is unknown; '$orca_command status --json' did not contain result.runtime.appVersion as major.minor.patch"
+        fi
+      fi
     else
       fail "orca" "$orca_command status --json did not return ok:true; $(orca_install_hint)"
     fi

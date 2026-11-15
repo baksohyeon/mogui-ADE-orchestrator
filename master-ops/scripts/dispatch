@@ -54,27 +54,6 @@ print(v)
 sys.exit(0 if v else 1)" 2>/dev/null
 }
 
-configured_quota_threshold() {
-  [ -n "${MOGUI_QUOTA_THRESHOLD_PERCENT:-}" ] && return 1
-  [ -f "$INSTANCE_RUNTIME_CONFIG" ] || return 1
-  python3 - "$INSTANCE_RUNTIME_CONFIG" <<'PY'
-import json
-import sys
-
-try:
-    with open(sys.argv[1], encoding="utf-8") as stream:
-        config = json.load(stream)
-except (OSError, ValueError):
-    raise SystemExit(1)
-for key in ("quota_threshold_percent", "quota_guard_threshold_percent"):
-    value = config.get(key)
-    if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value <= 100:
-        print(value)
-        raise SystemExit(0)
-raise SystemExit(1)
-PY
-}
-
 if [ -n "${MOGUI_MASTER_HOST_RUNTIME:-}" ]; then
   MASTER_HOST_RUNTIME=$MOGUI_MASTER_HOST_RUNTIME
   MASTER_HOST_SOURCE=env
@@ -116,24 +95,6 @@ TIER_POLICY_OVERRIDE=""
 TOKEN_BUDGET=""
 TOKENS_BASIS="total"
 TOKEN_BUDGET_SOURCE=""
-TOKEN_BUDGET_RECORDS=""
-QUOTA_THRESHOLD_PERCENT="${MOGUI_QUOTA_THRESHOLD_PERCENT:-15}"
-if CONFIGURED_QUOTA_THRESHOLD=$(configured_quota_threshold); then
-  QUOTA_THRESHOLD_PERCENT=$CONFIGURED_QUOTA_THRESHOLD
-fi
-validate_quota_threshold() {
-  python3 - "$QUOTA_THRESHOLD_PERCENT" <<'PY'
-import math
-import sys
-
-try:
-    value = float(sys.argv[1])
-except (TypeError, ValueError):
-    raise SystemExit(1)
-if not math.isfinite(value) or not 0 <= value <= 100:
-    raise SystemExit(1)
-PY
-}
 # Tracker card choice. With neither flag, the wrapper creates and claims a card
 # from the contract's H1 title when bd resolves to an active tracker.
 CARD=""
@@ -186,11 +147,6 @@ while [ $# -gt 0 ]; do
     *) usage;;
   esac
 done
-
-if ! validate_quota_threshold; then
-  echo "WARNING: invalid quota threshold '$QUOTA_THRESHOLD_PERCENT'; using default 15" >&2
-  QUOTA_THRESHOLD_PERCENT=15
-fi
 
 if [ "$CARD_ARG_SET" = 1 ] && [ "$NO_CARD_ARG_SET" = 1 ]; then
   echo "✗ choose one of --card or --no-card" >&2
@@ -306,6 +262,7 @@ EOF
 
 if [ -n "$LEDGER_EVENT" ]; then
   resolve_shared_paths
+  SETTLE_STATUS=0
   if [ -z "$LEDGER_EVENT_DISPATCH_ID" ]; then
     echo "✗ --ledger-event requires --dispatch-id" >&2
     exit 1
@@ -319,7 +276,11 @@ if [ -n "$LEDGER_EVENT" ]; then
       SETTLE_ARGS=(--ledger "$LEDGER" settle --dispatch-id "$LEDGER_EVENT_DISPATCH_ID")
       [ -n "$RUNTIME" ] && SETTLE_ARGS+=(--runtime "$RUNTIME")
       [ -n "$LEDGER_EVENT_SESSION_RECORD" ] && SETTLE_ARGS+=(--record "$LEDGER_EVENT_SESSION_RECORD")
-      "$GATE" "${SETTLE_ARGS[@]}" >/dev/null || exit $?
+      SETTLE_STATUS=0
+      "$GATE" "${SETTLE_ARGS[@]}" >/dev/null || {
+        SETTLE_STATUS=$?
+        echo "⚠ $LEDGER_EVENT settlement failed; recording the event" >&2
+      }
       ;;
     resume_attempt)
       if [ "$LEDGER_EVENT_RESULT" = resumed ]; then
@@ -370,7 +331,9 @@ if [ -n "$LEDGER_EVENT" ]; then
       ;;
   esac
   record_ledger_event
-  exit $?
+  RECORD_STATUS=$?
+  [ "$SETTLE_STATUS" -ne 0 ] && exit "$SETTLE_STATUS"
+  exit "$RECORD_STATUS"
 fi
 
 [ -z "$CONTRACT" ] || [ ! -f "$CONTRACT" ] && { echo "✗ contract file missing: $CONTRACT" >&2; exit 1; }
@@ -420,96 +383,13 @@ print($1)
 
 resolve_token_budget() {
   FRONT_MATTER_JSON=$(printf '%s' "$CHK" | jqf "json.dumps(d.get('front_matter') or {}, separators=(',',':'))") || return 1
-  TOKEN_FIELDS=$("$GATE" budget --tier "$TIER" --tier-policy "$POLICY" \
+  TOKEN_FIELDS=$("$GATE" budget --tier "$TIER" \
     --front-matter "$FRONT_MATTER_JSON" 2>/dev/null) || {
-    TOKEN_FIELDS='{"token_budget":null,"tokens_basis":"total","source":"unset:budget-reader","records":0}'
+    TOKEN_FIELDS='{"token_budget":null,"tokens_basis":"total","source":"unset:no-cap","records":null}'
   }
   TOKEN_BUDGET=$(printf '%s' "$TOKEN_FIELDS" | jqf "d.get('token_budget') if d.get('token_budget') is not None else ''")
   TOKENS_BASIS=$(printf '%s' "$TOKEN_FIELDS" | jqf "d.get('tokens_basis','total')")
   TOKEN_BUDGET_SOURCE=$(printf '%s' "$TOKEN_FIELDS" | jqf "d.get('source','unset')")
-  TOKEN_BUDGET_RECORDS=$(printf '%s' "$TOKEN_FIELDS" | jqf "d.get('records') if d.get('records') is not None else ''")
-}
-
-quota_guard_codex_root() {
-  [ "${RUNTIME:-}" = codex ] || return 1
-  local candidate account_root account_count=0 selected=""
-  if [ -n "${DISPATCH_CODEX_SESSION_ROOT:-}" ]; then
-    if [ -d "$DISPATCH_CODEX_SESSION_ROOT" ]; then
-      printf '%s\n' "$DISPATCH_CODEX_SESSION_ROOT"
-      return 0
-    fi
-    return 1
-  fi
-  if [ -n "${CODEX_HOME:-}" ]; then
-    for candidate in "$CODEX_HOME/sessions" "$CODEX_HOME/home/sessions"; do
-      if [ -d "$candidate" ]; then
-        account_count=$((account_count + 1))
-        selected=$candidate
-      fi
-    done
-    [ "$account_count" -eq 1 ] && { printf '%s\n' "$selected"; return 0; }
-    [ "$account_count" -gt 1 ] && { printf 'MULTI:%s\n' "$account_count"; return 2; }
-    return 1
-  fi
-  account_root=$(codex_accounts_dir)
-  for candidate in "$account_root"/*/home/sessions; do
-    if [ -d "$candidate" ]; then
-      account_count=$((account_count + 1))
-      selected=$candidate
-    fi
-  done
-  if [ "$account_count" -eq 1 ]; then
-    printf '%s\n' "$selected"
-    return 0
-  fi
-  [ "$account_count" -gt 1 ] && { printf 'MULTI:%s\n' "$account_count"; return 2; }
-  [ -n "${CODEX_ACCOUNTS_DIR:-}" ] && return 1
-  if [ -d "$HOME/.codex/sessions" ]; then
-    printf '%s\n' "$HOME/.codex/sessions"
-    return 0
-  fi
-  return 1
-}
-
-quota_guard() {
-  local quota_args=(quota --runtime "$RUNTIME" --threshold "$QUOTA_THRESHOLD_PERCENT")
-  local quota_root="" quota_root_status
-  case "$RUNTIME" in codex)
-    quota_root=$(quota_guard_codex_root)
-    quota_root_status=$?
-    if [ "$quota_root_status" -ne 0 ]; then
-      if [ "$quota_root_status" -eq 2 ] && [[ "$quota_root" == MULTI:* ]]; then
-        echo "quota: unknown (codex, account unresolved: ${quota_root#MULTI:} accounts)"
-      else
-        echo "quota: unknown (codex, account unresolved)"
-      fi
-      return 0
-    fi
-    quota_args+=(--root "$quota_root")
-    ;;
-  esac
-  if ! QUOTA_JSON=$("$GATE" "${quota_args[@]}" 2>/dev/null); then
-    echo "quota: unknown ($RUNTIME, quota reader failed)"
-    return 0
-  fi
-  if ! QUOTA_KNOWN=$(printf '%s' "$QUOTA_JSON" | jqf "d.get('known',False)" 2>/dev/null); then
-    echo "quota: unknown ($RUNTIME, unreadable quota output)"
-    return 0
-  fi
-  if [ "$QUOTA_KNOWN" != "True" ]; then
-    QUOTA_WHY=$(printf '%s' "$QUOTA_JSON" | jqf "d.get('why') or 'source unavailable'" 2>/dev/null || printf 'source unavailable')
-    echo "quota: unknown ($RUNTIME, $QUOTA_WHY)"
-    return 0
-  fi
-  QUOTA_REMAINING=$(printf '%s' "$QUOTA_JSON" | jqf "d.get('remaining_percent')")
-  QUOTA_RESETS=$(printf '%s' "$QUOTA_JSON" | jqf "d.get('resets_at') if d.get('resets_at') is not None else ''")
-  QUOTA_AGE=$(printf '%s' "$QUOTA_JSON" | jqf "d.get('age_seconds')")
-  QUOTA_BLOCKED=$(printf '%s' "$QUOTA_JSON" | jqf "d.get('blocked',False)")
-  echo "quota: $RUNTIME ${QUOTA_REMAINING}% remaining · age ${QUOTA_AGE}s${QUOTA_RESETS:+ · resets_at $QUOTA_RESETS}"
-  if [ "$QUOTA_BLOCKED" = True ]; then
-    echo "✗ quota guard · $RUNTIME has ${QUOTA_REMAINING}% remaining, below threshold ${QUOTA_THRESHOLD_PERCENT}%; ask the master before dispatching"
-    return 2
-  fi
 }
 
 # The tracker title is the contract's first level-one Markdown heading. Keep
@@ -2484,7 +2364,7 @@ resolve_token_budget || {
   exit 2
 }
 if [ -n "$TOKEN_BUDGET" ]; then
-  echo "token budget · ${TOKEN_BUDGET} tokens · basis=${TOKENS_BASIS} · source=${TOKEN_BUDGET_SOURCE}${TOKEN_BUDGET_RECORDS:+ · records=${TOKEN_BUDGET_RECORDS}}"
+  echo "token budget · ${TOKEN_BUDGET} tokens · basis=${TOKENS_BASIS} · source=${TOKEN_BUDGET_SOURCE}"
 else
   echo "token budget · unset · basis=${TOKENS_BASIS} · source=${TOKEN_BUDGET_SOURCE}"
 fi
@@ -2495,7 +2375,6 @@ if [ "$CHECK_ONLY" = 1 ]; then
   echo "⚙ gate ✓ $TIER · $MODEL · est $((EST/1000)).$(( (EST%1000)/100 ))k · 계약 ${SHA:0:8} · card=not-created(check-only)"
   exit 0
 fi
-quota_guard || exit $?
 # A concurrent dispatch can spend the budget after this preflight. If the final
 # recording gate denies, Codex pretrust may have prepared a worktree that never
 # receives a worker; dispatch-gate needs an atomic reservation API to close that
@@ -2617,7 +2496,7 @@ Worker token budget: ${TOKEN_BUDGET} tokens on the ${TOKENS_BASIS} basis. The su
 else
   SPEC="$SPEC
 
-Worker token budget: unset because no measured default exists for tier ${TIER}. The supervisor will record usage when the runtime provides it."
+Worker token budget: unset because no cap was declared. The supervisor will record usage when the runtime provides it."
 fi
 echo "📎 worker token budget · ${TOKEN_BUDGET:-unset} · basis=${TOKENS_BASIS}"
 if [ "$MODEL_NEEDS_MEASUREMENT" = 1 ]; then

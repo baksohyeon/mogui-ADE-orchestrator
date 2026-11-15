@@ -1,2 +1,0 @@
-{"type":"session_meta","payload":{"cwd":"/workspace","model":"gpt-5.6-luna"}}
-{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"cached_input_tokens":2,"output_tokens":3,"total_tokens":13}}}}

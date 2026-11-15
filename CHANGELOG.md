@@ -20,7 +20,7 @@ you build on it.
 
 ## [Unreleased]
 
-- Dispatch contracts can declare token budgets and basis, receive a visible budget line, record per-runtime usage, and guard against a measured low Codex weekly quota.
+- Dispatch contracts can declare token budgets and basis, receive a visible budget line, and record per-runtime usage; tier-default computation and the account quota guard are deferred to a later design for issue #263.
 
 ## [0.5.338] - 2026-11-14
 

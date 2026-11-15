@@ -260,6 +260,14 @@ printf '# production check-only fixture\n' > "$T/contract-production.md"
 cat > "$T/runtime/scripts/dispatch-gate" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "${GATE_CALLS:-/dev/null}"
+if [ "${GATE_SETTLE_FAIL:-}" = 1 ]; then
+  for arg in "$@"; do
+    if [ "$arg" = settle ]; then
+      printf '{"allow":false,"reason":"NO_MATCHING_TICKET"}\n'
+          exit 2
+    fi
+  done
+fi
 printf '{"allow":true,"contract_sha":"0123456789abcdef"}\n'
 EOF
 chmod +x "$T/runtime/scripts/dispatch-gate"
@@ -322,6 +330,19 @@ if [ "$done_status" -eq 0 ] \
   ok "worker_done ledger-event settles without a runtime"
 else
   fail "worker_done without runtime case: rc=$done_status out=$done_out gate=$(cat "$gate_calls" 2>/dev/null || true)"
+fi
+failure_ledger="$T/state/dispatch-ledger.jsonl"
+failure_status=0
+failure_out=$(MOGUI_STATE_DIR="$T/state" GATE_CALLS="$gate_calls" GATE_SETTLE_FAIL=1 \
+  DISPATCH_STANDING_RULES="$S/../rules/standing-rules.md" PATH="$T/bin:$PATH" \
+  bash "$T/harness/dispatch-production" \
+  --ledger-event worker_done --dispatch-id unknown-settlement 2>&1) || failure_status=$?
+if [ "$failure_status" -eq 2 ] \
+    && printf '%s\n' "$failure_out" | grep -qF 'settlement failed; recording the event' \
+    && grep -q '"kind":"worker_done"' "$failure_ledger"; then
+  ok "settle failure still records the worker_done event"
+else
+  fail "settle failure event case: rc=$failure_status out=$failure_out ledger=$(cat "$failure_ledger" 2>/dev/null || true)"
 fi
 printf '{}\n' > "$T/session-record.jsonl"
 record_status=0

@@ -876,13 +876,13 @@ class DispatchGate:
                 for entry in entries
                 if entry.get("job_id") == dispatch_id and entry.get("decision") == "ALLOW"
             ]
-            orphaned = (
-                []
-                if registered
-                else [entry for entry in entries if entry.get("settlement_dispatch_id") == dispatch_id]
-            )
-            targets = registered or orphaned
-            found = bool(targets)
+            if not registered:
+                return GateDecision(
+                    False,
+                    ReasonCode.NO_MATCHING_TICKET,
+                    message="dispatch is not registered",
+                )
+            targets = registered
             changed = False
             replaced_unmeasured = False
             for entry in targets:
@@ -903,24 +903,12 @@ class DispatchGate:
                 entry["token_usage_settled"] = True
                 changed = True
                 break
-            if not found:
-                entries.append(
-                    {
-                        "ts": self._clock(),
-                        "kind": "token_usage_settlement",
-                        "settlement_dispatch_id": dispatch_id,
-                        "token_usage": normalized,
-                        "token_usage_settled": True,
-                        "settlement_without_registration": True,
-                    }
-                )
-                changed = True
             if changed:
                 _replace_ledger_entries(Path(self.config.ledger_path), entries)
         if replaced_unmeasured:
             message = "usage upgraded from unmeasured"
         elif changed:
-            message = "usage recorded without registration" if not found else "usage recorded"
+            message = "usage recorded"
         else:
             message = "usage already settled"
         return GateDecision(True, ReasonCode.OK, message=message)

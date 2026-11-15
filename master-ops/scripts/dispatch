@@ -555,6 +555,7 @@ remote = sys.argv[1].strip()
 if remote.startswith("git@github.com:"):
     path = remote.split(":", 1)[1]
     display = remote
+    validated_url = display
 elif remote.startswith(("https://", "ssh://")):
     parsed = urlsplit(remote)
     if (parsed.hostname or "").lower() != "github.com":
@@ -583,7 +584,7 @@ if not owner_pattern.fullmatch(owner) or not repository_pattern.fullmatch(reposi
     raise SystemExit(1)
 if repository in {".", ".."}:
     raise SystemExit(1)
-print(f"{display}\t{owner}/{repository}\t{validated_url if 'validated_url' in locals() else display}")
+print(f"{display}\t{owner}/{repository}\t{validated_url}")
 PY
 }
 
@@ -601,7 +602,8 @@ for char in content:
     else:
         current = 0
 delimiter = "`" * (longest + 1)
-print(f"{delimiter}{content}{delimiter}")
+padding = " " if content.startswith("`") or content.endswith("`") else ""
+print(f"{delimiter}{padding}{content}{padding}{delimiter}")
 PY
 }
 

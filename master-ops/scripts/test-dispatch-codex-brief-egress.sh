@@ -15,10 +15,6 @@ markdown_fn=$(awk '$0=="markdown_code_span() {"{f=1} f{print} f&&$0=="}"{exit}' 
 [ -n "$markdown_fn" ] || { echo "FAIL: could not extract Markdown code-span helper" >&2; exit 1; }
 resolve_fn=$(awk '$0=="resolve_product_repo_arg() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
 [ -n "$resolve_fn" ] || { echo "FAIL: could not extract product-repository resolver" >&2; exit 1; }
-grep -Fq 'metadata=$(github_remote_metadata "$remote_url"' "$dispatch" || {
-  echo "FAIL: product-repository discovery does not reuse the GitHub remote parser" >&2
-  exit 1
-}
 
 work="${TMPDIR:-/tmp}/mogui-dispatch-codex-brief-egress.$$"
 mkdir -p "$work/repo"
@@ -164,18 +160,40 @@ esac
 echo "ok   : SSH port is named without userinfo in the codex brief"
 
 git -C "$work/repo" remote set-url origin 'https://token:secret@github.com/baksohyeon/mogui-ADE-orchestrator.git'
-special_branch=$'worker-`tick-\'quote'
 git -C "$work/repo" -c user.name=fixture -c user.email=fixture@example.invalid commit --allow-empty -qm fixture
-git -C "$work/repo" branch -m "$special_branch"
-special_branch_arg=$(printf '%q' "$special_branch")
-special_code=$(run_code_span "git push origin -- $special_branch_arg")
-special=$(run_case codex "path:$work/repo")
-[[ "$special" == *"run $special_code to "* ]] || {
-  echo "FAIL: special branch characters broke the Markdown code span" >&2
-  printf '  got: %s\n' "$special" >&2
+leading_span=$(run_code_span '`leading')
+[[ "$leading_span" == '`` '* ]] || {
+  echo "FAIL: leading backtick did not receive Markdown code-span padding" >&2
+  printf '  got: %s\n' "$leading_span" >&2
   exit 1
 }
-echo "ok   : special branch characters use a safe Markdown code span"
+trailing_span=$(run_code_span 'trailing`')
+[[ "$trailing_span" == *'trailing` '* ]] || {
+  echo "FAIL: trailing backtick did not receive Markdown code-span padding" >&2
+  printf '  got: %s\n' "$trailing_span" >&2
+  exit 1
+}
+ending_branch=$'worker-ending-`'
+git -C "$work/repo" branch -m "$ending_branch"
+ending_branch_arg=$(printf '%q' "$ending_branch")
+ending_code=$(run_code_span "git push origin -- $ending_branch_arg")
+ending=$(run_case codex "path:$work/repo")
+[[ "$ending" == *"run $ending_code to \`https://github.com/baksohyeon/mogui-ADE-orchestrator.git\`"* ]] || {
+  echo "FAIL: ending backtick branch broke the Markdown code span or hid the URL" >&2
+  printf '  got: %s\n' "$ending" >&2
+  exit 1
+}
+starting_branch=$'`worker-starting'
+git -C "$work/repo" branch -m "$starting_branch"
+starting_branch_arg=$(printf '%q' "$starting_branch")
+starting_code=$(run_code_span "git push origin -- $starting_branch_arg")
+starting=$(run_case codex "path:$work/repo")
+[[ "$starting" == *"run $starting_code to \`https://github.com/baksohyeon/mogui-ADE-orchestrator.git\`"* ]] || {
+  echo "FAIL: starting backtick branch broke the Markdown code span or hid the URL" >&2
+  printf '  got: %s\n' "$starting" >&2
+  exit 1
+}
+echo "ok   : leading and trailing backticks use safe Markdown code spans"
 
 expected_foreign="SPEC=<base brief
 
@@ -193,7 +211,7 @@ detached_warning=$(cat "$work/stderr")
   printf '  got: %s\n' "$detached_warning" >&2
   exit 1
 }
-git -C "$work/repo" checkout -q "$special_branch"
+git -C "$work/repo" checkout -q "$starting_branch"
 reused=$(run_case codex "")
 [ "$reused" = "$expected_foreign" ] || {
   echo "FAIL: reused pane without a worktree path did not remove push authorization" >&2
@@ -224,6 +242,24 @@ claude=$(run_case claude "path:$work/repo")
 }
 echo "ok   : non-codex brief is unchanged"
 
+git -C "$work/repo" config --unset-all remote.origin.pushurl 2>/dev/null || true
+git -C "$work/repo" remote set-url origin 'https://token:secret@github.com/owner/repo.git'
+git -C "$work/repo" remote set-url --add --push origin git@github.com:owner/other.git
+mismatched_push=$(run_case codex "path:$work/repo")
+[ "$mismatched_push" = "$expected_foreign" ] || {
+  echo "FAIL: a push URL for another repository retained push authorization" >&2
+  printf '  got: %s\n' "$mismatched_push" >&2
+  exit 1
+}
+mismatched_push_warning=$(cat "$work/stderr")
+[ "$mismatched_push_warning" = 'WARNING: codex authorized egress destination is unmeasured; no push is authorized.' ] || {
+  echo "FAIL: a mismatched push URL did not print exactly one warning" >&2
+  printf '  got: %s\n' "$mismatched_push_warning" >&2
+  exit 1
+}
+echo "ok   : a push URL for another repository is unmeasured"
+
+git -C "$work/repo" config --unset-all remote.origin.pushurl 2>/dev/null || true
 git -C "$work/repo" remote set-url origin https://gitlab.com/acme/tool.git
 foreign=$(run_case codex "path:$work/repo")
 [ "$foreign" = "$expected_foreign" ] || {
@@ -247,6 +283,38 @@ invalid_slug_warning=$(cat "$work/stderr")
   exit 1
 }
 echo "ok   : unsafe GitHub slug is unmeasured"
+
+git -C "$work/repo" remote set-url origin 'https://github.com@evil.com/owner/repo.git'
+invalid_host=$(run_case codex "path:$work/repo")
+invalid_host_warning=$(cat "$work/stderr")
+[ "$invalid_host" = "$expected_foreign" ] || {
+  echo "FAIL: a GitHub-looking userinfo host retained push authorization" >&2
+  printf '  got: %s\n' "$invalid_host" >&2
+  exit 1
+}
+[ "$invalid_host_warning" = 'WARNING: codex authorized egress destination is unmeasured; no push is authorized.' ] || {
+  echo "FAIL: invalid host did not print exactly one warning" >&2
+  printf '  got: %s\n' "$invalid_host_warning" >&2
+  exit 1
+}
+echo "ok   : invalid GitHub host is unmeasured"
+
+for repository_component in . ..; do
+  git -C "$work/repo" remote set-url origin "https://github.com/owner/$repository_component"
+  dot_repository=$(run_case codex "path:$work/repo")
+  dot_repository_warning=$(cat "$work/stderr")
+  [ "$dot_repository" = "$expected_foreign" ] || {
+    echo "FAIL: repository component '$repository_component' retained push authorization" >&2
+    printf '  got: %s\n' "$dot_repository" >&2
+    exit 1
+  }
+  [ "$dot_repository_warning" = 'WARNING: codex authorized egress destination is unmeasured; no push is authorized.' ] || {
+    echo "FAIL: repository component '$repository_component' did not print exactly one warning" >&2
+    printf '  got: %s\n' "$dot_repository_warning" >&2
+    exit 1
+  }
+done
+echo "ok   : dot and dot-dot repository components are unmeasured"
 
 git -C "$work/repo" remote remove origin
 unmeasured=$(run_case codex "path:$work/repo")

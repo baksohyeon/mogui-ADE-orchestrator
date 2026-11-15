@@ -98,6 +98,15 @@ class ReapRecord:
         }
 
 
+@dataclass(frozen=True)
+class LandingCheck:
+    """Result of checking whether a branch landed in the default branch."""
+
+    included: bool
+    reason: str
+    landing_rule: Optional[str] = None
+
+
 class ReapError(Exception):
     """Reap operation failed."""
 
@@ -1266,18 +1275,14 @@ class WorkerReaper:
             self._last_landing_rule = "ancestry"
             return True, True, ""
 
-        squash_included, squash_reason = self._branch_changes_included_in_origin_main(
-            worktree_path
-        )
-        if squash_included:
-            self._last_landing_rule = (
-                "merged_pr" if squash_reason == "merged_pr" else "content"
-            )
+        squash_result = self._branch_changes_included_in_origin_main(worktree_path)
+        if squash_result.included:
+            self._last_landing_rule = squash_result.landing_rule or "content"
             return True, True, ""
 
         return False, False, (
             f"Current branch {current_branch} is not merged to origin/main"
-            f" ({squash_reason})"
+            f" ({squash_result.reason})"
         )
 
     def _remote_tracking_contains_tip(self, worktree_path: Path) -> Optional[bool]:
@@ -1407,7 +1412,7 @@ class WorkerReaper:
 
     def _branch_changes_included_in_origin_main(
         self, worktree_path: Path
-    ) -> tuple[bool, str]:
+    ) -> LandingCheck:
         """
         True when the branch's changed paths have the same content in origin/main.
 
@@ -1443,7 +1448,11 @@ class WorkerReaper:
                 if code == 0:
                     changed_paths = [path for path in changed_output.split("\0") if path]
                     if not changed_paths:
-                        return True, "branch changes are already included in origin/main"
+                        return LandingCheck(
+                            True,
+                            "branch changes are already included in origin/main",
+                            "content",
+                        )
                     diff_command = [
                         "git",
                         "--literal-pathspecs",
@@ -1458,14 +1467,20 @@ class WorkerReaper:
                     ]
                     diff_code, diff_stdout, diff_stderr = self.orca_runner(diff_command)
                     if diff_code == 0:
-                        return True, "branch changes are already included in origin/main"
+                        return LandingCheck(
+                            True,
+                            "branch changes are already included in origin/main",
+                            "content",
+                        )
                     if diff_code == 1:
-                        return (
+                        return LandingCheck(
                             False,
                             "branch changes are not included in origin/main "
                             f"(differing paths: {', '.join(changed_paths)})",
                         )
-                    return False, f"content comparison failed: {diff_stderr or diff_stdout}"
+                    return LandingCheck(
+                        False, f"content comparison failed: {diff_stderr or diff_stdout}"
+                    )
 
         # Keep a compatibility fallback for older ledger fixtures that do not
         # expose a branch ref to the runner. Real dispatches take the measured
@@ -1474,12 +1489,12 @@ class WorkerReaper:
 
     def _legacy_branch_changes_included_in_origin_main(
         self, worktree_path: Path
-    ) -> tuple[bool, str]:
+    ) -> LandingCheck:
         code, main_tree_stdout, stderr = self.orca_runner(
             ["git", "-C", str(worktree_path), "rev-parse", "origin/main^{tree}"]
         )
         if code != 0:
-            return False, f"could not resolve origin/main tree: {stderr}"
+            return LandingCheck(False, f"could not resolve origin/main tree: {stderr}")
 
         code, merge_tree_stdout, stderr = self.orca_runner(
             [
@@ -1495,15 +1510,19 @@ class WorkerReaper:
         if code != 0:
             reason = f"virtual merge failed: {stderr or merge_tree_stdout}"
             if self._squash_landing_proof(worktree_path):
-                return True, "merged_pr"
-            return False, reason
+                return LandingCheck(True, "", "merged_pr")
+            return LandingCheck(False, reason)
 
         main_tree = main_tree_stdout.strip()
         merge_tree = merge_tree_stdout.splitlines()[0].strip() if merge_tree_stdout else ""
         if merge_tree == main_tree:
-            return True, "branch changes are already included in origin/main"
+            return LandingCheck(
+                True,
+                "branch changes are already included in origin/main",
+                "content",
+            )
 
-        return False, "branch changes are not included in origin/main"
+        return LandingCheck(False, "branch changes are not included in origin/main")
 
     def _remove_worktree(
         self, worktree_path: Path, worktree_selector: Optional[str] = None

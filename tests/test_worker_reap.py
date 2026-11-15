@@ -917,9 +917,9 @@ class WorkerReaperTests(unittest.TestCase):
                 "rev-parse",
                 "--git-common-dir",
             ]
-            self.assertEqual(len(common_dir_commands), 2)
-            self.assertTrue(
-                all(command == expected_common_dir_command for command in common_dir_commands)
+            self.assertEqual(
+                common_dir_commands,
+                [expected_common_dir_command, expected_common_dir_command],
             )
             remove_commands = [
                 cmd for cmd in commands
@@ -1954,7 +1954,7 @@ class RevisionTwoWorkerReapTests(unittest.TestCase):
                         self.assertEqual(runner.git_removed_commands, [])
 
     def test_squash_proof_rejects_tip_fork_base_and_gh_failures(self) -> None:
-        for case in ("tip", "fork", "base", "gh-fail"):
+        for case in ("tip", "fork", "wrong-owner", "base", "gh-fail"):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
                 runner = _RevisionTwoRunner(tmp, pr_case=case)
                 record = WorkerReaper(orca_runner=runner).reap(task_id="t1")
@@ -2129,7 +2129,13 @@ class _RevisionTwoRunner:
             if self.pr_case == "gh-fail":
                 return 1, "", "gh unavailable"
             head_tip = "wrong-tip" if self.pr_case == "tip" else "tip"
-            owner = "fork" if self.pr_case == "fork" else "example"
+            owner = (
+                "fork"
+                if self.pr_case == "fork"
+                else "other"
+                if self.pr_case == "wrong-owner"
+                else "example"
+            )
             base = "develop" if self.pr_case == "base" else "main"
             return 0, json.dumps(
                 [
@@ -2139,7 +2145,7 @@ class _RevisionTwoRunner:
                         "baseRefName": base,
                         "headRepositoryOwner": {"login": owner},
                         "headRepository": {"name": "worker-reap"},
-                        "isCrossRepository": owner != "example",
+                        "isCrossRepository": self.pr_case == "fork",
                     }
                 ]
             ), ""

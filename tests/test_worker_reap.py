@@ -234,6 +234,10 @@ class _MeasuredEnvironment:
             return 0, "", ""
         if "git" in cmd and "branch" in cmd and "--show-current" in cmd:
             return 0, "main\n", ""
+        if "git" in cmd and "rev-parse" in cmd and cmd[-1] == "HEAD":
+            return 0, "tip\n", ""
+        if "git" in cmd and "branch" in cmd and "-r" in cmd and "--contains" in cmd:
+            return 0, "  origin/main\n", ""
         if "git" in cmd and "branch" in cmd and "--merged" in cmd:
             return 0, "* main\n", ""
         if "git" in cmd and "worktree" in cmd and "remove" in cmd:
@@ -731,6 +735,10 @@ class WorkerReaperTests(unittest.TestCase):
                     return 0, "", ""
                 if "git" in cmd and "branch" in cmd and "--show-current" in cmd:
                     return 0, "main\n", ""
+                if "git" in cmd and "rev-parse" in cmd and cmd[-1] == "HEAD":
+                    return 0, "tip\n", ""
+                if "git" in cmd and "branch" in cmd and "-r" in cmd and "--contains" in cmd:
+                    return 0, "  origin/main\n", ""
                 if "git" in cmd and "branch" in cmd and "--merged" in cmd:
                     return 0, "* main\n", ""
                 if "git" in cmd and "rev-parse" in cmd and "--git-common-dir" in cmd:
@@ -902,17 +910,16 @@ class WorkerReaperTests(unittest.TestCase):
             reaper.reap(task_id="t1", execute=True)
 
             common_dir_commands = [cmd for cmd in commands if "--git-common-dir" in cmd]
-            self.assertEqual(
-                common_dir_commands,
-                [
-                    [
-                        "git",
-                        "-C",
-                        tmp_path,
-                        "rev-parse",
-                        "--git-common-dir",
-                    ]
-                ],
+            expected_common_dir_command = [
+                "git",
+                "-C",
+                tmp_path,
+                "rev-parse",
+                "--git-common-dir",
+            ]
+            self.assertEqual(len(common_dir_commands), 2)
+            self.assertTrue(
+                all(command == expected_common_dir_command for command in common_dir_commands)
             )
             remove_commands = [
                 cmd for cmd in commands
@@ -1124,6 +1131,7 @@ class WorkerReaperTests(unittest.TestCase):
             (repo / "file.txt").write_text("base\nfeature\n", encoding="utf-8")
             _git(repo, "commit", "-am", "squash feature")
             _git(repo, "update-ref", "refs/remotes/origin/main", "main")
+            _git(repo, "update-ref", "refs/remotes/origin/feature-x", "feature-x")
             _git(repo, "checkout", "feature-x")
 
             clean, merged, reason = WorkerReaper()._check_worktree_safe_to_remove(repo)
@@ -1147,6 +1155,7 @@ class WorkerReaperTests(unittest.TestCase):
             _git(repo, "commit", "-am", "feature")
             _git(repo, "checkout", "main")
             _git(repo, "update-ref", "refs/remotes/origin/main", "main")
+            _git(repo, "update-ref", "refs/remotes/origin/feature-x", "feature-x")
             _git(repo, "checkout", "feature-x")
 
             clean, merged, reason = WorkerReaper()._check_worktree_safe_to_remove(repo)
@@ -1184,6 +1193,7 @@ class WorkerReaperTests(unittest.TestCase):
             _git(repo, "add", "new.txt")
             _git(repo, "commit", "-m", "squash new content")
             _git(repo, "update-ref", "refs/remotes/origin/main", "main")
+            _git(repo, "update-ref", "refs/remotes/origin/feature-x", "feature-x")
             _git(repo, "checkout", "feature-x")
 
             clean, merged, reason = WorkerReaper()._check_worktree_safe_to_remove(repo)
@@ -1566,6 +1576,13 @@ class BranchDeletionTests(unittest.TestCase):
                     and cmd[3:5] == ["rev-parse", "HEAD"]
                 ):
                     return 0, f"{tip}\n", ""
+                if (
+                    cmd[:3] == ["git", "-C", str(worktree)]
+                    and "branch" in cmd
+                    and "-r" in cmd
+                    and "--contains" in cmd
+                ):
+                    return 0, "  origin/feature/test\n", ""
                 if cmd[:3] == ["git", "-C", str(worktree)] and "--git-common-dir" in cmd:
                     return 0, f"{common_dir}\n", ""
                 if cmd[:3] == ["git", "-C", str(worktree)] and cmd[3:] == [
@@ -1861,6 +1878,10 @@ class _SelectorEnvironment:
             return 0, "", ""
         if "git" in cmd and "branch" in cmd and "--show-current" in cmd:
             return 0, "feature-x\n", ""
+        if "git" in cmd and "rev-parse" in cmd and cmd[-1] == "HEAD":
+            return 0, "tip\n", ""
+        if "git" in cmd and "branch" in cmd and "-r" in cmd and "--contains" in cmd:
+            return 0, "  origin/feature-x\n", ""
         if "git" in cmd and "branch" in cmd and "--merged" in cmd:
             return 0, "* main\n", ""
         if "git" in cmd and "merge-base" in cmd:
@@ -1877,6 +1898,180 @@ class _SelectorEnvironment:
 
 class _FakeRunner:
     def __call__(self, cmd: list[str]) -> tuple[int, str, str]:
+        return 0, "", ""
+
+
+class RevisionTwoWorkerReapTests(unittest.TestCase):
+    def test_matching_squash_pr_reclaims_both_row_shapes(self) -> None:
+        for selector in (True, False):
+            with self.subTest(selector=selector), tempfile.TemporaryDirectory() as tmp:
+                runner = _RevisionTwoRunner(tmp, selector=selector)
+                record = WorkerReaper(orca_runner=runner).reap(task_id="t1")
+
+                self.assertEqual(record.measurements["worktree_landed_by"], "merged_pr")
+                self.assertTrue(runner.removed_commands or runner.git_removed_commands)
+                self.assertTrue(runner.closed_commands)
+
+    def test_squash_proof_rejects_tip_fork_base_and_gh_failures(self) -> None:
+        for case in ("tip", "fork", "base", "gh-fail"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
+                runner = _RevisionTwoRunner(tmp, pr_case=case)
+                record = WorkerReaper(orca_runner=runner).reap(task_id="t1")
+
+                self.assertIn("virtual merge failed", record.actions_taken)
+                self.assertEqual(runner.closed_commands, [])
+                self.assertEqual(runner.removed_commands, [])
+
+    def test_content_difference_keeps_main_verdict_without_pr_lookup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = _RevisionTwoRunner(tmp, content_difference=True)
+            record = WorkerReaper(orca_runner=runner).reap(task_id="t1")
+
+            self.assertIn("differing paths: src/worker.py", record.actions_taken)
+            self.assertFalse(any(cmd[:3] == ["gh", "pr", "list"] for cmd in runner.commands))
+            self.assertEqual(runner.removed_commands, [])
+
+    def test_unpushed_worktree_is_kept_for_both_row_shapes(self) -> None:
+        for selector in (True, False):
+            with self.subTest(selector=selector), tempfile.TemporaryDirectory() as tmp:
+                runner = _RevisionTwoRunner(tmp, selector=selector, unpushed=True)
+                record = WorkerReaper(orca_runner=runner).reap(task_id="t1")
+
+                self.assertIn("unpushed commits", record.actions_taken)
+                self.assertEqual(runner.closed_commands, [])
+                self.assertEqual(runner.removed_commands, [])
+
+    def test_main_verdict_is_kept_for_both_row_shapes_when_github_fails(self) -> None:
+        for selector in (True, False):
+            with self.subTest(selector=selector), tempfile.TemporaryDirectory() as tmp:
+                runner = _RevisionTwoRunner(tmp, selector=selector, pr_case="gh-fail")
+                record = WorkerReaper(orca_runner=runner).reap(task_id="t1")
+
+                self.assertIn("virtual merge failed", record.actions_taken)
+                self.assertEqual(runner.removed_commands, [])
+
+    def test_force_is_never_passed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = _RevisionTwoRunner(tmp)
+            WorkerReaper(orca_runner=runner).reap(task_id="t1")
+
+            self.assertTrue(all("--force" not in cmd for cmd in runner.commands))
+
+
+class _RevisionTwoRunner:
+    def __init__(
+        self,
+        worktree_path: str,
+        *,
+        selector: bool = True,
+        pr_case: str = "match",
+        unpushed: bool = False,
+        content_difference: bool = False,
+    ) -> None:
+        self.worktree_path = worktree_path
+        self.selector = selector
+        self.pr_case = pr_case
+        self.unpushed = unpushed
+        self.content_difference = content_difference
+        self.commands: list[list[str]] = []
+        self.closed_commands: list[list[str]] = []
+        self.removed_commands: list[list[str]] = []
+        self.git_removed_commands: list[list[str]] = []
+
+    def __call__(self, cmd: list[str]) -> tuple[int, str, str]:
+        self.commands.append(cmd)
+        if "dispatch-show" in cmd:
+            dispatch: dict[str, object] = {
+                "dispatch_id": "d1",
+                "task_id": "t1",
+                "terminal_id": "term-target",
+                "status": "COMPLETED",
+                "worktree_path": self.worktree_path,
+            }
+            if self.selector:
+                dispatch["worktree_selector"] = "id:repo:target"
+            return 0, json.dumps(dispatch), ""
+        if cmd[:4] == ["orca", "terminal", "list", "--json"]:
+            return 0, json.dumps(
+                {
+                    "result": {
+                        "terminals": [
+                            {
+                                "handle": "term-target",
+                                "worktreeId": "repo:target",
+                                "worktreePath": self.worktree_path,
+                            }
+                        ]
+                    }
+                }
+            ), ""
+        if cmd[:4] == ["orca", "orchestration", "worker-list", "--limit"]:
+            return 0, json.dumps({"result": {"workers": [], "page": {"hasMore": False}}}), ""
+        if cmd and cmd[0].endswith("worker-pane-sweep"):
+            return 0, "ok idle term-target worker\n", ""
+        if cmd[:2] == ["ps", "-axo"]:
+            return 0, "", ""
+        if cmd[:2] == ["orca", "terminal"] and "close" in cmd:
+            self.closed_commands.append(cmd)
+            return 0, "", ""
+        if cmd[:2] == ["orca", "worktree"] and "rm" in cmd:
+            self.removed_commands.append(cmd)
+            return 0, "", ""
+        if "git" in cmd and "status" in cmd:
+            return 0, "", ""
+        if "git" in cmd and "branch" in cmd and "--show-current" in cmd:
+            return 0, "feature-x\n", ""
+        if "git" in cmd and "rev-parse" in cmd and cmd[-1] == "HEAD":
+            return 0, "tip\n", ""
+        if "git" in cmd and "branch" in cmd and "-r" in cmd and "--contains" in cmd:
+            return 0, "" if self.unpushed else "  origin/feature-x\n", ""
+        if "git" in cmd and "branch" in cmd and "--merged" in cmd:
+            return 0, "* main\n", ""
+        if "git" in cmd and "merge-base" in cmd:
+            if self.content_difference:
+                return 0, "base\n", ""
+            return 1, "", "merge base unavailable"
+        if "git" in cmd and "--name-only" in cmd:
+            return 0, "src/worker.py\0", ""
+        if "git" in cmd and "--quiet" in cmd:
+            return (1 if self.content_difference else 0), "", ""
+        if "git" in cmd and "origin/main^{tree}" in cmd:
+            return 0, "tree-main\n", ""
+        if "git" in cmd and "merge-tree" in cmd:
+            return 1, "", "virtual merge failed"
+        if "git" in cmd and "--git-common-dir" in cmd:
+            return 0, "/repo/.git\n", ""
+        if "git" in cmd and "remote" in cmd and "get-url" in cmd:
+            return 0, "https://github.com/example/worker-reap.git\n", ""
+        if "git" in cmd and "--git-dir=" in " ".join(cmd) and "rev-parse" in cmd:
+            return 0, "tip\n", ""
+        if cmd and cmd[0] == "gh" and cmd[1:3] == ["repo", "view"]:
+            return 0, json.dumps({"defaultBranchRef": {"name": "main"}}), ""
+        if cmd and cmd[0] == "gh" and cmd[1:3] == ["pr", "list"]:
+            if self.pr_case == "gh-fail":
+                return 1, "", "gh unavailable"
+            head_tip = "wrong-tip" if self.pr_case == "tip" else "tip"
+            owner = "fork" if self.pr_case == "fork" else "example"
+            base = "develop" if self.pr_case == "base" else "main"
+            return 0, json.dumps(
+                [
+                    {
+                        "state": "MERGED",
+                        "headRefOid": head_tip,
+                        "baseRefName": base,
+                        "headRepositoryOwner": {"login": owner},
+                        "headRepository": {"name": "worker-reap"},
+                        "isCrossRepository": owner != "example",
+                    }
+                ]
+            ), ""
+        if cmd and cmd[0] == "gh" and cmd[1:3] == ["pr", "view"]:
+            return 0, json.dumps({"state": "MERGED", "headRefOid": "tip"}), ""
+        if "git" in cmd and "worktree" in cmd and "remove" in cmd:
+            self.git_removed_commands.append(cmd)
+            return 0, "", ""
+        if "git" in cmd and "-D" in cmd:
+            return 0, "", ""
         return 0, "", ""
 
 
@@ -1907,6 +2102,10 @@ def _clean_worktree_runner(
             return 0, "", ""
         if "git" in cmd and "branch" in cmd and "--show-current" in cmd:
             return 0, f"{current_branch}\n", ""
+        if "git" in cmd and "rev-parse" in cmd and cmd[-1] == "HEAD":
+            return 0, "tip\n", ""
+        if "git" in cmd and "branch" in cmd and "-r" in cmd and "--contains" in cmd:
+            return 0, "  origin/main\n", ""
         if "git" in cmd and "branch" in cmd and "--merged" in cmd:
             return 0, merged_branches, ""
         if "git" in cmd and "rev-parse" in cmd and "--git-common-dir" in cmd:

@@ -1234,6 +1234,12 @@ class WorkerReaper:
         if not current_branch:
             return False, False, "Could not get current branch: detached HEAD"
 
+        remote_contains_tip = self._remote_tracking_contains_tip(worktree_path)
+        if remote_contains_tip is None:
+            return False, False, "unpushed status unmeasured"
+        if not remote_contains_tip:
+            return False, False, "unpushed commits"
+
         # Check if branch is topologically merged.
         code, stdout, stderr = self.orca_runner(
             ["git", "-C", str(worktree_path), "branch", "-a", "--merged", "origin/main"]
@@ -1258,10 +1264,110 @@ class WorkerReaper:
             self._last_landing_rule = "content"
             return True, True, ""
 
+        if squash_reason.startswith("virtual merge failed:") and self._squash_landing_proof(
+            worktree_path
+        ):
+            self._last_landing_rule = "merged_pr"
+            return True, True, ""
+
         return False, False, (
             f"Current branch {current_branch} is not merged to origin/main"
             f" ({squash_reason})"
         )
+
+    def _remote_tracking_contains_tip(self, worktree_path: Path) -> Optional[bool]:
+        """Return whether a remote-tracking ref contains the worktree tip."""
+        code, tip_output, _stderr = self.orca_runner(
+            ["git", "-C", str(worktree_path), "rev-parse", "HEAD"]
+        )
+        tip = tip_output.strip()
+        if code != 0 or not tip:
+            return None
+        code, remote_output, _stderr = self.orca_runner(
+            ["git", "-C", str(worktree_path), "branch", "-r", "--contains", tip]
+        )
+        if code != 0:
+            return None
+        return bool(remote_output.strip())
+
+    def _squash_landing_proof(self, worktree_path: Path) -> bool:
+        """Prove a virtual-merge failure landed through a same-repository PR."""
+        branch, tip, _common_dir, repository, _reason = self._measure_branch_identity(
+            worktree_path
+        )
+        if not branch or not tip or not repository:
+            return False
+
+        code, stdout, _stderr = self.orca_runner(
+            ["gh", "repo", "view", repository, "--json", "defaultBranchRef"]
+        )
+        if code != 0:
+            return False
+        try:
+            payload = json.loads(stdout)
+        except json.JSONDecodeError:
+            return False
+        default_ref = payload.get("defaultBranchRef") if isinstance(payload, dict) else None
+        default_branch = default_ref.get("name") if isinstance(default_ref, dict) else None
+        if not isinstance(default_branch, str) or not default_branch:
+            return False
+
+        code, stdout, _stderr = self.orca_runner(
+            [
+                "gh",
+                "pr",
+                "list",
+                "--repo",
+                repository,
+                "--head",
+                branch,
+                "--state",
+                "merged",
+                "--limit",
+                "100",
+                "--json",
+                "state,headRefOid,baseRefName,headRepositoryOwner,headRepository,isCrossRepository",
+            ]
+        )
+        if code != 0:
+            return False
+        try:
+            prs = json.loads(stdout)
+        except json.JSONDecodeError:
+            return False
+        if not isinstance(prs, list):
+            return False
+
+        expected_repository = "/".join(repository.rstrip("/").split("/")[-2:]).casefold()
+        for pr in prs:
+            if not isinstance(pr, dict) or str(pr.get("state", "")).upper() != "MERGED":
+                continue
+            if pr.get("isCrossRepository") is True:
+                continue
+            head_repository = pr.get("headRepository")
+            name_with_owner = (
+                head_repository.get("nameWithOwner")
+                if isinstance(head_repository, dict)
+                else None
+            )
+            owner = pr.get("headRepositoryOwner")
+            name = head_repository.get("name") if isinstance(head_repository, dict) else None
+            same_repository = (
+                isinstance(name_with_owner, str)
+                and name_with_owner.casefold() == expected_repository
+            ) or (
+                isinstance(owner, dict)
+                and isinstance(owner.get("login"), str)
+                and isinstance(name, str)
+                and f"{owner['login']}/{name}".casefold() == expected_repository
+            )
+            if (
+                same_repository
+                and pr.get("headRefOid") == tip
+                and pr.get("baseRefName") == default_branch
+            ):
+                return True
+        return False
 
     def _ignored_media(self, worktree_path: Path) -> Optional[list[str]]:
         """Ignored paths under `worktree_path` whose suffix is in

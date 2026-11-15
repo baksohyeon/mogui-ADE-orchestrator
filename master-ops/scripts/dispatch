@@ -581,6 +581,143 @@ print(text)
 EOF
 }
 
+github_remote_metadata() {
+  python3 - "$1" <<'PY'
+import re
+import sys
+from urllib.parse import urlsplit, urlunsplit
+
+remote = sys.argv[1].strip()
+if remote.startswith("git@github.com:"):
+    path = remote.split(":", 1)[1]
+    display = remote
+    validated_url = display
+elif remote.startswith(("https://", "ssh://")):
+    parsed = urlsplit(remote)
+    if (parsed.hostname or "").lower() != "github.com":
+        raise SystemExit(1)
+    path = parsed.path
+    try:
+        port = parsed.port
+    except ValueError:
+        raise SystemExit(1)
+    validated_url = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+    display_netloc = parsed.hostname
+    if port is not None:
+        display_netloc = f"{display_netloc}:{port}"
+    display = urlunsplit((parsed.scheme, display_netloc, parsed.path, "", ""))
+else:
+    raise SystemExit(1)
+parts = [part for part in path.strip("/").split("/") if part]
+if len(parts) != 2:
+    raise SystemExit(1)
+owner, repository = parts
+if repository.endswith(".git"):
+    repository = repository[:-4]
+owner_pattern = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+repository_pattern = re.compile(r"^[A-Za-z0-9_.-]+$")
+if not owner_pattern.fullmatch(owner) or not repository_pattern.fullmatch(repository):
+    raise SystemExit(1)
+if repository in {".", ".."}:
+    raise SystemExit(1)
+print(f"{display}\t{owner}/{repository}\t{validated_url}")
+PY
+}
+
+markdown_code_span() {
+  python3 - "$1" <<'PY'
+import sys
+
+content = sys.argv[1]
+longest = 0
+current = 0
+for char in content:
+    if char == "`":
+        current += 1
+        longest = max(longest, current)
+    else:
+        current = 0
+delimiter = "`" * (longest + 1)
+padding = " " if content.startswith("`") or content.endswith("`") else ""
+print(f"{delimiter}{padding}{content}{padding}{delimiter}")
+PY
+}
+
+# Add the push and pull-request destination to codex briefs from the selected
+# worker worktree. The master supplies a selector, but the branch and remote
+# are measured here so the authority follows the worktree that will receive
+# the brief.
+append_codex_authorized_egress() {
+  [ "$RUNTIME" = codex ] || return 0
+  local worktree_selector="${WORKTREE:-}"
+  local worktree_path branch_name branch_arg push_command push_command_code origin_url origin_metadata origin_display_url owner_repo owner_repo_compare
+  local push_urls push_url push_metadata push_url_display push_repo push_repo_compare push_url_list push_measurement_failed
+  local unmeasured="Authorized egress for this worker (owner's repository): the destination is unmeasured and no push is authorized."
+
+  if [ "${REUSED_WORKTREE_ALIGNMENT_UNMEASURED:-0}" = 1 ]; then
+    SPEC="$SPEC
+
+$unmeasured"
+    echo "WARNING: codex authorized egress destination is unmeasured; no push is authorized." >&2
+    return 0
+  fi
+
+  case "$worktree_selector" in
+    path:*) worktree_path="${worktree_selector#path:}";;
+    *) worktree_path="";;
+  esac
+  if [ -n "$worktree_path" ] && [ -d "$worktree_path" ]; then
+    branch_name=$(git -C "$worktree_path" branch --show-current 2>/dev/null || true)
+    origin_url=$(git -C "$worktree_path" remote get-url origin 2>/dev/null || true)
+    push_urls=$(git -C "$worktree_path" remote get-url --push --all origin 2>/dev/null || true)
+  else
+    branch_name=""
+    origin_url=""
+    push_urls=""
+  fi
+  origin_metadata=$(github_remote_metadata "$origin_url" 2>/dev/null || true)
+  if [ -n "$origin_metadata" ]; then
+    origin_display_url="${origin_metadata%%$'\t'*}"
+    owner_repo="${origin_metadata#*$'\t'}"
+    owner_repo="${owner_repo%%$'\t'*}"
+  else
+    origin_display_url=""
+    owner_repo=""
+  fi
+  owner_repo_compare=$(printf '%s' "$owner_repo" | tr '[:upper:]' '[:lower:]')
+  push_url_list=""
+  push_measurement_failed=0
+  while IFS= read -r push_url; do
+    [ -n "$push_url" ] || continue
+    push_metadata=$(github_remote_metadata "$push_url" 2>/dev/null || true)
+    if [ -z "$push_metadata" ]; then
+      push_measurement_failed=1
+      continue
+    fi
+    push_url_display="${push_metadata%%$'\t'*}"
+    push_repo="${push_metadata#*$'\t'}"
+    push_repo="${push_repo%%$'\t'*}"
+    push_repo_compare=$(printf '%s' "$push_repo" | tr '[:upper:]' '[:lower:]')
+    [ "$push_repo_compare" = "$owner_repo_compare" ] || push_measurement_failed=1
+    push_url_list="${push_url_list}${push_url_list:+, }$push_url_display"
+  done <<< "$push_urls"
+
+  if [ -z "$branch_name" ] || [ -z "$origin_display_url" ] || [ -z "$owner_repo" ] \
+      || [ -z "$push_url_list" ] || [ "$push_measurement_failed" = 1 ]; then
+    SPEC="$SPEC
+
+$unmeasured"
+    echo "WARNING: codex authorized egress destination is unmeasured; no push is authorized." >&2
+    return 0
+  fi
+  branch_arg=$(printf '%q' "$branch_name")
+  push_command="git push origin -- $branch_arg"
+  push_command_code=$(markdown_code_span "$push_command")
+  SPEC="$SPEC
+
+Authorized egress for this worker (owner's repository): The owner authorizes this worker to run $push_command_code to \`$origin_display_url\`, with configured push destination(s) \`$push_url_list\`, which is the owner's own repository and this worktree's \`origin\`, and \`gh pr create\`, \`gh pr edit\`, \`gh pr comment\` and read-only \`gh api graphql\` queries on \`$owner_repo\`. GraphQL mutations and other network writes are not authorized."
+}
+
 # Resolve product_repositories (or product_repo) from the instance runtime
 # config into owner/repo slugs via each path's git remote origin, serialized
 # for dispatch-collision-check's MOGUI_PRODUCT_REPO-compatible third argument.
@@ -588,7 +725,7 @@ EOF
 # default repository, missing collisions in every other configured product
 # repository.
 resolve_product_repo_arg() {
-  local paths path slug slugs=()
+  local paths path remote_url metadata slug slugs=()
   paths=$(python3 -c "
 import json
 try:
@@ -611,20 +748,13 @@ for r in repos:
       echo "dispatch: '$path' has no git remote 'origin'; excluded from the collision scan" >&2
       continue
     fi
-    slug=$(printf '%s' "$remote_url" | python3 -c "
-import re, sys
-remote = sys.stdin.read().strip()
-for pattern in (
-    r'^git@github\.com:([^/]+/[^/]+?)(?:\.git)?\$',
-    r'^https://github\.com/([^/]+/[^/]+?)(?:\.git)?\$',
-    r'^ssh://git@github\.com/([^/]+/[^/]+?)(?:\.git)?\$',
-):
-    match = re.match(pattern, remote)
-    if match:
-        print(match.group(1))
-        sys.exit(0)
-sys.exit(1)
-" 2>/dev/null)
+    metadata=$(github_remote_metadata "$remote_url" 2>/dev/null || true)
+    if [ -n "$metadata" ]; then
+      slug="${metadata#*$'\t'}"
+      slug="${slug%%$'\t'*}"
+    else
+      slug=""
+    fi
     if [ -n "$slug" ]; then
       slugs+=("$slug")
     else
@@ -755,6 +885,85 @@ if isinstance(terminals, list):
             print(str(item.get("worktreePath") or item.get("worktree_path") or ""))
             break
 EOF
+}
+
+terminal_worktree_identity() {
+  local terminal="$1" placement_raw
+  placement_raw=$(orca terminal list --json 2>/dev/null || true)
+  PLACEMENT_JSON="$placement_raw" python3 - "$terminal" <<'EOF'
+import json
+import os
+import sys
+
+terminal = sys.argv[1]
+try:
+    payload = json.loads(os.environ.get("PLACEMENT_JSON", ""))
+except json.JSONDecodeError:
+    payload = {}
+result = payload.get("result") if isinstance(payload, dict) else None
+terminals = result.get("terminals") if isinstance(result, dict) else None
+if isinstance(terminals, list):
+    for item in terminals:
+        if isinstance(item, dict) and str(item.get("handle") or "") == terminal:
+            print(str(item.get("worktreeId") or item.get("worktree_id") or ""))
+            break
+EOF
+}
+
+validate_reused_worktree_alignment() {
+  local selected_path="" terminal_path="" selected_identity="" terminal_identity=""
+  REUSED_WORKTREE_ALIGNMENT_UNMEASURED=0
+  [ "$RUNTIME" = codex ] || return 0
+  [ -n "$TERMINAL" ] || return 0
+  [ -n "$WORKTREE" ] || return 0
+  case "$WORKTREE" in
+    path:*) selected_path="${WORKTREE#path:}";;
+    id:) REUSED_WORKTREE_ALIGNMENT_UNMEASURED=1; return 0;;
+    id:*) selected_identity="${WORKTREE#id:}";;
+    folder:*) selected_identity="$WORKTREE";;
+    *)
+      REUSED_WORKTREE_ALIGNMENT_UNMEASURED=1
+      return 0
+      ;;
+  esac
+  terminal_path=$(terminal_worktree_path "$TERMINAL")
+  if [ -n "$selected_identity" ]; then
+    terminal_identity=$(terminal_worktree_identity "$TERMINAL")
+    if [ -z "$terminal_identity" ]; then
+      REUSED_WORKTREE_ALIGNMENT_UNMEASURED=1
+      return 0
+    fi
+    if ! python3 - "$selected_identity" "$terminal_identity" <<'PY'
+import sys
+
+def normalize(value):
+    value = value.strip()
+    return value[3:] if value.startswith("id:") else value
+
+if normalize(sys.argv[1]) != normalize(sys.argv[2]):
+    raise SystemExit(1)
+PY
+    then
+      REUSED_WORKTREE_ALIGNMENT_UNMEASURED=1
+      return 0
+    fi
+    return 0
+  fi
+  if [ -z "$terminal_path" ]; then
+    REUSED_WORKTREE_ALIGNMENT_UNMEASURED=1
+    return 0
+  fi
+  if ! python3 - "$selected_path" "$terminal_path" <<'PY'
+import os
+import sys
+
+if os.path.realpath(sys.argv[1]) != os.path.realpath(sys.argv[2]):
+    raise SystemExit(1)
+PY
+  then
+    REUSED_WORKTREE_ALIGNMENT_UNMEASURED=1
+    return 0
+  fi
 }
 
 codex_rollout_session_for_worktree() {
@@ -2486,6 +2695,9 @@ $block"
   done
   echo "📎 standing rules · $STANDING_RULE_NAMES"
 fi
+
+validate_reused_worktree_alignment
+append_codex_authorized_egress
 
 # Keep this line in the prepared worker prompt so the card survives a later
 # context compaction. `none` is deliberate for an explicit or measured gap.

@@ -1131,7 +1131,6 @@ class WorkerReaperTests(unittest.TestCase):
             (repo / "file.txt").write_text("base\nfeature\n", encoding="utf-8")
             _git(repo, "commit", "-am", "squash feature")
             _git(repo, "update-ref", "refs/remotes/origin/main", "main")
-            _git(repo, "update-ref", "refs/remotes/origin/feature-x", "feature-x")
             _git(repo, "checkout", "feature-x")
 
             clean, merged, reason = WorkerReaper()._check_worktree_safe_to_remove(repo)
@@ -1155,7 +1154,6 @@ class WorkerReaperTests(unittest.TestCase):
             _git(repo, "commit", "-am", "feature")
             _git(repo, "checkout", "main")
             _git(repo, "update-ref", "refs/remotes/origin/main", "main")
-            _git(repo, "update-ref", "refs/remotes/origin/feature-x", "feature-x")
             _git(repo, "checkout", "feature-x")
 
             clean, merged, reason = WorkerReaper()._check_worktree_safe_to_remove(repo)
@@ -1193,7 +1191,6 @@ class WorkerReaperTests(unittest.TestCase):
             _git(repo, "add", "new.txt")
             _git(repo, "commit", "-m", "squash new content")
             _git(repo, "update-ref", "refs/remotes/origin/main", "main")
-            _git(repo, "update-ref", "refs/remotes/origin/feature-x", "feature-x")
             _git(repo, "checkout", "feature-x")
 
             clean, merged, reason = WorkerReaper()._check_worktree_safe_to_remove(repo)

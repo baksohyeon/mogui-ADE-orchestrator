@@ -337,6 +337,17 @@ class WorkerReaper:
                 measurements["worktree_clean"] = wt_clean
                 measurements["worktree_merged"] = wt_merged
                 if wt_clean and wt_merged:
+                    remote_contains_tip = self._remote_tracking_contains_tip(worktree_path)
+                    measurements["worktree_tip_remote"] = remote_contains_tip
+                    if remote_contains_tip is None:
+                        wt_clean = False
+                        wt_merged = False
+                        reason = "unpushed status unmeasured"
+                    elif not remote_contains_tip:
+                        wt_clean = False
+                        wt_merged = False
+                        reason = "unpushed commits"
+                if wt_clean and wt_merged:
                     measurements["worktree_landed_by"] = self._last_landing_rule
                     ignored_media = self._ignored_media(worktree_path)
                     measurements["worktree_ignored_media"] = (
@@ -1233,12 +1244,6 @@ class WorkerReaper:
         current_branch = branch_output.strip()
         if not current_branch:
             return False, False, "Could not get current branch: detached HEAD"
-
-        remote_contains_tip = self._remote_tracking_contains_tip(worktree_path)
-        if remote_contains_tip is None:
-            return False, False, "unpushed status unmeasured"
-        if not remote_contains_tip:
-            return False, False, "unpushed commits"
 
         # Check if branch is topologically merged.
         code, stdout, stderr = self.orca_runner(

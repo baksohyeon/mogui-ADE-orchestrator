@@ -121,6 +121,7 @@
     "scripts/test-dispatch-codex-instance-config.sh",
     "scripts/test-dispatch-codex-prompt-marker.sh",
     "scripts/test-dispatch-from-terminal.sh",
+    "scripts/test-dispatch-mcp-install.sh",
     "scripts/test-dispatch-required-infra.sh",
     "scripts/test-dispatch-runtime.sh",
     "scripts/test-dispatch-smoke.sh",

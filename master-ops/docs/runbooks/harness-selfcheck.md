@@ -35,6 +35,16 @@ For each tool, the check stops at the first gap it finds (one reason per line):
 
 A passing line reads `Infra: <tool> OK ...`; a gap reads `Infra: <tool> WARN <reason>`.
 
+#### Stage 2: default-on wiring (#317)
+
+This check still only measures and warns; the wiring itself now ships by default. Onboarding Step 7's
+"Required-infra MCP wiring" subsection merges the `code-review-graph` entry from `templates/mcp-servers.json`
+into the workspace-root `.mcp.json`, names it in `enabledMcpjsonServers`, and registers every `{{REPO_LIST}}`
+member into the multi-repo registry — the three things gap 2 and gap 3 above actually read. `dispatch.md`
+covers the matching worker-side wiring (`--mcp-config` for Claude, an inline `-c mcp_servers.<name>={...}`
+override for Codex). A `WARN` on this line after onboarding has run points at one of those three steps, not
+at a missing install.
+
 ## Running the check
 
 ```bash

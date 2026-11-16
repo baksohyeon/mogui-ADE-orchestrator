@@ -117,6 +117,68 @@ Place `bashOutputMaxChars` in the master's workspace-level project file `.claude
 
 Record in the ops notes that harness wiring is default-on as of this install. Reuse the dependency-set approval from Step 0; if it was not asked there, ask it once here and name the `ctx` local history indexing side effect before running `--fix`. Ask a separate host-edit approval before changing host `settings.json`, hooks, or plugin configuration. If host-edit approval is declined, print the commands, record that wiring as pending, and continue only where unconfigured execution is allowed.
 
+### Required-infra MCP wiring (code-review-graph, #317 stage 2)
+
+Merge the `code-review-graph` entry from `{{RUNTIME_ROOT}}/master-ops/templates/mcp-servers.json` into the
+workspace root's `.mcp.json`, keeping every entry already there (a fresh workspace has no file to merge
+into). Measured 2026-11-16 against `code-review-graph@2.4.0`: `serve` starts with no `--repo` flag even from
+a non-repository directory such as `{{WORKSPACE_ROOT}}` — every exposed tool instead takes an explicit
+`repo_root` argument per call, and a call that omits it from a non-repository cwd fails with a named,
+catchable error rather than a silent wrong answer. The shipped entry therefore stays bare
+(`uvx code-review-graph@<pin> serve`), the same command a worker gets through `--mcp-config`. This
+command refuses to touch the destination file when it already exists and is not valid JSON, so a
+malformed `.mcp.json` is reported rather than silently replaced:
+
+<!-- crg-mcp-merge:start -->
+```console
+$ python3 -c '
+import json, os, sys
+
+dest, pinned_path = sys.argv[1], sys.argv[2]
+
+current = {}
+if os.path.exists(dest):
+    with open(dest, encoding="utf-8") as fh:
+        raw = fh.read()
+    try:
+        current = json.loads(raw) if raw.strip() else {}
+    except json.JSONDecodeError as exc:
+        sys.exit(f"refusing to merge: {dest} is not valid JSON ({exc}); fix or remove it by hand first")
+
+with open(pinned_path, encoding="utf-8") as fh:
+    pinned = json.load(fh)
+
+current.setdefault("mcpServers", {}).update(pinned["mcpServers"])
+
+with open(dest, "w", encoding="utf-8") as fh:
+    json.dump(current, fh, indent=2)
+    fh.write("\n")
+' "{{WORKSPACE_ROOT}}/.mcp.json" "{{RUNTIME_ROOT}}/master-ops/templates/mcp-servers.json"
+```
+<!-- crg-mcp-merge:end -->
+
+A project-scope `.mcp.json` entry stays invisible to a Claude master session unless some settings file
+also lists it in `enabledMcpjsonServers` (or sets `enableAllProjectMcpServers`) — the exact gap the measured
+peer seat hit (its `.local.json` listed the server in `disabledMcpjsonServers` instead, which wins over any
+enable, regardless of which settings file sets it). Merge `"enabledMcpjsonServers": ["code-review-graph"]`
+into the master's workspace-level `.claude/settings.json` under the same host-edit approval as the hook
+fragment above, and check no settings file layered on top (including `.claude/settings.local.json`) still
+disables it.
+
+Cross-repo search (`cross_repo_search_tool`, `list_repos_tool`) answers from the tool's own multi-repo
+registry (`~/.code-review-graph/registry.json`), not from the `.mcp.json` entry or any `--repo` flag — and
+that registry is shared by every seat on the host machine, so register into it additively rather than
+replacing it. Register every confirmed `{{REPO_LIST}}` member (and `{{OPS_REPO}}`) once the workspace
+descriptor exists, once per entry already written to `config/workspace-descriptor.json`:
+
+```console
+$ code-review-graph register "{{WORKSPACE_ROOT}}/<repo-path>" --alias <repo-name>
+```
+
+A call the master or a worker makes still needs an explicit `repo_root` naming one of these paths;
+registration only makes a repo visible to `list_repos_tool`/`cross_repo_search_tool`, it does not change
+what a single `repo_root` call resolves.
+
 ### Antigravity folder trust and contract command approvals
 
 When `agy` is a worker runtime, run `{{RUNTIME_ROOT}}/scripts/agy-worker-pretrust <absolute-existing-worktree-path>` immediately before its launch. By default, the wrapper writes `~/.gemini/antigravity-cli/settings.json`; `AGY_SETTINGS_PATH` overrides the complete settings file, and `AGY_CONFIG_HOME` overrides the `.gemini` directory. It strips one trailing slash, refuses literal root and home paths, nonexistent paths, dot components, and glob characters, then writes one exact path under `trustedWorkspaces`; it preserves the other settings, never writes a wildcard, and prints a `Summary:` line. It keeps the path as typed and does not canonicalize symlink or repeated-slash equivalents. The measured first-run sequence on 2026-11-13 showed the `Do you trust the contents of this project?` screen before the CLI input screen; after selecting `Yes, I trust this folder`, the before/after diff added one array entry under `trustedWorkspaces` in that settings file, while `~/.gemini/trustedFolders.json` was unchanged.
@@ -183,6 +245,7 @@ When `--transcript` is omitted, consumers such as `{{RUNTIME_ROOT}}/scripts/mode
 - the owner heard the single sentence that everything is on and any piece can be disabled later by asking the master
 - the hook spec is documented, no sensitive implementation was added, and its owner is explicit or unresolved
 - `{{OPS_REPO}}/config/instance-runtime.json` has a `transcript_globs` entry for `master_host_runtime` (and any other runtime names the owner expects to probe) when measurement or an explicit owner value exists; keys are runtime names, not host nicknames; missing globs are left unset rather than guessed
+- `{{WORKSPACE_ROOT}}/.mcp.json` carries the `code-review-graph` entry merged from `templates/mcp-servers.json` with every pre-existing entry preserved, `enabledMcpjsonServers` names it in the master's `.claude/settings.json` with no conflicting `disabledMcpjsonServers` entry in any layered settings file, and every confirmed `{{REPO_LIST}}` member (and `{{OPS_REPO}}`) is registered in the multi-repo registry
 
 ## Step 7.5. Skill layer (default-on shipped stack; single approval)
 

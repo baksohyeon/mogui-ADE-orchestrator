@@ -43,6 +43,16 @@ A token written as a quoted key assignment, for example `access_token = "ack-<12
 
 Include the organization rules file move to the workspace root as `.redaction-extra.txt`, the legacy symlink at `~/.config/redaction-extra.txt`, and the operations repository's own pre-push hook update in the dry-run plan. Inspect `REDACTION_EXTRA_PATTERNS` in the operator environment and hook, plus both the legacy file and any existing workspace-root file; when the explicit path is set, record the selected file, and when both default files exist and differ, pause and ask the owner to resolve the differences before replacing either file. After the owner explicitly approves these changes at step 4, move the file, leave the symlink for tools that still use the legacy location, and set `REDACTION_PROFILE=internal` in the operations repository's own pre-push hook so `workspace_` rules remain available to export checks and are skipped from the internal scan.
 
+### 2026-11-16 required-infra MCP wiring (code-review-graph, #317 stage 2)
+
+`template-apply` does not carry this: `{{WORKSPACE_ROOT}}/.mcp.json`, `enabledMcpjsonServers`, and the
+multi-repo registry are instance-owned runtime state, the same reason the filled workspace descriptor is
+never templated. After confirming the dry-run plan at step 4, also walk the existing seat through the
+"Required-infra MCP wiring" subsection of `08-settings-and-skills.md` Step 7 under its own host-edit
+approval: merge the `code-review-graph` entry, confirm `enabledMcpjsonServers` names it with no
+conflicting `disabledMcpjsonServers` entry, and register every `{{REPO_LIST}}` member that is not already
+in `code-review-graph repos`.
+
 3. **Dry-run apply (always first)**: print the exact file list and the reason for each path. No write yet. Pass the same eight measured `--placeholder` values as step 5; a dry run that omits them prints the missing-placeholder report and exits 2 by design, since a planned file still carries each unsupplied token.
 
 ```console

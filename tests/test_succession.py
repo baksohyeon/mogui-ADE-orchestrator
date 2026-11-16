@@ -14,6 +14,7 @@ from unittest.mock import patch
 from master_runtime.core.bootstrap import RoleState
 from master_runtime.core.recovery import RecoveryReport, RecoveryStep
 from master_runtime.core.succession import (
+    SPAWN_KICKOFF_MISSING_BOOT_CARD,
     SPAWN_PLACEMENT_MISMATCH,
     SessionInfo,
     SuccessionError,
@@ -923,7 +924,7 @@ def test_retire_pane_surviving_close_is_refused() -> None:
 
 def test_spawn_successor_creates_and_verifies_worktree() -> None:
     calls = []
-    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    create_command = _spawn_create_command("folder:unit-a", "start here docs/runbooks/succession-boot-card.md", "/repo/example", "successor")
     runner = _recording_runner(
         {
             _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(), ""),
@@ -938,7 +939,7 @@ def test_spawn_successor_creates_and_verifies_worktree() -> None:
 
     report = spawn_successor(
         workspace_selector="folder:unit-a",
-        kickoff_text="start here",
+        kickoff_text="start here docs/runbooks/succession-boot-card.md",
         root="/repo/example",
         title="successor",
         orca_runner=runner,
@@ -950,6 +951,38 @@ def test_spawn_successor_creates_and_verifies_worktree() -> None:
     assert report.verified is True
     assert create_command in calls
     assert "expected_placement" not in report.verification
+
+
+def test_spawn_successor_refuses_kickoff_without_boot_card_path() -> None:
+    calls = []
+    runner = _recording_runner({}, calls)
+
+    with unittest.TestCase().assertRaisesRegex(
+        SuccessionError, "docs/runbooks/succession-boot-card.md"
+    ) as ctx:
+        spawn_successor(
+            workspace_selector="folder:unit-a",
+            kickoff_text="start here, then ask the owner to close the predecessor",
+            root="/repo/example",
+            title="successor",
+            orca_runner=runner,
+        )
+
+    assert ctx.exception.exit_code == SPAWN_KICKOFF_MISSING_BOOT_CARD
+    assert calls == []
+
+
+def test_spawn_successor_dry_run_refuses_kickoff_without_boot_card_path() -> None:
+    with unittest.TestCase().assertRaisesRegex(
+        SuccessionError, "docs/runbooks/succession-boot-card.md"
+    ):
+        spawn_successor(
+            workspace_selector="folder:unit-a",
+            kickoff_text="start here",
+            root="/repo/example",
+            title="successor",
+            dry_run=True,
+        )
 
 
 def test_spawn_successor_resolves_recorded_seat_path_with_one_live_match(tmp_path: Path) -> None:
@@ -976,7 +1009,7 @@ def test_spawn_successor_resolves_recorded_seat_path_with_one_live_match(tmp_pat
     ):
         report = spawn_successor(
             workspace_selector=None,
-            kickoff_text="start here",
+            kickoff_text="start here docs/runbooks/succession-boot-card.md",
             root="/repo/example",
             title="successor",
             orca_runner=_runner({_LIST_COMMAND: (0, fixture, "")}),
@@ -1023,7 +1056,7 @@ def test_spawn_successor_uses_scoped_path_listing_for_legacy_folder_id(
     ):
         report = spawn_successor(
             workspace_selector=None,
-            kickoff_text="start here",
+            kickoff_text="start here docs/runbooks/succession-boot-card.md",
             root="/repo/example",
             title="successor",
             orca_runner=_runner(
@@ -1065,7 +1098,7 @@ def test_spawn_successor_refuses_recorded_seat_path_without_live_match(tmp_path:
         ):
             spawn_successor(
                 workspace_selector=None,
-                kickoff_text="start here",
+                kickoff_text="start here docs/runbooks/succession-boot-card.md",
                 root="/repo/example",
                 title="successor",
                 orca_runner=_runner({_LIST_COMMAND: (0, fixture, "")}),
@@ -1108,7 +1141,7 @@ def test_spawn_successor_refuses_recorded_seat_path_with_multiple_live_matches(
         ):
             spawn_successor(
                 workspace_selector=None,
-                kickoff_text="start here",
+                kickoff_text="start here docs/runbooks/succession-boot-card.md",
                 root="/repo/example",
                 title="successor",
                 orca_runner=_runner({_LIST_COMMAND: (0, fixture, "")}),
@@ -1132,7 +1165,7 @@ def test_spawn_successor_explicit_selector_overrides_recorded_seat_path(tmp_path
     ):
         report = spawn_successor(
             workspace_selector="folder:explicit",
-            kickoff_text="start here",
+            kickoff_text="start here docs/runbooks/succession-boot-card.md",
             root="/repo/example",
             title="successor",
             orca_runner=unexpected_runner,
@@ -1154,7 +1187,7 @@ def test_spawn_successor_missing_record_keeps_selector_requirement(tmp_path: Pat
         ):
             spawn_successor(
                 workspace_selector=None,
-                kickoff_text="start here",
+                kickoff_text="start here docs/runbooks/succession-boot-card.md",
                 root="/repo/example",
                 title="successor",
                 dry_run=True,
@@ -1163,7 +1196,7 @@ def test_spawn_successor_missing_record_keeps_selector_requirement(tmp_path: Pat
 
 def test_spawn_successor_bare_folder_selector_uses_id_for_list_only() -> None:
     calls = []
-    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    create_command = _spawn_create_command("folder:unit-a", "start here docs/runbooks/succession-boot-card.md", "/repo/example", "successor")
     bare_list_command = _scoped_list_command("folder:unit-a")
     id_list_command = _scoped_list_command("id:folder:unit-a")
     runner = _recording_runner(
@@ -1181,7 +1214,7 @@ def test_spawn_successor_bare_folder_selector_uses_id_for_list_only() -> None:
 
     report = spawn_successor(
         workspace_selector="folder:unit-a",
-        kickoff_text="start here",
+        kickoff_text="start here docs/runbooks/succession-boot-card.md",
         root="/repo/example",
         title="successor",
         orca_runner=runner,
@@ -1197,7 +1230,7 @@ def test_spawn_successor_bare_folder_selector_uses_id_for_list_only() -> None:
 
 def test_spawn_successor_id_folder_selector_keeps_working() -> None:
     calls = []
-    create_command = _spawn_create_command("id:folder:unit-a", "start here", "/repo/example", "successor")
+    create_command = _spawn_create_command("id:folder:unit-a", "start here docs/runbooks/succession-boot-card.md", "/repo/example", "successor")
     id_list_command = _scoped_list_command("id:folder:unit-a")
     runner = _recording_runner(
         {
@@ -1213,7 +1246,7 @@ def test_spawn_successor_id_folder_selector_keeps_working() -> None:
 
     report = spawn_successor(
         workspace_selector="id:folder:unit-a",
-        kickoff_text="start here",
+        kickoff_text="start here docs/runbooks/succession-boot-card.md",
         root="/repo/example",
         title="successor",
         orca_runner=runner,
@@ -1258,7 +1291,7 @@ def test_worktrees_match_path_resolution_failure_fails_closed() -> None:
 
 
 def test_spawn_successor_expected_placement_passes() -> None:
-    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    create_command = _spawn_create_command("folder:unit-a", "start here docs/runbooks/succession-boot-card.md", "/repo/example", "successor")
     runner = _runner(
         {
             _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(), ""),
@@ -1273,7 +1306,7 @@ def test_spawn_successor_expected_placement_passes() -> None:
     report = spawn_successor(
         workspace_selector="folder:unit-a",
         expected_placement="id:folder:unit-a",
-        kickoff_text="start here",
+        kickoff_text="start here docs/runbooks/succession-boot-card.md",
         root="/repo/example",
         title="successor",
         orca_runner=runner,
@@ -1286,7 +1319,7 @@ def test_spawn_successor_expected_placement_passes() -> None:
 
 def test_spawn_successor_expected_placement_mismatch_closes_terminal() -> None:
     calls = []
-    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    create_command = _spawn_create_command("folder:unit-a", "start here docs/runbooks/succession-boot-card.md", "/repo/example", "successor")
     close_command = ("orca", "terminal", "close", "--terminal", "term-new", "--json")
     runner = _recording_runner(
         {
@@ -1305,7 +1338,7 @@ def test_spawn_successor_expected_placement_mismatch_closes_terminal() -> None:
         spawn_successor(
             workspace_selector="folder:unit-a",
             expected_placement="folder:other",
-            kickoff_text="start here",
+            kickoff_text="start here docs/runbooks/succession-boot-card.md",
             root="/repo/example",
             title="successor",
             orca_runner=runner,
@@ -1319,7 +1352,7 @@ def test_spawn_successor_expected_placement_mismatch_closes_terminal() -> None:
 
 def test_spawn_successor_mismatch_closes_terminal_and_fails_closed() -> None:
     calls = []
-    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    create_command = _spawn_create_command("folder:unit-a", "start here docs/runbooks/succession-boot-card.md", "/repo/example", "successor")
     close_command = ("orca", "terminal", "close", "--terminal", "term-new", "--json")
     scoped_list_command = (
         "orca",
@@ -1343,7 +1376,7 @@ def test_spawn_successor_mismatch_closes_terminal_and_fails_closed() -> None:
     with unittest.TestCase().assertRaisesRegex(SuccessionError, "worktree mismatch") as raised:
         spawn_successor(
             workspace_selector="folder:unit-a",
-            kickoff_text="start here",
+            kickoff_text="start here docs/runbooks/succession-boot-card.md",
             root="/repo/example",
             title="successor",
             orca_runner=runner,
@@ -1356,7 +1389,7 @@ def test_spawn_successor_mismatch_closes_terminal_and_fails_closed() -> None:
 
 def test_spawn_successor_mismatch_does_not_close_preexisting_cross_worktree_handle() -> None:
     calls = []
-    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    create_command = _spawn_create_command("folder:unit-a", "start here docs/runbooks/succession-boot-card.md", "/repo/example", "successor")
     close_command = ("orca", "terminal", "close", "--terminal", "term-recycled", "--json")
     scoped_list_command = (
         "orca",
@@ -1383,7 +1416,7 @@ def test_spawn_successor_mismatch_does_not_close_preexisting_cross_worktree_hand
     ):
         spawn_successor(
             workspace_selector="folder:unit-a",
-            kickoff_text="start here",
+            kickoff_text="start here docs/runbooks/succession-boot-card.md",
             root="/repo/example",
             title="successor",
             orca_runner=runner,
@@ -1426,7 +1459,7 @@ def test_spawn_startup_command_covers_agent_variants_and_shell_quoting() -> None
 
 
 def test_spawn_successor_close_failure_is_reported() -> None:
-    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    create_command = _spawn_create_command("folder:unit-a", "start here docs/runbooks/succession-boot-card.md", "/repo/example", "successor")
     close_command = ("orca", "terminal", "close", "--terminal", "term-new", "--json")
     scoped_list_command = (
         "orca",
@@ -1449,7 +1482,7 @@ def test_spawn_successor_close_failure_is_reported() -> None:
     with unittest.TestCase().assertRaisesRegex(SuccessionError, "close failed") as raised:
         spawn_successor(
             workspace_selector="folder:unit-a",
-            kickoff_text="start here",
+            kickoff_text="start here docs/runbooks/succession-boot-card.md",
             root="/repo/example",
             title="successor",
             orca_runner=runner,
@@ -1460,7 +1493,7 @@ def test_spawn_successor_close_failure_is_reported() -> None:
 
 def test_spawn_successor_parse_error_after_handle_closes_terminal() -> None:
     calls = []
-    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    create_command = _spawn_create_command("folder:unit-a", "start here docs/runbooks/succession-boot-card.md", "/repo/example", "successor")
     close_command = ("orca", "terminal", "close", "--terminal", "term-new", "--json")
     runner = _recording_runner(
         {
@@ -1482,7 +1515,7 @@ def test_spawn_successor_parse_error_after_handle_closes_terminal() -> None:
     with unittest.TestCase().assertRaisesRegex(SuccessionError, "invalid spawn JSON") as raised:
         spawn_successor(
             workspace_selector="folder:unit-a",
-            kickoff_text="start here",
+            kickoff_text="start here docs/runbooks/succession-boot-card.md",
             root="/repo/example",
             title="successor",
             orca_runner=runner,
@@ -1493,7 +1526,7 @@ def test_spawn_successor_parse_error_after_handle_closes_terminal() -> None:
 
 
 def test_spawn_successor_parse_error_close_failure_is_reported() -> None:
-    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    create_command = _spawn_create_command("folder:unit-a", "start here docs/runbooks/succession-boot-card.md", "/repo/example", "successor")
     close_command = ("orca", "terminal", "close", "--terminal", "term-new", "--json")
     runner = _runner(
         {
@@ -1514,7 +1547,7 @@ def test_spawn_successor_parse_error_close_failure_is_reported() -> None:
     with unittest.TestCase().assertRaisesRegex(SuccessionError, "invalid spawn JSON.*close failed") as raised:
         spawn_successor(
             workspace_selector="folder:unit-a",
-            kickoff_text="start here",
+            kickoff_text="start here docs/runbooks/succession-boot-card.md",
             root="/repo/example",
             title="successor",
             orca_runner=runner,
@@ -1525,7 +1558,7 @@ def test_spawn_successor_parse_error_close_failure_is_reported() -> None:
 
 def test_spawn_successor_missing_worktree_after_handle_closes_terminal() -> None:
     calls = []
-    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    create_command = _spawn_create_command("folder:unit-a", "start here docs/runbooks/succession-boot-card.md", "/repo/example", "successor")
     close_command = ("orca", "terminal", "close", "--terminal", "term-new", "--json")
     runner = _recording_runner(
         {
@@ -1551,7 +1584,7 @@ def test_spawn_successor_missing_worktree_after_handle_closes_terminal() -> None
     with unittest.TestCase().assertRaisesRegex(SuccessionError, "missing worktreeId") as raised:
         spawn_successor(
             workspace_selector="folder:unit-a",
-            kickoff_text="start here",
+            kickoff_text="start here docs/runbooks/succession-boot-card.md",
             root="/repo/example",
             title="successor",
             orca_runner=runner,
@@ -1562,7 +1595,7 @@ def test_spawn_successor_missing_worktree_after_handle_closes_terminal() -> None
 
 
 def test_spawn_successor_rejects_invalid_create_json() -> None:
-    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    create_command = _spawn_create_command("folder:unit-a", "start here docs/runbooks/succession-boot-card.md", "/repo/example", "successor")
     runner = _runner(
         {
             _LIST_COMMAND: (0, _orca_json_from_terminals(), ""),
@@ -1573,7 +1606,7 @@ def test_spawn_successor_rejects_invalid_create_json() -> None:
     with unittest.TestCase().assertRaisesRegex(SuccessionError, "invalid spawn JSON") as raised:
         spawn_successor(
             workspace_selector="folder:unit-a",
-            kickoff_text="start here",
+            kickoff_text="start here docs/runbooks/succession-boot-card.md",
             root="/repo/example",
             title="successor",
             orca_runner=runner,
@@ -1587,7 +1620,7 @@ def test_spawn_successor_dry_run_only_builds_plan() -> None:
 
     report = spawn_successor(
         workspace_selector="folder:unit-a",
-        kickoff_text="start here",
+        kickoff_text="start here docs/runbooks/succession-boot-card.md",
         root="/repo/example",
         title="successor",
         orca_runner=lambda command: calls.append(tuple(command)) or (1, "", "unexpected call"),
@@ -1597,13 +1630,13 @@ def test_spawn_successor_dry_run_only_builds_plan() -> None:
     assert report.status == "DRY_RUN"
     assert report.handle is None
     assert report.verified is False
-    assert report.command == _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    assert report.command == _spawn_create_command("folder:unit-a", "start here docs/runbooks/succession-boot-card.md", "/repo/example", "successor")
     assert "expected_placement" not in report.verification
     assert calls == []
 
 
 def test_spawn_successor_reissued_handle_resolves_via_list() -> None:
-    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    create_command = _spawn_create_command("folder:unit-a", "start here docs/runbooks/succession-boot-card.md", "/repo/example", "successor")
     runner = _runner(
         {
             _GLOBAL_SNAPSHOT_FIXTURE: (
@@ -1628,7 +1661,7 @@ def test_spawn_successor_reissued_handle_resolves_via_list() -> None:
 
     report = spawn_successor(
         workspace_selector="folder:unit-a",
-        kickoff_text="start here",
+        kickoff_text="start here docs/runbooks/succession-boot-card.md",
         root="/repo/example",
         title="successor",
         orca_runner=runner,
@@ -1645,7 +1678,7 @@ def test_spawn_successor_reissued_handle_resolves_via_list() -> None:
 
 
 def test_spawn_successor_reissued_expected_placement_passes() -> None:
-    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    create_command = _spawn_create_command("folder:unit-a", "start here docs/runbooks/succession-boot-card.md", "/repo/example", "successor")
     runner = _runner(
         {
             _GLOBAL_SNAPSHOT_FIXTURE: (
@@ -1671,7 +1704,7 @@ def test_spawn_successor_reissued_expected_placement_passes() -> None:
     report = spawn_successor(
         workspace_selector="folder:unit-a",
         expected_placement="id:folder:unit-a",
-        kickoff_text="start here",
+        kickoff_text="start here docs/runbooks/succession-boot-card.md",
         root="/repo/example",
         title="successor",
         orca_runner=runner,
@@ -1691,7 +1724,7 @@ def test_spawn_successor_reissued_expected_placement_mismatch_closes_terminal() 
         checkout.mkdir()
         selector = "path:{0}".format(checkout)
         expected = "repoa::{0}".format(checkout)
-        create_command = _spawn_create_command(selector, "start here", "/repo/example", "successor")
+        create_command = _spawn_create_command(selector, "start here docs/runbooks/succession-boot-card.md", "/repo/example", "successor")
         scoped_list_command = _scoped_list_command(selector)
         close_command = ("orca", "terminal", "close", "--terminal", "term-reissued", "--json")
         runner = _recording_runner(
@@ -1724,7 +1757,7 @@ def test_spawn_successor_reissued_expected_placement_mismatch_closes_terminal() 
             spawn_successor(
                 workspace_selector=selector,
                 expected_placement=expected,
-                kickoff_text="start here",
+                kickoff_text="start here docs/runbooks/succession-boot-card.md",
                 root="/repo/example",
                 title="successor",
                 orca_runner=runner,
@@ -1736,7 +1769,7 @@ def test_spawn_successor_reissued_expected_placement_mismatch_closes_terminal() 
 
 
 def test_spawn_successor_live_handle_is_not_reissued() -> None:
-    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    create_command = _spawn_create_command("folder:unit-a", "start here docs/runbooks/succession-boot-card.md", "/repo/example", "successor")
     runner = _runner(
         {
             _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(), ""),
@@ -1750,7 +1783,7 @@ def test_spawn_successor_live_handle_is_not_reissued() -> None:
 
     report = spawn_successor(
         workspace_selector="folder:unit-a",
-        kickoff_text="start here",
+        kickoff_text="start here docs/runbooks/succession-boot-card.md",
         root="/repo/example",
         title="successor",
         orca_runner=runner,
@@ -1765,7 +1798,7 @@ def test_spawn_successor_live_handle_is_not_reissued() -> None:
 
 def test_spawn_successor_stale_handle_zero_candidates_fails_closed() -> None:
     calls = []
-    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    create_command = _spawn_create_command("folder:unit-a", "start here docs/runbooks/succession-boot-card.md", "/repo/example", "successor")
     runner = _recording_runner(
         {
             _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(), ""),
@@ -1781,7 +1814,7 @@ def test_spawn_successor_stale_handle_zero_candidates_fails_closed() -> None:
     with unittest.TestCase().assertRaisesRegex(SuccessionError, "stale") as raised:
         spawn_successor(
             workspace_selector="folder:unit-a",
-            kickoff_text="start here",
+            kickoff_text="start here docs/runbooks/succession-boot-card.md",
             root="/repo/example",
             title="successor",
             orca_runner=runner,
@@ -1793,7 +1826,7 @@ def test_spawn_successor_stale_handle_zero_candidates_fails_closed() -> None:
 
 def test_spawn_successor_stale_handle_ambiguous_candidates_fails_closed_without_close() -> None:
     calls = []
-    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    create_command = _spawn_create_command("folder:unit-a", "start here docs/runbooks/succession-boot-card.md", "/repo/example", "successor")
     runner = _recording_runner(
         {
             _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(), ""),
@@ -1816,7 +1849,7 @@ def test_spawn_successor_stale_handle_ambiguous_candidates_fails_closed_without_
     with unittest.TestCase().assertRaisesRegex(SuccessionError, "stale") as raised:
         spawn_successor(
             workspace_selector="folder:unit-a",
-            kickoff_text="start here",
+            kickoff_text="start here docs/runbooks/succession-boot-card.md",
             root="/repo/example",
             title="successor",
             orca_runner=runner,
@@ -1827,7 +1860,7 @@ def test_spawn_successor_stale_handle_ambiguous_candidates_fails_closed_without_
 
 
 def test_spawn_successor_stale_handle_title_narrows_candidates() -> None:
-    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    create_command = _spawn_create_command("folder:unit-a", "start here docs/runbooks/succession-boot-card.md", "/repo/example", "successor")
     runner = _runner(
         {
             _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(), ""),
@@ -1848,7 +1881,7 @@ def test_spawn_successor_stale_handle_title_narrows_candidates() -> None:
 
     report = spawn_successor(
         workspace_selector="folder:unit-a",
-        kickoff_text="start here",
+        kickoff_text="start here docs/runbooks/succession-boot-card.md",
         root="/repo/example",
         title="successor",
         orca_runner=runner,
@@ -1859,7 +1892,7 @@ def test_spawn_successor_stale_handle_title_narrows_candidates() -> None:
 
 
 def test_spawn_successor_snapshot_handle_is_not_trusted_as_live() -> None:
-    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    create_command = _spawn_create_command("folder:unit-a", "start here docs/runbooks/succession-boot-card.md", "/repo/example", "successor")
     preexisting = _list_terminal("term-recycled", "folder:unit-a", "user shell")
     runner = _runner(
         {
@@ -1875,7 +1908,7 @@ def test_spawn_successor_snapshot_handle_is_not_trusted_as_live() -> None:
     with unittest.TestCase().assertRaisesRegex(SuccessionError, "stale") as raised:
         spawn_successor(
             workspace_selector="folder:unit-a",
-            kickoff_text="start here",
+            kickoff_text="start here docs/runbooks/succession-boot-card.md",
             root="/repo/example",
             title="successor",
             orca_runner=runner,
@@ -1885,7 +1918,7 @@ def test_spawn_successor_snapshot_handle_is_not_trusted_as_live() -> None:
 
 
 def test_spawn_successor_single_candidate_without_title_match_fails_closed() -> None:
-    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    create_command = _spawn_create_command("folder:unit-a", "start here docs/runbooks/succession-boot-card.md", "/repo/example", "successor")
     runner = _runner(
         {
             _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(), ""),
@@ -1900,7 +1933,7 @@ def test_spawn_successor_single_candidate_without_title_match_fails_closed() -> 
     with unittest.TestCase().assertRaisesRegex(SuccessionError, "stale") as raised:
         spawn_successor(
             workspace_selector="folder:unit-a",
-            kickoff_text="start here",
+            kickoff_text="start here docs/runbooks/succession-boot-card.md",
             root="/repo/example",
             title="successor",
             orca_runner=runner,
@@ -1910,7 +1943,7 @@ def test_spawn_successor_single_candidate_without_title_match_fails_closed() -> 
 
 
 def test_spawn_successor_new_terminal_in_other_worktree_is_not_adopted() -> None:
-    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    create_command = _spawn_create_command("folder:unit-a", "start here docs/runbooks/succession-boot-card.md", "/repo/example", "successor")
     runner = _runner(
         {
             _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(), ""),
@@ -1925,7 +1958,7 @@ def test_spawn_successor_new_terminal_in_other_worktree_is_not_adopted() -> None
     with unittest.TestCase().assertRaisesRegex(SuccessionError, "stale") as raised:
         spawn_successor(
             workspace_selector="folder:unit-a",
-            kickoff_text="start here",
+            kickoff_text="start here docs/runbooks/succession-boot-card.md",
             root="/repo/example",
             title="successor",
             orca_runner=runner,
@@ -1935,7 +1968,7 @@ def test_spawn_successor_new_terminal_in_other_worktree_is_not_adopted() -> None
 
 
 def test_spawn_successor_title_containment_collision_fails_closed() -> None:
-    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "master-gen2")
+    create_command = _spawn_create_command("folder:unit-a", "start here docs/runbooks/succession-boot-card.md", "/repo/example", "master-gen2")
     runner = _runner(
         {
             _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(), ""),
@@ -1957,7 +1990,7 @@ def test_spawn_successor_title_containment_collision_fails_closed() -> None:
     with unittest.TestCase().assertRaisesRegex(SuccessionError, "stale") as raised:
         spawn_successor(
             workspace_selector="folder:unit-a",
-            kickoff_text="start here",
+            kickoff_text="start here docs/runbooks/succession-boot-card.md",
             root="/repo/example",
             title="master-gen2",
             orca_runner=runner,
@@ -1971,7 +2004,7 @@ def test_spawn_successor_title_containment_collision_fails_closed() -> None:
 
 
 def test_spawn_successor_lone_substring_title_is_not_adopted() -> None:
-    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "master-gen2")
+    create_command = _spawn_create_command("folder:unit-a", "start here docs/runbooks/succession-boot-card.md", "/repo/example", "master-gen2")
     runner = _runner(
         {
             _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(), ""),
@@ -1986,7 +2019,7 @@ def test_spawn_successor_lone_substring_title_is_not_adopted() -> None:
     with unittest.TestCase().assertRaisesRegex(SuccessionError, "stale") as raised:
         spawn_successor(
             workspace_selector="folder:unit-a",
-            kickoff_text="start here",
+            kickoff_text="start here docs/runbooks/succession-boot-card.md",
             root="/repo/example",
             title="master-gen2",
             orca_runner=runner,
@@ -2014,7 +2047,7 @@ def test_reissued_title_matching_empty_pane_title_has_no_narrowed_candidates() -
 
 
 def test_spawn_successor_disconnected_reported_handle_is_not_live() -> None:
-    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    create_command = _spawn_create_command("folder:unit-a", "start here docs/runbooks/succession-boot-card.md", "/repo/example", "successor")
     dead = dict(_list_terminal("term-new", "folder:unit-a", "successor"), connected=False)
     runner = _runner(
         {
@@ -2030,7 +2063,7 @@ def test_spawn_successor_disconnected_reported_handle_is_not_live() -> None:
     with unittest.TestCase().assertRaisesRegex(SuccessionError, "stale") as raised:
         spawn_successor(
             workspace_selector="folder:unit-a",
-            kickoff_text="start here",
+            kickoff_text="start here docs/runbooks/succession-boot-card.md",
             root="/repo/example",
             title="successor",
             orca_runner=runner,
@@ -2040,7 +2073,7 @@ def test_spawn_successor_disconnected_reported_handle_is_not_live() -> None:
 
 
 def test_spawn_successor_disconnected_candidate_is_not_adopted() -> None:
-    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    create_command = _spawn_create_command("folder:unit-a", "start here docs/runbooks/succession-boot-card.md", "/repo/example", "successor")
     dead = dict(_list_terminal("term-dead", "folder:unit-a", "✳ successor"), connected=False)
     runner = _runner(
         {
@@ -2056,7 +2089,7 @@ def test_spawn_successor_disconnected_candidate_is_not_adopted() -> None:
     with unittest.TestCase().assertRaisesRegex(SuccessionError, "stale") as raised:
         spawn_successor(
             workspace_selector="folder:unit-a",
-            kickoff_text="start here",
+            kickoff_text="start here docs/runbooks/succession-boot-card.md",
             root="/repo/example",
             title="successor",
             orca_runner=runner,
@@ -2066,7 +2099,7 @@ def test_spawn_successor_disconnected_candidate_is_not_adopted() -> None:
 
 
 def test_spawn_successor_live_reported_handle_beats_ambient_candidates() -> None:
-    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    create_command = _spawn_create_command("folder:unit-a", "start here docs/runbooks/succession-boot-card.md", "/repo/example", "successor")
     runner = _runner(
         {
             _GLOBAL_SNAPSHOT_FIXTURE: (0, _orca_json_from_terminals(), ""),
@@ -2087,7 +2120,7 @@ def test_spawn_successor_live_reported_handle_beats_ambient_candidates() -> None
 
     report = spawn_successor(
         workspace_selector="folder:unit-a",
-        kickoff_text="start here",
+        kickoff_text="start here docs/runbooks/succession-boot-card.md",
         root="/repo/example",
         title="successor",
         orca_runner=runner,
@@ -2100,7 +2133,7 @@ def test_spawn_successor_live_reported_handle_beats_ambient_candidates() -> None
 
 
 def test_spawn_successor_liveness_list_failure_close_failure_is_reported() -> None:
-    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    create_command = _spawn_create_command("folder:unit-a", "start here docs/runbooks/succession-boot-card.md", "/repo/example", "successor")
     close_command = ("orca", "terminal", "close", "--terminal", "term-new", "--json")
     runner = _runner(
         {
@@ -2122,7 +2155,7 @@ def test_spawn_successor_liveness_list_failure_close_failure_is_reported() -> No
     with unittest.TestCase().assertRaisesRegex(SuccessionError, "spawn liveness list failed.*close failed") as raised:
         spawn_successor(
             workspace_selector="folder:unit-a",
-            kickoff_text="start here",
+            kickoff_text="start here docs/runbooks/succession-boot-card.md",
             root="/repo/example",
             title="successor",
             orca_runner=runner,
@@ -2152,7 +2185,7 @@ def test_find_sessions_skips_entries_without_handle() -> None:
 
 def test_spawn_successor_precheck_list_failure_blocks_create() -> None:
     calls = []
-    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    create_command = _spawn_create_command("folder:unit-a", "start here docs/runbooks/succession-boot-card.md", "/repo/example", "successor")
     runner = _recording_runner(
         {
             _LIST_COMMAND: (1, "", "orca offline"),
@@ -2164,7 +2197,7 @@ def test_spawn_successor_precheck_list_failure_blocks_create() -> None:
     with unittest.TestCase().assertRaisesRegex(SuccessionError, "spawn precheck list failed") as raised:
         spawn_successor(
             workspace_selector="folder:unit-a",
-            kickoff_text="start here",
+            kickoff_text="start here docs/runbooks/succession-boot-card.md",
             root="/repo/example",
             title="successor",
             orca_runner=runner,
@@ -2176,7 +2209,7 @@ def test_spawn_successor_precheck_list_failure_blocks_create() -> None:
 
 def test_spawn_successor_liveness_list_failure_closes_terminal() -> None:
     calls = []
-    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    create_command = _spawn_create_command("folder:unit-a", "start here docs/runbooks/succession-boot-card.md", "/repo/example", "successor")
     close_command = ("orca", "terminal", "close", "--terminal", "term-new", "--json")
     runner = _recording_runner(
         {
@@ -2199,7 +2232,7 @@ def test_spawn_successor_liveness_list_failure_closes_terminal() -> None:
     with unittest.TestCase().assertRaisesRegex(SuccessionError, "spawn liveness list failed.*closed terminal") as raised:
         spawn_successor(
             workspace_selector="folder:unit-a",
-            kickoff_text="start here",
+            kickoff_text="start here docs/runbooks/succession-boot-card.md",
             root="/repo/example",
             title="successor",
             orca_runner=runner,
@@ -2211,7 +2244,7 @@ def test_spawn_successor_liveness_list_failure_closes_terminal() -> None:
 
 def test_spawn_successor_cleanup_does_not_close_recycled_handle_without_title_ownership() -> None:
     calls = []
-    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    create_command = _spawn_create_command("folder:unit-a", "start here docs/runbooks/succession-boot-card.md", "/repo/example", "successor")
     close_command = ("orca", "terminal", "close", "--terminal", "term-recycled", "--json")
     runner = _recording_runner(
         {
@@ -2238,7 +2271,7 @@ def test_spawn_successor_cleanup_does_not_close_recycled_handle_without_title_ow
     ) as raised:
         spawn_successor(
             workspace_selector="folder:unit-a",
-            kickoff_text="start here",
+            kickoff_text="start here docs/runbooks/succession-boot-card.md",
             root="/repo/example",
             title="successor",
             orca_runner=runner,
@@ -2250,7 +2283,7 @@ def test_spawn_successor_cleanup_does_not_close_recycled_handle_without_title_ow
 
 def test_spawn_successor_cleanup_closes_recycled_handle_with_confirmed_title_ownership() -> None:
     calls = []
-    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    create_command = _spawn_create_command("folder:unit-a", "start here docs/runbooks/succession-boot-card.md", "/repo/example", "successor")
     close_command = ("orca", "terminal", "close", "--terminal", "term-recycled", "--json")
     runner = _recording_runner(
         {
@@ -2278,7 +2311,7 @@ def test_spawn_successor_cleanup_closes_recycled_handle_with_confirmed_title_own
     ) as raised:
         spawn_successor(
             workspace_selector="folder:unit-a",
-            kickoff_text="start here",
+            kickoff_text="start here docs/runbooks/succession-boot-card.md",
             root="/repo/example",
             title="successor",
             orca_runner=runner,
@@ -2290,7 +2323,7 @@ def test_spawn_successor_cleanup_closes_recycled_handle_with_confirmed_title_own
 
 def test_spawn_successor_cleanup_does_not_close_disconnected_confirmed_handle() -> None:
     calls = []
-    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    create_command = _spawn_create_command("folder:unit-a", "start here docs/runbooks/succession-boot-card.md", "/repo/example", "successor")
     close_command = ("orca", "terminal", "close", "--terminal", "term-recycled", "--json")
     disconnected_confirmed = {
         "handle": "term-recycled",
@@ -2318,7 +2351,7 @@ def test_spawn_successor_cleanup_does_not_close_disconnected_confirmed_handle() 
     ) as raised:
         spawn_successor(
             workspace_selector="folder:unit-a",
-            kickoff_text="start here",
+            kickoff_text="start here docs/runbooks/succession-boot-card.md",
             root="/repo/example",
             title="successor",
             orca_runner=runner,
@@ -2330,7 +2363,7 @@ def test_spawn_successor_cleanup_does_not_close_disconnected_confirmed_handle() 
 
 def test_spawn_successor_liveness_list_failure_does_not_close_preexisting_handle() -> None:
     calls = []
-    create_command = _spawn_create_command("folder:unit-a", "start here", "/repo/example", "successor")
+    create_command = _spawn_create_command("folder:unit-a", "start here docs/runbooks/succession-boot-card.md", "/repo/example", "successor")
     close_command = ("orca", "terminal", "close", "--terminal", "term-recycled", "--json")
     preexisting = _list_terminal("term-recycled", "folder:unit-a", "user shell")
     runner = _recording_runner(
@@ -2351,7 +2384,7 @@ def test_spawn_successor_liveness_list_failure_does_not_close_preexisting_handle
     ) as raised:
         spawn_successor(
             workspace_selector="folder:unit-a",
-            kickoff_text="start here",
+            kickoff_text="start here docs/runbooks/succession-boot-card.md",
             root="/repo/example",
             title="successor",
             orca_runner=runner,
@@ -2394,7 +2427,7 @@ def test_cli_spawn_dry_run_outputs_json() -> None:
             "--workspace-selector",
             "folder:unit-a",
             "--kickoff-text",
-            "start here",
+            "start here docs/runbooks/succession-boot-card.md",
             "--root",
             "/repo/example",
             "--title",
@@ -2436,7 +2469,7 @@ def test_cli_spawn_dry_run_resolves_recorded_seat_path(tmp_path: Path) -> None:
             str(Path(__file__).resolve().parent.parent / "scripts" / "master-succeed"),
             "spawn",
             "--kickoff-text",
-            "start here",
+            "start here docs/runbooks/succession-boot-card.md",
             "--root",
             "/repo/example",
             "--title",
@@ -2473,7 +2506,7 @@ def test_cli_spawn_dry_run_outputs_expected_placement() -> None:
             "--expected-placement",
             "id:folder:unit-a",
             "--kickoff-text",
-            "start here",
+            "start here docs/runbooks/succession-boot-card.md",
             "--root",
             "/repo/example",
             "--title",
@@ -2501,7 +2534,7 @@ def test_cli_spawn_uses_agent_specific_default_model() -> None:
             "--workspace-selector",
             "folder:unit-a",
             "--kickoff-text",
-            "start here",
+            "start here docs/runbooks/succession-boot-card.md",
             "--root",
             "/repo/example",
             "--agent",
@@ -2530,7 +2563,7 @@ def test_cli_spawn_uses_claude_fable_5_2_default_model() -> None:
             "--workspace-selector",
             "folder:unit-a",
             "--kickoff-text",
-            "start here",
+            "start here docs/runbooks/succession-boot-card.md",
             "--root",
             "/repo/example",
             "--agent",
@@ -2559,7 +2592,7 @@ def test_cli_spawn_explicit_model_overrides_claude_default() -> None:
             "--workspace-selector",
             "folder:unit-a",
             "--kickoff-text",
-            "start here",
+            "start here docs/runbooks/succession-boot-card.md",
             "--root",
             "/repo/example",
             "--agent",
@@ -2590,7 +2623,7 @@ def test_cli_spawn_requires_model_for_unknown_agent() -> None:
             "--workspace-selector",
             "folder:unit-a",
             "--kickoff-text",
-            "start here",
+            "start here docs/runbooks/succession-boot-card.md",
             "--root",
             "/repo/example",
             "--agent",
@@ -2606,6 +2639,31 @@ def test_cli_spawn_requires_model_for_unknown_agent() -> None:
 
     assert result.returncode == 2
     assert "--model is required for agent custom-agent" in result.stderr
+
+
+@skip_windows_exec_surface
+def test_cli_spawn_refuses_kickoff_without_boot_card_path() -> None:
+    result = subprocess.run(
+        [
+            str(Path(__file__).resolve().parent.parent / "scripts" / "master-succeed"),
+            "spawn",
+            "--workspace-selector",
+            "folder:unit-a",
+            "--kickoff-text",
+            "start here",
+            "--root",
+            "/repo/example",
+            "--title",
+            "successor",
+            "--dry-run",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == SPAWN_KICKOFF_MISSING_BOOT_CARD
+    assert "docs/runbooks/succession-boot-card.md" in result.stderr
 
 
 @skip_windows_exec_surface

@@ -126,6 +126,7 @@
     "scripts/test-dispatch-timeline.sh",
     "scripts/test-dispatch-unavailable-runtime.sh",
     "scripts/test-harness-inventory.sh",
+    "scripts/test-harness-selfcheck-infra.sh",
     "scripts/test-headless-browser-first.sh",
     "scripts/test-hook-paths.sh",
     "scripts/test-hook-verdict.sh",

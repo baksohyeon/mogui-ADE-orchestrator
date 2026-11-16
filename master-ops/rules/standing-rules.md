@@ -40,9 +40,13 @@ token never appears in a commit, a pull request body, or a review reply.
 
 ## mail-before-done
 
-Before `worker_done`, run `orca orchestration check` once. If it returns
-coordinator mail for this task, apply it before reporting, or say in the
-completion message why not.
+Before `worker_done`, run `orca orchestration check` in a loop. Its default
+call returns and marks handled only the oldest unread FIFO batch (`orca
+orchestration check --help`), so a single call can leave newer mail
+unread. Apply each returned batch before reporting, or say in the
+completion message why not, and keep calling until one returns no mail. If
+a check itself fails, name the failed check and its error text in the
+completion message.
 
 ## placement
 

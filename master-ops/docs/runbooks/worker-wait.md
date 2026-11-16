@@ -90,12 +90,12 @@ delivery, for the coordinator to act and then re-run `worker-wait`.
   commands cannot be read (a plugin hook
   source), choose option 3, continue without trusting, and file what was
   seen. It clears by hand the same way: `orca terminal send --terminal
-  <pane> --text <option-number>`, then an
-  empty `orca terminal send --terminal <pane> --text '' --enter` to confirm,
-  because a bare number only moves the selection. While the modal blocks the
-  pane, orca refuses that send with `agent_prompt_blocked` and an
-  `orchestrationRequestId`; re-issue it with `--retry-request <id>`, the same
-  sequence `scripts/codex-hooks-review-answer <pane>` runs. Redispatch into
+  <pane> --text <option-number> --enter`, the digit and the Enter that
+  confirms it in one call, bracketed-pasted so embedded control bytes stay
+  inert. While the modal blocks the pane, orca refuses that send with
+  `agent_prompt_blocked` and an `orchestrationRequestId`; re-issue it with
+  `--retry-request <id>`, the same sequence
+  `scripts/codex-hooks-review-answer <pane>` runs. Redispatch into
   the cleared pane passes `--terminal <pane>` alone; pre-trust is skipped on
   a reused pane, and the post-inject `hook-trust` check still stops the
   dispatch if the modal is back. With `--terminal <pane>` alone the
@@ -106,13 +106,16 @@ delivery, for the coordinator to act and then re-run `worker-wait`.
   the host's codex homes; it refuses when nothing was measured, so the
   manual path above is for the vet failing or an uncleared answer. An
   unenumerated source beside a passing enumerated file is still answered
-  on faith, the documented gap. The confirming send above carries
-  `--wait-submit <seconds>` too (`orca terminal send --terminal <pane> --text
-  '' --enter --wait-submit <seconds>`), and its output is kept, not
-  discarded: it is the receipt that the input was even accepted. Re-read the
-  pane afterward with `orca terminal read --terminal <pane> --screen`; if the
-  prompt text is still on screen, the answer did not land and the send has
-  to be retried. For a structured approval that should be refused, use `orca
+  on faith, the documented gap. The confirming send above can also carry
+  `--wait-submit <seconds>` (`orca terminal send --terminal <pane> --text
+  <option-number> --enter --wait-submit <seconds>`; measured against the
+  installed Orca 1.4.259, `--wait-submit` and `--retry-request` both refuse
+  an empty `--text ''` with `invalid_argument` before anything is sent, so
+  the digit has to be the one carrying it, not a separate blank confirm),
+  and its output is kept, not discarded: it is the receipt that the input
+  was even accepted. Re-read the pane afterward with `orca terminal read
+  --terminal <pane> --screen`; if the prompt text is still on screen, the
+  answer did not land and the send has to be retried. For a structured approval that should be refused, use `orca
   orchestration deny --dispatch <id> --prompt <approval_id> --reason <text>`
   (flag shapes read from the installed Orca CLI's own `orca orchestration
   deny --help`, 1.4.258, since this template's own grounding docs do not

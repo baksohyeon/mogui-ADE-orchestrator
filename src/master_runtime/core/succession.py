@@ -1488,8 +1488,8 @@ def _require_substr(value: str, label: str) -> str:
 def _require_boot_card_reference(kickoff_text: str) -> str:
     if SUCCESSION_BOOT_CARD_PATH_SUFFIX not in kickoff_text:
         raise SuccessionError(
-            "kickoff_text must tell the successor to read the boot card whole "
-            "before acting; missing path: " + SUCCESSION_BOOT_CARD_PATH_SUFFIX,
+            "kickoff_text must reference the succession boot card by path; "
+            "missing: " + SUCCESSION_BOOT_CARD_PATH_SUFFIX,
             SPAWN_KICKOFF_MISSING_BOOT_CARD,
         )
     return kickoff_text

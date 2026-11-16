@@ -360,7 +360,7 @@ start_m="$(git -C "${clone_m}" rev-parse HEAD)"
 git -C "${clone_m}" checkout --quiet -b work
 sha_m="$(make_commit "${clone_m}" file.txt worker-edit "commit m2, edits file.txt")"
 git -C "${clone_m}" checkout --quiet main
-# A commit, off the same base, that edits file.txt differently -- cherry-
+# A commit, off the same base, that edits file.txt differently; cherry-
 # picking it onto the worker's edit above is what the gate leaves conflicted.
 git -C "${clone_m}" checkout --quiet -b conflict-source "${start_m}"
 conflict_sha_m="$(make_commit "${clone_m}" file.txt conflict-source-edit "conflicting edit")"
@@ -383,6 +383,43 @@ if [ "${rc_m}" -eq 2 ] && [ "${cherry_in_progress_m}" -eq 1 ] && [ "${remote_m}"
 else
   fail "gate's own conflict was not protected: rc=${rc_m} cherry_in_progress=${cherry_in_progress_m} remote=${remote_m} want_remote=${start_m}"
   echo "       output: ${out_m}"
+fi
+
+# --- Case (n): gate resolves its own conflict to match HEAD, never
+# continues, and exits 0 -----------------------------------------------------
+# `git status --porcelain` is clean once a resolution matches HEAD exactly,
+# but CHERRY_PICK_HEAD is still there: the operation never finished. A dirty
+# check that only looks at `status` would miss this and let a seemingly
+# clean push go out, or a seemingly clean reset finish discarding it.
+clone_n="$(new_fixture n)"
+bare_n="${WORK_DIR}/n-origin.git"
+start_n="$(git -C "${clone_n}" rev-parse HEAD)"
+git -C "${clone_n}" checkout --quiet -b work
+sha_n="$(make_commit "${clone_n}" file.txt worker-edit-n "commit n, edits file.txt")"
+git -C "${clone_n}" checkout --quiet main
+git -C "${clone_n}" checkout --quiet -b conflict-source-n "${start_n}"
+conflict_sha_n="$(make_commit "${clone_n}" file.txt conflict-edit-n "conflicting edit n")"
+git -C "${clone_n}" checkout --quiet main
+cat >"${WORK_DIR}/gate-resolve-to-ours.sh" <<EOF
+#!/usr/bin/env bash
+git -C "${clone_n}" cherry-pick "${conflict_sha_n}" >/dev/null 2>&1
+git -C "${clone_n}" checkout --ours -- file.txt
+git -C "${clone_n}" add file.txt
+exit 0
+EOF
+chmod +x "${WORK_DIR}/gate-resolve-to-ours.sh"
+
+out_n=$(cd "${clone_n}" && "${LAND}" --repo "${clone_n}" --gate "${WORK_DIR}/gate-resolve-to-ours.sh" "${sha_n}" 2>&1)
+rc_n=$?
+cherry_in_progress_n=0
+git -C "${clone_n}" rev-parse --quiet --verify CHERRY_PICK_HEAD >/dev/null 2>&1 && cherry_in_progress_n=1
+remote_n="$(remote_sha "${bare_n}")"
+if [ "${rc_n}" -eq 2 ] && [ "${cherry_in_progress_n}" -eq 1 ] && [ "${remote_n}" = "${start_n}" ] \
+  && printf '%s' "${out_n}" | grep -q "NOT reset"; then
+  ok "gate resolves its own conflict to match HEAD and never continues: still caught, exit 2, nothing pushed"
+else
+  fail "gate's unfinished cherry-pick was not caught: rc=${rc_n} cherry_in_progress=${cherry_in_progress_n} remote=${remote_n} want_remote=${start_n}"
+  echo "       output: ${out_n}"
 fi
 
 # --- Case (l): --gate made of only whitespace exits 2 ----------------------

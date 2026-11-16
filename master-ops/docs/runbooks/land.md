@@ -26,11 +26,11 @@ In order, stopping at the first failure:
 3. run the gate in the repository root under `set -o pipefail`, with its full output kept in a
    log file whose path is printed; continue only on exit `0`, read from the gate's own process,
    not from any line of its output (a truncated or misread line is how issue #318 happened)
-4. confirm the checkout is still on `main`, still at `picked`, and still clean — a gate that
+4. confirm the checkout is still on `main`, still at `picked`, and still clean; a gate that
    commits, amends, checks out something else, or leaves an edit on a tracked file without
    committing it fails this step
 5. confirm `origin/main` (as fetched in step 1) is an ancestor of `picked`
-6. `git push origin "${picked}:main"` (never `--force`) — the sha the gate actually ran on, not
+6. `git push origin "${picked}:main"` (never `--force`), the sha the gate actually ran on, not
    whatever `HEAD` happens to be by then
 7. fetch again and confirm `origin/main` now has `picked` as an ancestor
 
@@ -71,3 +71,10 @@ anything a gate's own run leaves behind that is not already gitignored reads as 
 dirtied the checkout, and the run fails even though the gate itself passed. Point a repository's
 `--gate` command at something that cleans up after itself, or gitignore what it leaves, before
 wiring it into `land`.
+
+Every cleanliness check passes `--ignore-submodules=none`, so a dirty submodule is not hidden by
+a `submodule.<name>.ignore` setting in the repository's own config. Every cleanliness check also
+treats an unfinished cherry-pick (`CHERRY_PICK_HEAD` or a `.git/sequencer` directory) as dirty on
+its own, even when `git status --porcelain` itself is clean. A conflict resolved by staging a
+result identical to `HEAD`, without running `cherry-pick --continue`, is otherwise invisible to a
+plain status check.

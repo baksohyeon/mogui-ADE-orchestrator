@@ -103,6 +103,18 @@ gate_trimmed="$(printf '%s' "${gate}" | tr -d '[:space:]')"
 
 root="$(git -C "${repo}" rev-parse --show-toplevel 2>/dev/null)" || error "${repo} is not a git repository"
 
+# A conflict resolved by staging a result identical to HEAD (or a
+# multi-commit sequence with a later pick still queued) can leave
+# `--porcelain` clean while a cherry-pick is still mid-operation; a plain
+# dirty check would miss that and let a `reset --hard` quietly finish
+# discarding it.
+sequencer_active() {
+  git -C "${root}" rev-parse --quiet --verify CHERRY_PICK_HEAD >/dev/null 2>&1 && return 0
+  local seq_dir
+  seq_dir="$(git -C "${root}" rev-parse --git-path sequencer 2>/dev/null)"
+  [ -n "${seq_dir}" ] && [ -d "${seq_dir}" ]
+}
+
 # Resolve every commit to a full sha before anything changes the checkout,
 # so a bad argument is a could-not-run failure, not a half-done cherry-pick.
 # --end-of-options stops a commit-ish that happens to start with "-" from
@@ -119,8 +131,8 @@ current_branch="$(git -C "${root}" branch --show-current)"
 
 # --untracked-files=all overrides any status.showUntrackedFiles=no in the
 # repository's own config, so an untracked file cannot pass as clean.
-status_output="$(git -C "${root}" status --porcelain --untracked-files=all)" || error "git status failed"
-if [ -n "${status_output}" ]; then
+status_output="$(git -C "${root}" status --porcelain --untracked-files=all --ignore-submodules=none)" || error "git status failed"
+if [ -n "${status_output}" ] || sequencer_active; then
   fail "checkout is dirty; refusing before any change"
 fi
 
@@ -155,8 +167,8 @@ reset_to_start() {
     git -C "${root}" cherry-pick --abort >/dev/null 2>&1
   fi
   local porcelain
-  porcelain="$(git -C "${root}" status --porcelain --untracked-files=all 2>&1)"
-  if [ $? -ne 0 ] || [ -n "${porcelain}" ]; then
+  porcelain="$(git -C "${root}" status --porcelain --untracked-files=all --ignore-submodules=none 2>&1)"
+  if [ $? -ne 0 ] || [ -n "${porcelain}" ] || sequencer_active; then
     return 2
   fi
   # A gate may have left the checkout on another branch or detached;
@@ -181,7 +193,7 @@ reset_then_report() {
   rc=$?
   case "${rc}" in
     0) "${on_ok}" "${msg} (checkout reset to ${start_sha})" ;;
-    2) error "${msg} (checkout NOT reset: it holds uncommitted changes a \`reset --hard\` would destroy; recover by hand -- start_sha=${start_sha} picked=${picked})" ;;
+    2) error "${msg} (checkout NOT reset: it holds uncommitted changes a \`reset --hard\` would destroy; recover by hand, start_sha=${start_sha} picked=${picked})" ;;
     *) error "${msg} (resetting the checkout to ${start_sha} ALSO failed; the repository is left mid-operation, inspect it by hand)" ;;
   esac
 }
@@ -217,10 +229,10 @@ echo "land: gate passed; full output in ${gate_log}"
 # anything the gate itself did not actually test.
 branch_after_gate="$(git -C "${root}" branch --show-current 2>/dev/null)"
 head_after_gate="$(git -C "${root}" rev-parse HEAD 2>/dev/null)"
-dirty_after_gate="$(git -C "${root}" status --porcelain --untracked-files=all 2>&1)"
+dirty_after_gate="$(git -C "${root}" status --porcelain --untracked-files=all --ignore-submodules=none 2>&1)"
 dirty_rc=$?
 if [ "${branch_after_gate}" != "${BRANCH}" ] || [ "${head_after_gate}" != "${picked}" ] \
-  || [ "${dirty_rc}" -ne 0 ] || [ -n "${dirty_after_gate}" ]; then
+  || [ "${dirty_rc}" -ne 0 ] || [ -n "${dirty_after_gate}" ] || sequencer_active; then
   reset_and_fail "the gate left the checkout on '${branch_after_gate}' at '${head_after_gate}', not clean on '${BRANCH}' at '${picked}'"
 fi
 

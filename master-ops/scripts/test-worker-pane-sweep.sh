@@ -79,10 +79,17 @@ CLAUDE_STATUS_PANE='⏺ Bounded poll of PR checks after the malformed-entry fix 
 · Sautéing… (1h 15m 48s · ↓ 182.4k tokens)
 ❯'
 expect "mid-turn Claude status line above an empty prompt (#321)" "$CLAUDE_STATUS_PANE" working 0
-# A finished turn overwrites the same line with a past-tense, ellipsis-free summary. No ellipsis,
-# no parenthesized elapsed time with a middle-dot separator, so this must stay idle.
-expect "finished Claude turn with past-tense summary and an empty prompt" '⏺ I re-ran the tests from the extracted head.
-✻ Baked for 7s · done 4:30 PM · 1 monitor still running
+# One box-drawing separator line between the status line and the empty input is the shape a
+# bordered pane actually renders (measured live, 2026-11-16); skip over it to the status line.
+expect "mid-turn Claude status line above a border line above an empty prompt" '· Sautéing… (45s · ↓ 1.2k tokens)
+──────
+❯ ' working 0
+# A finished turn overwrites the same screen row with a past-tense summary. This fixture keeps
+# the parenthesized, middle-dot form the status line uses but drops the ellipsis, so it pins the
+# ellipsis itself as load-bearing: a status_line_re that dropped `…` would still match this line
+# and misread it as working.
+expect "finished Claude turn, no ellipsis, parens-and-middle-dot shape only" '⏺ I re-ran the tests from the extracted head.
+· Sautéed (7s · ↓ 182.4k tokens)
 ❯ ' idle 0
 # Stale scrollback: the status-line shape is still visible several lines up, but the pane has
 # moved well past it to a genuinely idle prompt. Same guard as the stale-modal case above, for
@@ -95,6 +102,14 @@ four
 five
 six
 ❯ ' idle 0
+# Adversarial case a reviewer bot raised: a finished worker's own reply quotes the status-line
+# shape, directly followed by its real, genuine finished-turn summary and an empty prompt. The
+# quote and the real summary cannot both be live-rendered (they would share one screen row), so
+# only the line directly above the prompt counts; the quote one line further up must not.
+expect "quoted status-line shape immediately above a real finished-turn line and an empty prompt" '⏺ Example from the bug report:
+  · Sautéing… (45s · ↓ 1.2k tokens)
+✻ Baked for 7s
+❯' idle 0
 
 # Failability: a copy that classifies from the whole captured chunk again, instead of the
 # foreground past the last prompt line, must flip the stale-scrollback case back to approval.

@@ -458,7 +458,15 @@ fi
 # $1 = bound in seconds, $@ = the command. Prefers the `timeout`/`gtimeout`
 # coreutils binary; macOS ships neither by default (measured on GitHub
 # Actions' macos-latest runner: "timeout: command not found"), so this falls
-# back to a plain-bash watchdog in that case.
+# back to a plain-bash watchdog in that case. The watchdog's own stdio is
+# redirected to /dev/null: without that, a watchdog killed after the command
+# already finished stays an orphaned `sleep` that still holds the caller's
+# command-substitution pipe open, so even a fast command would block the
+# caller for the full bound. SIGTERM is escalated to SIGKILL after a 1s grace
+# period for a command that ignores or handles the first signal. This only
+# reaches the direct child, not a subprocess it forks of its own — a bound
+# command that spawns a long-lived grandchild can still hold the pipe open
+# past the bound; none of the tools this function calls do that today.
 infra_with_timeout() {
   local secs="$1"
   shift
@@ -472,7 +480,12 @@ infra_with_timeout() {
   fi
   "$@" &
   local cmd_pid=$!
-  ( sleep "$secs"; kill -TERM "$cmd_pid" 2>/dev/null ) &
+  (
+    sleep "$secs"
+    kill -TERM "$cmd_pid" 2>/dev/null
+    sleep 1
+    kill -KILL "$cmd_pid" 2>/dev/null
+  ) </dev/null >/dev/null 2>&1 &
   local watchdog_pid=$!
   wait "$cmd_pid"
   local rc=$?
@@ -497,11 +510,14 @@ CODEX_MCP_CONFIG="${CODEX_MCP_CONFIG:-${CODEX_HOME:-$HOME/.codex}/config.toml}"
 # in `disabledMcpjsonServers` -- a disabled entry wins regardless of which
 # file sets it (coordinator addendum 2026-11-16, peer measurement: a server
 # present in .mcp.json was still invisible to Claude master sessions because
-# of exactly this). Codex: its config.toml `[mcp_servers.<tool>]`, which
-# this addendum does not touch. Reads configuration files only; never calls
-# `claude mcp list`, which health-checks every server and is slow.
+# of exactly this). Codex: its config.toml names an uncommented
+# `[mcp_servers.<tool>]` table header, checked even when Claude's own
+# verdict is disabled or pending, since either host can carry the session —
+# a Claude-side gap is not the final answer while Codex might still have an
+# active entry. Reads configuration files only; never calls `claude mcp
+# list`, which health-checks every server and is slow.
 infra_mcp_status() {
-  local tool="$1" status
+  local tool="$1" status claude_reason=""
   if status=$(TOOL="$tool" \
     CLAUDE_MCP_CONFIG="$CLAUDE_MCP_CONFIG" \
     CLAUDE_PROJECT_MCP_FILES="$WORKSPACE_ROOT/.mcp.json:$OPS_DIR/.mcp.json" \
@@ -563,19 +579,20 @@ EOFMCP
         return 0
         ;;
       disabled:*)
-        echo "disabled via ${status#disabled:}"
-        return 1
+        claude_reason="disabled via ${status#disabled:}"
         ;;
       pending:*)
-        echo "listed in ${status#pending:} but not approved (enableAllProjectMcpServers/enabledMcpjsonServers unset in every settings file read)"
-        return 1
+        claude_reason="listed in ${status#pending:} but not approved (enableAllProjectMcpServers/enabledMcpjsonServers unset in every settings file read)"
         ;;
     esac
   fi
-  if [ -f "$CODEX_MCP_CONFIG" ] && grep -qF "[mcp_servers.$tool]" "$CODEX_MCP_CONFIG" 2>/dev/null; then
+  # Anchored on the table header line itself (optional leading whitespace,
+  # nothing after the closing bracket): a substring match would also accept
+  # a commented-out `# [mcp_servers.ctx]`, which TOML parses as a comment.
+  if [ -f "$CODEX_MCP_CONFIG" ] && grep -qE "^[[:space:]]*\\[mcp_servers\\.${tool}\\][[:space:]]*\$" "$CODEX_MCP_CONFIG" 2>/dev/null; then
     return 0
   fi
-  echo "not registered as an MCP server (checked Claude user config, project .mcp.json, Codex config.toml)"
+  echo "${claude_reason:-not registered as an MCP server (checked Claude user config, project .mcp.json, Codex config.toml)}"
   return 1
 }
 
@@ -587,6 +604,7 @@ if ! command -v ctx >/dev/null 2>&1; then
   ctx_warn="absent from PATH"
 elif ! ctx_status_json=$(infra_with_timeout 10 ctx status --format json 2>&1); then
   ctx_warn=$(printf '%s\n' "$ctx_status_json" | head -1)
+  [ -n "$ctx_warn" ] || ctx_warn="ctx status failed with no output"
 elif ! ctx_mcp_reason=$(infra_mcp_status ctx); then
   ctx_warn="runs, but $ctx_mcp_reason"
 else
@@ -610,7 +628,7 @@ def sessions_by_agent(raw):
     try:
         data = json.loads(raw)
     except Exception:
-        return {}
+        return None
     return (data.get("result") or {}).get("sessionsByAgent") or {}
 
 def reason_for(provider_label, sources_text):
@@ -634,6 +652,8 @@ sources_text = os.environ.get("CTX_SOURCES", "")
 
 if providers is None:
     print("undecided (could not parse ctx status --format json)")
+elif sessions is None:
+    print("undecided (could not parse orca search --index-status --json)")
 else:
     missing = []
     for provider in ("claude", "codex"):
@@ -645,7 +665,7 @@ else:
     if missing:
         print("does not cover: " + ", ".join(missing))
 EOFCTX
-)
+) || ctx_warn="ctx covering-check failed to run"
 fi
 if [ -n "$ctx_warn" ]; then
   echo "Infra: ctx WARN $ctx_warn"
@@ -664,6 +684,7 @@ if ! command -v code-review-graph >/dev/null 2>&1; then
   crg_warn="absent from PATH"
 elif ! crg_version_out=$(infra_with_timeout 10 code-review-graph --version 2>&1); then
   crg_warn=$(printf '%s\n' "$crg_version_out" | head -1)
+  [ -n "$crg_warn" ] || crg_warn="code-review-graph --version failed with no output"
 elif ! crg_mcp_reason=$(infra_mcp_status code-review-graph); then
   crg_warn="runs, but $crg_mcp_reason"
 elif [ ! -f "$CODE_REVIEW_GRAPH_REGISTRY" ]; then
@@ -672,41 +693,53 @@ else
   crg_warn=$(CODE_REVIEW_GRAPH_REGISTRY="$CODE_REVIEW_GRAPH_REGISTRY" CODE_REVIEW_GRAPH_STALE_DAYS="$CODE_REVIEW_GRAPH_STALE_DAYS" python3 << 'EOFCRG'
 import json, os, time
 
-registry_path = os.environ["CODE_REVIEW_GRAPH_REGISTRY"]
-threshold_days = float(os.environ["CODE_REVIEW_GRAPH_STALE_DAYS"])
+def main():
+    registry_path = os.environ["CODE_REVIEW_GRAPH_REGISTRY"]
+    try:
+        threshold_days = float(os.environ["CODE_REVIEW_GRAPH_STALE_DAYS"])
+    except ValueError:
+        print(f"CODE_REVIEW_GRAPH_STALE_DAYS is not a number: {os.environ['CODE_REVIEW_GRAPH_STALE_DAYS']!r}")
+        return
+
+    try:
+        repos = json.load(open(registry_path)).get("repos") or []
+    except Exception as exc:
+        print(f"registry unreadable ({exc})")
+        return
+
+    missing_paths = []
+    stale = []
+    for repo in repos:
+        if not isinstance(repo, dict):
+            continue
+        path = repo.get("path") or ""
+        alias = repo.get("alias") or path or "?"
+        if not path or not os.path.isdir(path):
+            missing_paths.append(alias)
+            continue
+        graph_db = os.path.join(path, ".code-review-graph", "graph.db")
+        try:
+            mtime = os.path.getmtime(graph_db)
+        except OSError:
+            missing_paths.append(alias)
+            continue
+        age_days = (time.time() - mtime) / 86400
+        if age_days > threshold_days:
+            stale.append(f"{alias} ({age_days:.0f}d)")
+
+    parts = []
+    if stale:
+        parts.append("stale: " + ", ".join(stale))
+    if missing_paths:
+        parts.append("missing path: " + ", ".join(missing_paths))
+    print("; ".join(parts))
 
 try:
-    repos = json.load(open(registry_path)).get("repos") or []
+    main()
 except Exception as exc:
-    print(f"registry unreadable ({exc})")
-    raise SystemExit
-
-missing_paths = []
-stale = []
-for repo in repos:
-    path = repo.get("path") or ""
-    alias = repo.get("alias") or path or "?"
-    if not path or not os.path.isdir(path):
-        missing_paths.append(alias)
-        continue
-    graph_db = os.path.join(path, ".code-review-graph", "graph.db")
-    try:
-        mtime = os.path.getmtime(graph_db)
-    except OSError:
-        missing_paths.append(alias)
-        continue
-    age_days = (time.time() - mtime) / 86400
-    if age_days > threshold_days:
-        stale.append(f"{alias} ({age_days:.0f}d)")
-
-parts = []
-if stale:
-    parts.append("stale: " + ", ".join(stale))
-if missing_paths:
-    parts.append("missing path: " + ", ".join(missing_paths))
-print("; ".join(parts))
+    print(f"registry check failed ({exc})")
 EOFCRG
-)
+) || crg_warn="registry check failed to run"
 fi
 if [ -n "$crg_warn" ]; then
   echo "Infra: code-review-graph WARN $crg_warn"

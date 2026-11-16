@@ -192,11 +192,22 @@ touch -t "$(python3 -c "import datetime; print(datetime.datetime.fromtimestamp($
 check "(c) a 30-day-old graph is named with its day count" "Infra: code-review-graph WARN stale: repo-a (30d)" "" 0
 exit_codes+=("$(run_infra >/dev/null 2>&1; echo $?)")
 
-# (d) A tool absent from PATH warns, never crashes.
+# (d) A tool absent from PATH warns, never crashes. A real install
+# elsewhere on this host's own PATH (outside $BIN_DIR) would otherwise find
+# that instead of "absent"; SAFE_PATH only strips shim directories, so strip
+# the real binary's own directory too, if one resolves.
 reset_fixture
 rm -f "$BIN_DIR/code-review-graph"
+ORIGINAL_SAFE_PATH="$SAFE_PATH"
+real_crg=$(PATH="$SAFE_PATH" command -v code-review-graph 2>/dev/null) || true
+if [ -n "$real_crg" ]; then
+  real_crg_dir=$(dirname "$real_crg")
+  SAFE_PATH=$(printf '%s' "$SAFE_PATH" | tr ':' '\n' | grep -vF "$real_crg_dir" | tr '\n' ':')
+  SAFE_PATH="${SAFE_PATH%:}"
+fi
 check "(d) absent from PATH warns without crashing" "Infra: code-review-graph WARN absent from PATH" "" 0
 exit_codes+=("$(run_infra >/dev/null 2>&1; echo $?)")
+SAFE_PATH="$ORIGINAL_SAFE_PATH"
 
 # (e) The exit code is the same across (a) through (d) above.
 all_same=1
@@ -229,14 +240,23 @@ BASH_BIN="$(command -v bash)"
 
 fast_out=$(PATH="$NO_TIMEOUT_BIN" "$BASH_BIN" -c '
   source "$1"
+  start=$(date +%s)
   infra_with_timeout 5 echo hello
-  echo "rc=$?"
-' _ "$TIMEOUT_FN")
-if [ "$fast_out" = "$(printf 'hello\nrc=0')" ]; then
-  echo "ok   - infra_with_timeout fallback runs a quick command normally"
+  rc=$?
+  end=$(date +%s)
+  echo "rc=$rc elapsed=$((end - start))"
+' _ "$TIMEOUT_FN" 2>/dev/null)
+fast_rc=$(printf '%s' "$fast_out" | sed -n 's/.*rc=\([0-9-]*\) .*/\1/p')
+fast_elapsed=$(printf '%s' "$fast_out" | sed -n 's/.*elapsed=\([0-9]*\).*/\1/p')
+# Asserts the output AND that it returned promptly: a watchdog that keeps
+# the caller's pipe open after the command finishes (the bug an orphaned,
+# un-redirected `sleep` causes) would still eventually print the right
+# text, just after blocking for the full 5s bound instead of returning fast.
+if printf '%s' "$fast_out" | grep -qF "hello" && [ "$fast_rc" = "0" ] && [ -n "$fast_elapsed" ] && [ "$fast_elapsed" -le 2 ]; then
+  echo "ok   - infra_with_timeout fallback runs a quick command without blocking for the bound ($fast_out)"
   pass=$((pass + 1))
 else
-  echo "FAIL - infra_with_timeout fallback runs a quick command normally (got: $fast_out)"
+  echo "FAIL - infra_with_timeout fallback runs a quick command without blocking for the bound (got: $fast_out)"
   fail=$((fail + 1))
 fi
 
@@ -276,6 +296,27 @@ else
   echo "FAIL - disabled-server WARN does not name the settings file"
   fail=$((fail + 1))
 fi
+rm -f "$WORKSPACE_ROOT/.mcp.json"
+
+# A commented-out Codex table header is not a registration: TOML treats
+# `# [mcp_servers.ctx]` as a comment, so a substring match that ignores the
+# leading `#` would read this host as having ctx reachable when it does not.
+reset_fixture
+printf '{"mcpServers": {}}\n' > "$CLAUDE_MCP_CONFIG"
+printf '# [mcp_servers.ctx]\ncommand = "uvx"\n' > "$CODEX_MCP_CONFIG"
+check "a commented-out Codex table header is not a registration" "Infra: ctx WARN runs, but not registered" "" 0
+
+# A Claude-side gap (disabled, or absent from .mcp.json/mcpServers
+# entirely) is not the final answer while Codex still carries an active
+# entry for the same tool: the two hosts are checked independently, and
+# either one being reachable makes the tool reachable.
+reset_fixture
+printf '{"mcpServers": {"ctx": {}}}\n' > "$CLAUDE_MCP_CONFIG"
+printf '{"mcpServers": {"code-review-graph": {}}}\n' > "$WORKSPACE_ROOT/.mcp.json"
+mkdir -p "$WORKSPACE_ROOT/.claude"
+printf '{"disabledMcpjsonServers": ["code-review-graph"]}\n' > "$WORKSPACE_ROOT/.claude/settings.local.json"
+printf '[mcp_servers.code-review-graph]\ncommand = "uvx"\n' > "$CODEX_MCP_CONFIG"
+check "a Claude-disabled entry still reaches an active Codex registration" "Infra: code-review-graph OK" "code-review-graph WARN" 0
 rm -f "$WORKSPACE_ROOT/.mcp.json"
 
 echo "----"

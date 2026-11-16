@@ -11,6 +11,16 @@
 # (f) a commit that does not resolve. (e) and (f) are could-not-run
 # failures, exit 2, not the exit-1 shape of the others.
 #
+# (i) a gate that commits an extra change, moving HEAD past the sha the
+# cherry-picks produced: nothing pushed; (j) a gate that checks out a
+# different, already-pushed branch: nothing pushed, and main on the remote
+# is untouched; (i) and (j) are the two ways a gate can move the checkout
+# that step 4 must catch before the push, not after it. (k) a gate that
+# edits a tracked file without committing, then fails: the edit is not
+# reset away, and the exit is 2 (could not safely recover), not 1, because
+# a blind `reset --hard` would have destroyed it. (l) `--gate` made of only
+# whitespace: exits 2 before any change, same as an empty one.
+#
 # Each fixture is a fresh bare "origin" plus a clone, built from scratch per
 # case so a result in one case cannot leak into the next.
 set -u
@@ -253,6 +263,104 @@ if [ "${rc_h}" -eq 1 ] && [ "${head_h}" = "${start_h}" ] && [ "${remote_h}" = "$
 else
   fail "diverged main not refused cleanly: rc=${rc_h} head=${head_h} remote=${remote_h} want_remote=${remote_before_h}"
   echo "       output: ${out_h}"
+fi
+
+# --- Case (i): gate commits an extra change, moving HEAD past picked -------
+clone_i="$(new_fixture i)"
+bare_i="${WORK_DIR}/i-origin.git"
+start_i="$(git -C "${clone_i}" rev-parse HEAD)"
+git -C "${clone_i}" checkout --quiet -b work
+sha_i="$(make_commit "${clone_i}" change-i.txt one "commit i")"
+git -C "${clone_i}" checkout --quiet main
+cat >"${WORK_DIR}/gate-sneaky-commit.sh" <<'EOF'
+#!/usr/bin/env bash
+git commit --allow-empty -q -m sneaky
+exit 0
+EOF
+chmod +x "${WORK_DIR}/gate-sneaky-commit.sh"
+
+out_i=$(cd "${clone_i}" && "${LAND}" --repo "${clone_i}" --gate "${WORK_DIR}/gate-sneaky-commit.sh" "${sha_i}" 2>&1)
+rc_i=$?
+head_i="$(git -C "${clone_i}" rev-parse HEAD)"
+remote_i="$(remote_sha "${bare_i}")"
+if [ "${rc_i}" -eq 1 ] && [ "${head_i}" = "${start_i}" ] && [ "${remote_i}" = "${start_i}" ]; then
+  ok "gate commits an extra change after the cherry-pick: nothing pushed, checkout reset"
+else
+  fail "gate's extra commit was not caught: rc=${rc_i} head=${head_i} remote=${remote_i} want=${start_i}"
+  echo "       output: ${out_i}"
+fi
+
+# --- Case (j): gate checks out a different, already-pushed branch ----------
+clone_j="$(new_fixture j)"
+bare_j="${WORK_DIR}/j-origin.git"
+start_j="$(git -C "${clone_j}" rev-parse HEAD)"
+git -C "${clone_j}" checkout --quiet -b work
+sha_j="$(make_commit "${clone_j}" change-j.txt one "commit j")"
+git -C "${clone_j}" checkout --quiet main
+git -C "${clone_j}" checkout --quiet -b other "${start_j}"
+other_sha_j="$(make_commit "${clone_j}" other.txt other "other branch commit")"
+git -C "${clone_j}" push --quiet origin other
+git -C "${clone_j}" checkout --quiet main
+cat >"${WORK_DIR}/gate-checkout-other.sh" <<EOF
+#!/usr/bin/env bash
+git -C "${clone_j}" checkout --quiet other
+exit 0
+EOF
+chmod +x "${WORK_DIR}/gate-checkout-other.sh"
+
+out_j=$(cd "${clone_j}" && "${LAND}" --repo "${clone_j}" --gate "${WORK_DIR}/gate-checkout-other.sh" "${sha_j}" 2>&1)
+rc_j=$?
+remote_main_j="$(remote_sha "${bare_j}")"
+if [ "${rc_j}" -eq 1 ] && [ "${remote_main_j}" = "${start_j}" ]; then
+  ok "gate checks out a different branch: nothing pushed, main on the remote untouched"
+else
+  fail "gate's branch switch was not caught: rc=${rc_j} remote_main=${remote_main_j} want=${start_j} other_sha=${other_sha_j}"
+  echo "       output: ${out_j}"
+fi
+
+# --- Case (k): gate edits a tracked file without committing, then fails ----
+clone_k="$(new_fixture k)"
+bare_k="${WORK_DIR}/k-origin.git"
+start_k="$(git -C "${clone_k}" rev-parse HEAD)"
+git -C "${clone_k}" checkout --quiet -b work
+sha_k="$(make_commit "${clone_k}" change-k.txt one "commit k")"
+git -C "${clone_k}" checkout --quiet main
+cat >"${WORK_DIR}/gate-dirty-edit.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "edited-by-gate" > file.txt
+exit 1
+EOF
+chmod +x "${WORK_DIR}/gate-dirty-edit.sh"
+
+out_k=$(cd "${clone_k}" && "${LAND}" --repo "${clone_k}" --gate "${WORK_DIR}/gate-dirty-edit.sh" "${sha_k}" 2>&1)
+rc_k=$?
+content_k="$(cat "${clone_k}/file.txt" 2>/dev/null)"
+remote_k="$(remote_sha "${bare_k}")"
+if [ "${rc_k}" -eq 2 ] && [ "${content_k}" = "edited-by-gate" ] && [ "${remote_k}" = "${start_k}" ] \
+  && printf '%s' "${out_k}" | grep -q "${start_k}" && printf '%s' "${out_k}" | grep -q "NOT reset"; then
+  ok "gate leaves an uncommitted tracked-file edit then fails: exit 2, edit survives, nothing pushed"
+else
+  fail "gate's uncommitted edit was not protected: rc=${rc_k} content=[${content_k}] remote=${remote_k} want_remote=${start_k}"
+  echo "       output: ${out_k}"
+fi
+
+# --- Case (l): --gate made of only whitespace exits 2 ----------------------
+clone_l="$(new_fixture l)"
+bare_l="${WORK_DIR}/l-origin.git"
+start_l="$(git -C "${clone_l}" rev-parse HEAD)"
+git -C "${clone_l}" checkout --quiet -b work
+sha_l="$(make_commit "${clone_l}" change-l.txt one "commit l")"
+git -C "${clone_l}" checkout --quiet main
+
+out_l=$(cd "${clone_l}" && "${LAND}" --repo "${clone_l}" --gate "   " "${sha_l}" 2>&1)
+rc_l=$?
+head_l="$(git -C "${clone_l}" rev-parse HEAD)"
+remote_l="$(remote_sha "${bare_l}")"
+if [ "${rc_l}" -eq 2 ] && [ "${head_l}" = "${start_l}" ] && [ "${remote_l}" = "${start_l}" ]; then
+  ok "a whitespace-only --gate is rejected like an empty one: exits 2, nothing pushed"
+else
+  fail "whitespace-only --gate was accepted: rc=${rc_l} head=${head_l} remote=${remote_l} want=${start_l}"
+  echo "       output: ${out_l}"
 fi
 
 # --- Case (e): usage error (no arguments) exits 2 --------------------------

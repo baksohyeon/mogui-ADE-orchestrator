@@ -469,6 +469,95 @@ else
   fail "restored: unmutated script should still exit non-zero on {\"workers\":null}"
 fi
 
+# --- Cross test (#313): _pane_sweep() must parse worker-pane-sweep's actual stdout for an -------
+# approval pane into a verdict map holding only pane entries. worker-pane-sweep's approval row is
+# followed by a re-read hint (#286); _pane_sweep() skips only blank lines and lines starting with
+# "sweep:", so a hint on stdout would split into a bogus entry (its third field reads as a fake
+# "handle"). Feeds the sweep's actual stdout through _pane_sweep() itself, both for the real
+# (fixed) sweep and for a copy mutated back to the cf28142 shape, where the hint still went to
+# stdout.
+pane_sweep_dir="$work/pane-sweep-cross"
+mkdir -p "$pane_sweep_dir/bin"
+# One pane, frame fed through $SWEEP_FRAME (same convention as test-worker-pane-sweep.sh).
+cat > "$pane_sweep_dir/bin/orca" <<'FAKE'
+#!/usr/bin/env bash
+case "$1 $2" in
+  "terminal list") echo "term_00000000-0000-0000-0000-000000000001  fake worker pane";;
+  "terminal read") printf '%s\n' "$SWEEP_FRAME";;
+esac
+FAKE
+chmod +x "$pane_sweep_dir/bin/orca"
+
+# $1: a directory holding a worker-wait with a sibling worker-pane-sweep; imports that worker-wait
+# by path (its module-level guard is `if __name__ == "__main__"`, so importing never runs main())
+# and calls _pane_sweep() against the sibling sweep, printing the resulting dict as JSON.
+cat > "$pane_sweep_dir/call_pane_sweep.py" <<'PY'
+import importlib.util
+import json
+import sys
+from importlib.machinery import SourceFileLoader
+
+module_dir = sys.argv[1]
+path = f"{module_dir}/worker-wait"
+loader = SourceFileLoader("worker_wait_under_test", path)
+spec = importlib.util.spec_from_file_location("worker_wait_under_test", path, loader=loader)
+module = importlib.util.module_from_spec(spec)
+loader.exec_module(module)
+print(json.dumps(module._pane_sweep()))
+PY
+
+run_pane_sweep() {  # $1: directory with worker-wait + worker-pane-sweep siblings
+  env -u ORCA_TERMINAL_HANDLE PATH="$pane_sweep_dir/bin:$PATH" SWEEP_FRAME='Do you want to proceed?' \
+    python3 "$pane_sweep_dir/call_pane_sweep.py" "$1"
+}
+
+# --- Fixed pair: the real worker-wait + the real (patched) worker-pane-sweep ---
+mkdir -p "$pane_sweep_dir/fixed/lib"
+cp "$SCRIPT" "$pane_sweep_dir/fixed/worker-wait"
+cp "$ROOT/scripts/worker-pane-sweep" "$pane_sweep_dir/fixed/worker-pane-sweep"
+cp "$ROOT/scripts/approval-prompt-markers.txt" "$pane_sweep_dir/fixed/approval-prompt-markers.txt"
+cp "$ROOT/scripts/lib/orca_json.py" "$pane_sweep_dir/fixed/lib/orca_json.py"
+chmod +x "$pane_sweep_dir/fixed/worker-pane-sweep"
+
+fixed_out=$(run_pane_sweep "$pane_sweep_dir/fixed")
+fixed_expect='{"term_00000000-0000": "approval"}'
+if [ "$fixed_out" = "$fixed_expect" ]; then
+  ok "pane-sweep cross: verdict map for an approval pane holds only the pane entry: $fixed_out"
+else
+  fail "pane-sweep cross: expected $fixed_expect, got: $fixed_out"
+fi
+
+# --- Failability: a copy of worker-pane-sweep reverted to the cf28142 shape, where the hint -----
+# still went to stdout. Proves the assertion above is meaningful: it must fail on this pair, the
+# same way it would have failed on cf28142 itself.
+mkdir -p "$pane_sweep_dir/mutant/lib"
+cp "$SCRIPT" "$pane_sweep_dir/mutant/worker-wait"
+cp "$ROOT/scripts/approval-prompt-markers.txt" "$pane_sweep_dir/mutant/approval-prompt-markers.txt"
+cp "$ROOT/scripts/lib/orca_json.py" "$pane_sweep_dir/mutant/lib/orca_json.py"
+mutant_sweep="$pane_sweep_dir/mutant/worker-pane-sweep"
+python3 - "$ROOT/scripts/worker-pane-sweep" > "$mutant_sweep" <<'PY'
+import sys
+s = open(sys.argv[1]).read()
+old = ('[ "$verdict" = approval ] && echo "       after answering, re-read with orca terminal '
+       'read --terminal $h --screen before treating this as cleared (worker-wait.md)" >&2')
+new = old.replace(" >&2", "")
+assert old in s, "fixed hint-to-stderr line not found; worker-pane-sweep's shape changed"
+assert new != old
+s = s.replace(old, new, 1)
+sys.stdout.write(s)
+PY
+if [ ! -s "$mutant_sweep" ] || cmp -s "$ROOT/scripts/worker-pane-sweep" "$mutant_sweep"; then
+  fail "pane-sweep cross failability: mutant not generated"
+else
+  chmod +x "$mutant_sweep"
+  mutant_out=$(run_pane_sweep "$pane_sweep_dir/mutant")
+  if [ "$mutant_out" = "$fixed_expect" ]; then
+    fail "pane-sweep cross failability: cf28142-shaped sweep should have polluted the verdict map, got: $mutant_out"
+  else
+    ok "pane-sweep cross failability: cf28142-shaped sweep pollutes the verdict map: $mutant_out"
+  fi
+fi
+
 [ "$FAILED" -eq 0 ] && { echo "worker-wait: all checks passed"; exit 0; }
 echo "worker-wait: FAILED"
 exit 1

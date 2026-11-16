@@ -2696,6 +2696,30 @@ $block"
   echo "📎 standing rules · $STANDING_RULE_NAMES"
 fi
 
+# 1.6b mail-before-done ships to every brief, whether or not the contract
+# named it, the same way the worker token budget line below is unconditional:
+# a worker must check mail before worker_done whether or not the contract's
+# author opted in. Skipped when the loop above already appended it by name.
+# A missing block here warns and continues: the loop above refuses outright
+# on a missing named block because that failure is the contract author's,
+# while this block ships from the wrapper itself, so an install whose rules
+# file predates this feature keeps dispatching.
+case " $STANDING_RULE_NAMES " in
+  *" mail-before-done "*) ;;
+  *)
+    if MAIL_BEFORE_DONE_BLOCK=$(standing_rule_block "mail-before-done"); then
+      SPEC="$SPEC
+
+Standing rules (mail-before-done):
+
+$MAIL_BEFORE_DONE_BLOCK"
+      echo "📎 standing rules · mail-before-done (always)"
+    else
+      echo "⚠ mail-before-done standing-rule block not found; dispatching without it" >&2
+    fi
+    ;;
+esac
+
 validate_reused_worktree_alignment
 append_codex_authorized_egress
 

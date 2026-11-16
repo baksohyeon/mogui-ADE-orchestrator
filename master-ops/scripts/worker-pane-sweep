@@ -77,6 +77,9 @@ while IFS= read -r h; do
     *)                                  exit_code=1; mark="UNREAD" ;;
   esac
   printf '%-6s %-13s %s  %s\n' "$mark" "$verdict" "${h:0:18}" "$title"
+  # On stderr: a reminder for the human or coordinator reading the sweep, not a verdict row.
+  # worker-wait's _pane_sweep() parses stdout only, so this never reaches its verdict map.
+  [ "$verdict" = approval ] && echo "       after answering, re-read with orca terminal read --terminal $h --screen before treating this as cleared (worker-wait.md)" >&2
 done <<< "$handles"
 
 [ "$exit_code" != 0 ] && echo "sweep: at least one pane needs a decision — read it before acting"

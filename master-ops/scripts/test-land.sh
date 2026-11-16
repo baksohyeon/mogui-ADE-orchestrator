@@ -18,8 +18,11 @@
 # that step 4 must catch before the push, not after it. (k) a gate that
 # edits a tracked file without committing, then fails: the edit is not
 # reset away, and the exit is 2 (could not safely recover), not 1, because
-# a blind `reset --hard` would have destroyed it. (l) `--gate` made of only
-# whitespace: exits 2 before any change, same as an empty one.
+# a blind `reset --hard` would have destroyed it. (m) a gate that leaves its
+# own cherry-pick conflicted, then fails: the conflict is not silently
+# aborted before the dirty check ever sees it, same exit-2 shape as (k).
+# (l) `--gate` made of only whitespace: exits 2 before any change, same as
+# an empty one.
 #
 # Each fixture is a fresh bare "origin" plus a clone, built from scratch per
 # case so a result in one case cannot leak into the next.
@@ -311,10 +314,13 @@ chmod +x "${WORK_DIR}/gate-checkout-other.sh"
 out_j=$(cd "${clone_j}" && "${LAND}" --repo "${clone_j}" --gate "${WORK_DIR}/gate-checkout-other.sh" "${sha_j}" 2>&1)
 rc_j=$?
 remote_main_j="$(remote_sha "${bare_j}")"
-if [ "${rc_j}" -eq 1 ] && [ "${remote_main_j}" = "${start_j}" ]; then
-  ok "gate checks out a different branch: nothing pushed, main on the remote untouched"
+head_j="$(git -C "${clone_j}" rev-parse HEAD)"
+branch_j="$(git -C "${clone_j}" branch --show-current)"
+if [ "${rc_j}" -eq 1 ] && [ "${remote_main_j}" = "${start_j}" ] \
+  && [ "${head_j}" = "${start_j}" ] && [ "${branch_j}" = "main" ]; then
+  ok "gate checks out a different branch: nothing pushed, main on the remote untouched, local checkout back on main at the start sha"
 else
-  fail "gate's branch switch was not caught: rc=${rc_j} remote_main=${remote_main_j} want=${start_j} other_sha=${other_sha_j}"
+  fail "gate's branch switch was not caught: rc=${rc_j} remote_main=${remote_main_j} head=${head_j} branch=${branch_j} want=${start_j} other_sha=${other_sha_j}"
   echo "       output: ${out_j}"
 fi
 
@@ -342,6 +348,41 @@ if [ "${rc_k}" -eq 2 ] && [ "${content_k}" = "edited-by-gate" ] && [ "${remote_k
 else
   fail "gate's uncommitted edit was not protected: rc=${rc_k} content=[${content_k}] remote=${remote_k} want_remote=${start_k}"
   echo "       output: ${out_k}"
+fi
+
+# --- Case (m): gate leaves its own cherry-pick conflicted, then fails ------
+# Exercises the order inside reset_to_start itself: the dirty check must
+# run before any `cherry-pick --abort`, or a conflict the gate leaves
+# behind is discarded before land ever notices it was there.
+clone_m="$(new_fixture m2)"
+bare_m="${WORK_DIR}/m2-origin.git"
+start_m="$(git -C "${clone_m}" rev-parse HEAD)"
+git -C "${clone_m}" checkout --quiet -b work
+sha_m="$(make_commit "${clone_m}" file.txt worker-edit "commit m2, edits file.txt")"
+git -C "${clone_m}" checkout --quiet main
+# A commit, off the same base, that edits file.txt differently -- cherry-
+# picking it onto the worker's edit above is what the gate leaves conflicted.
+git -C "${clone_m}" checkout --quiet -b conflict-source "${start_m}"
+conflict_sha_m="$(make_commit "${clone_m}" file.txt conflict-source-edit "conflicting edit")"
+git -C "${clone_m}" checkout --quiet main
+cat >"${WORK_DIR}/gate-leave-conflict.sh" <<EOF
+#!/usr/bin/env bash
+git -C "${clone_m}" cherry-pick "${conflict_sha_m}" >/dev/null 2>&1
+exit 1
+EOF
+chmod +x "${WORK_DIR}/gate-leave-conflict.sh"
+
+out_m=$(cd "${clone_m}" && "${LAND}" --repo "${clone_m}" --gate "${WORK_DIR}/gate-leave-conflict.sh" "${sha_m}" 2>&1)
+rc_m=$?
+cherry_in_progress_m=0
+git -C "${clone_m}" rev-parse --quiet --verify CHERRY_PICK_HEAD >/dev/null 2>&1 && cherry_in_progress_m=1
+remote_m="$(remote_sha "${bare_m}")"
+if [ "${rc_m}" -eq 2 ] && [ "${cherry_in_progress_m}" -eq 1 ] && [ "${remote_m}" = "${start_m}" ] \
+  && printf '%s' "${out_m}" | grep -q "NOT reset"; then
+  ok "gate leaves its own cherry-pick conflicted then fails: not silently aborted, exit 2, nothing pushed"
+else
+  fail "gate's own conflict was not protected: rc=${rc_m} cherry_in_progress=${cherry_in_progress_m} remote=${remote_m} want_remote=${start_m}"
+  echo "       output: ${out_m}"
 fi
 
 # --- Case (l): --gate made of only whitespace exits 2 ----------------------

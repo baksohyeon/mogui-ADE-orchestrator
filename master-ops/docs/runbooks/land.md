@@ -39,8 +39,11 @@ leaves the checkout exactly as it was found, since nothing has changed yet. Any 
 step 2 onward resets the checkout to the sha it started from and says so, unless the checkout
 holds uncommitted changes a `reset --hard` would destroy, in which case `land` refuses to reset
 and prints `start_sha` and `picked` so the operator can recover by hand instead of losing that
-work silently. A failure in step 7 resets the checkout the same way, but the push in step 6
-already went out by then; the message names the sha that may already have landed on the remote.
+work silently. That dirty check runs before `cherry-pick --abort` in every case except the
+cherry-picks' own conflict in step 2, so a conflict the gate itself leaves unresolved in step 3
+reads as a refusal (exit 2) instead of being discarded by the abort before `land` ever sees it.
+A failure in step 7 resets the checkout the same way, but the push in step 6 already went out by
+then; the message names the sha that may already have landed on the remote.
 
 ## Exit Codes
 

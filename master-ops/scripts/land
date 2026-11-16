@@ -143,8 +143,17 @@ picked=""
 # Returns 0: reset done. 1: the reset command itself failed. 2: refused --
 # the checkout holds uncommitted changes (or `git status` itself failed),
 # which a `reset --hard` would silently destroy rather than recover from.
+#
+# $1 "abort_first": only the step-2 call site, recovering from the
+# cherry-picks' own conflict, passes this. There, the dirtiness the check
+# below would see IS that pending conflict, and `cherry-pick --abort`
+# clearing it first is expected. Every later call omits it, so a conflict
+# (or any other edit) the gate itself leaves unresolved reads as dirty
+# instead of being discarded before the check ever sees it.
 reset_to_start() {
-  git -C "${root}" cherry-pick --abort >/dev/null 2>&1
+  if [ "${1:-}" = "abort_first" ]; then
+    git -C "${root}" cherry-pick --abort >/dev/null 2>&1
+  fi
   local porcelain
   porcelain="$(git -C "${root}" status --porcelain --untracked-files=all 2>&1)"
   if [ $? -ne 0 ] || [ -n "${porcelain}" ]; then
@@ -167,8 +176,8 @@ reset_to_start() {
 # Resetting refused or the reset command itself failed: always `error`,
 # since the repository cannot be trusted to be where it should be.
 reset_then_report() {
-  local on_ok="$1" msg="$2" rc
-  reset_to_start
+  local on_ok="$1" msg="$2" mode="${3:-}" rc
+  reset_to_start "${mode}"
   rc=$?
   case "${rc}" in
     0) "${on_ok}" "${msg} (checkout reset to ${start_sha})" ;;
@@ -178,13 +187,13 @@ reset_then_report() {
 }
 
 reset_and_fail() {
-  reset_then_report fail "$*"
+  reset_then_report fail "$1" "${2:-}"
 }
 
 # --- Step 2: cherry-pick ----------------------------------------------------
 cherry_log="$(mktemp -t land-cherry-pick.XXXXXX)" || error "mktemp failed for the cherry-pick log"
 if ! git -C "${root}" cherry-pick "${resolved[@]}" >"${cherry_log}" 2>&1; then
-  reset_and_fail "cherry-pick conflict; see ${cherry_log}"
+  reset_and_fail "cherry-pick conflict; see ${cherry_log}" abort_first
 fi
 rm -f "${cherry_log}"
 picked="$(git -C "${root}" rev-parse HEAD)" || reset_and_fail "could not read HEAD after cherry-pick"

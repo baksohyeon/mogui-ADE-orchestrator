@@ -28,18 +28,20 @@ trap 'rm -rf "$work"' EXIT
 vars=$(grep -E '^CODEX_(REASONING_EFFORT|MIGRATION_ACK|BYPASS_FLAG|SHARED_GIT_DIR)=' "$dispatch")
 markers=$(grep -E '^LIMIT_MARKERS=' "$dispatch")
 shell_quote_fn=$(extract_fn shell_quote)
+mcp_args_fn=$(extract_fn codex_mcp_servers_args)
 read_fn=$(extract_fn codex_instance_launch_config)
 apply_fn=$(extract_fn apply_codex_instance_launch_config)
 runtime_command_fn=$(extract_fn runtime_command)
 start_fn=$(extract_fn codex_start_screen_problem)
+mcp_config="$(dirname "$dispatch")/../templates/mcp-servers.json"
 
 [ "$(printf '%s\n' "$vars" | grep -c .)" = 4 ] || { echo "FAIL: could not extract the four CODEX_ launch variables" >&2; exit 1; }
-for name in markers shell_quote_fn read_fn apply_fn runtime_command_fn start_fn; do
+for name in markers shell_quote_fn mcp_args_fn read_fn apply_fn runtime_command_fn start_fn; do
   [ -n "${!name}" ] || { echo "FAIL: could not extract $name from dispatch" >&2; exit 1; }
 done
 call_site='[ "$RUNTIME" = codex ] && apply_codex_instance_launch_config'
 
-base="codex --model gpt-5.5 -c 'model_reasoning_effort=\"xhigh\"' -c check_for_update_on_startup=false -c 'notice.model_migrations={\"gpt-5.5\"=\"gpt-6.1-sol\"}' --add-dir /repo/.git"
+base="codex --model gpt-5.5 -c 'model_reasoning_effort=\"xhigh\"' -c check_for_update_on_startup=false -c 'notice.model_migrations={\"gpt-5.5\"=\"gpt-6.1-sol\"}' -c 'mcp_servers.code-review-graph={command=\"uvx\",args=[\"code-review-graph@2.4.0\", \"serve\"]}' --add-dir /repo/.git"
 # Without the bypass flag the launch uses --approve-for-me plus the network-access
 # config key (measured 2026-11-11 on codex-cli 0.167.0, Orca 1.4.255).
 today="$base --approve-for-me -c sandbox_workspace_write.network_access=true"
@@ -58,7 +60,8 @@ run_case() {
   {
     echo 'set -u'
     printf 'INSTANCE_RUNTIME_CONFIG=%s\n' "$config"
-    printf '%s\n' "$vars" "$markers" "$shell_quote_fn" "$read_body" "$apply_body" "$runtime_command_fn" "$start_fn"
+    printf 'MCP_SERVERS_CONFIG=%s\n' "$mcp_config"
+    printf '%s\n' "$vars" "$markers" "$shell_quote_fn" "$mcp_args_fn" "$read_body" "$apply_body" "$runtime_command_fn" "$start_fn"
     echo 'apply_codex_instance_launch_config'
     echo 'MODEL=gpt-5.5'
     echo 'CODEX_SHARED_GIT_DIR=/repo/.git'

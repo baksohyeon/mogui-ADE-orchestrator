@@ -36,6 +36,11 @@ fi
 # even though onboarding step 01 verifies its existence.
 DEFAULT_MASTER_HOST_RUNTIME=codex
 INSTANCE_RUNTIME_CONFIG=${MOGUI_INSTANCE_RUNTIME_CONFIG:-$SCRIPTS_DIR/../config/instance-runtime.json}
+# Required infra (#317 stage 2): the one pinned source for the MCP servers a
+# claude worker gets via --mcp-config, the same version onboarding merges
+# into the master's own workspace-root .mcp.json. Resolved the same way
+# standing_rule_block resolves rules/standing-rules.md, below.
+MCP_SERVERS_CONFIG=${DISPATCH_MCP_SERVERS_CONFIG:-$SCRIPTS_DIR/../templates/mcp-servers.json}
 DISPATCH_FROM_TERMINAL=${DISPATCH_FROM_TERMINAL:-}
 DISPATCH_FROM_ARGS=()
 if [ -n "$DISPATCH_FROM_TERMINAL" ]; then
@@ -1719,6 +1724,47 @@ warn_codex_shared_git_surface_changes() {
   echo "WARNING: codex shared Git surface changed after dispatch: $detail"
 }
 
+# Prints one shell-quoted " -c mcp_servers.<name>={...}" fragment per server
+# declared in MCP_SERVERS_CONFIG (#317 stage 2), for codex's own inline-TOML
+# override. Measured 2026-11-16 via `codex mcp list -c
+# 'mcp_servers.<name>={...}'`: the server shows up enabled without writing
+# config.toml, the same one-shot, no-persistent-state shape --mcp-config
+# gives claude below. The dotted-key form (`-c
+# mcp_servers.<name>.command=...`) is not used here because a server name
+# with a `.` would read as another nesting level to Codex's dotted-path
+# parser the same way a model id with a `.` broke the dotted form for
+# notice.model_migrations above; an inline table sidesteps that. Reads
+# MCP_SERVERS_CONFIG directly rather than caching its content, so an edit to
+# that file takes effect on the next dispatch without restarting anything. A
+# missing or unreadable file (a seat predating this feature) prints nothing
+# rather than failing.
+codex_mcp_servers_args() {
+  local line
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    printf ' -c %s' "$(shell_quote "$line")"
+  done <<EOF
+$(python3 - "$MCP_SERVERS_CONFIG" <<'PYEOF'
+import json, sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as fh:
+        servers = json.load(fh).get("mcpServers") or {}
+except (OSError, json.JSONDecodeError):
+    servers = {}
+
+for name, cfg in servers.items():
+    command = cfg.get("command")
+    if not command:
+        continue
+    args = cfg.get("args") or []
+    args_toml = "[" + ", ".join(json.dumps(a) for a in args) + "]"
+    print(f"mcp_servers.{name}={{command={json.dumps(command)},args={args_toml}}}")
+PYEOF
+)
+EOF
+}
+
 runtime_command() {
   local model_arg codex_shared_arg
   model_arg=$(shell_quote "$MODEL")
@@ -1733,7 +1779,17 @@ runtime_command() {
     # strip, which is why the default kept working and every override died.
     # CLAUDE_SETTINGS_FLAG carries the per-task worker settings written by
     # write_worker_settings (step 3): one write root, enforced by the guard.
-    claude) echo "claude --model $model_arg --dangerously-skip-permissions${CLAUDE_SETTINGS_FLAG:-}";;
+    # --mcp-config loads the required-infra server(s) (#317 stage 2) straight
+    # from MCP_SERVERS_CONFIG, the same file onboarding merges into the
+    # master's own .mcp.json, so a worker gets code-review-graph without
+    # inheriting the untrusted-project-config approval prompt a bare
+    # worktree .mcp.json would raise (measured via `claude --help`: that
+    # prompt belongs to .mcp.json auto-discovery, not an explicit
+    # --mcp-config file). `--mcp-config` takes a space-separated list
+    # (`claude --help`: "<configs...>"), so it sits before
+    # CLAUDE_SETTINGS_FLAG rather than last, where it would otherwise
+    # swallow the next argument this echoed command is handed.
+    claude) echo "claude --model $model_arg --dangerously-skip-permissions --mcp-config $(shell_quote "$MCP_SERVERS_CONFIG")${CLAUDE_SETTINGS_FLAG:-}";;
     # Non-interactive approval flags, so a first visit to a worktree cannot stop
     # a worker on a trust prompt. Every flag below was measured from that CLI's
     # own --help on 2026-08-05, per the registry rule in MASTER-OPERATIONS
@@ -1784,7 +1840,7 @@ runtime_command() {
       if [ -n "${CODEX_SHARED_GIT_DIR:-}" ]; then
         codex_shared_arg=" --add-dir $(shell_quote "$CODEX_SHARED_GIT_DIR")"
       fi
-      echo "codex --model $model_arg -c $(shell_quote "model_reasoning_effort=\"$CODEX_REASONING_EFFORT\"") -c check_for_update_on_startup=false -c $(shell_quote "$CODEX_MIGRATION_ACK")$codex_shared_arg${CODEX_BYPASS_FLAG:- --approve-for-me -c sandbox_workspace_write.network_access=true}";;
+      echo "codex --model $model_arg -c $(shell_quote "model_reasoning_effort=\"$CODEX_REASONING_EFFORT\"") -c check_for_update_on_startup=false -c $(shell_quote "$CODEX_MIGRATION_ACK")$(codex_mcp_servers_args)$codex_shared_arg${CODEX_BYPASS_FLAG:- --approve-for-me -c sandbox_workspace_write.network_access=true}";;
     gemini) echo "gemini";;
     opencode) echo "opencode";;
     # agy is the Gemini host; `agy models` reports gemini-* ids. Its approval flag
@@ -2716,6 +2772,26 @@ $MAIL_BEFORE_DONE_BLOCK"
       echo "📎 standing rules · mail-before-done (always)"
     else
       echo "⚠ mail-before-done standing-rule block not found; dispatching without it" >&2
+    fi
+    ;;
+esac
+
+# 1.6c required-infra ships to every brief, whether or not the contract named
+# it, the same way mail-before-done does just above (#317 stage 2: orca,
+# beads, ctx, code-review-graph are required infra regardless of which
+# contract a worker is dispatched under).
+case " $STANDING_RULE_NAMES " in
+  *" required-infra "*) ;;
+  *)
+    if REQUIRED_INFRA_BLOCK=$(standing_rule_block "required-infra"); then
+      SPEC="$SPEC
+
+Standing rules (required-infra):
+
+$REQUIRED_INFRA_BLOCK"
+      echo "📎 standing rules · required-infra (always)"
+    else
+      echo "⚠ required-infra standing-rule block not found; dispatching without it" >&2
     fi
     ;;
 esac

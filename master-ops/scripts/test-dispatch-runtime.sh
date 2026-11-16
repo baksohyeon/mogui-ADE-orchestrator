@@ -1551,26 +1551,32 @@ orca_turn_signal_test "$dispatch" || exit 1
 codex_launch_flags_test() (
   set +e
   set -u
-  local dispatch="$1" work shell_quote_fn runtime_command_fn vars want got mutant_fn out status
+  local dispatch="$1" work shell_quote_fn runtime_command_fn mcp_args_fn vars want got mutant_fn out status
+  local mcp_config
 
   shell_quote_fn=$(awk '$0=="shell_quote() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  mcp_args_fn=$(awk '$0=="codex_mcp_servers_args() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   runtime_command_fn=$(awk '$0=="runtime_command() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   vars=$(grep -E '^CODEX_(REASONING_EFFORT|MIGRATION_ACK|SHARED_GIT_DIR)=' "$dispatch")
 
   [ -n "$shell_quote_fn" ] || { echo "FAIL: could not extract shell_quote" >&2; return 1; }
+  [ -n "$mcp_args_fn" ] || { echo "FAIL: could not extract codex_mcp_servers_args" >&2; return 1; }
   [ -n "$runtime_command_fn" ] || { echo "FAIL: could not extract runtime_command" >&2; return 1; }
   [ "$(printf '%s\n' "$vars" | grep -c .)" = 3 ] || { echo "FAIL: could not extract CODEX_ launch variables" >&2; return 1; }
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-codex-launch-test.$$"
   mkdir -p "$work"
   trap 'rm -rf "$work"' EXIT
+  mcp_config="$(dirname "$dispatch")/../templates/mcp-servers.json"
 
   write_script() {
     local outfile="$1" fn="$2"
     {
       echo 'set -u'
       printf '%s\n' "$vars"
+      printf 'MCP_SERVERS_CONFIG=%q\n' "$mcp_config"
       printf '%s\n' "$shell_quote_fn"
+      printf '%s\n' "$mcp_args_fn"
       printf '%s\n' "$fn"
       echo 'MODEL=gpt-5.5'
       echo 'CODEX_SHARED_GIT_DIR=/repo/.git'
@@ -1578,7 +1584,7 @@ codex_launch_flags_test() (
     } > "$outfile"
   }
 
-  want="codex --model gpt-5.5 -c 'model_reasoning_effort=\"xhigh\"' -c check_for_update_on_startup=false -c 'notice.model_migrations={\"gpt-5.5\"=\"gpt-6.1-sol\"}' --add-dir /repo/.git --approve-for-me -c sandbox_workspace_write.network_access=true"
+  want="codex --model gpt-5.5 -c 'model_reasoning_effort=\"xhigh\"' -c check_for_update_on_startup=false -c 'notice.model_migrations={\"gpt-5.5\"=\"gpt-6.1-sol\"}' -c 'mcp_servers.code-review-graph={command=\"uvx\",args=[\"code-review-graph@2.4.0\", \"serve\"]}' --add-dir /repo/.git --approve-for-me -c sandbox_workspace_write.network_access=true"
 
   script_file="$work/run.sh"
   write_script "$script_file" "$runtime_command_fn"
@@ -1630,7 +1636,7 @@ codex_launch_flags_test "$dispatch" || exit 1
 worker_settings_test() (
   set +e
   set -u
-  local dispatch="$1" work fns="" name fn out status file launch
+  local dispatch="$1" work fns="" name fn out status file launch mcp_config
   for name in shell_quote runtime_command write_worker_settings; do
     fn=$(awk -v h="$name() {" '$0==h{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
     [ -n "$fn" ] || { echo "FAIL: could not extract $name" >&2; return 1; }
@@ -1642,7 +1648,7 @@ worker_settings_test() (
   write_run() {  # worktree
     {
       echo 'set -u'
-      printf 'SCRIPTS_DIR=%q STATE_DIR=%q MODEL=claude-opus-5-5\n' "$(dirname "$dispatch")" "$work/state"
+      printf 'SCRIPTS_DIR=%q STATE_DIR=%q MODEL=claude-opus-5-5 MCP_SERVERS_CONFIG=%q\n' "$(dirname "$dispatch")" "$work/state" "$(dirname "$dispatch")/../templates/mcp-servers.json"
       printf '%s\n' "$fns"
       printf 'file=$(write_worker_settings task_fake %q) || exit 3\n' "$1"
       echo 'echo "FILE=$file"'
@@ -1675,11 +1681,12 @@ PY
     cat "$file" >&2
     return 1
   fi
+  mcp_config="$(dirname "$dispatch")/../templates/mcp-servers.json"
   case "$launch" in
-    "claude --model claude-opus-5-5 --dangerously-skip-permissions --settings $file") ;;
-    *) echo "FAIL: claude launch line should pass the worker settings through --settings, got '$launch'" >&2; return 1;;
+    "claude --model claude-opus-5-5 --dangerously-skip-permissions --mcp-config $mcp_config --settings $file") ;;
+    *) echo "FAIL: claude launch line should pass the worker settings through --settings and the required-infra servers through --mcp-config, got '$launch'" >&2; return 1;;
   esac
-  echo "ok   : worker settings · file under the state dir, two guard matchers rooted at the worktree, claude launch passes --settings"
+  echo "ok   : worker settings · file under the state dir, two guard matchers rooted at the worktree, claude launch passes --mcp-config before --settings"
 
   write_run relative/worktree
   bash "$work/run.sh" >/dev/null 2>&1
@@ -1715,7 +1722,7 @@ BIN
     rm -rf "$work/state/worker-settings"; : > "$work/calls"
     {
       echo 'set -u'
-      printf 'SCRIPTS_DIR=%q STATE_DIR=%q MODEL=claude-opus-5-5 RUNTIME=claude TASK=task_fake\n' "$(dirname "$dispatch")" "${2:-$work/state}"
+      printf 'SCRIPTS_DIR=%q STATE_DIR=%q MODEL=claude-opus-5-5 RUNTIME=claude TASK=task_fake MCP_SERVERS_CONFIG=%q\n' "$(dirname "$dispatch")" "${2:-$work/state}" "$(dirname "$dispatch")/../templates/mcp-servers.json"
       printf 'WORKTREE=%q TERMINAL=%q FAKE_CALLS=%q\n' "path:$work/worktree" "$1" "$work/calls"
       echo 'export FAKE_CALLS'
       echo 'fail_after_tracker_claim() { exit "${2:-3}"; }'

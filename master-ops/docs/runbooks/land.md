@@ -47,7 +47,8 @@ uncommitted left behind) resets it to the sha it started from and says so. A fai
 the checkout dirty instead (an uncommitted edit, an unfinished cherry-pick) is never reset over:
 `land` refuses and prints `start_sha` and `picked` so the operator can recover by hand rather than
 have a `reset --hard` destroy that work silently. To recover: note whatever `git status` shows (a
-diff to save or discard), run `git cherry-pick --abort` if `CHERRY_PICK_HEAD` is still set, then
+diff to save or discard), run `git cherry-pick --abort` if `CHERRY_PICK_HEAD` or `.git/sequencer`
+is present; if Git reports no operation to abort, remove the stale `.git/sequencer` by hand, then
 `git checkout main && git reset --hard <start_sha>`. That dirty check runs before
 `cherry-pick --abort` in every case except the cherry-picks' own conflict in step 2, so a conflict
 the gate itself leaves unresolved in step 3 reads as a refusal instead of being discarded by the

@@ -123,6 +123,8 @@
     "scripts/test-dispatch-codex-instance-config.sh",
     "scripts/test-dispatch-codex-prompt-marker.sh",
     "scripts/test-dispatch-from-terminal.sh",
+    "scripts/test-dispatch-mcp-install.sh",
+    "scripts/test-dispatch-required-infra.sh",
     "scripts/test-dispatch-runtime.sh",
     "scripts/test-dispatch-smoke.sh",
     "scripts/test-dispatch-timeline.sh",
@@ -172,6 +174,7 @@
     "skills/skill-host-compat/LICENSE",
     "skills/skill-host-compat/SKILL.md",
     "skills/skill-host-compat/SOURCE.md",
+    "templates/mcp-servers.json",
     "workspace-card/AGENTS.md",
     "workspace-card/CLAUDE.md",
     "workspace-card/README.md"

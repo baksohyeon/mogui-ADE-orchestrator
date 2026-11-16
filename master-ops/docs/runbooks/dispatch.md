@@ -28,6 +28,19 @@ contract and standing-rule material, so a worker can retain the association
 through context compaction. The register milestone names the same card; the
 ledger is the source of truth for later reconciliation.
 
+## Required infrastructure for workers (#317 stage 2)
+
+Every Claude and Codex worker gets the required-infra MCP server(s) pinned once in `templates/mcp-servers.json`
+(`code-review-graph`, currently). A Claude worker gets them through `--mcp-config <that file>`, placed before the per-task
+`--settings` flag so it is not swallowed as that flag's argument; this reads straight from `MCP_SERVERS_CONFIG`
+(`DISPATCH_MCP_SERVERS_CONFIG` overrides it) rather than through the worktree's own `.mcp.json`, so a worker
+never hits the untrusted-project-config approval prompt that auto-discovery would raise. A Codex worker gets
+the same server(s) through one `-c mcp_servers.<name>={command=...,args=[...]}` inline TOML override per
+server (`codex_mcp_servers_args`), built from the same JSON file; neither route writes anything to the
+worker's own `config.toml` or `.mcp.json`, so it does not persist past that one launch. The matching
+master-side wiring — the workspace-root `.mcp.json` merge, `enabledMcpjsonServers`, and multi-repo
+registration — is onboarding's job (`08-settings-and-skills.md` Step 7), not this wrapper's.
+
 ## Resume before re-dispatch
 
 When a worker exits abnormally, inspect the dispatch ledger row for its

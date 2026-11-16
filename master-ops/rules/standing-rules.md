@@ -1,6 +1,6 @@
 # Standing rules
 
-Seven named rule blocks, each a `## <name>` heading. A contract's front matter
+Eight named rule blocks, each a `## <name>` heading. A contract's front matter
 may name any subset of these under `standing_rules: [...]`; `scripts/dispatch`
 reads the named blocks and appends their text to the dispatched spec, so a
 worker receives the rule as part of its own task text instead of needing a
@@ -9,13 +9,13 @@ human to paste it in by hand. A seat may add further blocks in the overlay
 refreshes on every template re-stamp; the overlay, in the instance-owned
 `config/` directory, never does.
 
-`mail-before-done` is the one exception to "named under `standing_rules`":
-`scripts/dispatch` appends it to every brief whether or not a contract's
-front matter names it, the same way it always appends the worker token
-budget line below the standing-rule blocks. Naming it explicitly in
-`standing_rules` is harmless (the gate accepts it as a known block, same as
-the other six) but has no further effect, since the wrapper was going to add
-it anyway.
+`mail-before-done` and `required-infra` are the two exceptions to "named
+under `standing_rules`": `scripts/dispatch` appends both to every brief
+whether or not a contract's front matter names them, the same way it always
+appends the worker token budget line below the standing-rule blocks. Naming
+either explicitly in `standing_rules` is harmless (the gate accepts it as a
+known block, same as the others) but has no further effect, since the
+wrapper was going to add it anyway.
 
 ## headless
 
@@ -78,3 +78,13 @@ template names, including the four narrative ones: Problem, Why this
 approach, What this changes, Expected effect, plus a provenance line. A
 review-bot thread gets a reply inside the thread and a resolve; a silent
 batch resolve is never acceptable.
+
+## required-infra
+
+Orca, beads, `ctx`, and code-review-graph are required infra for this
+workspace. Prefer code-review-graph's tools (impact, cross-repo search)
+over reading whole files with `rg` when a graph query answers the same
+question. Use `bd` for tracking instead of ad hoc notes. Use `ctx` for
+questions about past sessions instead of re-deriving them from transcripts.
+If a required tool is missing, disabled, or unreachable, say so plainly in
+the completion message rather than working around its absence silently.

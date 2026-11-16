@@ -68,6 +68,7 @@ CLAUDE_MCP_CONFIG="$TMP/claude.json"
 CLAUDE_USER_SETTINGS="$TMP/user-settings.json"
 CODEX_MCP_CONFIG="$TMP/codex-config.toml"
 CRG_REGISTRY="$TMP/registry.json"
+CRG_MCP_CONFIG="$TMP/mcp-servers.json"
 REPO_A="$TMP/repo-a"
 CTX_SOURCES_FILE="$TMP/ctx-sources.txt"
 
@@ -100,6 +101,14 @@ EOF
   chmod +x "$BIN_DIR/ctx"
 }
 
+# $1 = launcher command name, $2 = pinned package spec (args[0]). Round 2
+# (#317): harness-selfcheck.sh now reads both from this file instead of
+# hardcoding "code-review-graph" as the probe target, so the fixture must
+# supply them the same way templates/mcp-servers.json does.
+write_mcp_servers_config() {
+  printf '{"mcpServers": {"code-review-graph": {"command": "%s", "args": ["%s", "serve"]}}}\n' "$1" "$2" > "$CRG_MCP_CONFIG"
+}
+
 # $1 = "ok" (runs cleanly) or "shim-fail" (mimics the real mise-shim error).
 write_stub_crg() {
   if [ "$1" = "ok" ]; then
@@ -122,6 +131,7 @@ reset_fixture() {
   write_stub_orca 10 5
   write_stub_ctx "claude codex"
   write_stub_crg ok
+  write_mcp_servers_config code-review-graph code-review-graph@2.4.0
   printf 'all sources available\n' > "$CTX_SOURCES_FILE"
   printf '{"mcpServers": {"ctx": {}, "code-review-graph": {}}}\n' > "$CLAUDE_MCP_CONFIG"
   printf '{}\n' > "$CLAUDE_USER_SETTINGS"
@@ -142,6 +152,7 @@ run_infra() {
     CODE_REVIEW_GRAPH_REGISTRY="$CRG_REGISTRY" \
     CODE_REVIEW_GRAPH_STALE_DAYS="${CODE_REVIEW_GRAPH_STALE_DAYS:-7}" \
     INFRA_TIMEOUT_SECONDS="${INFRA_TIMEOUT_SECONDS:-10}" \
+    MCP_SERVERS_CONFIG="$CRG_MCP_CONFIG" \
     bash "$INFRA_BLOCK"
 }
 
@@ -253,7 +264,7 @@ if [ -n "$real_crg" ]; then
   SAFE_PATH=$(printf '%s' "$SAFE_PATH" | tr ':' '\n' | grep -vF "$real_crg_dir" | tr '\n' ':')
   SAFE_PATH="${SAFE_PATH%:}"
 fi
-check "(d) absent from PATH warns without crashing" "Infra: code-review-graph WARN absent from PATH" "" 0
+check "(d) absent from PATH warns without crashing" "Infra: code-review-graph WARN launcher 'code-review-graph' absent from PATH" "" 0
 exit_codes+=("$(run_infra >/dev/null 2>&1; echo $?)")
 SAFE_PATH="$ORIGINAL_SAFE_PATH"
 
@@ -415,6 +426,66 @@ chmod +x "$BIN_DIR/code-review-graph"
 INFRA_TIMEOUT_SECONDS=1
 check "a timeout kill reports the bound it hit" "Infra: code-review-graph WARN timed out after 1s" "" 0
 unset INFRA_TIMEOUT_SECONDS
+
+# PR #326 round 2, Important #1: the probe reads its launcher from
+# MCP_SERVERS_CONFIG rather than a hardcoded "code-review-graph" -- proven
+# here with a launcher under a name the real stub never uses, so a
+# regression back to the hardcoded probe would miss this binary entirely
+# and fail closed as "absent from PATH", not pass by coincidence.
+reset_fixture
+rm -f "$BIN_DIR/code-review-graph"
+# Isolate from a real host-wide code-review-graph the same way case (d)
+# does: without this, reverting to the hardcoded probe would still find
+# that real binary on SAFE_PATH and print OK, masking the regression.
+ORIGINAL_SAFE_PATH="$SAFE_PATH"
+real_crg=$(PATH="$SAFE_PATH" command -v code-review-graph 2>/dev/null) || true
+if [ -n "$real_crg" ]; then
+  real_crg_dir=$(dirname "$real_crg")
+  SAFE_PATH=$(printf '%s' "$SAFE_PATH" | tr ':' '\n' | grep -vF "$real_crg_dir" | tr '\n' ':')
+  SAFE_PATH="${SAFE_PATH%:}"
+fi
+cat > "$BIN_DIR/crg-pinned-launcher" <<'EOF'
+#!/bin/bash
+echo "code-review-graph 2.4.0"
+EOF
+chmod +x "$BIN_DIR/crg-pinned-launcher"
+write_mcp_servers_config crg-pinned-launcher code-review-graph@2.4.0
+check "the probe runs the launcher named in MCP_SERVERS_CONFIG, not a hardcoded name" \
+  "Infra: code-review-graph OK" "code-review-graph WARN" 0
+SAFE_PATH="$ORIGINAL_SAFE_PATH"
+
+# PR #326 round 2, Important #1: a missing MCP_SERVERS_CONFIG warns naming
+# the read failure instead of crashing or falling through to a bare
+# `code-review-graph` on PATH.
+reset_fixture
+CRG_MCP_CONFIG_SAVED="$CRG_MCP_CONFIG"
+CRG_MCP_CONFIG="$TMP/no-such-mcp-servers.json"
+check "a missing MCP_SERVERS_CONFIG warns naming the read failure" \
+  "Infra: code-review-graph WARN could not read $CRG_MCP_CONFIG" "" 0
+CRG_MCP_CONFIG="$CRG_MCP_CONFIG_SAVED"
+
+# PR #326 round 2, Important #1: an MCP_SERVERS_CONFIG that exists but
+# carries no code-review-graph entry (or one with no command/args) warns
+# naming that gap, rather than probing nothing and reading as a clean pass.
+reset_fixture
+printf '{"mcpServers": {}}\n' > "$CRG_MCP_CONFIG"
+check "an MCP_SERVERS_CONFIG with no code-review-graph entry warns naming the file" \
+  "Infra: code-review-graph WARN no code-review-graph entry in $CRG_MCP_CONFIG" "" 0
+
+# PR #326 round 2 follow-up: a non-object mcpServers must not crash the
+# parser with an uncaught Python traceback -- it must warn by name.
+reset_fixture
+printf '{"mcpServers": ["not-a-mapping"]}\n' > "$CRG_MCP_CONFIG"
+check "a non-object mcpServers warns naming the file, never crashes" \
+  "Infra: code-review-graph WARN mcpServers in $CRG_MCP_CONFIG is not an object" "" 0
+
+# PR #326 round 2 follow-up: a string-valued args field makes args[0] a
+# single character in Python, not a missing value -- must warn by name
+# instead of silently probing that one-character "spec".
+reset_fixture
+printf '{"mcpServers": {"code-review-graph": {"command": "code-review-graph", "args": "serve"}}}\n' > "$CRG_MCP_CONFIG"
+check "a string-valued args field warns naming the entry, never probes a one-character spec" \
+  "Infra: code-review-graph WARN code-review-graph entry in $CRG_MCP_CONFIG has no valid command/args" "" 0
 
 echo "----"
 echo "passed: $pass  failed: $fail"

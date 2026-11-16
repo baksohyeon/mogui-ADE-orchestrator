@@ -50,6 +50,17 @@ while IFS= read -r h; do
   # Strip the runtime status line before matching. It carries "always-approve", which is the
   # opposite of a prompt, and the first draft flagged every pane that could not prompt at all.
   lower=$(printf '%s' "$foreground" | tr '[:upper:]' '[:lower:]' | sed 's/always-approve//g; s/bypass permissions//g')
+  # Claude Code's live status line (a verb, an ellipsis, then a parenthesized elapsed time with a
+  # middle-dot separator before the token count, e.g. "Sauteing (1h 15m 48s, then a middle dot,
+  # then 182.4k tokens)") sits one or two lines above the always-rendered, often-empty input
+  # line, so it falls outside $foreground's cut at the last prompt line (#321). Scope the match
+  # to a few lines above that cut rather than the whole frame: a finished turn overwrites this
+  # line with a past-tense, ellipsis-free summary, so a copy of it surviving further back in
+  # scrollback above a truly idle prompt must still read idle.
+  recent_start=$(( ${last_prompt_line:-1} - 5 ))
+  [ "$recent_start" -lt 1 ] && recent_start=1
+  recent=$(printf '%s\n' "$frame" | tail -n "+$recent_start" | tr '[:upper:]' '[:lower:]')
+  status_line_re='…[[:space:]]*\(([0-9]+[hms][[:space:]]*)+·'
 
   verdict=unknown
   if printf '%s' "$lower" | grep -qE "quota reached|resets in [0-9]|rate limit|usage limit|upgrade your subscription"; then
@@ -61,6 +72,8 @@ while IFS= read -r h; do
   elif [ -n "$approval_re" ] && printf '%s' "$lower" | grep -qiE "$approval_re"; then
     verdict=approval
   elif printf '%s' "$lower" | grep -qE "esc:cancel|esc to interrupt|working|thinking|churn"; then
+    verdict=working
+  elif printf '%s' "$recent" | grep -qE "$status_line_re"; then
     verdict=working
   fi
 

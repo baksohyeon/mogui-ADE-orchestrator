@@ -69,6 +69,33 @@ expect "idle prompt" '❯ ' idle 0
 expect "idle prompt under a status line that says always-approve bypass permissions" 'always-approve bypass permissions
 ❯ ' idle 0
 
+# Verbatim pane preview quoted in issue #321, 2026-11-16: a mid-turn Claude Code worker whose
+# live status line (a verb, an ellipsis, a parenthesized elapsed time) sits above an
+# always-rendered, empty input line. Working, even though the line right above the empty prompt
+# is not one of the esc/thinking/churn words.
+CLAUDE_STATUS_PANE='⏺ Bounded poll of PR checks after the malformed-entry fix push · 12s
+  ⎿  $ i=0 ... sleep 20 ... (12s)
+     (ctrl+b to run in background)
+· Sautéing… (1h 15m 48s · ↓ 182.4k tokens)
+❯'
+expect "mid-turn Claude status line above an empty prompt (#321)" "$CLAUDE_STATUS_PANE" working 0
+# A finished turn overwrites the same line with a past-tense, ellipsis-free summary. No ellipsis,
+# no parenthesized elapsed time with a middle-dot separator, so this must stay idle.
+expect "finished Claude turn with past-tense summary and an empty prompt" '⏺ I re-ran the tests from the extracted head.
+✻ Baked for 7s · done 4:30 PM · 1 monitor still running
+❯ ' idle 0
+# Stale scrollback: the status-line shape is still visible several lines up, but the pane has
+# moved well past it to a genuinely idle prompt. Same guard as the stale-modal case above, for
+# the new shape: far enough back, it must not pin the pane to working forever.
+expect "status-line shape far above a genuinely idle prompt" '· Sautéing… (45s · ↓ 1.2k tokens)
+one
+two
+three
+four
+five
+six
+❯ ' idle 0
+
 # Failability: a copy that classifies from the whole captured chunk again, instead of the
 # foreground past the last prompt line, must flip the stale-scrollback case back to approval.
 MUTANT="$T/worker-pane-sweep-mutant"

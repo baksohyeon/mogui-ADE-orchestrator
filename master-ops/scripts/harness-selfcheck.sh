@@ -516,6 +516,7 @@ infra_capture() {
 INFRA_TIMEOUT_SECONDS="${INFRA_TIMEOUT_SECONDS:-10}"
 CODE_REVIEW_GRAPH_STALE_DAYS="${CODE_REVIEW_GRAPH_STALE_DAYS:-7}"
 CODE_REVIEW_GRAPH_REGISTRY="${CODE_REVIEW_GRAPH_REGISTRY:-$HOME/.code-review-graph/registry.json}"
+MCP_SERVERS_CONFIG="${MCP_SERVERS_CONFIG:-$OPS_DIR/templates/mcp-servers.json}"
 CLAUDE_MCP_CONFIG="${CLAUDE_MCP_CONFIG:-${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json}"
 CLAUDE_USER_SETTINGS="${CLAUDE_USER_SETTINGS:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json}"
 CODEX_MCP_CONFIG="${CODEX_MCP_CONFIG:-${CODEX_HOME:-$HOME/.codex}/config.toml}"
@@ -798,11 +799,56 @@ fi
 # .code-review-graph/graph.db mtime directly rather than through the CLI,
 # which needs a per-repo cwd to report status, and which the Runs: check
 # just above may already have found broken.
+#
+# "Runs" probes the pinned launcher from MCP_SERVERS_CONFIG
+# (templates/mcp-servers.json), not a bare `code-review-graph` on PATH:
+# every session now launches it as `uvx code-review-graph@<pin> serve`
+# (#317 stage 2), and a host with uvx on PATH but no code-review-graph
+# shim installed globally -- the common case, and the one a correctly
+# wired install actually runs in -- warned forever here before this fix.
+# The entry's args[0] is the pinned package spec (e.g.
+# "code-review-graph@2.4.0"); the version probe passes that spec plus
+# --version to the same launcher command instead of args' own trailing
+# "serve", so it measures the exact binary and pin every session uses.
 crg_warn=""
-if ! command -v code-review-graph >/dev/null 2>&1; then
-  crg_warn="absent from PATH"
-else
-  infra_capture crg_version_out crg_version_rc infra_with_timeout "$INFRA_TIMEOUT_SECONDS" code-review-graph --version
+crg_launcher_cmd=""
+crg_launcher_spec=""
+crg_parse_out=$(python3 - "$MCP_SERVERS_CONFIG" <<'PYEOF'
+import json, sys
+
+path = sys.argv[1]
+try:
+    with open(path, encoding="utf-8") as fh:
+        servers = json.load(fh).get("mcpServers") or {}
+except (OSError, json.JSONDecodeError) as exc:
+    print(f"MCP_SERVERS_CONFIG_ERROR:could not read {path}: {exc}")
+    sys.exit(0)
+
+entry = servers.get("code-review-graph")
+if not isinstance(entry, dict):
+    print(f"MCP_SERVERS_CONFIG_ERROR:no code-review-graph entry in {path}")
+    sys.exit(0)
+
+command = entry.get("command")
+args = entry.get("args") or []
+if not command or not args:
+    print(f"MCP_SERVERS_CONFIG_ERROR:code-review-graph entry in {path} has no command/args")
+    sys.exit(0)
+
+print(f"{command}\t{args[0]}")
+PYEOF
+) || crg_warn="could not parse $MCP_SERVERS_CONFIG"
+if [ -z "$crg_warn" ]; then
+  case "$crg_parse_out" in
+    MCP_SERVERS_CONFIG_ERROR:*) crg_warn="${crg_parse_out#MCP_SERVERS_CONFIG_ERROR:}" ;;
+    *) crg_launcher_cmd="${crg_parse_out%%$'\t'*}"; crg_launcher_spec="${crg_parse_out#*$'\t'}" ;;
+  esac
+fi
+if [ -z "$crg_warn" ] && ! command -v "$crg_launcher_cmd" >/dev/null 2>&1; then
+  crg_warn="launcher '$crg_launcher_cmd' absent from PATH"
+fi
+if [ -z "$crg_warn" ]; then
+  infra_capture crg_version_out crg_version_rc infra_with_timeout "$INFRA_TIMEOUT_SECONDS" "$crg_launcher_cmd" "$crg_launcher_spec" --version
   if [ "$crg_version_rc" -ne 0 ]; then
     case "$crg_version_rc" in
       124 | 137 | 143)
@@ -810,7 +856,7 @@ else
         ;;
       *)
         crg_warn=$(printf '%s\n' "$crg_version_out" | head -1)
-        [ -n "$crg_warn" ] || crg_warn="code-review-graph --version failed with no output"
+        [ -n "$crg_warn" ] || crg_warn="$crg_launcher_cmd $crg_launcher_spec --version failed with no output"
         ;;
     esac
   elif ! crg_mcp_reason=$(infra_mcp_status code-review-graph); then

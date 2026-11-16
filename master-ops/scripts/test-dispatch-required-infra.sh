@@ -37,7 +37,7 @@ required_infra_always_test() (
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-required-infra-test.$$"
   mkdir -p "$work/rules" "$work/scripts"
-  trap 'rm -rf "$work"' EXIT
+  trap 'rm -rf "${work:?}"' EXIT
   cat > "$work/rules/standing-rules.md" <<'RULES'
 ## headless
 

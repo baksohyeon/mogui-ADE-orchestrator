@@ -27,7 +27,9 @@ Four tools are required infra for this workspace. Orca and beads already have pa
 
 For each tool, the check stops at the first gap it finds (one reason per line):
 
-1. **Runs.** The CLI is on `PATH` and a cheap, bounded (10s via `timeout`/`gtimeout`, or a plain-bash watchdog on a host with neither, such as stock macOS), network-free read command succeeds (`ctx status --format json`, `code-review-graph --version`). A shim error or non-zero exit reports its first line verbatim, or a fixed fallback reason when that line is empty; an absent binary reports `absent from PATH`.
+1. **Runs.** For `ctx`, the CLI is on `PATH` and a cheap, bounded (10s via `timeout`/`gtimeout`, or a plain-bash watchdog on a host with neither, such as stock macOS), network-free read command succeeds (`ctx status --format json`). For `code-review-graph` (#317 stage 2 round 2), the probe reads the launcher `command` and the pinned package spec (`args[0]`) for the `code-review-graph` entry from the configured servers file (`templates/mcp-servers.json`, the same file every session launches from, read through the `MCP_SERVERS_CONFIG` environment variable) and runs `<command> <spec> --version` — never a bare `code-review-graph` binary, since no session calls one directly.
+   A missing or unreadable servers file, or an entry with no `command`/`args`, is named by that reading, not folded into the launcher-absent case below.
+   A shim error or non-zero exit from the version command reports its first line verbatim, or a fixed fallback reason when that line is empty; a launcher absent from `PATH` reports `launcher '<command>' absent from PATH`.
 2. **Reachable from this host session.** Claude: a user-scope server (the top-level `mcpServers` in the file `CLAUDE_CONFIG_DIR` points an Orca profile's Claude CLI at) is always reachable. A project-scope server listed in `.mcp.json` additionally needs `enableAllProjectMcpServers` or `enabledMcpjsonServers` set in some settings file the session reads, and is rejected if **any** settings file (user `settings.json`, project `.claude/settings.json`, or project-local `.claude/settings.local.json`) lists it in `disabledMcpjsonServers` — a disabled entry wins regardless of which file sets it. Codex: an uncommented `[mcp_servers.<tool>]` table header in its `config.toml`, checked even when Claude's own verdict is disabled or pending, since either host can carry the session. This never calls `claude mcp list`, which health-checks every server and is slow.
 3. **Fresh and covering.**
    - `ctx`: every provider Orca's own agent-session index (`orca search --index-status --json`) reports sessions for among `claude` and `codex` must also appear in ctx's own indexed-providers list (`ctx status --format json`, `.daemon.jobs.*.progress.providers`). A missing provider is named, with the reason `ctx sources` prints for it when it prints one. An unreadable `ctx status` or `orca search --index-status` reports `undecided` rather than a vacuous pass.
@@ -42,9 +44,11 @@ This check still only measures and warns; the wiring itself now ships by default
 into the workspace-root `.mcp.json`, names it in `enabledMcpjsonServers`, and registers every `{{REPO_LIST}}`
 member into the multi-repo registry — the three things gap 2 and gap 3 above actually read. `dispatch.md`
 covers the matching worker-side wiring (`--mcp-config` for Claude, an inline `-c mcp_servers.<name>={...}`
-override for Codex). Triage a `WARN` on this line by its printed reason: gap 1 ("Runs") still names an
-absent or broken CLI install, same as before this stage, and only a gap 2 or gap 3 reason after onboarding
-has run points at one of the three wiring steps above instead.
+override for Codex). Triage a `WARN` on this line by its printed reason: gap 1 ("Runs") now probes the
+pinned launcher itself (round 2 above), so it only names a genuine launcher gap — the pin's package spec
+missing or the `uvx`-style command absent from `PATH` — not the false positive a bare `code-review-graph`
+binary check used to raise on a correctly wired, round-2-and-later install. A gap 2 or gap 3 reason after
+onboarding has run points at one of the three wiring steps above instead.
 
 ## Running the check
 
@@ -123,6 +127,8 @@ This check was tested with:
 2. **Detect unreachable skill (exit 1):** Skill directory on disk but missing entry file is detected as unreachable.
 3. **Undecided on settings failure (exit 2):** When settings file is unreadable, exit 2 without printing a passing line.
 
-`scripts/test-harness-selfcheck-infra.sh` covers the `Infra:` lines separately: all present/registered/covering/fresh (no `WARN`); ctx missing a provider Orca reports sessions for; a graph older than the staleness threshold; a tool absent from `PATH` (isolated from any real install elsewhere on the test host's own `PATH`); that none of these change the exit code; the plain-bash timeout fallback runs a quick command without blocking for the bound and still kills a slow one within it; a project-scope server disabled via `disabledMcpjsonServers` naming the settings file that disabled it; a commented-out Codex table header is not a registration; and a Claude-side disabled entry still reaches an active Codex registration for the same tool.
+`scripts/test-harness-selfcheck-infra.sh` covers the `Infra:` lines separately: all present/registered/covering/fresh (no `WARN`); ctx missing a provider Orca reports sessions for; a graph older than the staleness threshold; a launcher absent from `PATH` (isolated from any real install elsewhere on the test host's own `PATH`); that none of these change the exit code; the plain-bash timeout fallback runs a quick command without blocking for the bound and still kills a slow one within it; a project-scope server disabled via `disabledMcpjsonServers` naming the settings file that disabled it; a commented-out Codex table header is not a registration; and a Claude-side disabled entry still reaches an active Codex registration for the same tool.
+Round 2 (#326) adds: the probe runs the launcher command named in the configured servers file, proven with a launcher under a name the default fixture never uses.
+A missing servers file or one with no `code-review-graph` entry each get their own case, naming the file read.
 
 The check is read-only and does not modify any files.

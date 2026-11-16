@@ -50,7 +50,7 @@ mcp_merge_test() (
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-mcp-install-test.$$"
   mkdir -p "$work"
-  trap 'rm -rf "$work"' EXIT
+  trap 'rm -rf "${work:?}"' EXIT
   printf '%s\n' "$snippet" > "$work/merge.py"
 
   run_merge() {

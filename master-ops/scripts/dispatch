@@ -1790,8 +1790,20 @@ runtime_command() {
     # --mcp-config file). `--mcp-config` takes a space-separated list
     # (`claude --help`: "<configs...>"), so it sits before
     # CLAUDE_SETTINGS_FLAG rather than last, where it would otherwise
-    # swallow the next argument this echoed command is handed.
-    claude) echo "claude --model $model_arg --dangerously-skip-permissions --mcp-config $(shell_quote "$MCP_SERVERS_CONFIG")${CLAUDE_SETTINGS_FLAG:-}";;
+    # swallow the next argument this echoed command is handed. Emitted
+    # only when the file is actually readable: `--mcp-config` with a
+    # missing path refuses the whole launch rather than degrading, the
+    # one asymmetry with codex_mcp_servers_args above, which already
+    # prints nothing for the same gap instead of failing.
+    claude)
+      local claude_mcp_config_arg=""
+      if [ -r "$MCP_SERVERS_CONFIG" ]; then
+        claude_mcp_config_arg=" --mcp-config $(shell_quote "$MCP_SERVERS_CONFIG")"
+      else
+        echo "WARNING: MCP_SERVERS_CONFIG not readable at $MCP_SERVERS_CONFIG; this claude worker launches without the required-infra server(s)" >&2
+      fi
+      echo "claude --model $model_arg --dangerously-skip-permissions${claude_mcp_config_arg}${CLAUDE_SETTINGS_FLAG:-}"
+      ;;
     # Non-interactive approval flags, so a first visit to a worktree cannot stop
     # a worker on a trust prompt. Every flag below was measured from that CLI's
     # own --help on 2026-08-05, per the registry rule in MASTER-OPERATIONS

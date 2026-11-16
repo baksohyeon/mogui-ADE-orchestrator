@@ -633,6 +633,8 @@ if tool in (user_cfg.get("mcpServers") or {}):
 # above (user scope) and from a project's own .mcp.json (project scope,
 # checked below).
 projects = user_cfg.get("projects") or {}
+if not isinstance(projects, dict):
+    projects = {}
 for project_path in os.environ.get("CLAUDE_PROJECT_PATHS", "").split(":"):
     if not project_path:
         continue

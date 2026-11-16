@@ -353,6 +353,20 @@ reset_fixture
 printf '{"mcpServers": {}, "projects": {"%s": {"mcpServers": {"ctx": {}}}}}\n' "$WORKSPACE_ROOT" > "$CLAUDE_MCP_CONFIG"
 check "a Claude local-scope project entry is reachable" "Infra: ctx OK" "ctx WARN" 0
 
+# Round 2, coordinator review: a non-dict, non-empty `projects` value
+# (`[] or {}` already falls back to {} on its own, same as a missing key,
+# so this needs a truthy non-dict to reach the unguarded `.get()` this
+# fixes) must not abort the lookup before it reaches the project-scope
+# .mcp.json check that follows: a crash there and a found-and-approved
+# .mcp.json entry are not distinguishable by output alone unless something
+# downstream of the crash point would otherwise be found.
+reset_fixture
+printf '{"mcpServers": {}, "projects": ["not-a-mapping"]}\n' > "$CLAUDE_MCP_CONFIG"
+printf '{"mcpServers": {"ctx": {}}}\n' > "$WORKSPACE_ROOT/.mcp.json"
+printf '{"enableAllProjectMcpServers": true}\n' > "$CLAUDE_USER_SETTINGS"
+check "a non-object projects value does not block the .mcp.json lookup after it" "Infra: ctx OK" "ctx WARN" 0
+rm -f "$WORKSPACE_ROOT/.mcp.json"
+
 # A commented-out Codex table header is not a registration: TOML treats
 # `# [mcp_servers.ctx]` as a comment, so a substring match that ignores the
 # leading `#` would read this host as having ctx reachable when it does not.

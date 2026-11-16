@@ -11,8 +11,9 @@
 # Steps, in order, stopping at the first failure:
 #   1. the checkout is on main, clean, and equal to origin/main after a fetch
 #   2. git cherry-pick each commit; on conflict, abort and reset
-#   3. run the gate in the repo root, full output to a log file, continue
-#      only on exit 0 (never on a line of its output)
+#   3. run the gate in the repo root under `set -o pipefail`, full output
+#      to a log file, continue only on exit 0 (never on a line of its
+#      output, and not just the last stage of a pipeline inside it)
 #   4. origin/main (pre-push) is an ancestor of HEAD
 #   5. git push origin main (never --force)
 #   6. fetch again and confirm origin/main now equals the local HEAD
@@ -97,7 +98,10 @@ done
 current_branch="$(git -C "${root}" branch --show-current)"
 [ "${current_branch}" = "${BRANCH}" ] || fail "checkout is on '${current_branch}', not '${BRANCH}'"
 
-if [ -n "$(git -C "${root}" status --porcelain)" ]; then
+# --untracked-files=all overrides any status.showUntrackedFiles=no in the
+# repository's own config, so an untracked file cannot pass as clean.
+status_output="$(git -C "${root}" status --porcelain --untracked-files=all)" || error "git status failed"
+if [ -n "${status_output}" ]; then
   fail "checkout is dirty; refusing before any change"
 fi
 
@@ -111,7 +115,7 @@ remote_sha="$(git -C "${root}" rev-parse "${REMOTE}/${BRANCH}")" || error "could
 # and verifies the reset actually landed there.
 reset_to_start() {
   git -C "${root}" cherry-pick --abort >/dev/null 2>&1
-  git -C "${root}" reset --hard "${start_sha}" >/dev/null 2>&1
+  git -C "${root}" reset --hard "${start_sha}" >/dev/null 2>&1 || error "git reset --hard ${start_sha} failed"
   local after
   after="$(git -C "${root}" rev-parse HEAD 2>/dev/null)"
   [ "${after}" = "${start_sha}" ] || error "reset to ${start_sha} did not take; checkout is now at '${after}'"
@@ -130,8 +134,15 @@ fi
 rm -f "${cherry_log}"
 
 # --- Step 3: gate, judged only by its exit code -----------------------------
-gate_log="$(mktemp -t land-gate.XXXXXX)" || error "mktemp failed for the gate log"
-( cd "${root}" && eval "${gate}" ) >"${gate_log}" 2>&1
+# The cherry-pick already ran, so a failure from here on resets the checkout.
+if ! gate_log="$(mktemp -t land-gate.XXXXXX)"; then
+  reset_to_start
+  error "mktemp failed for the gate log"
+fi
+# pipefail inside this subshell only: if the gate command itself is a
+# pipeline (for example `make test | tail -1`), its exit code is the first
+# failing stage, not just the last one.
+( cd "${root}" && set -o pipefail && eval "${gate}" ) >"${gate_log}" 2>&1
 gate_rc=$?
 if [ "${gate_rc}" -ne 0 ]; then
   reset_and_fail "gate exited ${gate_rc}; full output in ${gate_log}"

@@ -3,10 +3,13 @@
 # gate exits nonzero even when its last printed line says "pass": nothing
 # pushed, checkout back at the start sha, log kept (the #318 bug: a
 # truncated last-line read, or a pipe that drops the gate's own exit code,
-# would pass this); (c) a cherry-pick conflict: aborted, nothing pushed;
-# (d) a dirty checkout: refused before any change, and the dirty content
-# survives; (e) no arguments; (f) a commit that does not resolve. (e) and
-# (f) are could-not-run failures, exit 2, not the exit-1 shape of (b)-(d).
+# would pass this); (c) a single-commit cherry-pick conflict: aborted,
+# nothing pushed; (c2) the same, on the second of two commits, checked for
+# leftover sequencer state too; (d) a dirty checkout: refused before any
+# change, and the dirty content survives; (g) a checkout on a branch other
+# than main; (h) local main diverged from origin/main; (e) no arguments;
+# (f) a commit that does not resolve. (e) and (f) are could-not-run
+# failures, exit 2, not the exit-1 shape of the others.
 #
 # Each fixture is a fresh bare "origin" plus a clone, built from scratch per
 # case so a result in one case cannot leak into the next.
@@ -164,6 +167,37 @@ else
   echo "       output: ${out}"
 fi
 
+# --- Case (c2): a multi-commit cherry-pick, conflicting on the second ------
+# A multi-commit pick leaves real sequencer state (not just CHERRY_PICK_HEAD)
+# if the abort does not clean it up; this is the case that state is checked.
+clone_c2="$(new_fixture c2)"
+bare_c2="${WORK_DIR}/c2-origin.git"
+echo "main-side-edit-2" >"${clone_c2}/file.txt"
+git -C "${clone_c2}" add file.txt
+git -C "${clone_c2}" commit --quiet -m "main edits file.txt"
+git -C "${clone_c2}" push --quiet origin main
+start_c2="$(git -C "${clone_c2}" rev-parse HEAD)"
+git -C "${clone_c2}" checkout --quiet -b work "${start_c2}^"
+sha_c2_1="$(make_commit "${clone_c2}" ok.txt fine "commit c2-1, no conflict")"
+sha_c2_2="$(make_commit "${clone_c2}" file.txt worker-side-edit-2 "commit c2-2, conflicts with main")"
+git -C "${clone_c2}" checkout --quiet main
+
+out=$(cd "${clone_c2}" && "${LAND}" --repo "${clone_c2}" --gate "${WORK_DIR}/gate-pass.sh" "${sha_c2_1}" "${sha_c2_2}" 2>&1)
+rc=$?
+head_c2="$(git -C "${clone_c2}" rev-parse HEAD)"
+remote_c2="$(remote_sha "${bare_c2}")"
+sequencer_in_progress=0
+[ -d "${clone_c2}/.git/sequencer" ] && sequencer_in_progress=1
+git -C "${clone_c2}" rev-parse --quiet --verify CHERRY_PICK_HEAD >/dev/null 2>&1 && sequencer_in_progress=1
+porcelain_c2="$(git -C "${clone_c2}" status --porcelain)"
+if [ "${rc}" -eq 1 ] && [ "${head_c2}" = "${start_c2}" ] && [ "${remote_c2}" = "${start_c2}" ] \
+  && [ "${sequencer_in_progress}" -eq 0 ] && [ -z "${porcelain_c2}" ]; then
+  ok "multi-commit cherry-pick conflict on the second commit: aborted cleanly, no sequencer state, nothing pushed"
+else
+  fail "multi-commit cherry-pick conflict not handled: rc=${rc} head=${head_c2} remote=${remote_c2} want=${start_c2} sequencer=${sequencer_in_progress} porcelain=[${porcelain_c2}]"
+  echo "       output: ${out}"
+fi
+
 # --- Case (d): dirty checkout ------------------------------------------------
 clone_d="$(new_fixture d)"
 bare_d="${WORK_DIR}/d-origin.git"
@@ -182,6 +216,43 @@ if [ "${rc}" -eq 1 ] && [ "${head_d}" = "${start_d}" ] && [ "${remote_d}" = "${s
 else
   fail "dirty checkout not refused cleanly: rc=${rc} head=${head_d} remote=${remote_d}"
   echo "       output: ${out}"
+fi
+
+# --- Case (g): checkout on a branch other than main -------------------------
+clone_g="$(new_fixture g)"
+bare_g="${WORK_DIR}/g-origin.git"
+start_g="$(git -C "${clone_g}" rev-parse HEAD)"
+git -C "${clone_g}" checkout --quiet -b not-main
+
+out_g=$(cd "${clone_g}" && "${LAND}" --repo "${clone_g}" --gate "${WORK_DIR}/gate-pass.sh" "${start_g}" 2>&1)
+rc_g=$?
+head_g="$(git -C "${clone_g}" rev-parse HEAD)"
+remote_g="$(remote_sha "${bare_g}")"
+if [ "${rc_g}" -eq 1 ] && [ "${head_g}" = "${start_g}" ] && [ "${remote_g}" = "${start_g}" ]; then
+  ok "checkout on a branch other than main: refused, nothing pushed"
+else
+  fail "wrong-branch checkout not refused cleanly: rc=${rc_g} head=${head_g} remote=${remote_g}"
+  echo "       output: ${out_g}"
+fi
+
+# --- Case (h): local main diverged from origin/main -------------------------
+clone_h="$(new_fixture h)"
+bare_h="${WORK_DIR}/h-origin.git"
+echo "local-only" >"${clone_h}/local-only.txt"
+git -C "${clone_h}" add local-only.txt
+git -C "${clone_h}" commit --quiet -m "local commit, never pushed"
+start_h="$(git -C "${clone_h}" rev-parse HEAD)"
+remote_before_h="$(remote_sha "${bare_h}")"
+
+out_h=$(cd "${clone_h}" && "${LAND}" --repo "${clone_h}" --gate "${WORK_DIR}/gate-pass.sh" "${start_h}" 2>&1)
+rc_h=$?
+head_h="$(git -C "${clone_h}" rev-parse HEAD)"
+remote_h="$(remote_sha "${bare_h}")"
+if [ "${rc_h}" -eq 1 ] && [ "${head_h}" = "${start_h}" ] && [ "${remote_h}" = "${remote_before_h}" ]; then
+  ok "local main diverged from origin/main: refused, nothing pushed"
+else
+  fail "diverged main not refused cleanly: rc=${rc_h} head=${head_h} remote=${remote_h} want_remote=${remote_before_h}"
+  echo "       output: ${out_h}"
 fi
 
 # --- Case (e): usage error (no arguments) exits 2 --------------------------

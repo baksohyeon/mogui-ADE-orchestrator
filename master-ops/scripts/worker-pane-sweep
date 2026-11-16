@@ -52,26 +52,28 @@ while IFS= read -r h; do
   lower=$(printf '%s' "$foreground" | tr '[:upper:]' '[:lower:]' | sed 's/always-approve//g; s/bypass permissions//g')
   # Claude Code's live status line (a verb, an ellipsis, then a parenthesized elapsed time with a
   # middle-dot separator before the token count, e.g. "Sauteing… (1h 15m 48s · ↓ 182.4k tokens)")
-  # sits directly above the always-rendered, often-empty input line, with at most one
-  # box-drawing separator line between them (#321). It falls outside $foreground's cut
-  # at the last prompt line, so check only that one determinate spot, not a wider window: a
-  # finished turn overwrites the same screen row with a past-tense, ellipsis-free summary, so
-  # that row can never hold both shapes from one live render, and a copy quoted nearby in chat
-  # prose (this PR's own report does that) is read as ordinary text, not matched. No bare prompt
-  # at all (mid-turn with the input hidden) leaves this unset; $lower already covers that case
-  # against the whole foreground.
+  # sits above the always-rendered, often-empty input line, with a box-drawing separator line
+  # and any number of "⎿" continuation lines (a tip, a queued message) between them (#321, #322
+  # round 2). It falls outside $foreground's cut at the last prompt line, so walk upward from
+  # there skipping separator and "⎿" lines and test the first other line found, rather than
+  # scanning a wider window: a finished turn overwrites the same screen row with a past-tense,
+  # ellipsis-free summary, so that row can never hold both shapes from one live render, and a
+  # copy quoted nearby in chat prose (this PR's own report does that) is the first other line
+  # found and is read as ordinary text, not matched. No bare prompt at all (mid-turn with the
+  # input hidden) leaves this unset; $lower already covers that case against the whole
+  # foreground.
   recent=""
   if [ -n "${last_prompt_line:-}" ]; then
-    above1_no=$(( last_prompt_line - 1 ))
-    if [ "$above1_no" -ge 1 ]; then
-      above1=$(printf '%s\n' "$frame" | sed -n "${above1_no}p")
-      if printf '%s' "$above1" | grep -qE '^[[:space:]]*[─━=_~-]+[[:space:]]*$'; then
-        above2_no=$(( above1_no - 1 ))
-        [ "$above2_no" -ge 1 ] && recent=$(printf '%s\n' "$frame" | sed -n "${above2_no}p")
-      else
-        recent="$above1"
+    above_no=$(( last_prompt_line - 1 ))
+    while [ "$above_no" -ge 1 ]; do
+      above=$(printf '%s\n' "$frame" | sed -n "${above_no}p")
+      if printf '%s' "$above" | grep -qE '^[[:space:]]*[─━=_~-]+[[:space:]]*$|^[[:space:]]*⎿'; then
+        above_no=$(( above_no - 1 ))
+        continue
       fi
-    fi
+      recent="$above"
+      break
+    done
   fi
   recent=$(printf '%s' "$recent" | tr '[:upper:]' '[:lower:]')
   status_line_re='…[[:space:]]*\(([0-9]+[hms][[:space:]]*)+·'

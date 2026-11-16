@@ -84,6 +84,21 @@ expect "mid-turn Claude status line above an empty prompt (#321)" "$CLAUDE_STATU
 expect "mid-turn Claude status line above a border line above an empty prompt" '· Sautéing… (45s · ↓ 1.2k tokens)
 ──────
 ❯ ' working 0
+# Verbatim pane preview measured live by the coordinator, 2026-11-16, PR #322 round 2: a "⎿ Tip:
+# ..." continuation line sits between the status line and the separator above the empty prompt.
+# a311f95 (round 1's fix) only checked the single line directly above the prompt, so it found
+# this continuation line instead of the status line and misread all three panes as idle; walking
+# upward past separator and "⎿" lines to the first other line fixes it. Three verbs, same shape.
+for verb in Crafting Percolating Whatchamacalliting; do
+  expect "live mid-turn pane, '$verb', behind a tip continuation line (#322 round 2)" "     (ctrl+b to run in background)
+✳ ${verb}… (29m 40s · ↓ 65.6k tokens)
+  ⎿  Tip: Did you know you can drag and drop image files into your terminal?
+───
+❯
+───
+  Sonnet 5 │ selfcheck-required-infra █████░░░░░ 58%
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · PR #319" working 0
+done
 # A finished turn overwrites the same screen row with a past-tense summary. This fixture keeps
 # the parenthesized, middle-dot form the status line uses but drops the ellipsis, so it pins the
 # ellipsis itself as load-bearing: a status_line_re that dropped `…` would still match this line

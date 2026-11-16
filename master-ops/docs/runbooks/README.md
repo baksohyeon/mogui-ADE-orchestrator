@@ -1,3 +1,4 @@
-# Research runbook index
+# Runbook index
 
 - [Research workflow](research-workflow.md): records research plans, coverage, literature, and owner-open conclusions.
+- [Land](land.md): lands commits on a repository's `main` without a PR, stopping at the first failed step.

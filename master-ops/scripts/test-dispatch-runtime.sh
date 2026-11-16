@@ -3342,6 +3342,44 @@ RULES
   fi
   echo "ok   : naming mail-before-done explicitly appends its block exactly once, with no duplicate from the unconditional step"
 
+  # Case: config/standing-rules.overlay.md defines its own mail-before-done
+  # block. standing_rule_block() reads the overlay before the shipped file
+  # for any name (same precedence standing_rules_append_test checks for
+  # "headless"), so the unconditional step must pick up the overlay's text,
+  # not the shipped file's, and still append it exactly once.
+  mkdir -p "$work/config"
+  cat > "$work/config/standing-rules.overlay.md" <<'RULES'
+## mail-before-done
+
+seat overlay mail-before-done text.
+RULES
+  write_script "$script_file" '{"allow": true, "front_matter": {}}'
+  out=$(bash "$script_file" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: an overlay mail-before-done block should not fail the unconditional append step" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF 'seat overlay mail-before-done text.'; then
+    echo "FAIL: the overlay's own mail-before-done text should win over the shipped file's text" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if printf '%s\n' "$out" | grep -qF 'mail-before-done body text.'; then
+    echo "FAIL: the shipped file's mail-before-done text should not appear when the overlay defines the same block" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  count=$(printf '%s\n' "$out" | grep -cF 'Standing rules (mail-before-done):')
+  if [ "$count" -ne 1 ]; then
+    echo "FAIL: an overlay mail-before-done block should still append exactly once, got $count" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "ok   : an overlay mail-before-done block wins over the shipped file and appends exactly once"
+  rm -f "$work/config/standing-rules.overlay.md"
+
   # Case: a rules file that predates this feature (no mail-before-done
   # heading) warns and continues rather than refusing the dispatch.
   : > "$work/rules/standing-rules-missing.md"

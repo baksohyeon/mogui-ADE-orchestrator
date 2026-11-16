@@ -23,7 +23,7 @@ you build on it.
 ### Fixed
 
 - The dispatch gate's ledger lock wait now times out (60s default, `DISPATCH_LEDGER_LOCK_TIMEOUT_SECONDS` overrides) and fails with `LEDGER_LOCK_TIMEOUT` instead of waiting forever behind a parent process holding the lock without passing `DISPATCH_LEDGER_LOCK_FD` (#290).
-- `master-succeed spawn` now refuses, before any Orca call, a kickoff whose text does not contain the succession boot card's path, so a kickoff can no longer drop the boot-card reference without the successor being pointed back to it (#320).
+- `master-succeed spawn` now refuses, before any Orca call, a kickoff whose text does not contain the succession boot card's path (exit 27, `SPAWN_KICKOFF_MISSING_BOOT_CARD`), so a kickoff can no longer drop the boot-card reference without the successor being pointed back to it (#320).
 
 ## [0.5.345] - 2026-11-15
 

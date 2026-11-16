@@ -135,7 +135,9 @@ scripts/master-succeed spawn \
   --json
 ```
 
-The recorded path must identify exactly one live workspace. A missing match or an ambiguous match stops the spawn and names the path so the operator can correct the seat or provide an explicit selector.
+The recorded `master_seat_path` must identify exactly one live workspace. A missing match or an ambiguous match stops the spawn and names the path so the operator can correct the seat or provide an explicit selector.
+
+`./ops/successor-kickoff.txt` must carry `docs/runbooks/succession-boot-card.md`'s path too, for the same reason as the founding example above.
 
 The successor then proves recovery through a report shape consumed by:
 

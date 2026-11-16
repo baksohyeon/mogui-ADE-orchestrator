@@ -77,4 +77,9 @@ a `submodule.<name>.ignore` setting in the repository's own config. Every cleanl
 treats an unfinished cherry-pick (`CHERRY_PICK_HEAD` or a `.git/sequencer` directory) as dirty on
 its own, even when `git status --porcelain` itself is clean. A conflict resolved by staging a
 result identical to `HEAD`, without running `cherry-pick --continue`, is otherwise invisible to a
-plain status check.
+plain status check. That same check does not recurse into submodules: a gate that enters an
+initialized submodule, resolves a conflict there back to exactly the commit the superproject's
+gitlink already records, and never continues it, leaves that submodule's own `CHERRY_PICK_HEAD`
+in place with nothing for `land` to see. The ordinary case (a submodule actually left modified or
+conflicted) already surfaces through the superproject's own status; this narrower one does not,
+and fixing it would mean `land` checking each submodule's own operation state in its own right.

@@ -41,9 +41,9 @@ for name in markers shell_quote_fn mcp_args_fn read_fn apply_fn runtime_command_
 done
 call_site='[ "$RUNTIME" = codex ] && apply_codex_instance_launch_config'
 
-# Read only the pin itself (args[0] of the shipped code-review-graph entry)
-# from the one file that pins it, rather than hand-typing a second copy here
-# that a version bump would have to catch independently.
+# Read the launcher command and the pin (args[0]) from the shipped
+# code-review-graph entry, rather than hand-typing a second copy here that
+# a launcher or version change would have to catch independently.
 crg_entry=$(python3 -c "import json,sys; e=json.load(open(sys.argv[1]))['mcpServers']['code-review-graph']; print(e['command']); print(e['args'][0])" "$mcp_config") \
   || { echo "FAIL: could not read the code-review-graph entry from $mcp_config" >&2; exit 1; }
 crg_launcher_cmd=$(printf '%s\n' "$crg_entry" | sed -n 1p)

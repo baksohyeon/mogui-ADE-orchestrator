@@ -822,7 +822,7 @@ path = sys.argv[1]
 try:
     with open(path, encoding="utf-8") as fh:
         data = json.load(fh)
-except (OSError, json.JSONDecodeError) as exc:
+except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
     print(f"MCP_SERVERS_CONFIG_ERROR:could not read {path}: {exc}")
     sys.exit(0)
 

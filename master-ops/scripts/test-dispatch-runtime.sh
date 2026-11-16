@@ -1568,9 +1568,9 @@ codex_launch_flags_test() (
   mkdir -p "$work"
   trap 'rm -rf "$work"' EXIT
   mcp_config="$(dirname "$dispatch")/../templates/mcp-servers.json"
-  # Read only the pin itself (args[0] of the shipped code-review-graph entry)
-  # from the one file that pins it, rather than hand-typing a second copy
-  # here that a version bump would have to catch independently.
+  # Read the launcher command and the pin (args[0]) from the shipped
+  # code-review-graph entry, rather than hand-typing a second copy here
+  # that a launcher or version change would have to catch independently.
   crg_entry=$(python3 -c "import json,sys; e=json.load(open(sys.argv[1]))['mcpServers']['code-review-graph']; print(e['command']); print(e['args'][0])" "$mcp_config") \
     || { echo "FAIL: could not read the code-review-graph entry from $mcp_config" >&2; return 1; }
   crg_launcher_cmd=$(printf '%s\n' "$crg_entry" | sed -n 1p)

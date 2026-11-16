@@ -472,6 +472,21 @@ printf '{"mcpServers": {}}\n' > "$CRG_MCP_CONFIG"
 check "an MCP_SERVERS_CONFIG with no code-review-graph entry warns naming the file" \
   "Infra: code-review-graph WARN no code-review-graph entry in $CRG_MCP_CONFIG" "" 0
 
+# PR #326 round 2 follow-up: a non-object mcpServers must not crash the
+# parser with an uncaught Python traceback -- it must warn by name.
+reset_fixture
+printf '{"mcpServers": ["not-a-mapping"]}\n' > "$CRG_MCP_CONFIG"
+check "a non-object mcpServers warns naming the file, never crashes" \
+  "Infra: code-review-graph WARN mcpServers in $CRG_MCP_CONFIG is not an object" "" 0
+
+# PR #326 round 2 follow-up: a string-valued args field makes args[0] a
+# single character in Python, not a missing value -- must warn by name
+# instead of silently probing that one-character "spec".
+reset_fixture
+printf '{"mcpServers": {"code-review-graph": {"command": "code-review-graph", "args": "serve"}}}\n' > "$CRG_MCP_CONFIG"
+check "a string-valued args field warns naming the entry, never probes a one-character spec" \
+  "Infra: code-review-graph WARN code-review-graph entry in $CRG_MCP_CONFIG has no valid command/args" "" 0
+
 echo "----"
 echo "passed: $pass  failed: $fail"
 [ "$fail" -eq 0 ]

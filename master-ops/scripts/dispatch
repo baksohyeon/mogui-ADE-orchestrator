@@ -1792,9 +1792,10 @@ runtime_command() {
     # CLAUDE_SETTINGS_FLAG rather than last, where it would otherwise
     # swallow the next argument this echoed command is handed. Emitted
     # only when the file is actually readable: `--mcp-config` with a
-    # missing path refuses the whole launch rather than degrading, the
-    # one asymmetry with codex_mcp_servers_args above, which already
-    # prints nothing for the same gap instead of failing.
+    # missing path refuses the whole launch, so this warns and drops the
+    # flag instead, the same gap codex_mcp_servers_args above already
+    # prints nothing for rather than failing; both runtimes now degrade
+    # and continue when the config is missing.
     claude)
       local claude_mcp_config_arg=""
       if [ -f "$MCP_SERVERS_CONFIG" ] && [ -r "$MCP_SERVERS_CONFIG" ]; then

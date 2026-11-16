@@ -211,6 +211,53 @@ else
   fail=$((fail + 1))
 fi
 
+# infra_with_timeout falls back correctly when neither `timeout` nor
+# `gtimeout` is on PATH: measured on GitHub Actions' macos-latest runner,
+# which has neither, so every `Infra:` line reported "command not found"
+# instead of running any check at all. `sleep` and `date` are the only two
+# externals the fallback or this assertion needs; everything else it uses
+# (kill, wait, command) is a bash builtin, resolved with no PATH lookup.
+TIMEOUT_FN="$TMP/timeout-fn.sh"
+sed -n '/^infra_with_timeout()/,/^}/p' "$SELFCHECK_BIN" > "$TIMEOUT_FN"
+NO_TIMEOUT_BIN="$TMP/no-timeout-bin"
+mkdir -p "$NO_TIMEOUT_BIN"
+ln -sf "$(command -v sleep)" "$NO_TIMEOUT_BIN/sleep"
+ln -sf "$(command -v date)" "$NO_TIMEOUT_BIN/date"
+# `PATH=X bash ...` resolves `bash` itself through the overridden PATH, not
+# the caller's, so the restricted PATH needs bash's own absolute path too.
+BASH_BIN="$(command -v bash)"
+
+fast_out=$(PATH="$NO_TIMEOUT_BIN" "$BASH_BIN" -c '
+  source "$1"
+  infra_with_timeout 5 echo hello
+  echo "rc=$?"
+' _ "$TIMEOUT_FN")
+if [ "$fast_out" = "$(printf 'hello\nrc=0')" ]; then
+  echo "ok   - infra_with_timeout fallback runs a quick command normally"
+  pass=$((pass + 1))
+else
+  echo "FAIL - infra_with_timeout fallback runs a quick command normally (got: $fast_out)"
+  fail=$((fail + 1))
+fi
+
+slow_out=$(PATH="$NO_TIMEOUT_BIN" "$BASH_BIN" -c '
+  source "$1"
+  start=$(date +%s)
+  infra_with_timeout 1 sleep 5
+  rc=$?
+  end=$(date +%s)
+  echo "rc=$rc elapsed=$((end - start))"
+' _ "$TIMEOUT_FN" 2>/dev/null)
+slow_rc=$(printf '%s' "$slow_out" | sed -n 's/.*rc=\([0-9-]*\) .*/\1/p')
+slow_elapsed=$(printf '%s' "$slow_out" | sed -n 's/.*elapsed=\([0-9]*\).*/\1/p')
+if [ -n "$slow_rc" ] && [ "$slow_rc" -ne 0 ] && [ -n "$slow_elapsed" ] && [ "$slow_elapsed" -le 3 ]; then
+  echo "ok   - infra_with_timeout fallback bounds a slow command ($slow_out)"
+  pass=$((pass + 1))
+else
+  echo "FAIL - infra_with_timeout fallback bounds a slow command (got: $slow_out)"
+  fail=$((fail + 1))
+fi
+
 # Coordinator addendum (2026-11-16): a server listed in .mcp.json but
 # disabled via disabledMcpjsonServers (in any settings file the session
 # reads) is a WARN naming that settings file -- it must not read as

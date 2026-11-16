@@ -455,6 +455,32 @@ fi
 # `Infra:` line each here. Unlike every check above, a gap here only warns
 # and never touches exit_code: this is stage 1, measure-and-warn only,
 # wiring either tool in by default is a later stage.
+# $1 = bound in seconds, $@ = the command. Prefers the `timeout`/`gtimeout`
+# coreutils binary; macOS ships neither by default (measured on GitHub
+# Actions' macos-latest runner: "timeout: command not found"), so this falls
+# back to a plain-bash watchdog in that case.
+infra_with_timeout() {
+  local secs="$1"
+  shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$secs" "$@"
+    return $?
+  fi
+  if command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$secs" "$@"
+    return $?
+  fi
+  "$@" &
+  local cmd_pid=$!
+  ( sleep "$secs"; kill -TERM "$cmd_pid" 2>/dev/null ) &
+  local watchdog_pid=$!
+  wait "$cmd_pid"
+  local rc=$?
+  kill "$watchdog_pid" 2>/dev/null
+  wait "$watchdog_pid" 2>/dev/null
+  return "$rc"
+}
+
 CODE_REVIEW_GRAPH_STALE_DAYS="${CODE_REVIEW_GRAPH_STALE_DAYS:-7}"
 CODE_REVIEW_GRAPH_REGISTRY="${CODE_REVIEW_GRAPH_REGISTRY:-$HOME/.code-review-graph/registry.json}"
 CLAUDE_MCP_CONFIG="${CLAUDE_MCP_CONFIG:-${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json}"
@@ -559,13 +585,13 @@ EOFMCP
 ctx_warn=""
 if ! command -v ctx >/dev/null 2>&1; then
   ctx_warn="absent from PATH"
-elif ! ctx_status_json=$(timeout 10 ctx status --format json 2>&1); then
+elif ! ctx_status_json=$(infra_with_timeout 10 ctx status --format json 2>&1); then
   ctx_warn=$(printf '%s\n' "$ctx_status_json" | head -1)
 elif ! ctx_mcp_reason=$(infra_mcp_status ctx); then
   ctx_warn="runs, but $ctx_mcp_reason"
 else
-  orca_status_json=$(timeout 10 orca search --index-status --json 2>&1) || orca_status_json=""
-  ctx_sources_text=$(timeout 10 ctx sources 2>&1) || true
+  orca_status_json=$(infra_with_timeout 10 orca search --index-status --json 2>&1) || orca_status_json=""
+  ctx_sources_text=$(infra_with_timeout 10 ctx sources 2>&1) || true
   ctx_warn=$(CTX_STATUS="$ctx_status_json" ORCA_STATUS="$orca_status_json" CTX_SOURCES="$ctx_sources_text" python3 << 'EOFCTX'
 import json, os
 
@@ -636,7 +662,7 @@ fi
 crg_warn=""
 if ! command -v code-review-graph >/dev/null 2>&1; then
   crg_warn="absent from PATH"
-elif ! crg_version_out=$(timeout 10 code-review-graph --version 2>&1); then
+elif ! crg_version_out=$(infra_with_timeout 10 code-review-graph --version 2>&1); then
   crg_warn=$(printf '%s\n' "$crg_version_out" | head -1)
 elif ! crg_mcp_reason=$(infra_mcp_status code-review-graph); then
   crg_warn="runs, but $crg_mcp_reason"

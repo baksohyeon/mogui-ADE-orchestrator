@@ -28,6 +28,7 @@ from master_runtime.core.dispatch_gate import (  # noqa: E402
     DispatchGateConfig,
     DispatchRequest,
     GateDecision,
+    LedgerLockTimeout,
     ledger_lock_path,
     model_session_root,
     ReasonCode,
@@ -67,38 +68,44 @@ def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
-    if args.command == "check":
-        return _check(args)
-    if args.command == "register":
-        return _register(args)
-    if args.command == "measure-model":
-        return _measure_model(args)
-    if args.command == "measure-usage":
-        return _measure_usage(args)
-    if args.command == "settle":
-        return _settle(args)
-    if args.command == "budget":
-        return _budget(args)
-    if args.command == "watch":
-        return _watch(args)
-    if args.command == "report":
-        return _report(args)
-    if args.command == "lock-path":
-        if not args.ledger:
-            print("dispatch-gate: lock-path requires --ledger", file=sys.stderr)
-            return 2
-        print(ledger_lock_path(args.ledger))
-        return 0
-    if args.command == "session-root":
-        root = model_session_root(args.runtime)
-        if root is None:
-            print(
-                f"dispatch-gate: no session root for runtime {args.runtime}",
-                file=sys.stderr,
-            )
-            return 1
-        print(root)
-        return 0
+    try:
+        if args.command == "check":
+            return _check(args)
+        if args.command == "register":
+            return _register(args)
+        if args.command == "measure-model":
+            return _measure_model(args)
+        if args.command == "measure-usage":
+            return _measure_usage(args)
+        if args.command == "settle":
+            return _settle(args)
+        if args.command == "budget":
+            return _budget(args)
+        if args.command == "watch":
+            return _watch(args)
+        if args.command == "report":
+            return _report(args)
+        if args.command == "lock-path":
+            if not args.ledger:
+                print("dispatch-gate: lock-path requires --ledger", file=sys.stderr)
+                return 2
+            print(ledger_lock_path(args.ledger))
+            return 0
+        if args.command == "session-root":
+            root = model_session_root(args.runtime)
+            if root is None:
+                print(
+                    f"dispatch-gate: no session root for runtime {args.runtime}",
+                    file=sys.stderr,
+                )
+                return 1
+            print(root)
+            return 0
+    except LedgerLockTimeout as error:
+        decision = GateDecision(False, ReasonCode.LEDGER_LOCK_TIMEOUT, message=str(error))
+        _print_decision(decision)
+        _diagnose(_decision_error(decision))
+        return 2
 
     parser.print_help(sys.stderr)
     return 2

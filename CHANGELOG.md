@@ -20,6 +20,10 @@ you build on it.
 
 ## [Unreleased]
 
+### Fixed
+
+- The dispatch gate's ledger lock wait now times out (60s default, `DISPATCH_LEDGER_LOCK_TIMEOUT_SECONDS` overrides) and fails with `LEDGER_LOCK_TIMEOUT` instead of waiting forever behind a parent process holding the lock without passing `DISPATCH_LEDGER_LOCK_FD` (#290).
+
 ## [0.5.345] - 2026-11-15
 
 ### Changed

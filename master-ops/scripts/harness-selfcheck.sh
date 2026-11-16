@@ -809,7 +809,9 @@ fi
 # The entry's args[0] is the pinned package spec (e.g.
 # "code-review-graph@2.4.0"); the version probe passes that spec plus
 # --version to the same launcher command instead of args' own trailing
-# "serve", so it measures the exact binary and pin every session uses.
+# "serve", so it measures the exact binary and pin the worker launches use
+# (a master session's own .mcp.json entry is only checked by name, in
+# infra_mcp_status below, not probed here).
 crg_warn=""
 crg_launcher_cmd=""
 crg_launcher_spec=""
@@ -819,9 +821,14 @@ import json, sys
 path = sys.argv[1]
 try:
     with open(path, encoding="utf-8") as fh:
-        servers = json.load(fh).get("mcpServers") or {}
+        data = json.load(fh)
 except (OSError, json.JSONDecodeError) as exc:
     print(f"MCP_SERVERS_CONFIG_ERROR:could not read {path}: {exc}")
+    sys.exit(0)
+
+servers = data.get("mcpServers") if isinstance(data, dict) else None
+if not isinstance(servers, dict):
+    print(f"MCP_SERVERS_CONFIG_ERROR:mcpServers in {path} is not an object")
     sys.exit(0)
 
 entry = servers.get("code-review-graph")
@@ -830,9 +837,13 @@ if not isinstance(entry, dict):
     sys.exit(0)
 
 command = entry.get("command")
-args = entry.get("args") or []
-if not command or not args:
-    print(f"MCP_SERVERS_CONFIG_ERROR:code-review-graph entry in {path} has no command/args")
+args = entry.get("args")
+if (
+    not isinstance(command, str) or not command
+    or not isinstance(args, list) or not args
+    or not isinstance(args[0], str) or not args[0]
+):
+    print(f"MCP_SERVERS_CONFIG_ERROR:code-review-graph entry in {path} has no valid command/args")
     sys.exit(0)
 
 print(f"{command}\t{args[0]}")

@@ -434,6 +434,16 @@ unset INFRA_TIMEOUT_SECONDS
 # and fail closed as "absent from PATH", not pass by coincidence.
 reset_fixture
 rm -f "$BIN_DIR/code-review-graph"
+# Isolate from a real host-wide code-review-graph the same way case (d)
+# does: without this, reverting to the hardcoded probe would still find
+# that real binary on SAFE_PATH and print OK, masking the regression.
+ORIGINAL_SAFE_PATH="$SAFE_PATH"
+real_crg=$(PATH="$SAFE_PATH" command -v code-review-graph 2>/dev/null) || true
+if [ -n "$real_crg" ]; then
+  real_crg_dir=$(dirname "$real_crg")
+  SAFE_PATH=$(printf '%s' "$SAFE_PATH" | tr ':' '\n' | grep -vF "$real_crg_dir" | tr '\n' ':')
+  SAFE_PATH="${SAFE_PATH%:}"
+fi
 cat > "$BIN_DIR/crg-pinned-launcher" <<'EOF'
 #!/bin/bash
 echo "code-review-graph 2.4.0"
@@ -442,6 +452,7 @@ chmod +x "$BIN_DIR/crg-pinned-launcher"
 write_mcp_servers_config crg-pinned-launcher code-review-graph@2.4.0
 check "the probe runs the launcher named in MCP_SERVERS_CONFIG, not a hardcoded name" \
   "Infra: code-review-graph OK" "code-review-graph WARN" 0
+SAFE_PATH="$ORIGINAL_SAFE_PATH"
 
 # PR #326 round 2, Important #1: a missing MCP_SERVERS_CONFIG warns naming
 # the read failure instead of crashing or falling through to a bare

@@ -10,6 +10,7 @@
   now emits `--mcp-config` for a Claude worker only when that file is
   readable, warning once on stderr naming the path otherwise and continuing
   the launch, matching the Codex path's existing silent-skip for the same
-  gap. Tests read the pin and the Codex `-c` string from
-  `templates/mcp-servers.json` instead of a second hand-typed literal.
+  gap. Tests read the launcher command and pin from `templates/mcp-servers.json`
+  and interpolate them into the expected Codex `-c` string, instead of a
+  second hand-typed literal of either.
   Refs #317.

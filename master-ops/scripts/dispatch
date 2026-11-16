@@ -1797,7 +1797,7 @@ runtime_command() {
     # prints nothing for the same gap instead of failing.
     claude)
       local claude_mcp_config_arg=""
-      if [ -r "$MCP_SERVERS_CONFIG" ]; then
+      if [ -f "$MCP_SERVERS_CONFIG" ] && [ -r "$MCP_SERVERS_CONFIG" ]; then
         claude_mcp_config_arg=" --mcp-config $(shell_quote "$MCP_SERVERS_CONFIG")"
       else
         echo "WARNING: MCP_SERVERS_CONFIG not readable at $MCP_SERVERS_CONFIG; this claude worker launches without the required-infra server(s)" >&2

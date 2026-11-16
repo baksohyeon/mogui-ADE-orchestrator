@@ -1552,7 +1552,7 @@ codex_launch_flags_test() (
   set +e
   set -u
   local dispatch="$1" work shell_quote_fn runtime_command_fn mcp_args_fn vars want got mutant_fn out status
-  local mcp_config crg_pin_spec
+  local mcp_config crg_pin_spec crg_launcher_cmd crg_entry
 
   shell_quote_fn=$(awk '$0=="shell_quote() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   mcp_args_fn=$(awk '$0=="codex_mcp_servers_args() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
@@ -1571,8 +1571,10 @@ codex_launch_flags_test() (
   # Read only the pin itself (args[0] of the shipped code-review-graph entry)
   # from the one file that pins it, rather than hand-typing a second copy
   # here that a version bump would have to catch independently.
-  crg_pin_spec=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['mcpServers']['code-review-graph']['args'][0])" "$mcp_config") \
-    || { echo "FAIL: could not read the code-review-graph pin from $mcp_config" >&2; return 1; }
+  crg_entry=$(python3 -c "import json,sys; e=json.load(open(sys.argv[1]))['mcpServers']['code-review-graph']; print(e['command']); print(e['args'][0])" "$mcp_config") \
+    || { echo "FAIL: could not read the code-review-graph entry from $mcp_config" >&2; return 1; }
+  crg_launcher_cmd=$(printf '%s\n' "$crg_entry" | sed -n 1p)
+  crg_pin_spec=$(printf '%s\n' "$crg_entry" | sed -n 2p)
 
   write_script() {
     local outfile="$1" fn="$2"
@@ -1589,7 +1591,7 @@ codex_launch_flags_test() (
     } > "$outfile"
   }
 
-  want="codex --model gpt-5.5 -c 'model_reasoning_effort=\"xhigh\"' -c check_for_update_on_startup=false -c 'notice.model_migrations={\"gpt-5.5\"=\"gpt-6.1-sol\"}' -c 'mcp_servers.\"code-review-graph\"={command=\"uvx\",args=[\"$crg_pin_spec\", \"serve\"]}' --add-dir /repo/.git --approve-for-me -c sandbox_workspace_write.network_access=true"
+  want="codex --model gpt-5.5 -c 'model_reasoning_effort=\"xhigh\"' -c check_for_update_on_startup=false -c 'notice.model_migrations={\"gpt-5.5\"=\"gpt-6.1-sol\"}' -c 'mcp_servers.\"code-review-graph\"={command=\"$crg_launcher_cmd\",args=[\"$crg_pin_spec\", \"serve\"]}' --add-dir /repo/.git --approve-for-me -c sandbox_workspace_write.network_access=true"
 
   script_file="$work/run.sh"
   write_script "$script_file" "$runtime_command_fn"

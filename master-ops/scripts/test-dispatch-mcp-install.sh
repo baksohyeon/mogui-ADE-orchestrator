@@ -11,6 +11,16 @@ here=$(cd "$(dirname "$0")" && pwd)
 doc=${1:-$here/../onboarding/08-settings-and-skills.md}
 pinned=${2:-$here/../templates/mcp-servers.json}
 
+# onboarding/ is read once from the authoring checkout during the live
+# onboarding conversation; MANIFEST.json never lists it, so a rendered
+# install (this script's own shipped destination) has no such file. Skip
+# rather than fail, the same way test-dispatch-unavailable-runtime.sh and
+# test-harness-selfcheck-infra.sh skip a dependency absent from that copy.
+if [ ! -f "$doc" ]; then
+  echo "SKIP: $(basename "$doc") not found (onboarding docs are authoring-checkout only, not part of a rendered template install)"
+  exit 0
+fi
+
 mcp_merge_test() (
   set +e
   set -u

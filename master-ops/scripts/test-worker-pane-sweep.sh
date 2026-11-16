@@ -69,6 +69,65 @@ expect "idle prompt" '❯ ' idle 0
 expect "idle prompt under a status line that says always-approve bypass permissions" 'always-approve bypass permissions
 ❯ ' idle 0
 
+# Verbatim pane preview quoted in issue #321, 2026-11-16: a mid-turn Claude Code worker whose
+# live status line (a verb, an ellipsis, a parenthesized elapsed time) sits above an
+# always-rendered, empty input line. Working, even though the line right above the empty prompt
+# is not one of the esc/thinking/churn words.
+CLAUDE_STATUS_PANE='⏺ Bounded poll of PR checks after the malformed-entry fix push · 12s
+  ⎿  $ i=0 ... sleep 20 ... (12s)
+     (ctrl+b to run in background)
+· Sautéing… (1h 15m 48s · ↓ 182.4k tokens)
+❯'
+expect "mid-turn Claude status line above an empty prompt (#321)" "$CLAUDE_STATUS_PANE" working 0
+# One box-drawing separator line between the status line and the empty input is the shape a
+# bordered pane actually renders (measured live, 2026-11-16); skip over it to the status line.
+expect "mid-turn Claude status line above a border line above an empty prompt" '· Sautéing… (45s · ↓ 1.2k tokens)
+──────
+❯ ' working 0
+# Pane preview measured live by the coordinator, 2026-11-16, PR #322 round 2, with the "Crafting"
+# verb: a "⎿ Tip: ..." continuation line sits between the status line and the separator above the
+# empty prompt. a311f95 (round 1's fix) only checked the single line directly above the prompt,
+# so it found this continuation line instead of the status line and misread the pane as idle;
+# walking upward past separator and "⎿" lines to the first other line fixes it. "Percolating" and
+# "Whatchamacalliting" are synthetic substitutions of the same shape, confirming the fix matches
+# the status-line's form rather than this one verb.
+for verb in Crafting Percolating Whatchamacalliting; do
+  expect "live mid-turn pane, '$verb', behind a tip continuation line (#322 round 2)" "     (ctrl+b to run in background)
+✳ ${verb}… (29m 40s · ↓ 65.6k tokens)
+  ⎿  Tip: Did you know you can drag and drop image files into your terminal?
+───
+❯
+───
+  Sonnet 5 │ selfcheck-required-infra █████░░░░░ 58%
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · PR #319" working 0
+done
+# A finished turn overwrites the same screen row with a past-tense summary. This fixture keeps
+# the parenthesized, middle-dot form the status line uses but drops the ellipsis, so it pins the
+# ellipsis itself as load-bearing: a status_line_re that dropped `…` would still match this line
+# and misread it as working.
+expect "finished Claude turn, no ellipsis, parens-and-middle-dot shape only" '⏺ I re-ran the tests from the extracted head.
+· Sautéed (7s · ↓ 182.4k tokens)
+❯ ' idle 0
+# Stale scrollback: the status-line shape is still visible several lines up, but the pane has
+# moved well past it to a genuinely idle prompt. Same guard as the stale-modal case above, for
+# the new shape: far enough back, it must not pin the pane to working forever.
+expect "status-line shape far above a genuinely idle prompt" '· Sautéing… (45s · ↓ 1.2k tokens)
+one
+two
+three
+four
+five
+six
+❯ ' idle 0
+# Adversarial case a reviewer bot raised: a finished worker's own reply quotes the status-line
+# shape, directly followed by its real, genuine finished-turn summary and an empty prompt. The
+# quote and the real summary cannot both be live-rendered (they would share one screen row), so
+# only the line directly above the prompt counts; the quote one line further up must not.
+expect "quoted status-line shape immediately above a real finished-turn line and an empty prompt" '⏺ Example from the bug report:
+  · Sautéing… (45s · ↓ 1.2k tokens)
+✻ Baked for 7s
+❯' idle 0
+
 # Failability: a copy that classifies from the whole captured chunk again, instead of the
 # foreground past the last prompt line, must flip the stale-scrollback case back to approval.
 MUTANT="$T/worker-pane-sweep-mutant"

@@ -15,14 +15,15 @@ set -u
 
 cd "$(dirname "$0")/.."
 
-SELFCHECK_BIN="${SELFCHECK_BIN:-./scripts/harness-selfcheck.sh}"
+SELFCHECK_DEFAULT="./scripts/harness-selfcheck.sh"
+SELFCHECK_BIN="${SELFCHECK_BIN:-$SELFCHECK_DEFAULT}"
 
 # harness-selfcheck.sh is instance-owned (template_common.INSTANCE_OWNED_EXACT):
 # a rendered template-only copy never has one, so there is nothing to measure
 # at the default path. An explicit override that is still missing is a typo
 # or a stale binary, not that case, and fails loudly instead of skipping.
 if [ ! -f "$SELFCHECK_BIN" ]; then
-  if [ "$SELFCHECK_BIN" != "./scripts/harness-selfcheck.sh" ]; then
+  if [ "$SELFCHECK_BIN" != "$SELFCHECK_DEFAULT" ]; then
     echo "FAIL: SELFCHECK_BIN=$SELFCHECK_BIN not found" >&2
     exit 1
   fi
@@ -31,7 +32,7 @@ if [ ! -f "$SELFCHECK_BIN" ]; then
 fi
 
 TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"' EXIT
+trap 'rm -rf "${TMP:?}"' EXIT
 
 pass=0
 fail=0
@@ -125,9 +126,9 @@ reset_fixture() {
   printf '{"mcpServers": {"ctx": {}, "code-review-graph": {}}}\n' > "$CLAUDE_MCP_CONFIG"
   printf '{}\n' > "$CLAUDE_USER_SETTINGS"
   printf '' > "$CODEX_MCP_CONFIG"
-  rm -rf "$WORKSPACE_ROOT/.claude" "$WORKSPACE_ROOT/.mcp.json"
+  rm -rf "${WORKSPACE_ROOT:?}/.claude" "${WORKSPACE_ROOT:?}/.mcp.json"
   mkdir -p "$WORKSPACE_ROOT/.claude"
-  rm -rf "$REPO_A"
+  rm -rf "${REPO_A:?}"
   mkdir -p "$REPO_A/.code-review-graph"
   touch "$REPO_A/.code-review-graph/graph.db"
   printf '{"repos": [{"path": "%s", "alias": "repo-a"}]}\n' "$REPO_A" > "$CRG_REGISTRY"
@@ -140,6 +141,7 @@ run_infra() {
     CODEX_MCP_CONFIG="$CODEX_MCP_CONFIG" \
     CODE_REVIEW_GRAPH_REGISTRY="$CRG_REGISTRY" \
     CODE_REVIEW_GRAPH_STALE_DAYS="${CODE_REVIEW_GRAPH_STALE_DAYS:-7}" \
+    INFRA_TIMEOUT_SECONDS="${INFRA_TIMEOUT_SECONDS:-10}" \
     bash "$INFRA_BLOCK"
 }
 
@@ -185,6 +187,27 @@ printf '! Claude Code history location could not be selected safely\nthe selecte
 check "(b) ctx missing claude coverage is named" "Infra: ctx WARN does not cover: claude" "" 0
 exit_codes+=("$(run_infra >/dev/null 2>&1; echo $?)")
 
+# Round 2, Important #1: orca search --index-status --json parsing fine but
+# carrying no result.sessionsByAgent must read as undecided, never as a
+# vacuous OK -- round 1's sessions_by_agent() returned {} for this shape,
+# which the coverage loop treats the same as "measured, nothing to report".
+reset_fixture
+cat > "$BIN_DIR/orca" <<'EOF'
+#!/bin/bash
+printf '%s\n' '{"ok": true}'
+EOF
+chmod +x "$BIN_DIR/orca"
+check "orca status missing result.sessionsByAgent is undecided, never OK" \
+  "Infra: ctx WARN undecided (orca search --index-status --json has no result.sessionsByAgent)" "Infra: ctx OK" 0
+
+# Round 2, Important #1: ctx reporting zero indexed providers warns on its
+# own, even when Orca has no claude/codex sessions to compare against --
+# an index that covers nothing is never a clean pass.
+reset_fixture
+write_stub_ctx ""
+check "ctx with zero indexed providers warns, never OK" \
+  "Infra: ctx WARN ctx has indexed no providers" "Infra: ctx OK" 0
+
 # (c) A graph updated 30 days ago warns with the day count.
 reset_fixture
 old_ts=$(python3 -c "import time; print(int(time.time() - 30 * 86400))")
@@ -197,6 +220,25 @@ exit_codes+=("$(run_infra >/dev/null 2>&1; echo $?)")
 reset_fixture
 printf '{"repos": [null]}\n' > "$CRG_REGISTRY"
 check "a non-dict registry entry is named, not silently skipped" "Infra: code-review-graph WARN missing path: invalid registry entry" "" 0
+
+# Round 2, Important #2: an empty registry (repos absent or an empty list)
+# warns that nothing is registered, rather than iterating zero times and
+# reading as a clean pass with nothing checked.
+reset_fixture
+printf '{"repos": []}\n' > "$CRG_REGISTRY"
+check "an empty code-review-graph registry warns, never OK" \
+  "Infra: code-review-graph WARN no repository registered" "Infra: code-review-graph OK" 0
+
+# Round 2, Important #2: a non-finite or non-positive
+# CODE_REVIEW_GRAPH_STALE_DAYS is rejected with a WARN naming the variable,
+# and the default of 7 is used for the rest of the check regardless.
+reset_fixture
+for bad_value in nan inf 0 -1; do
+  CODE_REVIEW_GRAPH_STALE_DAYS="$bad_value"
+  check "invalid CODE_REVIEW_GRAPH_STALE_DAYS=$bad_value warns and names the variable" \
+    "Infra: code-review-graph WARN CODE_REVIEW_GRAPH_STALE_DAYS='$bad_value' must be a positive, finite number; using default 7" "" 0
+done
+unset CODE_REVIEW_GRAPH_STALE_DAYS
 
 # (d) A tool absent from PATH warns, never crashes. A real install
 # elsewhere on this host's own PATH (outside $BIN_DIR) would otherwise find
@@ -304,6 +346,13 @@ else
 fi
 rm -f "$WORKSPACE_ROOT/.mcp.json"
 
+# Round 2, Minor: a Claude local-scope server, registered per-project
+# under projects[<path>].mcpServers in the same file top-level mcpServers
+# lives in, counts as reachable the same way a user-scope entry does.
+reset_fixture
+printf '{"mcpServers": {}, "projects": {"%s": {"mcpServers": {"ctx": {}}}}}\n' "$WORKSPACE_ROOT" > "$CLAUDE_MCP_CONFIG"
+check "a Claude local-scope project entry is reachable" "Infra: ctx OK" "ctx WARN" 0
+
 # A commented-out Codex table header is not a registration: TOML treats
 # `# [mcp_servers.ctx]` as a comment, so a substring match that ignores the
 # leading `#` would read this host as having ctx reachable when it does not.
@@ -324,6 +373,34 @@ printf '{"disabledMcpjsonServers": ["code-review-graph"]}\n' > "$WORKSPACE_ROOT/
 printf '[mcp_servers.code-review-graph]\ncommand = "uvx"\n' > "$CODEX_MCP_CONFIG"
 check "a Claude-disabled entry still reaches an active Codex registration" "Infra: code-review-graph OK" "code-review-graph WARN" 0
 rm -f "$WORKSPACE_ROOT/.mcp.json"
+
+# Round 2, Important #3: a Codex table with `enabled = false` is not
+# reachable, even though the table header itself matches.
+reset_fixture
+printf '{"mcpServers": {"ctx": {}}}\n' > "$CLAUDE_MCP_CONFIG"
+printf '[mcp_servers.code-review-graph]\nenabled = false\ncommand = "uvx"\n' > "$CODEX_MCP_CONFIG"
+check "a Codex entry with enabled = false is not reachable" \
+  "Infra: code-review-graph WARN runs, but not registered" "code-review-graph OK" 0
+
+# Round 2, Important #3: the quoted table header form is accepted the same
+# as the bare one.
+reset_fixture
+printf '{"mcpServers": {"ctx": {}}}\n' > "$CLAUDE_MCP_CONFIG"
+printf '[mcp_servers."code-review-graph"]\ncommand = "uvx"\n' > "$CODEX_MCP_CONFIG"
+check "a quoted Codex table header is accepted" "Infra: code-review-graph OK" "code-review-graph WARN" 0
+
+# Round 2, Minor: a timeout kill (124 from a real `timeout`/`gtimeout`, or
+# 137/143 from the plain-bash fallback's SIGKILL/SIGTERM) reports the bound
+# it hit, not the generic empty-output fallback text.
+reset_fixture
+cat > "$BIN_DIR/code-review-graph" <<'EOF'
+#!/bin/bash
+sleep 5
+EOF
+chmod +x "$BIN_DIR/code-review-graph"
+INFRA_TIMEOUT_SECONDS=1
+check "a timeout kill reports the bound it hit" "Infra: code-review-graph WARN timed out after 1s" "" 0
+unset INFRA_TIMEOUT_SECONDS
 
 echo "----"
 echo "passed: $pass  failed: $fail"

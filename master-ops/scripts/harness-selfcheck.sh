@@ -494,15 +494,100 @@ infra_with_timeout() {
   return "$rc"
 }
 
+# $1 = output var name, $2 = exit-code var name, remaining = the command.
+# Runs it and sets both variables in the caller, without the usual
+# `var=$(cmd)` problem of losing the real exit code to `set -e` (a bare
+# failing assignment aborts the script before `$?` can be read) or to a
+# negated `if ! var=$(cmd); then` (inside that branch `$?` reflects the
+# `if`, not `cmd` -- measured empirically while writing this). The exit
+# code travels inside the captured text itself, as a trailing
+# "\n<code>" that the final `printf` always succeeds in writing, so the
+# substitution's own status is always 0 and the assignment never aborts;
+# split back out here.
+infra_capture() {
+  local __out_var="$1" __rc_var="$2"
+  shift 2
+  local combined
+  combined=$("$@" 2>&1; printf '\n%s' "$?")
+  printf -v "$__out_var" '%s' "${combined%$'\n'*}"
+  printf -v "$__rc_var" '%s' "${combined##*$'\n'}"
+}
+
+INFRA_TIMEOUT_SECONDS="${INFRA_TIMEOUT_SECONDS:-10}"
 CODE_REVIEW_GRAPH_STALE_DAYS="${CODE_REVIEW_GRAPH_STALE_DAYS:-7}"
 CODE_REVIEW_GRAPH_REGISTRY="${CODE_REVIEW_GRAPH_REGISTRY:-$HOME/.code-review-graph/registry.json}"
 CLAUDE_MCP_CONFIG="${CLAUDE_MCP_CONFIG:-${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json}"
 CLAUDE_USER_SETTINGS="${CLAUDE_USER_SETTINGS:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json}"
 CODEX_MCP_CONFIG="${CODEX_MCP_CONFIG:-${CODEX_HOME:-$HOME/.codex}/config.toml}"
 
+# $1 = tool name. Returns 0 when Codex's config.toml names it with an
+# active entry, 1 otherwise (absent, or present with `enabled = false`).
+# Parses with `tomllib` when the running Python is 3.11+; a host still on
+# an older Python (this template's own gate notes one such case) falls
+# back to a line scan that covers both the bare `[mcp_servers.<tool>]`
+# header and the quoted `[mcp_servers."<tool>"]` form, since a bare table
+# key cannot contain a `.` as part of the tool name itself without TOML
+# requiring the quoted form.
+codex_mcp_reachable() {
+  local tool="$1"
+  [ -f "$CODEX_MCP_CONFIG" ] || return 1
+  TOOL="$tool" CONFIG="$CODEX_MCP_CONFIG" python3 << 'EOFCODEX'
+import os, re, sys
+
+tool = os.environ["TOOL"]
+config_path = os.environ["CONFIG"]
+
+try:
+    text = open(config_path, encoding="utf-8").read()
+except Exception:
+    sys.exit(1)
+
+
+def via_tomllib():
+    try:
+        import tomllib
+    except ImportError:
+        return None
+    try:
+        data = tomllib.loads(text)
+    except Exception:
+        return None
+    servers = data.get("mcp_servers")
+    if not isinstance(servers, dict) or tool not in servers:
+        return False
+    entry = servers[tool]
+    if isinstance(entry, dict) and entry.get("enabled") is False:
+        return False
+    return True
+
+
+def via_text_scan():
+    quoted = "(?:" + re.escape(tool) + "|\"" + re.escape(tool) + "\"|'" + re.escape(tool) + "')"
+    header_re = re.compile(r'^[ \t]*\[mcp_servers\.' + quoted + r'\][ \t]*$')
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if not header_re.match(line):
+            continue
+        for cont in lines[i + 1:]:
+            if re.match(r'^[ \t]*\[', cont):
+                return True
+            if re.match(r'^[ \t]*enabled[ \t]*=[ \t]*false\b', cont):
+                return False
+        return True
+    return False
+
+
+result = via_tomllib()
+if result is None:
+    result = via_text_scan()
+sys.exit(0 if result else 1)
+EOFCODEX
+}
+
 # $1 = tool name. Echoes nothing and returns 0 when reachable; echoes one
-# reason line and returns 1 when not. Claude: a user-scope server (the
-# top-level `mcpServers` in the file CLAUDE_CONFIG_DIR points an Orca
+# reason line and returns 1 when not. Claude: a user-scope or local-scope
+# server (the top-level `mcpServers`, or `projects[<path>].mcpServers` for
+# WORKSPACE_ROOT/OPS_DIR, both in the file CLAUDE_CONFIG_DIR points an Orca
 # profile's Claude CLI at) is always reachable; a project-scope server
 # listed in `.mcp.json` additionally needs `enableAllProjectMcpServers` or
 # `enabledMcpjsonServers` in some settings file the session reads, and is
@@ -510,16 +595,16 @@ CODEX_MCP_CONFIG="${CODEX_MCP_CONFIG:-${CODEX_HOME:-$HOME/.codex}/config.toml}"
 # in `disabledMcpjsonServers` -- a disabled entry wins regardless of which
 # file sets it (coordinator addendum 2026-11-16, peer measurement: a server
 # present in .mcp.json was still invisible to Claude master sessions because
-# of exactly this). Codex: its config.toml names an uncommented
-# `[mcp_servers.<tool>]` table header, checked even when Claude's own
-# verdict is disabled or pending, since either host can carry the session —
-# a Claude-side gap is not the final answer while Codex might still have an
-# active entry. Reads configuration files only; never calls `claude mcp
-# list`, which health-checks every server and is slow.
+# of exactly this). Codex: `codex_mcp_reachable` above, checked even when
+# Claude's own verdict is disabled or pending, since either host can carry
+# the session -- a Claude-side gap is not the final answer while Codex
+# might still have an active entry. Reads configuration files only; never
+# calls `claude mcp list`, which health-checks every server and is slow.
 infra_mcp_status() {
   local tool="$1" status claude_reason=""
   if status=$(TOOL="$tool" \
     CLAUDE_MCP_CONFIG="$CLAUDE_MCP_CONFIG" \
+    CLAUDE_PROJECT_PATHS="$WORKSPACE_ROOT:$OPS_DIR" \
     CLAUDE_PROJECT_MCP_FILES="$WORKSPACE_ROOT/.mcp.json:$OPS_DIR/.mcp.json" \
     CLAUDE_SETTINGS_FILES="$CLAUDE_USER_SETTINGS:$WORKSPACE_ROOT/.claude/settings.json:$WORKSPACE_ROOT/.claude/settings.local.json:$OPS_DIR/.claude/settings.json:$OPS_DIR/.claude/settings.local.json" \
     python3 << 'EOFMCP'
@@ -541,6 +626,20 @@ user_cfg = load_json(os.environ.get("CLAUDE_MCP_CONFIG")) or {}
 if tool in (user_cfg.get("mcpServers") or {}):
     print("reachable:user-scope")
     raise SystemExit
+
+# Local-scope servers (`claude mcp add -s local`) live under
+# projects[<project path>].mcpServers in the same file, keyed by the
+# project's own path -- distinct from the top-level mcpServers checked
+# above (user scope) and from a project's own .mcp.json (project scope,
+# checked below).
+projects = user_cfg.get("projects") or {}
+for project_path in os.environ.get("CLAUDE_PROJECT_PATHS", "").split(":"):
+    if not project_path:
+        continue
+    project_cfg = projects.get(project_path) or {}
+    if tool in (project_cfg.get("mcpServers") or {}):
+        print("reachable:local-scope")
+        raise SystemExit
 
 project_source = None
 for path in os.environ.get("CLAUDE_PROJECT_MCP_FILES", "").split(":"):
@@ -586,10 +685,7 @@ EOFMCP
         ;;
     esac
   fi
-  # Anchored on the table header line itself (optional leading whitespace,
-  # nothing after the closing bracket): a substring match would also accept
-  # a commented-out `# [mcp_servers.ctx]`, which TOML parses as a comment.
-  if [ -f "$CODEX_MCP_CONFIG" ] && grep -qE "^[[:space:]]*\\[mcp_servers\\.${tool}\\][[:space:]]*\$" "$CODEX_MCP_CONFIG" 2>/dev/null; then
+  if codex_mcp_reachable "$tool"; then
     return 0
   fi
   echo "${claude_reason:-not registered as an MCP server (checked Claude user config, project .mcp.json, Codex config.toml)}"
@@ -602,15 +698,24 @@ EOFMCP
 ctx_warn=""
 if ! command -v ctx >/dev/null 2>&1; then
   ctx_warn="absent from PATH"
-elif ! ctx_status_json=$(infra_with_timeout 10 ctx status --format json 2>&1); then
-  ctx_warn=$(printf '%s\n' "$ctx_status_json" | head -1)
-  [ -n "$ctx_warn" ] || ctx_warn="ctx status failed with no output"
-elif ! ctx_mcp_reason=$(infra_mcp_status ctx); then
-  ctx_warn="runs, but $ctx_mcp_reason"
 else
-  orca_status_json=$(infra_with_timeout 10 orca search --index-status --json 2>&1) || orca_status_json=""
-  ctx_sources_text=$(infra_with_timeout 10 ctx sources 2>&1) || true
-  ctx_warn=$(CTX_STATUS="$ctx_status_json" ORCA_STATUS="$orca_status_json" CTX_SOURCES="$ctx_sources_text" python3 << 'EOFCTX'
+  infra_capture ctx_status_json ctx_status_rc infra_with_timeout "$INFRA_TIMEOUT_SECONDS" ctx status --format json
+  if [ "$ctx_status_rc" -ne 0 ]; then
+    case "$ctx_status_rc" in
+      124 | 137 | 143)
+        ctx_warn="timed out after ${INFRA_TIMEOUT_SECONDS}s"
+        ;;
+      *)
+        ctx_warn=$(printf '%s\n' "$ctx_status_json" | head -1)
+        [ -n "$ctx_warn" ] || ctx_warn="ctx status failed with no output"
+        ;;
+    esac
+  elif ! ctx_mcp_reason=$(infra_mcp_status ctx); then
+    ctx_warn="runs, but $ctx_mcp_reason"
+  else
+    orca_status_json=$(infra_with_timeout "$INFRA_TIMEOUT_SECONDS" orca search --index-status --json 2>&1) || orca_status_json=""
+    ctx_sources_text=$(infra_with_timeout "$INFRA_TIMEOUT_SECONDS" ctx sources 2>&1) || true
+    ctx_warn=$(CTX_STATUS="$ctx_status_json" ORCA_STATUS="$orca_status_json" CTX_SOURCES="$ctx_sources_text" python3 << 'EOFCTX'
 import json, os
 
 def providers_from_status(raw):
@@ -625,11 +730,20 @@ def providers_from_status(raw):
     return providers
 
 def sessions_by_agent(raw):
+    # None distinguishes "could not tell" from "told us there are none":
+    # unparseable JSON, a missing `result`, or a `result` with no
+    # `sessionsByAgent` key are all an unmeasurable Orca index, not a
+    # measured empty one. A present `sessionsByAgent` is trusted even when
+    # it is itself `{}` -- that is Orca legitimately reporting no sessions.
     try:
         data = json.loads(raw)
     except Exception:
         return None
-    return (data.get("result") or {}).get("sessionsByAgent") or {}
+    result = data.get("result")
+    if not isinstance(result, dict) or "sessionsByAgent" not in result:
+        return None
+    sessions = result.get("sessionsByAgent")
+    return sessions if isinstance(sessions, dict) else None
 
 def reason_for(provider_label, sources_text):
     lines = sources_text.splitlines()
@@ -653,7 +767,9 @@ sources_text = os.environ.get("CTX_SOURCES", "")
 if providers is None:
     print("undecided (could not parse ctx status --format json)")
 elif sessions is None:
-    print("undecided (could not parse orca search --index-status --json)")
+    print("undecided (orca search --index-status --json has no result.sessionsByAgent)")
+elif not providers:
+    print("ctx has indexed no providers")
 else:
     missing = []
     for provider in ("claude", "codex"):
@@ -665,7 +781,8 @@ else:
     if missing:
         print("does not cover: " + ", ".join(missing))
 EOFCTX
-) || ctx_warn="ctx covering-check failed to run"
+    ) || ctx_warn="ctx covering-check failed to run"
+  fi
 fi
 if [ -n "$ctx_warn" ]; then
   echo "Infra: ctx WARN $ctx_warn"
@@ -682,29 +799,52 @@ fi
 crg_warn=""
 if ! command -v code-review-graph >/dev/null 2>&1; then
   crg_warn="absent from PATH"
-elif ! crg_version_out=$(infra_with_timeout 10 code-review-graph --version 2>&1); then
-  crg_warn=$(printf '%s\n' "$crg_version_out" | head -1)
-  [ -n "$crg_warn" ] || crg_warn="code-review-graph --version failed with no output"
-elif ! crg_mcp_reason=$(infra_mcp_status code-review-graph); then
-  crg_warn="runs, but $crg_mcp_reason"
-elif [ ! -f "$CODE_REVIEW_GRAPH_REGISTRY" ]; then
-  crg_warn="runs and registered, but no multi-repo registry at $CODE_REVIEW_GRAPH_REGISTRY"
 else
-  crg_warn=$(CODE_REVIEW_GRAPH_REGISTRY="$CODE_REVIEW_GRAPH_REGISTRY" CODE_REVIEW_GRAPH_STALE_DAYS="$CODE_REVIEW_GRAPH_STALE_DAYS" python3 << 'EOFCRG'
-import json, os, time
+  infra_capture crg_version_out crg_version_rc infra_with_timeout "$INFRA_TIMEOUT_SECONDS" code-review-graph --version
+  if [ "$crg_version_rc" -ne 0 ]; then
+    case "$crg_version_rc" in
+      124 | 137 | 143)
+        crg_warn="timed out after ${INFRA_TIMEOUT_SECONDS}s"
+        ;;
+      *)
+        crg_warn=$(printf '%s\n' "$crg_version_out" | head -1)
+        [ -n "$crg_warn" ] || crg_warn="code-review-graph --version failed with no output"
+        ;;
+    esac
+  elif ! crg_mcp_reason=$(infra_mcp_status code-review-graph); then
+    crg_warn="runs, but $crg_mcp_reason"
+  elif [ ! -f "$CODE_REVIEW_GRAPH_REGISTRY" ]; then
+    crg_warn="runs and registered, but no multi-repo registry at $CODE_REVIEW_GRAPH_REGISTRY"
+  else
+    crg_warn=$(CODE_REVIEW_GRAPH_REGISTRY="$CODE_REVIEW_GRAPH_REGISTRY" CODE_REVIEW_GRAPH_STALE_DAYS="$CODE_REVIEW_GRAPH_STALE_DAYS" python3 << 'EOFCRG'
+import json, math, os, time
 
 def main():
     registry_path = os.environ["CODE_REVIEW_GRAPH_REGISTRY"]
+    raw_threshold = os.environ["CODE_REVIEW_GRAPH_STALE_DAYS"]
+    threshold_days = 7.0
+    parts = []
     try:
-        threshold_days = float(os.environ["CODE_REVIEW_GRAPH_STALE_DAYS"])
+        parsed = float(raw_threshold)
     except ValueError:
-        print(f"CODE_REVIEW_GRAPH_STALE_DAYS is not a number: {os.environ['CODE_REVIEW_GRAPH_STALE_DAYS']!r}")
-        return
+        parsed = None
+    if parsed is None or not math.isfinite(parsed) or parsed <= 0:
+        parts.append(
+            f"CODE_REVIEW_GRAPH_STALE_DAYS={raw_threshold!r} must be a positive, finite number; using default 7"
+        )
+    else:
+        threshold_days = parsed
 
     try:
         repos = json.load(open(registry_path)).get("repos") or []
     except Exception as exc:
-        print(f"registry unreadable ({exc})")
+        parts.append(f"registry unreadable ({exc})")
+        print("; ".join(parts))
+        return
+
+    if not repos:
+        parts.append("no repository registered")
+        print("; ".join(parts))
         return
 
     missing_paths = []
@@ -728,7 +868,6 @@ def main():
         if age_days > threshold_days:
             stale.append(f"{alias} ({age_days:.0f}d)")
 
-    parts = []
     if stale:
         parts.append("stale: " + ", ".join(stale))
     if missing_paths:
@@ -740,7 +879,8 @@ try:
 except Exception as exc:
     print(f"registry check failed ({exc})")
 EOFCRG
-) || crg_warn="registry check failed to run"
+    ) || crg_warn="registry check failed to run"
+  fi
 fi
 if [ -n "$crg_warn" ]; then
   echo "Infra: code-review-graph WARN $crg_warn"

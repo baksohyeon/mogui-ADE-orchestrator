@@ -42,8 +42,9 @@ This check still only measures and warns; the wiring itself now ships by default
 into the workspace-root `.mcp.json`, names it in `enabledMcpjsonServers`, and registers every `{{REPO_LIST}}`
 member into the multi-repo registry — the three things gap 2 and gap 3 above actually read. `dispatch.md`
 covers the matching worker-side wiring (`--mcp-config` for Claude, an inline `-c mcp_servers.<name>={...}`
-override for Codex). A `WARN` on this line after onboarding has run points at one of those three steps, not
-at a missing install.
+override for Codex). Triage a `WARN` on this line by its printed reason: gap 1 ("Runs") still names an
+absent or broken CLI install, same as before this stage, and only a gap 2 or gap 3 reason after onboarding
+has run points at one of the three wiring steps above instead.
 
 ## Running the check
 

@@ -41,7 +41,7 @@ for name in markers shell_quote_fn mcp_args_fn read_fn apply_fn runtime_command_
 done
 call_site='[ "$RUNTIME" = codex ] && apply_codex_instance_launch_config'
 
-base="codex --model gpt-5.5 -c 'model_reasoning_effort=\"xhigh\"' -c check_for_update_on_startup=false -c 'notice.model_migrations={\"gpt-5.5\"=\"gpt-6.1-sol\"}' -c 'mcp_servers.code-review-graph={command=\"uvx\",args=[\"code-review-graph@2.4.0\", \"serve\"]}' --add-dir /repo/.git"
+base="codex --model gpt-5.5 -c 'model_reasoning_effort=\"xhigh\"' -c check_for_update_on_startup=false -c 'notice.model_migrations={\"gpt-5.5\"=\"gpt-6.1-sol\"}' -c 'mcp_servers.\"code-review-graph\"={command=\"uvx\",args=[\"code-review-graph@2.4.0\", \"serve\"]}' --add-dir /repo/.git"
 # Without the bypass flag the launch uses --approve-for-me plus the network-access
 # config key (measured 2026-11-11 on codex-cli 0.167.0, Orca 1.4.255).
 today="$base --approve-for-me -c sandbox_workspace_write.network_access=true"
@@ -60,7 +60,7 @@ run_case() {
   {
     echo 'set -u'
     printf 'INSTANCE_RUNTIME_CONFIG=%s\n' "$config"
-    printf 'MCP_SERVERS_CONFIG=%s\n' "$mcp_config"
+    printf 'MCP_SERVERS_CONFIG=%q\n' "$mcp_config"
     printf '%s\n' "$vars" "$markers" "$shell_quote_fn" "$mcp_args_fn" "$read_body" "$apply_body" "$runtime_command_fn" "$start_fn"
     echo 'apply_codex_instance_launch_config'
     echo 'MODEL=gpt-5.5'

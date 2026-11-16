@@ -58,21 +58,25 @@ mcp_merge_test() (
     python3 "$work/merge.py" "$dest" "$pinned"
   }
 
-  # Case: no existing .mcp.json — the merge creates one with the pinned entry.
+  # Case: no existing .mcp.json — the merge creates one with the pinned entry,
+  # and that entry is actually pinned (a package spec with no "@version" is
+  # a regression this test must catch, not just whatever the template holds).
   dest="$work/fresh.mcp.json"
-  run_merge "$dest" >/dev/null 2>&1
+  out=$(run_merge "$dest" 2>&1)
   status=$?
   if [ "$status" -ne 0 ] || [ ! -f "$dest" ]; then
     echo "FAIL: merge into a missing file should create it" >&2
+    printf '%s\n' "$out" >&2
     return 1
   fi
   if ! python3 -c "
 import json, sys
 dest_doc = json.load(open(sys.argv[1]))
 pinned_doc = json.load(open(sys.argv[2]))
-sys.exit(0 if dest_doc['mcpServers']['code-review-graph'] == pinned_doc['mcpServers']['code-review-graph'] else 1)
+want = pinned_doc['mcpServers']['code-review-graph']
+sys.exit(0 if dest_doc['mcpServers']['code-review-graph'] == want and '@' in want['args'][0] else 1)
 " "$dest" "$pinned"; then
-    echo "FAIL: fresh merge did not write the pinned code-review-graph entry" >&2
+    echo "FAIL: fresh merge did not write a pinned (name@version) code-review-graph entry" >&2
     cat "$dest" >&2
     return 1
   fi
@@ -91,10 +95,11 @@ sys.exit(0 if dest_doc['mcpServers']['code-review-graph'] == pinned_doc['mcpServ
   }
 }
 JSON
-  run_merge "$dest" >/dev/null 2>&1
+  out=$(run_merge "$dest" 2>&1)
   status=$?
   if [ "$status" -ne 0 ]; then
     echo "FAIL: merge into a file with another server should succeed" >&2
+    printf '%s\n' "$out" >&2
     return 1
   fi
   if ! python3 -c "
@@ -122,10 +127,11 @@ sys.exit(0 if 'some-other-tool' in servers and 'code-review-graph' in servers el
   }
 }
 JSON
-  run_merge "$dest" >/dev/null 2>&1
+  out=$(run_merge "$dest" 2>&1)
   status=$?
   if [ "$status" -ne 0 ]; then
     echo "FAIL: merge over a stale entry should succeed" >&2
+    printf '%s\n' "$out" >&2
     return 1
   fi
   if ! python3 -c "

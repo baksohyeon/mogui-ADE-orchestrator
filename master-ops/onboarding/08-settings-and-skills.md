@@ -141,7 +141,7 @@ if os.path.exists(dest):
     with open(dest, encoding="utf-8") as fh:
         raw = fh.read()
     try:
-        current = json.loads(raw) if raw.strip() else {}
+        current = json.loads(raw)
     except json.JSONDecodeError as exc:
         sys.exit(f"refusing to merge: {dest} is not valid JSON ({exc}); fix or remove it by hand first")
 
@@ -160,19 +160,31 @@ with open(dest, "w", encoding="utf-8") as fh:
 A project-scope `.mcp.json` entry stays invisible to a Claude master session unless some settings file
 also lists it in `enabledMcpjsonServers` (or sets `enableAllProjectMcpServers`) — the exact gap the measured
 peer seat hit (its `.local.json` listed the server in `disabledMcpjsonServers` instead, which wins over any
-enable, regardless of which settings file sets it). Merge `"enabledMcpjsonServers": ["code-review-graph"]`
-into the master's workspace-level `.claude/settings.json` under the same host-edit approval as the hook
-fragment above, and check no settings file layered on top (including `.claude/settings.local.json`) still
-disables it.
+enable, regardless of which settings file sets it). In the master's workspace-level `.claude/settings.json`,
+add `"code-review-graph"` to the `enabledMcpjsonServers` array if it is not already listed there, keeping
+every other entry in that array (create the key as `["code-review-graph"]` if the file has none yet). Do
+this under the same host-edit approval as the hook fragment above, and check no settings file layered on
+top (including `.claude/settings.local.json`) still disables it.
 
 Cross-repo search (`cross_repo_search_tool`, `list_repos_tool`) answers from the tool's own multi-repo
 registry (`~/.code-review-graph/registry.json`), not from the `.mcp.json` entry or any `--repo` flag — and
 that registry is shared by every seat on the host machine, so register into it additively rather than
-replacing it. Register every confirmed `{{REPO_LIST}}` member (and `{{OPS_REPO}}`) once the workspace
-descriptor exists, once per entry already written to `config/workspace-descriptor.json`:
+replacing it. `register` is a bare CLI subcommand, not an MCP launch, so it needs the same pin `uvx` supplies
+to `serve` rather than an unpinned `code-review-graph` on `PATH` (measured 2026-11-16: a bare shim without a
+pinned `mise`/`uvx` version fails before reaching the registry at all). Register every confirmed
+`{{REPO_LIST}}` member once the workspace descriptor exists, once per entry already written to
+`config/workspace-descriptor.json`:
 
 ```console
-$ code-review-graph register "{{WORKSPACE_ROOT}}/<repo-path>" --alias <repo-name>
+$ uvx code-review-graph@<pin> register "{{WORKSPACE_ROOT}}/<repo-path>" --alias <repo-name>
+```
+
+`{{OPS_REPO}}` commonly lives outside `{{WORKSPACE_ROOT}}` (a separate absolute path), so the relative form
+above cannot name it. When `{{OPS_REPO}}` is not already a `{{REPO_LIST}}` member, register it the same way
+with its own absolute path instead:
+
+```console
+$ uvx code-review-graph@<pin> register "{{OPS_REPO}}" --alias ops
 ```
 
 A call the master or a worker makes still needs an explicit `repo_root` naming one of these paths;

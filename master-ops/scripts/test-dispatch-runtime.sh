@@ -1584,7 +1584,7 @@ codex_launch_flags_test() (
     } > "$outfile"
   }
 
-  want="codex --model gpt-5.5 -c 'model_reasoning_effort=\"xhigh\"' -c check_for_update_on_startup=false -c 'notice.model_migrations={\"gpt-5.5\"=\"gpt-6.1-sol\"}' -c 'mcp_servers.code-review-graph={command=\"uvx\",args=[\"code-review-graph@2.4.0\", \"serve\"]}' --add-dir /repo/.git --approve-for-me -c sandbox_workspace_write.network_access=true"
+  want="codex --model gpt-5.5 -c 'model_reasoning_effort=\"xhigh\"' -c check_for_update_on_startup=false -c 'notice.model_migrations={\"gpt-5.5\"=\"gpt-6.1-sol\"}' -c 'mcp_servers.\"code-review-graph\"={command=\"uvx\",args=[\"code-review-graph@2.4.0\", \"serve\"]}' --add-dir /repo/.git --approve-for-me -c sandbox_workspace_write.network_access=true"
 
   script_file="$work/run.sh"
   write_script "$script_file" "$runtime_command_fn"

@@ -52,9 +52,9 @@ RULES
     local outfile="$1" chat_json="$2" rules_file="${3:-$work/rules/standing-rules.md}"
     {
       echo 'set -u'
-      printf 'SCRIPTS_DIR=%s\n' "$work/scripts"
-      printf 'export DISPATCH_STANDING_RULES=%s\n' "$rules_file"
-      printf 'export DISPATCH_STANDING_RULES_LOCAL=%s\n' "$work/config/standing-rules.overlay.md"
+      printf 'SCRIPTS_DIR=%q\n' "$work/scripts"
+      printf 'export DISPATCH_STANDING_RULES=%q\n' "$rules_file"
+      printf 'export DISPATCH_STANDING_RULES_LOCAL=%q\n' "$work/config/standing-rules.overlay.md"
       printf '%s\n' "$jqf_fn"
       printf '%s\n' "$block_fn"
       printf 'CHK=%s\n' "$(printf '%q' "$chat_json")"
@@ -171,7 +171,7 @@ required_infra_always_test "$dispatch" || exit 1
 # known names by scanning that file's headings; no separate allowlist to
 # keep in sync).
 rules_file=$(cd "$(dirname "$dispatch")/.." && pwd)/rules/standing-rules.md
-grep -qF '## required-infra' "$rules_file" || {
+grep -qxF '## required-infra' "$rules_file" || {
   echo "FAIL: shipped standing-rules.md is missing the '## required-infra' heading" >&2
   exit 1
 }

@@ -30,9 +30,8 @@ ledger is the source of truth for later reconciliation.
 
 ## Required infrastructure for workers (#317 stage 2)
 
-Every launched worker gets the required-infra MCP server(s) pinned once in `templates/mcp-servers.json`
-(`code-review-graph`, currently), the same file the `required-infra` standing-rule block points a worker at
-for guidance. A Claude worker gets them through `--mcp-config <that file>`, placed before the per-task
+Every Claude and Codex worker gets the required-infra MCP server(s) pinned once in `templates/mcp-servers.json`
+(`code-review-graph`, currently). A Claude worker gets them through `--mcp-config <that file>`, placed before the per-task
 `--settings` flag so it is not swallowed as that flag's argument; this reads straight from `MCP_SERVERS_CONFIG`
 (`DISPATCH_MCP_SERVERS_CONFIG` overrides it) rather than through the worktree's own `.mcp.json`, so a worker
 never hits the untrusted-project-config approval prompt that auto-discovery would raise. A Codex worker gets

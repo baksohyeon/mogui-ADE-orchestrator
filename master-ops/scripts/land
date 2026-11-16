@@ -1,0 +1,270 @@
+#!/usr/bin/env bash
+# Land one or more commits onto a repository's main only when every step
+# below passes. Each step runs on its own, and only that step's own exit
+# code decides whether the next one runs. Issue #318: a `tail -1` on a
+# gate's output hid its real exit code, and `;` chaining ran the push
+# regardless of what came before it, so a failing gate did not stop the
+# push.
+#
+# The checkout must not be edited while this script runs, and the gate
+# must not rewrite tracked files or move HEAD. A gate that moves the
+# checkout (a commit, an amend, a different branch checked out) fails the
+# run but resets cleanly; a gate that leaves it dirty (an uncommitted edit,
+# an unfinished cherry-pick) is never reset over, since land cannot tell
+# that apart from real work it would destroy.
+#
+# Usage: land --repo <path> --gate '<command>' <commit>...
+#
+# Steps, in order, stopping at the first failure:
+#   1. the checkout is on main, clean, and equal to origin/main after a fetch
+#   2. git cherry-pick each commit; on conflict, abort and reset; record
+#      `picked`, the sha this produced
+#   3. run the gate in the repo root under `set -o pipefail`, full output
+#      to a log file, continue only on exit 0 (never on a line of its
+#      output, and not just the last stage of a pipeline inside it)
+#   4. the checkout is still on main, at `picked`, and clean (a gate that
+#      commits, amends, checks out something else, or leaves an
+#      uncommitted edit on a tracked file fails this step)
+#   5. origin/main (pre-push) is an ancestor of `picked`
+#   6. git push origin "${picked}:main" (never --force)
+#   7. fetch again and confirm origin/main now has `picked` as an ancestor
+#
+# Exit codes:
+#   0  landed and pushed; origin/main confirmed to have picked as an
+#      ancestor.
+#   1  a step above said no, and the checkout reset cleanly to the sha it
+#      started from: the repository was not ready, the cherry-pick
+#      conflicted, the gate exited nonzero, the gate moved the checkout
+#      without leaving it dirty, the ancestor check failed, the push
+#      failed, or the post-push confirmation failed (there, the push
+#      already went out, and the message says so).
+#   2  could not run the check, or could not safely recover from a
+#      failure: bad usage, the repo path is not a git checkout, a commit
+#      argument does not resolve, git fetch failed, an internal step
+#      (mktemp, reading HEAD) failed, resetting the checkout itself
+#      failed, or a reset was refused because the checkout was left dirty
+#      (an uncommitted edit, an unfinished cherry-pick) and a
+#      `reset --hard` would have destroyed that instead of recovering it.
+set -u
+
+REMOTE="origin"
+BRANCH="main"
+
+usage() {
+  echo "usage: land --repo <path> --gate '<command>' <commit>..." >&2
+  exit 2
+}
+
+error() {
+  echo "land: $*" >&2
+  exit 2
+}
+
+fail() {
+  echo "land: $*" >&2
+  exit 1
+}
+
+repo=""
+gate=""
+commits=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --repo)
+      [ $# -ge 2 ] || usage
+      repo="$2"
+      shift 2
+      ;;
+    --gate)
+      [ $# -ge 2 ] || usage
+      gate="$2"
+      shift 2
+      ;;
+    --)
+      shift
+      commits+=("$@")
+      break
+      ;;
+    -*)
+      usage
+      ;;
+    *)
+      commits+=("$1")
+      shift
+      ;;
+  esac
+done
+
+[ -n "${repo}" ] || usage
+[ "${#commits[@]}" -ge 1 ] || usage
+# A gate string of only whitespace is still non-empty, and `eval` of one
+# returns 0, so the gate would never run but still read as having passed.
+gate_trimmed="$(printf '%s' "${gate}" | tr -d '[:space:]')"
+[ -n "${gate_trimmed}" ] || usage
+
+root="$(git -C "${repo}" rev-parse --show-toplevel 2>/dev/null)" || error "${repo} is not a git repository"
+
+# A conflict resolved by staging a result identical to HEAD (or a
+# multi-commit sequence with a later pick still queued) can leave
+# `--porcelain` clean while a cherry-pick is still mid-operation; a plain
+# dirty check would miss that and let a `reset --hard` quietly finish
+# discarding it.
+sequencer_active() {
+  git -C "${root}" rev-parse --quiet --verify CHERRY_PICK_HEAD >/dev/null 2>&1 && return 0
+  local seq_dir
+  seq_dir="$(git -C "${root}" rev-parse --git-path sequencer 2>/dev/null)"
+  [ -n "${seq_dir}" ] || return 1
+  # --git-path prints a path relative to root's own gitdir discovery, not
+  # to this script's cwd; land is routinely invoked from elsewhere (a
+  # workspace root, not the target checkout), so a relative answer has to
+  # be re-anchored to root before `-d` means anything.
+  case "${seq_dir}" in
+    /*) ;;
+    *) seq_dir="${root}/${seq_dir}" ;;
+  esac
+  [ -d "${seq_dir}" ]
+}
+
+# Resolve every commit to a full sha before anything changes the checkout,
+# so a bad argument is a could-not-run failure, not a half-done cherry-pick.
+# --end-of-options stops a commit-ish that happens to start with "-" from
+# being read as another rev-parse flag.
+resolved=()
+for c in "${commits[@]}"; do
+  sha="$(git -C "${root}" rev-parse --verify --quiet --end-of-options "${c}^{commit}")" || error "commit not found: ${c}"
+  resolved+=("${sha}")
+done
+
+# --- Step 1: checkout is on main, clean, and equal to origin/main ----------
+current_branch="$(git -C "${root}" branch --show-current)"
+[ "${current_branch}" = "${BRANCH}" ] || fail "checkout is on '${current_branch}', not '${BRANCH}'"
+
+# --untracked-files=all overrides any status.showUntrackedFiles=no in the
+# repository's own config, so an untracked file cannot pass as clean.
+status_output="$(git -C "${root}" status --porcelain --untracked-files=all --ignore-submodules=none)" || error "git status failed"
+if [ -n "${status_output}" ] || sequencer_active; then
+  fail "checkout is dirty; refusing before any change"
+fi
+
+git -C "${root}" fetch --quiet "${REMOTE}" || error "git fetch ${REMOTE} failed"
+
+start_sha="$(git -C "${root}" rev-parse HEAD)" || error "could not read HEAD"
+remote_sha="$(git -C "${root}" rev-parse "${REMOTE}/${BRANCH}")" || error "could not read ${REMOTE}/${BRANCH}"
+[ "${start_sha}" = "${remote_sha}" ] || fail "local ${BRANCH} (${start_sha}) is not ${REMOTE}/${BRANCH} (${remote_sha})"
+
+# Set once the cherry-picks succeed (step 2). Declared here, empty, so a
+# reset message from a failure that happens before that (the cherry-pick
+# itself conflicting) can still reference the variable under `set -u`.
+picked=""
+
+# From here on, any failure resets the checkout back to where it started.
+# reset_to_start reports its outcome by its return status instead of exiting
+# itself, so every caller can report what it already knew (a push that may
+# have gone out, a confirmation mismatch) together with what the cleanup
+# did, rather than losing that context to a bare "reset failed" message.
+# Returns 0: reset done. 1: the reset command itself failed. 2: refused --
+# the checkout holds uncommitted changes (or `git status` itself failed),
+# which a `reset --hard` would silently destroy rather than recover from.
+#
+# $1 "abort_first": only the step-2 call site, recovering from the
+# cherry-picks' own conflict, passes this. There, the dirtiness the check
+# below would see IS that pending conflict, and `cherry-pick --abort`
+# clearing it first is expected. Every later call omits it, so a conflict
+# (or any other edit) the gate itself leaves unresolved reads as dirty
+# instead of being discarded before the check ever sees it.
+reset_to_start() {
+  if [ "${1:-}" = "abort_first" ]; then
+    git -C "${root}" cherry-pick --abort >/dev/null 2>&1
+  fi
+  local porcelain
+  porcelain="$(git -C "${root}" status --porcelain --untracked-files=all --ignore-submodules=none 2>&1)"
+  if [ $? -ne 0 ] || [ -n "${porcelain}" ] || sequencer_active; then
+    return 2
+  fi
+  # A gate may have left the checkout on another branch or detached;
+  # `reset --hard` operates on whatever is checked out, so switch back to
+  # main first or it would reset the wrong ref.
+  git -C "${root}" checkout --quiet "${BRANCH}" >/dev/null 2>&1 || return 1
+  git -C "${root}" reset --hard "${start_sha}" >/dev/null 2>&1 || return 1
+  local after after_branch
+  after="$(git -C "${root}" rev-parse HEAD 2>/dev/null)"
+  after_branch="$(git -C "${root}" branch --show-current 2>/dev/null)"
+  [ "${after}" = "${start_sha}" ] && [ "${after_branch}" = "${BRANCH}" ]
+}
+
+# Shared by every site that must reset the checkout before reporting a
+# failure (the `reset_to_start()`-then-report block that used to appear
+# three times inline). Resetting ok: report through $1 (`fail` or `error`).
+# Resetting refused or the reset command itself failed: always `error`,
+# since the repository cannot be trusted to be where it should be.
+reset_then_report() {
+  local on_ok="$1" msg="$2" mode="${3:-}" rc
+  reset_to_start "${mode}"
+  rc=$?
+  case "${rc}" in
+    0) "${on_ok}" "${msg} (checkout reset to ${start_sha})" ;;
+    2) error "${msg} (checkout NOT reset: it holds uncommitted changes a \`reset --hard\` would destroy; recover by hand, start_sha=${start_sha} picked=${picked})" ;;
+    *) error "${msg} (resetting the checkout to ${start_sha} ALSO failed; the repository is left mid-operation, inspect it by hand)" ;;
+  esac
+}
+
+reset_and_fail() {
+  reset_then_report fail "$1" "${2:-}"
+}
+
+# --- Step 2: cherry-pick ----------------------------------------------------
+cherry_log="$(mktemp -t land-cherry-pick.XXXXXX)" || error "mktemp failed for the cherry-pick log"
+if ! git -C "${root}" cherry-pick "${resolved[@]}" >"${cherry_log}" 2>&1; then
+  reset_and_fail "cherry-pick conflict; see ${cherry_log}" abort_first
+fi
+rm -f "${cherry_log}"
+picked="$(git -C "${root}" rev-parse HEAD)" || reset_then_report error "could not read HEAD after cherry-pick"
+
+# --- Step 3: gate, judged only by its exit code -----------------------------
+# The cherry-pick already ran, so a failure from here on resets the checkout.
+gate_log="$(mktemp -t land-gate.XXXXXX)" || reset_then_report error "mktemp failed for the gate log"
+# pipefail inside this subshell only: if the gate command itself is a
+# pipeline (for example `make test | tail -1`), its exit code is the first
+# failing stage, not just the last one.
+( cd "${root}" && set -o pipefail && eval "${gate}" ) >"${gate_log}" 2>&1
+gate_rc=$?
+if [ "${gate_rc}" -ne 0 ]; then
+  reset_and_fail "gate exited ${gate_rc}; full output in ${gate_log}"
+fi
+echo "land: gate passed; full output in ${gate_log}"
+
+# --- Step 4: checkout is still on main, at picked, and clean ----------------
+# A gate that commits, amends, checks out something else, or leaves an
+# uncommitted edit on a tracked file is a failed run: land never pushes
+# anything the gate itself did not actually test.
+branch_after_gate="$(git -C "${root}" branch --show-current 2>/dev/null)"
+head_after_gate="$(git -C "${root}" rev-parse HEAD 2>/dev/null)"
+dirty_after_gate="$(git -C "${root}" status --porcelain --untracked-files=all --ignore-submodules=none 2>&1)"
+dirty_rc=$?
+if [ "${branch_after_gate}" != "${BRANCH}" ] || [ "${head_after_gate}" != "${picked}" ] \
+  || [ "${dirty_rc}" -ne 0 ] || [ -n "${dirty_after_gate}" ] || sequencer_active; then
+  reset_and_fail "the gate left the checkout on '${branch_after_gate}' at '${head_after_gate}', not clean on '${BRANCH}' at '${picked}'"
+fi
+
+# --- Step 5: origin/main (pre-push) is an ancestor of picked ----------------
+if ! git -C "${root}" merge-base --is-ancestor "${remote_sha}" "${picked}"; then
+  reset_and_fail "${REMOTE}/${BRANCH} (${remote_sha}) is not an ancestor of ${picked}"
+fi
+
+# --- Step 6: push the sha the gate actually ran on (never --force) ---------
+if ! git -C "${root}" push "${REMOTE}" "${picked}:${BRANCH}"; then
+  reset_and_fail "git push ${REMOTE} ${picked}:${BRANCH} failed"
+fi
+
+# --- Step 7: confirm the remote now has picked as an ancestor --------------
+pushed_sha="${picked}"
+if ! git -C "${root}" fetch --quiet "${REMOTE}"; then
+  reset_and_fail "post-push git fetch ${REMOTE} failed; the push to ${pushed_sha} may already have landed"
+fi
+confirmed_sha="$(git -C "${root}" rev-parse "${REMOTE}/${BRANCH}")"
+if ! git -C "${root}" merge-base --is-ancestor "${pushed_sha}" "${confirmed_sha}"; then
+  reset_and_fail "post-push confirmation failed: ${REMOTE}/${BRANCH} (${confirmed_sha}) does not have ${pushed_sha} as an ancestor; the push may already have landed"
+fi
+
+echo "land: pushed ${pushed_sha} to ${REMOTE}/${BRANCH}"
+exit 0

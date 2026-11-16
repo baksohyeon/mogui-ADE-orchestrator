@@ -51,8 +51,8 @@ never templated. After confirming the dry-run plan at step 4, also walk the exis
 "Required-infra MCP wiring" subsection of `08-settings-and-skills.md` Step 7 under its own host-edit
 approval: merge the `code-review-graph` entry, confirm `enabledMcpjsonServers` names it with no
 conflicting `disabledMcpjsonServers` entry, and register every `{{REPO_LIST}}` member and `{{OPS_REPO}}`
-(by its own absolute path when it is not itself a `{{REPO_LIST}}` member) that is not already in
-`code-review-graph repos`.
+(by its own absolute path when it is not itself a `{{REPO_LIST}}` member) that is not already a path in
+`~/.code-review-graph/registry.json`, the same registry file `harness-selfcheck.md` reads directly.
 
 3. **Dry-run apply (always first)**: print the exact file list and the reason for each path. No write yet. Pass the same eight measured `--placeholder` values as step 5; a dry run that omits them prints the missing-placeholder report and exits 2 by design, since a planned file still carries each unsupplied token.
 

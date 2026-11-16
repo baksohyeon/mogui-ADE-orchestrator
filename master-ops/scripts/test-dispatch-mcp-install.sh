@@ -17,14 +17,18 @@ mcp_merge_test() (
   local doc="$1" pinned="$2" work snippet out status
 
   # Extract only the python source between the "python3 -c '" opener and the
-  # closing "' <args>" line — not that invocation's own (templated) argv —
-  # so the test can supply its own fixture paths as argv instead.
-  snippet=$(awk -v open_fence="$(printf '$ python3 -c %s' "'")" -v close_fence="$(printf '%s "{{WORKSPACE_ROOT}}' "'")" '
+  # closing fence — not that invocation's own argv line (its last captured
+  # line), which carries {{WORKSPACE_ROOT}}/{{RUNTIME_ROOT}} placeholders that
+  # rendered-shell-tests substitutes away, so the end can't be matched by
+  # that line's text. The ``` closing fence is placeholder-free and stable
+  # under rendering either way. The test supplies its own fixture argv.
+  snippet=$(awk -v open_fence="$(printf '$ python3 -c %s' "'")" '
     index($0, "<!-- crg-mcp-merge:start -->"){f=1; next}
     index($0, "<!-- crg-mcp-merge:end -->"){exit}
     f && !p && $0 == open_fence {p=1; next}
-    f && p && index($0, close_fence) == 1 {p=0; next}
-    f && p {print}
+    f && p && $0 == "```" {exit}
+    f && p {buf[n++] = $0}
+    END {for (i = 0; i < n - 1; i++) print buf[i]}
   ' "$doc")
 
   [ -n "$snippet" ] || { echo "FAIL: could not extract the crg-mcp-merge python source from $doc" >&2; return 1; }

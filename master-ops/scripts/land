@@ -111,19 +111,25 @@ start_sha="$(git -C "${root}" rev-parse HEAD)" || error "could not read HEAD"
 remote_sha="$(git -C "${root}" rev-parse "${REMOTE}/${BRANCH}")" || error "could not read ${REMOTE}/${BRANCH}"
 [ "${start_sha}" = "${remote_sha}" ] || fail "local ${BRANCH} (${start_sha}) is not ${REMOTE}/${BRANCH} (${remote_sha})"
 
-# From here on, any failure resets the checkout back to where it started
-# and verifies the reset actually landed there.
+# From here on, any failure resets the checkout back to where it started.
+# reset_to_start reports success or failure by its return status instead of
+# exiting itself, so every caller can report what it already knew (a push
+# that may have gone out, a confirmation mismatch) together with whether the
+# cleanup itself worked, rather than losing that context to a bare "reset
+# failed" message.
 reset_to_start() {
   git -C "${root}" cherry-pick --abort >/dev/null 2>&1
-  git -C "${root}" reset --hard "${start_sha}" >/dev/null 2>&1 || error "git reset --hard ${start_sha} failed"
+  git -C "${root}" reset --hard "${start_sha}" >/dev/null 2>&1 || return 1
   local after
   after="$(git -C "${root}" rev-parse HEAD 2>/dev/null)"
-  [ "${after}" = "${start_sha}" ] || error "reset to ${start_sha} did not take; checkout is now at '${after}'"
+  [ "${after}" = "${start_sha}" ]
 }
 
 reset_and_fail() {
-  reset_to_start
-  fail "$* (checkout reset to ${start_sha})"
+  if reset_to_start; then
+    fail "$* (checkout reset to ${start_sha})"
+  fi
+  fail "$* (resetting the checkout to ${start_sha} ALSO failed; the repository is left mid-operation, inspect it by hand)"
 }
 
 # --- Step 2: cherry-pick ----------------------------------------------------
@@ -136,8 +142,10 @@ rm -f "${cherry_log}"
 # --- Step 3: gate, judged only by its exit code -----------------------------
 # The cherry-pick already ran, so a failure from here on resets the checkout.
 if ! gate_log="$(mktemp -t land-gate.XXXXXX)"; then
-  reset_to_start
-  error "mktemp failed for the gate log"
+  if reset_to_start; then
+    error "mktemp failed for the gate log (checkout reset to ${start_sha})"
+  fi
+  error "mktemp failed for the gate log; resetting the checkout to ${start_sha} ALSO failed; the repository is left mid-operation, inspect it by hand"
 fi
 # pipefail inside this subshell only: if the gate command itself is a
 # pipeline (for example `make test | tail -1`), its exit code is the first
@@ -162,13 +170,17 @@ fi
 # --- Step 6: confirm the remote now matches the pushed HEAD -----------------
 pushed_sha="$(git -C "${root}" rev-parse HEAD)"
 if ! git -C "${root}" fetch --quiet "${REMOTE}"; then
-  reset_to_start
-  fail "post-push git fetch ${REMOTE} failed; the push to ${pushed_sha} may already have landed (checkout reset to ${start_sha})"
+  if reset_to_start; then
+    fail "post-push git fetch ${REMOTE} failed; the push to ${pushed_sha} may already have landed (checkout reset to ${start_sha})"
+  fi
+  fail "post-push git fetch ${REMOTE} failed; the push to ${pushed_sha} may already have landed; resetting the checkout to ${start_sha} ALSO failed; the repository is left mid-operation, inspect it by hand"
 fi
 confirmed_sha="$(git -C "${root}" rev-parse "${REMOTE}/${BRANCH}")"
 if [ "${confirmed_sha}" != "${pushed_sha}" ]; then
-  reset_to_start
-  fail "post-push confirmation failed: ${REMOTE}/${BRANCH} is ${confirmed_sha}, expected ${pushed_sha}; the push may already have landed (checkout reset to ${start_sha})"
+  if reset_to_start; then
+    fail "post-push confirmation failed: ${REMOTE}/${BRANCH} is ${confirmed_sha}, expected ${pushed_sha}; the push may already have landed (checkout reset to ${start_sha})"
+  fi
+  fail "post-push confirmation failed: ${REMOTE}/${BRANCH} is ${confirmed_sha}, expected ${pushed_sha}; the push may already have landed; resetting the checkout to ${start_sha} ALSO failed; the repository is left mid-operation, inspect it by hand"
 fi
 
 echo "land: pushed ${pushed_sha} to ${REMOTE}/${BRANCH}"

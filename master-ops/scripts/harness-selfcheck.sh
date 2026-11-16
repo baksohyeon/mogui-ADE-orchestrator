@@ -711,6 +711,7 @@ def main():
     stale = []
     for repo in repos:
         if not isinstance(repo, dict):
+            missing_paths.append("invalid registry entry")
             continue
         path = repo.get("path") or ""
         alias = repo.get("alias") or path or "?"

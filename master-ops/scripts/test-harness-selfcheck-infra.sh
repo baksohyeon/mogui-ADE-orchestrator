@@ -192,6 +192,12 @@ touch -t "$(python3 -c "import datetime; print(datetime.datetime.fromtimestamp($
 check "(c) a 30-day-old graph is named with its day count" "Infra: code-review-graph WARN stale: repo-a (30d)" "" 0
 exit_codes+=("$(run_infra >/dev/null 2>&1; echo $?)")
 
+# A malformed registry entry (not an object) is named, not silently
+# skipped: {"repos":[null]} must not iterate to zero findings and pass.
+reset_fixture
+printf '{"repos": [null]}\n' > "$CRG_REGISTRY"
+check "a non-dict registry entry is named, not silently skipped" "Infra: code-review-graph WARN missing path: invalid registry entry" "" 0
+
 # (d) A tool absent from PATH warns, never crashes. A real install
 # elsewhere on this host's own PATH (outside $BIN_DIR) would otherwise find
 # that instead of "absent"; SAFE_PATH only strips shim directories, so strip

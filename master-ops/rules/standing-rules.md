@@ -40,13 +40,14 @@ token never appears in a commit, a pull request body, or a review reply.
 
 ## mail-before-done
 
-Before `worker_done`, run `orca orchestration check` in a loop. Its default
-call returns and marks handled only the oldest unread FIFO batch (`orca
-orchestration check --help`), so a single call can leave newer mail
-unread. Apply each returned batch before reporting, or say in the
-completion message why not, and keep calling until one returns no mail. If
-a check itself fails, name the failed check and its error text in the
-completion message.
+Before `worker_done`, run `orca orchestration check` in a loop, up to 10
+calls. Its default call returns and marks handled only the oldest unread
+FIFO batch (`orca orchestration check --help`), so a single call can leave
+newer mail unread. Apply each returned batch before reporting, or say in
+the completion message why not, and keep calling until one returns no
+mail. Stop at 10 calls even if mail remains and name that cap in the
+completion message. If a check itself fails, name the failed check and
+its error text in the completion message.
 
 ## placement
 

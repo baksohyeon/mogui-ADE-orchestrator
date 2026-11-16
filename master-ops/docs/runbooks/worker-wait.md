@@ -91,10 +91,9 @@ delivery, for the coordinator to act and then re-run `worker-wait`.
   source), choose option 3, continue without trusting, and file what was
   seen. It clears by hand the same way: `orca terminal send --terminal
   <pane> --text <option-number> --enter`, the digit and the Enter that
-  confirms it in one call, bracketed-pasted so embedded control bytes stay
-  inert. While the modal blocks the pane, orca refuses that send with
-  `agent_prompt_blocked` and an `orchestrationRequestId`; re-issue it with
-  `--retry-request <id>`, the same sequence
+  confirms it in one call. While the modal blocks the pane, orca refuses
+  that send with `agent_prompt_blocked` and an `orchestrationRequestId`;
+  re-issue it with `--retry-request <id>`, the same sequence
   `scripts/codex-hooks-review-answer <pane>` runs. Redispatch into
   the cleared pane passes `--terminal <pane>` alone; pre-trust is skipped on
   a reused pane, and the post-inject `hook-trust` check still stops the

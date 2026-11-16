@@ -16,6 +16,12 @@ scripts/land --repo <path> --gate '<command>' <commit>...
 example `PYTHONPATH=src python -m pytest tests -q`); `<commit>...` are one or more commit-ishes,
 in the order they should land.
 
+The checkout must not be edited while `land` runs, by anything other than the gate itself: `land`
+is re-checking that checkout from a clean, known start, and any change it did not make is one it
+cannot tell apart from a gate's own (possibly bad) edit. A gate that rewrites a tracked file, or
+that starts its own git operation and does not finish it, fails the run the same way a gate that
+actually fails does.
+
 ## Steps
 
 In order, stopping at the first failure:
@@ -35,29 +41,35 @@ In order, stopping at the first failure:
 7. fetch again and confirm `origin/main` now has `picked` as an ancestor
 
 A step-1 failure (wrong branch, dirty checkout, or local `main` not equal to `origin/main`)
-leaves the checkout exactly as it was found, since nothing has changed yet. Any failure from
-step 2 onward resets the checkout to the sha it started from and says so, unless the checkout
-holds uncommitted changes a `reset --hard` would destroy, in which case `land` refuses to reset
-and prints `start_sha` and `picked` so the operator can recover by hand instead of losing that
-work silently. That dirty check runs before `cherry-pick --abort` in every case except the
-cherry-picks' own conflict in step 2, so a conflict the gate itself leaves unresolved in step 3
-reads as a refusal (exit 2) instead of being discarded by the abort before `land` ever sees it.
-A failure in step 7 resets the checkout the same way, but the push in step 6 already went out by
-then; the message names the sha that may already have landed on the remote.
+leaves the checkout exactly as it was found, since nothing has changed yet. A failure from step 2
+onward that only moved the checkout (an extra commit, a different branch checked out, nothing
+uncommitted left behind) resets it to the sha it started from and says so. A failure that left
+the checkout dirty instead (an uncommitted edit, an unfinished cherry-pick) is never reset over:
+`land` refuses and prints `start_sha` and `picked` so the operator can recover by hand rather than
+have a `reset --hard` destroy that work silently. To recover: note whatever `git status` shows (a
+diff to save or discard), run `git cherry-pick --abort` if `CHERRY_PICK_HEAD` is still set, then
+`git checkout main && git reset --hard <start_sha>`. That dirty check runs before
+`cherry-pick --abort` in every case except the cherry-picks' own conflict in step 2, so a conflict
+the gate itself leaves unresolved in step 3 reads as a refusal instead of being discarded by the
+abort before `land` ever sees it. A failure in step 7 resets the checkout the same way, but the
+push in step 6 already went out by then; the message names the sha that may already have landed
+on the remote.
 
 ## Exit Codes
 
 - `0`: landed and pushed; `origin/main` confirmed to have `picked` as an ancestor.
-- `1`: a step above said no. The repository was not ready (step 1), the cherry-pick conflicted,
-  the gate exited nonzero, the gate moved or dirtied the checkout (step 4), the ancestor check
-  failed, the push failed, or the post-push fetch or confirmation (step 7) failed, and the
-  checkout was reset back to the sha it started from. A step-1 failure leaves the checkout
-  untouched, since nothing has changed yet.
+- `1`: a step above said no, and the checkout reset cleanly to the sha it started from. The
+  repository was not ready (step 1), the cherry-pick conflicted, the gate exited nonzero, the
+  gate moved the checkout without leaving it dirty (step 4), the ancestor check failed, the push
+  failed, or the post-push fetch or confirmation (step 7) failed. A step-1 failure leaves the
+  checkout untouched, since nothing has changed yet.
 - `2`: the check could not run at all, or could not safely recover from a failure: bad usage,
   the repository path given is not a git checkout, a commit argument does not resolve, a
   `--gate` that is empty or only whitespace, the pre-push `git fetch` (step 1) failed, an
   internal step (reading `HEAD`, writing a log file) failed, resetting the checkout itself
-  failed, or a reset was refused because the checkout held uncommitted changes.
+  failed, or a reset was refused because the gate left the checkout dirty (an uncommitted edit,
+  an unfinished cherry-pick) and a `reset --hard` would have destroyed that instead of
+  recovering it.
 
 ## Honest Limit
 

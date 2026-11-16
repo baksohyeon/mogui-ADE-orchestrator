@@ -7,10 +7,11 @@
 # push.
 #
 # The checkout must not be edited while this script runs, and the gate
-# must not rewrite tracked files or move HEAD. A gate that does either is
-# a failed run: land pushes the sha the cherry-picks actually produced,
-# never whatever the checkout happens to be after the gate, and it
-# refuses to reset over uncommitted changes rather than destroy them.
+# must not rewrite tracked files or move HEAD. A gate that moves the
+# checkout (a commit, an amend, a different branch checked out) fails the
+# run but resets cleanly; a gate that leaves it dirty (an uncommitted edit,
+# an unfinished cherry-pick) is never reset over, since land cannot tell
+# that apart from real work it would destroy.
 #
 # Usage: land --repo <path> --gate '<command>' <commit>...
 #
@@ -31,19 +32,19 @@
 # Exit codes:
 #   0  landed and pushed; origin/main confirmed to have picked as an
 #      ancestor.
-#   1  a step above said no: the repository was not ready, the
-#      cherry-pick conflicted, the gate exited nonzero, the gate moved or
-#      dirtied the checkout, the ancestor check failed, the push failed,
-#      or the post-push confirmation failed. The checkout is reset to
-#      the sha it started from. A failure in the post-push confirmation
-#      still resets the local checkout, but the push already went out,
-#      and the message says so.
+#   1  a step above said no, and the checkout reset cleanly to the sha it
+#      started from: the repository was not ready, the cherry-pick
+#      conflicted, the gate exited nonzero, the gate moved the checkout
+#      without leaving it dirty, the ancestor check failed, the push
+#      failed, or the post-push confirmation failed (there, the push
+#      already went out, and the message says so).
 #   2  could not run the check, or could not safely recover from a
 #      failure: bad usage, the repo path is not a git checkout, a commit
 #      argument does not resolve, git fetch failed, an internal step
 #      (mktemp, reading HEAD) failed, resetting the checkout itself
-#      failed, or a reset was refused because the checkout held
-#      uncommitted changes a `reset --hard` would have destroyed.
+#      failed, or a reset was refused because the checkout was left dirty
+#      (an uncommitted edit, an unfinished cherry-pick) and a
+#      `reset --hard` would have destroyed that instead of recovering it.
 set -u
 
 REMOTE="origin"
@@ -112,7 +113,16 @@ sequencer_active() {
   git -C "${root}" rev-parse --quiet --verify CHERRY_PICK_HEAD >/dev/null 2>&1 && return 0
   local seq_dir
   seq_dir="$(git -C "${root}" rev-parse --git-path sequencer 2>/dev/null)"
-  [ -n "${seq_dir}" ] && [ -d "${seq_dir}" ]
+  [ -n "${seq_dir}" ] || return 1
+  # --git-path prints a path relative to root's own gitdir discovery, not
+  # to this script's cwd; land is routinely invoked from elsewhere (a
+  # workspace root, not the target checkout), so a relative answer has to
+  # be re-anchored to root before `-d` means anything.
+  case "${seq_dir}" in
+    /*) ;;
+    *) seq_dir="${root}/${seq_dir}" ;;
+  esac
+  [ -d "${seq_dir}" ]
 }
 
 # Resolve every commit to a full sha before anything changes the checkout,
@@ -208,7 +218,7 @@ if ! git -C "${root}" cherry-pick "${resolved[@]}" >"${cherry_log}" 2>&1; then
   reset_and_fail "cherry-pick conflict; see ${cherry_log}" abort_first
 fi
 rm -f "${cherry_log}"
-picked="$(git -C "${root}" rev-parse HEAD)" || reset_and_fail "could not read HEAD after cherry-pick"
+picked="$(git -C "${root}" rev-parse HEAD)" || reset_then_report error "could not read HEAD after cherry-pick"
 
 # --- Step 3: gate, judged only by its exit code -----------------------------
 # The cherry-pick already ran, so a failure from here on resets the checkout.

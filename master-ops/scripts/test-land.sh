@@ -22,7 +22,15 @@
 # own cherry-pick conflicted, then fails: the conflict is not silently
 # aborted before the dirty check ever sees it, same exit-2 shape as (k).
 # (l) `--gate` made of only whitespace: exits 2 before any change, same as
-# an empty one.
+# an empty one. (o) a gate that leaves a tracked-file edit uncommitted and
+# exits 0: step 4's own clean check catches it, not step 3; exit 2, same
+# as (k). (p) a pre-existing `.git/sequencer` directory with no
+# `CHERRY_PICK_HEAD`, caught by step 1 from a cwd other than the
+# checkout: proves the sequencer check does not depend on the caller's
+# own directory. (q) a gate whose command is itself a pipeline (`false |
+# cat`): case (b) and the mutant below only ever run one command, so
+# neither would catch `set -o pipefail` being removed from the gate
+# subshell.
 #
 # Each fixture is a fresh bare "origin" plus a clone, built from scratch per
 # case so a result in one case cannot leak into the next.
@@ -420,6 +428,73 @@ if [ "${rc_n}" -eq 2 ] && [ "${cherry_in_progress_n}" -eq 1 ] && [ "${remote_n}"
 else
   fail "gate's unfinished cherry-pick was not caught: rc=${rc_n} cherry_in_progress=${cherry_in_progress_n} remote=${remote_n} want_remote=${start_n}"
   echo "       output: ${out_n}"
+fi
+
+# --- Case (o): gate leaves a tracked-file edit uncommitted, exits 0 -------
+# Distinct from (k): the gate itself "passes" (exit 0), so this is step 4's
+# own clean check catching the dirt, not step 3 reacting to a gate failure.
+clone_o="$(new_fixture o)"
+bare_o="${WORK_DIR}/o-origin.git"
+start_o="$(git -C "${clone_o}" rev-parse HEAD)"
+git -C "${clone_o}" checkout --quiet -b work
+sha_o="$(make_commit "${clone_o}" change-o.txt one "commit o")"
+git -C "${clone_o}" checkout --quiet main
+cat >"${WORK_DIR}/gate-dirty-pass.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "edited-by-gate" > file.txt
+exit 0
+EOF
+chmod +x "${WORK_DIR}/gate-dirty-pass.sh"
+
+out_o=$(cd "${clone_o}" && "${LAND}" --repo "${clone_o}" --gate "${WORK_DIR}/gate-dirty-pass.sh" "${sha_o}" 2>&1)
+rc_o=$?
+content_o="$(cat "${clone_o}/file.txt" 2>/dev/null)"
+remote_o="$(remote_sha "${bare_o}")"
+if [ "${rc_o}" -eq 2 ] && [ "${content_o}" = "edited-by-gate" ] && [ "${remote_o}" = "${start_o}" ] \
+  && printf '%s' "${out_o}" | grep -q "NOT reset"; then
+  ok "gate leaves a tracked-file edit uncommitted and exits 0: step 4 catches it, exit 2, nothing pushed"
+else
+  fail "gate's passing-but-dirty run was not caught: rc=${rc_o} content=[${content_o}] remote=${remote_o} want_remote=${start_o}"
+  echo "       output: ${out_o}"
+fi
+
+# --- Case (p): a pre-existing sequencer dir, checked from another cwd -----
+# sequencer_active resolves `git rev-parse --git-path sequencer` against
+# root, not the caller's own directory; running land from a different cwd
+# than the clone (unlike every other case here, which cd's into it first)
+# is what actually exercises that path join.
+clone_p="$(new_fixture p)"
+mkdir -p "${clone_p}/.git/sequencer"
+out_p=$("${LAND}" --repo "${clone_p}" --gate "${WORK_DIR}/gate-pass.sh" "$(git -C "${clone_p}" rev-parse HEAD)" 2>&1)
+rc_p=$?
+if [ "${rc_p}" -eq 1 ] && printf '%s' "${out_p}" | grep -q "dirty"; then
+  ok "a pre-existing sequencer dir is caught from another cwd, before any change"
+else
+  fail "sequencer dir was not caught from another cwd: rc=${rc_p}"
+  echo "       output: ${out_p}"
+fi
+rm -rf "${clone_p}/.git/sequencer"
+
+# --- Case (q): the gate command is itself a pipeline -----------------------
+# Neither case (b) nor the failability mutant below ever runs a pipeline as
+# the gate; this is what would catch `set -o pipefail` being dropped from
+# the gate subshell, the shape of bug issue #318 was actually filed over.
+clone_q="$(new_fixture q)"
+bare_q="${WORK_DIR}/q-origin.git"
+start_q="$(git -C "${clone_q}" rev-parse HEAD)"
+git -C "${clone_q}" checkout --quiet -b work
+sha_q="$(make_commit "${clone_q}" change-q.txt one "commit q")"
+git -C "${clone_q}" checkout --quiet main
+
+out_q=$(cd "${clone_q}" && "${LAND}" --repo "${clone_q}" --gate "false | cat" "${sha_q}" 2>&1)
+rc_q=$?
+head_q="$(git -C "${clone_q}" rev-parse HEAD)"
+remote_q="$(remote_sha "${bare_q}")"
+if [ "${rc_q}" -eq 1 ] && [ "${head_q}" = "${start_q}" ] && [ "${remote_q}" = "${start_q}" ]; then
+  ok "a gate command that is itself a pipeline still fails on its first stage: nothing pushed, checkout reset"
+else
+  fail "pipeline gate was not caught: rc=${rc_q} head=${head_q} remote=${remote_q} want=${start_q}"
+  echo "       output: ${out_q}"
 fi
 
 # --- Case (l): --gate made of only whitespace exits 2 ----------------------

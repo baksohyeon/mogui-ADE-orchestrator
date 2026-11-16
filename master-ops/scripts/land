@@ -129,7 +129,7 @@ reset_and_fail() {
   if reset_to_start; then
     fail "$* (checkout reset to ${start_sha})"
   fi
-  fail "$* (resetting the checkout to ${start_sha} ALSO failed; the repository is left mid-operation, inspect it by hand)"
+  error "$* (resetting the checkout to ${start_sha} ALSO failed; the repository is left mid-operation, inspect it by hand)"
 }
 
 # --- Step 2: cherry-pick ----------------------------------------------------
@@ -173,14 +173,14 @@ if ! git -C "${root}" fetch --quiet "${REMOTE}"; then
   if reset_to_start; then
     fail "post-push git fetch ${REMOTE} failed; the push to ${pushed_sha} may already have landed (checkout reset to ${start_sha})"
   fi
-  fail "post-push git fetch ${REMOTE} failed; the push to ${pushed_sha} may already have landed; resetting the checkout to ${start_sha} ALSO failed; the repository is left mid-operation, inspect it by hand"
+  error "post-push git fetch ${REMOTE} failed; the push to ${pushed_sha} may already have landed; resetting the checkout to ${start_sha} ALSO failed; the repository is left mid-operation, inspect it by hand"
 fi
 confirmed_sha="$(git -C "${root}" rev-parse "${REMOTE}/${BRANCH}")"
 if [ "${confirmed_sha}" != "${pushed_sha}" ]; then
   if reset_to_start; then
     fail "post-push confirmation failed: ${REMOTE}/${BRANCH} is ${confirmed_sha}, expected ${pushed_sha}; the push may already have landed (checkout reset to ${start_sha})"
   fi
-  fail "post-push confirmation failed: ${REMOTE}/${BRANCH} is ${confirmed_sha}, expected ${pushed_sha}; the push may already have landed; resetting the checkout to ${start_sha} ALSO failed; the repository is left mid-operation, inspect it by hand"
+  error "post-push confirmation failed: ${REMOTE}/${BRANCH} is ${confirmed_sha}, expected ${pushed_sha}; the push may already have landed; resetting the checkout to ${start_sha} ALSO failed; the repository is left mid-operation, inspect it by hand"
 fi
 
 echo "land: pushed ${pushed_sha} to ${REMOTE}/${BRANCH}"

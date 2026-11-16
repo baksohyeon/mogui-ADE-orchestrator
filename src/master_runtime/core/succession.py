@@ -140,6 +140,12 @@ SPAWN_CLOSE_ERROR = 23
 SPAWN_HANDLE_STALE = 24
 SPAWN_LIST_ERROR = 25
 SPAWN_PLACEMENT_MISMATCH = 26
+SPAWN_KICKOFF_MISSING_BOOT_CARD = 27
+
+# Suffix-matched so an install-relative or absolute form of the path both
+# pass (#320): a kickoff can otherwise drop the boot-card reference without
+# anything noticing that the successor never read it.
+SUCCESSION_BOOT_CARD_PATH_SUFFIX = "docs/runbooks/succession-boot-card.md"
 
 _SPAWN_HANDLE_HINT = re.compile(r'"(?:handle|terminal|terminalHandle)"\s*:\s*"([^"]+)"')
 _SPAWN_SELECTOR_HINT = (
@@ -652,8 +658,9 @@ def spawn_successor(
 ) -> SpawnReport:
     """Create a successor terminal and fail closed on worktree or handle-liveness mismatch."""
 
-    selector = _resolve_spawn_workspace_selector(workspace_selector, orca_runner)
     kickoff = _require_substr(kickoff_text, "kickoff_text")
+    _require_boot_card_reference(kickoff)
+    selector = _resolve_spawn_workspace_selector(workspace_selector, orca_runner)
     cwd = _require_substr(root, "root")
     pane_title = _require_substr(title, "title")
     model_name = _require_substr(model, "model")
@@ -1476,6 +1483,16 @@ def _require_substr(value: str, label: str) -> str:
     if not value:
         raise SuccessionError(label + " is required")
     return value
+
+
+def _require_boot_card_reference(kickoff_text: str) -> str:
+    if SUCCESSION_BOOT_CARD_PATH_SUFFIX not in kickoff_text:
+        raise SuccessionError(
+            "kickoff_text must reference the succession boot card by path; "
+            "missing: " + SUCCESSION_BOOT_CARD_PATH_SUFFIX,
+            SPAWN_KICKOFF_MISSING_BOOT_CARD,
+        )
+    return kickoff_text
 
 
 __all__ = (

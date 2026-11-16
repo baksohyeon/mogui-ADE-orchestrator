@@ -27,13 +27,15 @@ The actual spawn entry point is `scripts/master-succeed spawn`. A dry run is the
 ```bash
 scripts/master-succeed spawn \
   --workspace-selector "id:folder:<uuid>" \
-  --kickoff-text "Founding master boot" \
+  --kickoff-text "Founding master boot; read docs/runbooks/succession-boot-card.md before acting" \
   --root . \
   --model example-model \
   --title "Founding master boot" \
   --json \
   --dry-run
 ```
+
+`spawn_successor` has no founding/succession mode flag: it refuses any kickoff missing the boot card's path, founding spawns included, so this example carries the path too.
 
 When the host supports managed terminal creation, a non-dry-run spawn verifies that the returned worktree identifier matches the requested workspace selector. If it does not match, the code fails closed and closes the newly created terminal when possible.
 
@@ -133,7 +135,9 @@ scripts/master-succeed spawn \
   --json
 ```
 
-The recorded path must identify exactly one live workspace. A missing match or an ambiguous match stops the spawn and names the path so the operator can correct the seat or provide an explicit selector.
+The recorded `master_seat_path` must identify exactly one live workspace. A missing match or an ambiguous match stops the spawn and names the path so the operator can correct the seat or provide an explicit selector.
+
+`./ops/successor-kickoff.txt` must carry `docs/runbooks/succession-boot-card.md`'s path too, for the same reason as the founding example above.
 
 The successor then proves recovery through a report shape consumed by:
 

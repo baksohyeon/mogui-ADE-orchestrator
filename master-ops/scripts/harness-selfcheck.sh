@@ -448,6 +448,246 @@ if [ -n "$BEADS_DIR" ]; then
   fi
 fi
 
+# --- Infra: required-tool checks (ctx, code-review-graph; #317 stage 1) ---
+# Four tools are required infra for this workspace (owner direction
+# 2026-11-16, #317): Orca and beads already have dedicated checks above
+# (Orca:, Tracker:); kept as they are. ctx and code-review-graph get one
+# `Infra:` line each here. Unlike every check above, a gap here only warns
+# and never touches exit_code: this is stage 1, measure-and-warn only,
+# wiring either tool in by default is a later stage.
+CODE_REVIEW_GRAPH_STALE_DAYS="${CODE_REVIEW_GRAPH_STALE_DAYS:-7}"
+CODE_REVIEW_GRAPH_REGISTRY="${CODE_REVIEW_GRAPH_REGISTRY:-$HOME/.code-review-graph/registry.json}"
+CLAUDE_MCP_CONFIG="${CLAUDE_MCP_CONFIG:-${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json}"
+CLAUDE_USER_SETTINGS="${CLAUDE_USER_SETTINGS:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json}"
+CODEX_MCP_CONFIG="${CODEX_MCP_CONFIG:-${CODEX_HOME:-$HOME/.codex}/config.toml}"
+
+# $1 = tool name. Echoes nothing and returns 0 when reachable; echoes one
+# reason line and returns 1 when not. Claude: a user-scope server (the
+# top-level `mcpServers` in the file CLAUDE_CONFIG_DIR points an Orca
+# profile's Claude CLI at) is always reachable; a project-scope server
+# listed in `.mcp.json` additionally needs `enableAllProjectMcpServers` or
+# `enabledMcpjsonServers` in some settings file the session reads, and is
+# rejected if any settings file (user, project, or project-local) lists it
+# in `disabledMcpjsonServers` -- a disabled entry wins regardless of which
+# file sets it (coordinator addendum 2026-11-16, peer measurement: a server
+# present in .mcp.json was still invisible to Claude master sessions because
+# of exactly this). Codex: its config.toml `[mcp_servers.<tool>]`, which
+# this addendum does not touch. Reads configuration files only; never calls
+# `claude mcp list`, which health-checks every server and is slow.
+infra_mcp_status() {
+  local tool="$1" status
+  if status=$(TOOL="$tool" \
+    CLAUDE_MCP_CONFIG="$CLAUDE_MCP_CONFIG" \
+    CLAUDE_PROJECT_MCP_FILES="$WORKSPACE_ROOT/.mcp.json:$OPS_DIR/.mcp.json" \
+    CLAUDE_SETTINGS_FILES="$CLAUDE_USER_SETTINGS:$WORKSPACE_ROOT/.claude/settings.json:$WORKSPACE_ROOT/.claude/settings.local.json:$OPS_DIR/.claude/settings.json:$OPS_DIR/.claude/settings.local.json" \
+    python3 << 'EOFMCP'
+import json, os
+
+
+def load_json(path):
+    if not path:
+        return None
+    try:
+        return json.load(open(path))
+    except Exception:
+        return None
+
+
+tool = os.environ["TOOL"]
+
+user_cfg = load_json(os.environ.get("CLAUDE_MCP_CONFIG")) or {}
+if tool in (user_cfg.get("mcpServers") or {}):
+    print("reachable:user-scope")
+    raise SystemExit
+
+project_source = None
+for path in os.environ.get("CLAUDE_PROJECT_MCP_FILES", "").split(":"):
+    data = load_json(path)
+    if data and tool in (data.get("mcpServers") or {}):
+        project_source = path
+        break
+
+if project_source is None:
+    print("absent")
+    raise SystemExit
+
+disabled_in = None
+enabled_names = set()
+enable_all = False
+for path in os.environ.get("CLAUDE_SETTINGS_FILES", "").split(":"):
+    data = load_json(path)
+    if not data:
+        continue
+    if tool in (data.get("disabledMcpjsonServers") or []) and disabled_in is None:
+        disabled_in = path
+    enabled_names.update(data.get("enabledMcpjsonServers") or [])
+    if "enableAllProjectMcpServers" in data:
+        enable_all = bool(data["enableAllProjectMcpServers"])
+
+if disabled_in:
+    print(f"disabled:{disabled_in}")
+elif enable_all or tool in enabled_names:
+    print(f"reachable:project-scope:{project_source}")
+else:
+    print(f"pending:{project_source}")
+EOFMCP
+  ); then
+    case "$status" in
+      reachable:*)
+        return 0
+        ;;
+      disabled:*)
+        echo "disabled via ${status#disabled:}"
+        return 1
+        ;;
+      pending:*)
+        echo "listed in ${status#pending:} but not approved (enableAllProjectMcpServers/enabledMcpjsonServers unset in every settings file read)"
+        return 1
+        ;;
+    esac
+  fi
+  if [ -f "$CODEX_MCP_CONFIG" ] && grep -qF "[mcp_servers.$tool]" "$CODEX_MCP_CONFIG" 2>/dev/null; then
+    return 0
+  fi
+  echo "not registered as an MCP server (checked Claude user config, project .mcp.json, Codex config.toml)"
+  return 1
+}
+
+# ctx: runs, registered, and indexes every provider Orca reports sessions
+# for among claude and codex (owner 2026-11-16: ctx must also cover Orca's
+# own agent-session index).
+ctx_warn=""
+if ! command -v ctx >/dev/null 2>&1; then
+  ctx_warn="absent from PATH"
+elif ! ctx_status_json=$(timeout 10 ctx status --format json 2>&1); then
+  ctx_warn=$(printf '%s\n' "$ctx_status_json" | head -1)
+elif ! ctx_mcp_reason=$(infra_mcp_status ctx); then
+  ctx_warn="runs, but $ctx_mcp_reason"
+else
+  orca_status_json=$(timeout 10 orca search --index-status --json 2>&1) || orca_status_json=""
+  ctx_sources_text=$(timeout 10 ctx sources 2>&1) || true
+  ctx_warn=$(CTX_STATUS="$ctx_status_json" ORCA_STATUS="$orca_status_json" CTX_SOURCES="$ctx_sources_text" python3 << 'EOFCTX'
+import json, os
+
+def providers_from_status(raw):
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return None
+    jobs = ((data.get("daemon") or {}).get("jobs")) or {}
+    providers = set()
+    for job in jobs.values():
+        providers.update((job.get("progress") or {}).get("providers") or [])
+    return providers
+
+def sessions_by_agent(raw):
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return {}
+    return (data.get("result") or {}).get("sessionsByAgent") or {}
+
+def reason_for(provider_label, sources_text):
+    lines = sources_text.splitlines()
+    for i, line in enumerate(lines):
+        if line.strip().startswith("!") and provider_label.lower() in line.lower():
+            for cont in lines[i + 1:]:
+                cont = cont.strip()
+                if not cont:
+                    continue
+                if cont.startswith(("Hint", "Next")):
+                    return ""
+                return cont
+    return ""
+
+LABELS = {"claude": "Claude Code", "codex": "Codex"}
+
+providers = providers_from_status(os.environ.get("CTX_STATUS", ""))
+sessions = sessions_by_agent(os.environ.get("ORCA_STATUS", ""))
+sources_text = os.environ.get("CTX_SOURCES", "")
+
+if providers is None:
+    print("undecided (could not parse ctx status --format json)")
+else:
+    missing = []
+    for provider in ("claude", "codex"):
+        if not sessions.get(provider, 0):
+            continue
+        if provider not in providers:
+            reason = reason_for(LABELS.get(provider, provider), sources_text)
+            missing.append(provider + (f" ({reason})" if reason else ""))
+    if missing:
+        print("does not cover: " + ", ".join(missing))
+EOFCTX
+)
+fi
+if [ -n "$ctx_warn" ]; then
+  echo "Infra: ctx WARN $ctx_warn"
+else
+  echo "Infra: ctx OK runs, registered, covers every provider Orca reports claude/codex sessions for"
+fi
+
+# code-review-graph: runs, registered, and every repo in its multi-repo
+# registry (~/.code-review-graph/registry.json) has a graph no older than
+# CODE_REVIEW_GRAPH_STALE_DAYS. Reads the registry and each repo's
+# .code-review-graph/graph.db mtime directly rather than through the CLI,
+# which needs a per-repo cwd to report status, and which the Runs: check
+# just above may already have found broken.
+crg_warn=""
+if ! command -v code-review-graph >/dev/null 2>&1; then
+  crg_warn="absent from PATH"
+elif ! crg_version_out=$(timeout 10 code-review-graph --version 2>&1); then
+  crg_warn=$(printf '%s\n' "$crg_version_out" | head -1)
+elif ! crg_mcp_reason=$(infra_mcp_status code-review-graph); then
+  crg_warn="runs, but $crg_mcp_reason"
+elif [ ! -f "$CODE_REVIEW_GRAPH_REGISTRY" ]; then
+  crg_warn="runs and registered, but no multi-repo registry at $CODE_REVIEW_GRAPH_REGISTRY"
+else
+  crg_warn=$(CODE_REVIEW_GRAPH_REGISTRY="$CODE_REVIEW_GRAPH_REGISTRY" CODE_REVIEW_GRAPH_STALE_DAYS="$CODE_REVIEW_GRAPH_STALE_DAYS" python3 << 'EOFCRG'
+import json, os, time
+
+registry_path = os.environ["CODE_REVIEW_GRAPH_REGISTRY"]
+threshold_days = float(os.environ["CODE_REVIEW_GRAPH_STALE_DAYS"])
+
+try:
+    repos = json.load(open(registry_path)).get("repos") or []
+except Exception as exc:
+    print(f"registry unreadable ({exc})")
+    raise SystemExit
+
+missing_paths = []
+stale = []
+for repo in repos:
+    path = repo.get("path") or ""
+    alias = repo.get("alias") or path or "?"
+    if not path or not os.path.isdir(path):
+        missing_paths.append(alias)
+        continue
+    graph_db = os.path.join(path, ".code-review-graph", "graph.db")
+    try:
+        mtime = os.path.getmtime(graph_db)
+    except OSError:
+        missing_paths.append(alias)
+        continue
+    age_days = (time.time() - mtime) / 86400
+    if age_days > threshold_days:
+        stale.append(f"{alias} ({age_days:.0f}d)")
+
+parts = []
+if stale:
+    parts.append("stale: " + ", ".join(stale))
+if missing_paths:
+    parts.append("missing path: " + ", ".join(missing_paths))
+print("; ".join(parts))
+EOFCRG
+)
+fi
+if [ -n "$crg_warn" ]; then
+  echo "Infra: code-review-graph WARN $crg_warn"
+else
+  echo "Infra: code-review-graph OK runs, registered, every registered repo's graph fresh (<= ${CODE_REVIEW_GRAPH_STALE_DAYS}d)"
+fi
+
 # --- Template currency check ---
 # Attachment point for Upgrade mode: runs at every master boot. Apply stays in
 # onboarding/upgrade.md and scripts/template-apply. Nonzero from this block is

@@ -1,9 +1,10 @@
 - `scripts/dispatch` appends the `mail-before-done` standing-rule block to
   every brief when the install's rules file carries it (loop `orca
   orchestration check` before `worker_done` until one call returns no mail,
-  applying or explaining any coordinator mail each call returns, and naming
-  a failed check's error text if one fails), the same way it already
-  appends the token-budget line; a contract naming the block explicitly in
+  stopping at 10 calls and naming that cap if mail remains; apply or
+  explain any coordinator mail each call returns, and name a failed
+  check's error text if one fails), the same way it already appends the
+  token-budget line; a contract naming the block explicitly in
   `standing_rules` still gets it exactly once. An install whose rules file
   predates this change gets a warning instead and dispatches without the
   block. Fixes #310.

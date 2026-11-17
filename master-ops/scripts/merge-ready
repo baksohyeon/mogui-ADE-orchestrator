@@ -170,12 +170,6 @@ GQL_FILE="${TMP_DIR}/graphql.json"
 FILES_FILE="${TMP_DIR}/files.json"
 COMMENTS_FILE="${TMP_DIR}/comments.json"
 
-if ! gh pr view "${PR}" --repo "${REPO}" --json number,url,headRefOid,body,state,isDraft \
-    >"${PR_FILE}" 2>"${TMP_DIR}/pr.err"; then
-  not_ready "could not read the PR (gh pr view: $(tr '\n' ' ' <"${TMP_DIR}/pr.err"))"
-fi
-require_json "${PR_FILE}"
-
 # `gh pr checks --required` is the authoritative source for which checks
 # actually gate merge (branch protection's own required list), not every
 # entry in the PR's full check rollup: this repository's own CodeRabbit and
@@ -212,6 +206,16 @@ if ! gh api "repos/${REPO}/issues/${PR}/comments" --paginate >"${COMMENTS_FILE}"
   not_ready "could not read PR comments ($(tr '\n' ' ' <"${TMP_DIR}/comments.err"))"
 fi
 require_json "${COMMENTS_FILE}"
+
+# The head re-check reads last, after every other post-test call above: that
+# narrows the window a late push could land in to as little as possible,
+# rather than checking the head before fetching data a push could still
+# invalidate.
+if ! gh pr view "${PR}" --repo "${REPO}" --json number,url,headRefOid,body,state,isDraft \
+    >"${PR_FILE}" 2>"${TMP_DIR}/pr.err"; then
+  not_ready "could not read the PR (gh pr view: $(tr '\n' ' ' <"${TMP_DIR}/pr.err"))"
+fi
+require_json "${PR_FILE}"
 
 # --- aggregate every measurement and the stop list into one verdict --------
 python3 - "${PR_FILE}" "${CHECKS_FILE}" "${GQL_FILE}" "${FILES_FILE}" "${COMMENTS_FILE}" \
@@ -383,11 +387,23 @@ try:
         # never be read as the declared scope.
         fm_match = re.match(r"^---\n(.*?\n)---", text, re.DOTALL)
         front_matter = fm_match.group(1) if fm_match else ""
-        m = re.search(r"^writes:\s*\[(.*?)\]", front_matter, re.MULTILINE | re.DOTALL)
-        if not m:
+        globs = None
+        for fm_line in front_matter.splitlines():
+            key, sep, raw_value = fm_line.partition(":")
+            if sep and key.strip() == "writes":
+                # Strip only the outer "[" and "]", the same rule
+                # dispatch_gate.py's own front-matter parser uses, so a
+                # glob with brackets of its own (an fnmatch character
+                # class, `src/[ab].py`) survives intact; a regex capture
+                # stopping at the first "]" would truncate it.
+                raw_value = raw_value.strip()
+                if raw_value.startswith("[") and raw_value.endswith("]"):
+                    inner = raw_value[1:-1].strip()
+                    globs = [g.strip() for g in inner.split(",") if g.strip()] if inner else []
+                break
+        if globs is None:
             problems_not_ready.append("contract front matter has no writes: list; cannot verify scope")
         else:
-            globs = [g.strip() for g in m.group(1).split(",") if g.strip()]
             outside = [p for p in changed_paths if not any(fnmatch.fnmatch(p, g) for g in globs)]
             if outside:
                 problems_ask.append(f"{len(outside)} path(s) outside contract writes: " + ", ".join(outside))

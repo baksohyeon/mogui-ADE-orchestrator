@@ -35,6 +35,11 @@
   the contract's opening front matter, never an example in its body text, and a contract with no
   `writes:` field is not ready rather than an ask, since there is no declared scope to check
   against; the stop list adds `master-ops/AGENTS.md`, the redaction scanner script, the approval
-  gate module, the Codex hook-trust and pretrust scripts, and `scripts/dispatch-gate`; and the
-  stop-paths file location has no environment override, closing a path a worker's own shell
-  access could otherwise have used to neutralize the stop list.
+  gate module, the Codex hook-trust script, the Codex/Claude/Agy/Cursor worker pretrust scripts,
+  and `scripts/dispatch-gate`; and the stop-paths file location has no environment override,
+  closing a path a worker's own shell access could otherwise have used to neutralize the stop
+  list. A second review round on that fix commit found two more: the post-test head re-check now
+  reads last, after checks/files/comments, narrowing the window a late push could still land in,
+  and the `writes:` list parser now strips only the outer brackets (the same rule
+  `dispatch_gate.py`'s own front-matter parser uses) instead of a regex that stopped at the first
+  `]`, so a glob with its own brackets (an `fnmatch` character class) survives intact.

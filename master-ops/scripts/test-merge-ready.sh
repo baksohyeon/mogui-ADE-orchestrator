@@ -357,6 +357,20 @@ else
   fail "path inside contract writes exited ${rc}, want 0: ${out}"
 fi
 
+# --- a glob with its own brackets (an fnmatch character class) survives the
+# writes: list parse intact, rather than being truncated at the first "]" --
+bracket_glob_dir="${WORK_DIR}/bracket-glob-writes"
+write_fixture "${bracket_glob_dir}" "" 0 '[{"filename":"src/a.py"}]' "${PASS_MARKER}"
+bracket_contract="${WORK_DIR}/bracket-contract.md"
+printf '%s\n' "---" "writes: [src/[ab].py]" "---" >"${bracket_contract}"
+out=$(GH_FIXTURE_DIR="${bracket_glob_dir}" "${MERGE_READY}" --repo "${REPO}" --pr 1 --test-command true --contract "${bracket_contract}")
+rc=$?
+if [ "${rc}" -eq 0 ]; then
+  ok "a writes: glob with inner brackets is parsed intact (${out})"
+else
+  fail "writes: glob with inner brackets exited ${rc}, want 0: ${out}"
+fi
+
 # --- a contract missing a real writes: front-matter field is not ready, not
 # an ask, and a `writes: [...]` example in the contract's body text (after
 # the closing `---`) is never mistaken for the declared scope --------------

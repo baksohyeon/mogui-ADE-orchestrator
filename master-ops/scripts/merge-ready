@@ -308,10 +308,15 @@ try:
     if reviews["pageInfo"].get("hasNextPage"):
         problems_not_ready.append("more than 100 reviews; rerun with pagination")
     else:
-        # Keep only each bot's latest review on this exact head: an earlier
-        # CHANGES_REQUESTED the same bot later superseded on the same
-        # commit (by re-reviewing after a push did NOT move the head, for
-        # example a label change) must not still read as blocking.
+        # Keep only each bot's latest *decision* review on this exact head:
+        # an earlier CHANGES_REQUESTED the same bot later superseded with a
+        # new decision (an APPROVED, or a dismissal) on the same commit must
+        # not still read as blocking. A plain COMMENTED review carries no
+        # decision at all in GitHub's own review-decision model and must not
+        # clear a standing CHANGES_REQUESTED or PENDING the way one of these
+        # four states would; a bot that adds a remark without re-deciding
+        # stays exactly as blocking as it already was.
+        DECISION_STATES = {"APPROVED", "CHANGES_REQUESTED", "DISMISSED", "PENDING"}
         latest_bot_state = {}
         for node in reviews["nodes"]:
             author = node.get("author") or {}
@@ -319,7 +324,10 @@ try:
                 continue
             if (node.get("commit") or {}).get("oid") != head_sha:
                 continue
-            latest_bot_state[author.get("login", "unknown")] = (node.get("state") or "").upper()
+            state = (node.get("state") or "").upper()
+            if state not in DECISION_STATES:
+                continue
+            latest_bot_state[author.get("login", "unknown")] = state
         failing_bots = [
             f"{login}={state.lower()}"
             for login, state in latest_bot_state.items()

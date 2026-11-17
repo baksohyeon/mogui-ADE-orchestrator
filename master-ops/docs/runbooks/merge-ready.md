@@ -135,3 +135,15 @@ request or a hung test blocks the verdict until something else kills the process
 test command in a timeout was considered and left out, since GNU `timeout` is not reliably
 present on every machine this script runs on (macOS ships none by default, only `gtimeout` from
 a separate Homebrew install).
+
+Only a review in `APPROVED`, `CHANGES_REQUESTED`, `DISMISSED`, or `PENDING` state updates a bot's
+standing state for this measurement; a plain `COMMENTED` review (a remark with no decision)
+leaves a prior `CHANGES_REQUESTED` or `PENDING` in force, the same way GitHub's own review-decision
+model treats a comment as not clearing a standing decision.
+
+`--contract`'s `writes:` field is schema-optional (`dispatch_gate.py` records it but does not
+require it), yet the `merge-ready-before-done` standing rule tells a worker to always pass
+`--contract` when the task delivered one, and a contract with no `writes:` then reads not ready
+with no way for the worker to fix it by editing its own delivered contract. Measured against 198
+historical contracts with a front-matter block: all 198 already include `writes:`, so this is a
+latent schema gap, not an observed failure, and is not tightened further here.

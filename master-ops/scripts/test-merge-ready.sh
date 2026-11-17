@@ -262,13 +262,18 @@ else
   fail "non-required failing check exited ${rc}, want 0: ${out}"
 fi
 
-# --- a repository with no required checks at all is not blocked ------------
+# --- an empty-but-parseable checks array does not block merge (the
+# aggregator's own tolerance of that shape; real `gh pr checks --required`
+# does not actually emit `[]` with exit 0 for "nothing is required" (see
+# "Honest limits" in docs/runbooks/merge-ready.md), it emits no JSON at all
+# with a nonzero exit, which the "broken checks response" case above covers
+# instead) --------------------------------------------------------------
 non_required_clean_dir="${WORK_DIR}/non-required-clean"
 write_fixture "${non_required_clean_dir}" "" 0 '[{"filename":"README.md"}]' "${PASS_MARKER}" "[]"
 out=$(run_case "${non_required_clean_dir}")
 rc=$?
 if [ "${rc}" -eq 0 ]; then
-  ok "a repository with no required checks at all is not blocked by this measurement (${out})"
+  ok "an empty required-checks array does not block (aggregator tolerance, not the real-world shape) (${out})"
 else
   fail "empty required-checks list exited ${rc}, want 0: ${out}"
 fi
@@ -475,6 +480,27 @@ if [ "${rc}" -eq 0 ]; then
   ok "a bot's superseded CHANGES_REQUESTED on the same head does not block once it later approves (${out})"
 else
   fail "superseded bot review exited ${rc}, want 0: ${out}"
+fi
+
+# --- a bot's later COMMENTED-only review does NOT clear its own standing
+# CHANGES_REQUESTED: a remark carries no decision, unlike an approval -----
+commented_after_dir="${WORK_DIR}/commented-after-changes-requested"
+commented_after_json=$(python3 - "${HEAD_SHA}" <<'PY'
+import json, sys
+head_sha = sys.argv[1]
+print(json.dumps([
+    {"state": "CHANGES_REQUESTED", "commit": {"oid": head_sha}, "author": {"login": "some-bot", "__typename": "Bot"}},
+    {"state": "COMMENTED", "commit": {"oid": head_sha}, "author": {"login": "some-bot", "__typename": "Bot"}},
+]))
+PY
+)
+write_fixture "${commented_after_dir}" "" 0 '[{"filename":"README.md"}]' "${PASS_MARKER}" "${DEFAULT_CHECKS}" "${commented_after_json}"
+out=$(run_case "${commented_after_dir}")
+rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -qi "some-bot=changes_requested"; then
+  ok "a bot's later COMMENTED review does not clear its own standing CHANGES_REQUESTED (${out})"
+else
+  fail "bot COMMENTED after CHANGES_REQUESTED exited ${rc}, want 1 still naming it: ${out}"
 fi
 
 # --- a human reviewer's own CHANGES_REQUESTED review does not count -------

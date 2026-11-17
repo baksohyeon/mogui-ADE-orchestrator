@@ -1,0 +1,28 @@
+# Stop-list paths for scripts/merge-ready (#330, stop-list items 1-2).
+#
+# A changed path matching an entry here means "ask the owner", never "merge",
+# regardless of what else passed. One entry per line; blank lines and lines
+# starting with "#" are ignored. An entry ending in "/" matches that path and
+# everything under it, the same convention master-ops/MANIFEST.json's
+# instance_owned list uses. Everything else is an exact path match.
+#
+# Stop-list item 1: charter, workspace card, role state, boot comparison set.
+master-ops/docs/charter/
+master-ops/CLAUDE.md
+master-ops/workspace-card/
+master-ops/docs/runbooks/role-state.md
+master-ops/docs/runbooks/boot-comparison-set.md
+
+# Stop-list item 2: scanner, guard, gate, or permission-policy code -
+# anything that changes what a worker is allowed to do or how that is
+# enforced.
+config/gitleaks.toml
+master-ops/scripts/hooks/
+src/master_runtime/core/dispatch_gate.py
+master-ops/scripts/gate_runner.py
+master-ops/scripts/dispatch
+master-ops/scripts/merge-ready
+master-ops/config/merge-ready-stop-paths.txt
+master-ops/model-tier-policy.json
+master-ops/rules/standing-rules.md
+master-ops/templates/mcp-servers.json

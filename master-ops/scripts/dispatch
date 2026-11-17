@@ -2758,6 +2758,12 @@ if [ -n "$STANDING_RULE_NAMES" ]; then
   for name in $STANDING_RULE_NAMES; do
     block=$(standing_rule_block "$name") || {
       fail_after_tracker_claim "standing rule block not found: $name" 3; }
+    # merge-ready-before-done names a script path relative to this ops
+    # repo's own root, meaningless from the product worktree a worker
+    # actually runs in; resolve it to the absolute path before it ships.
+    if [ "$name" = "merge-ready-before-done" ]; then
+      block="${block//scripts\/merge-ready/$OPS/scripts/merge-ready}"
+    fi
     SPEC="$SPEC
 
 Standing rules ($name):
@@ -2807,6 +2813,29 @@ $REQUIRED_INFRA_BLOCK"
       echo "📎 standing rules · required-infra (always)"
     else
       echo "⚠ required-infra standing-rule block not found; dispatching without it" >&2
+    fi
+    ;;
+esac
+
+# 1.6d merge-ready-before-done ships to every brief, whether or not the
+# contract named it, the same way mail-before-done and required-infra do
+# just above (#330: every worker runs the same pre-merge measurement the
+# master will run, before worker_done, not after).
+case " $STANDING_RULE_NAMES " in
+  *" merge-ready-before-done "*) ;;
+  *)
+    if MERGE_READY_BEFORE_DONE_BLOCK=$(standing_rule_block "merge-ready-before-done"); then
+      # Same absolute-path resolution as the named-block loop above, for the
+      # case this block ships unconditionally instead of by name.
+      MERGE_READY_BEFORE_DONE_BLOCK="${MERGE_READY_BEFORE_DONE_BLOCK//scripts\/merge-ready/$OPS/scripts/merge-ready}"
+      SPEC="$SPEC
+
+Standing rules (merge-ready-before-done):
+
+$MERGE_READY_BEFORE_DONE_BLOCK"
+      echo "📎 standing rules · merge-ready-before-done (always)"
+    else
+      echo "⚠ merge-ready-before-done standing-rule block not found; dispatching without it" >&2
     fi
     ;;
 esac

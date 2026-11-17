@@ -1,0 +1,357 @@
+#!/usr/bin/env bash
+# One measurement for a pull request, run by the worker before `worker_done`
+# and by the master before merge (#330). Five measurements plus the
+# machine-checkable half of the stop list, same inputs every time: a worker's
+# own claim never substitutes for this run.
+#
+# Usage: merge-ready --repo <owner/name> --pr <n> [--contract <file>] [--test-command <cmd>]
+#
+# Exit codes:
+#   0  merge: every measurement passed and no stop-list path was touched.
+#   1  not ready: a measurement failed, a `gh` call could not be read or
+#      parsed (that case is 1, never 0: a measurement that could not run is
+#      not a passed measurement), or this invocation itself could not run
+#      (bad usage, `gh`/`python3` missing, an unreadable --contract or
+#      stop-paths file). 2 is reserved for "ask" alone, never a close-enough
+#      stand-in for "could not run".
+#   2  ask the owner: a changed path matches the stop list, or (with
+#      --contract) a changed path falls outside the contract's `writes`
+#      globs. Ask wins over not-ready when both are true, since the owner
+#      decides regardless of what else failed.
+#
+# One summary line on stdout names every failing or asking item.
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+STOP_PATHS_FILE="${MERGE_READY_STOP_PATHS:-$SCRIPT_DIR/../config/merge-ready-stop-paths.txt}"
+
+usage() {
+  echo "usage: merge-ready --repo <owner/name> --pr <n> [--contract <file>] [--test-command <cmd>]" >&2
+  exit 1
+}
+
+REPO=""
+PR=""
+CONTRACT=""
+TEST_COMMAND_OVERRIDE=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --repo)
+      [ $# -ge 2 ] || usage
+      REPO="$2"
+      shift 2
+      ;;
+    --pr)
+      [ $# -ge 2 ] || usage
+      PR="$2"
+      shift 2
+      ;;
+    --contract)
+      [ $# -ge 2 ] || usage
+      CONTRACT="$2"
+      shift 2
+      ;;
+    --test-command)
+      [ $# -ge 2 ] || usage
+      TEST_COMMAND_OVERRIDE="$2"
+      shift 2
+      ;;
+    *)
+      usage
+      ;;
+  esac
+done
+[ -n "${REPO}" ] && [ -n "${PR}" ] || usage
+
+command -v gh >/dev/null 2>&1 || { echo "merge-ready: gh is required" >&2; exit 1; }
+command -v python3 >/dev/null 2>&1 || { echo "merge-ready: python3 is required" >&2; exit 1; }
+if [ -n "${CONTRACT}" ] && [ ! -f "${CONTRACT}" ]; then
+  echo "merge-ready: --contract file not found: ${CONTRACT}" >&2
+  exit 1
+fi
+if [ ! -f "${STOP_PATHS_FILE}" ]; then
+  echo "merge-ready: stop-paths file not found: ${STOP_PATHS_FILE}" >&2
+  exit 1
+fi
+
+TMP_DIR="$(mktemp -d -t merge-ready.XXXXXX)" || { echo "merge-ready: mktemp failed" >&2; exit 1; }
+trap 'rm -rf "${TMP_DIR}"' EXIT
+
+PR_FILE="${TMP_DIR}/pr.json"
+CHECKS_FILE="${TMP_DIR}/checks.json"
+GQL_FILE="${TMP_DIR}/graphql.json"
+FILES_FILE="${TMP_DIR}/files.json"
+COMMENTS_FILE="${TMP_DIR}/comments.json"
+
+not_ready() {
+  echo "merge-ready: not ready · $1"
+  exit 1
+}
+
+# A file this script just wrote parses as the JSON shape it is about to
+# trust: a non-empty array for $2, or (with no $2) any value. An empty-but-
+# valid response (`{}`, `null`, `[]`) is exactly as unmeasurable as no
+# response at all, and must not quietly read as "nothing failed".
+require_json() {
+  local file="$1" kind="${2:-}" reason
+  reason="$(python3 -c "
+import json, sys
+try:
+    data = json.load(open('${file}', encoding='utf-8'))
+except Exception as exc:
+    print('unparseable: ' + str(exc)); sys.exit(1)
+if '${kind}' == 'nonempty-list' and not (isinstance(data, list) and len(data) > 0):
+    print('expected a non-empty list, got ' + type(data).__name__); sys.exit(1)
+" 2>&1)" && return 0
+  not_ready "${file##*/}: ${reason}"
+}
+
+# --- gather: everything a missing/unparseable/empty response turns into
+# exit 1, never a crash and never exit 2 (exit 2 is reserved for the stop
+# list). ---
+if ! gh pr view "${PR}" --repo "${REPO}" --json number,url,headRefOid,body \
+    >"${PR_FILE}" 2>"${TMP_DIR}/pr.err"; then
+  not_ready "could not read the PR (gh pr view: $(tr '\n' ' ' <"${TMP_DIR}/pr.err"))"
+fi
+require_json "${PR_FILE}"
+HEAD_SHA="$(python3 -c "
+import json
+print(json.load(open('${PR_FILE}', encoding='utf-8'))['headRefOid'])
+" 2>"${TMP_DIR}/pr.parse.err")" || not_ready "PR response missing headRefOid ($(tr '\n' ' ' <"${TMP_DIR}/pr.parse.err"))"
+
+# `gh pr checks --required` is the authoritative source for which checks
+# actually gate merge (branch protection's own required list), not every
+# entry in the PR's full check rollup: this repository's own CodeRabbit and
+# cubic review-bot checks, and its "label"/"assignee" checks, are none of
+# them required, so folding them in here would make every real PR here
+# permanently not-ready over checks nobody is waiting on. `gh` exits
+# non-zero for a pending or failing required check too, not only for a
+# request that could not run, so only a response that is not valid JSON at
+# all counts as "could not read".
+if ! gh pr checks "${PR}" --repo "${REPO}" --required --json name,bucket,state \
+    >"${CHECKS_FILE}" 2>"${TMP_DIR}/checks.err"; then
+  if ! python3 -c "import json; json.load(open('${CHECKS_FILE}', encoding='utf-8'))" >/dev/null 2>&1; then
+    not_ready "could not read required checks (gh pr checks: $(tr '\n' ' ' <"${TMP_DIR}/checks.err"))"
+  fi
+fi
+require_json "${CHECKS_FILE}"
+
+OWNER="${REPO%%/*}"
+NAME="${REPO#*/}"
+if ! gh api graphql \
+    -f owner="${OWNER}" -f name="${NAME}" -F number="${PR}" \
+    -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}} reviews(first:100){nodes{state commit{oid} author{login __typename}} pageInfo{hasNextPage}}}}}' \
+    >"${GQL_FILE}" 2>"${TMP_DIR}/gql.err"; then
+  not_ready "could not read review threads/reviews ($(tr '\n' ' ' <"${TMP_DIR}/gql.err"))"
+fi
+require_json "${GQL_FILE}"
+
+if ! gh api "repos/${REPO}/pulls/${PR}/files" --paginate >"${FILES_FILE}" 2>"${TMP_DIR}/files.err"; then
+  not_ready "could not read changed files ($(tr '\n' ' ' <"${TMP_DIR}/files.err"))"
+fi
+require_json "${FILES_FILE}" nonempty-list
+
+if ! gh api "repos/${REPO}/issues/${PR}/comments" --paginate >"${COMMENTS_FILE}" 2>"${TMP_DIR}/comments.err"; then
+  not_ready "could not read PR comments ($(tr '\n' ' ' <"${TMP_DIR}/comments.err"))"
+fi
+require_json "${COMMENTS_FILE}"
+
+# --- tarball re-run: the test command is chosen per repository by the case
+# statement below (an unlisted repository has none, which is itself a
+# not-ready reason), or forced with --test-command for a repo this script
+# does not know, or for a test harness stubbing the run. The known-needs-
+# .git exception is a short, commented allowlist, not a config file: it is
+# part of what this script measures, not a seat setting.
+default_test_command() {
+  case "$1" in
+    */mogui-ADE-orchestrator)
+      printf '%s' "PYTHONPATH=src python -m pytest tests -q --deselect tests/test_context_quality_scripts.py::test_context_quality_sampler_relative_anchor_git_log_works"
+      ;;
+    *)
+      printf '%s' ""
+      ;;
+  esac
+}
+
+TEST_CMD="${TEST_COMMAND_OVERRIDE:-$(default_test_command "${REPO}")}"
+TEST_STATUS="fail"
+TEST_REASON=""
+if [ -z "${TEST_CMD}" ]; then
+  TEST_REASON="no known test command for ${REPO}; pass --test-command"
+else
+  TARBALL="${TMP_DIR}/head.tar.gz"
+  WORKDIR="${TMP_DIR}/head"
+  mkdir -p "${WORKDIR}"
+  if ! gh api "repos/${REPO}/tarball/${HEAD_SHA}" >"${TARBALL}" 2>"${TMP_DIR}/tarball.err"; then
+    not_ready "could not fetch the head tarball ($(tr '\n' ' ' <"${TMP_DIR}/tarball.err"))"
+  fi
+  if ! tar -xzf "${TARBALL}" -C "${WORKDIR}" --strip-components=1 2>"${TMP_DIR}/untar.err"; then
+    not_ready "could not extract the head tarball ($(tr '\n' ' ' <"${TMP_DIR}/untar.err"))"
+  fi
+  TEST_LOG="${TMP_DIR}/test.log"
+  if ( cd "${WORKDIR}" && eval "${TEST_CMD}" ) >"${TEST_LOG}" 2>&1; then
+    TEST_STATUS="pass"
+  else
+    TEST_REASON="test re-run failed; last lines: $(tail -n 5 "${TEST_LOG}" | tr '\n' ' ')"
+  fi
+fi
+
+# --- aggregate every measurement and the stop list into one verdict --------
+python3 - "${PR_FILE}" "${CHECKS_FILE}" "${GQL_FILE}" "${FILES_FILE}" "${COMMENTS_FILE}" \
+         "${STOP_PATHS_FILE}" "${HEAD_SHA}" "${TEST_STATUS}" "${TEST_REASON}" "${CONTRACT}" <<'PY'
+import fnmatch
+import json
+import re
+import sys
+from pathlib import Path
+
+(pr_file, checks_file, gql_file, files_file, comments_file, stop_paths_file,
+ head_sha, test_status, test_reason, contract_path) = sys.argv[1:11]
+
+
+def load(path):
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def fail(reason):
+    # A single, guaranteed summary line beats a raw traceback: anything
+    # this script did not anticipate about a response's shape is still a
+    # measurement that could not run, never a crash with no verdict at all.
+    print(f"merge-ready: not ready · {reason}")
+    sys.exit(1)
+
+
+try:
+    pr = load(pr_file)
+    checks = load(checks_file)
+    gql = load(gql_file)
+    files = load(files_file)
+    comments = load(comments_file)
+
+    # A rename carries its old path in previous_filename; checking only the
+    # new name would let a stop-listed or out-of-scope path dodge both
+    # checks below just by being renamed in the same diff, so both names
+    # count as "changed".
+    changed_paths = sorted(
+        {f["filename"] for f in files}
+        | {f["previous_filename"] for f in files if f.get("previous_filename")}
+    )
+
+    problems_ask = []
+    problems_not_ready = []
+
+    # 1) required checks + review bots --------------------------------------
+    rate_limited = set()
+    for line in (pr.get("body") or "").splitlines():
+        m = re.match(r"\s*rate-limited:\s*(.+)", line, re.IGNORECASE)
+        if m:
+            rate_limited.update(n.strip().lower() for n in m.group(1).split(",") if n.strip())
+
+    # `gh pr checks --required` is branch protection's own required-check
+    # list (bucket is "pass"/"fail"/"pending"/"skipping"/"cancel"), so a
+    # check this repository runs but does not require (a review bot, a
+    # label/assignee check) never appears here at all and cannot block.
+    failing_checks = [
+        f"{c.get('name', 'unknown')}={c.get('state', c.get('bucket', 'unknown'))}"
+        for c in checks
+        if c.get("name", "").lower() not in rate_limited and c.get("bucket") != "pass"
+    ]
+    if failing_checks:
+        problems_not_ready.append("checks: " + ", ".join(failing_checks))
+
+    pull_request = (gql.get("data") or {}).get("repository", {}).get("pullRequest")
+    if not pull_request:
+        fail("graphql response missing data.repository.pullRequest")
+    reviews = pull_request.get("reviews") or {}
+    if reviews.get("pageInfo", {}).get("hasNextPage"):
+        problems_not_ready.append("more than 100 reviews; rerun with pagination")
+    else:
+        failing_bots = []
+        for node in reviews.get("nodes") or []:
+            author = node.get("author") or {}
+            if author.get("__typename") != "Bot":
+                continue
+            if (node.get("commit") or {}).get("oid") != head_sha:
+                continue
+            state = (node.get("state") or "").upper()
+            if state in {"PENDING", "CHANGES_REQUESTED"}:
+                failing_bots.append(f"{author.get('login', 'unknown')}={state.lower()}")
+        if failing_bots:
+            problems_not_ready.append("review bots: " + ", ".join(failing_bots))
+
+    # 2) open review threads ------------------------------------------------
+    threads = pull_request.get("reviewThreads") or {}
+    if threads.get("pageInfo", {}).get("hasNextPage"):
+        problems_not_ready.append("more than 100 review threads; rerun with pagination")
+    else:
+        open_threads = sum(1 for t in threads.get("nodes") or [] if not t.get("isResolved", False))
+        if open_threads:
+            problems_not_ready.append(f"{open_threads} open review thread(s)")
+
+    # 3) tarball test re-run (already run by the caller) --------------------
+    if test_status != "pass":
+        problems_not_ready.append(f"tests: {test_reason}")
+
+    # 4) review-pass marker --------------------------------------------------
+    # merge-ready-review-pass sha=<40-hex head sha> critical=<N> important=<N>
+    marker_re = re.compile(r"merge-ready-review-pass sha=([0-9a-f]{40}) critical=(\d+) important=(\d+)")
+    latest = None
+    for comment in comments:
+        for m in marker_re.finditer(comment.get("body") or ""):
+            latest = m
+    if latest is None:
+        problems_not_ready.append("no review-pass marker found")
+    else:
+        sha, critical, important = latest.group(1), int(latest.group(2)), int(latest.group(3))
+        if sha != head_sha:
+            problems_not_ready.append(f"review-pass marker is for {sha[:12]}, not head {head_sha[:12]}")
+        elif critical > 0 or important > 0:
+            problems_not_ready.append(f"review pass recorded critical={critical} important={important}")
+
+    # 5) stop-list paths ------------------------------------------------------
+    stop_entries = []
+    for line in Path(stop_paths_file).read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            stop_entries.append(line)
+
+    stop_hits = []
+    for path in changed_paths:
+        for entry in stop_entries:
+            if entry.endswith("/"):
+                hit = path == entry.rstrip("/") or path.startswith(entry)
+            else:
+                hit = path == entry
+            if hit:
+                stop_hits.append(f"{path} (stop-list)")
+                break
+    if stop_hits:
+        problems_ask.append(f"{len(stop_hits)} stop-list path(s): " + ", ".join(stop_hits))
+
+    # 6) outside the contract's writes globs, only when --contract is given -
+    if contract_path:
+        text = Path(contract_path).read_text(encoding="utf-8")
+        m = re.search(r"^writes:\s*\[(.*?)\]", text, re.MULTILINE | re.DOTALL)
+        if not m:
+            problems_ask.append("contract has no writes: list; cannot verify scope")
+        else:
+            globs = [g.strip() for g in m.group(1).split(",") if g.strip()]
+            outside = [p for p in changed_paths if not any(fnmatch.fnmatch(p, g) for g in globs)]
+            if outside:
+                problems_ask.append(f"{len(outside)} path(s) outside contract writes: " + ", ".join(outside))
+
+    # --- verdict ---------------------------------------------------------------
+    if problems_ask:
+        print("merge-ready: ask · " + "; ".join(problems_ask + problems_not_ready))
+        sys.exit(2)
+    if problems_not_ready:
+        print("merge-ready: not ready · " + "; ".join(problems_not_ready))
+        sys.exit(1)
+    print(f"merge-ready: merge · every measurement passed (head {head_sha[:12]})")
+    sys.exit(0)
+except SystemExit:
+    raise
+except Exception as exc:
+    fail(f"internal error: {exc}")
+PY
+exit $?

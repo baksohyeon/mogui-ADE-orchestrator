@@ -1,6 +1,6 @@
 # Standing rules
 
-Eight named rule blocks, each a `## <name>` heading. A contract's front matter
+Nine named rule blocks, each a `## <name>` heading. A contract's front matter
 may name any subset of these under `standing_rules: [...]`; `scripts/dispatch`
 reads the named blocks and appends their text to the dispatched spec, so a
 worker receives the rule as part of its own task text instead of needing a
@@ -9,13 +9,13 @@ human to paste it in by hand. A seat may add further blocks in the overlay
 refreshes on every template re-stamp; the overlay, in the instance-owned
 `config/` directory, never does.
 
-`mail-before-done` and `required-infra` are the two exceptions to "named
-under `standing_rules`": `scripts/dispatch` appends both to every brief
-whether or not a contract's front matter names them, the same way it always
-appends the worker token budget line below the standing-rule blocks. Naming
-either explicitly in `standing_rules` is harmless (the gate accepts it as a
-known block, same as the others) but has no further effect, since the
-wrapper was going to add it anyway.
+`mail-before-done`, `required-infra`, and `merge-ready-before-done` are the
+three exceptions to "named under `standing_rules`": `scripts/dispatch`
+appends all three to every brief whether or not a contract's front matter
+names them, the same way it always appends the worker token budget line
+below the standing-rule blocks. Naming one explicitly in `standing_rules` is
+harmless (the gate accepts it as a known block, same as the others) but has
+no further effect, since the wrapper was going to add it anyway.
 
 ## headless
 
@@ -48,6 +48,18 @@ the completion message why not, and keep calling until one returns no
 mail. Stop at 10 calls even if mail remains and name that cap in the
 completion message. If a check itself fails, name the failed check and
 its error text in the completion message.
+
+## merge-ready-before-done
+
+Skip this block if your task does not end in a pull request (a direct-to-`main` land, for
+example). Otherwise, before `worker_done`: run an independent review pass over your own diff (a
+review subagent or skill, never your own unverified opinion of it) and post its result as a PR
+comment containing the marker line `merge-ready-review-pass sha=<head sha> critical=<N>
+important=<N>`, with the real counts that pass found. Then run `scripts/merge-ready --repo
+<owner/name> --pr <n> [--contract <file>]` on your own PR and quote its one summary line in your
+completion message. Exit 1 means keep working: fix what the line names and run it again. Exit 2
+means stop and ask the coordinator rather than merge or keep iterating; it is not yours to
+resolve by guessing. `docs/runbooks/merge-ready.md` has the exit codes and the marker format.
 
 ## placement
 

@@ -55,7 +55,7 @@ merge_into() {
   dest="$workspace_root/.mcp.json"
   [ -f "$pinned" ] || { echo "install-mcp-config: pinned servers file not found: $pinned" >&2; return 1; }
   python3 - "$dest" "$pinned" <<'PYEOF'
-import json, os, sys
+import json, os, sys, tempfile
 
 dest, pinned_path = sys.argv[1], sys.argv[2]
 
@@ -88,10 +88,17 @@ current.setdefault("mcpServers", {}).update(pinned.get("mcpServers") or {})
 # serialized directly onto dest: that would already have truncated an
 # unrelated, correctly-merged .mcp.json before a disk-full or similar
 # mid-write failure, leaving a half-written file where this script's own
-# refusal cases promise the original stays untouched.
-tmp_path = f"{dest}.tmp-{os.getpid()}"
+# refusal cases promise the original stays untouched. mkstemp (O_EXCL under
+# the hood) rather than a predictable "dest.tmp-<pid>" name, so a pre-existing
+# file or symlink at that exact path cannot redirect the write.
+dest_dir = os.path.dirname(dest) or "."
+fd, tmp_path = tempfile.mkstemp(prefix=".mcp.json.tmp-", dir=dest_dir)
 try:
-    with open(tmp_path, "w", encoding="utf-8") as fh:
+    if os.path.exists(dest):
+        # Preserve the existing file's permission bits: mkstemp's own 0600
+        # default must not silently loosen or tighten an operator-chosen mode.
+        os.chmod(tmp_path, os.stat(dest).st_mode & 0o7777)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
         json.dump(current, fh, indent=2)
         fh.write("\n")
     os.replace(tmp_path, dest)

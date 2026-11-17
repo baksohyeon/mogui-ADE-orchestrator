@@ -201,10 +201,9 @@ echo "ok   : a non-object mcpServers is refused with a named reason and left unc
 ws="$work/null-servers"
 mkdir -p "$ws"
 printf '{"mcpServers": null}' > "$ws/.mcp.json"
-before=$(cat "$ws/.mcp.json")
+cp "$ws/.mcp.json" "$ws/.mcp.json.before"
 out=$(install_into "$ws" 2>&1) && status=0 || status=$?
-after=$(cat "$ws/.mcp.json")
-if [ "$status" -eq 0 ] || [ "$before" != "$after" ]; then
+if [ "$status" -eq 0 ] || ! cmp -s "$ws/.mcp.json.before" "$ws/.mcp.json"; then
   echo "FAIL: a null mcpServers should be refused and left untouched" >&2
   printf '%s\n' "$out" >&2
   exit 1

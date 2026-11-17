@@ -64,6 +64,15 @@ WORKSPACE_ROOT="$TMP/workspace"
 OPS_DIR="$TMP/ops"
 mkdir -p "$WORKSPACE_ROOT" "$OPS_DIR"
 
+# #328 follow-up: pin the fixture's default host so an already-exported
+# MOGUI_MASTER_HOST_RUNTIME in the calling shell (dispatch's own WARNING
+# text tells operators to export exactly this) cannot change which host the
+# Claude-default cases below run as, and so an inherited MOGUI_INSTANCE_RUNTIME_CONFIG
+# cannot point the unmeasurable-host case at a real file. Per-case overrides
+# below (including the empty-host case) still take effect over this default.
+MOGUI_MASTER_HOST_RUNTIME=claude
+unset MOGUI_INSTANCE_RUNTIME_CONFIG INSTANCE_RUNTIME_CONFIG
+
 CLAUDE_MCP_CONFIG="$TMP/claude.json"
 CLAUDE_USER_SETTINGS="$TMP/user-settings.json"
 CODEX_MCP_CONFIG="$TMP/codex-config.toml"
@@ -99,7 +108,7 @@ if [ "\$1" = "sources" ]; then
   cat "$CTX_SOURCES_FILE"
   exit 0
 fi
-if [ "\$1" = "upgrade" ] && [ "\$2" = "status" ]; then
+if [ "\$1" = "upgrade" ] && [ "\$2" = "status" ] && [ "\$3" = "--format" ] && [ "\$4" = "json" ]; then
   printf '%s\n' '$upgrade_json'
   exit 0
 fi
@@ -542,6 +551,20 @@ MOGUI_MASTER_HOST_RUNTIME=codex
 printf '{"mcpServers": {"ctx": {}}}\n' > "$CLAUDE_MCP_CONFIG"
 printf '[mcp_servers."code-review-graph"]\ncommand = "uvx"\n' > "$CODEX_MCP_CONFIG"
 check "a quoted Codex table header is accepted" "Infra: code-review-graph OK" "code-review-graph WARN" 0
+MOGUI_MASTER_HOST_RUNTIME=claude
+
+# #328 follow-up: the host resolver's file-based path (no env override set,
+# master_host_runtime read from config/instance-runtime.json under OPS_DIR)
+# is exercised directly, not only through the MOGUI_MASTER_HOST_RUNTIME env
+# override every other host-aware case above uses.
+reset_fixture
+MOGUI_MASTER_HOST_RUNTIME=""
+mkdir -p "$OPS_DIR/config"
+printf '{"master_host_runtime": "codex"}\n' > "$OPS_DIR/config/instance-runtime.json"
+printf '{"mcpServers": {"ctx": {}}}\n' > "$CLAUDE_MCP_CONFIG"
+printf '[mcp_servers.code-review-graph]\ncommand = "uvx"\n' > "$CODEX_MCP_CONFIG"
+check "a host read from config/instance-runtime.json is honored" "Infra: code-review-graph OK" "code-review-graph WARN" 0
+rm -rf "${OPS_DIR:?}/config"
 MOGUI_MASTER_HOST_RUNTIME=claude
 
 # Round 2, Minor: a timeout kill (124 from a real `timeout`/`gtimeout`, or

@@ -72,8 +72,8 @@ if os.path.exists(dest):
             f"refusing to merge: {dest} top level is a {type(current).__name__}, "
             "not a JSON object; fix or remove it by hand first"
         )
-    existing_servers = current.get("mcpServers")
-    if existing_servers is not None and not isinstance(existing_servers, dict):
+    if "mcpServers" in current and not isinstance(current["mcpServers"], dict):
+        existing_servers = current["mcpServers"]
         sys.exit(
             f"refusing to merge: {dest} 'mcpServers' is a {type(existing_servers).__name__}, "
             "not a JSON object; fix or remove it by hand first"
@@ -84,9 +84,23 @@ with open(pinned_path, encoding="utf-8") as fh:
 
 current.setdefault("mcpServers", {}).update(pinned.get("mcpServers") or {})
 
-with open(dest, "w", encoding="utf-8") as fh:
-    json.dump(current, fh, indent=2)
-    fh.write("\n")
+# Written to a sibling temp file and renamed into place, not opened and
+# serialized directly onto dest: that would already have truncated an
+# unrelated, correctly-merged .mcp.json before a disk-full or similar
+# mid-write failure, leaving a half-written file where this script's own
+# refusal cases promise the original stays untouched.
+tmp_path = f"{dest}.tmp-{os.getpid()}"
+try:
+    with open(tmp_path, "w", encoding="utf-8") as fh:
+        json.dump(current, fh, indent=2)
+        fh.write("\n")
+    os.replace(tmp_path, dest)
+except Exception:
+    try:
+        os.unlink(tmp_path)
+    except OSError:
+        pass
+    raise
 PYEOF
 }
 

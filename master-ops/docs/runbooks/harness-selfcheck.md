@@ -159,8 +159,8 @@ A missing servers file or one with no `code-review-graph` entry each get their o
 `Infra: ctx-upgrade` is covered separately: a reported `State error`, a version numerically behind the
 latest one `ctx upgrade check` last recorded, a timeout, unparseable output, and ctx absent from `PATH`.
 
-The check does not write any file it did not already own (`.mcp.json`, the Claude/Codex config files, and
-the registry are all read, never written). It is not otherwise side-effect-free: `code-review-graph`'s
+The check does not write these configuration files (`.mcp.json`, the Claude/Codex config files, and the
+registry are all read, never written). It is not otherwise side-effect-free: `code-review-graph`'s
 `Runs:` probe (gap 1 above) launches the pinned command with `--version`, and on a host with a cold `uv`
 cache that first run downloads the package and populates that cache — a real filesystem write and real
 network time, not merely a read. A `WARN` from that probe names a cold cache as the likely cause of a

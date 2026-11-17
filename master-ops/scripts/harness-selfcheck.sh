@@ -530,17 +530,24 @@ CODEX_MCP_CONFIG="${CODEX_MCP_CONFIG:-${CODEX_HOME:-$HOME/.codex}/config.toml}"
 # override, then `master_host_runtime` in the instance runtime config), minus
 # dispatch's own hardcoded fallback: an unmeasurable host must warn here
 # (every check below), never guess one and risk a false OK.
-INSTANCE_RUNTIME_CONFIG="${INSTANCE_RUNTIME_CONFIG:-$OPS_DIR/config/instance-runtime.json}"
+# MOGUI_INSTANCE_RUNTIME_CONFIG matches the override name `scripts/dispatch`
+# already reads for this same file; INSTANCE_RUNTIME_CONFIG stays as a
+# compatibility alias for a caller that set that instead.
+INSTANCE_RUNTIME_CONFIG="${MOGUI_INSTANCE_RUNTIME_CONFIG:-${INSTANCE_RUNTIME_CONFIG:-$OPS_DIR/config/instance-runtime.json}}"
 measured_master_host_runtime() {
   [ -f "$INSTANCE_RUNTIME_CONFIG" ] || return 1
-  python3 -c "
-import json,sys
+  # Path passed as argv, not interpolated into the python source string: a
+  # path containing a single quote would otherwise break the script with a
+  # syntax error, read here as an unmeasurable host.
+  python3 - "$INSTANCE_RUNTIME_CONFIG" <<'EOFHOST' 2>/dev/null
+import json, sys
 try:
-    v=json.load(open('$INSTANCE_RUNTIME_CONFIG')).get('master_host_runtime') or ''
+    v = json.load(open(sys.argv[1])).get("master_host_runtime") or ""
 except Exception:
-    v=''
+    v = ""
 print(v)
-sys.exit(0 if v else 1)" 2>/dev/null
+sys.exit(0 if v else 1)
+EOFHOST
 }
 if [ -n "${MOGUI_MASTER_HOST_RUNTIME:-}" ]; then
   MASTER_HOST_RUNTIME="$MOGUI_MASTER_HOST_RUNTIME"
@@ -726,7 +733,10 @@ EOFMCP
   fi
   local codex_ok=0
   codex_mcp_reachable "$tool" && codex_ok=1
-  local absent_reason="${claude_reason:-not registered as an MCP server (checked Claude user config, project .mcp.json, Codex config.toml)}"
+  # Host-neutral: never the claude-specific disabled/pending detail above,
+  # which only describes a Claude-side gap and would misdirect an operator
+  # on a Codex-hosted (or unmeasured-host) seat whose own gap is different.
+  local generic_absent="not registered as an MCP server (checked Claude user config, project .mcp.json, Codex config.toml)"
 
   case "$MASTER_HOST_RUNTIME" in
     claude)
@@ -734,7 +744,7 @@ EOFMCP
       if [ "$codex_ok" = 1 ]; then
         echo "registered for codex, not claude (this session measured its host as claude)"
       else
-        echo "$absent_reason"
+        echo "${claude_reason:-$generic_absent}"
       fi
       ;;
     codex)
@@ -742,17 +752,30 @@ EOFMCP
       if [ "$claude_ok" = 1 ]; then
         echo "registered for claude, not codex (this session measured its host as codex)"
       else
-        echo "$absent_reason"
+        echo "not registered in Codex config.toml"
       fi
       ;;
-    *)
+    "")
       if [ "$claude_ok" = 1 ] || [ "$codex_ok" = 1 ]; then
         local found=""
         [ "$claude_ok" = 1 ] && found="claude"
         [ "$codex_ok" = 1 ] && found="${found:+$found, }codex"
         echo "registered for $found, but this session's own host is unmeasurable (set MOGUI_MASTER_HOST_RUNTIME or master_host_runtime in $INSTANCE_RUNTIME_CONFIG) so that registration cannot be confirmed as this host's own"
       else
-        echo "$absent_reason; this session's host is also unmeasurable (set MOGUI_MASTER_HOST_RUNTIME or master_host_runtime in $INSTANCE_RUNTIME_CONFIG)"
+        echo "$generic_absent; this session's host is also unmeasurable (set MOGUI_MASTER_HOST_RUNTIME or master_host_runtime in $INSTANCE_RUNTIME_CONFIG)"
+      fi
+      ;;
+    *)
+      # A configured host this check does not model (anything other than
+      # claude/codex): never guess which side's registration applies, but
+      # do not claim the host is unmeasurable when it plainly is measured.
+      if [ "$claude_ok" = 1 ] || [ "$codex_ok" = 1 ]; then
+        local found=""
+        [ "$claude_ok" = 1 ] && found="claude"
+        [ "$codex_ok" = 1 ] && found="${found:+$found, }codex"
+        echo "registered for $found, but this check only judges claude/codex registration and this session's host is '$MASTER_HOST_RUNTIME'"
+      else
+        echo "$generic_absent"
       fi
       ;;
   esac

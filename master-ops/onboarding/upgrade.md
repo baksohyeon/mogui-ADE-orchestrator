@@ -51,8 +51,8 @@ never templated. A re-stamp that only runs `template-apply` leaves `.mcp.json` e
 missing entirely on a seat that never ran this subsection before (measured 2026-11-17, #328) — because
 copying template files is all `template-apply` does. After confirming the dry-run plan at step 4, also
 walk the existing seat through the "Required-infra MCP wiring" subsection of `08-settings-and-skills.md`
-Step 7 under its own host-edit approval: run `scripts/install-mcp-config "{{WORKSPACE_ROOT}}"` to merge
-the `code-review-graph` entry, confirm `enabledMcpjsonServers` names it with no conflicting
+Step 7 under its own host-edit approval: run `"{{RUNTIME_ROOT}}/master-ops/scripts/install-mcp-config" "{{WORKSPACE_ROOT}}"`
+to merge the `code-review-graph` entry, confirm `enabledMcpjsonServers` names it with no conflicting
 `disabledMcpjsonServers` entry, and register every `{{REPO_LIST}}` member and `{{OPS_REPO}}` (by its own
 absolute path when it is not itself a `{{REPO_LIST}}` member) that is not already a path in
 `~/.code-review-graph/registry.json`, the same registry file `harness-selfcheck.md` reads directly.

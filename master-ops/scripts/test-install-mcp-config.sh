@@ -46,12 +46,14 @@ fi
 echo "ok   : no existing .mcp.json creates one with the pinned code-review-graph entry"
 
 # Case: a second run on an already-merged workspace changes nothing
-# (acceptance check: idempotent, byte-identical).
-before=$(cat "$ws/.mcp.json")
+# (acceptance check: idempotent, byte-identical). Compared with `cmp`
+# against a copy, not a `$(cat ...)` string compare: command substitution
+# strips trailing newlines, so that comparison cannot catch a rewrite that
+# only adds or drops the file's own trailing newline.
+cp "$ws/.mcp.json" "$ws/.mcp.json.before"
 out=$(install_into "$ws" 2>&1)
 status=$?
-after=$(cat "$ws/.mcp.json")
-if [ "$status" -ne 0 ] || [ "$before" != "$after" ]; then
+if [ "$status" -ne 0 ] || ! cmp -s "$ws/.mcp.json.before" "$ws/.mcp.json"; then
   echo "FAIL: a second run over an already-merged .mcp.json should be a byte-identical no-op" >&2
   printf '%s\n' "$out" >&2
   exit 1
@@ -92,10 +94,9 @@ fi
 echo "ok   : an existing .mcp.json with another server keeps that entry and adds code-review-graph"
 
 # Case: the other server survives a second run too, and nothing changes.
-before=$(cat "$ws/.mcp.json")
+cp "$ws/.mcp.json" "$ws/.mcp.json.before"
 install_into "$ws" >/dev/null
-after=$(cat "$ws/.mcp.json")
-if [ "$before" != "$after" ]; then
+if ! cmp -s "$ws/.mcp.json.before" "$ws/.mcp.json"; then
   echo "FAIL: a second run should not touch a workspace whose other server is already merged" >&2
   exit 1
 fi
@@ -192,6 +193,27 @@ if ! printf '%s\n' "$out" | grep -qF 'refusing to merge'; then
   exit 1
 fi
 echo "ok   : a non-object mcpServers is refused with a named reason and left unclobbered"
+
+# Case: a JSON null "mcpServers" key is refused the same as any other
+# non-object value, not treated as absent (json.load's dict.get returns
+# None for both a present null and a missing key, so this is the one case
+# that could slip past an is-not-None guard into an unhandled crash).
+ws="$work/null-servers"
+mkdir -p "$ws"
+printf '{"mcpServers": null}' > "$ws/.mcp.json"
+before=$(cat "$ws/.mcp.json")
+out=$(install_into "$ws" 2>&1) && status=0 || status=$?
+after=$(cat "$ws/.mcp.json")
+if [ "$status" -eq 0 ] || [ "$before" != "$after" ]; then
+  echo "FAIL: a null mcpServers should be refused and left untouched" >&2
+  printf '%s\n' "$out" >&2
+  exit 1
+fi
+if ! printf '%s\n' "$out" | grep -qF 'refusing to merge'; then
+  echo "FAIL: null-mcpServers refusal should name the reason ('refusing to merge'), got: $out" >&2
+  exit 1
+fi
+echo "ok   : a null mcpServers is refused with a named reason and left unclobbered"
 
 # Case: --print-entry reads the real pinned command and pin without
 # re-parsing the JSON in the caller (used by other tests, below).

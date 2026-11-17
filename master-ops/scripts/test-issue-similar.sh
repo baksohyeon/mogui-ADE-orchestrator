@@ -11,9 +11,13 @@ SCRIPT="${1:-$(cd "$(dirname "$0")" && pwd)/issue-similar}"
 run_with_stub() {  # gh-body work-dir -- args...
   local gh_body="$1" work="$2"
   shift 2
-  mkdir -p "$work/bin"
-  printf '%s\n' "$gh_body" > "$work/bin/gh"
-  chmod +x "$work/bin/gh"
+  # Each setup step is guarded: a silent failure here (an unwritable
+  # TMPDIR, say) must stop the test rather than fall through to running
+  # the real gh from PATH, which would break the no-network-call guarantee
+  # without a single case noticing.
+  mkdir -p "$work/bin" || return 1
+  printf '%s\n' "$gh_body" > "$work/bin/gh" || return 1
+  chmod +x "$work/bin/gh" || return 1
   # --query-delay 0 last, so it always overrides anything the caller passed
   # (argparse keeps the last value for a repeated flag) and no case here
   # pays the real default pacing delay.
@@ -260,13 +264,13 @@ gh_invocation_shape_test() (
   local work out status
   work="${TMPDIR:-/tmp}/mogui-issue-similar-ghshape.$$"
   trap 'rm -rf "${work:?}"' EXIT
-  mkdir -p "$work/bin"
-  cat > "$work/bin/gh" <<'BIN'
+  mkdir -p "$work/bin" || return 1
+  cat > "$work/bin/gh" <<'BIN' || return 1
 #!/bin/bash
 printf '%s\n' "$*" >> "$MOGUI_TEST_ARGV_LOG"
 echo "[]"
 BIN
-  chmod +x "$work/bin/gh"
+  chmod +x "$work/bin/gh" || return 1
   out=$(cd "$work" && MOGUI_TEST_ARGV_LOG="$work/argv.log" PATH="$work/bin:$PATH" \
         python3 "$SCRIPT" --repo acme/widgets --title "alphaword" --query-delay 0 2>&1)
   status=$?
@@ -329,5 +333,61 @@ invalid_query_delay_is_a_usage_error_test() (
   echo "ok   : a negative, NaN, or infinite --query-delay is a clean usage error, not an uncaught exception"
 )
 invalid_query_delay_is_a_usage_error_test || exit 1
+
+# --- Case: negative --max-words or --max-code-terms is a usage error, not --
+# --- a negative Python slice that silently keeps nearly every term.        --
+negative_term_limits_are_a_usage_error_test() (
+  set +e
+  local out status
+  out=$(python3 "$SCRIPT" --repo acme/widgets --title "alphaword" --max-words -1 2>&1)
+  status=$?
+  [ "$status" -eq 2 ] || { echo "FAIL: --max-words -1 should be a usage error (exit 2), got $status" >&2; printf '%s\n' "$out" >&2; return 1; }
+  case "$out" in
+    *"--max-words must be"*) ;;
+    *) echo "FAIL: --max-words -1 should name the bad flag, not slice with it: $out" >&2; return 1 ;;
+  esac
+  out=$(python3 "$SCRIPT" --repo acme/widgets --title "alphaword" --max-code-terms -1 2>&1)
+  status=$?
+  [ "$status" -eq 2 ] || { echo "FAIL: --max-code-terms -1 should be a usage error (exit 2), got $status" >&2; printf '%s\n' "$out" >&2; return 1; }
+  case "$out" in
+    *"--max-code-terms must be"*) ;;
+    *) echo "FAIL: --max-code-terms -1 should name the bad flag, not slice with it: $out" >&2; return 1 ;;
+  esac
+  echo "ok   : a negative --max-words or --max-code-terms is a clean usage error, not a silent full scan"
+)
+negative_term_limits_are_a_usage_error_test || exit 1
+
+# --- Case: a backtick term shaped like a GitHub search qualifier -----------
+# --- (label:wontfix) is never sent to gh as a query term, but still        --
+# --- scores normally against the fetched candidate's own text.            --
+qualifier_like_term_not_sent_to_gh_test() (
+  set +e
+  local work out status
+  work="${TMPDIR:-/tmp}/mogui-issue-similar-qualifier.$$"
+  trap 'rm -rf "${work:?}"' EXIT
+  mkdir -p "$work/bin" || return 1
+  cat > "$work/bin/gh" <<'BIN' || return 1
+#!/bin/bash
+printf '%s\n' "$*" >> "$MOGUI_TEST_ARGV_LOG"
+echo "[{\"number\": 77, \"title\": \"alphaword seen with label:wontfix in its body\", \"state\": \"open\", \"url\": \"https://example.invalid/77\", \"body\": \"\"}]"
+BIN
+  chmod +x "$work/bin/gh" || return 1
+  out=$(cd "$work" && MOGUI_TEST_ARGV_LOG="$work/argv.log" PATH="$work/bin:$PATH" \
+        python3 "$SCRIPT" --repo acme/widgets --title 'alphaword `label:wontfix`' --query-delay 0 --json 2>&1)
+  status=$?
+  [ "$status" -eq 3 ] || { echo "FAIL: the word plus the qualifier-shaped term should still clear the threshold, got $status" >&2; printf '%s\n' "$out" >&2; return 1; }
+  [ -f "$work/argv.log" ] || { echo "FAIL: gh was never invoked" >&2; return 1; }
+  if grep -q "label:wontfix" "$work/argv.log"; then
+    echo "FAIL: label:wontfix reached a gh invocation; it must stay out of the query, only scored locally" >&2
+    cat "$work/argv.log" >&2
+    return 1
+  fi
+  case "$out" in
+    *'"label:wontfix"'*) ;;
+    *) echo "FAIL: label:wontfix should still appear as a matched scoring term: $out" >&2; return 1 ;;
+  esac
+  echo "ok   : a qualifier-shaped backtick term never reaches a gh query, but still scores locally"
+)
+qualifier_like_term_not_sent_to_gh_test || exit 1
 
 echo "issue-similar regression tests passed"

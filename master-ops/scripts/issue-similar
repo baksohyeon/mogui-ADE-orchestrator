@@ -143,6 +143,18 @@ def collect_words(title: str, body: str, max_words: int) -> list[str]:
     return combined[:max_words]
 
 
+GH_QUALIFIER_RE = re.compile(r"^[A-Za-z][\w-]*:\S+$")
+
+
+def is_gh_qualifier_like(term: str) -> bool:
+    """A bare `word:value` term (`label:wontfix`, `state:closed`) reads as a
+    GitHub search qualifier to gh's own search API regardless of local
+    shell quoting, so it is excluded from the queries actually sent to gh.
+    It still scores normally: scoring is a local substring/word match
+    against the fetched title and body, never gh's query syntax."""
+    return bool(GH_QUALIFIER_RE.match(term))
+
+
 def dedupe_case_insensitive(terms: list[str]) -> list[str]:
     """First occurrence wins; a code term and a plain word that are the same
     text (`` `crash` `` and `crash`) must not run the same search twice."""
@@ -296,6 +308,10 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("--limit must be >= 1")
     if not math.isfinite(args.query_delay) or args.query_delay < 0:
         ap.error("--query-delay must be a finite number >= 0")
+    if args.max_words < 0:
+        ap.error("--max-words must be >= 0")
+    if args.max_code_terms < 0:
+        ap.error("--max-code-terms must be >= 0")
 
     body = ""
     if args.body_file:
@@ -307,7 +323,9 @@ def main(argv: list[str] | None = None) -> int:
 
     code_terms = extract_code_terms(f"{args.title}\n{body}")[: args.max_code_terms]
     words = collect_words(args.title, body, args.max_words)
-    queries = dedupe_case_insensitive(code_terms + words)
+    queries = dedupe_case_insensitive(
+        [t for t in code_terms + words if not is_gh_qualifier_like(t)]
+    )
     if not queries:
         # No raw-title fallback here: a query with nothing to show for it
         # would still run a search, but words/code_terms (what scoring

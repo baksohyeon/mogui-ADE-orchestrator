@@ -49,8 +49,9 @@ The master runs this, or dispatches it, once a week:
 1. List every open issue's number, title, body, and assignees (`gh issue list --state open
    --limit 1000 --json number,title,body,assignees`; the default limit is 30, which silently
    drops older issues once the repository has more open issues than that).
-2. For each one, run `issue-similar --json --exclude <its own number>` with that issue's own
-   title as `--title` and its own body piped in via `--body-file -`, searching the others.
+2. For each one, run `issue-similar --repo <owner/name> --json --exclude <its own number>`
+   (the same repository as step 1) with that issue's own title as `--title` and its own body
+   piped in via `--body-file -`, searching the others.
    An exit `1` or `2` is a failed check for that issue, not "no duplicates found"; name it in
    the sweep's own report instead of folding it into the no-duplicate table.
 3. Collect every pair that crossed the threshold into a short table: issue, candidate,

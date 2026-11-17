@@ -320,9 +320,22 @@ short_slash_phrase_is_not_a_path_test || exit 1
 # --- not an uncaught exception from time.sleep.                           --
 invalid_query_delay_is_a_usage_error_test() (
   set +e
-  local out status
+  local work out status
+  work="${TMPDIR:-/tmp}/mogui-issue-similar-baddelay.$$"
+  trap 'rm -rf "${work:?}"' EXIT
+  # Not run_with_stub: it always appends --query-delay 0 last, which would
+  # override the very bad value under test (argparse keeps the last of a
+  # repeated flag). Stubbed by hand instead, same as every other case: the
+  # usage check must reject this before any gh call, never after.
+  mkdir -p "$work/bin" || return 1
+  cat > "$work/bin/gh" <<'BIN' || return 1
+#!/bin/bash
+echo "stub: gh should never be invoked for a usage error" >&2
+exit 1
+BIN
+  chmod +x "$work/bin/gh" || return 1
   for bad in -1 nan inf; do
-    out=$(python3 "$SCRIPT" --repo acme/widgets --title "alphaword" --query-delay "$bad" 2>&1)
+    out=$(PATH="$work/bin:$PATH" python3 "$SCRIPT" --repo acme/widgets --title "alphaword" --query-delay "$bad" 2>&1)
     status=$?
     [ "$status" -eq 2 ] || { echo "FAIL: --query-delay $bad should be a usage error (exit 2), got $status" >&2; printf '%s\n' "$out" >&2; return 1; }
     case "$out" in
@@ -338,15 +351,22 @@ invalid_query_delay_is_a_usage_error_test || exit 1
 # --- a negative Python slice that silently keeps nearly every term.        --
 negative_term_limits_are_a_usage_error_test() (
   set +e
-  local out status
-  out=$(python3 "$SCRIPT" --repo acme/widgets --title "alphaword" --max-words -1 2>&1)
+  local work out status
+  work="${TMPDIR:-/tmp}/mogui-issue-similar-negterms.$$"
+  trap 'rm -rf "${work:?}"' EXIT
+  # A stub that errors loudly if ever reached, same as every other case:
+  # the usage check must reject both flags before any gh call, never after.
+  local gh_stub='#!/bin/bash
+echo "stub: gh should never be invoked for a usage error" >&2
+exit 1'
+  out=$(run_with_stub "$gh_stub" "$work" --repo acme/widgets --title "alphaword" --max-words -1 2>&1)
   status=$?
   [ "$status" -eq 2 ] || { echo "FAIL: --max-words -1 should be a usage error (exit 2), got $status" >&2; printf '%s\n' "$out" >&2; return 1; }
   case "$out" in
     *"--max-words must be"*) ;;
     *) echo "FAIL: --max-words -1 should name the bad flag, not slice with it: $out" >&2; return 1 ;;
   esac
-  out=$(python3 "$SCRIPT" --repo acme/widgets --title "alphaword" --max-code-terms -1 2>&1)
+  out=$(run_with_stub "$gh_stub" "$work" --repo acme/widgets --title "alphaword" --max-code-terms -1 2>&1)
   status=$?
   [ "$status" -eq 2 ] || { echo "FAIL: --max-code-terms -1 should be a usage error (exit 2), got $status" >&2; printf '%s\n' "$out" >&2; return 1; }
   case "$out" in
@@ -389,5 +409,45 @@ BIN
   echo "ok   : a qualifier-shaped backtick term never reaches a gh query, but still scores locally"
 )
 qualifier_like_term_not_sent_to_gh_test || exit 1
+
+# --- Case: is_gh_qualifier_like's own edge cases, unit-level: a qualifier --
+# --- in a multi-word term's first token, a negated qualifier, and a URL  --
+# --- that must NOT be mistaken for one.                                   --
+qualifier_detection_edge_cases_test() (
+  set +e
+  local out status
+  out=$(python3 - "$SCRIPT" <<'PY'
+import importlib.machinery
+import importlib.util
+import sys
+
+script_path = sys.argv[1]
+loader = importlib.machinery.SourceFileLoader("issue_similar", script_path)
+spec = importlib.util.spec_from_loader("issue_similar", loader)
+module = importlib.util.module_from_spec(spec)
+loader.exec_module(module)
+
+cases = [
+    ("label:bug fix", True),       # qualifier in the first token of a multi-word term
+    ("-label:wontfix", True),      # negated qualifier
+    ("https://example.com", False),   # URL, must not be filtered out
+    ("http://x.example/y", False),    # URL, must not be filtered out
+    ("scripts/issue-similar", False),  # ordinary path, no colon at all
+]
+failures = [
+    f"{term!r}: expected {expected}, got {module.is_gh_qualifier_like(term)}"
+    for term, expected in cases
+    if module.is_gh_qualifier_like(term) != expected
+]
+if failures:
+    print("\n".join(failures))
+    raise SystemExit(1)
+PY
+)
+  status=$?
+  [ "$status" -eq 0 ] || { echo "FAIL: is_gh_qualifier_like edge cases:" >&2; printf '%s\n' "$out" >&2; return 1; }
+  echo "ok   : is_gh_qualifier_like catches a qualifier in a multi-word term and a negated qualifier, and spares URLs"
+)
+qualifier_detection_edge_cases_test || exit 1
 
 echo "issue-similar regression tests passed"

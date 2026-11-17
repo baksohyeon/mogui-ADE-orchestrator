@@ -143,16 +143,24 @@ def collect_words(title: str, body: str, max_words: int) -> list[str]:
     return combined[:max_words]
 
 
-GH_QUALIFIER_RE = re.compile(r"^[A-Za-z][\w-]*:\S+$")
+GH_QUALIFIER_RE = re.compile(r"^-?[A-Za-z][\w-]*:(?!//)\S*")
 
 
 def is_gh_qualifier_like(term: str) -> bool:
-    """A bare `word:value` term (`label:wontfix`, `state:closed`) reads as a
-    GitHub search qualifier to gh's own search API regardless of local
-    shell quoting, so it is excluded from the queries actually sent to gh.
-    It still scores normally: scoring is a local substring/word match
-    against the fetched title and body, never gh's query syntax."""
-    return bool(GH_QUALIFIER_RE.match(term))
+    """True when the term's first whitespace-delimited token reads as a
+    GitHub search qualifier (`label:wontfix`, `state:closed`, negated as
+    `-label:wontfix`) to gh's own search API, regardless of local shell
+    quoting: GitHub tokenizes its own `q` parameter on whitespace, so a
+    multi-word term (`label:bug fix`) carries a qualifier in its first
+    token even though the whole term is not one. A URL (`https://...`) is
+    excluded from this check; "scheme:" is not a qualifier name GitHub
+    recognizes, and scoring a URL is exactly the strong duplicate signal
+    this exists to keep, not drop. Such a term is excluded from the
+    queries actually sent to gh; it still scores normally, since scoring
+    is a local substring/word match against the fetched title and body,
+    never gh's query syntax."""
+    first_token = term.split(None, 1)[0] if term.strip() else term
+    return bool(GH_QUALIFIER_RE.match(first_token))
 
 
 def dedupe_case_insensitive(terms: list[str]) -> list[str]:

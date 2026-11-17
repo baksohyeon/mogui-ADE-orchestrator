@@ -34,6 +34,7 @@ apply_fn=$(extract_fn apply_codex_instance_launch_config)
 runtime_command_fn=$(extract_fn runtime_command)
 start_fn=$(extract_fn codex_start_screen_problem)
 mcp_config="$(dirname "$dispatch")/../templates/mcp-servers.json"
+install_mcp_config="$(dirname "$dispatch")/install-mcp-config"
 
 [ "$(printf '%s\n' "$vars" | grep -c .)" = 4 ] || { echo "FAIL: could not extract the four CODEX_ launch variables" >&2; exit 1; }
 for name in markers shell_quote_fn mcp_args_fn read_fn apply_fn runtime_command_fn start_fn; do
@@ -42,9 +43,11 @@ done
 call_site='[ "$RUNTIME" = codex ] && apply_codex_instance_launch_config'
 
 # Read the launcher command and the pin (args[0]) from the shipped
-# code-review-graph entry, rather than hand-typing a second copy here that
-# a launcher or version change would have to catch independently.
-crg_entry=$(python3 -c "import json,sys; e=json.load(open(sys.argv[1]))['mcpServers']['code-review-graph']; print(e['command']); print(e['args'][0])" "$mcp_config") \
+# code-review-graph entry through install-mcp-config --print-entry, rather
+# than hand-typing a second JSON parse here that a launcher or version
+# change would have to catch independently (#328: this one-liner used to be
+# duplicated verbatim in test-dispatch-runtime.sh too).
+crg_entry=$("$install_mcp_config" --print-entry code-review-graph "$mcp_config") \
   || { echo "FAIL: could not read the code-review-graph entry from $mcp_config" >&2; exit 1; }
 crg_launcher_cmd=$(printf '%s\n' "$crg_entry" | sed -n 1p)
 crg_pin_spec=$(printf '%s\n' "$crg_entry" | sed -n 2p)

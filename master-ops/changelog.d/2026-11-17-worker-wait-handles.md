@@ -1,0 +1,1 @@
+- `worker-wait` documents Orca handle rotation and re-attach close recovery for live workers.

@@ -137,7 +137,23 @@ pane is outside any dispatch, so Orca sends no stop alerts for it. Messages
 to a running worker use `orca orchestration send --to dispatch:<id>`;
 because these workers are unsupervised, delivery depends on the worker
 running `orca orchestration check` before `worker_done` (the
-`mail-before-done` standing rule).
+`mail-before-done` standing rule). Orca's own guide says `send` reopens a
+closed worker; that describes `worker-start` workers, not these, so a closed
+or finished `scripts/dispatch` worker gets more work only by the new dispatch
+above.
+
+**A handle is not the worker's identity.** handles rotate when Orca re-attaches a pane
+(template #339); a send or `dispatch --terminal` to the old handle fails with `inject_rejected` or reads `exited`;
+keep the task and dispatch ids and resolve the live handle before each read, send, dispatch, approval or close:
+`orca orchestration dispatch-show --task <task> --json` gives `result.dispatch.assignee_pane_key`; the `orca
+worktree ps --json` agent with that `paneKey` is the worker; its handle is the `orca terminal list` row in the same
+worktree; never match on a terminal `title`.
+
+**A re-attach can close a dispatch while its agent lives.** after a re-attach,
+`dispatch-show` can read `failed` with `termination_reason: operator_close` and no operator close; `reply` to an
+open question then fails with `dispatch_inactive` and the inbox gets `Worker lost without reporting`; resolve the
+pane as above before treating the worker as dead; if the agent is alive, re-dispatch through `scripts/dispatch
+--terminal <live handle>` with a contract that carries the answer; never type the answer into the pane.
 
 Without `--reap`, `worker-wait` never closes a pane, never abandons a
 dispatch, and never sends to a pane. It reports; the coordinator decides —

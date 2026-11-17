@@ -312,4 +312,22 @@ echo "[{\"number\": 55, \"title\": \"fixed on 2026/11/17, read/write and/or CI/C
 )
 short_slash_phrase_is_not_a_path_test || exit 1
 
+# --- Case: a negative, NaN, or infinite --query-delay is a usage error, ---
+# --- not an uncaught exception from time.sleep.                           --
+invalid_query_delay_is_a_usage_error_test() (
+  set +e
+  local out status
+  for bad in -1 nan inf; do
+    out=$(python3 "$SCRIPT" --repo acme/widgets --title "alphaword" --query-delay "$bad" 2>&1)
+    status=$?
+    [ "$status" -eq 2 ] || { echo "FAIL: --query-delay $bad should be a usage error (exit 2), got $status" >&2; printf '%s\n' "$out" >&2; return 1; }
+    case "$out" in
+      *"--query-delay must be"*) ;;
+      *) echo "FAIL: --query-delay $bad should name the bad flag, not raise: $out" >&2; return 1 ;;
+    esac
+  done
+  echo "ok   : a negative, NaN, or infinite --query-delay is a clean usage error, not an uncaught exception"
+)
+invalid_query_delay_is_a_usage_error_test || exit 1
+
 echo "issue-similar regression tests passed"

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import subprocess
 import sys
@@ -293,6 +294,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.limit < 1:
         ap.error("--limit must be >= 1")
+    if not math.isfinite(args.query_delay) or args.query_delay < 0:
+        ap.error("--query-delay must be a finite number >= 0")
 
     body = ""
     if args.body_file:

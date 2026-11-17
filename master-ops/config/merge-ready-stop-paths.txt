@@ -36,3 +36,38 @@ scripts/cursor-worker-pretrust
 master-ops/model-tier-policy.json
 master-ops/rules/standing-rules.md
 master-ops/templates/mcp-servers.json
+
+# Added round 2 (#330): paths the master's own review of PR #338 named,
+# each individually checked to exist on main. Succession/bootstrap code,
+# CI workflow definitions, and the redaction/allowlist scanner all change
+# what a worker is allowed to do or how that is enforced, the same as
+# stop-list item 2 above; CODEOWNERS, root CLAUDE.md/AGENTS.md, and the
+# succession boot card are the same charter/workspace-card/role-state
+# category as stop-list item 1.
+scripts/redaction-scan.sh
+scripts/redaction-allowlist.txt
+hooks/pre-push
+.github/workflows/**
+.github/CODEOWNERS
+.claude/**
+master-ops/docs/runbooks/succession-boot-card.md
+CLAUDE.md
+AGENTS.md
+master-ops/MANIFEST.json
+config/*.example.json
+scripts/master-*
+scripts/worker-reap
+src/master_runtime/core/succession.py
+src/master_runtime/core/bootstrap*.py
+src/master_runtime/core/instance_runtime_config.py
+src/master_runtime/core/worker_reap.py
+master-ops/scripts/lib/**
+master-ops/scripts/template-*
+master-ops/skills/**
+master-ops/onboarding/**
+master-ops/config/merge-ready-bots.txt
+
+# The tests of a stop-listed script are themselves stop-listed: a change
+# that weakens scripts/merge-ready's own test coverage must also ask,
+# not merge silently alongside the production file it tests.
+master-ops/scripts/test-merge-ready.sh

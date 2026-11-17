@@ -6,7 +6,11 @@ again before merge. Neither side's own claim that a PR is ready substitutes for 
 check, review, thread, changed-file, and comment measurement is gathered again after the tarball
 test re-run finishes, and the PR's head is re-read at that point too: a push landing mid-run
 invalidates everything gathered before it, so this script measures the head that is actually
-there when it finishes, never the one it started with.
+there when it finishes, never the one it started with. The one exception is the stop list and
+the `--contract` writes-scope check (measurement 5 below): both run once, early, from the diff
+alone, before the test re-run starts; when either already decides "ask", the test re-run never
+happens at all, and the summary line says so, since no PR code should run on this machine before
+the owner has even been asked whether this diff is allowed to run anywhere.
 
 ## Usage
 
@@ -29,36 +33,66 @@ directory before the brief ships, so the worker never needs to know where this r
 0. **The PR itself is open and not a draft.** `state` must be `OPEN` and `isDraft` must be
    false; a closed, merged, or draft PR is not ready, named as such, regardless of what else
    passed.
-1. **Required checks and review bots.** Every entry `gh pr checks --required` reports (branch
-   protection's own required-check list) must have bucket `pass`, except a check named on a
-   `rate-limited: <name>[, <name>...]` line in the PR body (case-insensitive, comma-separated);
-   that is the only skip, and it applies to any required check by that name, not only a review
-   bot's (the contract's own wording: "a check whose name the PR body lists as rate-limited").
-   A check this repository runs but does not require (a review bot, a label/assignee check)
-   never reaches this measurement at all. Every bot (GraphQL `author.__typename == "Bot"`, not a
-   login-suffix guess) whose *latest* review on the exact head commit is `PENDING` or
-   `CHANGES_REQUESTED` blocks; an earlier review by the same bot on the same commit that a later
-   one from that bot superseded does not. A bot that never reviewed the head at all does not
-   block either: the contract measures bots that reviewed the head, not a fixed roster of
-   expected reviewers this script has no source of truth for.
+1. **Required checks.** Every entry `gh pr checks --required` reports (branch protection's own
+   required-check list) must have bucket `pass`. No exemption of any kind, from the PR body or
+   anywhere else: a required check that is pending or failing blocks, full stop. An empty-but-
+   parseable `[]` response is also not ready (`require_json ... nonempty-list`): a required-check
+   list with nothing in it to measure is not the same thing as every required check having
+   passed, and nothing should read that shape as a free pass. A check this repository runs but
+   does not require (a review bot, a label/assignee check) never reaches this measurement at
+   all. Every bot (GraphQL `author.__typename == "Bot"`, not a login-suffix guess) whose *latest*
+   review on the exact head commit is `PENDING` or `CHANGES_REQUESTED` blocks separately; an
+   earlier review by the same bot on the same commit that a later one from that bot superseded
+   does not.
+1b. **The review-bot roster.** Every login in `config/merge-ready-bots.txt` must show some
+   engagement with the exact head: a GraphQL review on it (any state, including a plain
+   `COMMENTED` one, which measurement 1 does not treat as a decision but which still proves the
+   bot looked at this commit), or an issue comment posted at or after the head commit's own
+   committer timestamp. The REST issue-comments API reports a bot's login with a `[bot]` suffix
+   (`coderabbitai[bot]`) that the GraphQL API does not (`coderabbitai`); both sides are compared
+   with that suffix stripped. A bot with no review and no qualifying comment is not ready, naming
+   the bot. The one exemption the contract grants: an issue comment from that bot matching "review
+   limit reached" or "rate limited by" (case-insensitive), posted at or after the head commit's
+   timestamp, counts as covering the bot even with no actual review, since GitHub's own rate
+   limit silenced it rather than the bot having nothing to say. An empty bots file fails closed
+   the same way an empty stop-paths file does (see measurement 5), for the same reason: a worker
+   with shell access could otherwise blank it out and neutralize the whole roster check.
 2. **Open review threads.** `reviewThreads(isResolved)` on the head must show zero unresolved
    threads.
 3. **The test suite, re-run from a tarball of the head**, not from whatever is checked out
    locally. `tests/test_context_quality_scripts.py::test_context_quality_sampler_relative_anchor_git_log_works`
    is deselected because it needs a `.git` directory a tarball extraction does not have; that is
-   the one exception named in the contract.
-4. **A recorded review pass on the exact head.** A PR comment must contain the line
-   `merge-ready-review-pass sha=<40-hex head sha> critical=<N> important=<N>`. The newest matching
-   line across all comments wins. Missing, for the wrong sha, or `critical > 0` or `important >
-   0`: not ready.
-5. **Stop-list paths.** Any changed path matching `config/merge-ready-stop-paths.txt` is "ask",
-   never "merge": the charter, the workspace card, role state, the boot comparison set, the
-   scanner config, guard hooks, gate code, the tier policy, and worker settings. A stop-paths
-   file that parses but names no real entries (blank or all comments) is not ready, not read as
-   "nothing to block". With `--contract`, any changed path outside that contract's own `writes`
-   globs (read only from its opening front-matter block, never from an example elsewhere in the
-   contract's body text) is also "ask"; a contract with no `writes:` field in its front matter is
-   not ready instead, since there is no declared scope to check against, not a stop-list hit.
+   the one exception named in the contract. Never runs at all when measurement 5 already decided
+   "ask" from the diff alone (see "Early stop-list check" below).
+4. **A master-pass marker on the exact head**, distinct from the worker's own pre-check marker.
+   A PR comment must contain the line `merge-ready-master-pass sha=<40-hex head sha>
+   critical=<N> important=<N>`. The newest matching line across all comments wins. Missing, for
+   the wrong sha, or `critical > 0` or `important > 0`: not ready. The worker's own
+   `merge-ready-worker-pass` marker (see "The markers" below) never satisfies this measurement;
+   only the master's marker does.
+5. **Stop-list paths, checked both early and again at the end.** Any changed path matching
+   `config/merge-ready-stop-paths.txt` is "ask", never "merge": the charter, the workspace card,
+   role state, the boot comparison set, the scanner and redaction config, CI workflow and
+   CODEOWNERS definitions, succession/bootstrap code, guard hooks, gate code, the tier policy,
+   and worker settings. A stop-paths file that parses but names no real entries (blank or all
+   comments) is not ready, not read as "nothing to block". With `--contract`, any changed path
+   outside that contract's own `writes` globs (read only from its opening front-matter block,
+   never from an example elsewhere in the contract's body text) is also "ask"; a contract with no
+   `writes:` field in its front matter is not ready instead, since there is no declared scope to
+   check against, not a stop-list hit.
+
+## Early stop-list check
+
+The stop list and the `--contract` writes-scope half of measurement 5 run once, immediately after
+resolving the PR's head sha, before the tarball test re-run: a diff that was always going to be
+"ask" should not cost a full test re-run first. When either decides "ask" at this point, the
+script prints its verdict with `; tests not run (stop list decided before the test re-run)`
+appended and exits 2 immediately; the required-checks, bot-roster, review-thread, and marker
+measurements never run either, since there is nothing left to decide once the owner must be
+asked. The same two checks run again, unconditionally, at the very end against whatever files the
+head actually has once the test re-run is over: a stop-listed file that lands only via a push
+mid-run is still caught there, the early pass is purely an optimization for the common case where
+the diff decides the outcome from the start.
 
 ## Test command
 
@@ -70,25 +104,37 @@ exactly as given, with no deselect added for it. A tarball that cannot be fetche
 a test-re-run failure like any other, not an immediate exit, so a stop-list hit discovered
 afterward still wins (exit 2) the same way it would if the tests had merely failed.
 
-## The marker
+## The markers
 
-Post `merge-ready-review-pass sha=<full head sha> critical=<N> important=<N>` as a PR comment
-(or as a line inside a longer, human-readable review comment) right after finishing a review
-pass, substituting the real head sha and the Critical/Important counts that pass found. The
-sha ties the marker to one exact commit: a comment posted before the last push does not count
-for the current head, and merge-ready always reads the newest matching line, so a fix round that
-posts a fresh marker supersedes an older one without having to delete it.
+There are two, never interchangeable, because master and workers share one GitHub account and
+the marker name is the only thing that tells them apart:
+
+- `merge-ready-worker-pass sha=<full head sha> critical=<N> important=<N>`: the worker's own
+  pre-check, posted after its own independent review pass, before `worker_done`. This marker is
+  an informational attestation only; `scripts/merge-ready` never reads it for measurement 4, and
+  posting it never advances a PR toward exit 0 on its own.
+- `merge-ready-master-pass sha=<full head sha> critical=<N> important=<N>`: the master's own,
+  posted only after the master's own independent review. This is the only marker measurement 4
+  checks. A worker must never post this one; doing so would be exactly the self-report this
+  script exists to not trust, just moved from a completion message into a PR comment.
+
+Either marker as a PR comment (or as a line inside a longer, human-readable review comment) right
+after finishing the matching review pass, substituting the real head sha and the Critical/
+Important counts that pass found. The sha ties a marker to one exact commit: a comment posted
+before the last push does not count for the current head, and merge-ready always reads the
+newest matching line of the kind it is looking for, so a fix round that posts a fresh marker
+supersedes an older one of the same kind without having to delete it.
 
 ## Exit codes
 
 - `0` merge: every measurement passed and no stop-list path was touched.
 - `1` not ready: a measurement failed, a `gh` call could not be read or parsed, or the invocation
-  itself could not run (bad usage, `gh`/`python3` missing, an unreadable `--contract` or
-  stop-paths file). `2` is reserved for "ask" alone; nothing that merely failed to run is close
+  itself could not run (bad usage, `gh`/`python3` missing, an unreadable `--contract`, stop-paths,
+  or bots file). `2` is reserved for "ask" alone; nothing that merely failed to run is close
   enough to "ask the owner" to share its exit code.
 - `2` ask the owner: a changed path matches the stop list, or (with `--contract`) falls outside
-  the contract's `writes` globs. Ask wins over not-ready when both are true, since the owner
-  decides regardless of what else failed.
+  the contract's `writes` globs, decided from the diff alone before the test re-run runs (see
+  "Early stop-list check" above), so the test re-run never happens on this exit code.
 
 One summary line on stdout, prefixed `merge-ready: merge ·`, `merge-ready: not ready ·`, or
 `merge-ready: ask ·`, names every failing or asking item.
@@ -104,11 +150,22 @@ is required; a freshly opened PR reads as not ready until its required checks ha
 reporting, which is correct for the common case even though it is also conservative for the rare
 one.
 
-The review-pass marker (measurement 4) is read from any PR comment; this script has no way to
-tell a review pass an independent reviewer actually ran from one the worker invented to satisfy
-the check, the same honest gap `scripts/land`'s own runbook names for a gate that "exits 0
-without actually testing anything": merge-ready trusts that whoever posts the marker ran a real
-review, the way it trusts the operator's `--test-command` to actually be the real test suite.
+The master-pass marker (measurement 4) is read from any PR comment; this script has no way to
+tell a review pass the master actually ran from a marker typed by anyone who happens to have
+push access to the same GitHub account, the same honest gap `scripts/land`'s own runbook names
+for a gate that "exits 0 without actually testing anything": merge-ready trusts that whoever
+posts `merge-ready-master-pass` is the master and ran a real review, the way it trusts the
+operator's `--test-command` to actually be the real test suite. The worker/master marker split
+(#330 round 2) narrows this from "anyone posting any marker" to "anyone posting the specific
+master-named marker", which is a convention enforced by naming, not an identity check this script
+can verify.
+
+The review-bot roster's "for the head or newer" timing bound (measurement 1b) is an
+approximation: a REST issue comment carries no commit reference at all, so the head commit's own
+committer timestamp is the closest available proxy for "this comment is about the current push",
+not a guarantee. A bot that re-posts an old comment's text verbatim after a genuinely new push,
+or whose comment's timestamp the GitHub API reports with clock skew, would read the same way a
+comment truly about the new head does.
 
 `--contract`'s `writes` globs match with Python's `fnmatch`, whose `*` already crosses `/`, so
 `a/**` and `a/*` match the same set of paths; a contract relying on `**` meaning "this directory

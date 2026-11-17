@@ -54,13 +54,18 @@ its error text in the completion message.
 Skip this block if your task does not end in a pull request (a direct-to-`main` land, for
 example). Otherwise, before `worker_done`: run an independent review pass over your own diff (a
 review subagent or skill, never your own unverified opinion of it) and post its result as a PR
-comment containing the marker line `merge-ready-review-pass sha=<full 40-character head sha>
+comment containing the marker line `merge-ready-worker-pass sha=<full 40-character head sha>
 critical=<N> important=<N>`, with the real counts that pass found; the sha must be the full
-value, since the script's own marker regex accepts nothing shorter. Then run `scripts/merge-ready
---repo <owner/name> --pr <n>` on your own PR, adding `--contract <file>` whenever this task
-delivered one (omit it only for a contractless task), and quote its one summary line in your
-completion message. Exit 1 means fix the readiness failure the line names and rerun; after any
-fix that changes the head, repeat the review pass and post a fresh marker before rerunning, since
+value, since the script's own marker regex accepts nothing shorter. Never post
+`merge-ready-master-pass`: that marker is the master's own, posted only after the master's own
+independent review, and master and worker share one GitHub account, so the script cannot tell the
+two apart except by which literal marker name was typed. Then run `scripts/merge-ready --repo
+<owner/name> --pr <n>` on your own PR, adding `--contract <file>` whenever this task delivered one
+(omit it only for a contractless task), and quote its one summary line in your completion
+message. A clean run normally still exits 1 naming "no master-pass marker found": that is correct
+and expected, since the master has not reviewed yet, not a readiness failure to chase. Exit 1 for
+any other reason means fix the readiness failure the line names and rerun; after any fix that
+changes the head, repeat the review pass and post a fresh worker marker before rerunning, since
 the marker is tied to one exact commit. Exit 2 means stop and ask the coordinator rather than
 merge or keep iterating; it is not yours to resolve by guessing. The ops repository's own
 `docs/runbooks/merge-ready.md` (the checkout holding this rule's own `rules/` directory, not the

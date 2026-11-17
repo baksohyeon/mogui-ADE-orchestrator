@@ -1,0 +1,8 @@
+# Review bots scripts/merge-ready requires a head review, a recent
+# summary comment, or a recent rate-limit comment from (#330 round 2).
+# One GitHub login per line, in the GraphQL form (no "[bot]" suffix): the
+# REST issue-comments API reports the same account as "<login>[bot]", and
+# merge-ready strips that suffix before comparing either side. Blank
+# lines and lines starting with "#" are ignored.
+cubic-dev-ai
+coderabbitai

@@ -204,9 +204,12 @@ else
   fail "failing required check exited ${rc}, want 1 naming it: ${out}"
 fi
 
-# --- a check this repository does not require never reaches merge-ready: it
-# is simply absent from `gh pr checks --required`'s own output, so a PR
-# whose only non-passing check is non-required reads as clean -------------
+# --- an empty required-checks list means nothing to block on, whatever the
+# reason: a check this repository does not require never reaches this
+# script at all (it is simply absent from `gh pr checks --required`'s own
+# output), and if that call ever hands back `[]` outright (rather than the
+# no-JSON, nonzero-exit shape real `gh` uses when nothing has reported yet,
+# covered separately below), this aggregator must not invent a failure -----
 non_required_clean_dir="${WORK_DIR}/non-required-clean"
 write_fixture "${non_required_clean_dir}" "" 0 '[{"filename":"README.md"}]' "${PASS_MARKER}" "[]"
 out=$(run_case "${non_required_clean_dir}")

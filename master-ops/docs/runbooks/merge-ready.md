@@ -22,11 +22,13 @@ directory before the brief ships, so the worker never needs to know where this r
 
 ## What it measures
 
-1. **Checks and review bots.** Every entry in the PR's check rollup must have concluded
-   `success`, `neutral`, or `skipped`, except a check named on a `rate-limited: <name>[,
-   <name>...]` line in the PR body (case-insensitive, comma-separated); that is the only skip.
-   Every bot (GraphQL `author.__typename == "Bot"`, not a login-suffix guess) that reviewed the
-   exact head commit must not be `PENDING` or `CHANGES_REQUESTED`.
+1. **Required checks and review bots.** Every entry `gh pr checks --required` reports (branch
+   protection's own required-check list) must have bucket `pass`, except a check named on a
+   `rate-limited: <name>[, <name>...]` line in the PR body (case-insensitive, comma-separated);
+   that is the only skip. A check this repository runs but does not require (a review bot, a
+   label/assignee check) never reaches this measurement at all. Every bot (GraphQL
+   `author.__typename == "Bot"`, not a login-suffix guess) that reviewed the exact head commit
+   must not be `PENDING` or `CHANGES_REQUESTED`.
 2. **Open review threads.** `reviewThreads(isResolved)` on the head must show zero unresolved
    threads.
 3. **The test suite, re-run from a tarball of the head**, not from whatever is checked out
@@ -75,13 +77,14 @@ One summary line on stdout, prefixed `merge-ready: merge ·`, `merge-ready: not 
 
 ## Honest limits
 
-This script treats a check's `success`, `neutral`, or `skipped` conclusion as passing and
-everything else as failing, except one the PR body names rate-limited; it does not query branch
-protection to tell a required check from an optional one, because the PR-body exemption already
-covers the case that distinction exists for (a flaky or rate-limited integration). `neutral` is
-GitHub's own shape for "ran, not meant to block" (an informational bot review check, for
-example); treating only `success` as passing made every real PR to this repository permanently
-not-ready, since this repository's own bot checks report `neutral`.
+`gh pr checks --required` conflates two different situations behind the same shape: a branch
+with genuinely no required checks configured, and a branch whose required checks exist but have
+not posted a single check-run yet (a PR that was just opened, before CI starts). Both print no
+JSON at all and exit non-zero with "no required checks reported on the '<branch>' branch", so
+this script cannot tell them apart and treats both as not ready rather than guessing that nothing
+is required; a freshly opened PR reads as not ready until its required checks have started
+reporting, which is correct for the common case even though it is also conservative for the rare
+one.
 
 The review-pass marker (measurement 4) is read from any PR comment; this script has no way to
 tell a review pass an independent reviewer actually ran from one the worker invented to satisfy

@@ -462,7 +462,18 @@ BIN
     echo "✗ could not read OPS_REPO/RUNTIME_ROOT out of $dispatch's OPS=/GATE= lines" >&2
     return 1
   fi
-  sed -e "s#$runtime_value#$work#g" -e "s#$ops_value#$work#g" "$dispatch" > "$rendered"
+  # ops_value/runtime_value are arbitrary real filesystem paths once $dispatch
+  # is a rendered install, so a sed pattern substitution risks regex
+  # metacharacters, the delimiter, or a replacement "&" in the path. Python's
+  # str.replace is a literal substring swap with no escaping to get wrong.
+  python3 - "$dispatch" "$runtime_value" "$ops_value" "$work" > "$rendered" <<'PY'
+import sys
+dispatch_path, runtime_value, ops_value, work = sys.argv[1:5]
+with open(dispatch_path, encoding="utf-8") as fh:
+    text = fh.read()
+text = text.replace(runtime_value, work).replace(ops_value, work)
+sys.stdout.write(text)
+PY
   chmod +x "$rendered"
   ledger="$work/state/dispatch-ledger.jsonl"
   worktree_path="$work/worker"

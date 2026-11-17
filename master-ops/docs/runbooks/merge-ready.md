@@ -2,7 +2,11 @@
 
 `scripts/merge-ready` measures one pull request and exits non-zero unless it may merge without
 asking the owner (#330). A worker runs it on its own PR before `worker_done`; the master runs it
-again before merge. Neither side's own claim that a PR is ready substitutes for this run.
+again before merge. Neither side's own claim that a PR is ready substitutes for this run. Every
+check, review, thread, changed-file, and comment measurement is gathered again after the tarball
+test re-run finishes, and the PR's head is re-read at that point too: a push landing mid-run
+invalidates everything gathered before it, so this script measures the head that is actually
+there when it finishes, never the one it started with.
 
 ## Usage
 
@@ -10,10 +14,10 @@ again before merge. Neither side's own claim that a PR is ready substitutes for 
 scripts/merge-ready --repo <owner/name> --pr <n> [--contract <file>] [--test-command <cmd>]
 ```
 
-`--contract <file>` adds stop-list item 3 (any changed path outside that contract's `writes`
-globs asks the owner). `--test-command <cmd>` overrides the test command this script would
-otherwise choose for `<owner/name>` (see "Test command" below); pass it for a repository this
-script does not know, or from a test harness.
+`--contract <file>` adds the contract-scope check under "What it measures" below (any changed
+path outside that contract's `writes` globs asks the owner). `--test-command <cmd>` overrides the
+test command this script would otherwise choose for `<owner/name>` (see "Test command" below);
+pass it for a repository this script does not know, or from a test harness.
 
 A dispatched worker's cwd is a product-repo worktree, not this ops repo, so the
 `merge-ready-before-done` standing rule's text names this script by a relative path that would
@@ -22,13 +26,21 @@ directory before the brief ships, so the worker never needs to know where this r
 
 ## What it measures
 
+0. **The PR itself is open and not a draft.** `state` must be `OPEN` and `isDraft` must be
+   false; a closed, merged, or draft PR is not ready, named as such, regardless of what else
+   passed.
 1. **Required checks and review bots.** Every entry `gh pr checks --required` reports (branch
    protection's own required-check list) must have bucket `pass`, except a check named on a
    `rate-limited: <name>[, <name>...]` line in the PR body (case-insensitive, comma-separated);
-   that is the only skip. A check this repository runs but does not require (a review bot, a
-   label/assignee check) never reaches this measurement at all. Every bot (GraphQL
-   `author.__typename == "Bot"`, not a login-suffix guess) that reviewed the exact head commit
-   must not be `PENDING` or `CHANGES_REQUESTED`.
+   that is the only skip, and it applies to any required check by that name, not only a review
+   bot's (the contract's own wording: "a check whose name the PR body lists as rate-limited").
+   A check this repository runs but does not require (a review bot, a label/assignee check)
+   never reaches this measurement at all. Every bot (GraphQL `author.__typename == "Bot"`, not a
+   login-suffix guess) whose *latest* review on the exact head commit is `PENDING` or
+   `CHANGES_REQUESTED` blocks; an earlier review by the same bot on the same commit that a later
+   one from that bot superseded does not. A bot that never reviewed the head at all does not
+   block either: the contract measures bots that reviewed the head, not a fixed roster of
+   expected reviewers this script has no source of truth for.
 2. **Open review threads.** `reviewThreads(isResolved)` on the head must show zero unresolved
    threads.
 3. **The test suite, re-run from a tarball of the head**, not from whatever is checked out
@@ -41,16 +53,22 @@ directory before the brief ships, so the worker never needs to know where this r
    0`: not ready.
 5. **Stop-list paths.** Any changed path matching `config/merge-ready-stop-paths.txt` is "ask",
    never "merge": the charter, the workspace card, role state, the boot comparison set, the
-   scanner config, guard hooks, gate code, the tier policy, and worker settings. With
-   `--contract`, any changed path outside that contract's `writes` globs is also "ask".
+   scanner config, guard hooks, gate code, the tier policy, and worker settings. A stop-paths
+   file that parses but names no real entries (blank or all comments) is not ready, not read as
+   "nothing to block". With `--contract`, any changed path outside that contract's own `writes`
+   globs (read only from its opening front-matter block, never from an example elsewhere in the
+   contract's body text) is also "ask"; a contract with no `writes:` field in its front matter is
+   not ready instead, since there is no declared scope to check against, not a stop-list hit.
 
 ## Test command
 
 Chosen per repository by a `case` statement inside the script, keyed on `--repo`:
-`mogui-ADE-orchestrator` gets `PYTHONPATH=src python -m pytest tests -q` with the one deselect
+`mogui-ADE-orchestrator` gets `PYTHONPATH=src python3 -m pytest tests -q` with the one deselect
 above baked in. A repository this script does not know has no default and is "not ready" with
 that reason, unless `--test-command` supplies one. A command passed with `--test-command` runs
-exactly as given, with no deselect added for it.
+exactly as given, with no deselect added for it. A tarball that cannot be fetched or extracted is
+a test-re-run failure like any other, not an immediate exit, so a stop-list hit discovered
+afterward still wins (exit 2) the same way it would if the tests had merely failed.
 
 ## The marker
 
@@ -105,4 +123,15 @@ lists as a template-installed file (`instance_owned`, see `rules/standing-rules.
 re-stamp, upgrade, or fresh onboarding install ever copies it in from the template on its own;
 every install, old or newly onboarded, has to add this file by hand once, from this version.
 `merge-ready` fails closed (not ready, naming the missing file) rather than silently skipping
-the stop list when it is absent.
+the stop list when it is absent, and that path is resolved once, relative to this script's own
+install location, with no environment override: a worker with ordinary shell access could
+otherwise point an override at an empty file and neutralize the stop list entirely.
+
+Reviews and review threads are read up to 100 each; a PR past either limit is "not ready, rerun
+with pagination" rather than measured on a partial page, but this script does not implement
+cursor pagination to go further, the same scope limit `scripts/pr-steward-status` already
+accepts for the same data. The `gh` calls and the test re-run itself have no timeout, so a hung
+request or a hung test blocks the verdict until something else kills the process; wrapping the
+test command in a timeout was considered and left out, since GNU `timeout` is not reliably
+present on every machine this script runs on (macOS ships none by default, only `gtimeout` from
+a separate Homebrew install).

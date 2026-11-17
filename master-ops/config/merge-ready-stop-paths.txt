@@ -9,6 +9,7 @@
 # Stop-list item 1: charter, workspace card, role state, boot comparison set.
 master-ops/docs/charter/
 master-ops/CLAUDE.md
+master-ops/AGENTS.md
 master-ops/workspace-card/
 master-ops/docs/runbooks/role-state.md
 master-ops/docs/runbooks/boot-comparison-set.md
@@ -17,12 +18,21 @@ master-ops/docs/runbooks/boot-comparison-set.md
 # anything that changes what a worker is allowed to do or how that is
 # enforced.
 config/gitleaks.toml
+master-ops/scripts/conversation-redaction-scan
 master-ops/scripts/hooks/
 src/master_runtime/core/dispatch_gate.py
+src/master_runtime/core/approval/
 master-ops/scripts/gate_runner.py
 master-ops/scripts/dispatch
 master-ops/scripts/merge-ready
 master-ops/config/merge-ready-stop-paths.txt
+master-ops/scripts/codex-hooks-review-answer
+master-ops/scripts/approval-prompt-markers.txt
+scripts/dispatch-gate
+scripts/codex-worker-pretrust
+scripts/claude-worker-pretrust
+scripts/agy-worker-pretrust
+scripts/cursor-worker-pretrust
 master-ops/model-tier-policy.json
 master-ops/rules/standing-rules.md
 master-ops/templates/mcp-servers.json

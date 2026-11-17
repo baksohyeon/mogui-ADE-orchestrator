@@ -7,10 +7,9 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MERGE_READY="${SCRIPT_DIR}/merge-ready"
 
-if [ ! -x "${MERGE_READY}" ]; then
-  echo "FAIL: ${MERGE_READY} is missing or not executable"
+if [ ! -x "${SCRIPT_DIR}/merge-ready" ]; then
+  echo "FAIL: ${SCRIPT_DIR}/merge-ready is missing or not executable"
   exit 1
 fi
 
@@ -25,16 +24,22 @@ REPO="owner/repo"
 HEAD_SHA="0123456789abcdef0123456789abcdef01234567"
 OTHER_SHA="fedcba9876543210fedcba9876543210fedcba98"
 
+# A scratch install (scripts/ next to config/), not the real checkout: the
+# real config/merge-ready-stop-paths.txt is instance-owned and does not
+# exist at all in a rendered, template-only checkout (issue measured in
+# CI), and merge-ready itself has no override for that path, by design (a
+# worker with shell access could otherwise point it at an empty file and
+# neutralize the stop list). Copying the real script next to a fixture
+# config/ directory exercises the real, unmodified path-resolution logic.
+INSTALL_DIR="${WORK_DIR}/install"
+mkdir -p "${INSTALL_DIR}/scripts" "${INSTALL_DIR}/config"
+cp "${SCRIPT_DIR}/merge-ready" "${INSTALL_DIR}/scripts/merge-ready"
+chmod +x "${INSTALL_DIR}/scripts/merge-ready"
+MERGE_READY="${INSTALL_DIR}/scripts/merge-ready"
+printf '%s\n' "config/gitleaks.toml" >"${INSTALL_DIR}/config/merge-ready-stop-paths.txt"
+
 STUB_DIR="${WORK_DIR}/stub"
 mkdir -p "${STUB_DIR}"
-
-# A fixture stop-paths file, not the real config/merge-ready-stop-paths.txt:
-# that file is instance-owned and does not exist at all in a rendered,
-# template-only checkout (issue measured in CI), and this test should not
-# depend on the real seat's content anyway.
-STOP_PATHS_FIXTURE="${WORK_DIR}/merge-ready-stop-paths.txt"
-printf '%s\n' "config/gitleaks.toml" >"${STOP_PATHS_FIXTURE}"
-export MERGE_READY_STOP_PATHS="${STOP_PATHS_FIXTURE}"
 
 cat >"${STUB_DIR}/gh" <<'EOF'
 #!/usr/bin/env bash
@@ -43,7 +48,11 @@ cat >"${STUB_DIR}/gh" <<'EOF'
 # overrides one endpoint to simulate a missing, broken, or failing response.
 # `pr checks` mimics real gh: its own exit code is 1 whenever any entry in
 # the fixture is not bucket "pass", but the JSON itself still prints, the
-# same way a pending or failing required check behaves live.
+# same way a pending or failing required check behaves live. It also
+# mimics `--required` itself: a fixture check entry with `"required":
+# false` is filtered out before the JSON ever reaches the caller, the way
+# a review-bot or label/assignee check never appears in real `gh pr checks
+# --required` output at all.
 set -u
 case "$1" in
   pr)
@@ -57,6 +66,21 @@ case "$1" in
           bad-json)
             echo "this is not json"
             ;;
+          head-moved)
+            # merge-ready calls `pr view` twice: once before the test
+            # re-run (to pick a tarball) and once after (to re-check the
+            # head). The first call here returns pr.json; every call
+            # after that returns pr-moved.json, simulating a push that
+            # landed while the test was running.
+            counter="${GH_FIXTURE_DIR}/.pr_view_calls"
+            n=$(( $(cat "${counter}" 2>/dev/null || echo 0) + 1 ))
+            echo "${n}" >"${counter}"
+            if [ "${n}" -le 1 ]; then
+              cat "${GH_FIXTURE_DIR}/pr.json"
+            else
+              cat "${GH_FIXTURE_DIR}/pr-moved.json"
+            fi
+            ;;
           *)
             cat "${GH_FIXTURE_DIR}/pr.json"
             ;;
@@ -68,15 +92,16 @@ case "$1" in
           echo "gh: could not reach checks endpoint" >&2
           exit 1
         fi
-        cat "${GH_FIXTURE_DIR}/checks.json"
-        if python3 -c "
-import json, sys
+        required_only="$(python3 -c "
+import json
 data = json.load(open('${GH_FIXTURE_DIR}/checks.json', encoding='utf-8'))
-sys.exit(0 if all(c.get('bucket') == 'pass' for c in data) else 1)
-"; then
-          exit 0
-        fi
-        exit 1
+print(json.dumps([c for c in data if c.get('required', True)]))
+")"
+        printf '%s' "${required_only}"
+        python3 -c "
+import json, sys
+sys.exit(0 if all(c.get('bucket') == 'pass' for c in json.loads('''${required_only}''')) else 1)
+"
         ;;
       *)
         echo "gh stub: unhandled pr subcommand: $*" >&2
@@ -126,7 +151,9 @@ chmod +x "${STUB_DIR}/gh"
 export PATH="${STUB_DIR}:${PATH}"
 
 # A tiny tarball whose top-level entry is stripped by merge-ready's
-# `--strip-components=1`, the same shape a GitHub tarball download has.
+# `--strip-components=1`, the same shape a GitHub tarball download has. A
+# second one with a trivial failing test script, for the real-test-re-run
+# cases below.
 FIXTURE_SRC="${WORK_DIR}/fixture-src/stub-repo-${HEAD_SHA}"
 mkdir -p "${FIXTURE_SRC}"
 echo "fixture" >"${FIXTURE_SRC}/README.md"
@@ -138,15 +165,25 @@ DEFAULT_CHECKS='[{"name":"ci","bucket":"pass","state":"SUCCESS"}]'
 write_fixture() {
   # $1 fixture dir; $2 PR body; $3 open-thread count; $4 changed-file JSON
   # array body; $5 review-pass marker line (or ""); $6 checks.json array
-  # body (default: one passing required check); $7 reviews.nodes JSON
-  # array body for bot reviews (default none)
+  # body (default: one passing required check; an entry may add
+  # `"required": false` to simulate a check `--required` filters out);
+  # $7 reviews.nodes JSON array body for bot reviews (default none);
+  # $8 PR state (default OPEN); $9 isDraft (default false)
   local dir="$1" body="$2" open_threads="$3" files_json="$4" marker="$5"
   local checks_json="${6:-${DEFAULT_CHECKS}}" bot_reviews="${7:-[]}"
+  local pr_state="${8:-OPEN}" is_draft="${9:-false}"
   mkdir -p "${dir}"
-  python3 - "${dir}/pr.json" "${HEAD_SHA}" "${body}" <<'PY'
+  python3 - "${dir}/pr.json" "${HEAD_SHA}" "${body}" "${pr_state}" "${is_draft}" <<'PY'
 import json, sys
-path, head_sha, body = sys.argv[1:4]
-data = {"number": 1, "url": "https://example.invalid/pr/1", "headRefOid": head_sha, "body": body}
+path, head_sha, body, pr_state, is_draft = sys.argv[1:6]
+data = {
+    "number": 1,
+    "url": "https://example.invalid/pr/1",
+    "headRefOid": head_sha,
+    "body": body,
+    "state": pr_state,
+    "isDraft": is_draft == "true",
+}
 open(path, "w", encoding="utf-8").write(json.dumps(data))
 PY
   printf '%s' "${checks_json}" >"${dir}/checks.json"
@@ -212,12 +249,20 @@ else
   fail "failing required check exited ${rc}, want 1 naming it: ${out}"
 fi
 
-# --- an empty required-checks list means nothing to block on, whatever the
-# reason: a check this repository does not require never reaches this
-# script at all (it is simply absent from `gh pr checks --required`'s own
-# output), and if that call ever hands back `[]` outright (rather than the
-# no-JSON, nonzero-exit shape real `gh` uses when nothing has reported yet,
-# covered separately below), this aggregator must not invent a failure -----
+# --- a failing check that --required would exclude (not required) never
+# reaches this script at all, so the PR still reads clean -----------------
+non_required_dir="${WORK_DIR}/non-required-excluded"
+write_fixture "${non_required_dir}" "" 0 '[{"filename":"README.md"}]' "${PASS_MARKER}" \
+  '[{"name":"ci","bucket":"pass","state":"SUCCESS"},{"name":"CodeRabbit","bucket":"fail","state":"FAILURE","required":false}]'
+out=$(run_case "${non_required_dir}")
+rc=$?
+if [ "${rc}" -eq 0 ]; then
+  ok "a failing check --required excludes does not block (${out})"
+else
+  fail "non-required failing check exited ${rc}, want 0: ${out}"
+fi
+
+# --- a repository with no required checks at all is not blocked ------------
 non_required_clean_dir="${WORK_DIR}/non-required-clean"
 write_fixture "${non_required_clean_dir}" "" 0 '[{"filename":"README.md"}]' "${PASS_MARKER}" "[]"
 out=$(run_case "${non_required_clean_dir}")
@@ -271,6 +316,23 @@ else
   fail "stop-list path change exited ${rc}, want 2 naming the stop list: ${out}"
 fi
 
+# --- a stop-paths file with no real entries (all blank/commented) fails
+# closed instead of silently meaning "nothing to block" --------------------
+no_entries_dir="${WORK_DIR}/no-stop-entries"
+write_fixture "${no_entries_dir}" "" 0 '[{"filename":"config/gitleaks.toml"}]' "${PASS_MARKER}"
+empty_install="${WORK_DIR}/install-empty-stoplist"
+mkdir -p "${empty_install}/scripts" "${empty_install}/config"
+cp "${SCRIPT_DIR}/merge-ready" "${empty_install}/scripts/merge-ready"
+chmod +x "${empty_install}/scripts/merge-ready"
+printf '# only comments\n\n' >"${empty_install}/config/merge-ready-stop-paths.txt"
+out=$(GH_FIXTURE_DIR="${no_entries_dir}" "${empty_install}/scripts/merge-ready" --repo "${REPO}" --pr 1 --test-command true)
+rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -qi "no entries"; then
+  ok "a stop-paths file with no real entries fails closed (${out})"
+else
+  fail "empty-entries stop-paths file exited ${rc}, want 1: ${out}"
+fi
+
 # --- a path outside --contract's writes globs also asks (exit 2) -----------
 contract_dir="${WORK_DIR}/outside-writes"
 write_fixture "${contract_dir}" "" 0 '[{"filename":"somewhere/else.py"}]' "${PASS_MARKER}"
@@ -293,6 +355,22 @@ if [ "${rc}" -eq 0 ]; then
   ok "a path inside the contract's writes globs does not ask (${out})"
 else
   fail "path inside contract writes exited ${rc}, want 0: ${out}"
+fi
+
+# --- a contract missing a real writes: front-matter field is not ready, not
+# an ask, and a `writes: [...]` example in the contract's body text (after
+# the closing `---`) is never mistaken for the declared scope --------------
+body_example_dir="${WORK_DIR}/body-example-writes"
+write_fixture "${body_example_dir}" "" 0 '[{"filename":"somewhere/else.py"}]' "${PASS_MARKER}"
+no_writes_contract="${WORK_DIR}/no-writes-contract.md"
+printf '%s\n' "---" "tier: efficient" "---" "" "Example: \`writes: [**]\` is how a contract scopes a worker." \
+  >"${no_writes_contract}"
+out=$(GH_FIXTURE_DIR="${body_example_dir}" "${MERGE_READY}" --repo "${REPO}" --pr 1 --test-command true --contract "${no_writes_contract}")
+rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -qi "writes"; then
+  ok "a writes: example in the contract body is not read as the declared scope (${out})"
+else
+  fail "contract with no front-matter writes: list exited ${rc}, want 1: ${out}"
 fi
 
 # --- a missing review-pass marker is not ready, not merged -----------------
@@ -364,6 +442,27 @@ else
   fail "bot review of CHANGES_REQUESTED exited ${rc}, want 1 naming it: ${out}"
 fi
 
+# --- a bot's later, passing review on the same head commit supersedes its
+# own earlier CHANGES_REQUESTED; only the latest counts -------------------
+superseded_bot_dir="${WORK_DIR}/superseded-bot"
+superseded_review_json=$(python3 - "${HEAD_SHA}" <<'PY'
+import json, sys
+head_sha = sys.argv[1]
+print(json.dumps([
+    {"state": "CHANGES_REQUESTED", "commit": {"oid": head_sha}, "author": {"login": "some-bot", "__typename": "Bot"}},
+    {"state": "APPROVED", "commit": {"oid": head_sha}, "author": {"login": "some-bot", "__typename": "Bot"}},
+]))
+PY
+)
+write_fixture "${superseded_bot_dir}" "" 0 '[{"filename":"README.md"}]' "${PASS_MARKER}" "${DEFAULT_CHECKS}" "${superseded_review_json}"
+out=$(run_case "${superseded_bot_dir}")
+rc=$?
+if [ "${rc}" -eq 0 ]; then
+  ok "a bot's superseded CHANGES_REQUESTED on the same head does not block once it later approves (${out})"
+else
+  fail "superseded bot review exited ${rc}, want 0: ${out}"
+fi
+
 # --- a human reviewer's own CHANGES_REQUESTED review does not count -------
 human_review_json=$(python3 - "${HEAD_SHA}" <<'PY'
 import json, sys
@@ -403,6 +502,43 @@ else
   fail "stop-list hit plus a failed check exited ${rc}, want 2 naming both: ${out}"
 fi
 
+# --- ask still wins over not-ready even when the test step itself could
+# not run at all (no known command for this repo, and no override), since
+# the stop-list check happens after the test step regardless of whether
+# the test step itself could run -------------------------------------------
+tool_failure_ask_dir="${WORK_DIR}/tool-failure-ask-wins"
+write_fixture "${tool_failure_ask_dir}" "" 0 '[{"filename":"config/gitleaks.toml"}]' "${PASS_MARKER}"
+out=$(GH_FIXTURE_DIR="${tool_failure_ask_dir}" "${MERGE_READY}" --repo "nobody/unknown-repo" --pr 1)
+rc=$?
+if [ "${rc}" -eq 2 ] && printf '%s' "${out}" | grep -qi "stop-list"; then
+  ok "a stop-list hit still asks even when the test step itself could not run (${out})"
+else
+  fail "stop-list hit plus a tool failure exited ${rc}, want 2: ${out}"
+fi
+
+# --- an unknown repository with no --test-command override is not ready,
+# naming the missing test command -------------------------------------------
+unknown_repo_dir="${WORK_DIR}/unknown-repo"
+write_fixture "${unknown_repo_dir}" "" 0 '[{"filename":"README.md"}]' "${PASS_MARKER}"
+out=$(GH_FIXTURE_DIR="${unknown_repo_dir}" GH_STUB_CASE="" "${MERGE_READY}" --repo "nobody/unknown-repo" --pr 1)
+rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -qi "no known test command"; then
+  ok "an unknown repository with no --test-command is not ready (${out})"
+else
+  fail "unknown repository with no test command exited ${rc}, want 1: ${out}"
+fi
+
+# --- a real failing test command is not ready, naming the test re-run -----
+failing_test_dir="${WORK_DIR}/failing-test-command"
+write_fixture "${failing_test_dir}" "" 0 '[{"filename":"README.md"}]' "${PASS_MARKER}"
+out=$(GH_FIXTURE_DIR="${failing_test_dir}" "${MERGE_READY}" --repo "${REPO}" --pr 1 --test-command false)
+rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -qi "test re-run failed"; then
+  ok "a failing test command exits 1 naming the test re-run (${out})"
+else
+  fail "failing test command exited ${rc}, want 1 naming the test re-run: ${out}"
+fi
+
 # --- a graphql failure is 1 with a reason, never 0 -------------------------
 out=$(run_case "${clean_dir}" graphql-fail)
 rc=$?
@@ -423,6 +559,20 @@ if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -qi "pullRequest"; then
   ok "a graphql response missing pullRequest exits 1, not a silent pass (${out})"
 else
   fail "graphql response missing pullRequest exited ${rc}, want 1 naming the gap: ${out}"
+fi
+
+# --- a pullRequest with reviews/reviewThreads present but malformed (no
+# nodes/pageInfo) is 1, not a silent "zero reviews, zero threads" pass ----
+malformed_connections_dir="${WORK_DIR}/malformed-connections"
+write_fixture "${malformed_connections_dir}" "" 0 '[{"filename":"README.md"}]' "${PASS_MARKER}"
+printf '%s' '{"data":{"repository":{"pullRequest":{"reviews":{},"reviewThreads":{}}}}}' \
+  >"${malformed_connections_dir}/graphql.json"
+out=$(run_case "${malformed_connections_dir}")
+rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -qi "reviews"; then
+  ok "a pullRequest with malformed reviews/reviewThreads exits 1, not a silent pass (${out})"
+else
+  fail "malformed reviews/reviewThreads exited ${rc}, want 1: ${out}"
 fi
 
 # --- a changed-files lookup failure is 1 with a reason, never 0 -----------
@@ -453,6 +603,47 @@ if [ "${rc}" -eq 1 ] && [ -n "${out}" ]; then
   ok "a comments lookup failure exits 1 with a reason (${out})"
 else
   fail "comments lookup failure exited ${rc} with output <${out}>, want 1 with a reason"
+fi
+
+# --- a closed PR is not ready, never read as mergeable ---------------------
+closed_dir="${WORK_DIR}/closed-pr"
+write_fixture "${closed_dir}" "" 0 '[{"filename":"README.md"}]' "${PASS_MARKER}" "${DEFAULT_CHECKS}" "[]" "CLOSED" "false"
+out=$(run_case "${closed_dir}")
+rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -qi "CLOSED"; then
+  ok "a closed PR exits 1, naming its state (${out})"
+else
+  fail "closed PR exited ${rc}, want 1 naming CLOSED: ${out}"
+fi
+
+# --- a draft PR is not ready ------------------------------------------------
+draft_dir="${WORK_DIR}/draft-pr"
+write_fixture "${draft_dir}" "" 0 '[{"filename":"README.md"}]' "${PASS_MARKER}" "${DEFAULT_CHECKS}" "[]" "OPEN" "true"
+out=$(run_case "${draft_dir}")
+rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -qi "draft"; then
+  ok "a draft PR exits 1, naming it as a draft (${out})"
+else
+  fail "draft PR exited ${rc}, want 1 naming draft: ${out}"
+fi
+
+# --- a head that moves during the test re-run is not ready, never a stale
+# pass on a commit the measurement no longer reflects ----------------------
+head_moved_dir="${WORK_DIR}/head-moved"
+write_fixture "${head_moved_dir}" "" 0 '[{"filename":"README.md"}]' "${PASS_MARKER}"
+python3 - "${head_moved_dir}/pr.json" "${head_moved_dir}/pr-moved.json" "${OTHER_SHA}" <<'PY'
+import json, sys
+src, dst, other_sha = sys.argv[1:4]
+data = json.load(open(src, encoding="utf-8"))
+data["headRefOid"] = other_sha
+open(dst, "w", encoding="utf-8").write(json.dumps(data))
+PY
+out=$(run_case "${head_moved_dir}" head-moved)
+rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -qi "head changed"; then
+  ok "a head that moves during the test re-run exits 1, not a stale pass (${out})"
+else
+  fail "head-moved-during-run exited ${rc}, want 1 naming the change: ${out}"
 fi
 
 echo "----"

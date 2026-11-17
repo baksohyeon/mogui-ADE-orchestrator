@@ -2,7 +2,12 @@
 # One measurement for a pull request, run by the worker before `worker_done`
 # and by the master before merge (#330). Five measurements plus the
 # machine-checkable half of the stop list, same inputs every time: a worker's
-# own claim never substitutes for this run.
+# own claim never substitutes for this run. Every head-sensitive measurement
+# (checks, bot reviews, open threads, changed files, comments) is gathered
+# AFTER the tarball test re-run completes, and the PR's head is re-read then
+# too: a push that lands mid-run invalidates everything gathered before it,
+# and this script measures the head that is actually there when it finishes,
+# never the one it started with.
 #
 # Usage: merge-ready --repo <owner/name> --pr <n> [--contract <file>] [--test-command <cmd>]
 #
@@ -23,7 +28,7 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
-STOP_PATHS_FILE="${MERGE_READY_STOP_PATHS:-$SCRIPT_DIR/../config/merge-ready-stop-paths.txt}"
+STOP_PATHS_FILE="${SCRIPT_DIR}/../config/merge-ready-stop-paths.txt"
 
 usage() {
   echo "usage: merge-ready --repo <owner/name> --pr <n> [--contract <file>] [--test-command <cmd>]" >&2
@@ -63,25 +68,19 @@ while [ $# -gt 0 ]; do
 done
 [ -n "${REPO}" ] && [ -n "${PR}" ] || usage
 
-command -v gh >/dev/null 2>&1 || { echo "merge-ready: gh is required" >&2; exit 1; }
-command -v python3 >/dev/null 2>&1 || { echo "merge-ready: python3 is required" >&2; exit 1; }
+command -v gh >/dev/null 2>&1 || { echo "merge-ready: not ready · gh is required"; exit 1; }
+command -v python3 >/dev/null 2>&1 || { echo "merge-ready: not ready · python3 is required"; exit 1; }
 if [ -n "${CONTRACT}" ] && [ ! -f "${CONTRACT}" ]; then
-  echo "merge-ready: --contract file not found: ${CONTRACT}" >&2
+  echo "merge-ready: not ready · --contract file not found: ${CONTRACT}"
   exit 1
 fi
 if [ ! -f "${STOP_PATHS_FILE}" ]; then
-  echo "merge-ready: stop-paths file not found: ${STOP_PATHS_FILE}" >&2
+  echo "merge-ready: not ready · stop-paths file not found: ${STOP_PATHS_FILE}"
   exit 1
 fi
 
 TMP_DIR="$(mktemp -d -t merge-ready.XXXXXX)" || { echo "merge-ready: mktemp failed" >&2; exit 1; }
 trap 'rm -rf "${TMP_DIR}"' EXIT
-
-PR_FILE="${TMP_DIR}/pr.json"
-CHECKS_FILE="${TMP_DIR}/checks.json"
-GQL_FILE="${TMP_DIR}/graphql.json"
-FILES_FILE="${TMP_DIR}/files.json"
-COMMENTS_FILE="${TMP_DIR}/comments.json"
 
 not_ready() {
   echo "merge-ready: not ready · $1"
@@ -106,18 +105,76 @@ if '${kind}' == 'nonempty-list' and not (isinstance(data, list) and len(data) > 
   not_ready "${file##*/}: ${reason}"
 }
 
-# --- gather: everything a missing/unparseable/empty response turns into
-# exit 1, never a crash and never exit 2 (exit 2 is reserved for the stop
-# list). ---
-if ! gh pr view "${PR}" --repo "${REPO}" --json number,url,headRefOid,body \
+# --- step 1: the only thing needed before the test re-run is which tarball
+# to fetch. Everything else is gathered again after the test, below. ---
+PR_EARLY_FILE="${TMP_DIR}/pr-early.json"
+if ! gh pr view "${PR}" --repo "${REPO}" --json headRefOid \
+    >"${PR_EARLY_FILE}" 2>"${TMP_DIR}/pr-early.err"; then
+  not_ready "could not read the PR (gh pr view: $(tr '\n' ' ' <"${TMP_DIR}/pr-early.err"))"
+fi
+require_json "${PR_EARLY_FILE}"
+HEAD_SHA="$(python3 -c "
+import json
+print(json.load(open('${PR_EARLY_FILE}', encoding='utf-8'))['headRefOid'])
+" 2>"${TMP_DIR}/pr-early.parse.err")" || not_ready "PR response missing headRefOid ($(tr '\n' ' ' <"${TMP_DIR}/pr-early.parse.err"))"
+
+# --- step 2: tarball re-run. The test command is chosen per repository by
+# the case statement below (an unlisted repository has none, which is
+# itself a not-ready reason), or forced with --test-command for a repo this
+# script does not know, or for a test harness stubbing the run. The known-
+# needs-.git exception is a short, commented allowlist, not a config file:
+# it is part of what this script measures, not a seat setting. A tarball
+# that cannot be fetched or extracted is a test-re-run failure like any
+# other, not an immediate exit: a stop-list hit discovered afterward must
+# still win (exit 2), the same as when the tests themselves merely fail.
+default_test_command() {
+  case "$1" in
+    */mogui-ADE-orchestrator)
+      printf '%s' "PYTHONPATH=src python3 -m pytest tests -q --deselect tests/test_context_quality_scripts.py::test_context_quality_sampler_relative_anchor_git_log_works"
+      ;;
+    *)
+      printf '%s' ""
+      ;;
+  esac
+}
+
+TEST_CMD="${TEST_COMMAND_OVERRIDE:-$(default_test_command "${REPO}")}"
+TEST_STATUS="fail"
+TEST_REASON=""
+if [ -z "${TEST_CMD}" ]; then
+  TEST_REASON="no known test command for ${REPO}; pass --test-command"
+elif ! gh api "repos/${REPO}/tarball/${HEAD_SHA}" >"${TMP_DIR}/head.tar.gz" 2>"${TMP_DIR}/tarball.err"; then
+  TEST_REASON="could not fetch the head tarball ($(tr '\n' ' ' <"${TMP_DIR}/tarball.err"))"
+else
+  WORKDIR="${TMP_DIR}/head"
+  mkdir -p "${WORKDIR}"
+  if ! tar -xzf "${TMP_DIR}/head.tar.gz" -C "${WORKDIR}" --strip-components=1 2>"${TMP_DIR}/untar.err"; then
+    TEST_REASON="could not extract the head tarball ($(tr '\n' ' ' <"${TMP_DIR}/untar.err"))"
+  else
+    TEST_LOG="${TMP_DIR}/test.log"
+    if ( cd "${WORKDIR}" && eval "${TEST_CMD}" ) >"${TEST_LOG}" 2>&1; then
+      TEST_STATUS="pass"
+    else
+      TEST_REASON="test re-run failed; last lines: $(tail -n 5 "${TEST_LOG}" | tr '\n' ' ')"
+    fi
+  fi
+fi
+
+# --- step 3: gather every head-sensitive measurement again, now that the
+# (possibly long) test re-run is over, and everything a missing/unparseable/
+# empty response turns into exit 1, never a crash and never exit 2 (exit 2
+# is reserved for the stop list). ---
+PR_FILE="${TMP_DIR}/pr.json"
+CHECKS_FILE="${TMP_DIR}/checks.json"
+GQL_FILE="${TMP_DIR}/graphql.json"
+FILES_FILE="${TMP_DIR}/files.json"
+COMMENTS_FILE="${TMP_DIR}/comments.json"
+
+if ! gh pr view "${PR}" --repo "${REPO}" --json number,url,headRefOid,body,state,isDraft \
     >"${PR_FILE}" 2>"${TMP_DIR}/pr.err"; then
   not_ready "could not read the PR (gh pr view: $(tr '\n' ' ' <"${TMP_DIR}/pr.err"))"
 fi
 require_json "${PR_FILE}"
-HEAD_SHA="$(python3 -c "
-import json
-print(json.load(open('${PR_FILE}', encoding='utf-8'))['headRefOid'])
-" 2>"${TMP_DIR}/pr.parse.err")" || not_ready "PR response missing headRefOid ($(tr '\n' ' ' <"${TMP_DIR}/pr.parse.err"))"
 
 # `gh pr checks --required` is the authoritative source for which checks
 # actually gate merge (branch protection's own required list), not every
@@ -156,46 +213,6 @@ if ! gh api "repos/${REPO}/issues/${PR}/comments" --paginate >"${COMMENTS_FILE}"
 fi
 require_json "${COMMENTS_FILE}"
 
-# --- tarball re-run: the test command is chosen per repository by the case
-# statement below (an unlisted repository has none, which is itself a
-# not-ready reason), or forced with --test-command for a repo this script
-# does not know, or for a test harness stubbing the run. The known-needs-
-# .git exception is a short, commented allowlist, not a config file: it is
-# part of what this script measures, not a seat setting.
-default_test_command() {
-  case "$1" in
-    */mogui-ADE-orchestrator)
-      printf '%s' "PYTHONPATH=src python -m pytest tests -q --deselect tests/test_context_quality_scripts.py::test_context_quality_sampler_relative_anchor_git_log_works"
-      ;;
-    *)
-      printf '%s' ""
-      ;;
-  esac
-}
-
-TEST_CMD="${TEST_COMMAND_OVERRIDE:-$(default_test_command "${REPO}")}"
-TEST_STATUS="fail"
-TEST_REASON=""
-if [ -z "${TEST_CMD}" ]; then
-  TEST_REASON="no known test command for ${REPO}; pass --test-command"
-else
-  TARBALL="${TMP_DIR}/head.tar.gz"
-  WORKDIR="${TMP_DIR}/head"
-  mkdir -p "${WORKDIR}"
-  if ! gh api "repos/${REPO}/tarball/${HEAD_SHA}" >"${TARBALL}" 2>"${TMP_DIR}/tarball.err"; then
-    not_ready "could not fetch the head tarball ($(tr '\n' ' ' <"${TMP_DIR}/tarball.err"))"
-  fi
-  if ! tar -xzf "${TARBALL}" -C "${WORKDIR}" --strip-components=1 2>"${TMP_DIR}/untar.err"; then
-    not_ready "could not extract the head tarball ($(tr '\n' ' ' <"${TMP_DIR}/untar.err"))"
-  fi
-  TEST_LOG="${TMP_DIR}/test.log"
-  if ( cd "${WORKDIR}" && eval "${TEST_CMD}" ) >"${TEST_LOG}" 2>&1; then
-    TEST_STATUS="pass"
-  else
-    TEST_REASON="test re-run failed; last lines: $(tail -n 5 "${TEST_LOG}" | tr '\n' ' ')"
-  fi
-fi
-
 # --- aggregate every measurement and the stop list into one verdict --------
 python3 - "${PR_FILE}" "${CHECKS_FILE}" "${GQL_FILE}" "${FILES_FILE}" "${COMMENTS_FILE}" \
          "${STOP_PATHS_FILE}" "${HEAD_SHA}" "${TEST_STATUS}" "${TEST_REASON}" "${CONTRACT}" <<'PY'
@@ -221,12 +238,28 @@ def fail(reason):
     sys.exit(1)
 
 
+def require_connection(obj, name):
+    # A GraphQL connection missing `nodes` or `pageInfo` (a partial or
+    # malformed response) must not be read as "zero items, no more pages":
+    # that is indistinguishable from a real empty result and would let a
+    # broken response pass every review/thread measurement silently.
+    if not isinstance(obj, dict) or not isinstance(obj.get("nodes"), list) or not isinstance(obj.get("pageInfo"), dict):
+        fail(f"graphql response missing or malformed {name} (nodes/pageInfo)")
+    return obj
+
+
 try:
     pr = load(pr_file)
     checks = load(checks_file)
     gql = load(gql_file)
     files = load(files_file)
     comments = load(comments_file)
+
+    if pr.get("headRefOid") != head_sha:
+        fail(
+            f"head changed during measurement (tested {head_sha[:12]}, "
+            f"now {(pr.get('headRefOid') or '?')[:12]}); rerun"
+        )
 
     # A rename carries its old path in previous_filename; checking only the
     # new name would let a stop-listed or out-of-scope path dodge both
@@ -239,6 +272,11 @@ try:
 
     problems_ask = []
     problems_not_ready = []
+
+    if pr.get("state") != "OPEN":
+        problems_not_ready.append(f"PR state is {pr.get('state')}, not OPEN")
+    if pr.get("isDraft"):
+        problems_not_ready.append("PR is a draft")
 
     # 1) required checks + review bots --------------------------------------
     rate_limited = set()
@@ -262,29 +300,36 @@ try:
     pull_request = (gql.get("data") or {}).get("repository", {}).get("pullRequest")
     if not pull_request:
         fail("graphql response missing data.repository.pullRequest")
-    reviews = pull_request.get("reviews") or {}
-    if reviews.get("pageInfo", {}).get("hasNextPage"):
+    reviews = require_connection(pull_request.get("reviews"), "reviews")
+    if reviews["pageInfo"].get("hasNextPage"):
         problems_not_ready.append("more than 100 reviews; rerun with pagination")
     else:
-        failing_bots = []
-        for node in reviews.get("nodes") or []:
+        # Keep only each bot's latest review on this exact head: an earlier
+        # CHANGES_REQUESTED the same bot later superseded on the same
+        # commit (by re-reviewing after a push did NOT move the head, for
+        # example a label change) must not still read as blocking.
+        latest_bot_state = {}
+        for node in reviews["nodes"]:
             author = node.get("author") or {}
             if author.get("__typename") != "Bot":
                 continue
             if (node.get("commit") or {}).get("oid") != head_sha:
                 continue
-            state = (node.get("state") or "").upper()
-            if state in {"PENDING", "CHANGES_REQUESTED"}:
-                failing_bots.append(f"{author.get('login', 'unknown')}={state.lower()}")
+            latest_bot_state[author.get("login", "unknown")] = (node.get("state") or "").upper()
+        failing_bots = [
+            f"{login}={state.lower()}"
+            for login, state in latest_bot_state.items()
+            if state in {"PENDING", "CHANGES_REQUESTED"}
+        ]
         if failing_bots:
             problems_not_ready.append("review bots: " + ", ".join(failing_bots))
 
     # 2) open review threads ------------------------------------------------
-    threads = pull_request.get("reviewThreads") or {}
-    if threads.get("pageInfo", {}).get("hasNextPage"):
+    threads = require_connection(pull_request.get("reviewThreads"), "reviewThreads")
+    if threads["pageInfo"].get("hasNextPage"):
         problems_not_ready.append("more than 100 review threads; rerun with pagination")
     else:
-        open_threads = sum(1 for t in threads.get("nodes") or [] if not t.get("isResolved", False))
+        open_threads = sum(1 for t in threads["nodes"] if not t.get("isResolved", False))
         if open_threads:
             problems_not_ready.append(f"{open_threads} open review thread(s)")
 
@@ -314,6 +359,8 @@ try:
         line = line.strip()
         if line and not line.startswith("#"):
             stop_entries.append(line)
+    if not stop_entries:
+        fail(f"stop-paths file has no entries: {stop_paths_file}")
 
     stop_hits = []
     for path in changed_paths:
@@ -331,9 +378,14 @@ try:
     # 6) outside the contract's writes globs, only when --contract is given -
     if contract_path:
         text = Path(contract_path).read_text(encoding="utf-8")
-        m = re.search(r"^writes:\s*\[(.*?)\]", text, re.MULTILINE | re.DOTALL)
+        # Only the opening front-matter block is contract metadata; a
+        # `writes: [...]` example inside the contract's own prose body must
+        # never be read as the declared scope.
+        fm_match = re.match(r"^---\n(.*?\n)---", text, re.DOTALL)
+        front_matter = fm_match.group(1) if fm_match else ""
+        m = re.search(r"^writes:\s*\[(.*?)\]", front_matter, re.MULTILINE | re.DOTALL)
         if not m:
-            problems_ask.append("contract has no writes: list; cannot verify scope")
+            problems_not_ready.append("contract front matter has no writes: list; cannot verify scope")
         else:
             globs = [g.strip() for g in m.group(1).split(",") if g.strip()]
             outside = [p for p in changed_paths if not any(fnmatch.fnmatch(p, g) for g in globs)]

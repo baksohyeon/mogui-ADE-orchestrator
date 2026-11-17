@@ -24,3 +24,17 @@
   before `worker_done`, and quote its line. `scripts/dispatch` resolves the block's script path
   to this install's own absolute `scripts/` directory, since a dispatched worker's cwd is a
   product-repo worktree, not this ops repo.
+- Review-pass fixes to `scripts/merge-ready` (two independent automated reviews on PR #338):
+  every check, review, thread, changed-file, and comment measurement is now gathered again after
+  the tarball test re-run finishes, and the PR's head is compared against the one tested, not
+  ready if either moved mid-run; a closed, merged, or draft PR is not ready rather than
+  potentially passing; a bot's superseded review on the same head (replaced by a later one from
+  the same bot) no longer counts; an empty-but-structurally-present `reviews`/`reviewThreads`
+  connection (missing `nodes`/`pageInfo`) is not ready, not a silent zero; a stop-paths file with
+  no real entries is not ready, not "nothing to block"; the `writes` glob list is read only from
+  the contract's opening front matter, never an example in its body text, and a contract with no
+  `writes:` field is not ready rather than an ask, since there is no declared scope to check
+  against; the stop list adds `master-ops/AGENTS.md`, the redaction scanner script, the approval
+  gate module, the Codex hook-trust and pretrust scripts, and `scripts/dispatch-gate`; and the
+  stop-paths file location has no environment override, closing a path a worker's own shell
+  access could otherwise have used to neutralize the stop list.

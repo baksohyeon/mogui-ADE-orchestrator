@@ -20,6 +20,8 @@ you build on it.
 
 ## [Unreleased]
 
+## [0.5.353] - 2026-11-17
+
 ### Fixed
 
 - The dispatch gate's ledger lock wait now times out (60s default, `DISPATCH_LEDGER_LOCK_TIMEOUT_SECONDS` overrides) and fails with `LEDGER_LOCK_TIMEOUT` instead of waiting forever behind a parent process holding the lock without passing `DISPATCH_LEDGER_LOCK_FD` (#290).
@@ -508,7 +510,8 @@ tests pass, 1 skipped.
 There is no CI at this tag. Tests and the redaction scanners run locally before
 a push, so a passing count in a pull request is the author's word.
 
-[Unreleased]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.345...HEAD
+[Unreleased]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.353...HEAD
+[0.5.353]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.345...v0.5.353
 [0.5.345]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.338...v0.5.345
 [0.5.338]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.326...v0.5.338
 [0.5.326]: https://github.com/baksohyeon/mogui-ADE-orchestrator/compare/v0.5.319...v0.5.326

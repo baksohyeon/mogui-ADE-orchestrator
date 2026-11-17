@@ -28,13 +28,19 @@
 set -u
 # The test re-run executes the PR's own code with this script's own
 # filesystem privileges, ahead of several fixed, predictable sibling temp
-# file names this script writes to only afterward (checks.json and so on).
-# `noclobber` makes every `>` redirect below refuse outright if anything,
-# including a symlink the test command planted, already occupies that
-# path: confirmed empirically that bash's own noclobber check refuses a
-# dangling symlink exactly like an existing regular file, not only a
-# target that already exists, so this closes that window rather than only
-# documenting it.
+# file names this script writes to only afterward (checks.json and so
+# on). `noclobber` makes a bash `>` redirect among those refuse outright
+# if anything, including a symlink, already occupies that path -- but it
+# does not cover the Python-side `open(path, "w")` writes the paginated-
+# response flatten step below does, and on its own it would make a
+# planted file masquerade as a legitimate `gh` failure: `gh pr checks`
+# itself exits non-zero on a merely failing (not unreadable) required
+# check, so the fallback a few steps down that tolerates that shape would
+# also tolerate a file planted ahead of time, parsed as valid JSON, and
+# never actually queried. The explicit pre-flight check right before step
+# 3 below closes both gaps the same way: nothing is trusted, bash- or
+# Python-written, unless this script's own `gh` call is the one that
+# created it.
 set -C
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
@@ -324,6 +330,28 @@ fi
 # (possibly long) test re-run is over, and everything a missing/unparseable/
 # empty response turns into exit 1, never a crash and never exit 2 (exit 2
 # is reserved for the stop list, already decided in step 1). ---
+
+# None of this step's own sibling output paths may already exist: the test
+# command just finished running with this script's own filesystem
+# privileges, one level below these exact, predictable names, and a file
+# it planted there ahead of time (passing checks.json content, say) would
+# otherwise be read as this script's own `gh` response, never actually
+# queried. Checked here, before any of this step's `gh` calls run, rather
+# than reacted to after a write fails: `gh pr checks` legitimately exits
+# non-zero on a merely failing required check while still printing valid
+# JSON, so a check that only reacted to a write failure could not tell
+# that apart from a planted file parsing as valid JSON too. Checking first
+# means a real `gh` call still happens for the untampered case, and also
+# covers the paginated-response flatten step's Python-side `open(path,
+# "w")` writes below, which `set -C` (bash's own `noclobber`) does not.
+for MR_GUARDED_PATH in "${CHECKS_FILE}" "${CHECKS_ERR}" "${GQL_FILE}" "${GQL_ERR}" \
+    "${FILES_RAW}" "${FILES_FILE}" "${FILES_ERR}" \
+    "${COMMENTS_RAW}" "${COMMENTS_FILE}" "${COMMENTS_ERR}" \
+    "${TMP_DIR}/commit-date.txt" "${COMMIT_ERR}" "${PR_FILE}" "${PR_ERR}"; do
+  if [ -e "${MR_GUARDED_PATH}" ] || [ -L "${MR_GUARDED_PATH}" ]; then
+    not_ready "refusing to continue: ${MR_GUARDED_PATH##*/} already exists before this script wrote it (the test command may have planted it)"
+  fi
+done
 
 # `gh pr checks --required` is the authoritative source for which checks
 # actually gate merge (branch protection's own required list), not every

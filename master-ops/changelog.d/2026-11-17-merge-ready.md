@@ -5,7 +5,8 @@
   required check (`gh pr checks --required`, branch protection's own list) has bucket `pass`, no
   exemption of any kind; every bot review on the exact head is not pending or changes-requested,
   and every bot in `config/merge-ready-bots.txt` shows a review or a recent comment on the head
-  (a rate-limit comment from that bot is the one way to cover it without an actual review); zero
+  (a summary and a rate-limit comment count the same, since any qualifying comment covers the
+  bot without an actual review); zero
   open review threads; the test suite re-run from a tarball of the head, with one named deselect
   for the test that needs a `.git`; a `merge-ready-master-pass sha=... critical=... important=...`
   marker the master posts after its own review (the worker's own separate `merge-ready-worker-pass`
@@ -56,6 +57,12 @@
   rather than posting a fresh one each time); the stop list and `--contract` writes-scope check
   now run once early, before the test re-run starts, short-circuiting with no test run at all
   when either already decides "ask"; `gh api ... --paginate --slurp` replaces relying on
-  `--paginate` alone to combine pages; and `set -C` (`noclobber`) now guards every one of this
-  script's own writes to a predictable sibling temp-file name against a symlink the test
-  command's own run could have planted first.
+  `--paginate` alone to combine pages; and before any of this step's `gh` calls run, this script
+  now refuses outright if anything already occupies one of its own predictable sibling temp-file
+  names, closing a real gap: the test command runs first, with this script's own filesystem
+  privileges, and a file it planted at one of those names would otherwise be read back as this
+  script's own `gh` response (or, worse, let a merely-failing-but-readable `gh pr checks` response
+  be mistaken for a planted-and-unreadable one, skipping the real call and trusting the planted
+  content); `set -C` (`noclobber`) backs this for the bash-redirected writes, but the explicit
+  check is what actually closes it, since it also covers the Python-side `open(path, "w")` writes
+  in the paginated-response flatten step that `noclobber` does not reach.

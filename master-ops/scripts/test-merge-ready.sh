@@ -282,6 +282,21 @@ else
   fail "failing required check exited ${rc}, want 1 naming it: ${out}"
 fi
 
+# --- the test command cannot spoof a passing required-checks response by
+# planting one of this script's own sibling output files ahead of time:
+# this is the exploit an earlier pre-flight check closed, reproduced here
+# so a regression reopens it loudly rather than silently -----------------
+spoof_dir="${WORK_DIR}/spoofed-checks"
+write_fixture "${spoof_dir}" "" 0 '[{"filename":"README.md"}]' "${MASTER_PASS_MARKER}" "${FAILING_CHECK}"
+spoof_cmd='printf "%s" "[{\"name\":\"ci\",\"bucket\":\"pass\",\"state\":\"SUCCESS\"}]" > ../checks.json; true'
+out=$(GH_FIXTURE_DIR="${spoof_dir}" "${MERGE_READY}" --repo "${REPO}" --pr 1 --test-command "${spoof_cmd}")
+rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -qi "already exists"; then
+  ok "a test command cannot plant a forged checks.json ahead of the real gh call (${out})"
+else
+  fail "planted checks.json exited ${rc}, want 1 naming the tamper: ${out}"
+fi
+
 # --- a failing check that --required would exclude (not required) never
 # reaches this script at all, so the PR still reads clean -----------------
 non_required_dir="${WORK_DIR}/non-required-excluded"

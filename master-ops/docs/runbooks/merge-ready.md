@@ -210,16 +210,21 @@ otherwise point an override at an empty file and neutralize the stop list entire
 The test re-run executes the PR's own code (`eval "${TEST_CMD}"`, run from the extracted tarball)
 with the same filesystem privileges as the rest of this script, under a working directory one
 level below a predictable, fixed set of sibling temp-file names (`checks.json`, `graphql.json`,
-and so on) that this script itself only writes to *after* the test command has already run. A
-test suite that plants a symlink at one of those sibling paths before exiting could have had its
-target clobbered by this script's own later `gh api ... > file` write; `set -C` (`noclobber`),
-set near the top of the script, closes this: verified empirically that bash's own noclobber check
-refuses a `>` redirect through a symlink whether or not the symlink's target already exists,
-"cannot overwrite existing file" firing on a dangling link exactly as it would on a real one, so
-no `O_NOFOLLOW`-specific handling turned out to be needed. The one place this script writes the
+and so on) that this script itself only writes to *after* the test command has already run. Right
+before any of step 3's `gh` calls run, this script checks that none of its own sibling output
+paths already exist (a real file or a symlink, dangling or not); if one does, it refuses rather
+than writing through it. `set -C` (`noclobber`), set near the top of the script, backs this for
+the bash-redirected writes, but the explicit check, not `set -C` alone, is the actual fix: `gh pr
+checks` legitimately exits non-zero on a merely *failing* (not unreadable) required check while
+still printing valid JSON, so the fallback a few lines below that tolerates that exact shape would
+also have tolerated a file the test command planted ahead of time, parsed as valid JSON, and never
+actually queried from `gh` at all -- a real, demonstrated way to reach `0` on a failing required
+check, found and closed before merge. The explicit check also covers the paginated-response
+flatten step's Python-side `open(path, "w")` writes, which `set -C` does not reach at all, since
+noclobber is a bash shell property, not a filesystem one. The one place this script writes the
 same path twice on purpose (`fetch_paginated_array`'s own stderr file, once for the `gh` call and
-again for the flatten step that follows it) uses `2>|` to say so explicitly, rather than leaving
-a second `set -C` refusal looking like the same symlink risk it exists to catch.
+again for the flatten step that follows it) uses `2>|` to say so explicitly, rather than tripping
+its own tamper check on a write it intended.
 
 Reviews and review threads are read up to 100 each; a PR past either limit is "not ready, rerun
 with pagination" rather than measured on a partial page, but this script does not implement

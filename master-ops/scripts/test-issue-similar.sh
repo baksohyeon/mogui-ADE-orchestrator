@@ -207,9 +207,9 @@ echo "[{\"number\": 11, \"title\": \"login fails safari\", \"state\": \"open\", 
 )
 body_does_not_crowd_out_title_words_test || exit 1
 
-# --- Case: a title that is nothing but stopwords (or non-ASCII) still ------
-# --- yields real search/score terms instead of silently matching nothing. --
-stopword_and_non_ascii_title_fallback_test() (
+# --- Case: a title that is nothing but stopwords still yields real -------
+# --- search/score terms instead of silently matching nothing.             --
+stopword_only_title_fallback_test() (
   set +e
   local work out status
   work="${TMPDIR:-/tmp}/mogui-issue-similar-stopword.$$"
@@ -222,15 +222,34 @@ echo "[{\"number\": 21, \"title\": \"the and is\", \"state\": \"open\", \"url\":
   [ "$status" -eq 0 ] || { echo "FAIL: unexpected exit $status for a stopword-only title" >&2; printf '%s\n' "$out" >&2; return 1; }
   case "$out" in
     *'"words": []'*) echo "FAIL: a stopword-only title should still fall back to some query/score terms, not an empty word list" >&2; printf '%s\n' "$out" >&2; return 1 ;;
-    *) ;;
+    *'"score": 2'*) ;;
+    *) echo "FAIL: an exact stopword-only duplicate ('and' and 'the', 'is' is below the 3-char minimum) should score exactly 2: $out" >&2; return 1 ;;
   esac
-  case "$out" in
-    *'"score": 0'*) echo "FAIL: an exact stopword-only duplicate should score above 0" >&2; printf '%s\n' "$out" >&2; return 1 ;;
-    *) ;;
-  esac
-  echo "ok   : a stopword-only title falls back to real terms instead of silently scoring every candidate 0"
+  echo "ok   : a stopword-only title falls back to real terms and scores an exact duplicate above 0"
 )
-stopword_and_non_ascii_title_fallback_test || exit 1
+stopword_only_title_fallback_test || exit 1
+
+# --- Case: a non-ASCII (Korean) title is not dropped by the ASCII-only -----
+# --- word regex and scores an exact duplicate above 0.                     --
+non_ascii_title_fallback_test() (
+  set +e
+  local work out status
+  work="${TMPDIR:-/tmp}/mogui-issue-similar-nonascii.$$"
+  trap 'rm -rf "${work:?}"' EXIT
+  out=$(run_with_stub \
+    '#!/bin/bash
+echo "[{\"number\": 22, \"title\": \"이슈 제목이 한글로만 되어 있을 때\", \"state\": \"open\", \"url\": \"https://example.invalid/22\", \"body\": \"\"}]"' \
+    "$work" --repo acme/widgets --title "이슈 제목이 한글로만 되어 있을 때" --json 2>&1)
+  status=$?
+  [ "$status" -eq 0 ] || { echo "FAIL: unexpected exit $status for a Korean title" >&2; printf '%s\n' "$out" >&2; return 1; }
+  case "$out" in
+    *'"words": []'*) echo "FAIL: a Korean title should still yield words, not an empty list" >&2; printf '%s\n' "$out" >&2; return 1 ;;
+    *'"score": 2'*) ;;
+    *) echo "FAIL: an exact Korean-title duplicate should score exactly 2 (two >=3-char words): $out" >&2; return 1 ;;
+  esac
+  echo "ok   : a non-ASCII title yields real words and scores its own exact duplicate above 0"
+)
+non_ascii_title_fallback_test || exit 1
 
 # --- Case: the gh invocation itself carries --repo, --state, and a bare ----
 # --- -- separator ahead of the query, so a regression dropping one of      --

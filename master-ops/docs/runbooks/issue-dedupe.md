@@ -12,10 +12,11 @@ scripts/issue-similar --repo <owner/name> --title "<text>" [--body-file <file>] 
 ```
 
 It builds a handful of search queries from the title and body (backtick spans, quoted
-strings, and slash-paths first, then a bounded set of distinctive plain words), runs each
-through `gh search issues`, and scores every issue returned against the full set of
-extracted terms: a shared path, script name, or quoted string is worth 3 points, a shared
-plain word 1, and anything scoring 3 or more is printed as a likely duplicate. At most five
+strings, and slash-paths first, then a bounded set of distinctive plain words, up to
+`--max-code-terms` and `--max-words` of each), runs each through `gh search issues`, and
+scores every issue returned against that same bounded term set: a shared path, script name,
+or quoted string is worth 3 points, a shared plain word 1, and anything scoring 3 or more is
+printed as a likely duplicate. At most five
 candidates print by default (`--limit` to change that); `--json` emits the same ranking as
 structured data for the sweep below. `--exclude <n>` drops that issue number from the
 results, the mechanism the sweep needs so an issue never reports itself as its own
@@ -26,7 +27,7 @@ duplicate.
 - `0`: no candidate scored at or above the threshold, including when none was found at all.
 - `3`: at least one candidate scored at or above the threshold. Stop and read before filing.
 - `1`: a `gh` call failed, timed out, returned nothing, or returned something that was not a
-  parseable JSON list. Never `0` on a failure — a caller that only checks for zero would
+  parseable JSON list. Never `0` on a failure: a caller that only checks for zero would
   otherwise read a broken `gh` call as "no duplicates."
 
 ## (a) Before filing an issue
@@ -42,30 +43,34 @@ completion, not that nothing matched. Every issue filed this way carries
 
 The master runs this, or dispatches it, once a week:
 
-1. List every open issue's number, title, and assignees (`gh issue list --state open --json
-   number,title,body,assignees`).
-2. For each one, run `issue-similar --json --exclude <its own number>` against the others.
+1. List every open issue's number, title, body, and assignees (`gh issue list --state open
+   --limit 1000 --json number,title,body,assignees`; the default limit is 30, which silently
+   drops older issues once the repository has more open issues than that).
+2. For each one, run `issue-similar --json --exclude <its own number>` with that issue's own
+   title as `--title` and its own body piped in via `--body-file -`, searching the others.
 3. Collect every pair that crossed the threshold into a short table: issue, candidate,
    score, matched terms.
 4. List every open issue whose `assignees` came back empty in step 1, in its own short
-   table (issue, title) — a second, unrelated kind of gap the same sweep surfaces for free.
+   table (issue, title): a second, unrelated kind of gap the same sweep surfaces for free.
 5. The master reads both tables: closes a duplicate only with a comment linking the
    survivor, never a silent batch close, and assigns an unassigned issue or says why it
    stays unassigned.
 
 Pacing: GitHub's search endpoint allows 30 requests per minute, and one `issue-similar`
-call can itself make several (`--max-words` default 4 plus `--max-code-terms` default 3,
-paced `--query-delay` seconds apart, 2.0s by default). Run the sweep sequentially, issue by
-issue, and do not lower `--query-delay` to speed it up; on a 24-issue repository the
-sequential pacing takes a few minutes, which is the right trade against a rate-limited `gh`
-call turning into a false "failure, not duplicate" read.
+call can itself make several (`--max-words` default 4 plus `--max-code-terms` default 3).
+Every query, including the last one in a run, is followed by a `--query-delay` sleep (2.0s
+by default), so back-to-back invocations in the sweep's own loop are paced the same as
+queries inside one invocation. Run the sweep sequentially, issue by issue, and do not lower
+`--query-delay` to speed it up; on a 24-issue repository the sequential pacing takes a few
+minutes, which is the right trade against a rate-limited `gh` call turning into a false
+"failure, not duplicate" read.
 
 ## Honest limits
 
 This is lexical overlap, not semantic understanding: two issues about the same bug
 described in unrelated words score low, and the threshold (3 points: one shared path/quoted
 string, or three shared plain words) is a tuned heuristic, not a guarantee. Common
-repository boilerplate — "follow-ups", "from #NNN review", "dispatch" — scores as an
+repository boilerplate ("follow-ups", "from #NNN review", "dispatch") scores as an
 ordinary shared word like any other; a title built mostly from that vocabulary scores
 indistinguishable near-matches against several unrelated issues, which is why path and
 quoted-string terms are weighted higher; a title and body with neither will fall back to
@@ -77,9 +82,11 @@ land below the threshold even against its own exact duplicate, since each matche
 worth only 1 point and there may be only two or three of them to match; the fallback that
 keeps the words at all (instead of scoring every candidate 0) only closes part of that gap.
 A bare one-segment slash phrase (`and/or`, `CI/CD`, a date like `2026/11/17`) is deliberately
-not scored as a path or script name — real paths and script names in this repository nearly
-always have a segment longer than four characters — but an unusually short real path
-component could in principle fall on either side of that cutoff.
+not scored as a path or script name, since real paths and script names in this repository
+nearly always have a segment longer than four characters, but an unusually short real path
+component could in principle fall on either side of that cutoff. Matching is whole-word
+(`auth` does not match `oauth`, `base` does not match `database`), so it still needs the
+exact token to appear.
 
 Wiring this into `rules/standing-rules.md` or `scripts/dispatch` so filing is checked
 automatically is a deliberate follow-up, after #338 lands (that PR is already changing both

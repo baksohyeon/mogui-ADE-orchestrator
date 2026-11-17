@@ -5,7 +5,7 @@ Builds a handful of small search queries from the title and body (GitHub's
 issue search ANDs every bare word in one query, so a reworded title sent
 whole matches nothing; one term per query is what actually finds a near
 match), runs them through `gh search issues`, and locally scores every
-returned issue against the full set of extracted terms. A shared file path,
+returned issue against that same bounded term set. A shared file path,
 script name, or quoted/backticked string counts for more than a shared plain
 word, because two issues about the same bug usually share the former and
 almost any two issues share a few of the latter.
@@ -16,7 +16,7 @@ almost any two issues share a few of the latter.
 Exit 0 when nothing scores at or above the threshold (including when no
 candidate turns up at all), 3 when at least one does, 1 when a `gh` call
 fails, times out, or returns something that is not a parseable JSON list
-(never 0 on a failure — those are three different outcomes a caller needs
+(never 0 on a failure: those are three different outcomes a caller needs
 to tell apart). See docs/runbooks/issue-dedupe.md for how this fits into
 filing and the weekly sweep.
 """
@@ -69,7 +69,7 @@ def looks_like_a_path(candidate: str) -> bool:
     A real path or script name has at least one segment longer than this;
     ponytail: a fixed length cutoff, not a filesystem-aware check, so an
     unusually short real segment (`tests/cli`) can still slip past either
-    way — widen if that turns out to matter in practice."""
+    way: widen if that turns out to matter in practice."""
     segments = candidate.split("/")
     if all(segment.isdigit() for segment in segments):
         return False
@@ -97,11 +97,14 @@ def extract_code_terms(text: str) -> list[str]:
 
 
 def strip_code_terms(text: str) -> str:
-    """Remove backtick spans, quoted strings, and slash-paths before plain
-    word extraction, so a path's own segments are not also counted as
-    ordinary words."""
-    for pattern in (CODE_SPAN_RE, QUOTED_RE, PATH_RE):
-        text = pattern.sub(" ", text)
+    """Remove backtick spans, quoted strings, and accepted slash-paths
+    before plain word extraction, so a path's own segments are not also
+    counted as ordinary words. A slash phrase `looks_like_a_path` rejects
+    (`and/or`, a date) is left in place, so its words still reach
+    extract_words normally."""
+    text = CODE_SPAN_RE.sub(" ", text)
+    text = QUOTED_RE.sub(" ", text)
+    text = PATH_RE.sub(lambda m: " " if looks_like_a_path(m.group(0)) else m.group(0), text)
     return text
 
 
@@ -123,7 +126,7 @@ def collect_words(title: str, body: str, max_words: int) -> list[str]:
     """Title words always come before body words, so a few longer but
     generic body words can never crowd every title word out of a bounded
     slice (the title is the part a caller actually wrote to describe the
-    issue; the body is often boilerplate — repro steps, environment, a log
+    issue; the body is often boilerplate, repro steps, environment, a log
     dump). Falls back to keeping stopwords when both are otherwise empty,
     so a title/body with nothing else to go on still yields something to
     search and score against, instead of silently matching nothing."""
@@ -137,6 +140,19 @@ def collect_words(title: str, body: str, max_words: int) -> list[str]:
     seen = set(title_words)
     combined = title_words + [w for w in body_words if w not in seen]
     return combined[:max_words]
+
+
+def dedupe_case_insensitive(terms: list[str]) -> list[str]:
+    """First occurrence wins; a code term and a plain word that are the same
+    text (`` `crash` `` and `crash`) must not run the same search twice."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for term in terms:
+        key = term.lower()
+        if key not in seen:
+            seen.add(key)
+            out.append(term)
+    return out
 
 
 def gh_search(repo: str, query: str, state: str, fetch_limit: int) -> list[dict[str, Any]]:
@@ -183,16 +199,20 @@ def gather_candidates(
     repo: str, queries: list[str], state: str, fetch_limit: int, query_delay: float
 ) -> dict[int, dict[str, Any]]:
     """Run every query and merge results by issue number. Any single query
-    failing aborts the whole gather — this is a merge, not a best-effort
+    failing aborts the whole gather: this is a merge, not a best-effort
     scan, so one bad call must not silently shrink the candidate pool."""
     candidates: dict[int, dict[str, Any]] = {}
-    for i, query in enumerate(queries):
-        if i > 0:
-            time.sleep(query_delay)
+    for query in queries:
         for item in gh_search(repo, query, state, fetch_limit):
             number = item.get("number")
             if isinstance(number, int) and number not in candidates:
                 candidates[number] = item
+        # Paced after every query, the last one included: the weekly sweep
+        # calls this once per open issue, back to back, so the delay has to
+        # land at the process boundary too, not just between queries inside
+        # one invocation, or back-to-back invocations would have no pacing
+        # between them at all.
+        time.sleep(query_delay)
     return candidates
 
 
@@ -207,7 +227,7 @@ def score_candidate(
             matched.append(term)
             score += CODE_TERM_WEIGHT
     for word in words:
-        if word in haystack:
+        if re.search(rf"(?<!\w){re.escape(word)}(?!\w)", haystack):
             matched.append(word)
             score += WORD_WEIGHT
     return score, matched
@@ -284,10 +304,12 @@ def main(argv: list[str] | None = None) -> int:
 
     code_terms = extract_code_terms(f"{args.title}\n{body}")[: args.max_code_terms]
     words = collect_words(args.title, body, args.max_words)
-    queries = code_terms + words
+    queries = dedupe_case_insensitive(code_terms + words)
     if not queries:
-        queries = [args.title.strip()] if args.title.strip() else []
-    if not queries:
+        # No raw-title fallback here: a query with nothing to show for it
+        # would still run a search, but words/code_terms (what scoring
+        # matches against) would stay empty, so every candidate would score
+        # 0 and this would exit 0 looking exactly like "no duplicate" found.
         sys.stderr.write("issue-similar: --title has no usable search terms\n")
         return 1
 

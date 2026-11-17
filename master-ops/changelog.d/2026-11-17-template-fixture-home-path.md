@@ -10,10 +10,23 @@
   on an installed host where `dispatch` is already rendered with real absolute
   paths, that substitution was a silent no-op, `dispatch-gate`'s test mock
   became unreachable, and the CLI call failed instead of writing the ledger
-  line the test expected — reproduced locally by rendering a copy of
+  line the test expected; reproduced locally by rendering a copy of
   `dispatch` the way an install would and reading the resulting
   `git_escalation CLI validation did not cover accepted operations and
   refusals` failure. The test now reads whatever value `dispatch`'s own
   `OPS=`/`GATE=` lines currently hold (token or rendered path) before building
   its sandbox, and fails with a named reason instead of silently passing if it
   can't.
+
+  A follow-up master review on the same PR (#341 round 2) found three more
+  gaps. `check_git_escalation_cli` now substitutes the longer of
+  `OPS_REPO`/`RUNTIME_ROOT` first, since one value being a path prefix of the
+  other (for example `RUNTIME_ROOT=/a`, `OPS_REPO=/a/ops`) previously left
+  `OPS` resolved as `$work/ops` instead of `$work`; a new test case renders a
+  copy of `dispatch` with exactly that shape and the function now also reads
+  the rendered `OPS=`/`GATE=` lines back to confirm they resolve to the
+  sandbox root. It also fails by name when the render still contains the
+  original `OPS_REPO`/`RUNTIME_ROOT` value or came out byte-identical to the
+  source, and the empty-value guard names which of the two was unreadable.
+  `test-tracker-check-banner.sh`'s repeated `$TMP/pass-root/$OPS_BASENAME`
+  path is now one variable.

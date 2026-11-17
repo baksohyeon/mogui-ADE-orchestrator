@@ -435,12 +435,13 @@ PY
 
 check_git_escalation_cli() {
   local dispatch="$1" work rendered ledger worktree_path operation result_code line_count
-  local ops_value runtime_value
+  local ops_value runtime_value gate_path
   work="${TMPDIR:-/tmp}/mogui-dispatch-codex-git-cli.$$"
   mkdir -p "$work/scripts" "$work/state"
   trap 'rm -rf "$work"' RETURN
   cp "$(dirname "$dispatch")/approval-prompt-markers.txt" "$work/scripts/approval-prompt-markers.txt"
-  cat > "$work/scripts/dispatch-gate" <<'BIN'
+  gate_path="$work/scripts/dispatch-gate"
+  cat > "$gate_path" <<'BIN'
 #!/bin/bash
 case "$*" in
   *" lock-path") printf '%s\n' "${MOGUI_TEST_LEDGER}.lock" ;;
@@ -448,7 +449,7 @@ case "$*" in
   *) exit 1 ;;
 esac
 BIN
-  chmod +x "$work/scripts/dispatch-gate"
+  chmod +x "$gate_path"
   rendered="$work/scripts/dispatch"
   # $dispatch may still carry its raw OPS_REPO/RUNTIME_ROOT template tokens
   # (running against the template repo) or may already be a rendered,
@@ -458,23 +459,50 @@ BIN
   # substitution to $work is not a silent no-op on an installed host.
   ops_value=$(sed -n 's/^OPS=//p' "$dispatch" | head -n1)
   runtime_value=$(sed -n 's#^GATE=\(.*\)/scripts/dispatch-gate$#\1#p' "$dispatch" | head -n1)
-  if [ -z "$ops_value" ] || [ -z "$runtime_value" ]; then
-    echo "✗ could not read OPS_REPO/RUNTIME_ROOT out of $dispatch's OPS=/GATE= lines" >&2
+  if [ -z "$ops_value" ]; then
+    echo "✗ could not read OPS_REPO out of $dispatch's OPS= line" >&2
+    return 1
+  fi
+  if [ -z "$runtime_value" ]; then
+    echo "✗ could not read RUNTIME_ROOT out of $dispatch's GATE= line" >&2
     return 1
   fi
   # ops_value/runtime_value are arbitrary real filesystem paths once $dispatch
   # is a rendered install, so a sed pattern substitution risks regex
   # metacharacters, the delimiter, or a replacement "&" in the path. Python's
   # str.replace is a literal substring swap with no escaping to get wrong.
+  # One value can be a path prefix of the other (RUNTIME_ROOT /a, OPS_REPO
+  # /a/ops): replacing the shorter one first would eat the prefix out of the
+  # longer path and leave its tail stuck to $work (OPS ends up "$work/ops"
+  # instead of "$work"), so the longer value always goes first.
   python3 - "$dispatch" "$runtime_value" "$ops_value" "$work" > "$rendered" <<'PY'
 import sys
 dispatch_path, runtime_value, ops_value, work = sys.argv[1:5]
 with open(dispatch_path, encoding="utf-8") as fh:
     text = fh.read()
-text = text.replace(runtime_value, work).replace(ops_value, work)
+first, second = sorted((runtime_value, ops_value), key=len, reverse=True)
+text = text.replace(first, work).replace(second, work)
 sys.stdout.write(text)
 PY
   chmod +x "$rendered"
+  if grep -qF -- "$ops_value" "$rendered" || grep -qF -- "$runtime_value" "$rendered"; then
+    echo "✗ sandbox render of $dispatch still contains its real OPS_REPO or RUNTIME_ROOT value" >&2
+    return 1
+  fi
+  if cmp -s "$dispatch" "$rendered"; then
+    echo "✗ sandbox render of $dispatch is byte-identical to the original; nothing was substituted" >&2
+    return 1
+  fi
+  # The two checks above miss the prefix case directly: replacing the shorter
+  # value first fully consumes both occurrences without ever leaving the old
+  # value behind, it just leaves OPS pointing at "$work/ops" instead of
+  # "$work". Read the rendered OPS=/GATE= lines back and require them to
+  # resolve to exactly $work.
+  if [ "$(sed -n 's/^OPS=//p' "$rendered" | head -n1)" != "$work" ] ||
+     [ "$(sed -n 's#^GATE=\(.*\)/scripts/dispatch-gate$#\1#p' "$rendered" | head -n1)" != "$work" ]; then
+    echo "✗ sandbox render of $dispatch resolved OPS/GATE to something other than $work" >&2
+    return 1
+  fi
   ledger="$work/state/dispatch-ledger.jsonl"
   worktree_path="$work/worker"
   for operation in add commit fetch push; do
@@ -504,6 +532,39 @@ PY
       --operation add --escalated yes --refusal "fatal: missing worktree" >/dev/null 2>&1; then
     return 1
   fi
+}
+
+check_git_escalation_cli_prefix_values() {
+  local dispatch="$1" work rendered src_ops src_runtime
+  work="${TMPDIR:-/tmp}/mogui-dispatch-codex-git-cli-prefix.$$"
+  mkdir -p "$work"
+  trap 'rm -rf "$work"' RETURN
+  rendered="$work/dispatch"
+  src_ops=$(sed -n 's/^OPS=//p' "$dispatch" | head -n1)
+  src_runtime=$(sed -n 's#^GATE=\(.*\)/scripts/dispatch-gate$#\1#p' "$dispatch" | head -n1)
+  if [ -z "$src_ops" ] || [ -z "$src_runtime" ]; then
+    echo "✗ could not read OPS_REPO/RUNTIME_ROOT out of $dispatch's OPS=/GATE= lines to build the prefix case" >&2
+    return 1
+  fi
+  # Force RUNTIME_ROOT to resolve as an exact path prefix of OPS_REPO ($work
+  # vs $work/ops), regardless of whether $dispatch is still unrendered or
+  # already carries a real install's own, unrelated paths: hardcoding the
+  # {{RUNTIME_ROOT}}/{{OPS_REPO}} template tokens here would make this case a
+  # silent no-op against an already-rendered dispatch, the exact render-state
+  # assumption this whole fix is about not making.
+  python3 - "$dispatch" "$src_runtime" "$src_ops" "$work" > "$rendered" <<'PY'
+import sys
+dispatch_path, src_runtime, src_ops, work = sys.argv[1:5]
+with open(dispatch_path, encoding="utf-8") as fh:
+    text = fh.read()
+target = {src_runtime: work, src_ops: work + "/ops"}
+for src in sorted(target, key=len, reverse=True):
+    text = text.replace(src, target[src])
+sys.stdout.write(text)
+PY
+  chmod +x "$rendered"
+  cp "$(dirname "$dispatch")/approval-prompt-markers.txt" "$work/approval-prompt-markers.txt"
+  check_git_escalation_cli "$rendered"
 }
 
 if [ "${MUTANT_EXPECTED:-0}" = 1 ]; then
@@ -588,6 +649,12 @@ check_git_escalation_cli "$DISPATCH" || {
   exit 1
 }
 echo "✓ git_escalation CLI accepts the four operations and refuses invalid inputs"
+
+check_git_escalation_cli_prefix_values "$DISPATCH" || {
+  echo "✗ git_escalation CLI sandbox did not resolve OPS/GATE when RUNTIME_ROOT is a path prefix of OPS_REPO" >&2
+  exit 1
+}
+echo "✓ git_escalation CLI sandbox resolves OPS/GATE when RUNTIME_ROOT is a path prefix of OPS_REPO"
 
 work="${TMPDIR:-/tmp}/mogui-dispatch-codex-git-index.$$"
 mkdir -p "$work"

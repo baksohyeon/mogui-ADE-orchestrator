@@ -44,8 +44,9 @@ PY
 env -u BEADS_DIR MOGUI_HOOK_FIRE_LOG="$LOG" MOGUI_SETTINGS_FILE="$TMP/settings.json" MOGUI_HOOKS_DIR="$TMP/hooks" WORKSPACE_ROOT="$TMP" PATH="$TMP/bin:$PATH" bash "$T" >/dev/null 2>&1
 v=$(last_verdict 2>/dev/null || true); [ "$v" = "warn" ] && echo "  ok:   verdict unwired hooks -> warn" || { echo "  FAIL: verdict for unwired hooks expected warn got ${v:-<none>}"; F=1; }
 # Verdict pass: clean wiring and tracker resolution.
-mkdir -p "$TMP/pass-root/$OPS_BASENAME/.beads" "$TMP/pass-hooks" "$TMP/pass-bin"
-printf '#!/usr/bin/env bash\necho "%s"\n' "$TMP/pass-root/$OPS_BASENAME/.beads" > "$TMP/pass-bin/bd"; chmod +x "$TMP/pass-bin/bd"
+PASS_BEADS_DIR="$TMP/pass-root/$OPS_BASENAME/.beads"
+mkdir -p "$PASS_BEADS_DIR" "$TMP/pass-hooks" "$TMP/pass-bin"
+printf '#!/usr/bin/env bash\necho "%s"\n' "$PASS_BEADS_DIR" > "$TMP/pass-bin/bd"; chmod +x "$TMP/pass-bin/bd"
 : > "$TMP/pass-hooks/only-pass.sh"
 printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"command":"bash /x/hooks/only-pass.sh"}]}]}}' > "$TMP/pass-settings.json"
 env -u BEADS_DIR MOGUI_HOOK_FIRE_LOG="$LOG" MOGUI_SETTINGS_FILE="$TMP/pass-settings.json" MOGUI_HOOKS_DIR="$TMP/pass-hooks" WORKSPACE_ROOT="$TMP/pass-root" PATH="$TMP/pass-bin:$PATH" bash "$T" >/dev/null 2>&1

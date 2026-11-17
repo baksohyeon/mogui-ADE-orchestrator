@@ -521,6 +521,35 @@ CLAUDE_MCP_CONFIG="${CLAUDE_MCP_CONFIG:-${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json
 CLAUDE_USER_SETTINGS="${CLAUDE_USER_SETTINGS:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json}"
 CODEX_MCP_CONFIG="${CODEX_MCP_CONFIG:-${CODEX_HOME:-$HOME/.codex}/config.toml}"
 
+# This seat's own host runtime (#328 follow-up, owner postmortem: an
+# `Infra: code-review-graph OK ... registered` line printed on a
+# Claude-hosted seat whose Claude config had no such server, because the
+# check accepted a Codex-only registration as good enough regardless of
+# which host is actually running it). Same resolution order `scripts/dispatch`
+# already uses for `MASTER_HOST_RUNTIME` (`MOGUI_MASTER_HOST_RUNTIME` env
+# override, then `master_host_runtime` in the instance runtime config), minus
+# dispatch's own hardcoded fallback: an unmeasurable host must warn here
+# (every check below), never guess one and risk a false OK.
+INSTANCE_RUNTIME_CONFIG="${INSTANCE_RUNTIME_CONFIG:-$OPS_DIR/config/instance-runtime.json}"
+measured_master_host_runtime() {
+  [ -f "$INSTANCE_RUNTIME_CONFIG" ] || return 1
+  python3 -c "
+import json,sys
+try:
+    v=json.load(open('$INSTANCE_RUNTIME_CONFIG')).get('master_host_runtime') or ''
+except Exception:
+    v=''
+print(v)
+sys.exit(0 if v else 1)" 2>/dev/null
+}
+if [ -n "${MOGUI_MASTER_HOST_RUNTIME:-}" ]; then
+  MASTER_HOST_RUNTIME="$MOGUI_MASTER_HOST_RUNTIME"
+elif MASTER_HOST_RUNTIME=$(measured_master_host_runtime); then
+  :
+else
+  MASTER_HOST_RUNTIME=""
+fi
+
 # $1 = tool name. Returns 0 when Codex's config.toml names it with an
 # active entry, 1 otherwise (absent, or present with `enabled = false`).
 # Parses with `tomllib` when the running Python is 3.11+; a host still on
@@ -596,13 +625,20 @@ EOFCODEX
 # in `disabledMcpjsonServers` -- a disabled entry wins regardless of which
 # file sets it (coordinator addendum 2026-11-16, peer measurement: a server
 # present in .mcp.json was still invisible to Claude master sessions because
-# of exactly this). Codex: `codex_mcp_reachable` above, checked even when
-# Claude's own verdict is disabled or pending, since either host can carry
-# the session -- a Claude-side gap is not the final answer while Codex
-# might still have an active entry. Reads configuration files only; never
-# calls `claude mcp list`, which health-checks every server and is slow.
+# of exactly this). Codex: `codex_mcp_reachable` above.
+#
+# #328 follow-up (owner direction): registration is judged for the host
+# actually running this check, resolved into MASTER_HOST_RUNTIME above.
+# `claude`/`codex` each require their OWN registration; a registration on
+# the OTHER host is named and still a gap, not a pass -- this check used to
+# accept either host's registration regardless of which one is running it,
+# which is exactly the false `OK` the owner measured on a Claude-hosted seat
+# whose only registration was Codex's. An unmeasurable host (neither the env
+# override nor the instance config names one) can never return 0 either:
+# it names both sides it did find reachable, if any, so this stays a WARN,
+# never a guessed OK.
 infra_mcp_status() {
-  local tool="$1" status claude_reason=""
+  local tool="$1" status claude_reason="" claude_ok=0
   if status=$(TOOL="$tool" \
     CLAUDE_MCP_CONFIG="$CLAUDE_MCP_CONFIG" \
     CLAUDE_PROJECT_PATHS="$WORKSPACE_ROOT:$OPS_DIR" \
@@ -678,7 +714,7 @@ EOFMCP
   ); then
     case "$status" in
       reachable:*)
-        return 0
+        claude_ok=1
         ;;
       disabled:*)
         claude_reason="disabled via ${status#disabled:}"
@@ -688,10 +724,38 @@ EOFMCP
         ;;
     esac
   fi
-  if codex_mcp_reachable "$tool"; then
-    return 0
-  fi
-  echo "${claude_reason:-not registered as an MCP server (checked Claude user config, project .mcp.json, Codex config.toml)}"
+  local codex_ok=0
+  codex_mcp_reachable "$tool" && codex_ok=1
+  local absent_reason="${claude_reason:-not registered as an MCP server (checked Claude user config, project .mcp.json, Codex config.toml)}"
+
+  case "$MASTER_HOST_RUNTIME" in
+    claude)
+      [ "$claude_ok" = 1 ] && return 0
+      if [ "$codex_ok" = 1 ]; then
+        echo "registered for codex, not claude (this session measured its host as claude)"
+      else
+        echo "$absent_reason"
+      fi
+      ;;
+    codex)
+      [ "$codex_ok" = 1 ] && return 0
+      if [ "$claude_ok" = 1 ]; then
+        echo "registered for claude, not codex (this session measured its host as codex)"
+      else
+        echo "$absent_reason"
+      fi
+      ;;
+    *)
+      if [ "$claude_ok" = 1 ] || [ "$codex_ok" = 1 ]; then
+        local found=""
+        [ "$claude_ok" = 1 ] && found="claude"
+        [ "$codex_ok" = 1 ] && found="${found:+$found, }codex"
+        echo "registered for $found, but this session's own host is unmeasurable (set MOGUI_MASTER_HOST_RUNTIME or master_host_runtime in $INSTANCE_RUNTIME_CONFIG) so that registration cannot be confirmed as this host's own"
+      else
+        echo "$absent_reason; this session's host is also unmeasurable (set MOGUI_MASTER_HOST_RUNTIME or master_host_runtime in $INSTANCE_RUNTIME_CONFIG)"
+      fi
+      ;;
+  esac
   return 1
 }
 
@@ -793,6 +857,81 @@ else
   echo "Infra: ctx OK runs, registered, covers every provider Orca reports claude/codex sessions for"
 fi
 
+# ctx-upgrade: #328 follow-up, from the #317 seat postmortem -- the root
+# cause there was an install stuck on an old ctx with `ctx upgrade status` in
+# `State error` (a past DNS failure fetching release metadata) while a newer
+# release had long since closed the very symptoms the `Infra: ctx` check
+# above exists to catch. Reads only `ctx upgrade status --format json`
+# (never `ctx upgrade check`, which hits the network and can itself apply an
+# upgrade under this host's own auto-upgrade mode -- a side effect a bounded,
+# read-only self-check must not have). `state.latest_version` is whatever
+# release ctx's own background checker last recorded, so this can lag a
+# release that shipped after that last check; it is still the only
+# network-free signal available here. Compares current_version against it
+# numerically (dotted integers), not as strings, so "2.10.0" reads as newer
+# than "2.9.0".
+ctx_upgrade_warn=""
+if ! command -v ctx >/dev/null 2>&1; then
+  ctx_upgrade_warn="absent from PATH"
+else
+  infra_capture ctx_upgrade_status_json ctx_upgrade_status_rc infra_with_timeout "$INFRA_TIMEOUT_SECONDS" ctx upgrade status --format json
+  if [ "$ctx_upgrade_status_rc" -ne 0 ]; then
+    case "$ctx_upgrade_status_rc" in
+      124 | 137 | 143)
+        ctx_upgrade_warn="timed out after ${INFRA_TIMEOUT_SECONDS}s"
+        ;;
+      *)
+        ctx_upgrade_warn=$(printf '%s\n' "$ctx_upgrade_status_json" | head -1)
+        [ -n "$ctx_upgrade_warn" ] || ctx_upgrade_warn="ctx upgrade status failed with no output"
+        ;;
+    esac
+  else
+    ctx_upgrade_warn=$(CTX_UPGRADE_STATUS="$ctx_upgrade_status_json" python3 << 'EOFCTXUP'
+import json, os, sys
+
+try:
+    data = json.loads(os.environ["CTX_UPGRADE_STATUS"])
+except Exception as exc:
+    print(f"could not parse ctx upgrade status --format json output ({exc})")
+    raise SystemExit
+
+state = data.get("state") if isinstance(data.get("state"), dict) else {}
+status = state.get("status")
+current = data.get("current_version") or state.get("current_version")
+latest = state.get("latest_version")
+
+if status == "error":
+    print(f"ctx upgrade status reports State error (current {current or 'unknown'})")
+    raise SystemExit
+
+if not current or not latest:
+    print(f"ctx upgrade status has no current_version/latest_version to compare (status={status!r})")
+    raise SystemExit
+
+def version_tuple(v):
+    parts = []
+    for p in str(v).split("."):
+        try:
+            parts.append(int(p))
+        except ValueError:
+            return None
+    return tuple(parts) if parts else None
+
+current_t, latest_t = version_tuple(current), version_tuple(latest)
+if current_t is None or latest_t is None:
+    print(f"could not compare ctx versions current={current!r} latest={latest!r}")
+elif current_t < latest_t:
+    print(f"ctx {current} is behind {latest} (the latest version ctx last recorded; run 'ctx upgrade check')")
+EOFCTXUP
+) || ctx_upgrade_warn="ctx upgrade state check failed to run"
+  fi
+fi
+if [ -n "$ctx_upgrade_warn" ]; then
+  echo "Infra: ctx-upgrade WARN $ctx_upgrade_warn"
+else
+  echo "Infra: ctx-upgrade OK up to date"
+fi
+
 # code-review-graph: runs, registered, and every repo in its multi-repo
 # registry (~/.code-review-graph/registry.json) has a graph no older than
 # CODE_REVIEW_GRAPH_STALE_DAYS. Reads the registry and each repo's
@@ -863,7 +1002,13 @@ if [ -z "$crg_warn" ]; then
   if [ "$crg_version_rc" -ne 0 ]; then
     case "$crg_version_rc" in
       124 | 137 | 143)
-        crg_warn="timed out after ${INFRA_TIMEOUT_SECONDS}s"
+        # #328 follow-up: this launcher is almost always uvx, and a cold uv
+        # cache makes its first run download the package and write that
+        # cache -- real filesystem writes a "read-only check" otherwise
+        # claims not to make, and real network time that can outrun this
+        # bound on a slow link even though the command would have succeeded.
+        # Name that as the likely cause rather than a bare "timed out".
+        crg_warn="timed out after ${INFRA_TIMEOUT_SECONDS}s (likely cause: a first run of '$crg_launcher_cmd $crg_launcher_spec' downloads the package and populates its cache on a cold host/network; rerun once that cache is warm)"
         ;;
       *)
         crg_warn=$(printf '%s\n' "$crg_version_out" | head -1)

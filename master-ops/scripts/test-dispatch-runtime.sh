@@ -63,7 +63,7 @@ cursor_multivendor_test() (
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-cursor-test.$$"
   mkdir -p "$work"
-  trap 'rm -rf "$work"' EXIT
+  trap 'rm -rf "${work:?}"' EXIT
   cat > "$work/cursor-agent" <<'BIN'
 #!/bin/bash
 [ "$1" = models ] || exit 1
@@ -161,7 +161,7 @@ vendor_mismatch_measurement_test() (
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-vendor-mismatch-test.$$"
   mkdir -p "$work"
-  trap 'rm -rf "$work"' EXIT
+  trap 'rm -rf "${work:?}"' EXIT
   script_file="$work/run.sh"
   {
     echo 'set -u'
@@ -307,7 +307,7 @@ checkonly_ledger_test() (
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-checkonly-test.$$"
   mkdir -p "$work"
-  trap 'rm -rf "$work"' EXIT
+  trap 'rm -rf "${work:?}"' EXIT
   gate="$work/dispatch-gate"
   ledger="$work/ledger.jsonl"
   policy="$work/policy.json"
@@ -489,7 +489,7 @@ state_dir_seam_test() (
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-state-dir-test.$$"
   mkdir -p "$work"
-  trap 'rm -rf "$work"' EXIT
+  trap 'rm -rf "${work:?}"' EXIT
   fake_home="$work/home"
   mkdir -p "$fake_home"
 
@@ -608,7 +608,7 @@ contract_delivery_test() (
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-contract-test.$$"
   mkdir -p "$work"
-  trap 'rm -rf "$work"' EXIT
+  trap 'rm -rf "${work:?}"' EXIT
   contract="$work/src-contract.md"
   printf '# fake contract\n\nbody text\n' > "$contract"
   fake_home="$work/home"
@@ -707,7 +707,7 @@ cursor_pretrust_test() (
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-cursor-pretrust-test.$$"
   mkdir -p "$work"
-  trap 'rm -rf "$work"' EXIT
+  trap 'rm -rf "${work:?}"' EXIT
   cat > "$work/cursor-worker-pretrust" <<'BIN'
 #!/bin/bash
 printf '%s/.workspace-trusted: already trusted\n' "$1"
@@ -790,7 +790,7 @@ claude_pretrust_test() (
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-claude-pretrust-test.$$"
   mkdir -p "$work"
-  trap 'rm -rf "$work"' EXIT
+  trap 'rm -rf "${work:?}"' EXIT
   cat > "$work/claude-worker-pretrust" <<'BIN'
 #!/bin/bash
 printf '%s/.claude.json: already trusted\n' "$1"
@@ -940,7 +940,7 @@ pretrust_pane_reuse_skip_test() (
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-pretrust-pane-reuse-test.$$"
   mkdir -p "$work"
-  trap 'rm -rf "$work"' EXIT
+  trap 'rm -rf "${work:?}"' EXIT
   cat > "$work/fake-pretrust" <<'BIN'
 #!/bin/bash
 exit 9
@@ -1024,7 +1024,7 @@ reused_worktree_alignment_test() (
   selected="$work/selected"
   other="$work/other"
   mkdir -p "$selected" "$other"
-  trap 'rm -rf "$work"' EXIT
+  trap 'rm -rf "${work:?}"' EXIT
 
   write_script() {
     local outfile="$1" terminal="$2" worktree="$3" terminal_worktree="$4" terminal_identity="${5:-}" runtime="${6:-codex}"
@@ -1172,7 +1172,7 @@ claude_hook_trust_marker_test() (
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-claude-hook-trust-test.$$"
   mkdir -p "$work"
-  trap 'rm -rf "$work"' EXIT
+  trap 'rm -rf "${work:?}"' EXIT
 
   pane=' Accessing workspace:
 
@@ -1246,7 +1246,7 @@ fresh_claude_prompt_marker_test() (
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-fresh-claude-prompt-test.$$"
   mkdir -p "$work"
-  trap 'rm -rf "$work"' EXIT
+  trap 'rm -rf "${work:?}"' EXIT
 
   pane=$(printf '%s\n%s\n%s\n%s\n%s' \
     '──────────────────────────────────────────────────────────────────────────────────────────────────────────────' \
@@ -1312,7 +1312,7 @@ delivery_result_test() (
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-delivery-result-test.$$"
   mkdir -p "$work"
-  trap 'rm -rf "$work"' EXIT
+  trap 'rm -rf "${work:?}"' EXIT
 
   run_case() {  # pre post status want
     local body="$1" pre="$2" post="$3" dstatus="$4" want="$5" out
@@ -1402,7 +1402,7 @@ orca_turn_signal_test() (
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-orca-turn-signal-test.$$"
   mkdir -p "$work/bin"
-  trap 'rm -rf "$work"' EXIT
+  trap 'rm -rf "${work:?}"' EXIT
 
   cat > "$work/bin/orca" <<'BIN'
 #!/bin/bash
@@ -1566,12 +1566,14 @@ codex_launch_flags_test() (
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-codex-launch-test.$$"
   mkdir -p "$work"
-  trap 'rm -rf "$work"' EXIT
+  trap 'rm -rf "${work:?}"' EXIT
   mcp_config="$(dirname "$dispatch")/../templates/mcp-servers.json"
   # Read the launcher command and the pin (args[0]) from the shipped
-  # code-review-graph entry, rather than hand-typing a second copy here
-  # that a launcher or version change would have to catch independently.
-  crg_entry=$(python3 -c "import json,sys; e=json.load(open(sys.argv[1]))['mcpServers']['code-review-graph']; print(e['command']); print(e['args'][0])" "$mcp_config") \
+  # code-review-graph entry through install-mcp-config --print-entry,
+  # rather than hand-typing a second JSON parse here (#328: this one-liner
+  # used to be duplicated verbatim in test-dispatch-codex-instance-config.sh
+  # too).
+  crg_entry=$("$(dirname "$dispatch")/install-mcp-config" --print-entry code-review-graph "$mcp_config") \
     || { echo "FAIL: could not read the code-review-graph entry from $mcp_config" >&2; return 1; }
   crg_launcher_cmd=$(printf '%s\n' "$crg_entry" | sed -n 1p)
   crg_pin_spec=$(printf '%s\n' "$crg_entry" | sed -n 2p)
@@ -1651,7 +1653,7 @@ worker_settings_test() (
   done
   work="${TMPDIR:-/tmp}/mogui-dispatch-worker-settings-test.$$"
   mkdir -p "$work/state" "$work/worktree"
-  trap 'rm -rf "$work"' EXIT
+  trap 'rm -rf "${work:?}"' EXIT
   write_run() {  # worktree [mcp_servers_config]
     {
       echo 'set -u'
@@ -1806,7 +1808,7 @@ approval_markers_startup_test() (
   local dispatch="$1" work out status
   work="${TMPDIR:-/tmp}/mogui-dispatch-approval-markers-test.$$"
   mkdir -p "$work"
-  trap 'rm -rf "$work"' EXIT
+  trap 'rm -rf "${work:?}"' EXIT
   cp "$dispatch" "$work/dispatch"
   out=$(bash "$work/dispatch" 2>&1 </dev/null)
   status=$?
@@ -1859,7 +1861,7 @@ codex_start_screen_test() (
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-codex-start-test.$$"
   mkdir -p "$work"
-  trap 'rm -rf "$work"' EXIT
+  trap 'rm -rf "${work:?}"' EXIT
 
   run_case() {  # fn-body  pane-text
     local body="$1" pane="$2" script_file="$work/case.sh"
@@ -2038,7 +2040,7 @@ codex_start_screen_wiring_test() (
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-codex-wiring-test.$$"
   mkdir -p "$work"
-  trap 'rm -rf "$work"' EXIT
+  trap 'rm -rf "${work:?}"' EXIT
 
   cat > "$work/orca" <<'BIN'
 #!/bin/bash
@@ -2174,7 +2176,7 @@ codex_hooks_vet_test() (
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-hooks-vet-test.$$"
   mkdir -p "$work/pass" "$work/builtin" "$work/badpath" "$work/badword" "$work/badshape" "$work/missing" "$work/topempty" "$work/toplist" "$work/orcahook" "$work/commenthash" "$work/redirect"
-  trap 'rm -rf "$work"' EXIT
+  trap 'rm -rf "${work:?}"' EXIT
 
   cat > "$work/pass/hooks.json" <<'EOF'
 {"hooks": {"PreToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "echo hi"}]}]}}
@@ -2519,7 +2521,7 @@ codex_hooks_vet_wiring_test() (
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-hooks-wiring-test.$$"
   mkdir -p "$work/fakehome-pass/.codex" "$work/fakehome-fail/.codex" "$work/default-worktree"
-  trap 'rm -rf "$work"' EXIT
+  trap 'rm -rf "${work:?}"' EXIT
 
   cat > "$work/fakehome-pass/.codex/hooks.json" <<'EOF'
 {"hooks": {"PreToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "echo hi"}]}]}}
@@ -3005,7 +3007,7 @@ standing_rules_missing_file_test() (
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-standing-rules-missing-test.$$"
   mkdir -p "$work/scripts"
-  trap 'rm -rf "$work"' EXIT
+  trap 'rm -rf "${work:?}"' EXIT
 
   write_script() {
     local outfile="$1"
@@ -3112,7 +3114,7 @@ standing_rules_append_test() (
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-standing-rules-test.$$"
   mkdir -p "$work/rules" "$work/scripts"
-  trap 'rm -rf "$work"' EXIT
+  trap 'rm -rf "${work:?}"' EXIT
   cat > "$work/rules/standing-rules.md" <<'RULES'
 ## headless
 
@@ -3304,7 +3306,7 @@ mail_before_done_always_test() (
 
   work="${TMPDIR:-/tmp}/mogui-dispatch-mail-before-done-test.$$"
   mkdir -p "$work/rules" "$work/scripts"
-  trap 'rm -rf "$work"' EXIT
+  trap 'rm -rf "${work:?}"' EXIT
   cat > "$work/rules/standing-rules.md" <<'RULES'
 ## headless
 

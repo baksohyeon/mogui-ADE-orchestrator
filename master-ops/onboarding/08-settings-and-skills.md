@@ -125,37 +125,15 @@ into). Measured 2026-11-16 against `code-review-graph@2.4.0`: `serve` starts wit
 a non-repository directory such as `{{WORKSPACE_ROOT}}` — every exposed tool instead takes an explicit
 `repo_root` argument per call, and a call that omits it from a non-repository cwd fails with a named,
 catchable error rather than a silent wrong answer. The shipped entry therefore stays bare
-(`uvx code-review-graph@<pin> serve`), the same command a worker gets through `--mcp-config`. This
-command refuses to touch the destination file when it already exists and is not valid JSON, so a
-malformed `.mcp.json` is reported rather than silently replaced:
+(`uvx code-review-graph@<pin> serve`), the same command a worker gets through `--mcp-config`. Run the
+install script, the one place this merge is implemented (`scripts/test-install-mcp-config.sh` tests it
+directly); it refuses to touch the destination file when it already exists and is not a JSON object with
+a JSON-object `mcpServers`, so a malformed `.mcp.json` is reported rather than silently replaced, and it
+is idempotent (a second run leaves the file byte-identical):
 
-<!-- crg-mcp-merge:start -->
 ```console
-$ python3 -c '
-import json, os, sys
-
-dest, pinned_path = sys.argv[1], sys.argv[2]
-
-current = {}
-if os.path.exists(dest):
-    with open(dest, encoding="utf-8") as fh:
-        raw = fh.read()
-    try:
-        current = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        sys.exit(f"refusing to merge: {dest} is not valid JSON ({exc}); fix or remove it by hand first")
-
-with open(pinned_path, encoding="utf-8") as fh:
-    pinned = json.load(fh)
-
-current.setdefault("mcpServers", {}).update(pinned["mcpServers"])
-
-with open(dest, "w", encoding="utf-8") as fh:
-    json.dump(current, fh, indent=2)
-    fh.write("\n")
-' "{{WORKSPACE_ROOT}}/.mcp.json" "{{RUNTIME_ROOT}}/master-ops/templates/mcp-servers.json"
+$ "{{RUNTIME_ROOT}}/master-ops/scripts/install-mcp-config" "{{WORKSPACE_ROOT}}"
 ```
-<!-- crg-mcp-merge:end -->
 
 A project-scope `.mcp.json` entry stays invisible to a Claude master session unless some settings file
 also lists it in `enabledMcpjsonServers` (or sets `enableAllProjectMcpServers`) — the exact gap the measured

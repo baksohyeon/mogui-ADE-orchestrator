@@ -4,7 +4,9 @@
 # regardless of what else passed. One entry per line; blank lines and lines
 # starting with "#" are ignored. An entry ending in "/" matches that path and
 # everything under it, the same convention master-ops/MANIFEST.json's
-# instance_owned list uses. Everything else is an exact path match.
+# instance_owned list uses. An entry containing "*", "?", or "[" is matched
+# with Python's fnmatch (its "*" already crosses "/", so "a/**" and "a/*"
+# match the same set of paths). Everything else is an exact path match.
 #
 # Stop-list item 1: charter, workspace card, role state, boot comparison set.
 master-ops/docs/charter/
@@ -63,6 +65,7 @@ src/master_runtime/core/instance_runtime_config.py
 src/master_runtime/core/worker_reap.py
 master-ops/scripts/lib/**
 master-ops/scripts/template-*
+master-ops/scripts/template_*
 master-ops/skills/**
 master-ops/onboarding/**
 master-ops/config/merge-ready-bots.txt

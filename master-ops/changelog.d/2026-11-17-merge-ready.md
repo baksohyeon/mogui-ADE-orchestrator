@@ -2,22 +2,25 @@
   (#330): one measurement, run by a worker before `worker_done` and by the master before merge.
   Exit `0` merge, `1` not ready (including a `gh` call or the invocation itself failing to run),
   `2` ask the owner, with one summary line naming every failing or asking item. Measures: every
-  required check (`gh pr checks --required`, branch protection's own list) has bucket `pass`,
-  except one the PR body names `rate-limited:`; every bot review on the exact head is not pending
-  or changes-requested; zero open review threads; the test suite re-run from a tarball of the
-  head, with one named deselect for the test that needs a `.git`; a `merge-ready-review-pass
-  sha=... critical=... important=...` marker recorded for the exact head with no Critical or
-  Important findings; and the stop list in `config/merge-ready-stop-paths.txt` (charter,
-  workspace card, role state, boot comparison set, scanner config, guard hooks, gate code, tier
-  policy, worker settings, the stop-paths file and this script itself), checked against both a
-  renamed file's old and new path, plus, with `--contract`, any changed path outside that
-  contract's `writes` globs. Every gathered `gh` response is validated for shape, not just for
-  having run, so an empty-but-valid one (missing `pullRequest`, an empty files list) is not
+  required check (`gh pr checks --required`, branch protection's own list) has bucket `pass`, no
+  exemption of any kind; every bot review on the exact head is not pending or changes-requested,
+  and every bot in `config/merge-ready-bots.txt` shows a review or a recent comment on the head
+  (a rate-limit comment from that bot is the one way to cover it without an actual review); zero
+  open review threads; the test suite re-run from a tarball of the head, with one named deselect
+  for the test that needs a `.git`; a `merge-ready-master-pass sha=... critical=... important=...`
+  marker the master posts after its own review (the worker's own separate `merge-ready-worker-pass`
+  pre-check marker never satisfies this); and the stop list in `config/merge-ready-stop-paths.txt`
+  (charter, workspace card, role state, boot comparison set, scanner config, guard hooks, gate
+  code, tier policy, worker settings, CI/CODEOWNERS definitions, succession/bootstrap code, and
+  this script's own files), checked once early (before the test re-run even starts, so no PR code
+  runs on this machine before an "ask") and once more at the end, against both a renamed file's
+  old and new path, plus, with `--contract`, any changed path outside that contract's `writes`
+  globs. Every gathered `gh` response is validated for shape, not just for having run, so an
+  empty-but-valid one (missing `pullRequest`, an empty files or required-checks list) is not
   ready, never a silent pass. `docs/runbooks/merge-ready.md` has the full measurement list, the
-  marker format, and the honest limits (no way to verify a posted review pass was a real one,
-  `writes` globs matching with `fnmatch` whose `*` already crosses `/`, the 3000-file cap on
-  GitHub's own files API, and `gh pr checks --required` reading identically for "nothing is
-  required" and "required checks exist but have not posted yet").
+  marker format, and the honest limits (the review-bot roster's comment timestamp bound is an
+  approximation, `writes` globs matching with `fnmatch` whose `*` already crosses `/`, and the
+  3000-file cap on GitHub's own files API).
 - New standing-rule block `merge-ready-before-done`, appended to every dispatched brief the way
   `mail-before-done` and `required-infra` already are (skipped for work that does not end in a
   PR): run an independent review pass, post its marker, run `scripts/merge-ready` on your own PR
@@ -43,3 +46,16 @@
   and the `writes:` list parser now strips only the outer brackets (the same rule
   `dispatch_gate.py`'s own front-matter parser uses) instead of a regex that stopped at the first
   `]`, so a glob with its own brackets (an `fnmatch` character class) survives intact.
+- Round 2 (#330), from the master's own review: removed the PR-body `rate-limited:` exemption
+  entirely (a required check never skips, from anywhere); split the single review-pass marker
+  into the worker's own `merge-ready-worker-pass` pre-check and the master's `merge-ready-master-
+  pass`, only the latter gating exit 0; an empty required-checks list is now not ready instead of
+  a silent pass; added the `config/merge-ready-bots.txt` review-bot roster (`cubic-dev-ai`,
+  `coderabbitai`), each bot covered by a head review or a comment posted or last edited at or
+  after the head commit's own timestamp (catching a bot that edits one sticky comment per push
+  rather than posting a fresh one each time); the stop list and `--contract` writes-scope check
+  now run once early, before the test re-run starts, short-circuiting with no test run at all
+  when either already decides "ask"; `gh api ... --paginate --slurp` replaces relying on
+  `--paginate` alone to combine pages; and `set -C` (`noclobber`) now guards every one of this
+  script's own writes to a predictable sibling temp-file name against a symlink the test
+  command's own run could have planted first.

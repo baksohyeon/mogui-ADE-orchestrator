@@ -146,6 +146,10 @@ sys.exit(0 if all(c.get('bucket') == 'pass' for c in json.loads('''${required_on
         cat "${GH_FIXTURE_DIR}/comments.json"
         ;;
       repos/*/commits/*)
+        if [ "${GH_STUB_CASE:-}" = "commit-date-fail" ]; then
+          echo "gh: commit lookup failed" >&2
+          exit 1
+        fi
         cat "${GH_FIXTURE_DIR}/commit-date.txt"
         ;;
       repos/*/tarball/*)
@@ -364,6 +368,20 @@ else
   fail "stale rate-limit comment exited ${rc}, want 1 naming test-bot: ${out}"
 fi
 
+# --- the rate-limit phrase from a human account does not cover the bot:
+# the roster check's Bot-type guard must not be fooled by matching text
+# alone --------------------------------------------------------------
+human_rate_limit_dir="${WORK_DIR}/human-rate-limit-text"
+human_rate_limit_comment='[{"body":"Review limit reached for this billing cycle.","user":{"login":"test-bot","type":"User"},"created_at":"'"${FRESH_DATE}"'"}]'
+write_fixture "${human_rate_limit_dir}" "" 0 '[{"filename":"README.md"}]' "${MASTER_PASS_MARKER}" "${DEFAULT_CHECKS}" "[]" "OPEN" "false" "${human_rate_limit_comment}"
+out=$(run_case "${human_rate_limit_dir}")
+rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -qi "test-bot"; then
+  ok "the rate-limit phrase from a human account does not cover the bot (${out})"
+else
+  fail "human-account rate-limit text exited ${rc}, want 1 naming test-bot: ${out}"
+fi
+
 # --- a bot's sticky comment, created before the head commit but edited at
 # or after it, still covers the bot: cubic and CodeRabbit both edit one
 # comment in place on every push rather than posting a fresh one, so
@@ -548,6 +566,17 @@ else
   fail "recorded Critical finding exited ${rc}, want 1: ${out}"
 fi
 
+important_findings_dir="${WORK_DIR}/important-findings"
+write_fixture "${important_findings_dir}" "" 0 '[{"filename":"README.md"}]' \
+  "merge-ready-master-pass sha=${HEAD_SHA} critical=0 important=1"
+out=$(run_case "${important_findings_dir}")
+rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -qi "important=1"; then
+  ok "a recorded Important finding exits 1 (${out})"
+else
+  fail "recorded Important finding exited ${rc}, want 1: ${out}"
+fi
+
 # --- (round 2, critical #2) a master-pass marker for an older sha is not
 # a pass for the current head -----------------------------------------------
 stale_dir="${WORK_DIR}/stale-marker"
@@ -715,6 +744,28 @@ if [ "${rc}" -eq 1 ] && [ -n "${out}" ]; then
   ok "a graphql failure exits 1 with a reason (${out})"
 else
   fail "graphql failure exited ${rc} with output <${out}>, want 1 with a reason"
+fi
+
+# --- a head-commit-date lookup failure is 1 with a reason, never 0 --------
+out=$(run_case "${clean_dir}" commit-date-fail)
+rc=$?
+if [ "${rc}" -eq 1 ] && [ -n "${out}" ]; then
+  ok "a head commit date lookup failure exits 1 with a reason (${out})"
+else
+  fail "head commit date lookup failure exited ${rc} with output <${out}>, want 1 with a reason"
+fi
+
+# --- an empty head-commit-date response is 1, never read as "any comment
+# timestamp is new enough" ---------------------------------------------
+empty_commit_date_dir="${WORK_DIR}/empty-commit-date"
+write_fixture "${empty_commit_date_dir}" "" 0 '[{"filename":"README.md"}]' "${MASTER_PASS_MARKER}"
+printf '' >"${empty_commit_date_dir}/commit-date.txt"
+out=$(run_case "${empty_commit_date_dir}")
+rc=$?
+if [ "${rc}" -eq 1 ] && [ -n "${out}" ]; then
+  ok "an empty head commit date response exits 1, not a silent pass (${out})"
+else
+  fail "empty head commit date response exited ${rc}, want 1: ${out}"
 fi
 
 # --- an empty-but-valid graphql response (no pullRequest) is 1 with a

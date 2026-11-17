@@ -26,6 +26,16 @@
 #
 # One summary line on stdout names every failing or asking item.
 set -u
+# The test re-run executes the PR's own code with this script's own
+# filesystem privileges, ahead of several fixed, predictable sibling temp
+# file names this script writes to only afterward (checks.json and so on).
+# `noclobber` makes every `>` redirect below refuse outright if anything,
+# including a symlink the test command planted, already occupies that
+# path: confirmed empirically that bash's own noclobber check refuses a
+# dangling symlink exactly like an existing regular file, not only a
+# target that already exists, so this closes that window rather than only
+# documenting it.
+set -C
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 STOP_PATHS_FILE="${SCRIPT_DIR}/../config/merge-ready-stop-paths.txt"
@@ -147,13 +157,18 @@ fetch_paginated_array() {
   if ! gh api "${api_path}" --paginate --slurp >"${raw}" 2>"${err}"; then
     not_ready "could not read ${label} ($(tr '\n' ' ' <"${err}"))"
   fi
+  # Reuses the same $err path the gh call above just created (empty, since
+  # that call already returned success); `>|` says so explicitly rather
+  # than relying on noclobber to allow a second write to a file this
+  # function's own prior line just made, the same path `set -C` above
+  # exists specifically to refuse for anything it did not just create itself.
   if ! python3 -c '
 import json, sys
 raw_path, flat_path = sys.argv[1], sys.argv[2]
 pages = json.load(open(raw_path, encoding="utf-8"))
 flat = [item for page in pages for item in page]
 json.dump(flat, open(flat_path, "w", encoding="utf-8"))
-' "${raw}" "${flat}" 2>"${err}"; then
+' "${raw}" "${flat}" 2>|"${err}"; then
     not_ready "${label}: could not flatten the paginated response ($(tr '\n' ' ' <"${err}"))"
   fi
 }

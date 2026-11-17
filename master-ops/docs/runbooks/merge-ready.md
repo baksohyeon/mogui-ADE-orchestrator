@@ -40,10 +40,11 @@ directory before the brief ships, so the worker never needs to know where this r
    list with nothing in it to measure is not the same thing as every required check having
    passed, and nothing should read that shape as a free pass. A check this repository runs but
    does not require (a review bot, a label/assignee check) never reaches this measurement at
-   all. Every bot (GraphQL `author.__typename == "Bot"`, not a login-suffix guess) whose *latest*
-   review on the exact head commit is `PENDING` or `CHANGES_REQUESTED` blocks separately; an
-   earlier review by the same bot on the same commit that a later one from that bot superseded
-   does not.
+   all. Every bot (GraphQL `author.__typename == "Bot"`, not a login-suffix guess) whose *latest
+   decision* review on the exact head commit is `PENDING` or `CHANGES_REQUESTED` blocks
+   separately; only `APPROVED`, `CHANGES_REQUESTED`, `DISMISSED`, or `PENDING` count as a
+   decision, so a plain `COMMENTED` review from the same bot on the same commit, earlier or
+   later, never changes which decision is the latest one.
 1b. **The review-bot roster.** Every login in `config/merge-ready-bots.txt` must show some
    engagement with the exact head: a GraphQL review on it (any state, including a plain
    `COMMENTED` one, which measurement 1 does not treat as a decision but which still proves the
@@ -55,11 +56,12 @@ directory before the brief ships, so the worker never needs to know where this r
    genuine, just-updated comment as stale. The REST issue-comments API reports a bot's login with
    a `[bot]` suffix (`coderabbitai[bot]`) that the GraphQL API does not (`coderabbitai`); both
    sides are compared with that suffix stripped. A bot with no review and no qualifying comment
-   is not ready, naming the bot. The one exemption the contract grants: an issue comment from that
-   bot matching "review limit reached" or "rate limited by" (case-insensitive), posted or edited
-   at or after the head commit's timestamp, counts as covering the bot even with no actual
-   review, since GitHub's own rate limit silenced it rather than the bot having nothing to say.
-   An empty bots file fails closed
+   is not ready, naming the bot. An issue comment matching "review limit reached" or "rate
+   limited by" (case-insensitive) counts the same as any other qualifying comment from that bot;
+   the script does not distinguish the two kinds in its verdict (the contract names the
+   rate-limit phrasing specifically so a bot that could not actually review still reads as
+   covered, not as a separate, weaker kind of coverage this script enforces differently). An
+   empty bots file fails closed
    the same way an empty stop-paths file does (see measurement 5), for the same reason: a worker
    with shell access could otherwise blank it out and neutralize the whole roster check.
 2. **Open review threads.** `reviewThreads(isResolved)` on the head must show zero unresolved
@@ -138,8 +140,10 @@ supersedes an older one of the same kind without having to delete it.
   or bots file). `2` is reserved for "ask" alone; nothing that merely failed to run is close
   enough to "ask the owner" to share its exit code.
 - `2` ask the owner: a changed path matches the stop list, or (with `--contract`) falls outside
-  the contract's `writes` globs, decided from the diff alone before the test re-run runs (see
-  "Early stop-list check" above), so the test re-run never happens on this exit code.
+  the contract's `writes` globs. When the early check (see "Early stop-list check" above) decides
+  this from the diff alone, the test re-run never runs at all; the same check also runs again at
+  the very end, against whatever the head actually has once the test re-run is over, and can
+  still exit 2 there, after the test re-run already ran, if a push mid-run introduced the hit.
 
 One summary line on stdout, prefixed `merge-ready: merge ·`, `merge-ready: not ready ·`, or
 `merge-ready: ask ·`, names every failing or asking item.
@@ -207,13 +211,15 @@ The test re-run executes the PR's own code (`eval "${TEST_CMD}"`, run from the e
 with the same filesystem privileges as the rest of this script, under a working directory one
 level below a predictable, fixed set of sibling temp-file names (`checks.json`, `graphql.json`,
 and so on) that this script itself only writes to *after* the test command has already run. A
-test suite that plants a symlink at one of those sibling paths before exiting could have its
-target clobbered by this script's own later `gh api ... > file` write, since a dangling symlink
-does not trip `noclobber`-style "already exists" checks the way an existing regular file would.
-This is a real gap, present since round 1, not introduced or closed by round 2; it is noted here
-rather than fixed in this change, since a correct fix needs `O_NOFOLLOW`-safe file creation
-(bash's `>` redirection cannot express that on its own) and deserves its own measured round
-rather than a rushed patch under this one's scope.
+test suite that plants a symlink at one of those sibling paths before exiting could have had its
+target clobbered by this script's own later `gh api ... > file` write; `set -C` (`noclobber`),
+set near the top of the script, closes this: verified empirically that bash's own noclobber check
+refuses a `>` redirect through a symlink whether or not the symlink's target already exists,
+"cannot overwrite existing file" firing on a dangling link exactly as it would on a real one, so
+no `O_NOFOLLOW`-specific handling turned out to be needed. The one place this script writes the
+same path twice on purpose (`fetch_paginated_array`'s own stderr file, once for the `gh` call and
+again for the flatten step that follows it) uses `2>|` to say so explicitly, rather than leaving
+a second `set -C` refusal looking like the same symlink risk it exists to catch.
 
 Reviews and review threads are read up to 100 each; a PR past either limit is "not ready, rerun
 with pagination" rather than measured on a partial page, but this script does not implement

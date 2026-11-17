@@ -470,34 +470,36 @@ BIN
   # ops_value/runtime_value are arbitrary real filesystem paths once $dispatch
   # is a rendered install, so a sed pattern substitution risks regex
   # metacharacters, the delimiter, or a replacement "&" in the path. Python's
-  # str.replace is a literal substring swap with no escaping to get wrong.
-  # One value can be a path prefix of the other (RUNTIME_ROOT /a, OPS_REPO
-  # /a/ops): replacing the shorter one first would eat the prefix out of the
-  # longer path and leave its tail stuck to $work (OPS ends up "$work/ops"
-  # instead of "$work"), so the longer value always goes first.
+  # re.sub is a literal, single-pass substring swap: it matches against the
+  # original text only, so it cannot rescan text a replacement just inserted.
+  # Two sequential str.replace() calls can: when $work happens to share a
+  # prefix with one of the source values (both commonly start under /tmp),
+  # the second call matches inside the first call's own output and corrupts
+  # it. The longer alternative is tried first at each position so one value
+  # being a path prefix of the other (RUNTIME_ROOT /a, OPS_REPO /a/ops)
+  # cannot leave OPS stuck at "$work/ops" instead of "$work".
   python3 - "$dispatch" "$runtime_value" "$ops_value" "$work" > "$rendered" <<'PY'
+import re
 import sys
+
 dispatch_path, runtime_value, ops_value, work = sys.argv[1:5]
 with open(dispatch_path, encoding="utf-8") as fh:
     text = fh.read()
-first, second = sorted((runtime_value, ops_value), key=len, reverse=True)
-text = text.replace(first, work).replace(second, work)
-sys.stdout.write(text)
+values = sorted({runtime_value, ops_value}, key=len, reverse=True)
+pattern = re.compile("|".join(re.escape(v) for v in values))
+sys.stdout.write(pattern.sub(work, text))
 PY
   chmod +x "$rendered"
-  if grep -qF -- "$ops_value" "$rendered" || grep -qF -- "$runtime_value" "$rendered"; then
-    echo "✗ sandbox render of $dispatch still contains its real OPS_REPO or RUNTIME_ROOT value" >&2
-    return 1
-  fi
   if cmp -s "$dispatch" "$rendered"; then
     echo "✗ sandbox render of $dispatch is byte-identical to the original; nothing was substituted" >&2
     return 1
   fi
-  # The two checks above miss the prefix case directly: replacing the shorter
-  # value first fully consumes both occurrences without ever leaving the old
-  # value behind, it just leaves OPS pointing at "$work/ops" instead of
-  # "$work". Read the rendered OPS=/GATE= lines back and require them to
-  # resolve to exactly $work.
+  # A whole-file leftover-value grep would false-positive whenever $work
+  # legitimately contains the original value as a substring (RUNTIME_ROOT=
+  # /tmp and $work under /tmp by default, which is the common case). Reading
+  # back the rendered OPS=/GATE= lines exactly, instead of scanning the
+  # whole file, catches every wrong resolution (unchanged, prefix-stuck, or
+  # anything else) without that false positive.
   if [ "$(sed -n 's/^OPS=//p' "$rendered" | head -n1)" != "$work" ] ||
      [ "$(sed -n 's#^GATE=\(.*\)/scripts/dispatch-gate$#\1#p' "$rendered" | head -n1)" != "$work" ]; then
     echo "✗ sandbox render of $dispatch resolved OPS/GATE to something other than $work" >&2
@@ -552,15 +554,20 @@ check_git_escalation_cli_prefix_values() {
   # {{RUNTIME_ROOT}}/{{OPS_REPO}} template tokens here would make this case a
   # silent no-op against an already-rendered dispatch, the exact render-state
   # assumption this whole fix is about not making.
+  # A single regex pass (same reasoning as check_git_escalation_cli's own
+  # substitution) so a replacement value never gets rescanned by a later
+  # pattern.
   python3 - "$dispatch" "$src_runtime" "$src_ops" "$work" > "$rendered" <<'PY'
+import re
 import sys
+
 dispatch_path, src_runtime, src_ops, work = sys.argv[1:5]
 with open(dispatch_path, encoding="utf-8") as fh:
     text = fh.read()
 target = {src_runtime: work, src_ops: work + "/ops"}
-for src in sorted(target, key=len, reverse=True):
-    text = text.replace(src, target[src])
-sys.stdout.write(text)
+values = sorted(target, key=len, reverse=True)
+pattern = re.compile("|".join(re.escape(v) for v in values))
+sys.stdout.write(pattern.sub(lambda m: target[m.group(0)], text))
 PY
   chmod +x "$rendered"
   cp "$(dirname "$dispatch")/approval-prompt-markers.txt" "$work/approval-prompt-markers.txt"

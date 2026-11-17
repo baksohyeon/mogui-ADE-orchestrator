@@ -435,6 +435,7 @@ PY
 
 check_git_escalation_cli() {
   local dispatch="$1" work rendered ledger worktree_path operation result_code line_count
+  local ops_value runtime_value
   work="${TMPDIR:-/tmp}/mogui-dispatch-codex-git-cli.$$"
   mkdir -p "$work/scripts" "$work/state"
   trap 'rm -rf "$work"' RETURN
@@ -449,7 +450,19 @@ esac
 BIN
   chmod +x "$work/scripts/dispatch-gate"
   rendered="$work/scripts/dispatch"
-  sed -e "s#{{RUNTIME_ROOT}}#$work#g" -e "s#{{OPS_REPO}}#$work#g" "$dispatch" > "$rendered"
+  # $dispatch may still carry its raw OPS_REPO/RUNTIME_ROOT template tokens
+  # (running against the template repo) or may already be a rendered,
+  # installed copy with real absolute paths baked in (running against an
+  # applied install). Read whatever value is actually there from the OPS= and
+  # GATE= lines instead of assuming the unrendered token text, so this sandbox
+  # substitution to $work is not a silent no-op on an installed host.
+  ops_value=$(sed -n 's/^OPS=//p' "$dispatch" | head -n1)
+  runtime_value=$(sed -n 's#^GATE=\(.*\)/scripts/dispatch-gate$#\1#p' "$dispatch" | head -n1)
+  if [ -z "$ops_value" ] || [ -z "$runtime_value" ]; then
+    echo "✗ could not read OPS_REPO/RUNTIME_ROOT out of $dispatch's OPS=/GATE= lines" >&2
+    return 1
+  fi
+  sed -e "s#$runtime_value#$work#g" -e "s#$ops_value#$work#g" "$dispatch" > "$rendered"
   chmod +x "$rendered"
   ledger="$work/state/dispatch-ledger.jsonl"
   worktree_path="$work/worker"

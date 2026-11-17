@@ -64,6 +64,15 @@ WORKSPACE_ROOT="$TMP/workspace"
 OPS_DIR="$TMP/ops"
 mkdir -p "$WORKSPACE_ROOT" "$OPS_DIR"
 
+# #328 follow-up: pin the fixture's default host so an already-exported
+# MOGUI_MASTER_HOST_RUNTIME in the calling shell (dispatch's own WARNING
+# text tells operators to export exactly this) cannot change which host the
+# Claude-default cases below run as, and so an inherited MOGUI_INSTANCE_RUNTIME_CONFIG
+# cannot point the unmeasurable-host case at a real file. Per-case overrides
+# below (including the empty-host case) still take effect over this default.
+MOGUI_MASTER_HOST_RUNTIME=claude
+unset MOGUI_INSTANCE_RUNTIME_CONFIG INSTANCE_RUNTIME_CONFIG
+
 CLAUDE_MCP_CONFIG="$TMP/claude.json"
 CLAUDE_USER_SETTINGS="$TMP/user-settings.json"
 CODEX_MCP_CONFIG="$TMP/codex-config.toml"
@@ -82,10 +91,13 @@ EOF
   chmod +x "$BIN_DIR/orca"
 }
 
-# $1 = space-separated list of providers ctx reports as indexed.
+# $1 = space-separated list of providers ctx reports as indexed. $2 =
+# optional `ctx upgrade status --format json` body (#328 follow-up;
+# default: up to date at 2.4.1), for the ctx-upgrade cases below.
 write_stub_ctx() {
-  local providers_json
+  local providers_json upgrade_json
   providers_json=$(python3 -c "import json, sys; print(json.dumps(sys.argv[1].split()))" "$1")
+  upgrade_json=${2:-'{"current_version": "2.4.1", "state": {"status": "up_to_date", "latest_version": "2.4.1"}}'}
   cat > "$BIN_DIR/ctx" <<EOF
 #!/bin/bash
 if [ "\$1" = "status" ]; then
@@ -94,6 +106,10 @@ if [ "\$1" = "status" ]; then
 fi
 if [ "\$1" = "sources" ]; then
   cat "$CTX_SOURCES_FILE"
+  exit 0
+fi
+if [ "\$1" = "upgrade" ] && [ "\$2" = "status" ] && [ "\$3" = "--format" ] && [ "\$4" = "json" ]; then
+  printf '%s\n' '$upgrade_json'
   exit 0
 fi
 exit 1
@@ -144,6 +160,12 @@ reset_fixture() {
   printf '{"repos": [{"path": "%s", "alias": "repo-a"}]}\n' "$REPO_A" > "$CRG_REGISTRY"
 }
 
+# #328 follow-up: the Infra block now judges MCP registration against this
+# seat's own host (MASTER_HOST_RUNTIME), resolved from MOGUI_MASTER_HOST_RUNTIME
+# or master_host_runtime in $OPS_DIR/config/instance-runtime.json. Every
+# existing fixture here builds its "reachable" case through CLAUDE_MCP_CONFIG,
+# so default to a Claude-hosted seat; individual cases below override one or
+# both to exercise a Codex-hosted seat and an unmeasurable one.
 run_infra() {
   PATH="$BIN_DIR:$SAFE_PATH" HOME="$TMP" \
     WORKSPACE_ROOT="$WORKSPACE_ROOT" OPS_DIR="$OPS_DIR" \
@@ -153,6 +175,7 @@ run_infra() {
     CODE_REVIEW_GRAPH_STALE_DAYS="${CODE_REVIEW_GRAPH_STALE_DAYS:-7}" \
     INFRA_TIMEOUT_SECONDS="${INFRA_TIMEOUT_SECONDS:-10}" \
     MCP_SERVERS_CONFIG="$CRG_MCP_CONFIG" \
+    MOGUI_MASTER_HOST_RUNTIME="${MOGUI_MASTER_HOST_RUNTIME-claude}" \
     bash "$INFRA_BLOCK"
 }
 
@@ -218,6 +241,86 @@ reset_fixture
 write_stub_ctx ""
 check "ctx with zero indexed providers warns, never OK" \
   "Infra: ctx WARN ctx has indexed no providers" "Infra: ctx OK" 0
+
+# #328 follow-up (from the #317 seat postmortem): ctx-upgrade warns on a
+# reported State error, even when the main ctx check above is otherwise
+# clean.
+reset_fixture
+write_stub_ctx "claude codex" '{"current_version": "1.3.2", "state": {"status": "error", "latest_version": "2.2.1"}}'
+check "ctx-upgrade warns on a reported State error" \
+  "Infra: ctx-upgrade WARN ctx upgrade status reports State error" "ctx-upgrade OK" 0
+
+# ctx-upgrade warns when the installed version is numerically behind the
+# latest version ctx last recorded, comparing as dotted integers (not
+# strings, where "2.10.0" would sort before "2.9.0").
+reset_fixture
+write_stub_ctx "claude codex" '{"current_version": "2.9.0", "state": {"status": "up_to_date", "latest_version": "2.10.0"}}'
+check "ctx-upgrade warns when behind the latest recorded version" \
+  "Infra: ctx-upgrade WARN ctx 2.9.0 is behind 2.10.0" "ctx-upgrade OK" 0
+
+# ctx-upgrade is OK when current and latest match.
+reset_fixture
+write_stub_ctx "claude codex" '{"current_version": "2.4.1", "state": {"status": "up_to_date", "latest_version": "2.4.1"}}'
+check "ctx-upgrade OK when current matches the latest recorded version" "Infra: ctx-upgrade OK" "ctx-upgrade WARN" 0
+
+# ctx-upgrade warns, naming the bound, on a timeout -- independent of the
+# main ctx check's own timeout handling.
+reset_fixture
+cat > "$BIN_DIR/ctx" <<'EOF'
+#!/bin/bash
+if [ "$1" = "status" ]; then
+  printf '%s\n' '{"daemon": {"jobs": {"core_refresh": {"progress": {"providers": ["claude", "codex"]}}}}}'
+  exit 0
+fi
+if [ "$1" = "sources" ]; then
+  exit 0
+fi
+if [ "$1" = "upgrade" ] && [ "$2" = "status" ]; then
+  sleep 5
+fi
+exit 1
+EOF
+chmod +x "$BIN_DIR/ctx"
+INFRA_TIMEOUT_SECONDS=1
+check "ctx-upgrade warns naming the bound on a timeout" "Infra: ctx-upgrade WARN timed out after 1s" "ctx-upgrade OK" 0
+unset INFRA_TIMEOUT_SECONDS
+
+# ctx-upgrade warns, never crashes, on unparseable output.
+reset_fixture
+cat > "$BIN_DIR/ctx" <<'EOF'
+#!/bin/bash
+if [ "$1" = "status" ]; then
+  printf '%s\n' '{"daemon": {"jobs": {"core_refresh": {"progress": {"providers": ["claude", "codex"]}}}}}'
+  exit 0
+fi
+if [ "$1" = "sources" ]; then
+  exit 0
+fi
+if [ "$1" = "upgrade" ] && [ "$2" = "status" ]; then
+  printf 'not json\n'
+  exit 0
+fi
+exit 1
+EOF
+chmod +x "$BIN_DIR/ctx"
+check "ctx-upgrade warns naming the parse failure, never crashes" \
+  "Infra: ctx-upgrade WARN could not parse ctx upgrade status" "ctx-upgrade OK" 0
+
+# ctx-upgrade warns when ctx itself is absent from PATH, the same as the
+# main ctx check. A real ctx install elsewhere on this host's own PATH
+# (outside $BIN_DIR) would otherwise be found instead of "absent", the same
+# gap (d) below guards against for code-review-graph.
+reset_fixture
+rm -f "$BIN_DIR/ctx"
+ORIGINAL_SAFE_PATH="$SAFE_PATH"
+real_ctx=$(PATH="$SAFE_PATH" command -v ctx 2>/dev/null) || true
+if [ -n "$real_ctx" ]; then
+  real_ctx_dir=$(dirname "$real_ctx")
+  SAFE_PATH=$(printf '%s' "$SAFE_PATH" | tr ':' '\n' | grep -vF "$real_ctx_dir" | tr '\n' ':')
+  SAFE_PATH="${SAFE_PATH%:}"
+fi
+check "ctx-upgrade warns when ctx is absent from PATH" "Infra: ctx-upgrade WARN absent from PATH" "ctx-upgrade OK" 0
+SAFE_PATH="$ORIGINAL_SAFE_PATH"
 
 # (c) A graph updated 30 days ago warns with the day count.
 reset_fixture
@@ -386,18 +489,49 @@ printf '{"mcpServers": {}}\n' > "$CLAUDE_MCP_CONFIG"
 printf '# [mcp_servers.ctx]\ncommand = "uvx"\n' > "$CODEX_MCP_CONFIG"
 check "a commented-out Codex table header is not a registration" "Infra: ctx WARN runs, but not registered" "" 0
 
-# A Claude-side gap (disabled, or absent from .mcp.json/mcpServers
-# entirely) is not the final answer while Codex still carries an active
-# entry for the same tool: the two hosts are checked independently, and
-# either one being reachable makes the tool reachable.
+# #328 follow-up (owner direction): registration is judged for the host
+# actually running the check, not either host. A Claude-hosted seat (the
+# fixture default) with only an active Codex registration for the tool is
+# still a gap here -- the exact false OK the owner measured on a real
+# Claude-hosted seat whose only registration was Codex's -- and the WARN
+# names which host it measured.
 reset_fixture
 printf '{"mcpServers": {"ctx": {}}}\n' > "$CLAUDE_MCP_CONFIG"
 printf '{"mcpServers": {"code-review-graph": {}}}\n' > "$WORKSPACE_ROOT/.mcp.json"
 mkdir -p "$WORKSPACE_ROOT/.claude"
 printf '{"disabledMcpjsonServers": ["code-review-graph"]}\n' > "$WORKSPACE_ROOT/.claude/settings.local.json"
 printf '[mcp_servers.code-review-graph]\ncommand = "uvx"\n' > "$CODEX_MCP_CONFIG"
-check "a Claude-disabled entry still reaches an active Codex registration" "Infra: code-review-graph OK" "code-review-graph WARN" 0
+check "a Claude-hosted seat does not accept a Codex-only registration" \
+  "Infra: code-review-graph WARN runs, but registered for codex, not claude" "code-review-graph OK" 0
 rm -f "$WORKSPACE_ROOT/.mcp.json"
+
+# Symmetric case: a Codex-hosted seat does not accept a Claude-only
+# registration either.
+reset_fixture
+MOGUI_MASTER_HOST_RUNTIME=codex
+printf '{"mcpServers": {"ctx": {}}}\n' > "$CLAUDE_MCP_CONFIG"
+printf '' > "$CODEX_MCP_CONFIG"
+check "a Codex-hosted seat does not accept a Claude-only registration" \
+  "Infra: ctx WARN runs, but registered for claude, not codex" "ctx OK" 0
+MOGUI_MASTER_HOST_RUNTIME=claude
+
+# Symmetric case: a Codex-hosted seat with its own active registration is OK.
+reset_fixture
+MOGUI_MASTER_HOST_RUNTIME=codex
+printf '{"mcpServers": {}}\n' > "$CLAUDE_MCP_CONFIG"
+printf '[mcp_servers.ctx]\ncommand = "uvx"\n' > "$CODEX_MCP_CONFIG"
+check "a Codex-hosted seat with its own registration is OK" "Infra: ctx OK" "ctx WARN" 0
+MOGUI_MASTER_HOST_RUNTIME=claude
+
+# An unmeasurable host (no MOGUI_MASTER_HOST_RUNTIME, no instance-runtime.json
+# master_host_runtime) never reads as OK, even when one host's registration
+# is actually reachable: this check cannot confirm it is this session's own
+# host, so it names the gap rather than guessing.
+reset_fixture
+MOGUI_MASTER_HOST_RUNTIME=""
+check "an unmeasurable host warns naming itself, never OK" \
+  "Infra: ctx WARN runs, but registered for claude, but this session's own host is unmeasurable" "ctx OK" 0
+MOGUI_MASTER_HOST_RUNTIME=claude
 
 # Round 2, Important #3: a Codex table with `enabled = false` is not
 # reachable, even though the table header itself matches.
@@ -408,11 +542,30 @@ check "a Codex entry with enabled = false is not reachable" \
   "Infra: code-review-graph WARN runs, but not registered" "code-review-graph OK" 0
 
 # Round 2, Important #3: the quoted table header form is accepted the same
-# as the bare one.
+# as the bare one. Run this one as a Codex-hosted seat (#328): it is
+# specifically exercising codex_mcp_reachable's TOML parsing, and a
+# Codex-only registration is no longer an OK on the fixture's default
+# Claude-hosted seat.
 reset_fixture
+MOGUI_MASTER_HOST_RUNTIME=codex
 printf '{"mcpServers": {"ctx": {}}}\n' > "$CLAUDE_MCP_CONFIG"
 printf '[mcp_servers."code-review-graph"]\ncommand = "uvx"\n' > "$CODEX_MCP_CONFIG"
 check "a quoted Codex table header is accepted" "Infra: code-review-graph OK" "code-review-graph WARN" 0
+MOGUI_MASTER_HOST_RUNTIME=claude
+
+# #328 follow-up: the host resolver's file-based path (no env override set,
+# master_host_runtime read from config/instance-runtime.json under OPS_DIR)
+# is exercised directly, not only through the MOGUI_MASTER_HOST_RUNTIME env
+# override every other host-aware case above uses.
+reset_fixture
+MOGUI_MASTER_HOST_RUNTIME=""
+mkdir -p "$OPS_DIR/config"
+printf '{"master_host_runtime": "codex"}\n' > "$OPS_DIR/config/instance-runtime.json"
+printf '{"mcpServers": {"ctx": {}}}\n' > "$CLAUDE_MCP_CONFIG"
+printf '[mcp_servers.code-review-graph]\ncommand = "uvx"\n' > "$CODEX_MCP_CONFIG"
+check "a host read from config/instance-runtime.json is honored" "Infra: code-review-graph OK" "code-review-graph WARN" 0
+rm -rf "${OPS_DIR:?}/config"
+MOGUI_MASTER_HOST_RUNTIME=claude
 
 # Round 2, Minor: a timeout kill (124 from a real `timeout`/`gtimeout`, or
 # 137/143 from the plain-bash fallback's SIGKILL/SIGTERM) reports the bound

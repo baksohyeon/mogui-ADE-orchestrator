@@ -30,12 +30,38 @@ For each tool, the check stops at the first gap it finds (one reason per line):
 1. **Runs.** For `ctx`, the CLI is on `PATH` and a cheap, bounded (10s via `timeout`/`gtimeout`, or a plain-bash watchdog on a host with neither, such as stock macOS), network-free read command succeeds (`ctx status --format json`). For `code-review-graph` (#317), the probe reads the launcher `command` and the pinned package spec (`args[0]`) for the `code-review-graph` entry from the configured worker servers file (`templates/mcp-servers.json`, the file worker sessions launch from, read through the `MCP_SERVERS_CONFIG` environment variable) and runs `<command> <spec> --version` — never a bare `code-review-graph` binary, since no worker session calls one directly. A master session instead merges this same entry into its own `.mcp.json`; this probe checks only that it is registered under that name (gap 2 below), not that its command or pin matches.
    A missing or unreadable servers file, or an entry with no `command`/`args`, is named by that reading, not folded into the launcher-absent case below.
    A shim error or non-zero exit from the version command reports its first line verbatim, or a fixed fallback reason when that line is empty; a launcher absent from `PATH` reports `launcher '<command>' absent from PATH`.
-2. **Reachable from this host session.** Claude: a user-scope server (the top-level `mcpServers` in the file `CLAUDE_CONFIG_DIR` points an Orca profile's Claude CLI at) is always reachable. A project-scope server listed in `.mcp.json` additionally needs `enableAllProjectMcpServers` or `enabledMcpjsonServers` set in some settings file the session reads, and is rejected if **any** settings file (user `settings.json`, project `.claude/settings.json`, or project-local `.claude/settings.local.json`) lists it in `disabledMcpjsonServers` — a disabled entry wins regardless of which file sets it. Codex: an uncommented `[mcp_servers.<tool>]` table header in its `config.toml`, checked even when Claude's own verdict is disabled or pending, since either host can carry the session. This never calls `claude mcp list`, which health-checks every server and is slow.
+2. **Reachable from this host session.** Claude: a user-scope server (the top-level `mcpServers` in the file `CLAUDE_CONFIG_DIR` points an Orca profile's Claude CLI at) is always reachable. A project-scope server listed in `.mcp.json` additionally needs `enableAllProjectMcpServers` or `enabledMcpjsonServers` set in some settings file the session reads, and is rejected if **any** settings file (user `settings.json`, project `.claude/settings.json`, or project-local `.claude/settings.local.json`) lists it in `disabledMcpjsonServers` — a disabled entry wins regardless of which file sets it. Codex: an uncommented `[mcp_servers.<tool>]` table header in its `config.toml`. This never calls `claude mcp list`, which health-checks every server and is slow.
+
+   **#328 follow-up (owner direction):** which side's registration counts is judged for the host actually
+   running this check, not either host.
+   This seat's own host resolves the same way `scripts/dispatch` resolves its master host runtime: an
+   environment override, then a value recorded in `config/instance-runtime.json`, else unconfigured.
+   A Claude-hosted seat with only a Codex registration (or the reverse) is still a gap: the line names which
+   host it measured and which host actually has the registration — the exact false pass a 2026-11-17 seat
+   postmortem measured, where the only registration was Codex's on a Claude-hosted master.
+   An unconfigured host never reads as passing either, even when one side's registration is in fact
+   reachable; the line instead names that the host is unmeasurable.
 3. **Fresh and covering.**
    - `ctx`: every provider Orca's own agent-session index (`orca search --index-status --json`) reports sessions for among `claude` and `codex` must also appear in ctx's own indexed-providers list (`ctx status --format json`, `.daemon.jobs.*.progress.providers`). A missing provider is named, with the reason `ctx sources` prints for it when it prints one. An unreadable `ctx status` or `orca search --index-status` reports `undecided` rather than a vacuous pass.
    - `code-review-graph`: every repository in its multi-repo registry (`~/.code-review-graph/registry.json`) must have a graph no older than `CODE_REVIEW_GRAPH_STALE_DAYS` (default 7). Read directly from the registry and each repo's `.code-review-graph/graph.db` mtime, not through the CLI, which needs a per-repo cwd to report status and is the exact tool a `Runs:` gap means may not run at all. A registry entry whose path no longer exists is named under "missing path".
 
 A passing line reads `Infra: <tool> OK ...`; a gap reads `Infra: <tool> WARN <reason>`.
+
+### ctx upgrade state (#328, from the #317 seat postmortem)
+
+A separate `Infra: ctx-upgrade` line, independent of the `ctx` line above: an install can run and be
+correctly registered while stuck behind on an old release whose known failure modes are already closed
+upstream — the actual root cause of the seat postmortem that opened #317, a `ctx upgrade status` stuck in
+`State error` from a past DNS failure, with a newer release already available.
+
+This reads only `ctx upgrade status --format json`, bounded by the same `INFRA_TIMEOUT_SECONDS` watchdog
+as every other probe here — never `ctx upgrade check`, which hits the network and, on a host whose
+`auto_upgrade.mode` is `apply`, can itself apply an upgrade; a bounded, read-only self-check must not have
+that side effect. It warns when the status reports `error`, or when `current_version` is numerically
+behind `state.latest_version` (compared as dotted integers, not strings). `latest_version` is whatever
+release ctx's own background checker last recorded, so this can lag a release that shipped after that
+last check; it is still the only network-free signal this probe has. A timeout or unparseable output is a
+`WARN` naming that, never a vacuous `OK`.
 
 #### Stage 2: default-on wiring (#317)
 
@@ -127,8 +153,15 @@ This check was tested with:
 2. **Detect unreachable skill (exit 1):** Skill directory on disk but missing entry file is detected as unreachable.
 3. **Undecided on settings failure (exit 2):** When settings file is unreadable, exit 2 without printing a passing line.
 
-`scripts/test-harness-selfcheck-infra.sh` covers the `Infra:` lines separately: all present/registered/covering/fresh (no `WARN`); ctx missing a provider Orca reports sessions for; a graph older than the staleness threshold; a launcher absent from `PATH` (isolated from any real install elsewhere on the test host's own `PATH`); that none of these change the exit code; the plain-bash timeout fallback runs a quick command without blocking for the bound and still kills a slow one within it; a project-scope server disabled via `disabledMcpjsonServers` naming the settings file that disabled it; a commented-out Codex table header is not a registration; and a Claude-side disabled entry still reaches an active Codex registration for the same tool.
+`scripts/test-harness-selfcheck-infra.sh` covers the `Infra:` lines separately: all present/registered/covering/fresh (no `WARN`); ctx missing a provider Orca reports sessions for; a graph older than the staleness threshold; a launcher absent from `PATH` (isolated from any real install elsewhere on the test host's own `PATH`); that none of these change the exit code; the plain-bash timeout fallback runs a quick command without blocking for the bound and still kills a slow one within it; a project-scope server disabled via `disabledMcpjsonServers` naming the settings file that disabled it; a commented-out Codex table header is not a registration; a Claude-hosted seat does not accept a Codex-only registration and the symmetric Codex-hosted case does not accept a Claude-only one; a Codex-hosted seat with its own registration is OK; and an unmeasurable host warns naming itself rather than guessing a pass from whichever side happens to be reachable.
 The probe runs the launcher command named in the configured servers file; a launcher under a name the default fixture never uses proves it.
 A missing servers file or one with no `code-review-graph` entry each get their own case, naming the file read.
+`Infra: ctx-upgrade` is covered separately: a reported `State error`, a version numerically behind the
+latest one `ctx upgrade check` last recorded, a timeout, unparseable output, and ctx absent from `PATH`.
 
-The check is read-only and does not modify any files.
+The check does not write these configuration files (`.mcp.json`, the Claude/Codex config files, and the
+registry are all read, never written). It is not otherwise side-effect-free: `code-review-graph`'s
+`Runs:` probe (gap 1 above) launches the pinned command with `--version`, and on a host with a cold `uv`
+cache that first run downloads the package and populates that cache — a real filesystem write and real
+network time, not merely a read. A `WARN` from that probe names a cold cache as the likely cause of a
+timeout rather than leaving it as a bare "timed out" (#328).

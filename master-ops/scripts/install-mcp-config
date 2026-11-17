@@ -1,0 +1,126 @@
+#!/bin/bash
+# Merges the pinned MCP server entries (templates/mcp-servers.json) into a
+# workspace's .mcp.json, keeping every other entry already there (#317
+# stage 2, "Required-infra MCP wiring"). Extracted from the inline python3
+# snippet onboarding/08-settings-and-skills.md used to carry (#328 follow-up):
+# a re-stamp never ran that doc, so the merge only ever happened during a
+# live onboarding conversation. This script is the one thing both
+# onboarding/08-settings-and-skills.md and onboarding/upgrade.md now call,
+# so a re-stamp can get there too.
+set -eu
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEFAULT_PINNED="$SCRIPT_DIR/../templates/mcp-servers.json"
+
+usage() {
+  cat <<'USAGE'
+usage: install-mcp-config <workspace-root> [pinned-servers-file]
+       install-mcp-config --print-entry <server-name> [pinned-servers-file]
+
+Merges every server in the pinned file into <workspace-root>/.mcp.json,
+keeping every other entry already there. Idempotent: running it twice in a
+row leaves the file byte-identical on the second run. Refuses (nonzero
+exit, destination untouched) when the destination exists and is not a JSON
+object, or when its top-level "mcpServers" key exists but is not a JSON
+object.
+
+--print-entry <server-name> prints that server's "command" then its first
+arg, one per line, reading the pinned file (default: the template's own
+templates/mcp-servers.json next to this script). It never touches a
+workspace; callers that only need to know the pinned command/pin (tests,
+mainly) use this instead of re-parsing the JSON themselves.
+USAGE
+}
+
+print_entry() {
+  local server="$1" pinned="$2"
+  [ -f "$pinned" ] || { echo "install-mcp-config: pinned servers file not found: $pinned" >&2; return 1; }
+  python3 - "$pinned" "$server" <<'PYEOF'
+import json, sys
+
+path, server = sys.argv[1], sys.argv[2]
+with open(path, encoding="utf-8") as fh:
+    data = json.load(fh)
+entry = (data.get("mcpServers") or {}).get(server)
+if entry is None:
+    sys.exit(f"no {server!r} entry in {path}")
+args = entry.get("args") or []
+print(entry.get("command", ""))
+print(args[0] if args else "")
+PYEOF
+}
+
+merge_into() {
+  local workspace_root="$1" pinned="$2" dest
+  dest="$workspace_root/.mcp.json"
+  [ -f "$pinned" ] || { echo "install-mcp-config: pinned servers file not found: $pinned" >&2; return 1; }
+  python3 - "$dest" "$pinned" <<'PYEOF'
+import json, os, sys, tempfile
+
+dest, pinned_path = sys.argv[1], sys.argv[2]
+
+current = {}
+if os.path.exists(dest):
+    with open(dest, encoding="utf-8") as fh:
+        raw = fh.read()
+    try:
+        current = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        sys.exit(f"refusing to merge: {dest} is not valid JSON ({exc}); fix or remove it by hand first")
+    if not isinstance(current, dict):
+        sys.exit(
+            f"refusing to merge: {dest} top level is a {type(current).__name__}, "
+            "not a JSON object; fix or remove it by hand first"
+        )
+    if "mcpServers" in current and not isinstance(current["mcpServers"], dict):
+        existing_servers = current["mcpServers"]
+        sys.exit(
+            f"refusing to merge: {dest} 'mcpServers' is a {type(existing_servers).__name__}, "
+            "not a JSON object; fix or remove it by hand first"
+        )
+
+with open(pinned_path, encoding="utf-8") as fh:
+    pinned = json.load(fh)
+
+current.setdefault("mcpServers", {}).update(pinned.get("mcpServers") or {})
+
+# Written to a sibling temp file and renamed into place, not opened and
+# serialized directly onto dest: that would already have truncated an
+# unrelated, correctly-merged .mcp.json before a disk-full or similar
+# mid-write failure, leaving a half-written file where this script's own
+# refusal cases promise the original stays untouched. mkstemp (O_EXCL under
+# the hood) rather than a predictable "dest.tmp-<pid>" name, so a pre-existing
+# file or symlink at that exact path cannot redirect the write.
+dest_dir = os.path.dirname(dest) or "."
+fd, tmp_path = tempfile.mkstemp(prefix=".mcp.json.tmp-", dir=dest_dir)
+try:
+    if os.path.exists(dest):
+        # Preserve the existing file's permission bits: mkstemp's own 0600
+        # default must not silently loosen or tighten an operator-chosen mode.
+        os.chmod(tmp_path, os.stat(dest).st_mode & 0o7777)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(current, fh, indent=2)
+        fh.write("\n")
+    os.replace(tmp_path, dest)
+except Exception:
+    try:
+        os.unlink(tmp_path)
+    except OSError:
+        pass
+    raise
+PYEOF
+}
+
+case "${1:-}" in
+  --print-entry)
+    server="${2:?usage: install-mcp-config --print-entry <server-name> [pinned-file]}"
+    print_entry "$server" "${3:-$DEFAULT_PINNED}"
+    ;;
+  -h | --help | "")
+    usage
+    [ -n "${1:-}" ]
+    ;;
+  *)
+    merge_into "$1" "${2:-$DEFAULT_PINNED}"
+    ;;
+esac

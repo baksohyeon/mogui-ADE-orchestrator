@@ -3,16 +3,17 @@
 # This check catches components present on disk but unwired or unreachable
 # from the host discovery paths (section 8 of the charter: silence is not pass).
 #
-# Exit codes: 0 clean (no gap, no blocking warning). 1 a hard gap (skill
-# unreachable, hook missing/unwired, tracker misresolved, seat misseated or
-# undecided, card/twins diverged, template drifted). 2 could not measure at
-# all (settings file unreadable). 3 no hard gap, but at least one line below
-# is graded BLOCK (#336 item 2): a required-infra probe came back
-# unmeasurable, empty, or stale -- the same severity as a hard gap, kept on
-# its own code so a boot card that already treats any non-zero as "stop" can
-# still tell "a check is broken" (1) apart from "a check ran and found a real
-# gap in required infra" (3). A line graded INFO never changes the exit code;
-# the boot is correct without it.
+# Exit codes: 0 clean (no gap, no blocking warning). 1 a hard gap (Orca
+# absent, skill unreachable, hook missing/unwired, tracker misresolved, seat
+# misseated or undecided, card/twins diverged, template drifted). 2 could
+# not measure at all (settings file unreadable). 3 no hard gap, but at least
+# one line below is graded BLOCK (#336 item 2): a required-infra probe
+# failed or is incomplete -- unmeasurable, empty, unregistered, partially
+# covered, or stale -- the same severity as a hard gap, kept on its own code
+# so a boot card that already treats any non-zero as "stop" can still tell
+# "a check is broken" (1) apart from "a check ran and found a real gap in
+# required infra" (3). A line graded INFO never changes the exit code; the
+# boot is correct without it.
 set -e
 
 WORKSPACE_ROOT="{{WORKSPACE_ROOT}}"
@@ -992,16 +993,18 @@ if [ -n "$ctx_upgrade_warn" ]; then
   # (#336 item 2). Every other reason here (a reported State error, a
   # timeout, unparseable output, or ctx absent from PATH) means this probe
   # could not actually confirm the installed version at all -- blocking.
-  case "$ctx_upgrade_warn" in
-    *" is behind "*)
-      informational_warnings=$((${informational_warnings:-0} + 1))
-      echo "INFO: Infra: ctx-upgrade WARN $ctx_upgrade_warn"
-      ;;
-    *)
-      blocking_warnings=$((${blocking_warnings:-0} + 1))
-      echo "BLOCK: Infra: ctx-upgrade WARN $ctx_upgrade_warn"
-      ;;
-  esac
+  # The text match alone is not enough: a failed probe's own raw output
+  # (captured verbatim on a non-timeout failure a few lines above) could in
+  # principle contain the substring "is behind" for an unrelated reason, so
+  # INFO additionally requires ctx_upgrade_status_rc=0 -- the probe actually
+  # ran and returned parseable JSON this message was computed from.
+  if [ "${ctx_upgrade_status_rc:-1}" -eq 0 ] && case "$ctx_upgrade_warn" in *" is behind "*) true ;; *) false ;; esac; then
+    informational_warnings=$((${informational_warnings:-0} + 1))
+    echo "INFO: Infra: ctx-upgrade WARN $ctx_upgrade_warn"
+  else
+    blocking_warnings=$((${blocking_warnings:-0} + 1))
+    echo "BLOCK: Infra: ctx-upgrade WARN $ctx_upgrade_warn"
+  fi
 else
   echo "Infra: ctx-upgrade OK up to date"
 fi

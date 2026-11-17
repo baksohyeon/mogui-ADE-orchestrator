@@ -168,20 +168,33 @@ reset_fixture() {
   printf '{"repos": [{"path": "%s", "alias": "repo-a"}]}\n' "$REPO_A" > "$CRG_REGISTRY"
 }
 
+# The real script reads several of its own knobs from the environment when
+# present (BEADS_DIR, ROLE_STATE_PATH, ORCA_DATA_PATH, TEMPLATE_MANIFEST_FILE,
+# TEMPLATE_ADOPTION_LEDGER, INFRA_TIMEOUT_SECONDS, CODE_REVIEW_GRAPH_STALE_DAYS,
+# MOGUI_INSTANCE_RUNTIME_CONFIG/INSTANCE_RUNTIME_CONFIG). Left set in the
+# calling shell, any one of them would redirect a check outside this fixture
+# and fail every case for a reason that has nothing to do with the grading
+# this test exists to cover -- unset them all so only the overrides below,
+# and the files this fixture wrote under $OPS_DIR/$WORKSPACE_ROOT, apply.
 run_selfcheck() {
-  PATH="$BIN_DIR:$SAFE_PATH" HOME="$TMP/home" \
+  env -u BEADS_DIR -u ROLE_STATE_PATH -u ORCA_DATA_PATH \
+    -u TEMPLATE_MANIFEST_FILE -u TEMPLATE_ADOPTION_LEDGER \
+    -u INFRA_TIMEOUT_SECONDS -u CODE_REVIEW_GRAPH_STALE_DAYS \
+    -u MOGUI_INSTANCE_RUNTIME_CONFIG -u INSTANCE_RUNTIME_CONFIG \
+    PATH="$BIN_DIR:$SAFE_PATH" HOME="$TMP/home" \
     MOGUI_MASTER_HOST_RUNTIME=claude \
     CLAUDE_MCP_CONFIG="$CLAUDE_MCP_CONFIG" CLAUDE_USER_SETTINGS="$CLAUDE_USER_SETTINGS" \
     CODEX_MCP_CONFIG="$CODEX_MCP_CONFIG" \
     CODE_REVIEW_GRAPH_REGISTRY="$CRG_REGISTRY" MCP_SERVERS_CONFIG="$CRG_MCP_CONFIG" \
-    ORCA_WORKSPACE_ID="$SEAT_WS" \
+    ORCA_WORKSPACE_ID="${1:-$SEAT_WS}" \
     bash "$OPS_DIR/scripts/harness-selfcheck.sh"
 }
 
-# $1 = case name, $2 = expected substring, $3 = expected exit code.
+# $1 = case name, $2 = expected substring, $3 = expected exit code,
+# $4 = optional ORCA_WORKSPACE_ID override (default: $SEAT_WS, the recorded one).
 check_case() {
-  local name="$1" expect="$2" want_rc="$3" out rc
-  out=$(run_selfcheck 2>&1)
+  local name="$1" expect="$2" want_rc="$3" wsid="${4:-}" out rc
+  out=$(run_selfcheck "$wsid" 2>&1)
   rc=$?
   if printf '%s' "$out" | grep -qF "$expect" && [ "$rc" -eq "$want_rc" ]; then
     echo "ok   — $name"
@@ -236,6 +249,61 @@ reset_fixture
 printf '{"repos": []}\n' > "$CRG_REGISTRY"
 check_case "an empty registry (empty probe result) is graded blocking" \
   "BLOCK: Infra: code-review-graph WARN no repository registered" 3
+
+# D. The main ctx line itself (not just ctx-upgrade or code-review-graph)
+# is graded blocking, end to end: ctx absent from PATH is a single blocking
+# warning with code-review-graph and ctx-upgrade otherwise clean.
+reset_fixture
+rm -f "$BIN_DIR/ctx"
+ORIGINAL_SAFE_PATH="$SAFE_PATH"
+real_ctx=$(PATH="$SAFE_PATH" command -v ctx 2>/dev/null) || true
+if [ -n "$real_ctx" ]; then
+  real_ctx_dir=$(dirname "$real_ctx")
+  SAFE_PATH=$(printf '%s' "$SAFE_PATH" | tr ':' '\n' | grep -vF "$real_ctx_dir" | tr '\n' ':')
+  SAFE_PATH="${SAFE_PATH%:}"
+fi
+check_case "the main ctx line is tagged BLOCK:" \
+  "BLOCK: Infra: ctx WARN absent from PATH" 3
+check_case "the main ctx line escalates the exit code on its own" \
+  "Self-check summary: 2 blocking warning(s), 0 informational warning(s)" 3
+SAFE_PATH="$ORIGINAL_SAFE_PATH"
+
+# E. A failed (non-timeout) ctx-upgrade probe whose raw first line of output
+# happens to contain the substring "is behind" for an unrelated reason is
+# still graded blocking: the probe never returned 0, so it never actually
+# measured a version to compare, and text content alone must not grant INFO.
+reset_fixture
+cat > "$BIN_DIR/ctx" <<EOF
+#!/bin/bash
+if [ "\$1" = "status" ]; then
+  printf '%s\n' '{"daemon": {"jobs": {"core_refresh": {"progress": {"providers": ["claude", "codex"]}}}}}'
+  exit 0
+fi
+if [ "\$1" = "sources" ]; then
+  cat "$CTX_SOURCES_FILE"
+  exit 0
+fi
+if [ "\$1" = "upgrade" ] && [ "\$2" = "status" ]; then
+  echo "scheduled rollout is behind plan, aborting"
+  exit 1
+fi
+exit 1
+EOF
+chmod +x "$BIN_DIR/ctx"
+check_case "a failed probe whose text happens to say 'is behind' is still graded BLOCK:" \
+  "BLOCK: Infra: ctx-upgrade WARN scheduled rollout is behind plan, aborting" 3
+
+# F. The Seat: NOTICE line (workspace id rotated, same path, no clone) is
+# graded informational end to end: exit stays 0 on the whole script, the
+# same proof test-seat-check.sh's own fixture cannot give because its
+# lighter setup does not carry the whole run to a clean exit. "other::"
+# shares $WORKSPACE_ROOT with the recorded id but differs before "::", so
+# it resolves to the same sole, correct seat and only the record is stale.
+reset_fixture
+check_case "the rotated-workspace-id seat notice is tagged INFO:" \
+  "Seat: INFO: NOTICE" 0 "other::$WORKSPACE_ROOT"
+check_case "the rotated-workspace-id seat notice never escalates the exit code" \
+  "Self-check summary: 0 blocking warning(s), 1 informational warning(s)" 0 "other::$WORKSPACE_ROOT"
 
 echo "----"
 echo "passed: $pass  failed: $fail"

@@ -389,8 +389,10 @@ write_orca_data "${CLONE_WS#folder:}|$SEAT_PATH|0"
 check "rotated id on a unique path is a notice, not a block" "sole workspace" "$CLONE_WS"
 check_line2 "rotated id asks for the record to be updated" "NOTICE" "$CLONE_WS"
 # #336 item 2: this notice is graded informational (the seat already proved
-# sole and correct above; only the role-state record is stale), so it must
-# carry the INFO: tag and never move the exit code off 0.
+# sole and correct above; only the role-state record is stale). check_line2
+# pipes through sed and cannot carry the real exit code back here, so this
+# only proves the INFO: tag; test-harness-selfcheck-grading.sh's end-to-end
+# fixture proves the exit code stays 0 against the same seat shape.
 check_line2 "rotated id notice is graded INFO:, not blocking" "INFO:" "$CLONE_WS"
 
 echo "----"

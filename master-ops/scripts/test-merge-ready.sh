@@ -28,6 +28,14 @@ OTHER_SHA="fedcba9876543210fedcba9876543210fedcba98"
 STUB_DIR="${WORK_DIR}/stub"
 mkdir -p "${STUB_DIR}"
 
+# A fixture stop-paths file, not the real config/merge-ready-stop-paths.txt:
+# that file is instance-owned and does not exist at all in a rendered,
+# template-only checkout (issue measured in CI), and this test should not
+# depend on the real seat's content anyway.
+STOP_PATHS_FIXTURE="${WORK_DIR}/merge-ready-stop-paths.txt"
+printf '%s\n' "config/gitleaks.toml" >"${STOP_PATHS_FIXTURE}"
+export MERGE_READY_STOP_PATHS="${STOP_PATHS_FIXTURE}"
+
 cat >"${STUB_DIR}/gh" <<'EOF'
 #!/usr/bin/env bash
 # Fixture gh: reads canned JSON (or, for the tarball endpoint, raw bytes)

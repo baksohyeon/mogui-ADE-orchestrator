@@ -364,6 +364,21 @@ else
   fail "stale rate-limit comment exited ${rc}, want 1 naming test-bot: ${out}"
 fi
 
+# --- a bot's sticky comment, created before the head commit but edited at
+# or after it, still covers the bot: cubic and CodeRabbit both edit one
+# comment in place on every push rather than posting a fresh one, so
+# `updated_at`, not only `created_at`, has to move this measurement -------
+edited_comment_dir="${WORK_DIR}/edited-comment-covers-bot"
+edited_comment='[{"body":"Summary of this PR.","user":{"login":"test-bot[bot]","type":"Bot"},"created_at":"'"${STALE_DATE}"'","updated_at":"'"${FRESH_DATE}"'"}]'
+write_fixture "${edited_comment_dir}" "" 0 '[{"filename":"README.md"}]' "${MASTER_PASS_MARKER}" "${DEFAULT_CHECKS}" "[]" "OPEN" "false" "${edited_comment}"
+out=$(run_case "${edited_comment_dir}")
+rc=$?
+if [ "${rc}" -eq 0 ]; then
+  ok "a bot's comment created before the head but edited after it still covers the bot (${out})"
+else
+  fail "edited-after-head comment exited ${rc}, want 0: ${out}"
+fi
+
 # --- an empty bots file fails closed, the same way an empty stop-paths
 # file does, rather than reading as "no bots required" --------------------
 empty_bots_install="${WORK_DIR}/install-empty-bots"
@@ -448,6 +463,23 @@ if [ "${rc}" -eq 0 ]; then
   ok "a path inside the contract's writes globs does not ask (${out})"
 else
   fail "path inside contract writes exited ${rc}, want 0: ${out}"
+fi
+
+# --- an explicit empty writes: [] list declares an empty scope, so every
+# changed path is outside it: this must ask early (before any test re-run),
+# the same as a non-empty list a path falls outside, never silently pass
+# through as if an empty list meant "nothing to check" --------------------
+empty_writes_dir="${WORK_DIR}/empty-writes-list"
+write_fixture "${empty_writes_dir}" "" 0 '[{"filename":"anything.py"}]' "${MASTER_PASS_MARKER}"
+empty_writes_contract="${WORK_DIR}/empty-writes-contract.md"
+printf '%s\n' "---" "writes: []" "---" >"${empty_writes_contract}"
+empty_writes_sentinel="${WORK_DIR}/empty-writes-sentinel"
+out=$(GH_FIXTURE_DIR="${empty_writes_dir}" "${MERGE_READY}" --repo "${REPO}" --pr 1 --test-command "touch '${empty_writes_sentinel}'" --contract "${empty_writes_contract}")
+rc=$?
+if [ "${rc}" -eq 2 ] && printf '%s' "${out}" | grep -qi "outside contract writes" && [ ! -e "${empty_writes_sentinel}" ]; then
+  ok "an explicit writes: [] asks early for every changed path, no test run (${out})"
+else
+  fail "writes: [] exited ${rc} (sentinel exists: $([ -e "${empty_writes_sentinel}" ] && echo yes || echo no)), want 2 with no test run: ${out}"
 fi
 
 # --- a glob with its own brackets (an fnmatch character class) survives the

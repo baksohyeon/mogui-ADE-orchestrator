@@ -233,7 +233,12 @@ if contract_path:
     # A missing writes: field is a not-ready case, not an early ask; it is
     # left to the full post-test aggregator below so it gets one real
     # measurement and one message, not a second wording from this shortcut.
-    if globs:
+    # An explicit empty list (`writes: []`, schema-valid) is not the same
+    # as a missing field: it declares an empty scope, so every changed path
+    # is outside it, the same way the final aggregator below reads it; a
+    # bare `if globs:` here would treat `[]` as falsy and silently skip the
+    # check that `[]` should actually fail hardest.
+    if globs is not None:
         outside = [p for p in changed_paths if not any(fnmatch.fnmatch(p, g) for g in globs)]
         if outside:
             problems_ask.append(f"{len(outside)} path(s) outside contract writes: " + ", ".join(outside))
@@ -248,6 +253,14 @@ EARLY_RC=$?
 if [ "${EARLY_RC}" -eq 2 ]; then
   echo "${EARLY_VERDICT}"
   exit 2
+fi
+if [ "${EARLY_RC}" -ne 0 ]; then
+  # Anything other than a clean pass-through (0) or a decided "ask" (2) is
+  # the early check itself failing to run, not a quiet green light: falling
+  # through to the test re-run on an unrecognized exit code would be
+  # exactly the "a measurement that could not run is not a passed
+  # measurement" mistake this script's own header promises never to make.
+  not_ready "early stop-list/contract check failed unexpectedly (exit ${EARLY_RC})${EARLY_VERDICT:+: ${EARLY_VERDICT}}"
 fi
 
 # --- step 2: tarball re-run. The test command is chosen per repository by
@@ -487,12 +500,17 @@ try:
     # with this exact head: a GraphQL review on it (any state, including a
     # plain COMMENTED one, which section 1 above does not count as a
     # decision but which still proves the bot looked at this commit), or an
-    # issue comment posted at or after the head commit's own timestamp (a
-    # "summary" for anything else, or a "rate-limited" notice specifically).
-    # An issue comment carries no commit reference at all, so the timestamp
-    # bound is the closest available proxy for "about this head"; a bot
-    # that stayed silent on the current push is not covered by a stale
-    # comment from an earlier one.
+    # issue comment posted OR LAST EDITED at or after the head commit's own
+    # timestamp (a "summary" for anything else, or a "rate-limited" notice
+    # specifically). Checking only `created_at` would read a bot's genuine,
+    # just-updated sticky comment as stale: cubic and CodeRabbit both post
+    # one issue comment per PR and edit it in place on every push rather
+    # than posting a fresh one, so `updated_at` is the field that actually
+    # moves on the push this measurement cares about. An issue comment
+    # carries no commit reference at all, so the later of the two
+    # timestamps is the closest available proxy for "about this head"; a
+    # bot that stayed silent on the current push is not covered by a stale
+    # comment from an earlier one that nothing has touched since.
     bots = [
         line.strip() for line in Path(bots_file).read_text(encoding="utf-8").splitlines()
         if line.strip() and not line.strip().startswith("#")
@@ -506,7 +524,8 @@ try:
         user = comment.get("user") or {}
         if user.get("type") != "Bot":
             continue
-        if (comment.get("created_at") or "") < head_commit_date:
+        comment_time = max(comment.get("created_at") or "", comment.get("updated_at") or "")
+        if comment_time < head_commit_date:
             continue
         login = strip_bot_suffix(user.get("login", ""))
         kind = "rate-limited" if RATE_LIMIT_RE.search(comment.get("body") or "") else "summary"

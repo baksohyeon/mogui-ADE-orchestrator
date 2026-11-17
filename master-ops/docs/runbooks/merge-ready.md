@@ -47,14 +47,19 @@ directory before the brief ships, so the worker never needs to know where this r
 1b. **The review-bot roster.** Every login in `config/merge-ready-bots.txt` must show some
    engagement with the exact head: a GraphQL review on it (any state, including a plain
    `COMMENTED` one, which measurement 1 does not treat as a decision but which still proves the
-   bot looked at this commit), or an issue comment posted at or after the head commit's own
-   committer timestamp. The REST issue-comments API reports a bot's login with a `[bot]` suffix
-   (`coderabbitai[bot]`) that the GraphQL API does not (`coderabbitai`); both sides are compared
-   with that suffix stripped. A bot with no review and no qualifying comment is not ready, naming
-   the bot. The one exemption the contract grants: an issue comment from that bot matching "review
-   limit reached" or "rate limited by" (case-insensitive), posted at or after the head commit's
-   timestamp, counts as covering the bot even with no actual review, since GitHub's own rate
-   limit silenced it rather than the bot having nothing to say. An empty bots file fails closed
+   bot looked at this commit), or an issue comment posted or last edited at or after the head
+   commit's own committer timestamp. The "or last edited" half matters in practice: cubic and
+   CodeRabbit both post one issue comment per PR and edit it in place on every push rather than
+   posting a fresh one each time, so a comment's `updated_at` is the field that actually moves on
+   the push this measurement cares about; comparing only `created_at` would read that bot's
+   genuine, just-updated comment as stale. The REST issue-comments API reports a bot's login with
+   a `[bot]` suffix (`coderabbitai[bot]`) that the GraphQL API does not (`coderabbitai`); both
+   sides are compared with that suffix stripped. A bot with no review and no qualifying comment
+   is not ready, naming the bot. The one exemption the contract grants: an issue comment from that
+   bot matching "review limit reached" or "rate limited by" (case-insensitive), posted or edited
+   at or after the head commit's timestamp, counts as covering the bot even with no actual
+   review, since GitHub's own rate limit silenced it rather than the bot having nothing to say.
+   An empty bots file fails closed
    the same way an empty stop-paths file does (see measurement 5), for the same reason: a worker
    with shell access could otherwise blank it out and neutralize the whole roster check.
 2. **Open review threads.** `reviewThreads(isResolved)` on the head must show zero unresolved
@@ -160,12 +165,26 @@ operator's `--test-command` to actually be the real test suite. The worker/maste
 master-named marker", which is a convention enforced by naming, not an identity check this script
 can verify.
 
-The review-bot roster's "for the head or newer" timing bound (measurement 1b) is an
-approximation: a REST issue comment carries no commit reference at all, so the head commit's own
-committer timestamp is the closest available proxy for "this comment is about the current push",
-not a guarantee. A bot that re-posts an old comment's text verbatim after a genuinely new push,
-or whose comment's timestamp the GitHub API reports with clock skew, would read the same way a
-comment truly about the new head does.
+The review-bot roster's "for the head or newer" timing bound (measurement 1b, compared against
+the later of a comment's `created_at` and `updated_at`) is an approximation: a REST issue comment
+carries no commit reference at all, so the head commit's own committer timestamp is the closest
+available proxy for "this comment is about the current push", not a guarantee. A bot that
+re-posts or re-edits an old comment's text verbatim after a genuinely new push, or whose
+comment's timestamp the GitHub API reports with clock skew, would read the same way a comment
+truly about the new head does; a PR author who can set their own head commit's committer date
+(`GIT_COMMITTER_DATE` is fully author-controlled) could in principle backdate it to make an old
+bot comment appear to qualify, though this has not been demonstrated end to end against this
+script.
+
+A contract's `writes:` field schema-validly accepts an explicit empty list (`writes: []`,
+declaring that nothing is in scope); both the early and the final stop-list/writes-scope checks
+treat that the same way, as every changed path being outside scope, never as "no list, so
+nothing to check" (that reading is reserved for a genuinely missing `writes:` field, which is a
+not-ready case, not an ask). The early check's own stop-list/writes-scope pass is a second,
+independent read of the same two rules the final aggregator applies; if that early pass itself
+fails to run to completion for any reason other than deciding 0 (proceed) or 2 (ask), the script
+treats that as not ready rather than silently falling through to the test re-run as if the early
+pass had cleanly passed.
 
 `--contract`'s `writes` globs match with Python's `fnmatch`, whose `*` already crosses `/`, so
 `a/**` and `a/*` match the same set of paths; a contract relying on `**` meaning "this directory
@@ -183,6 +202,18 @@ every install, old or newly onboarded, has to add this file by hand once, from t
 the stop list when it is absent, and that path is resolved once, relative to this script's own
 install location, with no environment override: a worker with ordinary shell access could
 otherwise point an override at an empty file and neutralize the stop list entirely.
+
+The test re-run executes the PR's own code (`eval "${TEST_CMD}"`, run from the extracted tarball)
+with the same filesystem privileges as the rest of this script, under a working directory one
+level below a predictable, fixed set of sibling temp-file names (`checks.json`, `graphql.json`,
+and so on) that this script itself only writes to *after* the test command has already run. A
+test suite that plants a symlink at one of those sibling paths before exiting could have its
+target clobbered by this script's own later `gh api ... > file` write, since a dangling symlink
+does not trip `noclobber`-style "already exists" checks the way an existing regular file would.
+This is a real gap, present since round 1, not introduced or closed by round 2; it is noted here
+rather than fixed in this change, since a correct fix needs `O_NOFOLLOW`-safe file creation
+(bash's `>` redirection cannot express that on its own) and deserves its own measured round
+rather than a rushed patch under this one's scope.
 
 Reviews and review threads are read up to 100 each; a PR past either limit is "not ready, rerun
 with pagination" rather than measured on a partial page, but this script does not implement

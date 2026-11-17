@@ -388,6 +388,10 @@ write_role_state "$SEAT_PATH" "$SEAT_WS"
 write_orca_data "${CLONE_WS#folder:}|$SEAT_PATH|0"
 check "rotated id on a unique path is a notice, not a block" "sole workspace" "$CLONE_WS"
 check_line2 "rotated id asks for the record to be updated" "NOTICE" "$CLONE_WS"
+# #336 item 2: this notice is graded informational (the seat already proved
+# sole and correct above; only the role-state record is stale), so it must
+# carry the INFO: tag and never move the exit code off 0.
+check_line2 "rotated id notice is graded INFO:, not blocking" "INFO:" "$CLONE_WS"
 
 echo "----"
 echo "passed: $pass  failed: $fail"

@@ -146,8 +146,9 @@ above.
 (template #339); a send or `dispatch --terminal` to the old handle fails with `inject_rejected` or reads `exited`;
 keep the task and dispatch ids and resolve the live handle before each read, send, dispatch, approval or close:
 `orca orchestration dispatch-show --task <task> --json` gives `result.dispatch.assignee_pane_key`; the `orca
-worktree ps --json` agent with that `paneKey` is the worker; its handle is the `orca terminal list` row in the same
-worktree; never match on a terminal `title`.
+worktree ps --json` agent with that `paneKey` is the worker; the `orca terminal list --json` row whose `tabId` and
+`leafId` equal the two parts of `assignee_pane_key` is the worker's pane and its `handle` is the live handle; a
+worktree can hold several terminals, so never pick the row by worktree alone; never match on a terminal `title`.
 
 **A re-attach can close a dispatch while its agent lives.** after a re-attach,
 `dispatch-show` can read `failed` with `termination_reason: operator_close` and no operator close; `reply` to an

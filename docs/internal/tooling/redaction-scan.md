@@ -37,6 +37,32 @@ redaction-scan: OK: 0 findings (mode=tracked, files=144, commit-messages=not-sca
 
 `org-rules=N` counts rules actually loaded into the run, not lines the file happens to hold.
 `org-rules-source` names whether the file came from the environment, the workspace root, or the legacy home path. `profile=export` is the safe default and loads every valid rule. `profile=internal` skips rules whose id starts with `workspace_` and reports them as `export-only-skipped=N`.
+`pre-existing=N` and `stale-fingerprints=N` are explained below.
+
+### `--range` judges the lines the range itself touches
+
+A full-tree or staged scan flags every match on the file, full stop. `--range` is different: a finding on a line the range adds or changes still blocks, exactly as before, but a finding on a line already present on the range's base prints as a pre-existing warning (count, file, line, rule) and does not affect the exit code. Measured case: a lineage file whose append added zero new findings was blocked by 114-115 that were already there before this change; `--range` no longer does that.
+
+```console
+$ scripts/redaction-scan.sh --range origin/main..HEAD
+redaction-scan: WARNING — 2 pre-existing finding(s) outside this range's added lines (not blocking in range mode, still exempt only via .gitleaksignore):
+  notes.md:40  [internal_host] Internal or corp hostname  :: host.example.com
+redaction-scan: OK: 0 findings (mode=range, files=3, ..., pre-existing=2, ...)
+```
+
+The judgment only ever makes a file's findings *more* lenient, never adds scope: a file the range diff cannot be read for safely (an unreadable or empty diff for a file the range lists as changed, most commonly a binary file) fails the whole scan (exit 2) rather than guessing either way, and a file the working tree no longer matches at the range's own tip is left out of the judgment entirely, so every finding in it stays blocking. Full-file and staged modes never consult this at all.
+
+### Stale `.gitleaksignore` fingerprints
+
+A fingerprint is `path:rule:line`. gitleaks 8.30.1 has no content-based fingerprint (confirmed against its own source, `detect/detect.go`: the fingerprint is built from the file path, rule id, and start line alone), so adding a line above an exempted finding shifts it to a new fingerprint, and the old one silently stops matching anything, which is not visible on its own: the finding it used to cover either reappears as a live, blocking finding (safe, if noisy) or the fingerprint simply goes unused forever (invisible drift). In tracked-mode runs, when `.gitleaksignore` holds entries, the scan reruns the same files with ignore-matching disabled and reports any listed fingerprint that now matches nothing live:
+
+```console
+redaction-scan: WARNING — 2 .gitleaksignore fingerprint(s) match no current finding (stale; the exempted line likely shifted or was removed); review .gitleaksignore:
+secret.txt:aws_access_key:1
+secret.txt:aws-access-token:1
+```
+
+This never fails the scan on its own: a fingerprint going stale because its line really did move with the secret still present already fails the normal pass above, on its own merits. Staged and range-mode runs skip this check, since they only ever touch a subset of files and would misreport an untouched file's still-valid fingerprint as stale.
 
 ### Organization-specific rules (`REDACTION_EXTRA_PATTERNS`)
 

@@ -398,7 +398,12 @@ list_scan_files() {
   case "${MODE}" in
     tracked) git ls-files -z ;;
     staged)  git diff --cached --name-only -z --diff-filter=ACMR ;;
-    range)   git diff --name-only -z --diff-filter=ACMR "${RANGE}" ;;
+    # --no-renames: a rename this script let through as "R" would show the
+    # new path with zero content hunks, which the added-lines judgment below
+    # would read as "nothing added here" even on a first-ever appearance of
+    # the content at this path. Forcing delete+add makes the new path's
+    # whole content a fresh addition instead.
+    range)   git diff --no-renames --name-only -z --diff-filter=ACMR "${RANGE}" ;;
   esac
 }
 
@@ -502,6 +507,103 @@ if [[ "${list_rc}" -ne 0 ]]; then
   exit 2
 fi
 
+# Range mode only: which lines the range itself added or changed, per file, so
+# a finding already on the range's base can be told apart from one the range
+# introduces. Full-file and staged modes never read this map, so they are
+# unaffected. A file this cannot be judged for safely is a FAIL, never a
+# silent "nothing added here" — that silence is exactly the defect this adds.
+ADDED_LINES_MAP="${WORK_DIR}/added-lines.json"
+if [[ "${MODE}" == "range" ]]; then
+  # "A.." (open-ended) is valid git range syntax meaning "A..HEAD", and the
+  # earlier validation accepts it (it contains ".."), but the parameter
+  # expansion below then yields an empty string rather than HEAD.
+  RANGE_TO="${RANGE##*..}"
+  RANGE_TO="${RANGE_TO:-HEAD}"
+  ADDED_LINES_ERROR="${WORK_DIR}/added-lines-error"
+  if ! "${PYTHON}" - "${RANGE}" "${RANGE_TO}" "${FILES_LIST}" "${ADDED_LINES_MAP}" \
+    > "${ADDED_LINES_ERROR}" <<'PY'
+import json
+import re
+import subprocess
+import sys
+
+range_spec, range_to, files_list_path, out_path = sys.argv[1:5]
+
+with open(files_list_path, "rb") as handle:
+    raw = handle.read()
+paths = [p.decode("utf-8") for p in raw.split(b"\0") if p]
+
+HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", re.MULTILINE)
+# Anchored to a whole line, not a substring search over the whole diff: an
+# unanchored "Binary files " in text and " differ" in text matched this
+# very check's own two string literals when this file's diff was scanned
+# against itself (measured), failing every range-mode run on this commit.
+BINARY_MARKER_RE = re.compile(r"^Binary files .* differ$", re.MULTILINE)
+
+added = {}
+for path in paths:
+    # gitleaks is about to scan the file on disk, but the range diff numbers
+    # lines against the range's own tip commit. If the two disagree, a line
+    # number from the diff would not point at the line gitleaks just read,
+    # so this file gets no entry here: every finding in it stays blocking,
+    # same as outside range mode, rather than a judgment built on a mismatch.
+    tip_check = subprocess.run(
+        [
+            "git", "diff", "--quiet", "--no-color", "--no-ext-diff",
+            "--no-textconv", range_to, "--", path,
+        ]
+    )
+    if tip_check.returncode not in (0, 1):
+        print(
+            f"could not compare the working tree to {range_to} for {path} "
+            f"(git exit {tip_check.returncode})"
+        )
+        sys.exit(1)
+    if tip_check.returncode == 1:
+        continue
+
+    diff = subprocess.run(
+        [
+            "git", "diff", "--no-color", "--no-renames", "--no-ext-diff",
+            "--no-textconv", "-U0", range_spec, "--", path,
+        ],
+        capture_output=True, text=True,
+    )
+    if diff.returncode != 0:
+        print(
+            f"git diff failed on {path} (exit {diff.returncode}): "
+            f"{diff.stderr.strip()[:200]}"
+        )
+        sys.exit(1)
+    text = diff.stdout
+    if not text.strip():
+        print(f"empty diff for {path}, but the range lists it as changed")
+        sys.exit(1)
+    if BINARY_MARKER_RE.search(text):
+        print(f"binary diff for {path}; cannot tell which lines it added")
+        sys.exit(1)
+    lines = set()
+    for match in HUNK_RE.finditer(text):
+        start = int(match.group(1))
+        count = int(match.group(2)) if match.group(2) is not None else 1
+        if count == 0:
+            # A pure-deletion hunk ("+N,0") adds nothing on the new side.
+            continue
+        lines.update(range(start, start + count))
+    # No hunks with real text (a pure mode change, for example) means the
+    # range made no content change here: nothing in this file is new.
+    added[path] = sorted(lines)
+
+with open(out_path, "w", encoding="utf-8") as handle:
+    json.dump(added, handle)
+PY
+  then
+    reason="$(cat "${ADDED_LINES_ERROR}" 2>/dev/null)"
+    echo "redaction-scan: FAIL — could not determine added lines for range mode${reason:+: ${reason}}" >&2
+    exit 2
+  fi
+fi
+
 file_count=0
 while IFS= read -r -d '' path; do
   [[ -z "${path}" ]] && continue
@@ -509,14 +611,143 @@ while IFS= read -r -d '' path; do
   scan_path "${path}"
 done < "${FILES_LIST}"
 
+# Stale .gitleaksignore fingerprints (tracked mode only; a staged or range
+# subset would make an untouched file's still-valid fingerprint read as
+# stale purely because this run never scanned that file). A fingerprint is
+# path:rule:line: it drifts as soon as a line above it shifts, so this reruns
+# the same files — and, when this run also scanned commit messages, those
+# same commits — with ignore-matching turned off, and reports any listed
+# fingerprint that now matches nothing live. This never fails the scan on
+# its own: the finding the drift exposes, if any, already fails on its own
+# in the normal pass above, uncovered by any fingerprint that still matches
+# it. A malformed .gitleaksignore (for example, a non-UTF-8 byte) is a
+# distinct problem from drift and fails closed with its own named reason.
+GITLEAKSIGNORE="${TARGET_ROOT}/.gitleaksignore"
+STALE_FINGERPRINTS_FILE="${WORK_DIR}/stale-fingerprints.txt"
+: > "${STALE_FINGERPRINTS_FILE}"
+if [[ "${MODE}" == "tracked" && -f "${GITLEAKSIGNORE}" ]] \
+  && grep -qvE '^[[:space:]]*(#|$)' "${GITLEAKSIGNORE}"; then
+  UNFILTERED_REPORTS="${WORK_DIR}/reports-unfiltered"
+  mkdir -p "${UNFILTERED_REPORTS}"
+  NO_IGNORE_DIR="${WORK_DIR}/no-ignore"
+  mkdir -p "${NO_IGNORE_DIR}"
+  ufi_index=0
+  while IFS= read -r -d '' path; do
+    [[ -z "${path}" ]] && continue
+    [[ -f "${path}" ]] || continue
+    ufi_index=$((ufi_index + 1))
+    if ! gitleaks dir "${path}" \
+      --config "${CONFIG}" \
+      --no-banner \
+      --exit-code 0 \
+      --report-format json \
+      --report-path "${UNFILTERED_REPORTS}/${ufi_index}.json" \
+      -i "${NO_IGNORE_DIR}" \
+      >/dev/null 2>&1; then
+      echo "redaction-scan: FAIL — gitleaks failed on ${path} during the fingerprint-staleness check (engine error, not a finding)" >&2
+      exit 2
+    fi
+  done < "${FILES_LIST}"
+
+  # Commit-message findings (scan_commit_messages above) use gitleaks' stdin
+  # fingerprint shape (no file, so "" instead of a path) and never appear in
+  # the dir rescan above: without this, every .gitleaksignore entry exempting
+  # one would always read as stale, even while actively suppressing a live
+  # secret in the same run (measured with --commit-messages). `gitleaks
+  # stdin` has no source directory of its own, so -i does not replace its
+  # default "." lookup the way it does for `dir`: it reads from both the
+  # working directory's real .gitleaksignore AND -i (measured with -l
+  # debug, two "found .gitleaksignore file" lines). Running it with its
+  # working directory set to NO_IGNORE_DIR, which holds no .gitleaksignore,
+  # is what actually disables it.
+  if [[ -n "${COMMIT_RANGE}" ]]; then
+    ufm_index=0
+    while IFS= read -r sha; do
+      [[ -z "${sha}" ]] && continue
+      ufm_index=$((ufm_index + 1))
+      if ! ( cd "${NO_IGNORE_DIR}" && git -C "${TARGET_ROOT}" log -1 --format=%B "${sha}" \
+        | gitleaks stdin \
+            --config "${CONFIG}" \
+            --no-banner \
+            --exit-code 0 \
+            --report-format json \
+            --report-path "${UNFILTERED_REPORTS}/commit-${ufm_index}.json" \
+            -i "${NO_IGNORE_DIR}" \
+            >/dev/null 2>&1 ); then
+        echo "redaction-scan: FAIL — gitleaks failed on commit ${sha:0:12} message during the fingerprint-staleness check (engine error, not a finding)" >&2
+        exit 2
+      fi
+    done < "${WORK_DIR}/commits-to-scan"
+  fi
+
+  STALE_CHECK_ERROR="${WORK_DIR}/stale-check-error"
+  if ! "${PYTHON}" - "${GITLEAKSIGNORE}" "${UNFILTERED_REPORTS}" "${STALE_FINGERPRINTS_FILE}" \
+    > "${STALE_CHECK_ERROR}" <<'PY'
+import json
+import pathlib
+import sys
+
+ignore_path, reports_dir, out_path = (
+    pathlib.Path(sys.argv[1]),
+    pathlib.Path(sys.argv[2]),
+    pathlib.Path(sys.argv[3]),
+)
+
+try:
+    ignore_text = ignore_path.read_text(encoding="utf-8")
+except (OSError, UnicodeDecodeError) as exc:
+    print(f"cannot read {ignore_path}: {exc}")
+    sys.exit(1)
+
+listed = []
+for line in ignore_text.splitlines():
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        continue
+    listed.append(stripped)
+
+live = set()
+for report in sorted(pathlib.Path(reports_dir).glob("*.json")):
+    try:
+        rows = json.loads(report.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        continue
+    for row in rows:
+        fingerprint = row.get("Fingerprint")
+        if fingerprint:
+            live.add(fingerprint)
+
+stale = [fp for fp in listed if fp not in live]
+out_path.write_text("".join(f"{fp}\n" for fp in stale), encoding="utf-8")
+PY
+  then
+    reason="$(cat "${STALE_CHECK_ERROR}" 2>/dev/null)"
+    echo "redaction-scan: FAIL — could not check .gitleaksignore for stale fingerprints${reason:+: ${reason}}" >&2
+    exit 2
+  fi
+fi
+
+STALE_COUNT="$(wc -l < "${STALE_FINGERPRINTS_FILE}" | tr -d ' ')"
+if [[ "${STALE_COUNT}" -gt 0 ]]; then
+  echo "redaction-scan: WARNING — ${STALE_COUNT} .gitleaksignore fingerprint(s) match no current finding (stale; the exempted line likely shifted or was removed); review ${GITLEAKSIGNORE}:" >&2
+  cat "${STALE_FINGERPRINTS_FILE}" >&2
+fi
+
 FINDINGS_FILE="${WORK_DIR}/findings.txt"
-"${PYTHON}" - "${REPORTS}" "${FINDINGS_FILE}" > /dev/null <<'PY'
+PREEXISTING_FILE="${WORK_DIR}/preexisting.txt"
+"${PYTHON}" - "${REPORTS}" "${FINDINGS_FILE}" "${PREEXISTING_FILE}" "${MODE}" "${ADDED_LINES_MAP}" > /dev/null <<'PY'
 import json
 import pathlib
 import re
 import sys
 
-reports, out_path = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+reports, findings_path, preexisting_path, mode, added_map_path = (
+    pathlib.Path(sys.argv[1]),
+    pathlib.Path(sys.argv[2]),
+    pathlib.Path(sys.argv[3]),
+    sys.argv[4],
+    pathlib.Path(sys.argv[5]),
+)
 MASKS = (
     (re.compile(r"(AKIA)[0-9A-Z]{16}"), r"\1****************"),
     (re.compile(r"(gh[pousr]_)[A-Za-z0-9]{8,}"), r"\1********"),
@@ -527,40 +758,72 @@ MASKS = (
     (re.compile(r"""(=\s*["'])[^"']{8,}(["'])"""), r"\1***\2"),
 )
 
-lines = set()
+# Range mode only. Absent here, every finding stays blocking: the same
+# behaviour full-file and staged modes always had.
+added_lines = {}
+if mode == "range" and added_map_path.is_file():
+    try:
+        added_lines = json.loads(added_map_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        added_lines = {}
+
+blocking = set()
+preexisting = set()
 for report in sorted(reports.glob("*.json")):
     try:
         rows = json.loads(report.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         continue
     for row in rows:
+        file_ = row.get("File", "?")
+        start = row.get("StartLine", 0) or 0
+        end = row.get("EndLine", start) or start
         snippet = (row.get("Match") or "").strip()
         for pattern, replacement in MASKS:
             snippet = pattern.sub(replacement, snippet)
-        lines.add(
-            "  {file}:{line}  [{rule}] {desc}  :: {snippet}".format(
-                file=row.get("File", "?"),
-                line=row.get("StartLine", 0),
-                rule=row.get("RuleID", "?"),
-                desc=row.get("Description", ""),
-                snippet=snippet[:160],
-            )
+        line_text = "  {file}:{line}  [{rule}] {desc}  :: {snippet}".format(
+            file=file_,
+            line=start,
+            rule=row.get("RuleID", "?"),
+            desc=row.get("Description", ""),
+            snippet=snippet[:160],
         )
-out_path.write_text("".join(f"{line}\n" for line in sorted(lines)), encoding="utf-8")
+        # A file absent from the map (not in this range's changed-file list,
+        # or a commit-message pseudo-file) is judged exactly as before: it
+        # blocks. Only a file the map does cover, and only a line outside
+        # every span it marks added, downgrades to pre-existing.
+        is_added = True
+        if file_ in added_lines:
+            file_added = set(added_lines[file_])
+            is_added = any(ln in file_added for ln in range(start, end + 1))
+        (blocking if is_added else preexisting).add(line_text)
+
+findings_path.write_text(
+    "".join(f"{line}\n" for line in sorted(blocking)), encoding="utf-8"
+)
+preexisting_path.write_text(
+    "".join(f"{line}\n" for line in sorted(preexisting)), encoding="utf-8"
+)
 PY
 
 FINDINGS="$(wc -l < "${FINDINGS_FILE}" | tr -d ' ')"
+PREEXISTING_COUNT="$(wc -l < "${PREEXISTING_FILE}" | tr -d ' ')"
 
 if [[ "${VERBOSE}" -eq 1 ]]; then
-  echo "redaction-scan: mode=${MODE} range=${RANGE:-none} files=${file_count} commit-messages=${COMMIT_MESSAGES_SCANNED} org-rules=${EXTRA_RULE_COUNT} org-rules-source=${EXTRA_SOURCE} profile=${REDACTION_PROFILE} export-only-skipped=${EXTRA_EXPORT_ONLY_SKIPPED} config=$(basename "${CONFIG}") engine=$(gitleaks version 2>/dev/null | head -1) root=${TARGET_ROOT}"
+  echo "redaction-scan: mode=${MODE} range=${RANGE:-none} files=${file_count} commit-messages=${COMMIT_MESSAGES_SCANNED} org-rules=${EXTRA_RULE_COUNT} org-rules-source=${EXTRA_SOURCE} profile=${REDACTION_PROFILE} export-only-skipped=${EXTRA_EXPORT_ONLY_SKIPPED} pre-existing=${PREEXISTING_COUNT} stale-fingerprints=${STALE_COUNT} config=$(basename "${CONFIG}") engine=$(gitleaks version 2>/dev/null | head -1) root=${TARGET_ROOT}"
+fi
+
+if [[ "${PREEXISTING_COUNT}" -gt 0 ]]; then
+  echo "redaction-scan: WARNING — ${PREEXISTING_COUNT} pre-existing finding(s) outside this range's added lines (not blocking in range mode, still exempt only via .gitleaksignore):" >&2
+  cat "${PREEXISTING_FILE}" >&2
 fi
 
 if [[ "${FINDINGS}" -gt 0 ]]; then
-  echo "redaction-scan: FAIL: ${FINDINGS} finding(s) (profile=${REDACTION_PROFILE}, fail-closed, root=${TARGET_ROOT})" >&2
+  echo "redaction-scan: FAIL: ${FINDINGS} finding(s) (profile=${REDACTION_PROFILE}, fail-closed, pre-existing=${PREEXISTING_COUNT}, stale-fingerprints=${STALE_COUNT}, root=${TARGET_ROOT})" >&2
   cat "${FINDINGS_FILE}" >&2
   echo "redaction-scan: fix, or exempt with a .gitleaksignore fingerprint, then re-run." >&2
   exit 1
 fi
 
-echo "redaction-scan: OK: 0 findings (mode=${MODE}, files=${file_count}, commit-messages=${COMMIT_MESSAGES_SCANNED}, org-rules=${EXTRA_RULE_COUNT}, org-rules-source=${EXTRA_SOURCE}, profile=${REDACTION_PROFILE}, export-only-skipped=${EXTRA_EXPORT_ONLY_SKIPPED}, read-proof-tokens ack-<12 hex> are allowlisted, root=${TARGET_ROOT})"
+echo "redaction-scan: OK: 0 findings (mode=${MODE}, files=${file_count}, commit-messages=${COMMIT_MESSAGES_SCANNED}, org-rules=${EXTRA_RULE_COUNT}, org-rules-source=${EXTRA_SOURCE}, profile=${REDACTION_PROFILE}, export-only-skipped=${EXTRA_EXPORT_ONLY_SKIPPED}, pre-existing=${PREEXISTING_COUNT}, stale-fingerprints=${STALE_COUNT}, read-proof-tokens ack-<12 hex> are allowlisted, root=${TARGET_ROOT})"
 exit 0

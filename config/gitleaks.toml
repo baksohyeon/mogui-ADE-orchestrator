@@ -93,12 +93,28 @@ regex = '''https?://[A-Za-z0-9._-]*slack\.com/'''
 [[rules]]
 id = "internal_host"
 description = "Internal or corp hostname"
-regex = '''\b[A-Za-z0-9._-]+\.(internal|corp|local)\b'''
+# The trailing (?:\.[A-Za-z0-9_-]+)* makes the match swallow every further
+# dotted label instead of stopping at the first internal/corp/local keyword.
+# A truncating match (keyword-and-stop) cannot tell "settings.local.json" (a
+# real file name) apart from "cache.local.evil.net" (a real host that merely
+# starts the same way); both would truncate to the same keyword-ending text.
+# Swallowing the whole token means the allowlist below sees the complete
+# name and can require it to end exactly there, nothing further.
+regex = '''\b[A-Za-z0-9._-]+\.(internal|corp|local)(?:\.[A-Za-z0-9_-]+)*\b'''
   [rules.allowlist]
-  # Claude Code's per-checkout settings file, not a host.
+  # Claude Code's per-checkout settings file, not a host. Bare and the real
+  # on-disk name both excused; nothing with more after ".json" is.
+  #
+  # *.local.env (#168-style env override files, issue #331) and a comment
+  # naming one: the label before ".local" is restricted to a single
+  # unbroken token (no dot), so a real corp/internal host wearing a
+  # ".local.env" suffix (e.g. "vault.corp.local.env") keeps matching the
+  # base regex but never satisfies this anchored allowlist entry.
   regexTarget = "match"
   regexes = [
     '''^settings\.local$''',
+    '''^settings\.local\.json$''',
+    '''^[A-Za-z0-9_-]+\.local\.env$''',
   ]
 
 [[allowlists]]

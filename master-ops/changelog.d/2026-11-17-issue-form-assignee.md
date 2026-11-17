@@ -1,0 +1,1 @@
+- Issue forms assign `baksohyeon` by default so reports from outside contributors arrive with a maintainer assigned.

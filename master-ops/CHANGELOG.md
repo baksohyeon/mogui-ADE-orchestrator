@@ -48,6 +48,127 @@ installation was taken from alongside the tag.
 
 ## Unreleased
 
+## v0.5.353
+
+Release v0.5.353 (2026-11-17): master-ops/TEMPLATE-VERSION and master-ops/MANIFEST.json move to v0.5.353 alongside the changelog fold, and the root CHANGELOG.md rolls its Unreleased section into 0.5.353.
+
+- New `scripts/land --repo <path> --gate '<command>' <commit>...` for repositories whose
+  `main` takes commits without a PR: fetch, cherry-pick and record the sha that produced
+  (`picked`), run the gate and continue only on its exit code (never a line of its output),
+  confirm the checkout is still on `main` at `picked` and clean, confirm the remote is an
+  ancestor, push `picked` (never whatever `HEAD` happens to be by then), then confirm the
+  remote now has `picked` as an ancestor, stopping at the first failure and resetting the
+  checkout. A `--gate` that is empty or only whitespace is rejected before anything runs, and a
+  reset that would destroy uncommitted changes left on the checkout is refused instead, with
+  recovery shas printed, rather than silently discarding them. `docs/runbooks/land.md` has the
+  steps and exit codes. Fixes #318.
+
+- PR #326 round 2 (#317): `scripts/harness-selfcheck.sh`'s `code-review-graph`
+  `Infra:` "Runs" check now probes the pinned launcher read from
+  `templates/mcp-servers.json` (`uvx code-review-graph@<pin> --version`,
+  the launcher `command` plus `args[0]`) instead of a bare `code-review-graph`
+  binary on `PATH`, which no session ever calls directly and which warned
+  forever on a host with `uvx` but no global `code-review-graph` shim — the
+  common, correctly-wired case. A missing or unreadable servers file, or an
+  entry with no `command`/`args`, is named by that reading; an absent
+  launcher reports `launcher '<command>' absent from PATH`. `scripts/dispatch`
+  now emits `--mcp-config` for a Claude worker only when that file is
+  readable, warning once on stderr naming the path otherwise and continuing
+  the launch, matching the Codex path's existing silent-skip for the same
+  gap. Tests read the launcher command and pin from `templates/mcp-servers.json`
+  and interpolate them into the expected Codex `-c` string, instead of a
+  second hand-typed literal of either.
+  Refs #317.
+
+- Required infra (#317 stage 2) ships wired by default instead of just
+  measured. `scripts/dispatch` launches every worker with the
+  `code-review-graph` server pinned once in `templates/mcp-servers.json`:
+  Claude workers get it through `--mcp-config`, Codex workers through an
+  inline `-c mcp_servers.<name>={...}` TOML override; neither persists past
+  the one launch. A `required-infra` standing-rule block (naming orca,
+  beads, `ctx`, and code-review-graph) folds into every dispatched brief the
+  same way `mail-before-done` does. On the master side, onboarding Step 7
+  (`08-settings-and-skills.md`) now merges the same pinned entry into the
+  workspace-root `.mcp.json`, keeping other servers already there (an
+  existing `code-review-graph` entry is replaced with the pinned one) and
+  refusing to touch a malformed file; merges `enabledMcpjsonServers` into the
+  master's settings so that project-scope entry is actually reachable
+  (the gap a peer seat hit via `disabledMcpjsonServers`); and registers
+  every confirmed repository into code-review-graph's multi-repo registry
+  so `cross_repo_search_tool`/`list_repos_tool` cover the workspace.
+  Measured against `code-review-graph@2.4.0`: `serve` needs no `--repo`
+  flag even from a non-repository directory, since every exposed tool takes
+  an explicit `repo_root` argument instead. `upgrade.md` points existing
+  seats at the same subsection. Refs #317.
+
+- `scripts/harness-selfcheck.sh`'s `ctx`/`code-review-graph` `Infra:` checks
+  (#317 stage 1) no longer print `OK` for a state nothing actually measured:
+  an `orca search --index-status --json` that parses but carries no
+  `result.sessionsByAgent`, or a `ctx status` with zero indexed providers,
+  now warn `undecided`/`ctx has indexed no providers` instead of reading as
+  a clean pass; an empty `code-review-graph` registry warns `no repository
+  registered`; a non-finite or non-positive `CODE_REVIEW_GRAPH_STALE_DAYS`
+  (`nan`, `inf`, `0`, `-1`) warns naming the variable and falls back to the
+  default of 7; a Codex `[mcp_servers.<tool>]` table with `enabled = false`
+  is no longer read as reachable, the quoted header form
+  `[mcp_servers."<tool>"]` is now accepted, and a Claude local-scope server
+  under `projects[<path>].mcpServers` now counts as registered. The 10s
+  timeout bound is one variable (`INFRA_TIMEOUT_SECONDS`), and a timeout
+  kill reports `timed out after Ns` instead of a generic empty-output
+  reason. Refs #317.
+
+- `scripts/harness-selfcheck.sh` adds one warning-only `Infra:` line each for
+  `ctx` and `code-review-graph`: whether the CLI runs, whether it is
+  reachable as an MCP server for this host session (Claude user-scope
+  `mcpServers`, or a project `.mcp.json` entry gated by
+  `enableAllProjectMcpServers`/`enabledMcpjsonServers` and rejected by a
+  `disabledMcpjsonServers` entry in any settings file; Codex's
+  `config.toml`), and whether it is fresh and covering (ctx: every provider
+  Orca's own agent-session index reports sessions for among `claude` and
+  `codex`; code-review-graph: every repo in its multi-repo registry has a
+  graph no older than `CODE_REVIEW_GRAPH_STALE_DAYS`, default 7 days). These
+  lines never change the script's exit code; Orca and beads keep their
+  existing pass/fail checks unchanged. Refs #317.
+
+- `succession-boot-card.md`'s spawn step now states that the kickoff must
+  carry the card's own path and that no kickoff sentence overrides the card.
+  `master-succeed spawn` enforces only the path reference; the no-override
+  sentence is a procedural rule for whoever writes the kickoff. Fixes #320.
+- `master-ops/onboarding/09-spawn.md`'s Step 8 kickoff-content list now
+  names `docs/runbooks/succession-boot-card.md`'s path explicitly and says
+  spawn exits 27 without it; the founding kickoff previously carried the
+  path only by accident, through the warm resume note naming it. Fixes #320.
+
+- `scripts/worker-pane-sweep` reads a mid-turn Claude Code worker's current status line (a verb,
+  an ellipsis, then a parenthesized elapsed time with a middle-dot separator, e.g. "Sauteing…
+  (1h 15m 48s · ↓ 182.4k tokens)") as `working`, even when an always-rendered, often-empty input
+  line sits right below it, and even when a box-drawing separator line or a "⎿" continuation
+  line (a tip, a queued message) sits between the two. The sweep walks upward from the input
+  line, skipping separator and "⎿" lines, and tests only the first other line it finds, not a
+  wider scrollback window: a finished turn overwrites the same screen row with a past-tense,
+  ellipsis-free summary, so a copy of the status-line shape quoted elsewhere in the pane, above a
+  genuinely idle prompt, still reads `idle`. Fixes #321.
+
+- `scripts/dispatch` appends the `mail-before-done` standing-rule block to
+  every brief when the install's rules file carries it (loop `orca
+  orchestration check` before `worker_done` until one call returns no mail,
+  stopping at 10 calls and naming that cap if mail remains; apply or
+  explain any coordinator mail each call returns, and name a failed
+  check's error text if one fails), the same way it already appends the
+  token-budget line; a contract naming the block explicitly in
+  `standing_rules` still gets it exactly once. An install whose rules file
+  predates this change gets a warning instead and dispatches without the
+  block. Fixes #310.
+- `docs/runbooks/worker-wait.md` states that more work for a pane whose
+  dispatch already sent `worker_done` goes as a new dispatch to the same
+  pane; text typed into the pane runs outside any dispatch, so Orca sends no
+  stop alerts for it. Fixes #307.
+- `docs/runbooks/worker-wait.md`'s approval-clearing guidance adds
+  `--wait-submit` plus a pane re-read (`orca terminal read --screen`) before
+  an answered approval counts as cleared, and names `orca orchestration deny`
+  for a refusal; `scripts/worker-pane-sweep` prints the same re-read check on
+  every `approval` row. Fixes #286.
+
 ## v0.5.345
 
 Release v0.5.345 (2026-11-15): master-ops/TEMPLATE-VERSION and master-ops/MANIFEST.json move to v0.5.345 alongside the changelog fold, and the root CHANGELOG.md rolls its Unreleased section into 0.5.345.

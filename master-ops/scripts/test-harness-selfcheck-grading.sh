@@ -252,7 +252,10 @@ check_case "an empty registry (empty probe result) is graded blocking" \
 
 # D. The main ctx line itself (not just ctx-upgrade or code-review-graph)
 # is graded blocking, end to end: ctx absent from PATH is a single blocking
-# warning with code-review-graph and ctx-upgrade otherwise clean.
+# warning with code-review-graph otherwise clean. ctx-upgrade uses the
+# identical `command -v ctx` probe, so it reports the same absence as a
+# dependent line, not a second cause (#336 item 2 round 2, Minor 1): one
+# missing tool must count once, not twice for the same reason.
 reset_fixture
 rm -f "$BIN_DIR/ctx"
 ORIGINAL_SAFE_PATH="$SAFE_PATH"
@@ -264,8 +267,10 @@ if [ -n "$real_ctx" ]; then
 fi
 check_case "the main ctx line is tagged BLOCK:" \
   "BLOCK: Infra: ctx WARN absent from PATH" 3
-check_case "the main ctx line escalates the exit code on its own" \
-  "Self-check summary: 2 blocking warning(s), 0 informational warning(s)" 3
+check_case "the dependent ctx-upgrade line names ctx as the cause, without its own count" \
+  "BLOCK: Infra: ctx-upgrade WARN absent from PATH (follows from ctx missing)" 3
+check_case "a missing ctx counts once, not twice, for one cause" \
+  "Self-check summary: 1 blocking warning(s), 0 informational warning(s)" 3
 SAFE_PATH="$ORIGINAL_SAFE_PATH"
 
 # E. A failed (non-timeout) ctx-upgrade probe whose raw first line of output

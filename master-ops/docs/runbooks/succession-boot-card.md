@@ -33,7 +33,7 @@ changed this exit code used to read as a pass to a step that only checks for non
 |------|---------|--------|
 | 0 | Clean: no gap, no blocking warning | Continue |
 | 1 | A hard gap (Orca, skill, hook, tracker, seat, card/twins, template) | Stop. Fix the named gap, then rerun before continuing |
-| 2 | Could not measure at all (for example an unreadable settings file) | Stop. Fix the blocker, then rerun |
+| 2 | Could not measure at all (an unreadable settings file, or the script could not cd to the workspace root) | Stop. Fix the blocker, then rerun |
 | 3 | No hard gap, but at least one line is tagged `BLOCK:` | Do not treat this as a pass. A required-infra probe (`Infra:` line) failed or is incomplete: unmeasurable, empty, unregistered, partially covered, or stale. Read the summary line and every `BLOCK:` line it counts, then either fix the gap or tell the owner why this boot continues without it |
 
 A line tagged `INFO:` never changes the exit code; the boot is correct without it, but read it anyway

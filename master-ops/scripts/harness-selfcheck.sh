@@ -6,14 +6,14 @@
 # Exit codes: 0 clean (no gap, no blocking warning). 1 a hard gap (Orca
 # absent, skill unreachable, hook missing/unwired, tracker misresolved, seat
 # misseated or undecided, card/twins diverged, template drifted). 2 could
-# not measure at all (settings file unreadable). 3 no hard gap, but at least
-# one line below is graded BLOCK (#336 item 2): a required-infra probe
-# failed or is incomplete -- unmeasurable, empty, unregistered, partially
-# covered, or stale -- the same severity as a hard gap, kept on its own code
-# so a boot card that already treats any non-zero as "stop" can still tell
-# "a check is broken" (1) apart from "a check ran and found a real gap in
-# required infra" (3). A line graded INFO never changes the exit code; the
-# boot is correct without it.
+# not measure at all (settings file unreadable, or this script cannot cd to
+# WORKSPACE_ROOT). 3 no hard gap, but at least one line below is graded
+# BLOCK (#336 item 2): a required-infra probe failed or is incomplete --
+# unmeasurable, empty, unregistered, partially covered, or stale -- the same
+# severity as a hard gap, kept on its own code so a boot card that already
+# treats any non-zero as "stop" can still tell "a check is broken" (1) apart
+# from "a check ran and found a real gap in required infra" (3). A line
+# graded INFO never changes the exit code; the boot is correct without it.
 set -e
 
 WORKSPACE_ROOT="{{WORKSPACE_ROOT}}"
@@ -912,7 +912,7 @@ fi
 # is an empty or stale probe result -- none of these leave "the boot is
 # correct without it" true.
 if [ -n "$ctx_warn" ]; then
-  blocking_warnings=$((${blocking_warnings:-0} + 1))
+  blocking_warnings=$((blocking_warnings + 1))
   echo "BLOCK: Infra: ctx WARN $ctx_warn"
 else
   echo "Infra: ctx OK runs, registered, covers every provider Orca reports claude/codex sessions for"
@@ -988,21 +988,28 @@ EOFCTXUP
   fi
 fi
 if [ -n "$ctx_upgrade_warn" ]; then
+  # ctx itself being absent from PATH is one cause, not two: the check just
+  # above already counted it once, as the ctx line's own BLOCK:. This probe
+  # tests the identical `command -v ctx`, so this exact text can only occur
+  # when that first check already hit the same absence; print it as
+  # dependent, without a second increment (#336 item 2 round 2, Minor 1).
+  if [ "$ctx_upgrade_warn" = "absent from PATH" ]; then
+    echo "BLOCK: Infra: ctx-upgrade WARN absent from PATH (follows from ctx missing)"
   # A version numerically behind the latest one ctx's own checker last
   # recorded is a measured, known state and ctx still runs: informational
   # (#336 item 2). Every other reason here (a reported State error, a
-  # timeout, unparseable output, or ctx absent from PATH) means this probe
-  # could not actually confirm the installed version at all -- blocking.
-  # The text match alone is not enough: a failed probe's own raw output
-  # (captured verbatim on a non-timeout failure a few lines above) could in
-  # principle contain the substring "is behind" for an unrelated reason, so
-  # INFO additionally requires ctx_upgrade_status_rc=0 -- the probe actually
-  # ran and returned parseable JSON this message was computed from.
-  if [ "${ctx_upgrade_status_rc:-1}" -eq 0 ] && case "$ctx_upgrade_warn" in *" is behind "*) true ;; *) false ;; esac; then
-    informational_warnings=$((${informational_warnings:-0} + 1))
+  # timeout, or unparseable output) means this probe could not actually
+  # confirm the installed version at all -- blocking. The text match alone
+  # is not enough: a failed probe's own raw output (captured verbatim on a
+  # non-timeout failure a few lines above) could in principle contain the
+  # substring "is behind" for an unrelated reason, so INFO additionally
+  # requires ctx_upgrade_status_rc=0 -- the probe actually ran and returned
+  # parseable JSON this message was computed from.
+  elif [ "${ctx_upgrade_status_rc:-1}" -eq 0 ] && case "$ctx_upgrade_warn" in *" is behind "*) true ;; *) false ;; esac; then
+    informational_warnings=$((informational_warnings + 1))
     echo "INFO: Infra: ctx-upgrade WARN $ctx_upgrade_warn"
   else
-    blocking_warnings=$((${blocking_warnings:-0} + 1))
+    blocking_warnings=$((blocking_warnings + 1))
     echo "BLOCK: Infra: ctx-upgrade WARN $ctx_upgrade_warn"
   fi
 else
@@ -1169,7 +1176,7 @@ fi
 # missing-path repo is literally the "a stale source" example this grading
 # is built for.
 if [ -n "$crg_warn" ]; then
-  blocking_warnings=$((${blocking_warnings:-0} + 1))
+  blocking_warnings=$((blocking_warnings + 1))
   echo "BLOCK: Infra: code-review-graph WARN $crg_warn"
 else
   echo "Infra: code-review-graph OK runs, registered, every registered repo's graph fresh (<= ${CODE_REVIEW_GRAPH_STALE_DAYS}d)"

@@ -1,6 +1,7 @@
 name: Bug report
 description: Something behaved differently from what the docs say
 labels: ["bug", "untriaged"]
+assignees: ["baksohyeon"]
 body:
   - type: textarea
     id: what

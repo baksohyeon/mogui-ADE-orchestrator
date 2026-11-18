@@ -425,6 +425,26 @@ REPORTS="${WORK_DIR}/reports"
 mkdir -p "${REPORTS}"
 report_index=0
 
+annotate_report() {
+  local report_path="$1"
+  local origin="$2"
+  local file_label="${3:-}"
+  "${PYTHON}" - "${report_path}" "${origin}" "${file_label}" <<'PY'
+import json
+import sys
+
+path, origin, file_label = sys.argv[1:]
+with open(path, encoding="utf-8") as handle:
+    rows = json.load(handle)
+for row in rows:
+    row["Origin"] = origin
+    if file_label:
+        row["File"] = file_label
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(rows, handle)
+PY
+}
+
 scan_path() {
   # One path per invocation. gitleaks scopes a single path argument reliably and
   # falls back to the whole directory when given several, which would drag in
@@ -443,6 +463,9 @@ scan_path() {
     # failing, and a failed engine must not read as a clean file.
     echo "redaction-scan: FAIL — gitleaks failed on ${path} (engine error, not a finding)" >&2
     exit 2
+  fi
+  if grep -q '"RuleID"' "${REPORTS}/${report_index}.json"; then
+    annotate_report "${REPORTS}/${report_index}.json" "file_content"
   fi
 }
 
@@ -483,6 +506,7 @@ with open(path, encoding="utf-8") as handle:
     rows = json.load(handle)
 for row in rows:
     row["File"] = label
+    row["Origin"] = "commit_message"
 with open(path, "w", encoding="utf-8") as handle:
     json.dump(rows, handle)
 PY
@@ -715,6 +739,9 @@ if [[ "${MODE}" == "tracked" && -f "${GITLEAKSIGNORE}" ]] \
       echo "redaction-scan: FAIL — gitleaks failed on ${path} during the fingerprint-staleness check (engine error, not a finding)" >&2
       exit 2
     fi
+    if grep -q '"RuleID"' "${UNFILTERED_REPORTS}/${ufi_index}.json"; then
+      annotate_report "${UNFILTERED_REPORTS}/${ufi_index}.json" "file_content"
+    fi
   done < "${FILES_LIST}"
 
   # Commit-message findings (scan_commit_messages above) use gitleaks' stdin
@@ -744,6 +771,21 @@ if [[ "${MODE}" == "tracked" && -f "${GITLEAKSIGNORE}" ]] \
             >/dev/null 2>&1 ); then
         echo "redaction-scan: FAIL — gitleaks failed on commit ${sha:0:12} message during the fingerprint-staleness check (engine error, not a finding)" >&2
         exit 2
+      fi
+      if grep -q '"RuleID"' "${UNFILTERED_REPORTS}/commit-${ufm_index}.json"; then
+        "${PYTHON}" - "${UNFILTERED_REPORTS}/commit-${ufm_index}.json" "commit:${sha:0:12}" <<'PY'
+import json
+import sys
+
+path, label = sys.argv[1], sys.argv[2]
+with open(path, encoding="utf-8") as handle:
+    rows = json.load(handle)
+for row in rows:
+    row["File"] = label
+    row["Origin"] = "commit_message"
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(rows, handle)
+PY
       fi
     done < "${WORK_DIR}/commits-to-scan"
   fi
@@ -866,12 +908,11 @@ for report in sorted(reports.glob("*.json")):
             desc=row.get("Description", ""),
             snippet=snippet[:160],
         )
-        # A file absent from the map (not in this range's changed-file list,
-        # or a commit-message pseudo-file) is judged exactly as before: it
-        # blocks. Only a file the map does cover, and only a line outside
-        # every span it marks added, downgrades to pre-existing.
+        # Every row is tagged where it was produced. Only file-content rows
+        # use the added-lines map; commit-message rows always block, even if
+        # a changed path happens to have the same label as their pseudo-file.
         is_added = True
-        if file_ in added_lines:
+        if row.get("Origin") == "file_content" and file_ in added_lines:
             file_added = set(added_lines[file_])
             is_added = any(ln in file_added for ln in range(start, end + 1))
         (blocking if is_added else preexisting).add(line_text)

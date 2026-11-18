@@ -70,6 +70,35 @@ def test_range_mode_blocks_a_newly_added_secret_line(tmp_path: Path) -> None:
 
 
 @requires_gitleaks
+def test_range_mode_keeps_commit_message_secret_blocking_when_pseudo_path_is_added(
+    tmp_path: Path,
+) -> None:
+    """A later empty file can have the pseudo-path used for a commit-message
+    finding. The finding's origin must keep it blocking instead of letting the
+    empty file's zero added lines classify it as pre-existing.
+    """
+    repo = _repo_with_commits(tmp_path, ["base"])
+    base = _head(repo)
+
+    (repo / "message.md").write_text("clean file\n", encoding="utf-8")
+    _git(repo, "add", "message.md")
+    _git(repo, "commit", "-q", "-m", f"message contains {LEAK}")
+    commit_sha = _head(repo)
+
+    pseudo_path = repo / f"commit:{commit_sha[:12]}"
+    pseudo_path.touch()
+    _git(repo, "add", pseudo_path.name)
+    _git(repo, "commit", "-q", "-m", "add an empty commit-shaped path")
+
+    result = _scan(repo, "--range", f"{base}..HEAD")
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 1, output
+    assert f"commit:{commit_sha[:12]}" in output, output
+    assert "pre-existing=0" in output, output
+
+
+@requires_gitleaks
 def test_range_mode_downgrades_a_pre_existing_secret_to_a_warning(
     tmp_path: Path,
 ) -> None:

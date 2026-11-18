@@ -120,9 +120,10 @@ def test_redaction_python_override_runs_translator_for_org_rule_finding(tmp_path
     assert result.returncode == 1, result.stdout + result.stderr
     assert "probe_rule" in result.stderr, result.stderr
     # Measured on this fixture with gitleaks 8.30.1: the runnability probe,
-    # the organization-rules translator, and the unconditional findings
-    # merge. No commit range here, so the per-commit normalizer never runs.
-    assert len(log.read_text(encoding="utf-8").splitlines()) == 3
+    # the organization-rules translator, the file-content report annotation,
+    # and the unconditional findings merge. No commit range here, so the
+    # per-commit normalizer never runs.
+    assert len(log.read_text(encoding="utf-8").splitlines()) == 4
 
 
 def test_redaction_python_override_runs_rule_id_check_on_engine_crash(tmp_path: Path) -> None:

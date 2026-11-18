@@ -50,6 +50,8 @@ redaction-scan: WARNING — 1 pre-existing finding(s) outside this range's added
 redaction-scan: OK: 0 findings (mode=range, files=3, ..., pre-existing=1, ...)
 ```
 
+Every finding row records whether it came from file content or a commit message. Only file-content rows consult the added-lines map. A commit-message row keeps blocking even when a later empty file happens to use its `commit:<12 hex>` display label, so the path text cannot change its origin.
+
 The judgment only ever makes a file's findings *more* lenient, never adds scope: a file the range diff cannot be read for safely (an unreadable or empty diff for a file the range lists as changed, most commonly a binary file) fails the whole scan (exit 2) rather than guessing either way, and a file the working tree no longer matches at the range's own tip is left out of the judgment entirely, so every finding in it stays blocking. Full-file and staged modes never consult this at all.
 
 ### Stale `.gitleaksignore` fingerprints
@@ -64,7 +66,7 @@ secret.txt:aws_access_key:1
 secret.txt:aws-access-token:1
 ```
 
-This never fails the scan on its own: a fingerprint going stale because its line really did move with the secret still present already fails the normal pass above, on its own merits. Staged and range-mode runs skip this check, since they only ever touch a subset of files and would misreport an untouched file's still-valid fingerprint as stale. A run without `--commit-messages` leaves every commit-message-shaped (`:rule:line`) entry unchecked for the same reason: it never rescanned the commits that would confirm one way or the other.
+This never fails the scan on its own: a fingerprint going stale because its line really did move with the secret still present already fails the normal pass above, on its own merits. The unfiltered reports in this block are used only to collect live fingerprints, so their paths and origins never enter the blocking or pre-existing classification. Staged and range-mode runs skip this check, since they only ever touch a subset of files and would misreport an untouched file's still-valid fingerprint as stale. A run without `--commit-messages` leaves every commit-message-shaped (`:rule:line`) entry unchecked for the same reason: it never rescanned the commits that would confirm one way or the other.
 
 ### Organization-specific rules (`REDACTION_EXTRA_PATTERNS`)
 

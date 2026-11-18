@@ -176,6 +176,38 @@ def dedupe_case_insensitive(terms: list[str]) -> list[str]:
     return out
 
 
+def gh_repo_view(repo: str) -> None:
+    """Confirm the repository exists before an empty search can look valid."""
+    cmd = ["gh", "repo", "view", repo, "--json", "name"]
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=GH_TIMEOUT_SECONDS
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise GhFailure(
+            f"gh repo view timed out after {GH_TIMEOUT_SECONDS}s for repository {repo!r}"
+        ) from exc
+    except OSError as exc:
+        raise GhFailure(f"could not run gh repo view: {exc}") from exc
+    if proc.returncode != 0:
+        raise GhFailure(
+            f"gh repo view failed (exit {proc.returncode}) for repository {repo!r}: "
+            f"{proc.stderr.strip()}"
+        )
+    if not proc.stdout.strip():
+        raise GhFailure(f"empty response from gh repo view for repository {repo!r}")
+    try:
+        data = json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        raise GhFailure(
+            f"unparseable response from gh repo view for repository {repo!r}: {exc}"
+        ) from exc
+    if not isinstance(data, dict) or not isinstance(data.get("name"), str) or not data["name"].strip():
+        raise GhFailure(
+            f"unexpected response from gh repo view for repository {repo!r}: expected a name"
+        )
+
+
 def gh_search(repo: str, query: str, state: str, fetch_limit: int) -> list[dict[str, Any]]:
     cmd = [
         "gh", "search", "issues", "--repo", repo,
@@ -218,15 +250,19 @@ def gh_search(repo: str, query: str, state: str, fetch_limit: int) -> list[dict[
 
 def gather_candidates(
     repo: str, queries: list[str], state: str, fetch_limit: int, query_delay: float
-) -> dict[int, dict[str, Any]]:
+) -> tuple[dict[int, dict[str, Any]], int]:
     """Run every query and merge results by issue number. Any single query
     failing aborts the whole gather: this is a merge, not a best-effort
     scan, so one bad call must not silently shrink the candidate pool."""
     candidates: dict[int, dict[str, Any]] = {}
+    skipped_numbers = 0
     for query in queries:
         for item in gh_search(repo, query, state, fetch_limit):
             number = item.get("number")
-            if isinstance(number, int) and number not in candidates:
+            if type(number) is not int:
+                skipped_numbers += 1
+                continue
+            if number not in candidates:
                 candidates[number] = item
         # Paced after every query, the last one included: the weekly sweep
         # calls this once per open issue, back to back, so the delay has to
@@ -234,7 +270,7 @@ def gather_candidates(
         # one invocation, or back-to-back invocations would have no pacing
         # between them at all.
         time.sleep(query_delay)
-    return candidates
+    return candidates, skipped_numbers
 
 
 def score_candidate(
@@ -343,12 +379,21 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     try:
-        candidates = gather_candidates(
+        gh_repo_view(args.repo)
+        candidates, skipped_numbers = gather_candidates(
             args.repo, queries, args.state, fetch_limit=30, query_delay=args.query_delay
         )
     except GhFailure as exc:
         sys.stderr.write(f"issue-similar: {exc}\n")
         return 1
+
+    if skipped_numbers:
+        noun = "candidate" if skipped_numbers == 1 else "candidates"
+        sys.stderr.write(
+            f"issue-similar: skipped {skipped_numbers} {noun} with malformed issue numbers\n"
+        )
+        if not candidates:
+            return 1
 
     ranked = rank_candidates(candidates, words, code_terms, args.exclude, args.limit)
     max_score = ranked[0]["score"] if ranked else 0

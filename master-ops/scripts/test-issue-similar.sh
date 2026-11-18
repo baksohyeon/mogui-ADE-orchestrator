@@ -7,16 +7,27 @@
 set -eu
 
 SCRIPT="${1:-$(cd "$(dirname "$0")" && pwd)/issue-similar}"
+WORK_ROOT="$(mktemp -d)"
+trap 'rm -rf "${WORK_ROOT:?}"' EXIT
+REPO="acme/widgets"
 
 run_with_stub() {  # gh-body work-dir -- args...
   local gh_body="$1" work="$2"
   shift 2
   # Each setup step is guarded: a silent failure here (an unwritable
-  # TMPDIR, say) must stop the test rather than fall through to running
+  # scratch root, say) must stop the test rather than fall through to running
   # the real gh from PATH, which would break the no-network-call guarantee
   # without a single case noticing.
   mkdir -p "$work/bin" || return 1
-  printf '%s\n' "$gh_body" > "$work/bin/gh" || return 1
+  printf '%s\n' "$gh_body" > "$work/bin/gh-body" || return 1
+  cat > "$work/bin/gh" <<'GH' || return 1
+#!/bin/bash
+if [ "$1" = "repo" ] && [ "$2" = "view" ]; then
+  echo '{"name":"stub"}'
+  exit 0
+fi
+exec bash "${BASH_SOURCE[0]}-body" "$@"
+GH
   chmod +x "$work/bin/gh" || return 1
   # --query-delay 0 last, so it always overrides anything the caller passed
   # (argparse keeps the last value for a repeated flag) and no case here
@@ -28,13 +39,12 @@ run_with_stub() {  # gh-body work-dir -- args...
 failed_gh_call_test() (
   set +e
   local work out status
-  work="${TMPDIR:-/tmp}/mogui-issue-similar-failed.$$"
-  trap 'rm -rf "${work:?}"' EXIT
+  work="$WORK_ROOT/failed"
   out=$(run_with_stub \
     '#!/bin/bash
 echo "stub: network unreachable" >&2
 exit 1' \
-    "$work" --repo acme/widgets --title "alphaword betaword" 2>&1)
+    "$work" --repo "$REPO" --title "alphaword betaword" 2>&1)
   status=$?
   [ "$status" -eq 1 ] || { echo "FAIL: a failed gh call should exit 1, got $status" >&2; printf '%s\n' "$out" >&2; return 1; }
   case "$out" in
@@ -45,16 +55,45 @@ exit 1' \
 )
 failed_gh_call_test || exit 1
 
+# --- Case: an invalid repository is reported before issue search. ---------
+repository_validation_test() (
+  set +e
+  local work out status
+  work="$WORK_ROOT/repository-validation"
+  mkdir -p "$work/bin" || return 1
+  cat > "$work/bin/gh" <<'BIN' || return 1
+#!/bin/bash
+if [ "$1" = "repo" ] && [ "$2" = "view" ]; then
+  echo "stub: repository not found" >&2
+  exit 1
+fi
+echo "stub: issue search should not run" >&2
+exit 1
+BIN
+  chmod +x "$work/bin/gh" || return 1
+  out=$(PATH="$work/bin:$PATH" python3 "$SCRIPT" --repo "$REPO" --title "alphaword" --query-delay 0 2>&1)
+  status=$?
+  [ "$status" -eq 1 ] || { echo "FAIL: an invalid repository should exit 1, got $status" >&2; printf '%s\n' "$out" >&2; return 1; }
+  case "$out" in
+    *"gh repo view failed"*"repository not found"*) ;;
+    *) echo "FAIL: stderr should name the repository validation failure: $out" >&2; return 1 ;;
+  esac
+  case "$out" in
+    *"issue search should not run"*) echo "FAIL: issue search ran after repository validation failed" >&2; return 1 ;;
+  esac
+  echo "ok   : an invalid repository is rejected before issue search"
+)
+repository_validation_test || exit 1
+
 # --- Case: an empty response (gh exits 0, prints nothing) exits 1, never 0.-
 empty_response_test() (
   set +e
   local work out status
-  work="${TMPDIR:-/tmp}/mogui-issue-similar-empty.$$"
-  trap 'rm -rf "${work:?}"' EXIT
+  work="$WORK_ROOT/empty"
   out=$(run_with_stub \
     '#!/bin/bash
 exit 0' \
-    "$work" --repo acme/widgets --title "alphaword betaword" 2>&1)
+    "$work" --repo "$REPO" --title "alphaword betaword" 2>&1)
   status=$?
   [ "$status" -eq 1 ] || { echo "FAIL: an empty gh response should exit 1 (never 0), got $status" >&2; printf '%s\n' "$out" >&2; return 1; }
   case "$out" in
@@ -69,12 +108,11 @@ empty_response_test || exit 1
 unparseable_response_test() (
   set +e
   local work out status
-  work="${TMPDIR:-/tmp}/mogui-issue-similar-unparseable.$$"
-  trap 'rm -rf "${work:?}"' EXIT
+  work="$WORK_ROOT/unparseable"
   out=$(run_with_stub \
     '#!/bin/bash
 echo "not valid json at all"' \
-    "$work" --repo acme/widgets --title "alphaword betaword" 2>&1)
+    "$work" --repo "$REPO" --title "alphaword betaword" 2>&1)
   status=$?
   [ "$status" -eq 1 ] || { echo "FAIL: an unparseable gh response should exit 1 (never 0), got $status" >&2; printf '%s\n' "$out" >&2; return 1; }
   case "$out" in
@@ -90,8 +128,7 @@ unparseable_response_test || exit 1
 partial_query_failure_test() (
   set +e
   local work out status
-  work="${TMPDIR:-/tmp}/mogui-issue-similar-partial.$$"
-  trap 'rm -rf "${work:?}"' EXIT
+  work="$WORK_ROOT/partial"
   # The title yields two distinct query terms; only the one containing
   # "zzzfailterm" fails, found by inspecting the stub's own last argument
   # rather than call order, so this does not depend on query ordering.
@@ -102,7 +139,7 @@ case "$last" in
   *zzzfailterm*) echo "stub: simulated failure on this term" >&2; exit 7 ;;
   *) echo "[]" ;;
 esac' \
-    "$work" --repo acme/widgets --title "harmlessalpha zzzfailterm" 2>&1)
+    "$work" --repo "$REPO" --title "harmlessalpha zzzfailterm" 2>&1)
   status=$?
   [ "$status" -eq 1 ] || { echo "FAIL: a partial query failure should still exit 1, got $status" >&2; printf '%s\n' "$out" >&2; return 1; }
   case "$out" in
@@ -118,12 +155,11 @@ partial_query_failure_test || exit 1
 no_match_test() (
   set +e
   local work out status
-  work="${TMPDIR:-/tmp}/mogui-issue-similar-nomatch.$$"
-  trap 'rm -rf "${work:?}"' EXIT
+  work="$WORK_ROOT/nomatch"
   out=$(run_with_stub \
     '#!/bin/bash
 echo "[]"' \
-    "$work" --repo acme/widgets --title "alphaword betaword" 2>&1)
+    "$work" --repo "$REPO" --title "alphaword betaword" 2>&1)
   status=$?
   [ "$status" -eq 0 ] || { echo "FAIL: a valid empty candidate list should exit 0, got $status" >&2; printf '%s\n' "$out" >&2; return 1; }
   case "$out" in
@@ -134,16 +170,34 @@ echo "[]"' \
 )
 no_match_test || exit 1
 
+# --- Case: malformed issue numbers are counted and fail an all-malformed run.
+malformed_number_test() (
+  set +e
+  local work out status
+  work="$WORK_ROOT/malformed-number"
+  out=$(run_with_stub \
+    '#!/bin/bash
+echo "[{\"number\": \"42\", \"title\": \"alphaword\", \"state\": \"open\", \"url\": \"https://example.invalid/42\", \"body\": \"\"}]"' \
+    "$work" --repo "$REPO" --title "alphaword" 2>&1)
+  status=$?
+  [ "$status" -eq 1 ] || { echo "FAIL: an all-malformed candidate list should exit 1, got $status" >&2; printf '%s\n' "$out" >&2; return 1; }
+  case "$out" in
+    *"skipped 1 candidate with malformed issue numbers"*) ;;
+    *) echo "FAIL: stderr should count the malformed issue number: $out" >&2; return 1 ;;
+  esac
+  echo "ok   : malformed issue numbers are counted and fail an all-malformed run"
+)
+malformed_number_test || exit 1
+
 # --- Case: a strong match (score above threshold) exits 3. -----------------
 strong_match_test() (
   set +e
   local work out status
-  work="${TMPDIR:-/tmp}/mogui-issue-similar-strong.$$"
-  trap 'rm -rf "${work:?}"' EXIT
+  work="$WORK_ROOT/strong"
   out=$(run_with_stub \
     '#!/bin/bash
 echo "[{\"number\": 42, \"title\": \"zzzalpha zzzbeta zzzgamma reported again\", \"state\": \"open\", \"url\": \"https://example.invalid/42\", \"body\": \"\"}]"' \
-    "$work" --repo acme/widgets --title "zzzalpha zzzbeta zzzgamma" 2>&1)
+    "$work" --repo "$REPO" --title "zzzalpha zzzbeta zzzgamma" 2>&1)
   status=$?
   [ "$status" -eq 3 ] || { echo "FAIL: a strong match should exit 3, got $status" >&2; printf '%s\n' "$out" >&2; return 1; }
   case "$out" in
@@ -162,11 +216,10 @@ strong_match_test || exit 1
 exclude_drops_self_match_test() (
   set +e
   local work out status
-  work="${TMPDIR:-/tmp}/mogui-issue-similar-exclude.$$"
-  trap 'rm -rf "${work:?}"' EXIT
+  work="$WORK_ROOT/exclude"
   local gh_stub='#!/bin/bash
 echo "[{\"number\": 99, \"title\": \"alphaword betaword gammaword also appears here\", \"state\": \"open\", \"url\": \"https://example.invalid/99\", \"body\": \"\"}]"'
-  out=$(run_with_stub "$gh_stub" "$work" --repo acme/widgets --title "alphaword betaword gammaword" 2>&1)
+  out=$(run_with_stub "$gh_stub" "$work" --repo "$REPO" --title "alphaword betaword gammaword" 2>&1)
   status=$?
   [ "$status" -eq 3 ] || { echo "FAIL: three shared words should clear the threshold without --exclude, got $status" >&2; printf '%s\n' "$out" >&2; return 1; }
   case "$out" in
@@ -174,9 +227,8 @@ echo "[{\"number\": 99, \"title\": \"alphaword betaword gammaword also appears h
     *) echo "FAIL: candidate #99 should be listed without --exclude" >&2; printf '%s\n' "$out" >&2; return 1 ;;
   esac
   local work2
-  work2="${TMPDIR:-/tmp}/mogui-issue-similar-exclude2.$$"
-  trap 'rm -rf "${work:?}"; rm -rf "${work2:?}"' EXIT
-  out=$(run_with_stub "$gh_stub" "$work2" --repo acme/widgets --title "alphaword betaword gammaword" --exclude 99 2>&1)
+  work2="$WORK_ROOT/exclude2"
+  out=$(run_with_stub "$gh_stub" "$work2" --repo "$REPO" --title "alphaword betaword gammaword" --exclude 99 2>&1)
   status=$?
   [ "$status" -eq 0 ] || { echo "FAIL: excluding the only (otherwise threshold-clearing) candidate should exit 0, got $status" >&2; printf '%s\n' "$out" >&2; return 1; }
   case "$out" in
@@ -193,14 +245,13 @@ exclude_drops_self_match_test || exit 1
 body_does_not_crowd_out_title_words_test() (
   set +e
   local work out status
-  work="${TMPDIR:-/tmp}/mogui-issue-similar-bodycrowd.$$"
-  trap 'rm -rf "${work:?}"' EXIT
+  work="$WORK_ROOT/bodycrowd"
   mkdir -p "$work"
   printf '%s' 'stepstoreproduceissue reproduceenvironment verboselogsattached screenshotattached' > "$work/body.txt"
   out=$(run_with_stub \
     '#!/bin/bash
 echo "[{\"number\": 11, \"title\": \"login fails safari\", \"state\": \"open\", \"url\": \"https://example.invalid/11\", \"body\": \"\"}]"' \
-    "$work" --repo acme/widgets --title "login fails safari" --body-file "$work/body.txt" --max-words 4 2>&1)
+    "$work" --repo "$REPO" --title "login fails safari" --body-file "$work/body.txt" --max-words 4 2>&1)
   status=$?
   [ "$status" -eq 3 ] || { echo "FAIL: the title's own 3 words should clear the threshold despite a longer body, got $status" >&2; printf '%s\n' "$out" >&2; return 1; }
   case "$out" in
@@ -216,12 +267,11 @@ body_does_not_crowd_out_title_words_test || exit 1
 stopword_only_title_fallback_test() (
   set +e
   local work out status
-  work="${TMPDIR:-/tmp}/mogui-issue-similar-stopword.$$"
-  trap 'rm -rf "${work:?}"' EXIT
+  work="$WORK_ROOT/stopword"
   out=$(run_with_stub \
     '#!/bin/bash
 echo "[{\"number\": 21, \"title\": \"the and is\", \"state\": \"open\", \"url\": \"https://example.invalid/21\", \"body\": \"\"}]"' \
-    "$work" --repo acme/widgets --title "the and is" --json 2>&1)
+    "$work" --repo "$REPO" --title "the and is" --json 2>&1)
   status=$?
   [ "$status" -eq 0 ] || { echo "FAIL: unexpected exit $status for a stopword-only title" >&2; printf '%s\n' "$out" >&2; return 1; }
   case "$out" in
@@ -238,12 +288,11 @@ stopword_only_title_fallback_test || exit 1
 non_ascii_title_fallback_test() (
   set +e
   local work out status
-  work="${TMPDIR:-/tmp}/mogui-issue-similar-nonascii.$$"
-  trap 'rm -rf "${work:?}"' EXIT
+  work="$WORK_ROOT/nonascii"
   out=$(run_with_stub \
     '#!/bin/bash
 echo "[{\"number\": 22, \"title\": \"이슈 제목이 한글로만 되어 있을 때\", \"state\": \"open\", \"url\": \"https://example.invalid/22\", \"body\": \"\"}]"' \
-    "$work" --repo acme/widgets --title "이슈 제목이 한글로만 되어 있을 때" --json 2>&1)
+    "$work" --repo "$REPO" --title "이슈 제목이 한글로만 되어 있을 때" --json 2>&1)
   status=$?
   [ "$status" -eq 0 ] || { echo "FAIL: unexpected exit $status for a Korean title" >&2; printf '%s\n' "$out" >&2; return 1; }
   case "$out" in
@@ -262,25 +311,28 @@ non_ascii_title_fallback_test || exit 1
 gh_invocation_shape_test() (
   set +e
   local work out status
-  work="${TMPDIR:-/tmp}/mogui-issue-similar-ghshape.$$"
-  trap 'rm -rf "${work:?}"' EXIT
+  work="$WORK_ROOT/ghshape"
   mkdir -p "$work/bin" || return 1
   cat > "$work/bin/gh" <<'BIN' || return 1
 #!/bin/bash
+if [ "$1" = "repo" ] && [ "$2" = "view" ]; then
+  echo '{"name":"stub"}'
+  exit 0
+fi
 printf '%s\n' "$*" >> "$MOGUI_TEST_ARGV_LOG"
 echo "[]"
 BIN
   chmod +x "$work/bin/gh" || return 1
   out=$(cd "$work" && MOGUI_TEST_ARGV_LOG="$work/argv.log" PATH="$work/bin:$PATH" \
-        python3 "$SCRIPT" --repo acme/widgets --title "alphaword" --query-delay 0 2>&1)
+        python3 "$SCRIPT" --repo "$REPO" --title "alphaword" --query-delay 0 2>&1)
   status=$?
   [ "$status" -eq 0 ] || { echo "FAIL: unexpected exit $status" >&2; printf '%s\n' "$out" >&2; return 1; }
   [ -f "$work/argv.log" ] || { echo "FAIL: gh was never invoked" >&2; return 1; }
   local logged
   logged=$(cat "$work/argv.log")
   case "$logged" in
-    *"search issues --repo acme/widgets"*) ;;
-    *) echo "FAIL: gh argv missing 'search issues --repo acme/widgets': $logged" >&2; return 1 ;;
+    *"search issues --repo $REPO"*) ;;
+    *) echo "FAIL: gh argv missing 'search issues --repo $REPO': $logged" >&2; return 1 ;;
   esac
   case "$logged" in
     *"--state open"*) ;;
@@ -300,12 +352,11 @@ gh_invocation_shape_test || exit 1
 short_slash_phrase_is_not_a_path_test() (
   set +e
   local work out status
-  work="${TMPDIR:-/tmp}/mogui-issue-similar-notpath.$$"
-  trap 'rm -rf "${work:?}"' EXIT
+  work="$WORK_ROOT/notpath"
   out=$(run_with_stub \
     '#!/bin/bash
 echo "[{\"number\": 55, \"title\": \"fixed on 2026/11/17, read/write and/or CI/CD either way\", \"state\": \"open\", \"url\": \"https://example.invalid/55\", \"body\": \"\"}]"' \
-    "$work" --repo acme/widgets --title "a bug happened on 2026/11/17, filed under and/or CI/CD" --json 2>&1)
+    "$work" --repo "$REPO" --title "a bug happened on 2026/11/17, filed under and/or CI/CD" --json 2>&1)
   status=$?
   [ "$status" -eq 0 ] || { echo "FAIL: a date and short slash-phrases alone should not clear the threshold, got $status" >&2; printf '%s\n' "$out" >&2; return 1; }
   case "$out" in
@@ -321,8 +372,7 @@ short_slash_phrase_is_not_a_path_test || exit 1
 invalid_query_delay_is_a_usage_error_test() (
   set +e
   local work out status
-  work="${TMPDIR:-/tmp}/mogui-issue-similar-baddelay.$$"
-  trap 'rm -rf "${work:?}"' EXIT
+  work="$WORK_ROOT/baddelay"
   # Not run_with_stub: it always appends --query-delay 0 last, which would
   # override the very bad value under test (argparse keeps the last of a
   # repeated flag). Stubbed by hand instead, same as every other case: the
@@ -335,7 +385,7 @@ exit 1
 BIN
   chmod +x "$work/bin/gh" || return 1
   for bad in -1 nan inf; do
-    out=$(PATH="$work/bin:$PATH" python3 "$SCRIPT" --repo acme/widgets --title "alphaword" --query-delay "$bad" 2>&1)
+    out=$(PATH="$work/bin:$PATH" python3 "$SCRIPT" --repo "$REPO" --title "alphaword" --query-delay "$bad" 2>&1)
     status=$?
     [ "$status" -eq 2 ] || { echo "FAIL: --query-delay $bad should be a usage error (exit 2), got $status" >&2; printf '%s\n' "$out" >&2; return 1; }
     case "$out" in
@@ -352,21 +402,20 @@ invalid_query_delay_is_a_usage_error_test || exit 1
 negative_term_limits_are_a_usage_error_test() (
   set +e
   local work out status
-  work="${TMPDIR:-/tmp}/mogui-issue-similar-negterms.$$"
-  trap 'rm -rf "${work:?}"' EXIT
+  work="$WORK_ROOT/negterms"
   # A stub that errors loudly if ever reached, same as every other case:
   # the usage check must reject both flags before any gh call, never after.
   local gh_stub='#!/bin/bash
 echo "stub: gh should never be invoked for a usage error" >&2
 exit 1'
-  out=$(run_with_stub "$gh_stub" "$work" --repo acme/widgets --title "alphaword" --max-words -1 2>&1)
+  out=$(run_with_stub "$gh_stub" "$work" --repo "$REPO" --title "alphaword" --max-words -1 2>&1)
   status=$?
   [ "$status" -eq 2 ] || { echo "FAIL: --max-words -1 should be a usage error (exit 2), got $status" >&2; printf '%s\n' "$out" >&2; return 1; }
   case "$out" in
     *"--max-words must be"*) ;;
     *) echo "FAIL: --max-words -1 should name the bad flag, not slice with it: $out" >&2; return 1 ;;
   esac
-  out=$(run_with_stub "$gh_stub" "$work" --repo acme/widgets --title "alphaword" --max-code-terms -1 2>&1)
+  out=$(run_with_stub "$gh_stub" "$work" --repo "$REPO" --title "alphaword" --max-code-terms -1 2>&1)
   status=$?
   [ "$status" -eq 2 ] || { echo "FAIL: --max-code-terms -1 should be a usage error (exit 2), got $status" >&2; printf '%s\n' "$out" >&2; return 1; }
   case "$out" in
@@ -383,17 +432,20 @@ negative_term_limits_are_a_usage_error_test || exit 1
 qualifier_like_term_not_sent_to_gh_test() (
   set +e
   local work out status
-  work="${TMPDIR:-/tmp}/mogui-issue-similar-qualifier.$$"
-  trap 'rm -rf "${work:?}"' EXIT
+  work="$WORK_ROOT/qualifier"
   mkdir -p "$work/bin" || return 1
   cat > "$work/bin/gh" <<'BIN' || return 1
 #!/bin/bash
+if [ "$1" = "repo" ] && [ "$2" = "view" ]; then
+  echo '{"name":"stub"}'
+  exit 0
+fi
 printf '%s\n' "$*" >> "$MOGUI_TEST_ARGV_LOG"
 echo "[{\"number\": 77, \"title\": \"alphaword seen with label:wontfix in its body\", \"state\": \"open\", \"url\": \"https://example.invalid/77\", \"body\": \"\"}]"
 BIN
   chmod +x "$work/bin/gh" || return 1
   out=$(cd "$work" && MOGUI_TEST_ARGV_LOG="$work/argv.log" PATH="$work/bin:$PATH" \
-        python3 "$SCRIPT" --repo acme/widgets --title 'alphaword `label:wontfix`' --query-delay 0 --json 2>&1)
+        python3 "$SCRIPT" --repo "$REPO" --title 'alphaword `label:wontfix`' --query-delay 0 --json 2>&1)
   status=$?
   [ "$status" -eq 3 ] || { echo "FAIL: the word plus the qualifier-shaped term should still clear the threshold, got $status" >&2; printf '%s\n' "$out" >&2; return 1; }
   [ -f "$work/argv.log" ] || { echo "FAIL: gh was never invoked" >&2; return 1; }

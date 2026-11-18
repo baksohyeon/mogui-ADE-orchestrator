@@ -40,7 +40,8 @@ Run `issue-similar` with the title (and body, via `--body-file`, if drafted alre
 existing issue instead of filing, or file the new issue and link the near match in its body.
 On exit `0` or `1`, follow the exit code above; a `1` means the check did not run to
 completion, not that nothing matched. Every issue filed this way carries
-`--assignee baksohyeon`, the same as a pull request.
+`--assignee` for the repository maintainer (in this template, `baksohyeon`); an installation
+should change that value to its own maintainer.
 
 ## (b) Weekly sweep
 

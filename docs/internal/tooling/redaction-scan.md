@@ -45,16 +45,18 @@ A full-tree or staged scan flags every match on the file, full stop. `--range` i
 
 ```console
 $ scripts/redaction-scan.sh --range origin/main..HEAD
-redaction-scan: WARNING — 2 pre-existing finding(s) outside this range's added lines (not blocking in range mode, still exempt only via .gitleaksignore):
-  notes.md:40  [internal_host] Internal or corp hostname  :: host.example.com
-redaction-scan: OK: 0 findings (mode=range, files=3, ..., pre-existing=2, ...)
+redaction-scan: WARNING — 1 pre-existing finding(s) outside this range's added lines (not blocking in range mode, still exempt only via .gitleaksignore):
+  notes.md:40  [internal_host] Internal or corp hostname  :: ci.cor…
+redaction-scan: OK: 0 findings (mode=range, files=3, ..., pre-existing=1, ...)
 ```
 
 The judgment only ever makes a file's findings *more* lenient, never adds scope: a file the range diff cannot be read for safely (an unreadable or empty diff for a file the range lists as changed, most commonly a binary file) fails the whole scan (exit 2) rather than guessing either way, and a file the working tree no longer matches at the range's own tip is left out of the judgment entirely, so every finding in it stays blocking. Full-file and staged modes never consult this at all.
 
 ### Stale `.gitleaksignore` fingerprints
 
-A fingerprint is `path:rule:line`. gitleaks 8.30.1 has no content-based fingerprint (confirmed against its own source, `detect/detect.go`: the fingerprint is built from the file path, rule id, and start line alone), so adding a line above an exempted finding shifts it to a new fingerprint, and the old one silently stops matching anything, which is not visible on its own: the finding it used to cover either reappears as a live, blocking finding (safe, if noisy) or the fingerprint simply goes unused forever (invisible drift). In tracked-mode runs, when `.gitleaksignore` holds entries, the scan reruns the same files with ignore-matching disabled and reports any listed fingerprint that now matches nothing live:
+A file fingerprint is `path:rule:line`. gitleaks 8.30.1 has no content-based fingerprint (confirmed against its own source, `detect/detect.go`: the fingerprint is built from the file path, rule id, and start line alone), so adding a line above an exempted finding shifts it to a new fingerprint, and the old one silently stops matching anything, which is not visible on its own: the finding it used to cover either reappears as a live, blocking finding (safe, if noisy) or the fingerprint simply goes unused forever (invisible drift). A commit-message fingerprint has the same `rule:line` shape but no file, so it reads as `:rule:line`.
+
+In tracked-mode runs, when `.gitleaksignore` holds entries, the scan reruns the same files with ignore-matching disabled, and, when this run also scanned commit messages, those same commits the same way, then reports any listed fingerprint that now matches nothing live:
 
 ```console
 redaction-scan: WARNING — 2 .gitleaksignore fingerprint(s) match no current finding (stale; the exempted line likely shifted or was removed); review .gitleaksignore:
@@ -62,7 +64,7 @@ secret.txt:aws_access_key:1
 secret.txt:aws-access-token:1
 ```
 
-This never fails the scan on its own: a fingerprint going stale because its line really did move with the secret still present already fails the normal pass above, on its own merits. Staged and range-mode runs skip this check, since they only ever touch a subset of files and would misreport an untouched file's still-valid fingerprint as stale.
+This never fails the scan on its own: a fingerprint going stale because its line really did move with the secret still present already fails the normal pass above, on its own merits. Staged and range-mode runs skip this check, since they only ever touch a subset of files and would misreport an untouched file's still-valid fingerprint as stale. A run without `--commit-messages` leaves every commit-message-shaped (`:rule:line`) entry unchecked for the same reason: it never rescanned the commits that would confirm one way or the other.
 
 ### Organization-specific rules (`REDACTION_EXTRA_PATTERNS`)
 

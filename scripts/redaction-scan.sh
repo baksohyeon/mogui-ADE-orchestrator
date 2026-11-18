@@ -540,8 +540,39 @@ HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", re.MULTILINE)
 # against itself (measured), failing every range-mode run on this commit.
 BINARY_MARKER_RE = re.compile(r"^Binary files .* differ$", re.MULTILINE)
 
+# A path with a clean/smudge filter (Git LFS and the like) stores a small
+# pointer as its git blob; the diff below would read that pointer's line
+# numbers, but gitleaks is about to scan the smudged working-tree file,
+# which can be unrelated content of a completely different length (measured:
+# a 1-line pointer diff next to a 4-line smudged file put a newly added
+# secret on line 4 while "added" only ever held line 1, and the secret
+# printed as non-blocking pre-existing). No entry for such a path, same as
+# any other case this cannot judge safely.
+attr_check = subprocess.run(
+    ["git", "check-attr", "-z", "--stdin", "filter"],
+    input="\0".join(paths), capture_output=True, text=True,
+)
+if attr_check.returncode != 0:
+    print(
+        f"could not read filter attributes (git exit {attr_check.returncode}): "
+        f"{attr_check.stderr.strip()[:200]}"
+    )
+    sys.exit(1)
+fields = attr_check.stdout.split("\0")[:-1] if attr_check.stdout else []
+# "unspecified" (no .gitattributes entry mentions this path) and "unset"
+# (a ".gitattributes" rule explicitly says "-filter", meaning no filter)
+# both mean no filter runs here; only a named filter value means one does.
+filtered_paths = {
+    fields[i]
+    for i in range(0, len(fields), 3)
+    if fields[i + 2] not in ("unspecified", "unset")
+}
+
 added = {}
 for path in paths:
+    if path in filtered_paths:
+        continue
+
     # gitleaks is about to scan the file on disk, but the range diff numbers
     # lines against the range's own tip commit. If the two disagree, a line
     # number from the diff would not point at the line gitleaks just read,
@@ -610,6 +641,43 @@ while IFS= read -r -d '' path; do
   file_count=$((file_count + 1))
   scan_path "${path}"
 done < "${FILES_LIST}"
+
+# Each mapped path's added-lines judgment was computed from a diff taken
+# earlier in this same run; if gitleaks' scan above raced a further change
+# to the file, that judgment no longer describes what was actually
+# scanned, so it must not be trusted to downgrade anything. Rechecked once,
+# in a batch, after every file has been scanned, rather than with a bash
+# associative array (unavailable under the bash 3.2 that ships as /bin/bash
+# on macOS, including this project's own macOS CI runner).
+if [[ "${MODE}" == "range" ]]; then
+  RECHECK_ERROR="${WORK_DIR}/recheck-error"
+  if ! "${PYTHON}" - "${RANGE_TO}" "${ADDED_LINES_MAP}" \
+    > "${RECHECK_ERROR}" <<'PY'
+import json
+import subprocess
+import sys
+
+range_to, map_path = sys.argv[1:3]
+with open(map_path, encoding="utf-8") as handle:
+    mapped_paths = json.load(handle)
+
+for path in mapped_paths:
+    check = subprocess.run(
+        [
+            "git", "diff", "--quiet", "--no-color", "--no-ext-diff",
+            "--no-textconv", range_to, "--", path,
+        ]
+    )
+    if check.returncode != 0:
+        print(f"{path} changed after its added-lines judgment was computed")
+        sys.exit(1)
+PY
+  then
+    reason="$(cat "${RECHECK_ERROR}" 2>/dev/null)"
+    echo "redaction-scan: FAIL — ${reason:-a mapped file changed mid-scan}; re-run to get a judgment that matches what was scanned" >&2
+    exit 2
+  fi
+fi
 
 # Stale .gitleaksignore fingerprints (tracked mode only; a staged or range
 # subset would make an untouched file's still-valid fingerprint read as
@@ -682,6 +750,7 @@ if [[ "${MODE}" == "tracked" && -f "${GITLEAKSIGNORE}" ]] \
 
   STALE_CHECK_ERROR="${WORK_DIR}/stale-check-error"
   if ! "${PYTHON}" - "${GITLEAKSIGNORE}" "${UNFILTERED_REPORTS}" "${STALE_FINGERPRINTS_FILE}" \
+    "${COMMIT_RANGE:+1}" \
     > "${STALE_CHECK_ERROR}" <<'PY'
 import json
 import pathlib
@@ -692,6 +761,7 @@ ignore_path, reports_dir, out_path = (
     pathlib.Path(sys.argv[2]),
     pathlib.Path(sys.argv[3]),
 )
+commit_messages_scanned = len(sys.argv) > 4 and sys.argv[4] == "1"
 
 try:
     ignore_text = ignore_path.read_text(encoding="utf-8")
@@ -703,6 +773,14 @@ listed = []
 for line in ignore_text.splitlines():
     stripped = line.strip()
     if not stripped or stripped.startswith("#"):
+        continue
+    # A commit-message fingerprint has no file, so it starts with the
+    # separator (":rule:line"). This run only rescans commit messages when
+    # it scanned them in the first place: without that, such an entry
+    # cannot be told apart from stale, so it is left unchecked rather than
+    # reported stale on an absence this run never looked at (the same
+    # principle a staged/range file subset already gets, above).
+    if stripped.startswith(":") and not commit_messages_scanned:
         continue
     listed.append(stripped)
 

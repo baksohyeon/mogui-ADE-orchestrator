@@ -251,21 +251,29 @@ def test_range_mode_binary_marker_check_is_line_anchored(tmp_path: Path) -> None
     own diff as a binary file and fail closed on every range-mode run of
     this very commit (caught in review, reproduced with
     `scripts/redaction-scan.sh --range origin/main..HEAD` on this repo).
-    This fixture pins a plain-text change that merely mentions both words
-    without an actual binary marker line, and must still be judged normally.
+
+    The two marker words have to be in the *added* lines for this fixture to
+    exercise the check at all: review caught an earlier version that put
+    them in the base commit instead, where `-U0` never shows them, so the
+    old unanchored check and the new anchored one agreed by accident and the
+    test passed either way. They are split across two added lines here —
+    together they still trip the old whole-text substring search, but
+    neither line alone matches the new anchored marker pattern — so a
+    revert of the anchoring fix turns this into an unrelated failure
+    (`binary diff for notes.md`) instead of passing quietly.
     """
     repo = _repo_with_commits(tmp_path, ["base"])
-    (repo / "notes.md").write_text(
-        "a note about diff output: Binary files can print a line ending in"
-        " the word differ, but this is not that marker line\n",
-        encoding="utf-8",
-    )
+    (repo / "notes.md").write_text("clean base line\n", encoding="utf-8")
     _git(repo, "add", "notes.md")
     _git(repo, "commit", "-q", "-m", "add report")
     base = _head(repo)
 
     with open(repo / "notes.md", "a", encoding="utf-8") as handle:
-        handle.write(f"{LEAK}\n")
+        handle.write(
+            "This text begins with the words Binary files for a reason.\n"
+            "It also later contains the word differ, unrelated to any marker.\n"
+            f"{LEAK}\n"
+        )
     _git(repo, "add", "notes.md")
     _git(repo, "commit", "-q", "-m", "add a secret")
 
@@ -274,3 +282,94 @@ def test_range_mode_binary_marker_check_is_line_anchored(tmp_path: Path) -> None
 
     assert result.returncode == 1, output
     assert "aws_access_key" in output, output
+
+
+@requires_gitleaks
+def test_range_mode_leaves_a_filtered_path_fully_blocking(tmp_path: Path) -> None:
+    """A path with a clean/smudge filter (Git LFS and the like) stores a
+    small pointer as its git blob; the added-lines diff reads that
+    pointer's line numbers, but gitleaks scans the smudged working-tree
+    file, which can be unrelated content of a different length. Reproduced
+    directly: a 1-line pointer change next to a 4-line smudged file put a
+    newly added secret on line 4 while the diff-derived "added" set only
+    ever held line 1, downgrading it to a non-blocking pre-existing warning
+    (caught in review). This fixture stands in for Git LFS with a toy
+    clean/smudge filter so the test needs no real LFS install.
+    """
+    repo = _repo_with_commits(tmp_path, ["base"])
+    store = repo / "lfs-store"
+    store.mkdir()
+    filters_dir = repo / ".git" / "filters"
+    filters_dir.mkdir()
+    (filters_dir / "clean.sh").write_text(
+        "#!/bin/bash\nwc -c | awk '{print \"oid:\" $1}'\n", encoding="utf-8"
+    )
+    (filters_dir / "smudge.sh").write_text(
+        "#!/bin/bash\nread -r line\noid=\"${line#oid:}\"\n"
+        f'cat "{store}/$oid"\n',
+        encoding="utf-8",
+    )
+    (filters_dir / "clean.sh").chmod(0o755)
+    (filters_dir / "smudge.sh").chmod(0o755)
+    _git(repo, "config", "filter.toy.clean", str(filters_dir / "clean.sh"))
+    _git(repo, "config", "filter.toy.smudge", str(filters_dir / "smudge.sh"))
+    _git(repo, "config", "filter.toy.required", "true")
+    (repo / ".gitattributes").write_text("big.dat filter=toy\n", encoding="utf-8")
+    _git(repo, "add", ".gitattributes")
+    _git(repo, "commit", "-q", "-m", "attrs")
+
+    v1 = "safe1\nsafe2\nsafe3\n"
+    (store / str(len(v1))).write_text(v1, encoding="utf-8")
+    (repo / "big.dat").write_text(v1, encoding="utf-8")
+    _git(repo, "add", "big.dat")
+    _git(repo, "commit", "-q", "-m", "add big.dat v1")
+    base = _head(repo)
+
+    v2 = f"safe1\nsafe2\nsafe3\n{LEAK}\n"
+    (store / str(len(v2))).write_text(v2, encoding="utf-8")
+    (repo / "big.dat").unlink()
+    (repo / "big.dat").write_text(v2, encoding="utf-8")
+    _git(repo, "add", "big.dat")
+    _git(repo, "commit", "-q", "-m", "update big.dat v2")
+    (repo / "big.dat").unlink()
+    _git(repo, "checkout", "-q", "--", "big.dat")
+
+    result = _scan(repo, "--range", f"{base}..HEAD")
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 1, output
+    assert "aws_access_key" in output, output
+    assert "pre-existing" not in result.stdout, output
+
+
+@requires_gitleaks
+def test_range_mode_still_downgrades_a_path_with_an_explicit_unset_filter(
+    tmp_path: Path,
+) -> None:
+    """`.gitattributes` can explicitly say `-filter` to turn a filter back
+    off for one path; `git check-attr` reports that as `unset`, a third
+    value distinct from `unspecified` (no rule mentions this path at all).
+    Treating `unset` as "has a filter" wrongly excluded an ordinary,
+    actually-unfiltered path from the added-lines map, leaving its
+    pre-existing findings blocking when they should downgrade like any
+    other file (caught in review).
+    """
+    repo = _repo_with_commits(tmp_path, ["base"])
+    (repo / ".gitattributes").write_text("report.md -filter\n", encoding="utf-8")
+    _git(repo, "add", ".gitattributes")
+    _git(repo, "commit", "-q", "-m", "attrs")
+    (repo / "report.md").write_text(f"{LEAK}\nclean base line\n", encoding="utf-8")
+    _git(repo, "add", "report.md")
+    _git(repo, "commit", "-q", "-m", "add report with an old secret")
+    base = _head(repo)
+
+    with open(repo / "report.md", "a", encoding="utf-8") as handle:
+        handle.write("a new clean append\n")
+    _git(repo, "add", "report.md")
+    _git(repo, "commit", "-q", "-m", "append a clean line")
+
+    result = _scan(repo, "--range", f"{base}..HEAD")
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 0, output
+    assert "pre-existing=2" in result.stdout, output

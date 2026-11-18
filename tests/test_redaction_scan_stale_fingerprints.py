@@ -128,6 +128,32 @@ def test_a_commit_message_exemption_is_not_wrongly_reported_stale(
 
 
 @requires_gitleaks
+def test_a_commit_message_fingerprint_is_not_checked_when_messages_were_not_scanned(
+    tmp_path: Path,
+) -> None:
+    """A `.gitleaksignore` entry left over from an earlier `--commit-messages`
+    run has no file (`:rule:line`). A later run without that flag never
+    rescans commit messages at all, so it has no way to tell that entry
+    apart from one that is genuinely stale — it must stay unchecked, not
+    be reported stale on an absence this run never looked at (caught in
+    review; the same principle already applies to a staged/range file
+    subset's untouched files).
+    """
+    repo = _repo_with_commits(tmp_path, ["base"])
+    (repo / ".gitleaksignore").write_text(
+        ":aws_access_key:1\n:aws-access-token:1\n", encoding="utf-8"
+    )
+    _git(repo, "add", ".gitleaksignore")
+    _git(repo, "commit", "-q", "-m", "add gitleaksignore from an earlier run")
+
+    result = _scan(repo)
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 0, output
+    assert "stale-fingerprints=0" in result.stdout, output
+
+
+@requires_gitleaks
 def test_a_malformed_gitleaksignore_fails_closed_with_a_named_reason(
     tmp_path: Path,
 ) -> None:

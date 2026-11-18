@@ -122,6 +122,64 @@ def test_local_env_embedded_in_a_longer_real_host_still_flags(
 
 
 @requires_gitleaks
+def test_local_env_embedded_in_a_unicode_continued_host_still_flags(
+    tmp_path: Path,
+) -> None:
+    """An ASCII-only continuation class truncated the match one label
+    early at a non-ASCII dotted label, which the allowlist then exempted
+    as if that truncated prefix were the whole token (caught in review,
+    confirmed directly against gitleaks with ignore-matching disabled: the
+    match came back as exactly the truncated ASCII prefix, excused).
+    """
+    repo = _repo_with_commits(tmp_path, ["base"])
+    (repo / "notes.md").write_text(
+        "cache" + ".local" + ".env." + "équipe.net serves traffic\n",
+        encoding="utf-8",
+    )
+    _git(repo, "add", "notes.md")
+    _git(repo, "commit", "-q", "-m", "notes")
+
+    result = _scan(repo)
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 1, output
+    assert "internal_host" in output, output
+
+
+@requires_gitleaks
+def test_local_env_embedded_in_a_decomposed_unicode_host_still_flags(
+    tmp_path: Path,
+) -> None:
+    """The same `.local.env.équipe.net` host written in Unicode's NFD
+    (decomposed) form — "e" plus its own combining accent, rather than the
+    single precomposed "é" codepoint — is letters and digits plus a
+    combining mark, not a letter followed by a boundary. Without \\p{M} in
+    the continuation class this still failed closed rather than hiding the
+    finding (truncated one character short of the combining mark, which
+    the allowlist's end anchor then rejected), but the match text was an
+    oddly truncated "...env.e"; confirmed directly against gitleaks that
+    \\p{M} fixes the truncation and the match now reads the full host.
+    """
+    import unicodedata
+
+    repo = _repo_with_commits(tmp_path, ["base"])
+    host_nfd = unicodedata.normalize(
+        "NFD", "cache" + ".local" + ".env." + "équipe.net"
+    )
+    (repo / "notes.md").write_text(
+        f"{host_nfd} serves traffic\n", encoding="utf-8"
+    )
+    _git(repo, "add", "notes.md")
+    _git(repo, "commit", "-q", "-m", "notes")
+
+    result = _scan(repo)
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 1, output
+    assert "internal_host" in output, output
+
+
+@requires_gitleaks
 def test_local_env_exemption_holds_across_a_lone_cr_line(
     tmp_path: Path,
 ) -> None:

@@ -23,8 +23,8 @@ you build on it.
 ### Fixed
 
 - `scripts/redaction-scan.sh --range` now judges only the lines a range itself adds or changes: a finding already on the range's base prints as a non-blocking pre-existing warning instead of blocking a change that added none of its own; a file whose added lines cannot be determined safely (an unreadable or binary diff) fails the whole scan rather than guessing. Full-file and staged modes are unchanged (#331).
-- Tracked-mode scans now report `.gitleaksignore` fingerprints that match no current finding, since a fingerprint is `path:rule:line` and drifts as soon as a line above it shifts (#331).
-- The `internal_host` rule no longer flags a `*.local.env` file name or a comment naming one, while a bare `*.local` host, or a real host on the same line, still flags (#331, extends #168).
+- Tracked-mode scans now report `.gitleaksignore` fingerprints that match no current finding; a file fingerprint is `path:rule:line` and drifts as soon as a line above it shifts (#331).
+- The `internal_host` rule no longer flags a single-label `*.local.env` file name or a comment naming one, while a bare `*.local` host, or a real host on the same line, still flags (#331, extends #168).
 
 ## [0.5.353] - 2026-11-17
 

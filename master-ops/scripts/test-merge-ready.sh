@@ -271,8 +271,8 @@ fi
 stop_dir="${WORK_DIR}/stop-path"
 write_fixture "${stop_dir}" '[{"filename":"config/gitleaks.toml"}]' ""
 out=$(run_case "${stop_dir}"); rc=$?
-if [ "${rc}" -eq 2 ] && printf '%s' "${out}" | grep -q 'stop-list'; then
-  ok "stop-list path exits 2"
+if [ "${rc}" -eq 2 ] && printf '%s' "${out}" | grep -q 'stop-list' && printf '%s' "${out}" | grep -q "head ${HEAD_SHA}"; then
+  ok "stop-list path exits 2 and reports the measured head"
 else
   fail "stop-list path: got ${rc}: ${out}"
 fi

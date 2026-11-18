@@ -325,7 +325,7 @@ PY
 )"
 PATH_RC=$?
 if [ "${PATH_RC}" -eq 2 ]; then
-  echo "${PATH_VERDICT}"
+  echo "${PATH_VERDICT} (head ${HEAD_SHA})"
   exit 2
 fi
 if [ "${PATH_RC}" -ne 0 ]; then
@@ -561,7 +561,7 @@ try:
                 problems_ask.append("path(s) outside contract writes: " + ", ".join(outside))
 
     if problems_ask:
-        print("merge-ready: ask · " + "; ".join(problems_ask + problems_not_ready))
+        print(f"merge-ready: ask · {'; '.join(problems_ask + problems_not_ready)} (head {head_sha})")
         sys.exit(2)
     if problems_not_ready:
         print("merge-ready: not ready · " + "; ".join(problems_not_ready))

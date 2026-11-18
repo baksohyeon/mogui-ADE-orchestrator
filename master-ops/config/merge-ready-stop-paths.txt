@@ -51,6 +51,10 @@ scripts/redaction-allowlist.txt
 hooks/pre-push
 .github/workflows/**
 .github/CODEOWNERS
+CODEOWNERS
+docs/CODEOWNERS
+.github/labeler.yml
+.github/release.yml
 .claude/**
 master-ops/docs/runbooks/succession-boot-card.md
 CLAUDE.md

@@ -27,10 +27,11 @@ duplicate.
 - `0`: no candidate scored at or above the threshold, including when none was found at all
   and no malformed records were skipped.
 - `3`: at least one candidate scored at or above the threshold. Stop and read before filing.
-- `1`: a `gh` call failed, timed out, returned nothing, or returned something that was not a
-  parseable JSON list, or one or more returned records had malformed issue numbers. The
-  skipped-record count is written to stderr. Never `0` on a failure: a caller that only checks
-  for zero would otherwise read a broken or partial `gh` result as "no duplicates."
+- `1`: repository validation or an issue-search `gh` call failed, timed out, returned nothing,
+  or returned something that was not a parseable JSON list; `--body-file` could not be read;
+  `--title` had no usable search terms; or one or more returned records had malformed issue
+  numbers. The skipped-record count is written to stderr. Never `0` on a failure: a caller that
+  only checks for zero would otherwise read a broken or partial check as "no duplicates."
 - `2`: a usage error (a missing required flag, an invalid `--query-delay`, and the like),
   the standard `argparse` exit code. Treat it the same as `1` in the sweep: a failed check
   for that issue, never "no duplicates found."

@@ -1,61 +1,32 @@
 #!/usr/bin/env bash
 # One measurement for a pull request, run by the worker before `worker_done`
-# and by the master before merge (#330, round 2). Every head-sensitive
-# measurement (checks, bot reviews, open threads, changed files, comments)
-# is gathered AFTER the tarball test re-run completes, and the PR's head is
-# re-read then too: a push that lands mid-run invalidates everything
-# gathered before it, and this script measures the head that is actually
-# there when it finishes, never the one it started with. The one exception
-# is the stop list and the --contract writes-scope check, which run once
-# early, before the test re-run: when either already decides "ask", no PR
-# code runs on this machine at all, and the summary line says so.
+# and by the master before merge (#330). This command reads GitHub state and
+# never runs code from the pull request.
 #
-# Usage: merge-ready --repo <owner/name> --pr <n> [--contract <file>] [--test-command <cmd>]
+# Usage: merge-ready --repo <owner/name> --pr <n> [--contract <file>]
 #
 # Exit codes:
 #   0  merge: every measurement passed and no stop-list path was touched.
-#   1  not ready: a measurement failed, a `gh` call could not be read or
-#      parsed (that case is 1, never 0: a measurement that could not run is
-#      not a passed measurement), or this invocation itself could not run
-#      (bad usage, `gh`/`python3` missing, an unreadable --contract, stop-
-#      paths, or bots file). 2 is reserved for "ask" alone, never a close-
-#      enough stand-in for "could not run".
-#   2  ask the owner: a changed path matches the stop list, or (with
-#      --contract) a changed path falls outside the contract's `writes`
-#      globs. Decided before the test re-run, which then does not run.
+#   1  not ready: a measurement failed, a GitHub response could not be read
+#      or parsed, or this invocation could not run.
+#   2  ask the owner: a changed path matches the stop list, or a changed path
+#      falls outside the contract's `writes` globs.
 #
 # One summary line on stdout names every failing or asking item.
 set -u
-# The test re-run executes the PR's own code with this script's own
-# filesystem privileges, ahead of several fixed, predictable sibling temp
-# file names this script writes to only afterward (checks.json and so
-# on). `noclobber` makes a bash `>` redirect among those refuse outright
-# if anything, including a symlink, already occupies that path -- but it
-# does not cover the Python-side `open(path, "w")` writes the paginated-
-# response flatten step below does, and on its own it would make a
-# planted file masquerade as a legitimate `gh` failure: `gh pr checks`
-# itself exits non-zero on a merely failing (not unreadable) required
-# check, so the fallback a few steps down that tolerates that shape would
-# also tolerate a file planted ahead of time, parsed as valid JSON, and
-# never actually queried. The explicit pre-flight check right before step
-# 3 below closes both gaps the same way: nothing is trusted, bash- or
-# Python-written, unless this script's own `gh` call is the one that
-# created it.
-set -C
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 STOP_PATHS_FILE="${SCRIPT_DIR}/../config/merge-ready-stop-paths.txt"
 BOTS_FILE="${SCRIPT_DIR}/../config/merge-ready-bots.txt"
 
 usage() {
-  echo "usage: merge-ready --repo <owner/name> --pr <n> [--contract <file>] [--test-command <cmd>]" >&2
+  echo "usage: merge-ready --repo <owner/name> --pr <n> [--contract <file>]" >&2
   exit 1
 }
 
 REPO=""
 PR=""
 CONTRACT=""
-TEST_COMMAND_OVERRIDE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --repo)
@@ -71,11 +42,6 @@ while [ $# -gt 0 ]; do
     --contract)
       [ $# -ge 2 ] || usage
       CONTRACT="$2"
-      shift 2
-      ;;
-    --test-command)
-      [ $# -ge 2 ] || usage
-      TEST_COMMAND_OVERRIDE="$2"
       shift 2
       ;;
     *)
@@ -100,30 +66,26 @@ if [ ! -f "${BOTS_FILE}" ]; then
   exit 1
 fi
 
-TMP_DIR="$(mktemp -d -t merge-ready.XXXXXX)" || { echo "merge-ready: mktemp failed" >&2; exit 1; }
+TMP_DIR="$(mktemp -d -t merge-ready.XXXXXX)" || {
+  echo "merge-ready: not ready · mktemp failed"
+  exit 1
+}
 trap 'rm -rf "${TMP_DIR}"' EXIT
 
-# Named once, reused everywhere they are written or read, instead of the
-# same "${TMP_DIR}/pr-early*.err"-shaped literal spelled out at each site.
-PR_EARLY_FILE="${TMP_DIR}/pr-early.json"
-PR_EARLY_ERR="${TMP_DIR}/pr-early.err"
-PR_EARLY_PARSE_ERR="${TMP_DIR}/pr-early.parse.err"
-EARLY_FILES_RAW="${TMP_DIR}/files-early-raw.json"
-EARLY_FILES_FILE="${TMP_DIR}/files-early.json"
-EARLY_FILES_ERR="${TMP_DIR}/files-early.err"
-TARBALL_ERR="${TMP_DIR}/tarball.err"
-UNTAR_ERR="${TMP_DIR}/untar.err"
+PR_HEAD_FILE="${TMP_DIR}/pr-head.json"
+PR_HEAD_ERR="${TMP_DIR}/pr-head.err"
 CHECKS_FILE="${TMP_DIR}/checks.json"
 CHECKS_ERR="${TMP_DIR}/checks.err"
 GQL_FILE="${TMP_DIR}/graphql.json"
-GQL_ERR="${TMP_DIR}/gql.err"
+GQL_ERR="${TMP_DIR}/graphql.err"
 FILES_RAW="${TMP_DIR}/files-raw.json"
 FILES_FILE="${TMP_DIR}/files.json"
 FILES_ERR="${TMP_DIR}/files.err"
 COMMENTS_RAW="${TMP_DIR}/comments-raw.json"
 COMMENTS_FILE="${TMP_DIR}/comments.json"
 COMMENTS_ERR="${TMP_DIR}/comments.err"
-COMMIT_ERR="${TMP_DIR}/commit.err"
+COMMIT_DATE_FILE="${TMP_DIR}/commit-date.txt"
+COMMIT_DATE_ERR="${TMP_DIR}/commit-date.err"
 PR_FILE="${TMP_DIR}/pr.json"
 PR_ERR="${TMP_DIR}/pr.err"
 
@@ -132,12 +94,6 @@ not_ready() {
   exit 1
 }
 
-# A file this script just wrote parses as the JSON shape it is about to
-# trust: a non-empty array for $2, or (with no $2) any value. An empty-but-
-# valid response (`{}`, `null`, `[]`) is exactly as unmeasurable as no
-# response at all, and must not quietly read as "nothing failed". File
-# paths reach the embedded script as argv, never interpolated into the
-# source text.
 require_json() {
   local file="$1" kind="${2:-}" reason
   reason="$(python3 -c '
@@ -153,224 +109,42 @@ if kind == "nonempty-list" and not (isinstance(data, list) and len(data) > 0):
   not_ready "${file##*/}: ${reason}"
 }
 
-# `gh api ... --paginate` alone already combines a REST array endpoint's
-# pages into one array in the common case, but `--slurp` is the documented,
-# version-independent way to get that guarantee: it wraps each page's own
-# array in an outer one, which this flattens back into the single flat
-# array every caller below expects.
 fetch_paginated_array() {
   local api_path="$1" raw="$2" flat="$3" err="$4" label="$5"
   if ! gh api "${api_path}" --paginate --slurp >"${raw}" 2>"${err}"; then
     not_ready "could not read ${label} ($(tr '\n' ' ' <"${err}"))"
   fi
-  # Reuses the same $err path the gh call above just created (empty, since
-  # that call already returned success); `>|` says so explicitly rather
-  # than relying on noclobber to allow a second write to a file this
-  # function's own prior line just made, the same path `set -C` above
-  # exists specifically to refuse for anything it did not just create itself.
   if ! python3 -c '
 import json, sys
 raw_path, flat_path = sys.argv[1], sys.argv[2]
 pages = json.load(open(raw_path, encoding="utf-8"))
-flat = [item for page in pages for item in page]
-json.dump(flat, open(flat_path, "w", encoding="utf-8"))
-' "${raw}" "${flat}" 2>|"${err}"; then
-    not_ready "${label}: could not flatten the paginated response ($(tr '\n' ' ' <"${err}"))"
+if not isinstance(pages, list) or not all(isinstance(page, list) for page in pages):
+    raise ValueError("expected a list of array pages")
+json.dump([item for page in pages for item in page], open(flat_path, "w", encoding="utf-8"))
+' "${raw}" "${flat}" 2>"${err}"; then
+    not_ready "${label}: could not flatten the response ($(tr '\n' ' ' <"${err}"))"
   fi
 }
 
-# --- step 1: the only thing needed before the test re-run is which tarball
-# to fetch and whether the stop list or the contract's writes scope already
-# decide "ask" on the diff alone. Everything else is gathered again after
-# the test, below. ---
 if ! gh pr view "${PR}" --repo "${REPO}" --json headRefOid \
-    >"${PR_EARLY_FILE}" 2>"${PR_EARLY_ERR}"; then
-  not_ready "could not read the PR (gh pr view: $(tr '\n' ' ' <"${PR_EARLY_ERR}"))"
+    >"${PR_HEAD_FILE}" 2>"${PR_HEAD_ERR}"; then
+  not_ready "could not read the PR (gh pr view: $(tr '\n' ' ' <"${PR_HEAD_ERR}"))"
 fi
-require_json "${PR_EARLY_FILE}"
+require_json "${PR_HEAD_FILE}"
 HEAD_SHA="$(python3 -c '
 import json, sys
 print(json.load(open(sys.argv[1], encoding="utf-8"))["headRefOid"])
-' "${PR_EARLY_FILE}" 2>"${PR_EARLY_PARSE_ERR}")" || not_ready "PR response missing headRefOid ($(tr '\n' ' ' <"${PR_EARLY_PARSE_ERR}"))"
-
-fetch_paginated_array "repos/${REPO}/pulls/${PR}/files" "${EARLY_FILES_RAW}" "${EARLY_FILES_FILE}" "${EARLY_FILES_ERR}" "changed files"
-require_json "${EARLY_FILES_FILE}" nonempty-list
-
-# A stop-list or --contract writes-scope hit is checked once here, from the
-# diff alone, before anything that runs the PR's own code. The post-test
-# gather below re-fetches files and re-checks the same two things on
-# whatever head is actually there when the test finishes, so a stop-listed
-# file that lands only via a mid-run push is still caught; this early pass
-# only short-circuits the common case where the diff was always going to
-# be "ask", sparing the test re-run for a verdict that answer cannot change.
-EARLY_VERDICT="$(python3 - "${EARLY_FILES_FILE}" "${STOP_PATHS_FILE}" "${CONTRACT}" <<'PY'
-import fnmatch
-import json
-import re
-import sys
-from pathlib import Path
-
-files_file, stop_paths_file, contract_path = sys.argv[1:4]
-files = json.loads(Path(files_file).read_text(encoding="utf-8"))
-changed_paths = sorted(
-    {f["filename"] for f in files}
-    | {f["previous_filename"] for f in files if f.get("previous_filename")}
-)
-
-
-def matches_stop(path, entry):
-    if entry.endswith("/"):
-        return path == entry.rstrip("/") or path.startswith(entry)
-    if any(ch in entry for ch in "*?["):
-        return fnmatch.fnmatch(path, entry)
-    return path == entry
-
-
-stop_entries = [
-    line.strip() for line in Path(stop_paths_file).read_text(encoding="utf-8").splitlines()
-    if line.strip() and not line.strip().startswith("#")
-]
-stop_hits = [p for p in changed_paths if stop_entries and any(matches_stop(p, e) for e in stop_entries)]
-
-problems_ask = []
-if stop_hits:
-    problems_ask.append(
-        f"{len(stop_hits)} stop-list path(s): " + ", ".join(f"{p} (stop-list)" for p in stop_hits)
-    )
-
-if contract_path:
-    text = Path(contract_path).read_text(encoding="utf-8")
-    fm_match = re.match(r"^---\n(.*?\n)---", text, re.DOTALL)
-    front_matter = fm_match.group(1) if fm_match else ""
-    globs = None
-    for fm_line in front_matter.splitlines():
-        key, sep, raw_value = fm_line.partition(":")
-        if sep and key.strip() == "writes":
-            raw_value = raw_value.strip()
-            if raw_value.startswith("[") and raw_value.endswith("]"):
-                inner = raw_value[1:-1].strip()
-                globs = [g.strip() for g in inner.split(",") if g.strip()] if inner else []
-            break
-    # A missing writes: field is a not-ready case, not an early ask; it is
-    # left to the full post-test aggregator below so it gets one real
-    # measurement and one message, not a second wording from this shortcut.
-    # An explicit empty list (`writes: []`, schema-valid) is not the same
-    # as a missing field: it declares an empty scope, so every changed path
-    # is outside it, the same way the final aggregator below reads it; a
-    # bare `if globs:` here would treat `[]` as falsy and silently skip the
-    # check that `[]` should actually fail hardest.
-    if globs is not None:
-        outside = [p for p in changed_paths if not any(fnmatch.fnmatch(p, g) for g in globs)]
-        if outside:
-            problems_ask.append(f"{len(outside)} path(s) outside contract writes: " + ", ".join(outside))
-
-if problems_ask:
-    print("merge-ready: ask · " + "; ".join(problems_ask) + "; tests not run (stop list decided before the test re-run)")
-    sys.exit(2)
-sys.exit(0)
-PY
-)"
-EARLY_RC=$?
-if [ "${EARLY_RC}" -eq 2 ]; then
-  echo "${EARLY_VERDICT}"
-  exit 2
-fi
-if [ "${EARLY_RC}" -ne 0 ]; then
-  # Anything other than a clean pass-through (0) or a decided "ask" (2) is
-  # the early check itself failing to run, not a quiet green light: falling
-  # through to the test re-run on an unrecognized exit code would be
-  # exactly the "a measurement that could not run is not a passed
-  # measurement" mistake this script's own header promises never to make.
-  not_ready "early stop-list/contract check failed unexpectedly (exit ${EARLY_RC})${EARLY_VERDICT:+: ${EARLY_VERDICT}}"
-fi
-
-# --- step 2: tarball re-run. The test command is chosen per repository by
-# the case statement below (an unlisted repository has none, which is
-# itself a not-ready reason), or forced with --test-command for a repo this
-# script does not know, or for a test harness stubbing the run. The known-
-# needs-.git exception is a short, commented allowlist, not a config file:
-# it is part of what this script measures, not a seat setting. A tarball
-# that cannot be fetched or extracted is a test-re-run failure like any
-# other, not an immediate exit: a stop-list hit discovered afterward must
-# still win (exit 2), the same as when the tests themselves merely fail.
-default_test_command() {
-  case "$1" in
-    */mogui-ADE-orchestrator)
-      printf '%s' "PYTHONPATH=src python3 -m pytest tests -q --deselect tests/test_context_quality_scripts.py::test_context_quality_sampler_relative_anchor_git_log_works"
-      ;;
-    *)
-      printf '%s' ""
-      ;;
-  esac
+' "${PR_HEAD_FILE}" 2>"${TMP_DIR}/head-parse.err")" || {
+  not_ready "PR response missing headRefOid ($(tr '\n' ' ' <"${TMP_DIR}/head-parse.err"))"
 }
 
-TEST_CMD="${TEST_COMMAND_OVERRIDE:-$(default_test_command "${REPO}")}"
-TEST_STATUS="fail"
-TEST_REASON=""
-if [ -z "${TEST_CMD}" ]; then
-  TEST_REASON="no known test command for ${REPO}; pass --test-command"
-elif ! gh api "repos/${REPO}/tarball/${HEAD_SHA}" >"${TMP_DIR}/head.tar.gz" 2>"${TARBALL_ERR}"; then
-  TEST_REASON="could not fetch the head tarball ($(tr '\n' ' ' <"${TARBALL_ERR}"))"
-else
-  WORKDIR="${TMP_DIR}/head"
-  mkdir -p "${WORKDIR}"
-  if ! tar -xzf "${TMP_DIR}/head.tar.gz" -C "${WORKDIR}" --strip-components=1 2>"${UNTAR_ERR}"; then
-    TEST_REASON="could not extract the head tarball ($(tr '\n' ' ' <"${UNTAR_ERR}"))"
-  else
-    TEST_LOG="${TMP_DIR}/test.log"
-    if ( cd "${WORKDIR}" && eval "${TEST_CMD}" ) >"${TEST_LOG}" 2>&1; then
-      TEST_STATUS="pass"
-    else
-      TEST_REASON="test re-run failed; last lines: $(tail -n 5 "${TEST_LOG}" | tr '\n' ' ')"
-    fi
-  fi
-fi
+fetch_paginated_array "repos/${REPO}/pulls/${PR}/files" "${FILES_RAW}" "${FILES_FILE}" "${FILES_ERR}" "changed files"
+require_json "${FILES_FILE}" nonempty-list
 
-# --- step 3: gather every head-sensitive measurement again, now that the
-# (possibly long) test re-run is over, and everything a missing/unparseable/
-# empty response turns into exit 1, never a crash and never exit 2 (exit 2
-# is reserved for the stop list, already decided in step 1). ---
-
-# None of this step's own sibling output paths may already exist: the test
-# command just finished running with this script's own filesystem
-# privileges, one level below these exact, predictable names, and a file
-# it planted there ahead of time (passing checks.json content, say) would
-# otherwise be read as this script's own `gh` response, never actually
-# queried. Checked here, before any of this step's `gh` calls run, rather
-# than reacted to after a write fails: `gh pr checks` legitimately exits
-# non-zero on a merely failing required check while still printing valid
-# JSON, so a check that only reacted to a write failure could not tell
-# that apart from a planted file parsing as valid JSON too. Checking first
-# means a real `gh` call still happens for the untampered case, and also
-# covers the paginated-response flatten step's Python-side `open(path,
-# "w")` writes below, which `set -C` (bash's own `noclobber`) does not.
-for MR_GUARDED_PATH in "${CHECKS_FILE}" "${CHECKS_ERR}" "${GQL_FILE}" "${GQL_ERR}" \
-    "${FILES_RAW}" "${FILES_FILE}" "${FILES_ERR}" \
-    "${COMMENTS_RAW}" "${COMMENTS_FILE}" "${COMMENTS_ERR}" \
-    "${TMP_DIR}/commit-date.txt" "${COMMIT_ERR}" "${PR_FILE}" "${PR_ERR}"; do
-  if [ -e "${MR_GUARDED_PATH}" ] || [ -L "${MR_GUARDED_PATH}" ]; then
-    not_ready "refusing to continue: ${MR_GUARDED_PATH##*/} already exists before this script wrote it (the test command may have planted it)"
-  fi
-done
-
-# `gh pr checks --required` is the authoritative source for which checks
-# actually gate merge (branch protection's own required list), not every
-# entry in the PR's full check rollup: this repository's own CodeRabbit and
-# cubic review-bot checks, and its "label"/"assignee" checks, are none of
-# them required, so folding them in here would make every real PR here
-# permanently not-ready over checks nobody is waiting on. `gh` exits
-# non-zero for a pending or failing required check too, not only for a
-# request that could not run, so only a response that is not valid JSON at
-# all counts as "could not read". An empty-but-parseable `[]` is still "not
-# ready": no PR body exemption can turn a required check into an optional
-# one, and a required-check list with nothing in it to measure is not the
-# same thing as every required check having passed.
 if ! gh pr checks "${PR}" --repo "${REPO}" --required --json name,bucket,state \
     >"${CHECKS_FILE}" 2>"${CHECKS_ERR}"; then
-  if ! python3 -c '
-import json, sys
-json.load(open(sys.argv[1], encoding="utf-8"))
-' "${CHECKS_FILE}" >/dev/null 2>&1; then
+  if ! python3 -c 'import json, sys; json.load(open(sys.argv[1], encoding="utf-8"))' \
+      "${CHECKS_FILE}" >/dev/null 2>&1; then
     not_ready "could not read required checks (gh pr checks: $(tr '\n' ' ' <"${CHECKS_ERR}"))"
   fi
 fi
@@ -380,44 +154,30 @@ OWNER="${REPO%%/*}"
 NAME="${REPO#*/}"
 if ! gh api graphql \
     -f owner="${OWNER}" -f name="${NAME}" -F number="${PR}" \
-    -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}} reviews(first:100){nodes{state commit{oid} author{login __typename}} pageInfo{hasNextPage}}}}}' \
+    -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}} reviews(first:100){nodes{state submittedAt commit{oid} author{login __typename}} pageInfo{hasNextPage}}}}}' \
     >"${GQL_FILE}" 2>"${GQL_ERR}"; then
   not_ready "could not read review threads/reviews ($(tr '\n' ' ' <"${GQL_ERR}"))"
 fi
 require_json "${GQL_FILE}"
 
-fetch_paginated_array "repos/${REPO}/pulls/${PR}/files" "${FILES_RAW}" "${FILES_FILE}" "${FILES_ERR}" "changed files"
-require_json "${FILES_FILE}" nonempty-list
-
 fetch_paginated_array "repos/${REPO}/issues/${PR}/comments" "${COMMENTS_RAW}" "${COMMENTS_FILE}" "${COMMENTS_ERR}" "PR comments"
 require_json "${COMMENTS_FILE}"
 
-# The head commit's own committer date anchors "for the head or newer" (the
-# contract's own phrase for a bot's rate-limit or summary comment): an ISO
-# 8601 UTC timestamp string-compares correctly against another one of the
-# same shape, so no date parsing is needed to tell a comment posted before
-# this commit existed from one posted after.
 if ! gh api "repos/${REPO}/commits/${HEAD_SHA}" --jq '.commit.committer.date' \
-    >"${TMP_DIR}/commit-date.txt" 2>"${COMMIT_ERR}"; then
-  not_ready "could not read the head commit's date ($(tr '\n' ' ' <"${COMMIT_ERR}"))"
+    >"${COMMIT_DATE_FILE}" 2>"${COMMIT_DATE_ERR}"; then
+  not_ready "could not read the head commit's date ($(tr '\n' ' ' <"${COMMIT_DATE_ERR}"))"
 fi
-HEAD_COMMIT_DATE="$(cat "${TMP_DIR}/commit-date.txt")"
+HEAD_COMMIT_DATE="$(cat "${COMMIT_DATE_FILE}")"
 [ -n "${HEAD_COMMIT_DATE}" ] || not_ready "head commit date response was empty"
 
-# The head re-check reads last, after every other post-test call above: that
-# narrows the window a late push could land in to as little as possible,
-# rather than checking the head before fetching data a push could still
-# invalidate.
 if ! gh pr view "${PR}" --repo "${REPO}" --json number,url,headRefOid,state,isDraft \
     >"${PR_FILE}" 2>"${PR_ERR}"; then
   not_ready "could not read the PR (gh pr view: $(tr '\n' ' ' <"${PR_ERR}"))"
 fi
 require_json "${PR_FILE}"
 
-# --- aggregate every measurement and the stop list into one verdict --------
 python3 - "${PR_FILE}" "${CHECKS_FILE}" "${GQL_FILE}" "${FILES_FILE}" "${COMMENTS_FILE}" \
-         "${STOP_PATHS_FILE}" "${BOTS_FILE}" "${HEAD_SHA}" "${HEAD_COMMIT_DATE}" \
-         "${TEST_STATUS}" "${TEST_REASON}" "${CONTRACT}" <<'PY'
+         "${STOP_PATHS_FILE}" "${BOTS_FILE}" "${HEAD_SHA}" "${HEAD_COMMIT_DATE}" "${CONTRACT}" <<'PY'
 import fnmatch
 import json
 import re
@@ -425,8 +185,7 @@ import sys
 from pathlib import Path
 
 (pr_file, checks_file, gql_file, files_file, comments_file, stop_paths_file,
- bots_file, head_sha, head_commit_date, test_status, test_reason,
- contract_path) = sys.argv[1:13]
+ bots_file, head_sha, head_commit_date, contract_path) = sys.argv[1:11]
 
 
 def load(path):
@@ -434,27 +193,22 @@ def load(path):
 
 
 def fail(reason):
-    # A single, guaranteed summary line beats a raw traceback: anything
-    # this script did not anticipate about a response's shape is still a
-    # measurement that could not run, never a crash with no verdict at all.
     print(f"merge-ready: not ready · {reason}")
     sys.exit(1)
 
 
 def require_connection(obj, name):
-    # A GraphQL connection missing `nodes` or `pageInfo` (a partial or
-    # malformed response) must not be read as "zero items, no more pages":
-    # that is indistinguishable from a real empty result and would let a
-    # broken response pass every review/thread measurement silently.
-    if not isinstance(obj, dict) or not isinstance(obj.get("nodes"), list) or not isinstance(obj.get("pageInfo"), dict):
+    if (
+        not isinstance(obj, dict)
+        or not isinstance(obj.get("nodes"), list)
+        or not isinstance(obj.get("pageInfo"), dict)
+        or not isinstance(obj["pageInfo"].get("hasNextPage"), bool)
+    ):
         fail(f"graphql response missing or malformed {name} (nodes/pageInfo)")
     return obj
 
 
 def strip_bot_suffix(login):
-    # The REST API reports a GitHub App bot's login with a "[bot]" suffix
-    # (e.g. "coderabbitai[bot]"); the GraphQL API reports the same account
-    # without it ("coderabbitai"). Both name the same account.
     return login[:-5] if login.lower().endswith("[bot]") else login
 
 
@@ -465,21 +219,18 @@ try:
     files = load(files_file)
     comments = load(comments_file)
 
-    if pr.get("headRefOid") != head_sha:
-        fail(
-            f"head changed during measurement (tested {head_sha[:12]}, "
-            f"now {(pr.get('headRefOid') or '?')[:12]}); rerun"
-        )
+    if not isinstance(pr, dict) or not isinstance(pr.get("headRefOid"), str):
+        fail("PR response missing or malformed headRefOid")
+    if not isinstance(pr.get("state"), str) or not isinstance(pr.get("isDraft"), bool):
+        fail("PR response missing or malformed state/isDraft")
 
-    # A rename carries its old path in previous_filename; checking only the
-    # new name would let a stop-listed or out-of-scope path dodge both
-    # checks below just by being renamed in the same diff, so both names
-    # count as "changed".
+    if pr.get("headRefOid") != head_sha:
+        fail(f"head changed during measurement (started {head_sha[:12]}, now {(pr.get('headRefOid') or '?')[:12]}); rerun")
+
     changed_paths = sorted(
         {f["filename"] for f in files}
         | {f["previous_filename"] for f in files if f.get("previous_filename")}
     )
-
     problems_ask = []
     problems_not_ready = []
 
@@ -488,10 +239,6 @@ try:
     if pr.get("isDraft"):
         problems_not_ready.append("PR is a draft")
 
-    # 1) required checks -------------------------------------------------
-    # No exemption of any kind: a required check that is not bucket "pass"
-    # blocks, full stop. The rate-limit exception named in the contract
-    # applies only to the bot roster below (section 1b), never here.
     failing_checks = [
         f"{c.get('name', 'unknown')}={c.get('state', c.get('bucket', 'unknown'))}"
         for c in checks
@@ -501,59 +248,45 @@ try:
         problems_not_ready.append("checks: " + ", ".join(failing_checks))
 
     pull_request = (gql.get("data") or {}).get("repository", {}).get("pullRequest")
-    if not pull_request:
+    if not isinstance(pull_request, dict):
         fail("graphql response missing data.repository.pullRequest")
     reviews = require_connection(pull_request.get("reviews"), "reviews")
-    failing_bots = []
-    head_bot_reviewer_logins = set()
-    if reviews["pageInfo"].get("hasNextPage"):
+    if reviews["pageInfo"]["hasNextPage"]:
         problems_not_ready.append("more than 100 reviews; rerun with pagination")
-    else:
-        # Keep only each bot's latest *decision* review on this exact head:
-        # an earlier CHANGES_REQUESTED the same bot later superseded with a
-        # new decision (an APPROVED, or a dismissal) on the same commit must
-        # not still read as blocking. A plain COMMENTED review carries no
-        # decision at all in GitHub's own review-decision model and must not
-        # clear a standing CHANGES_REQUESTED or PENDING the way one of these
-        # four states would; a bot that adds a remark without re-deciding
-        # stays exactly as blocking as it already was.
-        DECISION_STATES = {"APPROVED", "CHANGES_REQUESTED", "DISMISSED", "PENDING"}
-        latest_bot_state = {}
-        for node in reviews["nodes"]:
-            author = node.get("author") or {}
-            if author.get("__typename") != "Bot":
-                continue
-            if (node.get("commit") or {}).get("oid") != head_sha:
-                continue
-            head_bot_reviewer_logins.add(strip_bot_suffix(author.get("login", "")))
-            state = (node.get("state") or "").upper()
-            if state not in DECISION_STATES:
-                continue
-            latest_bot_state[author.get("login", "unknown")] = state
-        failing_bots = [
-            f"{login}={state.lower()}"
-            for login, state in latest_bot_state.items()
-            if state in {"PENDING", "CHANGES_REQUESTED"}
-        ]
-        if failing_bots:
-            problems_not_ready.append("review bots: " + ", ".join(failing_bots))
 
-    # 1b) the review-bot roster -------------------------------------------
-    # Each bot config/merge-ready-bots.txt names must show some engagement
-    # with this exact head: a GraphQL review on it (any state, including a
-    # plain COMMENTED one, which section 1 above does not count as a
-    # decision but which still proves the bot looked at this commit), or an
-    # issue comment posted OR LAST EDITED at or after the head commit's own
-    # timestamp (a "summary" for anything else, or a "rate-limited" notice
-    # specifically). Checking only `created_at` would read a bot's genuine,
-    # just-updated sticky comment as stale: cubic and CodeRabbit both post
-    # one issue comment per PR and edit it in place on every push rather
-    # than posting a fresh one, so `updated_at` is the field that actually
-    # moves on the push this measurement cares about. An issue comment
-    # carries no commit reference at all, so the later of the two
-    # timestamps is the closest available proxy for "about this head"; a
-    # bot that stayed silent on the current push is not covered by a stale
-    # comment from an earlier one that nothing has touched since.
+    decision_states = {"APPROVED", "CHANGES_REQUESTED", "DISMISSED", "PENDING"}
+    decision_reviews = {}
+    head_bot_reviewer_logins = set()
+    for index, node in enumerate(reviews["nodes"]):
+        if not isinstance(node, dict):
+            fail("graphql response has a malformed review node")
+        author = node.get("author") or {}
+        if author.get("__typename") != "Bot":
+            continue
+        login = strip_bot_suffix(author.get("login", ""))
+        if (node.get("commit") or {}).get("oid") != head_sha:
+            continue
+        if login:
+            head_bot_reviewer_logins.add(login)
+        state = (node.get("state") or "").upper()
+        if state in decision_states:
+            decision_reviews.setdefault(login or "unknown", []).append(
+                (node.get("submittedAt") or "", index, state)
+            )
+
+    latest_bot_state = {
+        login: max(reviews_for_bot, key=lambda item: (item[0], item[1]))[2]
+        for login, reviews_for_bot in decision_reviews.items()
+    }
+
+    failing_bots = [
+        f"{login}={state.lower()}"
+        for login, state in latest_bot_state.items()
+        if state in {"PENDING", "CHANGES_REQUESTED"}
+    ]
+    if failing_bots:
+        problems_not_ready.append("review bots: " + ", ".join(failing_bots))
+
     bots = [
         line.strip() for line in Path(bots_file).read_text(encoding="utf-8").splitlines()
         if line.strip() and not line.strip().startswith("#")
@@ -561,68 +294,60 @@ try:
     if not bots:
         fail(f"bots file has no entries: {bots_file}")
 
-    RATE_LIMIT_RE = re.compile(r"review limit reached|rate limited by", re.IGNORECASE)
-    recent_bot_comment_kinds = {}
+    rate_limit_re = re.compile(r"review limit reached|rate limited by", re.IGNORECASE)
+    recent_rate_limited_bots = set()
     for comment in comments:
+        if not isinstance(comment, dict):
+            fail("PR comments response has a malformed comment")
         user = comment.get("user") or {}
         if user.get("type") != "Bot":
             continue
         comment_time = max(comment.get("created_at") or "", comment.get("updated_at") or "")
-        if comment_time < head_commit_date:
-            continue
-        login = strip_bot_suffix(user.get("login", ""))
-        kind = "rate-limited" if RATE_LIMIT_RE.search(comment.get("body") or "") else "summary"
-        recent_bot_comment_kinds.setdefault(login, set()).add(kind)
+        if comment_time >= head_commit_date and rate_limit_re.search(comment.get("body") or ""):
+            recent_rate_limited_bots.add(strip_bot_suffix(user.get("login", "")))
 
     missing_bots = [
         bot for bot in bots
-        if bot not in head_bot_reviewer_logins and not recent_bot_comment_kinds.get(bot)
+        if bot not in head_bot_reviewer_logins and bot not in recent_rate_limited_bots
     ]
     if missing_bots:
         problems_not_ready.append(
-            "bot(s) with no head review, summary, or rate-limit comment: " + ", ".join(missing_bots)
+            "bot(s) with no head review or measured rate-limit comment: " + ", ".join(missing_bots)
         )
 
-    # 2) open review threads ------------------------------------------------
     threads = require_connection(pull_request.get("reviewThreads"), "reviewThreads")
-    if threads["pageInfo"].get("hasNextPage"):
+    if threads["pageInfo"]["hasNextPage"]:
         problems_not_ready.append("more than 100 review threads; rerun with pagination")
-    else:
-        open_threads = sum(1 for t in threads["nodes"] if not t.get("isResolved", False))
-        if open_threads:
-            problems_not_ready.append(f"{open_threads} open review thread(s)")
+    open_threads = sum(
+        1 for thread in threads["nodes"]
+        if not isinstance(thread, dict) or not thread.get("isResolved", False)
+    )
+    if open_threads:
+        problems_not_ready.append(f"{open_threads} open review thread(s)")
 
-    # 3) tarball test re-run (already run by the caller) --------------------
-    if test_status != "pass":
-        problems_not_ready.append(f"tests: {test_reason}")
-
-    # 4) a master review-pass marker, distinct from the worker's own ------
-    # merge-ready-master-pass sha=<40-hex head sha> critical=<N> important=<N>
-    # The worker posts merge-ready-worker-pass before worker_done, its own
-    # pre-check; that marker never satisfies this measurement, since master
-    # and worker share one GitHub account and the worker's own say-so about
-    # its own work is exactly the self-report this script exists to not
-    # trust. Only a master-pass marker, posted after the master's own
-    # review, reaches exit 0.
     marker_re = re.compile(r"merge-ready-master-pass sha=([0-9a-f]{40}) critical=(\d+) important=(\d+)")
     latest = None
-    for comment in comments:
-        for m in marker_re.finditer(comment.get("body") or ""):
-            latest = m
+    latest_marker_key = ("", -1)
+    for index, comment in enumerate(comments):
+        comment_time = max(comment.get("created_at") or "", comment.get("updated_at") or "")
+        for match in marker_re.finditer(comment.get("body") or ""):
+            marker_key = (comment_time, index)
+            if marker_key >= latest_marker_key:
+                latest = match
+                latest_marker_key = marker_key
     if latest is None:
         problems_not_ready.append("no master-pass marker found")
     else:
-        sha, critical, important = latest.group(1), int(latest.group(2)), int(latest.group(3))
-        if sha != head_sha:
-            problems_not_ready.append(f"master-pass marker is for {sha[:12]}, not head {head_sha[:12]}")
+        marker_sha, critical, important = latest.group(1), int(latest.group(2)), int(latest.group(3))
+        if marker_sha != head_sha:
+            problems_not_ready.append(f"master-pass marker is for {marker_sha[:12]}, not head {head_sha[:12]}")
         elif critical > 0 or important > 0:
             problems_not_ready.append(f"master-pass marker recorded critical={critical} important={important}")
 
-    # 5) stop-list paths ------------------------------------------------------
     def matches_stop(path, entry):
         if entry.endswith("/"):
             return path == entry.rstrip("/") or path.startswith(entry)
-        if any(ch in entry for ch in "*?["):
+        if any(char in entry for char in "*?["):
             return fnmatch.fnmatch(path, entry)
         return path == entry
 
@@ -632,43 +357,32 @@ try:
     ]
     if not stop_entries:
         fail(f"stop-paths file has no entries: {stop_paths_file}")
-
-    stop_hits = [p for p in changed_paths if any(matches_stop(p, e) for e in stop_entries)]
+    stop_hits = [path for path in changed_paths if any(matches_stop(path, entry) for entry in stop_entries)]
     if stop_hits:
         problems_ask.append(
-            f"{len(stop_hits)} stop-list path(s): " + ", ".join(f"{p} (stop-list)" for p in stop_hits)
+            f"{len(stop_hits)} stop-list path(s): " + ", ".join(f"{path} (stop-list)" for path in stop_hits)
         )
 
-    # 6) outside the contract's writes globs, only when --contract is given -
     if contract_path:
         text = Path(contract_path).read_text(encoding="utf-8")
-        # Only the opening front-matter block is contract metadata; a
-        # `writes: [...]` example inside the contract's own prose body must
-        # never be read as the declared scope.
-        fm_match = re.match(r"^---\n(.*?\n)---", text, re.DOTALL)
-        front_matter = fm_match.group(1) if fm_match else ""
+        front_matter_match = re.match(r"^---\n(.*?\n)---", text, re.DOTALL)
+        front_matter = front_matter_match.group(1) if front_matter_match else ""
         globs = None
-        for fm_line in front_matter.splitlines():
-            key, sep, raw_value = fm_line.partition(":")
-            if sep and key.strip() == "writes":
-                # Strip only the outer "[" and "]", the same rule
-                # dispatch_gate.py's own front-matter parser uses, so a
-                # glob with brackets of its own (an fnmatch character
-                # class, `src/[ab].py`) survives intact; a regex capture
-                # stopping at the first "]" would truncate it.
+        for front_matter_line in front_matter.splitlines():
+            key, separator, raw_value = front_matter_line.partition(":")
+            if separator and key.strip() == "writes":
                 raw_value = raw_value.strip()
                 if raw_value.startswith("[") and raw_value.endswith("]"):
                     inner = raw_value[1:-1].strip()
-                    globs = [g.strip() for g in inner.split(",") if g.strip()] if inner else []
+                    globs = [glob.strip() for glob in inner.split(",") if glob.strip()] if inner else []
                 break
         if globs is None:
             problems_not_ready.append("contract front matter has no writes: list; cannot verify scope")
         else:
-            outside = [p for p in changed_paths if not any(fnmatch.fnmatch(p, g) for g in globs)]
+            outside = [path for path in changed_paths if not any(fnmatch.fnmatch(path, glob) for glob in globs)]
             if outside:
-                problems_ask.append(f"{len(outside)} path(s) outside contract writes: " + ", ".join(outside))
+                problems_ask.append("path(s) outside contract writes: " + ", ".join(outside))
 
-    # --- verdict ---------------------------------------------------------------
     if problems_ask:
         print("merge-ready: ask · " + "; ".join(problems_ask + problems_not_ready))
         sys.exit(2)

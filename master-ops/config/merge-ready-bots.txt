@@ -1,5 +1,5 @@
-# Review bots scripts/merge-ready requires a head review, a recent
-# summary comment, or a recent rate-limit comment from (#330 round 2).
+# Review bots scripts/merge-ready requires a head review or a measured
+# rate-limit comment from (#330 round 2).
 # One GitHub login per line, written bare, with no "[bot]" suffix: the
 # REST issue-comments API reports the same account as "<login>[bot]", and
 # merge-ready strips that suffix from what the API reports before

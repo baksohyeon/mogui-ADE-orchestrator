@@ -170,24 +170,43 @@ echo "[]"' \
 )
 no_match_test || exit 1
 
-# --- Case: malformed issue numbers are counted and fail an all-malformed run.
-malformed_number_test() (
+# --- Case: a partial malformed skip is counted and fails the run. -----------
+malformed_number_partial_skip_test() (
   set +e
   local work out status
   work="$WORK_ROOT/malformed-number"
   out=$(run_with_stub \
     '#!/bin/bash
-echo "[{\"number\": \"42\", \"title\": \"alphaword\", \"state\": \"open\", \"url\": \"https://example.invalid/42\", \"body\": \"\"}]"' \
+echo "[{\"number\": \"42\", \"title\": \"alphaword\", \"state\": \"open\", \"url\": \"https://example.invalid/42\", \"body\": \"\"}, {\"number\": 7, \"title\": \"alphaword\", \"state\": \"open\", \"url\": \"https://example.invalid/7\", \"body\": \"\"}]"' \
     "$work" --repo "$REPO" --title "alphaword" 2>&1)
   status=$?
-  [ "$status" -eq 1 ] || { echo "FAIL: an all-malformed candidate list should exit 1, got $status" >&2; printf '%s\n' "$out" >&2; return 1; }
+  [ "$status" -eq 1 ] || { echo "FAIL: a partial malformed candidate list should exit 1, got $status" >&2; printf '%s\n' "$out" >&2; return 1; }
   case "$out" in
     *"skipped 1 candidate with malformed issue numbers"*) ;;
     *) echo "FAIL: stderr should count the malformed issue number: $out" >&2; return 1 ;;
   esac
-  echo "ok   : malformed issue numbers are counted and fail an all-malformed run"
+  echo "ok   : a partial malformed skip is counted and fails the run"
 )
-malformed_number_test || exit 1
+malformed_number_partial_skip_test || exit 1
+
+# --- Case: issue numbers below one are malformed and fail the run. ----------
+number_below_one_test() (
+  set +e
+  local work out status
+  work="$WORK_ROOT/number-below-one"
+  out=$(run_with_stub \
+    '#!/bin/bash
+echo "[{\"number\": 0, \"title\": \"alphaword\", \"state\": \"open\", \"url\": \"https://example.invalid/0\", \"body\": \"\"}]"' \
+    "$work" --repo "$REPO" --title "alphaword" 2>&1)
+  status=$?
+  [ "$status" -eq 1 ] || { echo "FAIL: an issue number below one should exit 1, got $status" >&2; printf '%s\n' "$out" >&2; return 1; }
+  case "$out" in
+    *"skipped 1 candidate with malformed issue numbers"*) ;;
+    *) echo "FAIL: stderr should count the issue number below one: $out" >&2; return 1 ;;
+  esac
+  echo "ok   : issue numbers below one are malformed and fail the run"
+)
+number_below_one_test || exit 1
 
 # --- Case: a strong match (score above threshold) exits 3. -----------------
 strong_match_test() (

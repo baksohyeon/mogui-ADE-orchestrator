@@ -259,7 +259,7 @@ def gather_candidates(
     for query in queries:
         for item in gh_search(repo, query, state, fetch_limit):
             number = item.get("number")
-            if type(number) is not int:
+            if type(number) is not int or number < 1:
                 skipped_numbers += 1
                 continue
             if number not in candidates:
@@ -392,8 +392,7 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(
             f"issue-similar: skipped {skipped_numbers} {noun} with malformed issue numbers\n"
         )
-        if not candidates:
-            return 1
+        return 1
 
     ranked = rank_candidates(candidates, words, code_terms, args.exclude, args.limit)
     max_score = ranked[0]["score"] if ranked else 0

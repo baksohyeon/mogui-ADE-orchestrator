@@ -497,19 +497,7 @@ scan_commit_messages() {
       exit 2
     fi
     if [[ -s "${REPORTS}/${report_index}.json" ]]; then
-      "${PYTHON}" - "${REPORTS}/${report_index}.json" "commit:${sha:0:12}" <<'PY'
-import json
-import sys
-
-path, label = sys.argv[1], sys.argv[2]
-with open(path, encoding="utf-8") as handle:
-    rows = json.load(handle)
-for row in rows:
-    row["File"] = label
-    row["Origin"] = "commit_message"
-with open(path, "w", encoding="utf-8") as handle:
-    json.dump(rows, handle)
-PY
+      annotate_report "${REPORTS}/${report_index}.json" "commit_message" "commit:${sha:0:12}"
     fi
     count=$((count + 1))
   done < "${sha_list}"
@@ -773,19 +761,7 @@ if [[ "${MODE}" == "tracked" && -f "${GITLEAKSIGNORE}" ]] \
         exit 2
       fi
       if grep -q '"RuleID"' "${UNFILTERED_REPORTS}/commit-${ufm_index}.json"; then
-        "${PYTHON}" - "${UNFILTERED_REPORTS}/commit-${ufm_index}.json" "commit:${sha:0:12}" <<'PY'
-import json
-import sys
-
-path, label = sys.argv[1], sys.argv[2]
-with open(path, encoding="utf-8") as handle:
-    rows = json.load(handle)
-for row in rows:
-    row["File"] = label
-    row["Origin"] = "commit_message"
-with open(path, "w", encoding="utf-8") as handle:
-    json.dump(rows, handle)
-PY
+        annotate_report "${UNFILTERED_REPORTS}/commit-${ufm_index}.json" "commit_message" "commit:${sha:0:12}"
       fi
     done < "${WORK_DIR}/commits-to-scan"
   fi

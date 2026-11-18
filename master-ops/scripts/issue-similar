@@ -1,0 +1,412 @@
+#!/usr/bin/env python3
+"""Find issues that may already cover a title/body before filing a new one.
+
+Builds a handful of small search queries from the title and body (GitHub's
+issue search ANDs every bare word in one query, so a reworded title sent
+whole matches nothing; one term per query is what actually finds a near
+match), runs them through `gh search issues`, and locally scores every
+returned issue against that same bounded term set. A shared file path,
+script name, or quoted/backticked string counts for more than a shared plain
+word, because two issues about the same bug usually share the former and
+almost any two issues share a few of the latter.
+
+    scripts/issue-similar --repo <owner/name> --title "..." [--body-file FILE]
+        [--state open|all] [--limit N] [--exclude N] [--json]
+
+Exit 0 when nothing scores at or above the threshold (including when no
+candidate turns up at all), 3 when at least one does, 1 when a `gh` call
+fails, times out, or returns something that is not a parseable JSON list
+(never 0 on a failure: those are three different outcomes a caller needs
+to tell apart). See docs/runbooks/issue-dedupe.md for how this fits into
+filing and the weekly sweep.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import re
+import subprocess
+import sys
+import time
+from typing import Any
+
+# One shared path/script-name/quoted-string match outweighs three shared
+# plain words; either alone is enough to clear this.
+CODE_TERM_WEIGHT = 3
+WORD_WEIGHT = 1
+SIMILAR_THRESHOLD = 3
+
+# gh's underlying search API allows 30 requests/minute; this paces one
+# invocation's own calls (and, run back to back in the weekly sweep, calls
+# across invocations) safely under that.
+DEFAULT_QUERY_DELAY_SECONDS = 2.0
+GH_TIMEOUT_SECONDS = 30
+
+STOPWORDS = frozenset(
+    """
+    a an and are as at be been but by for from had has have if in into is
+    it its of on or that the their this to was were will with without
+    not no yes do does did can cannot could should would may might must
+    shall also than then them they you your our we i
+    """.split()
+)
+
+# Unicode letters, not ASCII-only: a title in any script still yields words.
+WORD_RE = re.compile(r"[^\W\d_]{3,}")
+CODE_SPAN_RE = re.compile(r"`([^`\n]{2,80})`")
+QUOTED_RE = re.compile(r'"([^"\n]{4,80})"')
+PATH_RE = re.compile(r"\b[\w][\w.-]*(?:/[\w][\w.-]*)+\b")
+
+
+class GhFailure(Exception):
+    """A `gh` call failed, timed out, or returned something unusable."""
+
+
+def looks_like_a_path(candidate: str) -> bool:
+    """Reject the common false positives a bare slash-regex pulls in: an
+    all-digit date (`2026/11/17`) and a short word pair (`and/or`, `CI/CD`).
+    A real path or script name has at least one segment longer than this;
+    ponytail: a fixed length cutoff, not a filesystem-aware check, so an
+    unusually short real segment (`tests/cli`) can still slip past either
+    way: widen if that turns out to matter in practice."""
+    segments = candidate.split("/")
+    if all(segment.isdigit() for segment in segments):
+        return False
+    if all(len(segment) <= 4 for segment in segments):
+        return False
+    return True
+
+
+def extract_code_terms(text: str) -> list[str]:
+    """Backtick spans, quoted strings, and slash-paths, in that priority
+    order, deduplicated case-insensitively, first occurrence wins."""
+    seen: set[str] = set()
+    terms: list[str] = []
+    for pattern, group in ((CODE_SPAN_RE, 1), (QUOTED_RE, 1), (PATH_RE, 0)):
+        for match in pattern.finditer(text):
+            term = match.group(group).strip()
+            key = term.lower()
+            if not term or key in seen:
+                continue
+            if pattern is PATH_RE and not looks_like_a_path(term):
+                continue
+            seen.add(key)
+            terms.append(term)
+    return terms
+
+
+def strip_code_terms(text: str) -> str:
+    """Remove backtick spans, quoted strings, and accepted slash-paths
+    before plain word extraction, so a path's own segments are not also
+    counted as ordinary words. A slash phrase `looks_like_a_path` rejects
+    (`and/or`, a date) is left in place, so its words still reach
+    extract_words normally."""
+    text = CODE_SPAN_RE.sub(" ", text)
+    text = QUOTED_RE.sub(" ", text)
+    text = PATH_RE.sub(lambda m: " " if looks_like_a_path(m.group(0)) else m.group(0), text)
+    return text
+
+
+def extract_words(text: str, *, keep_stopwords: bool = False) -> list[str]:
+    """Distinctive plain words: longer first, alphabetical tie-break for a
+    deterministic order, stopwords and short words dropped unless
+    keep_stopwords is set (the last-resort fallback for a title/body that is
+    nothing but stopwords, where dropping them all would leave nothing to
+    search or score against)."""
+    seen: set[str] = set()
+    for match in WORD_RE.finditer(text):
+        word = match.group(0).lower()
+        if keep_stopwords or word not in STOPWORDS:
+            seen.add(word)
+    return sorted(seen, key=lambda w: (-len(w), w))
+
+
+def collect_words(title: str, body: str, max_words: int) -> list[str]:
+    """Title words always come before body words, so a few longer but
+    generic body words can never crowd every title word out of a bounded
+    slice (the title is the part a caller actually wrote to describe the
+    issue; the body is often boilerplate, repro steps, environment, a log
+    dump). Falls back to keeping stopwords when both are otherwise empty,
+    so a title/body with nothing else to go on still yields something to
+    search and score against, instead of silently matching nothing."""
+    title_clean = strip_code_terms(title)
+    body_clean = strip_code_terms(body)
+    title_words = extract_words(title_clean)
+    body_words = extract_words(body_clean)
+    if not title_words and not body_words:
+        title_words = extract_words(title_clean, keep_stopwords=True)
+        body_words = extract_words(body_clean, keep_stopwords=True)
+    seen = set(title_words)
+    combined = title_words + [w for w in body_words if w not in seen]
+    return combined[:max_words]
+
+
+GH_QUALIFIER_RE = re.compile(r"^-?[A-Za-z][\w-]*:(?!//)\S*")
+
+
+def is_gh_qualifier_like(term: str) -> bool:
+    """True when the term's first whitespace-delimited token reads as a
+    GitHub search qualifier (`label:wontfix`, `state:closed`, negated as
+    `-label:wontfix`) to gh's own search API, regardless of local shell
+    quoting: GitHub tokenizes its own `q` parameter on whitespace, so a
+    multi-word term (`label:bug fix`) carries a qualifier in its first
+    token even though the whole term is not one. A URL (`https://...`) is
+    excluded from this check; "scheme:" is not a qualifier name GitHub
+    recognizes, and scoring a URL is exactly the strong duplicate signal
+    this exists to keep, not drop. Such a term is excluded from the
+    queries actually sent to gh; it still scores normally, since scoring
+    is a local substring/word match against the fetched title and body,
+    never gh's query syntax."""
+    first_token = term.split(None, 1)[0] if term.strip() else term
+    return bool(GH_QUALIFIER_RE.match(first_token))
+
+
+def dedupe_case_insensitive(terms: list[str]) -> list[str]:
+    """First occurrence wins; a code term and a plain word that are the same
+    text (`` `crash` `` and `crash`) must not run the same search twice."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for term in terms:
+        key = term.lower()
+        if key not in seen:
+            seen.add(key)
+            out.append(term)
+    return out
+
+
+def gh_repo_view(repo: str) -> None:
+    """Confirm the repository exists before an empty search can look valid."""
+    cmd = ["gh", "repo", "view", repo, "--json", "name"]
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=GH_TIMEOUT_SECONDS
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise GhFailure(
+            f"gh repo view timed out after {GH_TIMEOUT_SECONDS}s for repository {repo!r}"
+        ) from exc
+    except OSError as exc:
+        raise GhFailure(f"could not run gh repo view: {exc}") from exc
+    if proc.returncode != 0:
+        raise GhFailure(
+            f"gh repo view failed (exit {proc.returncode}) for repository {repo!r}: "
+            f"{proc.stderr.strip()}"
+        )
+    if not proc.stdout.strip():
+        raise GhFailure(f"empty response from gh repo view for repository {repo!r}")
+    try:
+        data = json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        raise GhFailure(
+            f"unparseable response from gh repo view for repository {repo!r}: {exc}"
+        ) from exc
+    if not isinstance(data, dict) or not isinstance(data.get("name"), str) or not data["name"].strip():
+        raise GhFailure(
+            f"unexpected response from gh repo view for repository {repo!r}: expected a name"
+        )
+
+
+def gh_search(repo: str, query: str, state: str, fetch_limit: int) -> list[dict[str, Any]]:
+    cmd = [
+        "gh", "search", "issues", "--repo", repo,
+        "--limit", str(fetch_limit),
+        "--json", "number,title,state,url,body",
+    ]
+    if state == "open":
+        cmd += ["--state", "open"]
+    cmd += ["--", query]
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=GH_TIMEOUT_SECONDS
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise GhFailure(
+            f"gh search issues timed out after {GH_TIMEOUT_SECONDS}s for query {query!r}"
+        ) from exc
+    except OSError as exc:
+        raise GhFailure(f"could not run gh: {exc}") from exc
+    if proc.returncode != 0:
+        raise GhFailure(
+            f"gh search issues failed (exit {proc.returncode}) for query {query!r}: "
+            f"{proc.stderr.strip()}"
+        )
+    if not proc.stdout.strip():
+        raise GhFailure(f"empty response from gh search issues for query {query!r}")
+    try:
+        data = json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        raise GhFailure(
+            f"unparseable response from gh search issues for query {query!r}: {exc}"
+        ) from exc
+    if not isinstance(data, list):
+        raise GhFailure(
+            f"unexpected response shape from gh search issues for query {query!r}: "
+            "expected a JSON list"
+        )
+    return data
+
+
+def gather_candidates(
+    repo: str, queries: list[str], state: str, fetch_limit: int, query_delay: float
+) -> tuple[dict[int, dict[str, Any]], int]:
+    """Run every query and merge results by issue number. Any single query
+    failing aborts the whole gather: this is a merge, not a best-effort
+    scan, so one bad call must not silently shrink the candidate pool."""
+    candidates: dict[int, dict[str, Any]] = {}
+    skipped_numbers = 0
+    for query in queries:
+        for item in gh_search(repo, query, state, fetch_limit):
+            number = item.get("number")
+            if type(number) is not int or number < 1:
+                skipped_numbers += 1
+                continue
+            if number not in candidates:
+                candidates[number] = item
+        # Paced after every query, the last one included: the weekly sweep
+        # calls this once per open issue, back to back, so the delay has to
+        # land at the process boundary too, not just between queries inside
+        # one invocation, or back-to-back invocations would have no pacing
+        # between them at all.
+        time.sleep(query_delay)
+    return candidates, skipped_numbers
+
+
+def score_candidate(
+    candidate: dict[str, Any], words: list[str], code_terms: list[str]
+) -> tuple[int, list[str]]:
+    haystack = f"{candidate.get('title', '')}\n{candidate.get('body', '') or ''}".lower()
+    matched: list[str] = []
+    score = 0
+    for term in code_terms:
+        if term.lower() in haystack:
+            matched.append(term)
+            score += CODE_TERM_WEIGHT
+    for word in words:
+        if re.search(rf"(?<!\w){re.escape(word)}(?!\w)", haystack):
+            matched.append(word)
+            score += WORD_WEIGHT
+    return score, matched
+
+
+def rank_candidates(
+    candidates: dict[int, dict[str, Any]],
+    words: list[str],
+    code_terms: list[str],
+    exclude: int | None,
+    limit: int,
+) -> list[dict[str, Any]]:
+    ranked = []
+    for number, item in candidates.items():
+        if exclude is not None and number == exclude:
+            continue
+        score, matched = score_candidate(item, words, code_terms)
+        ranked.append(
+            {
+                "number": number,
+                "state": item.get("state", ""),
+                "title": item.get("title", ""),
+                "url": item.get("url", ""),
+                "score": score,
+                "matched_terms": matched,
+            }
+        )
+    ranked.sort(key=lambda c: (-c["score"], c["number"]))
+    return ranked[:limit]
+
+
+def render_table(ranked: list[dict[str, Any]]) -> str:
+    if not ranked:
+        return "no candidates found\n"
+    lines = []
+    for c in ranked:
+        terms = ", ".join(c["matched_terms"]) if c["matched_terms"] else "(none)"
+        lines.append(
+            f"#{c['number']} [{c['state']}] score={c['score']} {c['title']}\n"
+            f"    matched: {terms}\n"
+            f"    {c['url']}"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--repo", required=True, help="owner/name")
+    ap.add_argument("--title", required=True, help="the candidate issue's title")
+    ap.add_argument("--body-file", default=None, help="file holding the candidate body; - for stdin")
+    ap.add_argument("--state", choices=["open", "all"], default="open")
+    ap.add_argument("--limit", type=int, default=5, help="max candidates to print (default 5)")
+    ap.add_argument("--exclude", type=int, default=None,
+                     help="drop this issue number from candidates (the sweep excludes the issue being checked)")
+    ap.add_argument("--max-words", type=int, default=4,
+                     help="max distinctive plain-word queries (default 4, keeps a single run well under the search rate limit)")
+    ap.add_argument("--max-code-terms", type=int, default=3,
+                     help="max path/script-name/quoted-string queries (default 3)")
+    ap.add_argument("--query-delay", type=float, default=DEFAULT_QUERY_DELAY_SECONDS,
+                     help=f"seconds between gh calls (default {DEFAULT_QUERY_DELAY_SECONDS}, see docs/runbooks/issue-dedupe.md)")
+    ap.add_argument("--json", action="store_true", help="emit JSON instead of a table")
+    args = ap.parse_args(argv)
+
+    if args.limit < 1:
+        ap.error("--limit must be >= 1")
+    if not math.isfinite(args.query_delay) or args.query_delay < 0:
+        ap.error("--query-delay must be a finite number >= 0")
+    if args.max_words < 0:
+        ap.error("--max-words must be >= 0")
+    if args.max_code_terms < 0:
+        ap.error("--max-code-terms must be >= 0")
+
+    body = ""
+    if args.body_file:
+        try:
+            body = sys.stdin.read() if args.body_file == "-" else open(args.body_file, encoding="utf-8").read()
+        except OSError as exc:
+            sys.stderr.write(f"issue-similar: cannot read --body-file {args.body_file}: {exc}\n")
+            return 1
+
+    code_terms = extract_code_terms(f"{args.title}\n{body}")[: args.max_code_terms]
+    words = collect_words(args.title, body, args.max_words)
+    queries = dedupe_case_insensitive(
+        [t for t in code_terms + words if not is_gh_qualifier_like(t)]
+    )
+    if not queries:
+        # No raw-title fallback here: a query with nothing to show for it
+        # would still run a search, but words/code_terms (what scoring
+        # matches against) would stay empty, so every candidate would score
+        # 0 and this would exit 0 looking exactly like "no duplicate" found.
+        sys.stderr.write("issue-similar: --title has no usable search terms\n")
+        return 1
+
+    try:
+        gh_repo_view(args.repo)
+        candidates, skipped_numbers = gather_candidates(
+            args.repo, queries, args.state, fetch_limit=30, query_delay=args.query_delay
+        )
+    except GhFailure as exc:
+        sys.stderr.write(f"issue-similar: {exc}\n")
+        return 1
+
+    if skipped_numbers:
+        noun = "candidate" if skipped_numbers == 1 else "candidates"
+        sys.stderr.write(
+            f"issue-similar: skipped {skipped_numbers} {noun} with malformed issue numbers\n"
+        )
+        return 1
+
+    ranked = rank_candidates(candidates, words, code_terms, args.exclude, args.limit)
+    max_score = ranked[0]["score"] if ranked else 0
+
+    if args.json:
+        sys.stdout.write(json.dumps(
+            {"query_terms": {"words": words, "code_terms": code_terms}, "candidates": ranked},
+            indent=2,
+        ) + "\n")
+    else:
+        sys.stdout.write(render_table(ranked))
+
+    return 3 if max_score >= SIMILAR_THRESHOLD else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

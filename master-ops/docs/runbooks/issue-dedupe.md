@@ -24,17 +24,16 @@ duplicate.
 
 ### Exit codes
 
-- `0`: no candidate scored at or above the threshold, including when none was found at all
-  and no malformed records were skipped.
-- `3`: at least one candidate scored at or above the threshold. Stop and read before filing.
-- `1`: repository validation or an issue-search `gh` call failed, timed out, returned nothing,
-  or returned something that was not a parseable JSON list; `--body-file` could not be read;
-  `--title` had no usable search terms; or one or more returned records had malformed issue
-  numbers. The skipped-record count is written to stderr. Never `0` on a failure: a caller that
-  only checks for zero would otherwise read a broken or partial check as "no duplicates."
-- `2`: a usage error (a missing required flag, an invalid `--query-delay`, and the like),
-  the standard `argparse` exit code. Treat it the same as `1` in the sweep: a failed check
-  for that issue, never "no duplicates found."
+| Exit code | Condition | Response shape that triggers it |
+| --- | --- | --- |
+| `0` | The run completes with no ranked candidate at or above the threshold. | `gh repo view <repo> --json name` returns an object with a nonempty string `name`; every `gh search issues` call returns a JSON list; every returned issue has a positive integer `number`; and the highest remaining score is below 3. |
+| `1` | `--body-file` cannot be read. | Opening the named file, or reading stdin for `--body-file -`, raises `OSError`. |
+| `1` | The title and body produce no usable search terms. | Code terms, words, and the qualifier filter leave no query, so no GitHub response is requested. |
+| `1` | Repository validation fails. | `gh repo view <repo> --json name` times out, fails, returns nothing, returns invalid JSON, or returns JSON that is not an object with a nonempty string `name`. |
+| `1` | An issue search fails. | `gh search issues` times out, fails, returns nothing, returns invalid JSON, or returns JSON that is not a list. |
+| `1` | One or more returned issues are skipped as malformed. | A search JSON list contains an issue whose `number` is not a positive integer; the skipped count is written to stderr. |
+| `2` | Argument parsing or a value validation fails. | A required flag is missing, a choice or integer is invalid, or `--limit`, `--query-delay`, `--max-words`, or `--max-code-terms` fails its range check; no external response is required. |
+| `3` | At least one ranked candidate reaches the duplicate threshold. | The valid response shapes above produce a highest remaining score of 3 or more, and the candidates are printed as a table or JSON. |
 
 ## (a) Before filing an issue
 

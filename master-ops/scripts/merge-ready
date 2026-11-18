@@ -141,6 +141,77 @@ print(json.load(open(sys.argv[1], encoding="utf-8"))["headRefOid"])
 fetch_paginated_array "repos/${REPO}/pulls/${PR}/files" "${FILES_RAW}" "${FILES_FILE}" "${FILES_ERR}" "changed files"
 require_json "${FILES_FILE}" nonempty-list
 
+PATH_VERDICT="$(python3 - "${FILES_FILE}" "${STOP_PATHS_FILE}" "${CONTRACT}" <<'PY'
+import fnmatch
+import json
+import re
+import sys
+from pathlib import Path
+
+files_file, stop_paths_file, contract_path = sys.argv[1:4]
+files = json.loads(Path(files_file).read_text(encoding="utf-8"))
+changed_paths = sorted(
+    {item["filename"] for item in files}
+    | {item["previous_filename"] for item in files if item.get("previous_filename")}
+)
+
+
+def matches_stop(path, entry):
+    if entry.endswith("/"):
+        return path == entry.rstrip("/") or path.startswith(entry)
+    if any(char in entry for char in "*?["):
+        return fnmatch.fnmatch(path, entry)
+    return path == entry
+
+
+stop_entries = [
+    line.strip() for line in Path(stop_paths_file).read_text(encoding="utf-8").splitlines()
+    if line.strip() and not line.strip().startswith("#")
+]
+if not stop_entries:
+    print(f"stop-paths file has no entries: {stop_paths_file}")
+    sys.exit(1)
+
+stop_hits = [path for path in changed_paths if any(matches_stop(path, entry) for entry in stop_entries)]
+problems = []
+if stop_hits:
+    problems.append(
+        f"{len(stop_hits)} stop-list path(s): " + ", ".join(f"{path} (stop-list)" for path in stop_hits)
+    )
+
+if contract_path:
+    text = Path(contract_path).read_text(encoding="utf-8")
+    front_matter_match = re.match(r"^---\n(.*?\n)---", text, re.DOTALL)
+    front_matter = front_matter_match.group(1) if front_matter_match else ""
+    globs = None
+    for front_matter_line in front_matter.splitlines():
+        key, separator, raw_value = front_matter_line.partition(":")
+        if separator and key.strip() == "writes":
+            raw_value = raw_value.strip()
+            if raw_value.startswith("[") and raw_value.endswith("]"):
+                inner = raw_value[1:-1].strip()
+                globs = [glob.strip() for glob in inner.split(",") if glob.strip()] if inner else []
+            break
+    if globs is not None:
+        outside = [path for path in changed_paths if not any(fnmatch.fnmatch(path, glob) for glob in globs)]
+        if outside:
+            problems.append("path(s) outside contract writes: " + ", ".join(outside))
+
+if problems:
+    print("merge-ready: ask · " + "; ".join(problems))
+    sys.exit(2)
+sys.exit(0)
+PY
+)"
+PATH_RC=$?
+if [ "${PATH_RC}" -eq 2 ]; then
+  echo "${PATH_VERDICT}"
+  exit 2
+fi
+if [ "${PATH_RC}" -ne 0 ]; then
+  not_ready "${PATH_VERDICT}"
+fi
+
 if ! gh pr checks "${PR}" --repo "${REPO}" --required --json name,bucket,state \
     >"${CHECKS_FILE}" 2>"${CHECKS_ERR}"; then
   if ! python3 -c 'import json, sys; json.load(open(sys.argv[1], encoding="utf-8"))' \

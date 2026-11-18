@@ -241,6 +241,40 @@ def test_range_mode_leaves_a_file_fully_blocking_when_the_tip_does_not_match_dis
     assert "pre-existing" not in result.stdout, output
 
 
+@pytest.mark.parametrize("index_flag", ["--assume-unchanged", "--skip-worktree"])
+@requires_gitleaks
+def test_range_mode_leaves_an_index_flagged_path_fully_blocking(
+    tmp_path: Path, index_flag: str
+) -> None:
+    """Index flags can make git diff read the indexed blob while gitleaks
+    reads the working tree. Findings in that path must stay blocking.
+    """
+    repo = _repo_with_commits(tmp_path, ["base"])
+    (repo / "report.md").write_text(
+        "clean base line\nsecond base line\n", encoding="utf-8"
+    )
+    _git(repo, "add", "report.md")
+    _git(repo, "commit", "-q", "-m", "add report")
+    base = _head(repo)
+
+    with open(repo / "report.md", "a", encoding="utf-8") as handle:
+        handle.write(f"{LEAK}\n")
+    _git(repo, "add", "report.md")
+    _git(repo, "commit", "-q", "-m", "append a secret")
+    _git(repo, "update-index", index_flag, "report.md")
+
+    # The index flag makes the working-tree edit invisible to git diff, while
+    # gitleaks still scans the shorter file and finds the secret on line 1.
+    (repo / "report.md").write_text(f"{LEAK}\n", encoding="utf-8")
+
+    result = _scan(repo, "--range", f"{base}..HEAD")
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 1, output
+    assert "aws_access_key" in output, output
+    assert "pre-existing" not in result.stdout, output
+
+
 @requires_gitleaks
 def test_range_mode_blocks_a_newly_added_secret_even_with_color_ui_always(
     tmp_path: Path,
@@ -402,3 +436,28 @@ def test_range_mode_still_downgrades_a_path_with_an_explicit_unset_filter(
 
     assert result.returncode == 0, output
     assert "pre-existing=2" in result.stdout, output
+
+
+@requires_gitleaks
+def test_range_mode_keeps_a_path_only_finding_blocking(
+    tmp_path: Path,
+) -> None:
+    """Path-only findings have no positive line range to compare with the
+    diff, so a changed path cannot downgrade them to pre-existing.
+    """
+    repo = _repo_with_commits(tmp_path, ["base"])
+    (repo / "bundle.p12").write_text("base bundle\n", encoding="utf-8")
+    _git(repo, "add", "bundle.p12")
+    _git(repo, "commit", "-q", "-m", "add bundle")
+    base = _head(repo)
+
+    (repo / "bundle.p12").write_text("updated bundle\n", encoding="utf-8")
+    _git(repo, "add", "bundle.p12")
+    _git(repo, "commit", "-q", "-m", "update bundle")
+
+    result = _scan(repo, "--range", f"{base}..HEAD")
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 1, output
+    assert "pkcs12-file" in output, output
+    assert "pre-existing" not in result.stdout, output

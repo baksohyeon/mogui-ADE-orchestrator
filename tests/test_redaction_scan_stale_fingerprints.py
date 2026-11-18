@@ -96,6 +96,33 @@ def test_a_line_shift_breaks_the_fingerprint_and_the_scan_reports_it_stale(
 
 
 @requires_gitleaks
+def test_a_backslash_path_fingerprint_is_not_reported_stale(
+    tmp_path: Path,
+) -> None:
+    """Gitleaks normalizes backslashes in an ignore path before matching.
+    The stale check must use the same normalized path while preserving the
+    original entry if it later needs to be reported.
+    """
+    repo = _repo_with_commits(tmp_path, ["base"])
+    nested = repo / "nested"
+    nested.mkdir()
+    (nested / "secret.txt").write_text(f"{LEAK}\n", encoding="utf-8")
+    (repo / ".gitleaksignore").write_text(
+        "nested\\secret.txt:aws_access_key:1\n"
+        "nested\\secret.txt:aws-access-token:1\n",
+        encoding="utf-8",
+    )
+    _git(repo, "add", "nested/secret.txt", ".gitleaksignore")
+    _git(repo, "commit", "-q", "-m", "add nested exempted secret")
+
+    result = _scan(repo)
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 0, output
+    assert "stale-fingerprints=0" in result.stdout, output
+
+
+@requires_gitleaks
 def test_a_commit_message_exemption_is_not_wrongly_reported_stale(
     tmp_path: Path,
 ) -> None:

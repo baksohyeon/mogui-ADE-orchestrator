@@ -585,6 +585,29 @@ for path in paths:
     if path in filtered_paths:
         continue
 
+    # `git diff` can trust the index for a path marked assume-unchanged or
+    # skip-worktree, while gitleaks below reads the working-tree file. The
+    # diff's line coordinates then describe a different file, so leave these
+    # paths out of the lenient classification unless their index flags are
+    # clear. Use -z so a legal path containing a newline cannot change which
+    # status is inspected.
+    index_check = subprocess.run(
+        ["git", "ls-files", "-v", "-z", "--", path],
+        capture_output=True,
+    )
+    if index_check.returncode != 0:
+        print(
+            f"could not read index flags for {path} "
+            f"(git exit {index_check.returncode})"
+        )
+        sys.exit(1)
+    index_entries = [entry for entry in index_check.stdout.split(b"\0") if entry]
+    if not index_entries:
+        print(f"could not read an index entry for {path}")
+        sys.exit(1)
+    if any(entry[:1] in (b"h", b"s", b"S") for entry in index_entries):
+        continue
+
     # gitleaks is about to scan the file on disk, but the range diff numbers
     # lines against the range's own tip commit. If the two disagree, a line
     # number from the diff would not point at the line gitleaks just read,
@@ -800,7 +823,9 @@ for line in ignore_text.splitlines():
     # principle a staged/range file subset already gets, above).
     if stripped.startswith(":") and not commit_messages_scanned:
         continue
-    listed.append(stripped)
+    path, separator, remainder = stripped.partition(":")
+    normalized = f"{path.replace(chr(92), '/')}{separator}{remainder}"
+    listed.append((stripped, normalized))
 
 live = set()
 for report in sorted(pathlib.Path(reports_dir).glob("*.json")):
@@ -811,9 +836,10 @@ for report in sorted(pathlib.Path(reports_dir).glob("*.json")):
     for row in rows:
         fingerprint = row.get("Fingerprint")
         if fingerprint:
-            live.add(fingerprint)
+            path, separator, remainder = fingerprint.partition(":")
+            live.add(f"{path.replace(chr(92), '/')}{separator}{remainder}")
 
-stale = [fp for fp in listed if fp not in live]
+stale = [original for original, normalized in listed if normalized not in live]
 out_path.write_text("".join(f"{fp}\n" for fp in stale), encoding="utf-8")
 PY
   then
@@ -872,8 +898,19 @@ for report in sorted(reports.glob("*.json")):
         continue
     for row in rows:
         file_ = row.get("File", "?")
-        start = row.get("StartLine", 0) or 0
-        end = row.get("EndLine", start) or start
+        start_value = row.get("StartLine")
+        end_value = row.get("EndLine")
+        start = start_value if isinstance(start_value, int) else 0
+        end = end_value if isinstance(end_value, int) else start
+        valid_coordinates = (
+            isinstance(start_value, int)
+            and not isinstance(start_value, bool)
+            and isinstance(end_value, int)
+            and not isinstance(end_value, bool)
+            and start_value > 0
+            and end_value > 0
+            and start_value <= end_value
+        )
         snippet = (row.get("Match") or "").strip()
         for pattern, replacement in MASKS:
             snippet = pattern.sub(replacement, snippet)
@@ -888,7 +925,11 @@ for report in sorted(reports.glob("*.json")):
         # use the added-lines map; commit-message rows always block, even if
         # a changed path happens to have the same label as their pseudo-file.
         is_added = True
-        if row.get("Origin") == "file_content" and file_ in added_lines:
+        if (
+            valid_coordinates
+            and row.get("Origin") == "file_content"
+            and file_ in added_lines
+        ):
             file_added = set(added_lines[file_])
             is_added = any(ln in file_added for ln in range(start, end + 1))
         (blocking if is_added else preexisting).add(line_text)

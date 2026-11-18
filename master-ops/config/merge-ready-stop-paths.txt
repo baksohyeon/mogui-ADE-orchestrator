@@ -39,13 +39,13 @@ master-ops/model-tier-policy.json
 master-ops/rules/standing-rules.md
 master-ops/templates/mcp-servers.json
 
-# Added round 2 (#330): paths the master's own review of PR #338 named,
-# each individually checked to exist on main. Succession/bootstrap code,
-# CI workflow definitions, and the redaction/allowlist scanner all change
+# Added round 2 (#330): paths the master's own review of PR #338 named.
+# Succession/bootstrap code, CI workflow definitions, and the redaction/allowlist scanner all change
 # what a worker is allowed to do or how that is enforced, the same as
 # stop-list item 2 above; CODEOWNERS, root CLAUDE.md/AGENTS.md, and the
-# succession boot card are the same charter/workspace-card/role-state
-# category as stop-list item 1.
+# succession boot card are the same charter/workspace-card/role-state category as stop-list item 1.
+# The CODEOWNERS locations and labeler/release metadata are pre-emptive entries for GitHub-honored
+# paths and remain stop-listed even when a checkout has not created those files yet.
 scripts/redaction-scan.sh
 scripts/redaction-allowlist.txt
 hooks/pre-push

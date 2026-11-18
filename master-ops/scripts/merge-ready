@@ -165,7 +165,19 @@ CHECK_RUN_TIME_RC=0
 python3 - "${CHECK_RUNS_RAW}" >"${HEAD_TIME_FILE}" 2>"${HEAD_TIME_ERR}" <<'PY' || CHECK_RUN_TIME_RC=$?
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
+
+def parse_timestamp(value):
+    if not isinstance(value, str) or not value:
+        raise ValueError("missing or empty GitHub timestamp")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"invalid GitHub timestamp {value!r}") from exc
+    if parsed.tzinfo is None:
+        raise ValueError(f"GitHub timestamp has no timezone {value!r}")
+    return parsed.astimezone(timezone.utc)
 
 pages = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 if not isinstance(pages, list) or not all(isinstance(page, dict) for page in pages):
@@ -180,17 +192,17 @@ for page in pages:
         if not isinstance(check_run, dict):
             raise ValueError("check-run response contains a malformed check run")
         created_at = check_run.get("created_at")
-        if isinstance(created_at, str) and created_at:
-            timestamps.append(created_at)
+        if created_at is not None:
+            timestamps.append(parse_timestamp(created_at))
         check_suite = check_run.get("check_suite")
         if isinstance(check_suite, dict):
             suite_created_at = check_suite.get("created_at")
-            if isinstance(suite_created_at, str) and suite_created_at:
-                timestamps.append(suite_created_at)
+            if suite_created_at is not None:
+                timestamps.append(parse_timestamp(suite_created_at))
 
 if not timestamps:
     raise ValueError("head check runs have no check-suite or check-run creation time")
-print(min(timestamps))
+print(min(timestamps).isoformat(timespec="seconds").replace("+00:00", "Z"))
 PY
 if [ "${CHECK_RUN_TIME_RC}" -ne 0 ]; then
   CHECK_SUITE_TIME_RC=0
@@ -202,7 +214,19 @@ if [ "${CHECK_RUN_TIME_RC}" -ne 0 ]; then
     python3 - "${CHECK_SUITES_RAW}" >"${HEAD_TIME_FILE}" 2>"${HEAD_TIME_ERR}" <<'PY' || CHECK_SUITE_TIME_RC=$?
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
+
+def parse_timestamp(value):
+    if not isinstance(value, str) or not value:
+        raise ValueError("missing or empty GitHub timestamp")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"invalid GitHub timestamp {value!r}") from exc
+    if parsed.tzinfo is None:
+        raise ValueError(f"GitHub timestamp has no timezone {value!r}")
+    return parsed.astimezone(timezone.utc)
 
 pages = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 if not isinstance(pages, list) or not all(isinstance(page, dict) for page in pages):
@@ -217,12 +241,12 @@ for page in pages:
         if not isinstance(check_suite, dict):
             raise ValueError("check-suite response contains a malformed check suite")
         created_at = check_suite.get("created_at")
-        if isinstance(created_at, str) and created_at:
-            timestamps.append(created_at)
+        if created_at is not None:
+            timestamps.append(parse_timestamp(created_at))
 
 if not timestamps:
     raise ValueError("head check suites have no creation time")
-print(min(timestamps))
+print(min(timestamps).isoformat(timespec="seconds").replace("+00:00", "Z"))
 PY
   fi
   if [ "${CHECK_SUITE_TIME_RC}" -ne 0 ]; then
@@ -232,7 +256,19 @@ PY
     if ! python3 - "${TIMELINE_FILE}" "${HEAD_SHA}" >"${HEAD_TIME_FILE}" 2>"${HEAD_TIME_ERR}" <<'PY'
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
+
+def parse_timestamp(value):
+    if not isinstance(value, str) or not value:
+        raise ValueError("missing or empty GitHub timestamp")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"invalid GitHub timestamp {value!r}") from exc
+    if parsed.tzinfo is None:
+        raise ValueError(f"GitHub timestamp has no timezone {value!r}")
+    return parsed.astimezone(timezone.utc)
 
 events = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 head_sha = sys.argv[2]
@@ -246,12 +282,19 @@ for event in events:
     created_at = event.get("created_at")
     if not isinstance(created_at, str) or not created_at:
         continue
-    if event.get("commit_id") == head_sha or event.get("sha") == head_sha:
-        timestamps.append(created_at)
+    timestamp = parse_timestamp(created_at)
+    if (
+        event.get("event") == "head_ref_force_pushed"
+        and event.get("commit_id") == head_sha
+    ) or (
+        event.get("event") == "committed"
+        and event.get("sha") == head_sha
+    ):
+        timestamps.append(timestamp)
 
 if not timestamps:
     raise ValueError("PR timeline has no push event for the measured head")
-print(min(timestamps))
+print(min(timestamps).isoformat(timespec="seconds").replace("+00:00", "Z"))
 PY
     then
       not_ready "head check runs and suites: could not establish a trusted creation time ($(tr '\n' ' ' <"${HEAD_TIME_ERR}"))"
@@ -482,13 +525,15 @@ try:
         fail(f"bots file has no entries: {bots_file}")
 
     def is_rate_limit_notice(login, body):
-        if login != "coderabbitai":
+        if login not in bots:
             return False
         lines = set(body.splitlines())
-        return (
-            "<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->" in lines
-            and "> ## Review limit reached" in lines
-        )
+        marker_lines = [
+            line for line in lines
+            if line.startswith("<!-- This is an auto-generated comment: rate limited by ")
+            and line.endswith(" -->")
+        ]
+        return len(marker_lines) == 1 and "> ## Review limit reached" in lines
 
     recent_rate_limited_bots = set()
     for comment in comments:

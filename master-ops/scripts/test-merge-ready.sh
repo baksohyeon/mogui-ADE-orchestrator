@@ -292,7 +292,7 @@ timeline_dir="${WORK_DIR}/timeline-fallback"
 write_fixture "${timeline_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" '[]' 0 OPEN false "${rate_limit_comment}"
 printf '%s' '[{"check_runs":[]}]' >"${timeline_dir}/check-runs.json"
 printf '%s' '[{"check_suites":[]}]' >"${timeline_dir}/check-suites.json"
-printf '%s' '[[{"event":"head_ref_force_pushed","sha":"'"${HEAD_SHA}"'","created_at":"2026-01-01T00:00:00Z"}]]' >"${timeline_dir}/timeline.json"
+printf '%s' '[[{"event":"head_ref_force_pushed","commit_id":"'"${HEAD_SHA}"'","created_at":"2026-01-01T00:00:00Z"}]]' >"${timeline_dir}/timeline.json"
 out=$(run_case "${timeline_dir}"); rc=$?
 assert_rc "PR timeline supplies the trusted head time when check runs are empty" 0 "${out}" "${rc}"
 

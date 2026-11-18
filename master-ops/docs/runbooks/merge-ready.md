@@ -55,8 +55,9 @@ the brief ships.
 
 The command validates the shape of every response before using it. It reads the PR head and
 changed files, required checks, GraphQL reviews and threads, PR comments, and the head's check-run
-creation time. It reads the PR head again after the other responses; a changed head makes the
-result not ready so the command can be run again.
+or check-suite creation time. If neither response carries a timestamp, it reads the PR timeline
+for a matching push event. It reads the PR head again after the other responses; a changed head
+makes the result not ready so the command can be run again.
 
 Reviews and review threads are read up to 100 each. A connection with another page is not ready
 and names pagination as the next action. The REST PR files endpoint caps responses at 3000 files;

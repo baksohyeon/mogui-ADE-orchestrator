@@ -89,6 +89,8 @@ COMMENTS_FILE="${TMP_DIR}/comments.json"
 COMMENTS_ERR="${TMP_DIR}/comments.err"
 CHECK_RUNS_RAW="${TMP_DIR}/check-runs-raw.json"
 CHECK_RUNS_ERR="${TMP_DIR}/check-runs.err"
+CHECK_SUITES_RAW="${TMP_DIR}/check-suites-raw.json"
+CHECK_SUITES_ERR="${TMP_DIR}/check-suites.err"
 TIMELINE_RAW="${TMP_DIR}/timeline-raw.json"
 TIMELINE_FILE="${TMP_DIR}/timeline.json"
 TIMELINE_ERR="${TMP_DIR}/timeline.err"
@@ -191,10 +193,43 @@ if not timestamps:
 print(min(timestamps))
 PY
 if [ "${CHECK_RUN_TIME_RC}" -ne 0 ]; then
-  if ! fetch_paginated_array "repos/${REPO}/issues/${PR}/timeline" "${TIMELINE_RAW}" "${TIMELINE_FILE}" "${TIMELINE_ERR}" "PR timeline"; then
-    not_ready "head check runs: could not establish a trusted creation time ($(tr '\n' ' ' <"${HEAD_TIME_ERR}")); timeline fallback failed"
+  CHECK_SUITE_TIME_RC=0
+  if ! gh api "repos/${REPO}/commits/${HEAD_SHA}/check-suites" --paginate --slurp \
+      >"${CHECK_SUITES_RAW}" 2>"${CHECK_SUITES_ERR}"; then
+    printf '%s' "could not read head check suites: $(tr '\n' ' ' <"${CHECK_SUITES_ERR}")" >"${HEAD_TIME_ERR}"
+    CHECK_SUITE_TIME_RC=1
+  else
+    python3 - "${CHECK_SUITES_RAW}" >"${HEAD_TIME_FILE}" 2>"${HEAD_TIME_ERR}" <<'PY' || CHECK_SUITE_TIME_RC=$?
+import json
+import sys
+from pathlib import Path
+
+pages = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if not isinstance(pages, list) or not all(isinstance(page, dict) for page in pages):
+    raise ValueError("expected a list of check-suite response objects")
+
+timestamps = []
+for page in pages:
+    check_suites = page.get("check_suites")
+    if not isinstance(check_suites, list):
+        raise ValueError("check-suite response is missing check_suites")
+    for check_suite in check_suites:
+        if not isinstance(check_suite, dict):
+            raise ValueError("check-suite response contains a malformed check suite")
+        created_at = check_suite.get("created_at")
+        if isinstance(created_at, str) and created_at:
+            timestamps.append(created_at)
+
+if not timestamps:
+    raise ValueError("head check suites have no creation time")
+print(min(timestamps))
+PY
   fi
-  if ! python3 - "${TIMELINE_FILE}" "${HEAD_SHA}" >"${HEAD_TIME_FILE}" 2>"${HEAD_TIME_ERR}" <<'PY'
+  if [ "${CHECK_SUITE_TIME_RC}" -ne 0 ]; then
+    if ! fetch_paginated_array "repos/${REPO}/issues/${PR}/timeline" "${TIMELINE_RAW}" "${TIMELINE_FILE}" "${TIMELINE_ERR}" "PR timeline"; then
+      not_ready "head check runs and suites: could not establish a trusted creation time ($(tr '\n' ' ' <"${HEAD_TIME_ERR}")); timeline fallback failed"
+    fi
+    if ! python3 - "${TIMELINE_FILE}" "${HEAD_SHA}" >"${HEAD_TIME_FILE}" 2>"${HEAD_TIME_ERR}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -218,8 +253,9 @@ if not timestamps:
     raise ValueError("PR timeline has no push event for the measured head")
 print(min(timestamps))
 PY
-  then
-    not_ready "head check runs: could not establish a trusted creation time ($(tr '\n' ' ' <"${HEAD_TIME_ERR}"))"
+    then
+      not_ready "head check runs and suites: could not establish a trusted creation time ($(tr '\n' ' ' <"${HEAD_TIME_ERR}"))"
+    fi
   fi
 fi
 HEAD_TIME="$(cat "${HEAD_TIME_FILE}")"

@@ -91,6 +91,9 @@ case "$1" in
       repos/*/commits/*/check-runs)
         cat "${GH_FIXTURE_DIR}/check-runs.json"
         ;;
+      repos/*/commits/*/check-suites)
+        cat "${GH_FIXTURE_DIR}/check-suites.json"
+        ;;
       repos/*/commits/*)
         cat "${GH_FIXTURE_DIR}/commit-date.txt"
         ;;
@@ -146,6 +149,7 @@ json.dump([comments], open(path, "w", encoding="utf-8"))
 PY
   printf '%s' "${HEAD_COMMIT_DATE}" >"${dir}/commit-date.txt"
   printf '%s' '[{"check_runs":[{"created_at":"'"${CHECK_RUN_DATE}"'","check_suite":{"created_at":"'"${CHECK_RUN_DATE}"'"}}]}]' >"${dir}/check-runs.json"
+  printf '%s' '[{"check_suites":[{"created_at":"'"${CHECK_RUN_DATE}"'"}]}]' >"${dir}/check-suites.json"
   printf '%s' '[[]]' >"${dir}/timeline.json"
 }
 
@@ -287,6 +291,7 @@ fi
 timeline_dir="${WORK_DIR}/timeline-fallback"
 write_fixture "${timeline_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" '[]' 0 OPEN false "${rate_limit_comment}"
 printf '%s' '[{"check_runs":[]}]' >"${timeline_dir}/check-runs.json"
+printf '%s' '[{"check_suites":[]}]' >"${timeline_dir}/check-suites.json"
 printf '%s' '[[{"event":"head_ref_force_pushed","sha":"'"${HEAD_SHA}"'","created_at":"2026-01-01T00:00:00Z"}]]' >"${timeline_dir}/timeline.json"
 out=$(run_case "${timeline_dir}"); rc=$?
 assert_rc "PR timeline supplies the trusted head time when check runs are empty" 0 "${out}" "${rc}"

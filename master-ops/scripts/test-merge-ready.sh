@@ -254,6 +254,15 @@ else
   fail "stop-list path: got ${rc}: ${out}"
 fi
 
+manifest_dir="${WORK_DIR}/manifest"
+write_fixture "${manifest_dir}" '[{"filename":"master-ops/MANIFEST.json"}]' ""
+out=$(run_case "${manifest_dir}"); rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'no master-pass marker'; then
+  ok "manifest-only change reaches the marker measurement"
+else
+  fail "manifest-only change: got ${rc}: ${out}"
+fi
+
 draft_dir="${WORK_DIR}/draft"
 write_fixture "${draft_dir}" '[{"filename":"README.md"}]' "${MASTER_PASS_MARKER}" "${DEFAULT_CHECKS}" "${DEFAULT_REVIEWS}" 0 DRAFT true
 out=$(run_case "${draft_dir}"); rc=$?

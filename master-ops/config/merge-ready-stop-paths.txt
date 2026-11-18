@@ -55,7 +55,6 @@ hooks/pre-push
 master-ops/docs/runbooks/succession-boot-card.md
 CLAUDE.md
 AGENTS.md
-master-ops/MANIFEST.json
 config/*.example.json
 scripts/master-*
 scripts/worker-reap

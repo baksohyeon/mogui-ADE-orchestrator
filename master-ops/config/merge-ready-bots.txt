@@ -1,11 +1,10 @@
 # Review bots scripts/merge-ready requires a head review or a measured
 # rate-limit comment from (#330 round 2).
-# One GitHub login per line, written bare, with no "[bot]" suffix: the
-# REST issue-comments API reports the same account as "<login>[bot]", and
-# merge-ready strips that suffix from what the API reports before
-# comparing it against the bare login written here. A line in this file
-# that itself ends in "[bot]" will never match anything, since this file
-# is read as written, not normalized. Blank lines and lines starting
-# with "#" are ignored.
-cubic-dev-ai
-coderabbitai
+# Each roster row has three pipe-separated fields:
+#   login | exact rate-limit marker line | exact required body line
+# Use `none` in both notice fields when that bot has no rate-limit exemption.
+# The REST issue-comments API reports a bot login as "<login>[bot]";
+# merge-ready strips that suffix before comparing it with the login here.
+# Blank lines and lines starting with "#" are ignored.
+cubic-dev-ai | none | none
+coderabbitai | <!-- This is an auto-generated comment: rate limited by coderabbit.ai --> | > ## Review limit reached

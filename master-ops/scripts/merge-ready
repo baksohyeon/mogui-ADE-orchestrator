@@ -517,23 +517,36 @@ try:
     if failing_bots:
         problems_not_ready.append("review bots: " + ", ".join(failing_bots))
 
-    bots = [
-        line.strip() for line in Path(bots_file).read_text(encoding="utf-8").splitlines()
-        if line.strip() and not line.strip().startswith("#")
-    ]
-    if not bots:
+    bot_forms = {}
+    for line_number, raw_line in enumerate(
+        Path(bots_file).read_text(encoding="utf-8").splitlines(), start=1
+    ):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        fields = [field.strip() for field in line.split("|")]
+        if len(fields) != 3 or not all(fields):
+            fail(
+                f"bots file has malformed line {line_number}; expected "
+                "login | rate-limit marker | required line"
+            )
+        login, marker, required_line = fields
+        if login in bot_forms:
+            fail(f"bots file has duplicate login: {login}")
+        if (marker == "none") != (required_line == "none"):
+            fail(f"bots file has incomplete rate-limit form for {login}")
+        bot_forms[login] = None if marker == "none" else (marker, required_line)
+
+    if not bot_forms:
         fail(f"bots file has no entries: {bots_file}")
 
     def is_rate_limit_notice(login, body):
-        if login not in bots:
+        form = bot_forms.get(login)
+        if form is None:
             return False
-        lines = set(body.splitlines())
-        marker_lines = [
-            line for line in lines
-            if line.startswith("<!-- This is an auto-generated comment: rate limited by ")
-            and line.endswith(" -->")
-        ]
-        return len(marker_lines) == 1 and "> ## Review limit reached" in lines
+        marker, required_line = form
+        lines = body.splitlines()
+        return lines.count(marker) == 1 and required_line in lines
 
     recent_rate_limited_bots = set()
     for comment in comments:
@@ -541,14 +554,14 @@ try:
             fail("PR comments response has a malformed comment")
         user = comment.get("user") or {}
         login = strip_bot_suffix(user.get("login", ""))
-        if user.get("type") != "Bot" or login not in bots:
+        if user.get("type") != "Bot" or login not in bot_forms:
             continue
         comment_time = max(comment.get("created_at") or "", comment.get("updated_at") or "")
         if comment_time >= head_time and is_rate_limit_notice(login, comment.get("body") or ""):
             recent_rate_limited_bots.add(login)
 
     missing_bots = [
-        bot for bot in bots
+        bot for bot in bot_forms
         if bot not in head_bot_reviewer_logins and bot not in recent_rate_limited_bots
     ]
     if missing_bots:

@@ -8,6 +8,8 @@
 - The command never executes pull-request code. The master separately performs its independent
   review and reruns the suite from a tarball of the exact head before using
   `gh pr merge --match-head-commit <sha>`.
+- Existing installs must copy `config/merge-ready-stop-paths.txt` into their own `config/` directory
+  before running the command. The command fails closed when that file is missing or empty.
 - The review-bot roster compares an exact bot notice with a GitHub-generated check-suite or
   check-run creation time, with a matching PR timeline push event as fallback, so an
   author-controlled committer timestamp cannot qualify an older notice. The command rejects a

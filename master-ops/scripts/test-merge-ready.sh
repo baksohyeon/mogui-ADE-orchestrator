@@ -30,7 +30,10 @@ cp "${MERGE_READY}" "${INSTALL_DIR}/scripts/merge-ready"
 chmod +x "${INSTALL_DIR}/scripts/merge-ready"
 MERGE_READY="${INSTALL_DIR}/scripts/merge-ready"
 printf '%s\n' "config/gitleaks.toml" >"${INSTALL_DIR}/config/merge-ready-stop-paths.txt"
-printf '%s\n' "coderabbitai" >"${INSTALL_DIR}/config/merge-ready-bots.txt"
+cat >"${INSTALL_DIR}/config/merge-ready-bots.txt" <<'EOF'
+cubic-dev-ai | none | none
+coderabbitai | <!-- This is an auto-generated comment: rate limited by coderabbit.ai --> | > ## Review limit reached
+EOF
 
 STUB_DIR="${WORK_DIR}/stub"
 mkdir -p "${STUB_DIR}"
@@ -114,8 +117,9 @@ export PATH="${STUB_DIR}:${PATH}"
 
 DEFAULT_CHECKS='[{"name":"ci","bucket":"pass","state":"SUCCESS"}]'
 FAILING_CHECK='[{"name":"ci","bucket":"fail","state":"FAILURE"}]'
-DEFAULT_REVIEWS='[{"state":"COMMENTED","commit":{"oid":"HEAD_SHA_PLACEHOLDER"},"author":{"login":"coderabbitai","__typename":"Bot"}}]'
+DEFAULT_REVIEWS='[{"state":"COMMENTED","commit":{"oid":"HEAD_SHA_PLACEHOLDER"},"author":{"login":"coderabbitai","__typename":"Bot"}},{"state":"COMMENTED","commit":{"oid":"HEAD_SHA_PLACEHOLDER"},"author":{"login":"cubic-dev-ai","__typename":"Bot"}}]'
 DEFAULT_REVIEWS="${DEFAULT_REVIEWS//HEAD_SHA_PLACEHOLDER/${HEAD_SHA}}"
+CUBIC_REVIEW="[{\"state\":\"COMMENTED\",\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"cubic-dev-ai\",\"__typename\":\"Bot\"}}]"
 
 write_fixture() {
   local dir="$1" files_json="$2" _unused_comment="$3" checks_json="${4:-${DEFAULT_CHECKS}}"
@@ -209,13 +213,23 @@ fi
 
 rate_limit_dir="${WORK_DIR}/rate-limit"
 rate_limit_comment='[{"body":"<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n\n> ## Review limit reached","user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"'"${FRESH_DATE}"'"}]'
-write_fixture "${rate_limit_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" '[]' 0 OPEN false "${rate_limit_comment}"
+write_fixture "${rate_limit_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" "${CUBIC_REVIEW}" 0 OPEN false "${rate_limit_comment}"
 out=$(run_case "${rate_limit_dir}"); rc=$?
 assert_rc "measured rate-limit comment covers the listed bot" 0 "${out}" "${rc}"
 
+cubic_rate_limit_dir="${WORK_DIR}/cubic-rate-limit"
+cubic_rate_limit_comment='[{"body":"<!-- This is an auto-generated comment: rate limited by cubic.dev -->\n\n> ## Review limit reached","user":{"login":"cubic-dev-ai[bot]","type":"Bot"},"created_at":"'"${FRESH_DATE}"'"}]'
+write_fixture "${cubic_rate_limit_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" '[]' 0 OPEN false "${cubic_rate_limit_comment}"
+out=$(run_case "${cubic_rate_limit_dir}"); rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'cubic-dev-ai'; then
+  ok "a Cubic rate-limit notice does not create an exemption"
+else
+  fail "Cubic rate-limit exemption: got ${rc}: ${out}"
+fi
+
 summary_only_dir="${WORK_DIR}/summary-only"
 summary_comment='[{"body":"Review summary for this change.","user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"'"${FRESH_DATE}"'"}]'
-write_fixture "${summary_only_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" '[]' 0 OPEN false "${summary_comment}"
+write_fixture "${summary_only_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" "${CUBIC_REVIEW}" 0 OPEN false "${summary_comment}"
 out=$(run_case "${summary_only_dir}"); rc=$?
 if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'coderabbitai'; then
   ok "a non-rate-limit comment without a head review exits 1"
@@ -225,7 +239,7 @@ fi
 
 stale_rate_limit_dir="${WORK_DIR}/stale-rate-limit"
 stale_rate_limit_comment='[{"body":"<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n\n> ## Review limit reached","user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"'"${STALE_DATE}"'"}]'
-write_fixture "${stale_rate_limit_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" '[]' 0 OPEN false "${stale_rate_limit_comment}"
+write_fixture "${stale_rate_limit_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" "${CUBIC_REVIEW}" 0 OPEN false "${stale_rate_limit_comment}"
 out=$(run_case "${stale_rate_limit_dir}"); rc=$?
 if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'coderabbitai'; then
   ok "a stale rate-limit comment exits 1"
@@ -240,7 +254,7 @@ assert_rc "comments are not required for the GitHub-state measurement" 0 "${out}
 
 quoted_notice_dir="${WORK_DIR}/quoted-notice"
 quoted_notice_comment='[{"body":"A prior comment quoted the phrase: Review limit reached","user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"'"${FRESH_DATE}"'"}]'
-write_fixture "${quoted_notice_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" '[]' 0 OPEN false "${quoted_notice_comment}"
+write_fixture "${quoted_notice_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" "${CUBIC_REVIEW}" 0 OPEN false "${quoted_notice_comment}"
 out=$(run_case "${quoted_notice_dir}"); rc=$?
 if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'coderabbitai'; then
   ok "a bot comment quoting the notice phrase does not count"
@@ -250,7 +264,7 @@ fi
 
 backdated_dir="${WORK_DIR}/backdated-committer"
 backdated_comment='[{"body":"<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n\n> ## Review limit reached","user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"'"${BACKDATED_COMMENT_DATE}"'"}]'
-write_fixture "${backdated_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" '[]' 0 OPEN false "${backdated_comment}"
+write_fixture "${backdated_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" "${CUBIC_REVIEW}" 0 OPEN false "${backdated_comment}"
 printf '%s' "${STALE_DATE}" >"${backdated_dir}/commit-date.txt"
 out=$(run_case "${backdated_dir}"); rc=$?
 if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'coderabbitai'; then
@@ -289,7 +303,7 @@ else
 fi
 
 timeline_dir="${WORK_DIR}/timeline-fallback"
-write_fixture "${timeline_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" '[]' 0 OPEN false "${rate_limit_comment}"
+write_fixture "${timeline_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" "${CUBIC_REVIEW}" 0 OPEN false "${rate_limit_comment}"
 printf '%s' '[{"check_runs":[]}]' >"${timeline_dir}/check-runs.json"
 printf '%s' '[{"check_suites":[]}]' >"${timeline_dir}/check-suites.json"
 printf '%s' '[[{"event":"head_ref_force_pushed","commit_id":"'"${HEAD_SHA}"'","created_at":"2026-01-01T00:00:00Z"}]]' >"${timeline_dir}/timeline.json"
@@ -326,15 +340,14 @@ assert_rc "GitHub failure exits 1" 1 "${out}" "${rc}"
 out=$(run_case "${clean_dir}" graphql-bad-json); rc=$?
 assert_rc "unparseable GitHub reply exits 1" 1 "${out}" "${rc}"
 
-if grep -E 'eval|tarball|test-command|TEST_CMD' "${SCRIPT_DIR}/merge-ready" >/dev/null; then
+scan_rc=0
+grep -Eq 'eval|tarball|test-command|TEST_CMD' "${SCRIPT_DIR}/merge-ready" >/dev/null || scan_rc=$?
+if [ "${scan_rc}" -eq 0 ]; then
   fail "production script still contains removed execution interface"
+elif [ "${scan_rc}" -eq 1 ]; then
+  ok "production script has no removed execution interface"
 else
-  grep_rc=$?
-  if [ "${grep_rc}" -eq 1 ]; then
-    ok "production script has no removed execution interface"
-  else
-    fail "removed execution interface check failed with grep status ${grep_rc}"
-  fi
+  fail "removed execution interface check failed with grep status ${scan_rc}"
 fi
 
 if [ "${F}" -ne 0 ]; then

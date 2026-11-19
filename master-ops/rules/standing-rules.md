@@ -65,6 +65,8 @@ it is not yours to resolve by guessing. The ops repository's own
 `docs/runbooks/merge-ready.md` (the checkout holding this rule's own `rules/` directory, not the
 product repository you are dispatched into) has the exit codes and the separate master-step
 procedure.
+The command reads GitHub state and the checked-in gate configuration, and it does not execute
+pull-request code.
 
 ## placement
 

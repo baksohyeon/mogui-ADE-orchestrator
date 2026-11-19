@@ -82,6 +82,25 @@ case "$1" in
           cat "${GH_FIXTURE_DIR}/graphql.json"
         fi
         ;;
+      repos/*/rules/branches/*)
+        if [ "${GH_STUB_CASE:-}" = "rules-fail" ]; then
+          echo "gh: rules unavailable" >&2
+          exit 1
+        fi
+        cat "${GH_FIXTURE_DIR}/rules.json"
+        ;;
+      repos/*/branches/*/protection/required_status_checks)
+        if [ "${GH_STUB_CASE:-}" = "legacy-fail" ]; then
+          echo "gh: legacy protection unavailable" >&2
+          exit 1
+        fi
+        if [ "${GH_STUB_CASE:-}" = "legacy-404" ]; then
+          echo "gh: Branch not protected (HTTP 404)" >&2
+          printf '%s' '{"message":"Branch not protected","status":"404"}'
+          exit 1
+        fi
+        cat "${GH_FIXTURE_DIR}/legacy.json"
+        ;;
       repos/*/pulls/*/files)
         cat "${GH_FIXTURE_DIR}/files.json"
         ;;
@@ -117,21 +136,28 @@ export PATH="${STUB_DIR}:${PATH}"
 
 DEFAULT_CHECKS='[{"name":"ci","bucket":"pass","state":"SUCCESS"}]'
 FAILING_CHECK='[{"name":"ci","bucket":"fail","state":"FAILURE"}]'
+DEFAULT_RULES='[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"ci"}]}}]'
+DEFAULT_LEGACY='{"contexts":[],"checks":[]}'
 DEFAULT_REVIEWS='[{"state":"COMMENTED","commit":{"oid":"HEAD_SHA_PLACEHOLDER"},"author":{"login":"coderabbitai","__typename":"Bot"}},{"state":"COMMENTED","commit":{"oid":"HEAD_SHA_PLACEHOLDER"},"author":{"login":"cubic-dev-ai","__typename":"Bot"}}]'
 DEFAULT_REVIEWS="${DEFAULT_REVIEWS//HEAD_SHA_PLACEHOLDER/${HEAD_SHA}}"
 CUBIC_REVIEW="[{\"state\":\"COMMENTED\",\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"cubic-dev-ai\",\"__typename\":\"Bot\"}}]"
+
+NON_HEAD_REVIEW='[{"state":"COMMENTED","commit":{"oid":"1111111111111111111111111111111111111111"},"author":{"login":"coderabbitai","__typename":"Bot"}}]'
 
 write_fixture() {
   local dir="$1" files_json="$2" _unused_comment="$3" checks_json="${4:-${DEFAULT_CHECKS}}"
   local reviews_json="${5:-${DEFAULT_REVIEWS}}" open_threads="${6:-0}"
   local state="${7:-OPEN}" is_draft="${8:-false}" extra_comments="${9:-[]}"
+  local rules_json="${10:-${DEFAULT_RULES}}" legacy_json="${11:-${DEFAULT_LEGACY}}"
   mkdir -p "${dir}"
   python3 - "${dir}/pr.json" "${state}" "${is_draft}" <<'PY'
 import json, sys
 path, state, is_draft = sys.argv[1:]
-json.dump({"number": 1, "url": "https://example.invalid/pr/1", "headRefOid": "0123456789abcdef0123456789abcdef01234567", "state": state, "isDraft": is_draft == "true"}, open(path, "w", encoding="utf-8"))
+json.dump({"number": 1, "url": "https://example.invalid/pr/1", "headRefOid": "0123456789abcdef0123456789abcdef01234567", "baseRefName": "main", "state": state, "isDraft": is_draft == "true"}, open(path, "w", encoding="utf-8"))
 PY
   printf '%s' "${checks_json}" >"${dir}/checks.json"
+  printf '%s' "${rules_json}" >"${dir}/rules.json"
+  printf '%s' "${legacy_json}" >"${dir}/legacy.json"
   python3 - "${dir}/graphql.json" "${reviews_json}" "${open_threads}" <<'PY'
 import json, sys
 path, reviews_raw, open_threads = sys.argv[1], sys.argv[2], int(sys.argv[3])
@@ -226,7 +252,7 @@ else
 fi
 
 path_before_timestamp_dir="${WORK_DIR}/path-before-timestamp"
-write_fixture "${path_before_timestamp_dir}" '[{"filename":"config/gitleaks.toml"}]' ""
+write_fixture "${path_before_timestamp_dir}" '[{"filename":"config/gitleaks.toml"}]' "" "${DEFAULT_CHECKS}" "${NON_HEAD_REVIEW}" 0 OPEN false "${rate_limit_comment}"
 printf '%s' '[]' >"${path_before_timestamp_dir}/check-runs.json"
 printf '%s' '[]' >"${path_before_timestamp_dir}/check-suites.json"
 printf '%s' '[[]]' >"${path_before_timestamp_dir}/timeline.json"
@@ -236,6 +262,39 @@ if [ "${rc}" -eq 2 ] && printf '%s' "${out}" | grep -q 'stop-list'; then
 else
   fail "path before timestamp: got ${rc}: ${out}"
 fi
+
+missing_required_dir="${WORK_DIR}/missing-required"
+missing_required_rules='[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"ci"},{"context":"tests (ubuntu-latest)"}]}}]'
+write_fixture "${missing_required_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" "${DEFAULT_REVIEWS}" 0 OPEN false "[]" "${missing_required_rules}"
+out=$(run_case "${missing_required_dir}"); rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'missing required checks: tests (ubuntu-latest)'; then
+  ok "a required context absent from reported checks exits 1 and names it"
+else
+  fail "missing required context: got ${rc}: ${out}"
+fi
+
+rules_fail_dir="${WORK_DIR}/rules-fail"
+write_fixture "${rules_fail_dir}" '[{"filename":"README.md"}]' ""
+out=$(run_case "${rules_fail_dir}" rules-fail); rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'required-check rules'; then
+  ok "an unreadable required-check rules response exits 1"
+else
+  fail "unreadable required-check rules: got ${rc}: ${out}"
+fi
+
+legacy_fail_dir="${WORK_DIR}/legacy-fail"
+write_fixture "${legacy_fail_dir}" '[{"filename":"README.md"}]' ""
+out=$(run_case "${legacy_fail_dir}" legacy-fail); rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'legacy required checks'; then
+  ok "an unreadable legacy required-check response exits 1"
+else
+  fail "unreadable legacy required checks: got ${rc}: ${out}"
+fi
+
+legacy_404_dir="${WORK_DIR}/legacy-404"
+write_fixture "${legacy_404_dir}" '[{"filename":"README.md"}]' ""
+out=$(run_case "${legacy_404_dir}" legacy-404); rc=$?
+assert_rc "unprotected legacy status-check endpoint contributes no contexts" 0 "${out}" "${rc}"
 
 bots_config="${INSTALL_DIR}/config/merge-ready-bots.txt"
 bots_backup="${WORK_DIR}/merge-ready-bots.txt.valid"

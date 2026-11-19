@@ -39,7 +39,11 @@ the brief ships.
 
 0. **The PR is open and not a draft.** `state` must be `OPEN` and `isDraft` must be false.
 
-1. **Required checks.** Every entry reported by `gh pr checks --required` must have bucket `pass`.
+1. **Required checks.** The command compares names reported by `gh pr checks --required` with the
+   full required set from `gh api repos/<owner/name>/rules/branches/<base>`. It also reads the
+   legacy `gh api repos/<owner/name>/branches/<base>/protection/required_status_checks` endpoint;
+   a `404 Branch not protected` response contributes no legacy contexts, while any other failure
+   to read either source is not ready. Every required context must be reported with bucket `pass`.
    A parseable empty list is not ready because there is no required check to measure. A check that
    this repository runs but does not require never reaches this measurement. Every bot whose latest
    decision review on the exact head is `PENDING` or `CHANGES_REQUESTED` blocks separately. Only

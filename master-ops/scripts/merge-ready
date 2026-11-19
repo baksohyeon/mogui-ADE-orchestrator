@@ -98,6 +98,10 @@ HEAD_TIME_FILE="${TMP_DIR}/head-time.txt"
 HEAD_TIME_ERR="${TMP_DIR}/head-time.err"
 PR_FILE="${TMP_DIR}/pr.json"
 PR_ERR="${TMP_DIR}/pr.err"
+RULES_FILE="${TMP_DIR}/rules.json"
+RULES_ERR="${TMP_DIR}/rules.err"
+LEGACY_FILE="${TMP_DIR}/legacy-required-status-checks.json"
+LEGACY_ERR="${TMP_DIR}/legacy-required-status-checks.err"
 
 not_ready() {
   echo "merge-ready: not ready · $1"
@@ -136,7 +140,7 @@ json.dump([item for page in pages for item in page], open(flat_path, "w", encodi
   fi
 }
 
-if ! gh pr view "${PR}" --repo "${REPO}" --json headRefOid \
+if ! gh pr view "${PR}" --repo "${REPO}" --json headRefOid,baseRefName \
     >"${PR_HEAD_FILE}" 2>"${PR_HEAD_ERR}"; then
   not_ready "could not read the PR (gh pr view: $(tr '\n' ' ' <"${PR_HEAD_ERR}"))"
 fi
@@ -146,6 +150,15 @@ import json, sys
 print(json.load(open(sys.argv[1], encoding="utf-8"))["headRefOid"])
 ' "${PR_HEAD_FILE}" 2>"${TMP_DIR}/head-parse.err")" || {
   not_ready "PR response missing headRefOid ($(tr '\n' ' ' <"${TMP_DIR}/head-parse.err"))"
+}
+BASE_BRANCH="$(python3 -I -c '
+import json, sys
+base = json.load(open(sys.argv[1], encoding="utf-8")).get("baseRefName")
+if not isinstance(base, str) or not base:
+    raise ValueError("PR response missing baseRefName")
+print(base)
+' "${PR_HEAD_FILE}" 2>"${TMP_DIR}/base-parse.err")" || {
+  not_ready "PR response missing baseRefName ($(tr '\n' ' ' <"${TMP_DIR}/base-parse.err"))"
 }
 
 fetch_paginated_array "repos/${REPO}/pulls/${PR}/files" "${FILES_RAW}" "${FILES_FILE}" "${FILES_ERR}" "changed files"
@@ -233,6 +246,21 @@ fi
 
 OWNER="${REPO%%/*}"
 NAME="${REPO#*/}"
+if ! gh api "repos/${REPO}/rules/branches/${BASE_BRANCH}" \
+    >"${RULES_FILE}" 2>"${RULES_ERR}"; then
+  not_ready "could not read required-check rules for base branch ${BASE_BRANCH} ($(tr '\n' ' ' <"${RULES_ERR}"))"
+fi
+require_json "${RULES_FILE}"
+
+if ! gh api "repos/${REPO}/branches/${BASE_BRANCH}/protection/required_status_checks" \
+    >"${LEGACY_FILE}" 2>"${LEGACY_ERR}"; then
+  if grep -Fq "Branch not protected" "${LEGACY_ERR}" && grep -Eq "404|HTTP 404" "${LEGACY_ERR}"; then
+    printf '%s' '{"contexts":[],"checks":[]}' >"${LEGACY_FILE}"
+  else
+    not_ready "could not read legacy required checks for base branch ${BASE_BRANCH} ($(tr '\n' ' ' <"${LEGACY_ERR}"))"
+  fi
+fi
+require_json "${LEGACY_FILE}"
 if ! gh api graphql \
     -f owner="${OWNER}" -f name="${NAME}" -F number="${PR}" \
     -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}} reviews(first:100){nodes{state submittedAt commit{oid} author{login __typename}} pageInfo{hasNextPage}}}}}' \
@@ -470,7 +498,8 @@ fi
 require_json "${PR_FILE}"
 
 python3 -I - "${PR_FILE}" "${CHECKS_FILE}" "${GQL_FILE}" "${FILES_FILE}" "${COMMENTS_FILE}" \
-         "${STOP_PATHS_FILE}" "${BOTS_FILE}" "${HEAD_SHA}" "${HEAD_TIME}" "${CONTRACT}" <<'PY'
+         "${STOP_PATHS_FILE}" "${BOTS_FILE}" "${RULES_FILE}" "${LEGACY_FILE}" \
+         "${BASE_BRANCH}" "${HEAD_SHA}" "${HEAD_TIME}" "${CONTRACT}" <<'PY'
 import fnmatch
 import json
 import re
@@ -478,7 +507,8 @@ import sys
 from pathlib import Path
 
 (pr_file, checks_file, gql_file, files_file, comments_file, stop_paths_file,
- bots_file, head_sha, head_time, contract_path) = sys.argv[1:11]
+ bots_file, rules_file, legacy_file, base_branch, head_sha, head_time,
+ contract_path) = sys.argv[1:14]
 
 
 def load(path):
@@ -511,6 +541,8 @@ try:
     gql = load(gql_file)
     files = load(files_file)
     comments = load(comments_file)
+    rules = load(rules_file)
+    legacy = load(legacy_file)
 
     if not isinstance(pr, dict) or not isinstance(pr.get("headRefOid"), str):
         fail("PR response missing or malformed headRefOid")
@@ -526,6 +558,55 @@ try:
     )
     problems_ask = []
     problems_not_ready = []
+
+    required_contexts = set()
+    if not isinstance(rules, list):
+        fail("required-check rules response is not a list")
+    for rule in rules:
+        if not isinstance(rule, dict):
+            fail("required-check rules response contains a malformed rule")
+        if rule.get("type") != "required_status_checks":
+            continue
+        parameters = rule.get("parameters")
+        if not isinstance(parameters, dict) or not isinstance(parameters.get("required_status_checks"), list):
+            fail("required-check rules response has a malformed required_status_checks rule")
+        for required in parameters["required_status_checks"]:
+            if not isinstance(required, dict) or not isinstance(required.get("context"), str) or not required["context"]:
+                fail("required-check rules response has a malformed required context")
+            required_contexts.add(required["context"])
+
+    if not isinstance(legacy, dict):
+        fail("legacy required-check response is not an object")
+    legacy_contexts = legacy.get("contexts")
+    legacy_checks = legacy.get("checks")
+    if legacy_contexts is None and legacy_checks is None:
+        fail("legacy required-check response has no contexts or checks")
+    if legacy_contexts is not None:
+        if not isinstance(legacy_contexts, list) or not all(isinstance(context, str) and context for context in legacy_contexts):
+            fail("legacy required-check response has malformed contexts")
+        required_contexts.update(legacy_contexts)
+    if legacy_checks is not None:
+        if not isinstance(legacy_checks, list):
+            fail("legacy required-check response has malformed checks")
+        for required in legacy_checks:
+            if not isinstance(required, dict) or not isinstance(required.get("context"), str) or not required["context"]:
+                fail("legacy required-check response has a malformed check")
+            required_contexts.add(required["context"])
+
+    if not isinstance(checks, list):
+        fail("required checks response is not a list")
+    reported_contexts = set()
+    for check in checks:
+        if not isinstance(check, dict) or not isinstance(check.get("name"), str) or not check["name"]:
+            fail("required checks response has a malformed check")
+        reported_contexts.add(check["name"])
+    missing_required = sorted(required_contexts - reported_contexts)
+    if missing_required:
+        problems_not_ready.append("missing required checks: " + ", ".join(missing_required))
+    required_summary = (
+        f"required checks from base branch {base_branch}: "
+        + (", ".join(sorted(required_contexts)) if required_contexts else "none")
+    )
 
     if pr.get("state") != "OPEN":
         problems_not_ready.append(f"PR state is {pr.get('state')}, not OPEN")
@@ -682,12 +763,12 @@ try:
                 problems_ask.append("path(s) outside contract writes: " + ", ".join(outside))
 
     if problems_ask:
-        print(f"merge-ready: ask · {'; '.join(problems_ask + problems_not_ready)} (head {head_sha})")
+        print(f"merge-ready: ask · {'; '.join(problems_ask + problems_not_ready + [required_summary])} (head {head_sha})")
         sys.exit(2)
     if problems_not_ready:
-        print("merge-ready: not ready · " + "; ".join(problems_not_ready))
+        print("merge-ready: not ready · " + "; ".join(problems_not_ready + [required_summary]))
         sys.exit(1)
-    print(f"merge-ready: merge · every GitHub-state measurement passed (head {head_sha})")
+    print(f"merge-ready: merge · {required_summary}; every GitHub-state measurement passed (head {head_sha})")
     sys.exit(0)
 except SystemExit:
     raise

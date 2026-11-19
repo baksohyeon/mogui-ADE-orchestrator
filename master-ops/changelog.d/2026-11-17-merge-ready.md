@@ -20,3 +20,7 @@
   `.github/release.yml`, `CODEOWNERS`, `.github/CODEOWNERS`, and `docs/CODEOWNERS`.
 - Required checks never use a rate-limit exception. Empty required-check, roster, stop-list, or
   malformed-response shapes fail closed.
+- Required checks are compared with the complete required context set from the PR base branch's
+  rules endpoint and legacy protection endpoint. A legacy `404 Branch not protected` response
+  contributes no contexts; any other source failure is not ready, and missing reported contexts
+  are named in the summary.

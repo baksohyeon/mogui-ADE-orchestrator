@@ -202,11 +202,8 @@ def test_redaction_python_override_runs_per_commit_normalizer(tmp_path: Path) ->
     assert result.returncode != 0, output
     assert "commit:" in output, output
     assert "aws_access_key" in output, output
-    # gitleaks writes a report for every commit in the range, clean or not
-    # (a zero-finding report is still a non-empty file), so the normalizer
-    # runs once per commit here: the probe, the range-mode added-lines pass
-    # (one call regardless of file count, since it loops over files inside
-    # one interpreter run), two per-commit calls, the added-lines recheck
-    # after scanning (one call, same reason), and the merge. Measured on
-    # this fixture with gitleaks 8.30.1.
-    assert len(log.read_text(encoding="utf-8").splitlines()) == 6
+    # The resolved interpreter runs its Python 3 check, the two per-commit
+    # message normalizers, the range filter-attribute lookup, and the final
+    # findings merge.
+    # Measured on this fixture with gitleaks 8.30.1.
+    assert len(log.read_text(encoding="utf-8").splitlines()) == 5

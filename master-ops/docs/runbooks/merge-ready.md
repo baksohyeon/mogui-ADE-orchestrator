@@ -71,17 +71,17 @@ the brief ships.
 
 ## Collected responses
 
-The command validates the shape of every response before using it. It pins changed files, check
-runs, reviews, and the final head check to the initial head sha. It reads the PR head and compare
-files, required checks, GraphQL reviews and threads, PR comments, and a matching PR timeline push
-event when a rate-limit exemption needs a timestamp. Check-run timestamps do not qualify an
-exemption. It reads the PR head again after the other responses; a changed head makes the result
-not ready so the command can be run again.
+The command validates the shape of every response before using it. It reads the complete paginated
+pull-request file list, checks the measured head before and after that read, and pins check runs,
+reviews, and the final head check to the initial head sha. It reads required checks, GraphQL reviews
+and threads, PR comments, and a matching PR timeline push event when a rate-limit exemption needs a
+timestamp. Check-run timestamps do not qualify an exemption. A changed head makes the result not
+ready so the command can be run again.
 
 Reviews and review threads are read up to 100 each. A connection with another page is not ready
-and names pagination as the next action. The compare response caps responses at 3000 files;
-the command exits `1` when the flattened response reaches 3000 because the complete path set cannot
-be verified.
+and names pagination as the next action. The pull-request files endpoint caps responses at 3000
+files; the command exits `1` when the flattened response reaches 3000 because the complete path set
+cannot be verified.
 
 ## Exit codes
 

@@ -14,7 +14,7 @@
 - The review-bot roster compares an exact bot notice with a GitHub-generated check-suite or
   check-run creation time, with a matching PR timeline push event as fallback, so an
   author-controlled committer timestamp cannot qualify an older notice. The command rejects a
-  response at GitHub's 3000-file cap and reports when the out-of-contract check was skipped.
+  pull-request files response at GitHub's 3000-file cap and reports when the out-of-contract check was skipped.
 - The stop list in `config/merge-ready-stop-paths.txt` covers charter, workspace, gate, hook,
   workflow, scanner, and CODEOWNERS controls. Its examples include `.github/labeler.yml`,
   `.github/release.yml`, `CODEOWNERS`, `.github/CODEOWNERS`, and `docs/CODEOWNERS`.

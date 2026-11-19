@@ -84,8 +84,8 @@ GQL_ERR="${TMP_DIR}/graphql.err"
 FILES_RAW="${TMP_DIR}/files-raw.json"
 FILES_FILE="${TMP_DIR}/files.json"
 FILES_ERR="${TMP_DIR}/files.err"
-COMPARE_RAW="${TMP_DIR}/compare-raw.json"
-COMPARE_ERR="${TMP_DIR}/compare.err"
+FILES_HEAD_FILE="${TMP_DIR}/files-head.json"
+FILES_HEAD_ERR="${TMP_DIR}/files-head.err"
 COMMENTS_RAW="${TMP_DIR}/comments-raw.json"
 COMMENTS_FILE="${TMP_DIR}/comments.json"
 COMMENTS_ERR="${TMP_DIR}/comments.err"
@@ -163,30 +163,26 @@ print(base)
   not_ready "PR response missing baseRefName ($(tr '\n' ' ' <"${TMP_DIR}/base-parse.err"))"
 }
 
-if ! gh api "repos/${REPO}/compare/${BASE_BRANCH}...${HEAD_SHA}" \
-    >"${COMPARE_RAW}" 2>"${COMPARE_ERR}"; then
-  not_ready "could not read changed files for measured head ${HEAD_SHA} ($(tr '\n' ' ' <"${COMPARE_ERR}"))"
-fi
-if ! python3 -I - "${COMPARE_RAW}" "${FILES_FILE}" >"${TMP_DIR}/compare-parse.out" 2>"${FILES_ERR}" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-compare = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-files = compare.get("files") if isinstance(compare, dict) else None
-if not isinstance(files, list):
-    raise ValueError("compare response is missing files")
-json.dump(files, Path(sys.argv[2]).open("w", encoding="utf-8"))
-PY
-then
-  not_ready "changed files: could not parse compare response ($(tr '\n' ' ' <"${FILES_ERR}"))"
-fi
+fetch_paginated_array "repos/${REPO}/pulls/${PR}/files" "${FILES_RAW}" "${FILES_FILE}" "${FILES_ERR}" "changed files"
 require_json "${FILES_FILE}" nonempty-list
 FILE_COUNT="$(python3 -I -c 'import json, sys; print(len(json.load(open(sys.argv[1], encoding="utf-8"))))' "${FILES_FILE}" 2>"${TMP_DIR}/file-count.err")" || {
   not_ready "changed files: could not count the response ($(tr '\n' ' ' <"${TMP_DIR}/file-count.err"))"
 }
 if [ "${FILE_COUNT}" -ge 3000 ]; then
-  not_ready "changed files response reached GitHub's 3000-file cap (${FILE_COUNT}); complete file set cannot be verified"
+  not_ready "pull request files response reached GitHub's 3000-file cap (${FILE_COUNT}); complete file set cannot be verified"
+fi
+if ! gh pr view "${PR}" --repo "${REPO}" --json headRefOid \
+    >"${FILES_HEAD_FILE}" 2>"${FILES_HEAD_ERR}"; then
+  not_ready "could not re-read the PR head after changed files ($(tr '\n' ' ' <"${FILES_HEAD_ERR}"))"
+fi
+FILES_HEAD_SHA="$(python3 -I -c '
+import json, sys
+print(json.load(open(sys.argv[1], encoding="utf-8"))["headRefOid"])
+' "${FILES_HEAD_FILE}" 2>"${TMP_DIR}/files-head-parse.err")" || {
+  not_ready "changed files response missing headRefOid ($(tr '\n' ' ' <"${TMP_DIR}/files-head-parse.err"))"
+}
+if [ "${FILES_HEAD_SHA}" != "${HEAD_SHA}" ]; then
+  not_ready "head changed during changed-file measurement (started ${HEAD_SHA:0:12}, now ${FILES_HEAD_SHA:0:12}); rerun"
 fi
 
 PATH_VERDICT="$(python3 -I - "${FILES_FILE}" "${STOP_PATHS_FILE}" "${CONTRACT}" <<'PY'
@@ -194,6 +190,7 @@ import fnmatch
 import json
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 files_file, stop_paths_file, contract_path = sys.argv[1:4]
@@ -363,8 +360,10 @@ def review_is_standalone(review):
     comments = review.get("comments")
     if not isinstance(comments, dict) or not isinstance(comments.get("nodes"), list):
         return False
-    page_info = comments.get("pageInfo") or {}
-    if page_info.get("hasNextPage") is True:
+    page_info = comments.get("pageInfo")
+    if not isinstance(page_info, dict) or not isinstance(page_info.get("hasNextPage"), bool):
+        raise ValueError("graphql response has malformed review comments pageInfo")
+    if page_info["hasNextPage"]:
         return False
     return any(
         isinstance(comment, dict) and comment.get("replyTo") is None
@@ -496,6 +495,7 @@ import fnmatch
 import json
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 (pr_file, checks_file, gql_file, files_file, comments_file, stop_paths_file,
@@ -526,6 +526,18 @@ def strip_bot_suffix(login):
     return login[:-5] if login.lower().endswith("[bot]") else login
 
 
+def parse_github_timestamp(value):
+    if not isinstance(value, str) or not value:
+        raise ValueError("missing or empty timestamp")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"invalid timestamp {value!r}") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(f"timestamp has no timezone {value!r}")
+    return parsed.astimezone(timezone.utc)
+
+
 try:
     pr = load(pr_file)
     checks = load(checks_file)
@@ -549,6 +561,10 @@ try:
     problems_not_ready = []
 
     required_contexts = set(load(contexts_file))
+    try:
+        head_time_value = parse_github_timestamp(head_time) if head_time else None
+    except ValueError as exc:
+        fail(f"head push time is malformed: {exc}")
 
     if not isinstance(checks, list):
         fail("required checks response is not a list")
@@ -593,7 +609,10 @@ try:
         comments = review.get("comments")
         if not isinstance(comments, dict) or not isinstance(comments.get("nodes"), list):
             return False
-        if (comments.get("pageInfo") or {}).get("hasNextPage") is True:
+        page_info = comments.get("pageInfo")
+        if not isinstance(page_info, dict) or not isinstance(page_info.get("hasNextPage"), bool):
+            fail("graphql response has malformed review comments pageInfo")
+        if page_info["hasNextPage"]:
             return False
         return any(
             isinstance(comment, dict) and comment.get("replyTo") is None
@@ -675,8 +694,11 @@ try:
         login = strip_bot_suffix(user.get("login", ""))
         if user.get("type") != "Bot" or login not in bot_forms:
             continue
-        comment_time = comment.get("created_at") or ""
-        if head_time and comment_time >= head_time and is_rate_limit_notice(login, comment.get("body") or ""):
+        try:
+            comment_time = parse_github_timestamp(comment.get("created_at")) if head_time_value else None
+        except ValueError as exc:
+            fail(f"PR comment created_at is malformed: {exc}")
+        if head_time_value and comment_time >= head_time_value and is_rate_limit_notice(login, comment.get("body") or ""):
             recent_rate_limited_bots.add(login)
 
     missing_bots = [

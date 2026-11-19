@@ -112,8 +112,8 @@ case "$1" in
         fi
         cat "${GH_FIXTURE_DIR}/legacy.json"
         ;;
-      repos/*/compare/*)
-        python3 -I -c "import json; print(json.dumps({'files': json.load(open('${GH_FIXTURE_DIR}/files.json'))[0]}))"
+      repos/*/pulls/*/files)
+        cat "${GH_FIXTURE_DIR}/files.json"
         ;;
       repos/*/issues/*/comments)
         cat "${GH_FIXTURE_DIR}/comments.json"
@@ -158,6 +158,8 @@ DEFAULT_REVIEWS="${DEFAULT_REVIEWS//HEAD_SHA_PLACEHOLDER/${HEAD_SHA}}"
 CUBIC_REVIEW="[{\"state\":\"COMMENTED\",\"body\":\"Automated review\",\"comments\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"cubic-dev-ai\",\"__typename\":\"Bot\"}}]"
 THREAD_REPLY_REVIEW="[{\"state\":\"COMMENTED\",\"body\":\"\",\"comments\":{\"nodes\":[{\"databaseId\":1,\"replyTo\":{\"databaseId\":2}}],\"pageInfo\":{\"hasNextPage\":false}},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"coderabbitai\",\"__typename\":\"Bot\"}},{\"state\":\"COMMENTED\",\"body\":\"Automated review\",\"comments\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"cubic-dev-ai\",\"__typename\":\"Bot\"}}]"
 DISMISSED_REVIEW="[{\"state\":\"DISMISSED\",\"body\":\"Automated review\",\"comments\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"coderabbitai\",\"__typename\":\"Bot\"}},{\"state\":\"COMMENTED\",\"body\":\"Automated review\",\"comments\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"cubic-dev-ai\",\"__typename\":\"Bot\"}}]"
+MALFORMED_PAGEINFO_REVIEW="[{\"state\":\"COMMENTED\",\"body\":\"\",\"comments\":{\"nodes\":[]},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"coderabbitai\",\"__typename\":\"Bot\"}},{\"state\":\"COMMENTED\",\"body\":\"Automated review\",\"comments\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"cubic-dev-ai\",\"__typename\":\"Bot\"}}]"
+NONBOOLEAN_PAGEINFO_REVIEW="[{\"state\":\"COMMENTED\",\"body\":\"\",\"comments\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":\"false\"}},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"coderabbitai\",\"__typename\":\"Bot\"}},{\"state\":\"COMMENTED\",\"body\":\"Automated review\",\"comments\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"cubic-dev-ai\",\"__typename\":\"Bot\"}}]"
 
 NON_HEAD_REVIEW='[{"state":"COMMENTED","commit":{"oid":"1111111111111111111111111111111111111111"},"author":{"login":"coderabbitai","__typename":"Bot"}}]'
 
@@ -301,13 +303,72 @@ else
   fail "updated rate-limit notice: got ${rc}: ${out}"
 fi
 
+malformed_created_at_dir="${WORK_DIR}/malformed-created-at"
+malformed_created_at_comment='[{"body":"<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n\n> ## Review limit reached","user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"not-a-timestamp"}]'
+write_fixture "${malformed_created_at_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" "${CUBIC_REVIEW}" 0 OPEN false "${malformed_created_at_comment}"
+printf '%s' '[[{"event":"head_ref_force_pushed","commit_id":"'"${HEAD_SHA}"'","created_at":"'"${FRESH_DATE}"'"}]]' >"${malformed_created_at_dir}/timeline.json"
+out=$(run_case "${malformed_created_at_dir}"); rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'created_at is malformed'; then
+  ok "an unparseable rate-limit created_at blocks the exemption"
+else
+  fail "malformed rate-limit created_at: got ${rc}: ${out}"
+fi
+
 head_changed_dir="${WORK_DIR}/head-changed"
 write_fixture "${head_changed_dir}" '[{"filename":"README.md"}]' ""
 out=$(run_case "${head_changed_dir}" head-changed); rc=$?
-if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'head changed during measurement'; then
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'head changed during changed-file measurement'; then
   ok "a PR head change during measurement exits 1"
 else
   fail "head changed during measurement: got ${rc}: ${out}"
+fi
+
+complete_files_dir="${WORK_DIR}/complete-files"
+write_fixture "${complete_files_dir}" '[{"filename":"README.md"}]' ""
+python3 - "${complete_files_dir}/files.json" <<'PY'
+import json, sys
+first = [{"filename": f"docs/file-{index}.md"} for index in range(300)]
+second = [{"filename": "config/gitleaks.toml"}]
+json.dump([first, second], open(sys.argv[1], "w", encoding="utf-8"))
+PY
+out=$(run_case "${complete_files_dir}"); rc=$?
+if [ "${rc}" -eq 2 ] && printf '%s' "${out}" | grep -q 'config/gitleaks.toml (stop-list)'; then
+  ok "paginated pull-request files include a stop-list path beyond the first 300"
+else
+  fail "complete paginated files: got ${rc}: ${out}"
+fi
+
+complete_files_head_changed_dir="${WORK_DIR}/complete-files-head-changed"
+write_fixture "${complete_files_head_changed_dir}" '[{"filename":"README.md"}]' ""
+python3 - "${complete_files_head_changed_dir}/files.json" <<'PY'
+import json, sys
+first = [{"filename": f"docs/file-{index}.md"} for index in range(300)]
+second = [{"filename": "README.md"}]
+json.dump([first, second], open(sys.argv[1], "w", encoding="utf-8"))
+PY
+out=$(run_case "${complete_files_head_changed_dir}" head-changed); rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'head changed during changed-file measurement'; then
+  ok "head movement between file-list reads exits 1"
+else
+  fail "head movement during file-list read: got ${rc}: ${out}"
+fi
+
+malformed_pageinfo_dir="${WORK_DIR}/malformed-pageinfo"
+write_fixture "${malformed_pageinfo_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" "${MALFORMED_PAGEINFO_REVIEW}"
+out=$(run_case "${malformed_pageinfo_dir}"); rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'could not determine whether a rate-limit exemption needs a timestamp'; then
+  ok "missing nested review-comment pageInfo exits 1"
+else
+  fail "missing nested review-comment pageInfo: got ${rc}: ${out}"
+fi
+
+nonboolean_pageinfo_dir="${WORK_DIR}/nonboolean-pageinfo"
+write_fixture "${nonboolean_pageinfo_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" "${NONBOOLEAN_PAGEINFO_REVIEW}"
+out=$(run_case "${nonboolean_pageinfo_dir}"); rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'could not determine whether a rate-limit exemption needs a timestamp'; then
+  ok "non-boolean nested review-comment pageInfo exits 1"
+else
+  fail "non-boolean nested review-comment pageInfo: got ${rc}: ${out}"
 fi
 
 check_run_time_dir="${WORK_DIR}/check-run-time"

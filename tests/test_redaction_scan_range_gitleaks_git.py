@@ -252,8 +252,20 @@ def test_range_mode_includes_a_merge_commit_resolution_diff(tmp_path: Path) -> N
     assert "aws_access_key" in output, output
 
 
+@pytest.mark.parametrize(
+    ("report_payload", "expected_message"),
+    [
+        ("malformed", "could not parse range gitleaks report"),
+        (
+            '[{"RuleID":"aws_access_key"}]',
+            "expected non-empty File fields",
+        ),
+    ],
+)
 @requires_gitleaks
-def test_range_mode_fails_closed_on_a_malformed_range_report(tmp_path: Path) -> None:
+def test_range_mode_fails_closed_on_a_malformed_range_report(
+    tmp_path: Path, report_payload: str, expected_message: str
+) -> None:
     repo = _repo_with_commits(tmp_path, ["base"])
     (repo / "changed.txt").write_text("clean\n", encoding="utf-8")
     _git(repo, "add", "changed.txt")
@@ -271,7 +283,7 @@ def test_range_mode_fails_closed_on_a_malformed_range_report(tmp_path: Path) -> 
         '  previous=""\n'
         '  for arg in "$@"; do\n'
         '    if [ "$previous" = "--report-path" ]; then\n'
-        '      printf "%s" "malformed" > "$arg"\n'
+        f"      printf '%s' {shlex.quote(report_payload)} > \"$arg\"\n"
         "      exit 0\n"
         "    fi\n"
         '    previous="$arg"\n'
@@ -292,4 +304,4 @@ def test_range_mode_fails_closed_on_a_malformed_range_report(tmp_path: Path) -> 
 
     assert result.returncode == 2, output
     assert "could not classify range findings" in output, output
-    assert "could not parse range gitleaks report" in output, output
+    assert expected_message in output, output

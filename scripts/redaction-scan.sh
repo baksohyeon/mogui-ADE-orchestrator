@@ -818,6 +818,12 @@ if mode == "range":
     if any(not isinstance(row, dict) for row in range_rows):
         print("could not parse range gitleaks report: expected finding objects", file=sys.stderr)
         raise SystemExit(1)
+    if any(not isinstance(row.get("File"), str) or not row["File"] for row in range_rows):
+        print(
+            "could not parse range gitleaks report: expected non-empty File fields",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
     filter_rows = load_range_json(filtered_path, "filter path list")
     if any(not isinstance(path, str) for path in filter_rows):
         print("could not parse filter path list: expected path strings", file=sys.stderr)

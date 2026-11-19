@@ -19,11 +19,17 @@ scripts/merge-ready --repo <owner/name> --pr <n> [--contract <file>]
 `writes` globs asks the owner. Without this option, the command prints that the out-of-contract
 check was skipped.
 
-Existing installs must provide their instance-owned `config/merge-ready-stop-paths.txt` before
-running this command. Copy the template file into the install's `config/` directory, for example
-`cp <template>/config/merge-ready-stop-paths.txt <install>/config/merge-ready-stop-paths.txt`.
-The command fails closed when this file is missing or has no entries, and it has no environment
-override for the stop-list path.
+Existing installs must provide their instance-owned `config/merge-ready-stop-paths.txt` and
+`config/merge-ready-bots.txt` before running this command. Copy both template files into the
+install's `config/` directory:
+
+```bash
+cp <template>/config/merge-ready-stop-paths.txt <install>/config/merge-ready-stop-paths.txt
+cp <template>/config/merge-ready-bots.txt <install>/config/merge-ready-bots.txt
+```
+
+The command fails closed when either file is missing, when the stop-list has no entries, or when
+the roster file is empty or comment-only. It has no environment override for either path.
 
 A dispatched worker's cwd is a product-repo worktree, not this ops repo. `scripts/dispatch`
 rewrites the standing rule's relative script path to the installed `scripts/` directory before

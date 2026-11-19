@@ -435,11 +435,13 @@ PY
 
 check_git_escalation_cli() {
   local dispatch="$1" work rendered ledger worktree_path operation result_code line_count
+  local ops_value runtime_value gate_path
   work="${TMPDIR:-/tmp}/mogui-dispatch-codex-git-cli.$$"
   mkdir -p "$work/scripts" "$work/state"
   trap 'rm -rf "$work"' RETURN
   cp "$(dirname "$dispatch")/approval-prompt-markers.txt" "$work/scripts/approval-prompt-markers.txt"
-  cat > "$work/scripts/dispatch-gate" <<'BIN'
+  gate_path="$work/scripts/dispatch-gate"
+  cat > "$gate_path" <<'BIN'
 #!/bin/bash
 case "$*" in
   *" lock-path") printf '%s\n' "${MOGUI_TEST_LEDGER}.lock" ;;
@@ -447,10 +449,62 @@ case "$*" in
   *) exit 1 ;;
 esac
 BIN
-  chmod +x "$work/scripts/dispatch-gate"
+  chmod +x "$gate_path"
   rendered="$work/scripts/dispatch"
-  sed -e "s#{{RUNTIME_ROOT}}#$work#g" -e "s#{{OPS_REPO}}#$work#g" "$dispatch" > "$rendered"
+  # $dispatch may still carry its raw OPS_REPO/RUNTIME_ROOT template tokens
+  # (running against the template repo) or may already be a rendered,
+  # installed copy with real absolute paths baked in (running against an
+  # applied install). Read whatever value is actually there from the OPS= and
+  # GATE= lines instead of assuming the unrendered token text, so this sandbox
+  # substitution to $work is not a silent no-op on an installed host.
+  ops_value=$(sed -n 's/^OPS=//p' "$dispatch" | head -n1)
+  runtime_value=$(sed -n 's#^GATE=\(.*\)/scripts/dispatch-gate$#\1#p' "$dispatch" | head -n1)
+  if [ -z "$ops_value" ]; then
+    echo "✗ could not read OPS_REPO out of $dispatch's OPS= line" >&2
+    return 1
+  fi
+  if [ -z "$runtime_value" ]; then
+    echo "✗ could not read RUNTIME_ROOT out of $dispatch's GATE= line" >&2
+    return 1
+  fi
+  # ops_value/runtime_value are arbitrary real filesystem paths once $dispatch
+  # is a rendered install, so a sed pattern substitution risks regex
+  # metacharacters, the delimiter, or a replacement "&" in the path. Python's
+  # re.sub is a literal, single-pass substring swap: it matches against the
+  # original text only, so it cannot rescan text a replacement just inserted.
+  # Two sequential str.replace() calls can: when $work happens to share a
+  # prefix with one of the source values (both commonly start under /tmp),
+  # the second call matches inside the first call's own output and corrupts
+  # it. The longer alternative is tried first at each position so one value
+  # being a path prefix of the other (RUNTIME_ROOT /a, OPS_REPO /a/ops)
+  # cannot leave OPS stuck at "$work/ops" instead of "$work".
+  python3 - "$dispatch" "$runtime_value" "$ops_value" "$work" > "$rendered" <<'PY'
+import re
+import sys
+
+dispatch_path, runtime_value, ops_value, work = sys.argv[1:5]
+with open(dispatch_path, encoding="utf-8") as fh:
+    text = fh.read()
+values = sorted({runtime_value, ops_value}, key=len, reverse=True)
+pattern = re.compile("|".join(re.escape(v) for v in values))
+sys.stdout.write(pattern.sub(work, text))
+PY
   chmod +x "$rendered"
+  if cmp -s "$dispatch" "$rendered"; then
+    echo "✗ sandbox render of $dispatch is byte-identical to the original; nothing was substituted" >&2
+    return 1
+  fi
+  # A whole-file leftover-value grep would false-positive whenever $work
+  # legitimately contains the original value as a substring (RUNTIME_ROOT=
+  # /tmp and $work under /tmp by default, which is the common case). Reading
+  # back the rendered OPS=/GATE= lines exactly, instead of scanning the
+  # whole file, catches every wrong resolution (unchanged, prefix-stuck, or
+  # anything else) without that false positive.
+  if [ "$(sed -n 's/^OPS=//p' "$rendered" | head -n1)" != "$work" ] ||
+     [ "$(sed -n 's#^GATE=\(.*\)/scripts/dispatch-gate$#\1#p' "$rendered" | head -n1)" != "$work" ]; then
+    echo "✗ sandbox render of $dispatch resolved OPS/GATE to something other than $work" >&2
+    return 1
+  fi
   ledger="$work/state/dispatch-ledger.jsonl"
   worktree_path="$work/worker"
   for operation in add commit fetch push; do
@@ -480,6 +534,44 @@ BIN
       --operation add --escalated yes --refusal "fatal: missing worktree" >/dev/null 2>&1; then
     return 1
   fi
+}
+
+check_git_escalation_cli_prefix_values() {
+  local dispatch="$1" work rendered src_ops src_runtime
+  work="${TMPDIR:-/tmp}/mogui-dispatch-codex-git-cli-prefix.$$"
+  mkdir -p "$work"
+  trap 'rm -rf "$work"' RETURN
+  rendered="$work/dispatch"
+  src_ops=$(sed -n 's/^OPS=//p' "$dispatch" | head -n1)
+  src_runtime=$(sed -n 's#^GATE=\(.*\)/scripts/dispatch-gate$#\1#p' "$dispatch" | head -n1)
+  if [ -z "$src_ops" ] || [ -z "$src_runtime" ]; then
+    echo "✗ could not read OPS_REPO/RUNTIME_ROOT out of $dispatch's OPS=/GATE= lines to build the prefix case" >&2
+    return 1
+  fi
+  # Force RUNTIME_ROOT to resolve as an exact path prefix of OPS_REPO ($work
+  # vs $work/ops), regardless of whether $dispatch is still unrendered or
+  # already carries a real install's own, unrelated paths: hardcoding the
+  # {{RUNTIME_ROOT}}/{{OPS_REPO}} template tokens here would make this case a
+  # silent no-op against an already-rendered dispatch, the exact render-state
+  # assumption this whole fix is about not making.
+  # A single regex pass (same reasoning as check_git_escalation_cli's own
+  # substitution) so a replacement value never gets rescanned by a later
+  # pattern.
+  python3 - "$dispatch" "$src_runtime" "$src_ops" "$work" > "$rendered" <<'PY'
+import re
+import sys
+
+dispatch_path, src_runtime, src_ops, work = sys.argv[1:5]
+with open(dispatch_path, encoding="utf-8") as fh:
+    text = fh.read()
+target = {src_runtime: work, src_ops: work + "/ops"}
+values = sorted(target, key=len, reverse=True)
+pattern = re.compile("|".join(re.escape(v) for v in values))
+sys.stdout.write(pattern.sub(lambda m: target[m.group(0)], text))
+PY
+  chmod +x "$rendered"
+  cp "$(dirname "$dispatch")/approval-prompt-markers.txt" "$work/approval-prompt-markers.txt"
+  check_git_escalation_cli "$rendered"
 }
 
 if [ "${MUTANT_EXPECTED:-0}" = 1 ]; then
@@ -564,6 +656,12 @@ check_git_escalation_cli "$DISPATCH" || {
   exit 1
 }
 echo "✓ git_escalation CLI accepts the four operations and refuses invalid inputs"
+
+check_git_escalation_cli_prefix_values "$DISPATCH" || {
+  echo "✗ git_escalation CLI sandbox did not resolve OPS/GATE when RUNTIME_ROOT is a path prefix of OPS_REPO" >&2
+  exit 1
+}
+echo "✓ git_escalation CLI sandbox resolves OPS/GATE when RUNTIME_ROOT is a path prefix of OPS_REPO"
 
 work="${TMPDIR:-/tmp}/mogui-dispatch-codex-git-index.$$"
 mkdir -p "$work"

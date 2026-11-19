@@ -2,13 +2,19 @@
 # The banner must name only hooks that a settings command references, and name the rest as NOT WIRED.
 set -u
 T="$(cd "$(dirname "$0")" && pwd)/hooks/tracker-check.sh"; TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT; F=0
+# Read the same basename tracker-check.sh itself computes from its OPS_REPO
+# template value, rendered or not, instead of baking that value (which a
+# render turns into a real, home-containing path) into this fixture's source.
+ops_repo_value=$(sed -n 's/^OPS_BASENAME="\$(basename "\(.*\)")"$/\1/p' "$T" | head -n1)
+[ -n "$ops_repo_value" ] || { echo "FAIL: could not read OPS_BASENAME's source value out of $T" >&2; exit 1; }
+OPS_BASENAME=$(basename "$ops_repo_value")
 REAL_LOG="${HOME:-$(cd ~ && pwd)}/.mogui/hook-fire-log.jsonl"
 HOME="$TMP/home"; mkdir -p "$HOME/.mogui"
 PATH="/usr/bin:/bin:$PATH"
 LOG="$TMP/fire.jsonl"
 if [ -f "$REAL_LOG" ]; then real_before=$(wc -l < "$REAL_LOG"); else real_before=0; fi
 mkdir -p "$TMP/hooks" "$TMP/bin"; for n in a-guard.sh b-warn.sh tracker-check.sh; do : > "$TMP/hooks/$n"; done
-printf '#!/usr/bin/env bash\nprintf "%%s\\n" "%s/{{OPS_REPO}}/.beads"\n' "$TMP" > "$TMP/bin/bd"; chmod +x "$TMP/bin/bd"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "%s/%s/.beads"\n' "$TMP" "$OPS_BASENAME" > "$TMP/bin/bd"; chmod +x "$TMP/bin/bd"
 printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"command":"bash /x/hooks/a-guard.sh"}]}]}}' > "$TMP/settings.json"
 out=$(env -u BEADS_DIR MOGUI_HOOK_FIRE_LOG="$LOG" MOGUI_SETTINGS_FILE="$TMP/settings.json" MOGUI_HOOKS_DIR="$TMP/hooks" WORKSPACE_ROOT="$TMP" PATH="$TMP/bin:$PATH" bash "$T" 2>/dev/null | grep '^\[protections\]')
 [ ! -e "$TMP/.beads" ] && echo "  ok:   root without .beads still reaches the protections banner" || { echo "  FAIL: fixture unexpectedly created .beads"; F=1; }
@@ -38,8 +44,9 @@ PY
 env -u BEADS_DIR MOGUI_HOOK_FIRE_LOG="$LOG" MOGUI_SETTINGS_FILE="$TMP/settings.json" MOGUI_HOOKS_DIR="$TMP/hooks" WORKSPACE_ROOT="$TMP" PATH="$TMP/bin:$PATH" bash "$T" >/dev/null 2>&1
 v=$(last_verdict 2>/dev/null || true); [ "$v" = "warn" ] && echo "  ok:   verdict unwired hooks -> warn" || { echo "  FAIL: verdict for unwired hooks expected warn got ${v:-<none>}"; F=1; }
 # Verdict pass: clean wiring and tracker resolution.
-mkdir -p "$TMP/pass-root/{{OPS_REPO}}/.beads" "$TMP/pass-hooks" "$TMP/pass-bin"
-printf '#!/usr/bin/env bash\necho "%s"\n' "$TMP/pass-root/{{OPS_REPO}}/.beads" > "$TMP/pass-bin/bd"; chmod +x "$TMP/pass-bin/bd"
+PASS_BEADS_DIR="$TMP/pass-root/$OPS_BASENAME/.beads"
+mkdir -p "$PASS_BEADS_DIR" "$TMP/pass-hooks" "$TMP/pass-bin"
+printf '#!/usr/bin/env bash\necho "%s"\n' "$PASS_BEADS_DIR" > "$TMP/pass-bin/bd"; chmod +x "$TMP/pass-bin/bd"
 : > "$TMP/pass-hooks/only-pass.sh"
 printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"command":"bash /x/hooks/only-pass.sh"}]}]}}' > "$TMP/pass-settings.json"
 env -u BEADS_DIR MOGUI_HOOK_FIRE_LOG="$LOG" MOGUI_SETTINGS_FILE="$TMP/pass-settings.json" MOGUI_HOOKS_DIR="$TMP/pass-hooks" WORKSPACE_ROOT="$TMP/pass-root" PATH="$TMP/pass-bin:$PATH" bash "$T" >/dev/null 2>&1

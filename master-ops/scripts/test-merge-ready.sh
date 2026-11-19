@@ -176,6 +176,24 @@ write_fixture "${clean_dir}" '[{"filename":"README.md"}]' ""
 out=$(run_case "${clean_dir}"); rc=$?
 assert_rc "clean PR exits 0" 0 "${out}" "${rc}"
 
+bots_config="${INSTALL_DIR}/config/merge-ready-bots.txt"
+bots_backup="${WORK_DIR}/merge-ready-bots.txt.valid"
+mv "${bots_config}" "${bots_backup}"
+out=$(run_case "${clean_dir}"); rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'bots file not found'; then
+  ok "missing roster file exits 1 and fails closed"
+else
+  fail "missing roster file: got ${rc}: ${out}"
+fi
+: >"${bots_config}"
+out=$(run_case "${clean_dir}"); rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'bots file has no entries'; then
+  ok "empty roster file exits 1 and fails closed"
+else
+  fail "empty roster file: got ${rc}: ${out}"
+fi
+mv "${bots_backup}" "${bots_config}"
+
 skip_stderr="${WORK_DIR}/skip-stderr"
 GH_FIXTURE_DIR="${clean_dir}" GH_STUB_CASE="" "${MERGE_READY}" --repo "${REPO}" --pr 1 >/dev/null 2>"${skip_stderr}"; rc=$?
 if [ "${rc}" -eq 0 ] && grep -Fq 'out-of-contract check skipped (no --contract)' "${skip_stderr}"; then
@@ -216,6 +234,16 @@ rate_limit_comment='[{"body":"<!-- This is an auto-generated comment: rate limit
 write_fixture "${rate_limit_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" "${CUBIC_REVIEW}" 0 OPEN false "${rate_limit_comment}"
 out=$(run_case "${rate_limit_dir}"); rc=$?
 assert_rc "measured rate-limit comment covers the listed bot" 0 "${out}" "${rc}"
+
+missing_required_line_dir="${WORK_DIR}/missing-required-line"
+missing_required_line_comment='[{"body":"<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->","user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"'"${FRESH_DATE}"'"}]'
+write_fixture "${missing_required_line_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" "${CUBIC_REVIEW}" 0 OPEN false "${missing_required_line_comment}"
+out=$(run_case "${missing_required_line_dir}"); rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'coderabbitai'; then
+  ok "a marker without the required notice line exits 1"
+else
+  fail "missing required notice line: got ${rc}: ${out}"
+fi
 
 cubic_rate_limit_dir="${WORK_DIR}/cubic-rate-limit"
 cubic_rate_limit_comment='[{"body":"<!-- This is an auto-generated comment: rate limited by cubic.dev -->\n\n> ## Review limit reached","user":{"login":"cubic-dev-ai[bot]","type":"Bot"},"created_at":"'"${FRESH_DATE}"'"}]'

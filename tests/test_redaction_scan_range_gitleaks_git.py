@@ -124,6 +124,30 @@ def test_range_mode_keeps_a_pre_existing_finding_as_a_warning_in_an_edited_file(
 
 
 @requires_gitleaks
+def test_range_mode_blocks_the_same_key_moved_to_a_different_path(
+    tmp_path: Path,
+) -> None:
+    repo = _repo_with_commits(tmp_path, ["base"])
+    key = _aws_key()
+    (repo / "a.txt").write_text(f"{key}\n", encoding="utf-8")
+    _git(repo, "add", "a.txt")
+    _git(repo, "commit", "-q", "-m", "add old path")
+    base = _head(repo)
+
+    (repo / "a.txt").unlink()
+    (repo / "b.txt").write_text(f"{key}\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "move key to another path")
+
+    result = _scan(repo, "--range", f"{base}..HEAD")
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 1, output
+    assert "b.txt" in output, output
+    assert "pre-existing=0" in result.stderr, output
+
+
+@requires_gitleaks
 def test_range_mode_blocks_an_uncommitted_key_in_a_changed_path(
     tmp_path: Path,
 ) -> None:

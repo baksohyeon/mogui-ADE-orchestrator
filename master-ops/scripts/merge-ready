@@ -106,7 +106,7 @@ not_ready() {
 
 require_json() {
   local file="$1" kind="${2:-}" reason
-  reason="$(python3 -c '
+  reason="$(python3 -I -c '
 import json, sys
 file_path, kind = sys.argv[1], sys.argv[2]
 try:
@@ -124,7 +124,7 @@ fetch_paginated_array() {
   if ! gh api "${api_path}" --paginate --slurp >"${raw}" 2>"${err}"; then
     not_ready "could not read ${label} ($(tr '\n' ' ' <"${err}"))"
   fi
-  if ! python3 -c '
+  if ! python3 -I -c '
 import json, sys
 raw_path, flat_path = sys.argv[1], sys.argv[2]
 pages = json.load(open(raw_path, encoding="utf-8"))
@@ -141,7 +141,7 @@ if ! gh pr view "${PR}" --repo "${REPO}" --json headRefOid \
   not_ready "could not read the PR (gh pr view: $(tr '\n' ' ' <"${PR_HEAD_ERR}"))"
 fi
 require_json "${PR_HEAD_FILE}"
-HEAD_SHA="$(python3 -c '
+HEAD_SHA="$(python3 -I -c '
 import json, sys
 print(json.load(open(sys.argv[1], encoding="utf-8"))["headRefOid"])
 ' "${PR_HEAD_FILE}" 2>"${TMP_DIR}/head-parse.err")" || {
@@ -150,161 +150,14 @@ print(json.load(open(sys.argv[1], encoding="utf-8"))["headRefOid"])
 
 fetch_paginated_array "repos/${REPO}/pulls/${PR}/files" "${FILES_RAW}" "${FILES_FILE}" "${FILES_ERR}" "changed files"
 require_json "${FILES_FILE}" nonempty-list
-FILE_COUNT="$(python3 -c 'import json, sys; print(len(json.load(open(sys.argv[1], encoding="utf-8"))))' "${FILES_FILE}" 2>"${TMP_DIR}/file-count.err")" || {
+FILE_COUNT="$(python3 -I -c 'import json, sys; print(len(json.load(open(sys.argv[1], encoding="utf-8"))))' "${FILES_FILE}" 2>"${TMP_DIR}/file-count.err")" || {
   not_ready "changed files: could not count the response ($(tr '\n' ' ' <"${TMP_DIR}/file-count.err"))"
 }
 if [ "${FILE_COUNT}" -ge 3000 ]; then
   not_ready "changed files response reached GitHub's 3000-file cap (${FILE_COUNT}); complete file set cannot be verified"
 fi
 
-if ! gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" --paginate --slurp \
-    >"${CHECK_RUNS_RAW}" 2>"${CHECK_RUNS_ERR}"; then
-  not_ready "could not read the head check runs ($(tr '\n' ' ' <"${CHECK_RUNS_ERR}"))"
-fi
-CHECK_RUN_TIME_RC=0
-python3 - "${CHECK_RUNS_RAW}" >"${HEAD_TIME_FILE}" 2>"${HEAD_TIME_ERR}" <<'PY' || CHECK_RUN_TIME_RC=$?
-import json
-import sys
-from datetime import datetime, timezone
-from pathlib import Path
-
-def parse_timestamp(value):
-    if not isinstance(value, str) or not value:
-        raise ValueError("missing or empty GitHub timestamp")
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise ValueError(f"invalid GitHub timestamp {value!r}") from exc
-    if parsed.tzinfo is None:
-        raise ValueError(f"GitHub timestamp has no timezone {value!r}")
-    return parsed.astimezone(timezone.utc)
-
-pages = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-if not isinstance(pages, list) or not all(isinstance(page, dict) for page in pages):
-    raise ValueError("expected a list of check-run response objects")
-
-timestamps = []
-for page in pages:
-    check_runs = page.get("check_runs")
-    if not isinstance(check_runs, list):
-        raise ValueError("check-run response is missing check_runs")
-    for check_run in check_runs:
-        if not isinstance(check_run, dict):
-            raise ValueError("check-run response contains a malformed check run")
-        created_at = check_run.get("created_at")
-        if created_at is not None:
-            timestamps.append(parse_timestamp(created_at))
-        check_suite = check_run.get("check_suite")
-        if isinstance(check_suite, dict):
-            suite_created_at = check_suite.get("created_at")
-            if suite_created_at is not None:
-                timestamps.append(parse_timestamp(suite_created_at))
-
-if not timestamps:
-    raise ValueError("head check runs have no check-suite or check-run creation time")
-print(min(timestamps).isoformat(timespec="seconds").replace("+00:00", "Z"))
-PY
-if [ "${CHECK_RUN_TIME_RC}" -ne 0 ]; then
-  CHECK_SUITE_TIME_RC=0
-  if ! gh api "repos/${REPO}/commits/${HEAD_SHA}/check-suites" --paginate --slurp \
-      >"${CHECK_SUITES_RAW}" 2>"${CHECK_SUITES_ERR}"; then
-    printf '%s' "could not read head check suites: $(tr '\n' ' ' <"${CHECK_SUITES_ERR}")" >"${HEAD_TIME_ERR}"
-    CHECK_SUITE_TIME_RC=1
-  else
-    python3 - "${CHECK_SUITES_RAW}" >"${HEAD_TIME_FILE}" 2>"${HEAD_TIME_ERR}" <<'PY' || CHECK_SUITE_TIME_RC=$?
-import json
-import sys
-from datetime import datetime, timezone
-from pathlib import Path
-
-def parse_timestamp(value):
-    if not isinstance(value, str) or not value:
-        raise ValueError("missing or empty GitHub timestamp")
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise ValueError(f"invalid GitHub timestamp {value!r}") from exc
-    if parsed.tzinfo is None:
-        raise ValueError(f"GitHub timestamp has no timezone {value!r}")
-    return parsed.astimezone(timezone.utc)
-
-pages = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-if not isinstance(pages, list) or not all(isinstance(page, dict) for page in pages):
-    raise ValueError("expected a list of check-suite response objects")
-
-timestamps = []
-for page in pages:
-    check_suites = page.get("check_suites")
-    if not isinstance(check_suites, list):
-        raise ValueError("check-suite response is missing check_suites")
-    for check_suite in check_suites:
-        if not isinstance(check_suite, dict):
-            raise ValueError("check-suite response contains a malformed check suite")
-        created_at = check_suite.get("created_at")
-        if created_at is not None:
-            timestamps.append(parse_timestamp(created_at))
-
-if not timestamps:
-    raise ValueError("head check suites have no creation time")
-print(min(timestamps).isoformat(timespec="seconds").replace("+00:00", "Z"))
-PY
-  fi
-  if [ "${CHECK_SUITE_TIME_RC}" -ne 0 ]; then
-    if ! fetch_paginated_array "repos/${REPO}/issues/${PR}/timeline" "${TIMELINE_RAW}" "${TIMELINE_FILE}" "${TIMELINE_ERR}" "PR timeline"; then
-      not_ready "head check runs and suites: could not establish a trusted creation time ($(tr '\n' ' ' <"${HEAD_TIME_ERR}")); timeline fallback failed"
-    fi
-    if ! python3 - "${TIMELINE_FILE}" "${HEAD_SHA}" >"${HEAD_TIME_FILE}" 2>"${HEAD_TIME_ERR}" <<'PY'
-import json
-import sys
-from datetime import datetime, timezone
-from pathlib import Path
-
-def parse_timestamp(value):
-    if not isinstance(value, str) or not value:
-        raise ValueError("missing or empty GitHub timestamp")
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise ValueError(f"invalid GitHub timestamp {value!r}") from exc
-    if parsed.tzinfo is None:
-        raise ValueError(f"GitHub timestamp has no timezone {value!r}")
-    return parsed.astimezone(timezone.utc)
-
-events = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-head_sha = sys.argv[2]
-if not isinstance(events, list):
-    raise ValueError("expected a list of timeline events")
-
-timestamps = []
-for event in events:
-    if not isinstance(event, dict):
-        raise ValueError("timeline response contains a malformed event")
-    created_at = event.get("created_at")
-    if not isinstance(created_at, str) or not created_at:
-        continue
-    timestamp = parse_timestamp(created_at)
-    if (
-        event.get("event") == "head_ref_force_pushed"
-        and event.get("commit_id") == head_sha
-    ) or (
-        event.get("event") == "committed"
-        and event.get("sha") == head_sha
-    ):
-        timestamps.append(timestamp)
-
-if not timestamps:
-    raise ValueError("PR timeline has no push event for the measured head")
-print(min(timestamps).isoformat(timespec="seconds").replace("+00:00", "Z"))
-PY
-    then
-      not_ready "head check runs and suites: could not establish a trusted creation time ($(tr '\n' ' ' <"${HEAD_TIME_ERR}"))"
-    fi
-  fi
-fi
-HEAD_TIME="$(cat "${HEAD_TIME_FILE}")"
-[ -n "${HEAD_TIME}" ] || not_ready "head check runs creation time response was empty"
-
-PATH_VERDICT="$(python3 - "${FILES_FILE}" "${STOP_PATHS_FILE}" "${CONTRACT}" <<'PY'
+PATH_VERDICT="$(python3 -I - "${FILES_FILE}" "${STOP_PATHS_FILE}" "${CONTRACT}" <<'PY'
 import fnmatch
 import json
 import re
@@ -378,15 +231,6 @@ if [ "${PATH_RC}" -ne 0 ]; then
   not_ready "changed paths: could not check the stop-list or contract scope"
 fi
 
-if ! gh pr checks "${PR}" --repo "${REPO}" --required --json name,bucket,state \
-    >"${CHECKS_FILE}" 2>"${CHECKS_ERR}"; then
-  if ! python3 -c 'import json, sys; json.load(open(sys.argv[1], encoding="utf-8"))' \
-      "${CHECKS_FILE}" >/dev/null 2>&1; then
-    not_ready "could not read required checks (gh pr checks: $(tr '\n' ' ' <"${CHECKS_ERR}"))"
-  fi
-fi
-require_json "${CHECKS_FILE}" nonempty-list
-
 OWNER="${REPO%%/*}"
 NAME="${REPO#*/}"
 if ! gh api graphql \
@@ -400,13 +244,232 @@ require_json "${GQL_FILE}"
 fetch_paginated_array "repos/${REPO}/issues/${PR}/comments" "${COMMENTS_RAW}" "${COMMENTS_FILE}" "${COMMENTS_ERR}" "PR comments"
 require_json "${COMMENTS_FILE}"
 
+EXEMPTION_NEEDED="$(python3 -I - "${GQL_FILE}" "${COMMENTS_FILE}" "${BOTS_FILE}" "${HEAD_SHA}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+gql_file, comments_file, bots_file, head_sha = sys.argv[1:5]
+pull_request = (json.loads(Path(gql_file).read_text(encoding="utf-8")).get("data") or {}).get("repository", {}).get("pullRequest")
+if not isinstance(pull_request, dict):
+    raise ValueError("graphql response missing data.repository.pullRequest")
+reviews = pull_request.get("reviews")
+if not isinstance(reviews, dict) or not isinstance(reviews.get("nodes"), list):
+    raise ValueError("graphql response missing reviews")
+
+
+def strip_bot_suffix(login):
+    return login[:-5] if login.lower().endswith("[bot]") else login
+
+
+head_reviewers = set()
+for review in reviews["nodes"]:
+    if not isinstance(review, dict):
+        raise ValueError("graphql response has a malformed review node")
+    author = review.get("author") or {}
+    if author.get("__typename") == "Bot" and (review.get("commit") or {}).get("oid") == head_sha:
+        login = strip_bot_suffix(author.get("login", ""))
+        if login:
+            head_reviewers.add(login)
+
+bot_forms = {}
+for raw_line in Path(bots_file).read_text(encoding="utf-8").splitlines():
+    line = raw_line.strip()
+    if not line or line.startswith("#"):
+        continue
+    fields = [field.strip() for field in line.split("|")]
+    if len(fields) != 3 or not all(fields):
+        raise ValueError("bots file has malformed line")
+    login, marker, required_line = fields
+    if login in bot_forms:
+        raise ValueError("bots file has duplicate login")
+    bot_forms[login] = None if marker == "none" else (marker, required_line)
+
+comments = json.loads(Path(comments_file).read_text(encoding="utf-8"))
+candidate_bots = set()
+for comment in comments:
+    if not isinstance(comment, dict):
+        raise ValueError("PR comments response has a malformed comment")
+    user = comment.get("user") or {}
+    login = strip_bot_suffix(user.get("login", ""))
+    form = bot_forms.get(login)
+    if user.get("type") != "Bot" or form is None:
+        continue
+    marker, required_line = form
+    lines = (comment.get("body") or "").splitlines()
+    if lines.count(marker) == 1 and required_line in lines and login not in head_reviewers:
+        candidate_bots.add(login)
+
+print("yes" if candidate_bots else "no")
+PY
+)" || not_ready "could not determine whether a rate-limit exemption needs a timestamp"
+
+HEAD_TIME=""
+if [ "${EXEMPTION_NEEDED}" = "yes" ]; then
+if ! gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" --paginate --slurp \
+    >"${CHECK_RUNS_RAW}" 2>"${CHECK_RUNS_ERR}"; then
+  not_ready "could not read the head check runs ($(tr '\n' ' ' <"${CHECK_RUNS_ERR}"))"
+fi
+CHECK_RUN_TIME_RC=0
+python3 -I - "${CHECK_RUNS_RAW}" >"${HEAD_TIME_FILE}" 2>"${HEAD_TIME_ERR}" <<'PY' || CHECK_RUN_TIME_RC=$?
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+def parse_timestamp(value):
+    if not isinstance(value, str) or not value:
+        raise ValueError("missing or empty GitHub timestamp")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"invalid GitHub timestamp {value!r}") from exc
+    if parsed.tzinfo is None:
+        raise ValueError(f"GitHub timestamp has no timezone {value!r}")
+    return parsed.astimezone(timezone.utc)
+
+pages = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if not isinstance(pages, list) or not all(isinstance(page, dict) for page in pages):
+    raise ValueError("expected a list of check-run response objects")
+
+timestamps = []
+for page in pages:
+    check_runs = page.get("check_runs")
+    if not isinstance(check_runs, list):
+        raise ValueError("check-run response is missing check_runs")
+    for check_run in check_runs:
+        if not isinstance(check_run, dict):
+            raise ValueError("check-run response contains a malformed check run")
+        created_at = check_run.get("created_at")
+        if created_at is not None:
+            timestamps.append(parse_timestamp(created_at))
+        check_suite = check_run.get("check_suite")
+        if isinstance(check_suite, dict):
+            suite_created_at = check_suite.get("created_at")
+            if suite_created_at is not None:
+                timestamps.append(parse_timestamp(suite_created_at))
+
+if not timestamps:
+    raise ValueError("head check runs have no check-suite or check-run creation time")
+print(min(timestamps).isoformat(timespec="seconds").replace("+00:00", "Z"))
+PY
+if [ "${CHECK_RUN_TIME_RC}" -ne 0 ]; then
+  CHECK_SUITE_TIME_RC=0
+  if ! gh api "repos/${REPO}/commits/${HEAD_SHA}/check-suites" --paginate --slurp \
+      >"${CHECK_SUITES_RAW}" 2>"${CHECK_SUITES_ERR}"; then
+    printf '%s' "could not read head check suites: $(tr '\n' ' ' <"${CHECK_SUITES_ERR}")" >"${HEAD_TIME_ERR}"
+    CHECK_SUITE_TIME_RC=1
+  else
+    python3 -I - "${CHECK_SUITES_RAW}" >"${HEAD_TIME_FILE}" 2>"${HEAD_TIME_ERR}" <<'PY' || CHECK_SUITE_TIME_RC=$?
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+def parse_timestamp(value):
+    if not isinstance(value, str) or not value:
+        raise ValueError("missing or empty GitHub timestamp")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"invalid GitHub timestamp {value!r}") from exc
+    if parsed.tzinfo is None:
+        raise ValueError(f"GitHub timestamp has no timezone {value!r}")
+    return parsed.astimezone(timezone.utc)
+
+pages = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if not isinstance(pages, list) or not all(isinstance(page, dict) for page in pages):
+    raise ValueError("expected a list of check-suite response objects")
+
+timestamps = []
+for page in pages:
+    check_suites = page.get("check_suites")
+    if not isinstance(check_suites, list):
+        raise ValueError("check-suite response is missing check_suites")
+    for check_suite in check_suites:
+        if not isinstance(check_suite, dict):
+            raise ValueError("check-suite response contains a malformed check suite")
+        created_at = check_suite.get("created_at")
+        if created_at is not None:
+            timestamps.append(parse_timestamp(created_at))
+
+if not timestamps:
+    raise ValueError("head check suites have no creation time")
+print(min(timestamps).isoformat(timespec="seconds").replace("+00:00", "Z"))
+PY
+  fi
+  if [ "${CHECK_SUITE_TIME_RC}" -ne 0 ]; then
+    if ! fetch_paginated_array "repos/${REPO}/issues/${PR}/timeline" "${TIMELINE_RAW}" "${TIMELINE_FILE}" "${TIMELINE_ERR}" "PR timeline"; then
+      not_ready "head check runs and suites: could not establish a trusted creation time ($(tr '\n' ' ' <"${HEAD_TIME_ERR}")); timeline fallback failed"
+    fi
+    if ! python3 -I - "${TIMELINE_FILE}" "${HEAD_SHA}" >"${HEAD_TIME_FILE}" 2>"${HEAD_TIME_ERR}" <<'PY'
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+def parse_timestamp(value):
+    if not isinstance(value, str) or not value:
+        raise ValueError("missing or empty GitHub timestamp")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"invalid GitHub timestamp {value!r}") from exc
+    if parsed.tzinfo is None:
+        raise ValueError(f"GitHub timestamp has no timezone {value!r}")
+    return parsed.astimezone(timezone.utc)
+
+events = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+head_sha = sys.argv[2]
+if not isinstance(events, list):
+    raise ValueError("expected a list of timeline events")
+
+timestamps = []
+for event in events:
+    if not isinstance(event, dict):
+        raise ValueError("timeline response contains a malformed event")
+    created_at = event.get("created_at")
+    if not isinstance(created_at, str) or not created_at:
+        continue
+    timestamp = parse_timestamp(created_at)
+    if (
+        event.get("event") == "head_ref_force_pushed"
+        and event.get("commit_id") == head_sha
+    ) or (
+        event.get("event") == "committed"
+        and event.get("sha") == head_sha
+    ):
+        timestamps.append(timestamp)
+
+if not timestamps:
+    raise ValueError("PR timeline has no push event for the measured head")
+print(min(timestamps).isoformat(timespec="seconds").replace("+00:00", "Z"))
+PY
+    then
+      not_ready "head check runs and suites: could not establish a trusted creation time ($(tr '\n' ' ' <"${HEAD_TIME_ERR}"))"
+    fi
+  fi
+fi
+HEAD_TIME="$(cat "${HEAD_TIME_FILE}")"
+[ -n "${HEAD_TIME}" ] || not_ready "head check runs creation time response was empty"
+fi
+
+if ! gh pr checks "${PR}" --repo "${REPO}" --required --json name,bucket,state \
+    >"${CHECKS_FILE}" 2>"${CHECKS_ERR}"; then
+  if ! python3 -I -c 'import json, sys; json.load(open(sys.argv[1], encoding="utf-8"))' \
+      "${CHECKS_FILE}" >/dev/null 2>&1; then
+    not_ready "could not read required checks (gh pr checks: $(tr '\n' ' ' <"${CHECKS_ERR}"))"
+  fi
+fi
+require_json "${CHECKS_FILE}" nonempty-list
+
 if ! gh pr view "${PR}" --repo "${REPO}" --json number,url,headRefOid,state,isDraft \
     >"${PR_FILE}" 2>"${PR_ERR}"; then
   not_ready "could not read the PR (gh pr view: $(tr '\n' ' ' <"${PR_ERR}"))"
 fi
 require_json "${PR_FILE}"
 
-python3 - "${PR_FILE}" "${CHECKS_FILE}" "${GQL_FILE}" "${FILES_FILE}" "${COMMENTS_FILE}" \
+python3 -I - "${PR_FILE}" "${CHECKS_FILE}" "${GQL_FILE}" "${FILES_FILE}" "${COMMENTS_FILE}" \
          "${STOP_PATHS_FILE}" "${BOTS_FILE}" "${HEAD_SHA}" "${HEAD_TIME}" "${CONTRACT}" <<'PY'
 import fnmatch
 import json
@@ -557,7 +620,7 @@ try:
         if user.get("type") != "Bot" or login not in bot_forms:
             continue
         comment_time = max(comment.get("created_at") or "", comment.get("updated_at") or "")
-        if comment_time >= head_time and is_rate_limit_notice(login, comment.get("body") or ""):
+        if head_time and comment_time >= head_time and is_rate_limit_notice(login, comment.get("body") or ""):
             recent_rate_limited_bots.add(login)
 
     missing_bots = [

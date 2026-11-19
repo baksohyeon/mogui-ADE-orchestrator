@@ -59,9 +59,9 @@ case "$1" in
           echo "gh: checks unavailable" >&2
           exit 1
         fi
-        required_only="$(python3 -c "import json; d=json.load(open('${GH_FIXTURE_DIR}/checks.json')); print(json.dumps([c for c in d if c.get('required', True)]))")"
+        required_only="$(python3 -I -c "import json; d=json.load(open('${GH_FIXTURE_DIR}/checks.json')); print(json.dumps([c for c in d if c.get('required', True)]))")"
         printf '%s' "${required_only}"
-        python3 -c "import json, sys; sys.exit(0 if all(c.get('bucket') == 'pass' for c in json.loads('''${required_only}''')) else 1)"
+        python3 -I -c "import json, sys; sys.exit(0 if all(c.get('bucket') == 'pass' for c in json.loads('''${required_only}''')) else 1)"
         ;;
       *)
         echo "gh stub: unhandled pr command: $*" >&2
@@ -162,6 +162,14 @@ run_case() {
   GH_FIXTURE_DIR="${dir}" GH_STUB_CASE="${stub_case}" "${MERGE_READY}" --repo "${REPO}" --pr 1
 }
 
+run_case_in_worktree() {
+  local dir="$1" stub_case="${2:-}"
+  (
+    cd "${dir}"
+    GH_FIXTURE_DIR="${dir}" GH_STUB_CASE="${stub_case}" "${MERGE_READY}" --repo "${REPO}" --pr 1
+  )
+}
+
 assert_rc() {
   local label="$1" expected="$2" output="$3" actual="$4"
   if [ "${actual}" -eq "${expected}" ]; then
@@ -175,6 +183,59 @@ clean_dir="${WORK_DIR}/clean"
 write_fixture "${clean_dir}" '[{"filename":"README.md"}]' ""
 out=$(run_case "${clean_dir}"); rc=$?
 assert_rc "clean PR exits 0" 0 "${out}" "${rc}"
+
+isolation_dir="${WORK_DIR}/python-isolation"
+write_fixture "${isolation_dir}" '[{"filename":"README.md"}]' ""
+cat >"${isolation_dir}/json.py" <<'PY'
+from pathlib import Path
+
+Path("json-imported.marker").write_text("imported", encoding="utf-8")
+raise RuntimeError("pull-request json.py was imported")
+PY
+out=$(run_case_in_worktree "${isolation_dir}"); rc=$?
+if [ -e "${isolation_dir}/json-imported.marker" ]; then
+  isolation_marker="present"
+else
+  isolation_marker="absent"
+fi
+if [ "${rc}" -eq 0 ] && [ "${isolation_marker}" = "absent" ]; then
+  ok "python invocations use -I and ignore a worktree json.py (marker ${isolation_marker})"
+else
+  fail "python isolation: got ${rc}, marker ${isolation_marker}: ${out}"
+fi
+
+legacy_checks_dir="${WORK_DIR}/legacy-checks"
+write_fixture "${legacy_checks_dir}" '[{"filename":"README.md"}]' ""
+printf '%s' '[]' >"${legacy_checks_dir}/check-runs.json"
+printf '%s' '[]' >"${legacy_checks_dir}/check-suites.json"
+printf '%s' '[[]]' >"${legacy_checks_dir}/timeline.json"
+out=$(run_case "${legacy_checks_dir}"); rc=$?
+assert_rc "legacy checks with completed bot reviews do not need a timestamp" 0 "${out}" "${rc}"
+
+missing_timestamp_dir="${WORK_DIR}/missing-timestamp"
+rate_limit_comment='[{"body":"<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n\n> ## Review limit reached","user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"'"${FRESH_DATE}"'"}]'
+write_fixture "${missing_timestamp_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" "${CUBIC_REVIEW}" 0 OPEN false "${rate_limit_comment}"
+printf '%s' '[]' >"${missing_timestamp_dir}/check-runs.json"
+printf '%s' '[]' >"${missing_timestamp_dir}/check-suites.json"
+printf '%s' '[[]]' >"${missing_timestamp_dir}/timeline.json"
+out=$(run_case "${missing_timestamp_dir}"); rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'creation time'; then
+  ok "a missing trusted timestamp blocks the rate-limit exemption"
+else
+  fail "missing trusted timestamp: got ${rc}: ${out}"
+fi
+
+path_before_timestamp_dir="${WORK_DIR}/path-before-timestamp"
+write_fixture "${path_before_timestamp_dir}" '[{"filename":"config/gitleaks.toml"}]' ""
+printf '%s' '[]' >"${path_before_timestamp_dir}/check-runs.json"
+printf '%s' '[]' >"${path_before_timestamp_dir}/check-suites.json"
+printf '%s' '[[]]' >"${path_before_timestamp_dir}/timeline.json"
+out=$(run_case "${path_before_timestamp_dir}"); rc=$?
+if [ "${rc}" -eq 2 ] && printf '%s' "${out}" | grep -q 'stop-list'; then
+  ok "a stop-list hit exits 2 before timestamp acquisition"
+else
+  fail "path before timestamp: got ${rc}: ${out}"
+fi
 
 bots_config="${INSTALL_DIR}/config/merge-ready-bots.txt"
 bots_backup="${WORK_DIR}/merge-ready-bots.txt.valid"

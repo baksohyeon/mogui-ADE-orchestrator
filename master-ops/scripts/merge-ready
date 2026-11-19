@@ -84,13 +84,13 @@ GQL_ERR="${TMP_DIR}/graphql.err"
 FILES_RAW="${TMP_DIR}/files-raw.json"
 FILES_FILE="${TMP_DIR}/files.json"
 FILES_ERR="${TMP_DIR}/files.err"
+COMPARE_RAW="${TMP_DIR}/compare-raw.json"
+COMPARE_ERR="${TMP_DIR}/compare.err"
 COMMENTS_RAW="${TMP_DIR}/comments-raw.json"
 COMMENTS_FILE="${TMP_DIR}/comments.json"
 COMMENTS_ERR="${TMP_DIR}/comments.err"
 CHECK_RUNS_RAW="${TMP_DIR}/check-runs-raw.json"
 CHECK_RUNS_ERR="${TMP_DIR}/check-runs.err"
-CHECK_SUITES_RAW="${TMP_DIR}/check-suites-raw.json"
-CHECK_SUITES_ERR="${TMP_DIR}/check-suites.err"
 TIMELINE_RAW="${TMP_DIR}/timeline-raw.json"
 TIMELINE_FILE="${TMP_DIR}/timeline.json"
 TIMELINE_ERR="${TMP_DIR}/timeline.err"
@@ -100,8 +100,10 @@ PR_FILE="${TMP_DIR}/pr.json"
 PR_ERR="${TMP_DIR}/pr.err"
 RULES_FILE="${TMP_DIR}/rules.json"
 RULES_ERR="${TMP_DIR}/rules.err"
+RULES_RAW="${TMP_DIR}/rules-raw.json"
 LEGACY_FILE="${TMP_DIR}/legacy-required-status-checks.json"
 LEGACY_ERR="${TMP_DIR}/legacy-required-status-checks.err"
+REQUIRED_CONTEXTS_FILE="${TMP_DIR}/required-contexts.json"
 
 not_ready() {
   echo "merge-ready: not ready · $1"
@@ -161,7 +163,24 @@ print(base)
   not_ready "PR response missing baseRefName ($(tr '\n' ' ' <"${TMP_DIR}/base-parse.err"))"
 }
 
-fetch_paginated_array "repos/${REPO}/pulls/${PR}/files" "${FILES_RAW}" "${FILES_FILE}" "${FILES_ERR}" "changed files"
+if ! gh api "repos/${REPO}/compare/${BASE_BRANCH}...${HEAD_SHA}" \
+    >"${COMPARE_RAW}" 2>"${COMPARE_ERR}"; then
+  not_ready "could not read changed files for measured head ${HEAD_SHA} ($(tr '\n' ' ' <"${COMPARE_ERR}"))"
+fi
+if ! python3 -I - "${COMPARE_RAW}" "${FILES_FILE}" >"${TMP_DIR}/compare-parse.out" 2>"${FILES_ERR}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+compare = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+files = compare.get("files") if isinstance(compare, dict) else None
+if not isinstance(files, list):
+    raise ValueError("compare response is missing files")
+json.dump(files, Path(sys.argv[2]).open("w", encoding="utf-8"))
+PY
+then
+  not_ready "changed files: could not parse compare response ($(tr '\n' ' ' <"${FILES_ERR}"))"
+fi
 require_json "${FILES_FILE}" nonempty-list
 FILE_COUNT="$(python3 -I -c 'import json, sys; print(len(json.load(open(sys.argv[1], encoding="utf-8"))))' "${FILES_FILE}" 2>"${TMP_DIR}/file-count.err")" || {
   not_ready "changed files: could not count the response ($(tr '\n' ' ' <"${TMP_DIR}/file-count.err"))"
@@ -235,10 +254,7 @@ PY
 PATH_RC=$?
 OWNER="${REPO%%/*}"
 NAME="${REPO#*/}"
-if ! gh api "repos/${REPO}/rules/branches/${BASE_BRANCH}" \
-    >"${RULES_FILE}" 2>"${RULES_ERR}"; then
-  not_ready "could not read required-check rules for base branch ${BASE_BRANCH} ($(tr '\n' ' ' <"${RULES_ERR}"))"
-fi
+fetch_paginated_array "repos/${REPO}/rules/branches/${BASE_BRANCH}" "${RULES_RAW}" "${RULES_FILE}" "${RULES_ERR}" "required-check rules"
 require_json "${RULES_FILE}"
 
 if ! gh api "repos/${REPO}/branches/${BASE_BRANCH}/protection/required_status_checks" \
@@ -251,14 +267,15 @@ if ! gh api "repos/${REPO}/branches/${BASE_BRANCH}/protection/required_status_ch
 fi
 require_json "${LEGACY_FILE}"
 
-REQUIRED_SUMMARY="$(python3 -I - "${RULES_FILE}" "${LEGACY_FILE}" "${BASE_BRANCH}" <<'PY'
+REQUIRED_SUMMARY="$(python3 -I - "${RULES_FILE}" "${LEGACY_FILE}" "${REQUIRED_CONTEXTS_FILE}" "${BASE_BRANCH}" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 rules = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 legacy = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
-base_branch = sys.argv[3]
+contexts_file = Path(sys.argv[3])
+base_branch = sys.argv[4]
 required_contexts = set()
 if not isinstance(rules, list):
     raise ValueError("required-check rules response is not a list")
@@ -291,6 +308,7 @@ if legacy_checks is not None:
         if not isinstance(required, dict) or not isinstance(required.get("context"), str) or not required["context"]:
             raise ValueError("legacy required-check response has a malformed check")
         required_contexts.add(required["context"])
+contexts_file.write_text(json.dumps(sorted(required_contexts)), encoding="utf-8")
 print(
     f"required checks from base branch {base_branch}: "
     + (", ".join(sorted(required_contexts)) if required_contexts else "none")
@@ -311,7 +329,7 @@ fi
 
 if ! gh api graphql \
     -f owner="${OWNER}" -f name="${NAME}" -F number="${PR}" \
-    -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}} reviews(first:100){nodes{state submittedAt commit{oid} author{login __typename}} pageInfo{hasNextPage}}}}}' \
+    -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}} reviews(first:100){nodes{state submittedAt body commit{oid} author{login __typename} comments(first:100){nodes{databaseId replyTo{databaseId}} pageInfo{hasNextPage}}} pageInfo{hasNextPage}}}}}' \
     >"${GQL_FILE}" 2>"${GQL_ERR}"; then
   not_ready "could not read review threads/reviews ($(tr '\n' ' ' <"${GQL_ERR}"))"
 fi
@@ -338,12 +356,33 @@ def strip_bot_suffix(login):
     return login[:-5] if login.lower().endswith("[bot]") else login
 
 
+def review_is_standalone(review):
+    body = review.get("body")
+    if isinstance(body, str) and body.strip():
+        return True
+    comments = review.get("comments")
+    if not isinstance(comments, dict) or not isinstance(comments.get("nodes"), list):
+        return False
+    page_info = comments.get("pageInfo") or {}
+    if page_info.get("hasNextPage") is True:
+        return False
+    return any(
+        isinstance(comment, dict) and comment.get("replyTo") is None
+        for comment in comments["nodes"]
+    )
+
+
 head_reviewers = set()
 for review in reviews["nodes"]:
     if not isinstance(review, dict):
         raise ValueError("graphql response has a malformed review node")
     author = review.get("author") or {}
-    if author.get("__typename") == "Bot" and (review.get("commit") or {}).get("oid") == head_sha:
+    if (
+        author.get("__typename") == "Bot"
+        and (review.get("commit") or {}).get("oid") == head_sha
+        and (review.get("state") or "").upper() != "DISMISSED"
+        and review_is_standalone(review)
+    ):
         login = strip_bot_suffix(author.get("login", ""))
         if login:
             head_reviewers.add(login)
@@ -382,124 +421,17 @@ PY
 
 HEAD_TIME=""
 if [ "${EXEMPTION_NEEDED}" = "yes" ]; then
-if ! gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" --paginate --slurp \
-    >"${CHECK_RUNS_RAW}" 2>"${CHECK_RUNS_ERR}"; then
-  not_ready "could not read the head check runs ($(tr '\n' ' ' <"${CHECK_RUNS_ERR}"))"
-fi
-CHECK_RUN_TIME_RC=0
-python3 -I - "${CHECK_RUNS_RAW}" >"${HEAD_TIME_FILE}" 2>"${HEAD_TIME_ERR}" <<'PY' || CHECK_RUN_TIME_RC=$?
+  fetch_paginated_array "repos/${REPO}/issues/${PR}/timeline" "${TIMELINE_RAW}" "${TIMELINE_FILE}" "${TIMELINE_ERR}" "PR timeline"
+  python3 -I - "${TIMELINE_FILE}" "${HEAD_SHA}" >"${HEAD_TIME_FILE}" 2>"${HEAD_TIME_ERR}" <<'PY' || not_ready "could not establish a trusted head push time ($(tr '\n' ' ' <"${HEAD_TIME_ERR}"))"
 import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-
-def parse_timestamp(value):
-    if not isinstance(value, str) or not value:
-        raise ValueError("missing or empty GitHub timestamp")
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise ValueError(f"invalid GitHub timestamp {value!r}") from exc
-    if parsed.tzinfo is None:
-        raise ValueError(f"GitHub timestamp has no timezone {value!r}")
-    return parsed.astimezone(timezone.utc)
-
-pages = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-if not isinstance(pages, list) or not all(isinstance(page, dict) for page in pages):
-    raise ValueError("expected a list of check-run response objects")
-
-timestamps = []
-for page in pages:
-    check_runs = page.get("check_runs")
-    if not isinstance(check_runs, list):
-        raise ValueError("check-run response is missing check_runs")
-    for check_run in check_runs:
-        if not isinstance(check_run, dict):
-            raise ValueError("check-run response contains a malformed check run")
-        created_at = check_run.get("created_at")
-        if created_at is not None:
-            timestamps.append(parse_timestamp(created_at))
-        check_suite = check_run.get("check_suite")
-        if isinstance(check_suite, dict):
-            suite_created_at = check_suite.get("created_at")
-            if suite_created_at is not None:
-                timestamps.append(parse_timestamp(suite_created_at))
-
-if not timestamps:
-    raise ValueError("head check runs have no check-suite or check-run creation time")
-print(min(timestamps).isoformat(timespec="seconds").replace("+00:00", "Z"))
-PY
-if [ "${CHECK_RUN_TIME_RC}" -ne 0 ]; then
-  CHECK_SUITE_TIME_RC=0
-  if ! gh api "repos/${REPO}/commits/${HEAD_SHA}/check-suites" --paginate --slurp \
-      >"${CHECK_SUITES_RAW}" 2>"${CHECK_SUITES_ERR}"; then
-    printf '%s' "could not read head check suites: $(tr '\n' ' ' <"${CHECK_SUITES_ERR}")" >"${HEAD_TIME_ERR}"
-    CHECK_SUITE_TIME_RC=1
-  else
-    python3 -I - "${CHECK_SUITES_RAW}" >"${HEAD_TIME_FILE}" 2>"${HEAD_TIME_ERR}" <<'PY' || CHECK_SUITE_TIME_RC=$?
-import json
-import sys
-from datetime import datetime, timezone
-from pathlib import Path
-
-def parse_timestamp(value):
-    if not isinstance(value, str) or not value:
-        raise ValueError("missing or empty GitHub timestamp")
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise ValueError(f"invalid GitHub timestamp {value!r}") from exc
-    if parsed.tzinfo is None:
-        raise ValueError(f"GitHub timestamp has no timezone {value!r}")
-    return parsed.astimezone(timezone.utc)
-
-pages = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-if not isinstance(pages, list) or not all(isinstance(page, dict) for page in pages):
-    raise ValueError("expected a list of check-suite response objects")
-
-timestamps = []
-for page in pages:
-    check_suites = page.get("check_suites")
-    if not isinstance(check_suites, list):
-        raise ValueError("check-suite response is missing check_suites")
-    for check_suite in check_suites:
-        if not isinstance(check_suite, dict):
-            raise ValueError("check-suite response contains a malformed check suite")
-        created_at = check_suite.get("created_at")
-        if created_at is not None:
-            timestamps.append(parse_timestamp(created_at))
-
-if not timestamps:
-    raise ValueError("head check suites have no creation time")
-print(min(timestamps).isoformat(timespec="seconds").replace("+00:00", "Z"))
-PY
-  fi
-  if [ "${CHECK_SUITE_TIME_RC}" -ne 0 ]; then
-    if ! fetch_paginated_array "repos/${REPO}/issues/${PR}/timeline" "${TIMELINE_RAW}" "${TIMELINE_FILE}" "${TIMELINE_ERR}" "PR timeline"; then
-      not_ready "head check runs and suites: could not establish a trusted creation time ($(tr '\n' ' ' <"${HEAD_TIME_ERR}")); timeline fallback failed"
-    fi
-    if ! python3 -I - "${TIMELINE_FILE}" "${HEAD_SHA}" >"${HEAD_TIME_FILE}" 2>"${HEAD_TIME_ERR}" <<'PY'
-import json
-import sys
-from datetime import datetime, timezone
-from pathlib import Path
-
-def parse_timestamp(value):
-    if not isinstance(value, str) or not value:
-        raise ValueError("missing or empty GitHub timestamp")
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise ValueError(f"invalid GitHub timestamp {value!r}") from exc
-    if parsed.tzinfo is None:
-        raise ValueError(f"GitHub timestamp has no timezone {value!r}")
-    return parsed.astimezone(timezone.utc)
 
 events = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 head_sha = sys.argv[2]
 if not isinstance(events, list):
     raise ValueError("expected a list of timeline events")
-
 timestamps = []
 for event in events:
     if not isinstance(event, dict):
@@ -507,7 +439,6 @@ for event in events:
     created_at = event.get("created_at")
     if not isinstance(created_at, str) or not created_at:
         continue
-    timestamp = parse_timestamp(created_at)
     if (
         event.get("event") == "head_ref_force_pushed"
         and event.get("commit_id") == head_sha
@@ -515,20 +446,33 @@ for event in events:
         event.get("event") == "committed"
         and event.get("sha") == head_sha
     ):
-        timestamps.append(timestamp)
-
+        parsed = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            raise ValueError("head push event timestamp has no timezone")
+        timestamps.append(parsed.astimezone(timezone.utc))
 if not timestamps:
     raise ValueError("PR timeline has no push event for the measured head")
 print(min(timestamps).isoformat(timespec="seconds").replace("+00:00", "Z"))
 PY
-    then
-      not_ready "head check runs and suites: could not establish a trusted creation time ($(tr '\n' ' ' <"${HEAD_TIME_ERR}"))"
-    fi
-  fi
+  HEAD_TIME="$(cat "${HEAD_TIME_FILE}")"
+  [ -n "${HEAD_TIME}" ] || not_ready "head push time response was empty"
 fi
-HEAD_TIME="$(cat "${HEAD_TIME_FILE}")"
-[ -n "${HEAD_TIME}" ] || not_ready "head check runs creation time response was empty"
-fi
+
+gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" --paginate --slurp \
+    >"${CHECK_RUNS_RAW}" 2>"${CHECK_RUNS_ERR}" || \
+  not_ready "could not read check runs for measured head ${HEAD_SHA} ($(tr '\n' ' ' <"${CHECK_RUNS_ERR}"))"
+python3 -I - "${CHECK_RUNS_RAW}" <<'PY' 2>"${CHECK_RUNS_ERR}" || \
+  not_ready "check runs for measured head: could not parse response ($(tr '\n' ' ' <"${CHECK_RUNS_ERR}"))"
+import json,sys
+from pathlib import Path
+pages=json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if not isinstance(pages,list) or not all(isinstance(page,dict) for page in pages):
+    raise ValueError("expected a list of check-run response objects")
+for page in pages:
+    runs=page.get("check_runs")
+    if not isinstance(runs,list) or not all(isinstance(run,dict) for run in runs):
+        raise ValueError("check-run response is missing a valid check_runs list")
+PY
 
 if ! gh pr checks "${PR}" --repo "${REPO}" --required --json name,bucket,state \
     >"${CHECKS_FILE}" 2>"${CHECKS_ERR}"; then
@@ -546,7 +490,7 @@ fi
 require_json "${PR_FILE}"
 
 python3 -I - "${PR_FILE}" "${CHECKS_FILE}" "${GQL_FILE}" "${FILES_FILE}" "${COMMENTS_FILE}" \
-         "${STOP_PATHS_FILE}" "${BOTS_FILE}" "${RULES_FILE}" "${LEGACY_FILE}" \
+         "${STOP_PATHS_FILE}" "${BOTS_FILE}" "${REQUIRED_CONTEXTS_FILE}" \
          "${BASE_BRANCH}" "${HEAD_SHA}" "${HEAD_TIME}" "${CONTRACT}" <<'PY'
 import fnmatch
 import json
@@ -555,8 +499,7 @@ import sys
 from pathlib import Path
 
 (pr_file, checks_file, gql_file, files_file, comments_file, stop_paths_file,
- bots_file, rules_file, legacy_file, base_branch, head_sha, head_time,
- contract_path) = sys.argv[1:14]
+ bots_file, contexts_file, base_branch, head_sha, head_time, contract_path) = sys.argv[1:13]
 
 
 def load(path):
@@ -589,8 +532,6 @@ try:
     gql = load(gql_file)
     files = load(files_file)
     comments = load(comments_file)
-    rules = load(rules_file)
-    legacy = load(legacy_file)
 
     if not isinstance(pr, dict) or not isinstance(pr.get("headRefOid"), str):
         fail("PR response missing or malformed headRefOid")
@@ -607,39 +548,7 @@ try:
     problems_ask = []
     problems_not_ready = []
 
-    required_contexts = set()
-    if not isinstance(rules, list):
-        fail("required-check rules response is not a list")
-    for rule in rules:
-        if not isinstance(rule, dict):
-            fail("required-check rules response contains a malformed rule")
-        if rule.get("type") != "required_status_checks":
-            continue
-        parameters = rule.get("parameters")
-        if not isinstance(parameters, dict) or not isinstance(parameters.get("required_status_checks"), list):
-            fail("required-check rules response has a malformed required_status_checks rule")
-        for required in parameters["required_status_checks"]:
-            if not isinstance(required, dict) or not isinstance(required.get("context"), str) or not required["context"]:
-                fail("required-check rules response has a malformed required context")
-            required_contexts.add(required["context"])
-
-    if not isinstance(legacy, dict):
-        fail("legacy required-check response is not an object")
-    legacy_contexts = legacy.get("contexts")
-    legacy_checks = legacy.get("checks")
-    if legacy_contexts is None and legacy_checks is None:
-        fail("legacy required-check response has no contexts or checks")
-    if legacy_contexts is not None:
-        if not isinstance(legacy_contexts, list) or not all(isinstance(context, str) and context for context in legacy_contexts):
-            fail("legacy required-check response has malformed contexts")
-        required_contexts.update(legacy_contexts)
-    if legacy_checks is not None:
-        if not isinstance(legacy_checks, list):
-            fail("legacy required-check response has malformed checks")
-        for required in legacy_checks:
-            if not isinstance(required, dict) or not isinstance(required.get("context"), str) or not required["context"]:
-                fail("legacy required-check response has a malformed check")
-            required_contexts.add(required["context"])
+    required_contexts = set(load(contexts_file))
 
     if not isinstance(checks, list):
         fail("required checks response is not a list")
@@ -676,6 +585,21 @@ try:
     if reviews["pageInfo"]["hasNextPage"]:
         problems_not_ready.append("more than 100 reviews; rerun with pagination")
 
+
+    def review_is_standalone(review):
+        body = review.get("body")
+        if isinstance(body, str) and body.strip():
+            return True
+        comments = review.get("comments")
+        if not isinstance(comments, dict) or not isinstance(comments.get("nodes"), list):
+            return False
+        if (comments.get("pageInfo") or {}).get("hasNextPage") is True:
+            return False
+        return any(
+            isinstance(comment, dict) and comment.get("replyTo") is None
+            for comment in comments["nodes"]
+        )
+
     decision_states = {"APPROVED", "CHANGES_REQUESTED", "DISMISSED", "PENDING"}
     decision_reviews = {}
     head_bot_reviewer_logins = set()
@@ -688,7 +612,10 @@ try:
         login = strip_bot_suffix(author.get("login", ""))
         if (node.get("commit") or {}).get("oid") != head_sha:
             continue
-        if login:
+        if not review_is_standalone(node):
+            continue
+        state = (node.get("state") or "").upper()
+        if login and state != "DISMISSED":
             head_bot_reviewer_logins.add(login)
         state = (node.get("state") or "").upper()
         if state in decision_states:
@@ -748,7 +675,7 @@ try:
         login = strip_bot_suffix(user.get("login", ""))
         if user.get("type") != "Bot" or login not in bot_forms:
             continue
-        comment_time = max(comment.get("created_at") or "", comment.get("updated_at") or "")
+        comment_time = comment.get("created_at") or ""
         if head_time and comment_time >= head_time and is_rate_limit_notice(login, comment.get("body") or ""):
             recent_rate_limited_bots.add(login)
 
@@ -816,7 +743,8 @@ try:
     if problems_not_ready:
         print("merge-ready: not ready · " + "; ".join(problems_not_ready + [required_summary]))
         sys.exit(1)
-    print(f"merge-ready: merge · {required_summary}; every GitHub-state measurement passed (head {head_sha})")
+    scope_summary = "contract scope check passed" if contract_path else "contract scope check skipped (no --contract)"
+    print(f"merge-ready: merge · {required_summary}; {scope_summary}; every GitHub-state measurement passed (head {head_sha})")
     sys.exit(0)
 except SystemExit:
     raise

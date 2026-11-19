@@ -50,6 +50,13 @@ case "$1" in
         fi
         if [ "${GH_STUB_CASE:-}" = "pr-bad-json" ]; then
           echo "not json"
+        elif [ "${GH_STUB_CASE:-}" = "head-changed" ]; then
+          if [ -e "${GH_FIXTURE_DIR}/pr-view-count" ]; then
+            cat "${GH_FIXTURE_DIR}/pr-changed.json"
+          else
+            : >"${GH_FIXTURE_DIR}/pr-view-count"
+            cat "${GH_FIXTURE_DIR}/pr.json"
+          fi
         else
           cat "${GH_FIXTURE_DIR}/pr.json"
         fi
@@ -87,7 +94,11 @@ case "$1" in
           echo "gh: rules unavailable" >&2
           exit 1
         fi
-        cat "${GH_FIXTURE_DIR}/rules.json"
+        if [ "${GH_STUB_CASE:-}" = "rules-paginated" ]; then
+          cat "${GH_FIXTURE_DIR}/rules-pages.json"
+        else
+          python3 -I -c "import json; print(json.dumps([json.load(open('${GH_FIXTURE_DIR}/rules.json'))]))"
+        fi
         ;;
       repos/*/branches/*/protection/required_status_checks)
         if [ "${GH_STUB_CASE:-}" = "legacy-fail" ]; then
@@ -101,8 +112,8 @@ case "$1" in
         fi
         cat "${GH_FIXTURE_DIR}/legacy.json"
         ;;
-      repos/*/pulls/*/files)
-        cat "${GH_FIXTURE_DIR}/files.json"
+      repos/*/compare/*)
+        python3 -I -c "import json; print(json.dumps({'files': json.load(open('${GH_FIXTURE_DIR}/files.json'))[0]}))"
         ;;
       repos/*/issues/*/comments)
         cat "${GH_FIXTURE_DIR}/comments.json"
@@ -111,6 +122,10 @@ case "$1" in
         cat "${GH_FIXTURE_DIR}/timeline.json"
         ;;
       repos/*/commits/*/check-runs)
+        if [ "${GH_STUB_CASE:-}" = "check-runs-fail" ]; then
+          echo "gh: check runs unavailable" >&2
+          exit 1
+        fi
         cat "${GH_FIXTURE_DIR}/check-runs.json"
         ;;
       repos/*/commits/*/check-suites)
@@ -138,9 +153,11 @@ DEFAULT_CHECKS='[{"name":"ci","bucket":"pass","state":"SUCCESS"}]'
 FAILING_CHECK='[{"name":"ci","bucket":"fail","state":"FAILURE"}]'
 DEFAULT_RULES='[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"ci"}]}}]'
 DEFAULT_LEGACY='{"contexts":[],"checks":[]}'
-DEFAULT_REVIEWS='[{"state":"COMMENTED","commit":{"oid":"HEAD_SHA_PLACEHOLDER"},"author":{"login":"coderabbitai","__typename":"Bot"}},{"state":"COMMENTED","commit":{"oid":"HEAD_SHA_PLACEHOLDER"},"author":{"login":"cubic-dev-ai","__typename":"Bot"}}]'
+DEFAULT_REVIEWS='[{"state":"COMMENTED","body":"Automated review","comments":{"nodes":[],"pageInfo":{"hasNextPage":false}},"commit":{"oid":"HEAD_SHA_PLACEHOLDER"},"author":{"login":"coderabbitai","__typename":"Bot"}},{"state":"COMMENTED","body":"Automated review","comments":{"nodes":[],"pageInfo":{"hasNextPage":false}},"commit":{"oid":"HEAD_SHA_PLACEHOLDER"},"author":{"login":"cubic-dev-ai","__typename":"Bot"}}]'
 DEFAULT_REVIEWS="${DEFAULT_REVIEWS//HEAD_SHA_PLACEHOLDER/${HEAD_SHA}}"
-CUBIC_REVIEW="[{\"state\":\"COMMENTED\",\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"cubic-dev-ai\",\"__typename\":\"Bot\"}}]"
+CUBIC_REVIEW="[{\"state\":\"COMMENTED\",\"body\":\"Automated review\",\"comments\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"cubic-dev-ai\",\"__typename\":\"Bot\"}}]"
+THREAD_REPLY_REVIEW="[{\"state\":\"COMMENTED\",\"body\":\"\",\"comments\":{\"nodes\":[{\"databaseId\":1,\"replyTo\":{\"databaseId\":2}}],\"pageInfo\":{\"hasNextPage\":false}},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"coderabbitai\",\"__typename\":\"Bot\"}},{\"state\":\"COMMENTED\",\"body\":\"Automated review\",\"comments\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"cubic-dev-ai\",\"__typename\":\"Bot\"}}]"
+DISMISSED_REVIEW="[{\"state\":\"DISMISSED\",\"body\":\"Automated review\",\"comments\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"coderabbitai\",\"__typename\":\"Bot\"}},{\"state\":\"COMMENTED\",\"body\":\"Automated review\",\"comments\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"cubic-dev-ai\",\"__typename\":\"Bot\"}}]"
 
 NON_HEAD_REVIEW='[{"state":"COMMENTED","commit":{"oid":"1111111111111111111111111111111111111111"},"author":{"login":"coderabbitai","__typename":"Bot"}}]'
 
@@ -154,6 +171,10 @@ write_fixture() {
 import json, sys
 path, state, is_draft = sys.argv[1:]
 json.dump({"number": 1, "url": "https://example.invalid/pr/1", "headRefOid": "0123456789abcdef0123456789abcdef01234567", "baseRefName": "main", "state": state, "isDraft": is_draft == "true"}, open(path, "w", encoding="utf-8"))
+PY
+  python3 - "${dir}/pr-changed.json" <<'PY'
+import json, sys
+json.dump({"number": 1, "url": "https://example.invalid/pr/1", "headRefOid": "ffffffffffffffffffffffffffffffffffffffff", "baseRefName": "main", "state": "OPEN", "isDraft": False}, open(sys.argv[1], "w", encoding="utf-8"))
 PY
   printf '%s' "${checks_json}" >"${dir}/checks.json"
   printf '%s' "${rules_json}" >"${dir}/rules.json"
@@ -178,7 +199,7 @@ comments = json.loads(extra)
 json.dump([comments], open(path, "w", encoding="utf-8"))
 PY
   printf '%s' "${HEAD_COMMIT_DATE}" >"${dir}/commit-date.txt"
-  printf '%s' '[{"check_runs":[{"created_at":"'"${CHECK_RUN_DATE}"'","check_suite":{"created_at":"'"${CHECK_RUN_DATE}"'"}}]}]' >"${dir}/check-runs.json"
+  printf '%s' '[{"check_runs":[{"name":"ci","created_at":"'"${CHECK_RUN_DATE}"'","check_suite":{"created_at":"'"${CHECK_RUN_DATE}"'"}}]}]' >"${dir}/check-runs.json"
   printf '%s' '[{"check_suites":[{"created_at":"'"${CHECK_RUN_DATE}"'"}]}]' >"${dir}/check-suites.json"
   printf '%s' '[[]]' >"${dir}/timeline.json"
 }
@@ -245,10 +266,59 @@ printf '%s' '[]' >"${missing_timestamp_dir}/check-runs.json"
 printf '%s' '[]' >"${missing_timestamp_dir}/check-suites.json"
 printf '%s' '[[]]' >"${missing_timestamp_dir}/timeline.json"
 out=$(run_case "${missing_timestamp_dir}"); rc=$?
-if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'creation time'; then
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'trusted head push time'; then
   ok "a missing trusted timestamp blocks the rate-limit exemption"
 else
   fail "missing trusted timestamp: got ${rc}: ${out}"
+fi
+
+thread_reply_review_dir="${WORK_DIR}/thread-reply-review"
+write_fixture "${thread_reply_review_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" "${THREAD_REPLY_REVIEW}"
+out=$(run_case "${thread_reply_review_dir}"); rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'coderabbitai'; then
+  ok "a head review made only of thread replies does not cover the bot"
+else
+  fail "thread-reply-only review: got ${rc}: ${out}"
+fi
+
+dismissed_review_dir="${WORK_DIR}/dismissed-review"
+write_fixture "${dismissed_review_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" "${DISMISSED_REVIEW}"
+out=$(run_case "${dismissed_review_dir}"); rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'coderabbitai'; then
+  ok "a dismissed head review does not cover the bot"
+else
+  fail "dismissed review: got ${rc}: ${out}"
+fi
+
+updated_notice_dir="${WORK_DIR}/updated-notice"
+updated_notice_comment='[{"body":"<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n\n> ## Review limit reached","user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"'"${STALE_DATE}"'","updated_at":"'"${FRESH_DATE}"'"}]'
+write_fixture "${updated_notice_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" "${CUBIC_REVIEW}" 0 OPEN false "${updated_notice_comment}"
+printf '%s' '[[{"event":"head_ref_force_pushed","commit_id":"'"${HEAD_SHA}"'","created_at":"'"${FRESH_DATE}"'"}]]' >"${updated_notice_dir}/timeline.json"
+out=$(run_case "${updated_notice_dir}"); rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'coderabbitai'; then
+  ok "an edited old rate-limit notice uses created_at and does not qualify"
+else
+  fail "updated rate-limit notice: got ${rc}: ${out}"
+fi
+
+head_changed_dir="${WORK_DIR}/head-changed"
+write_fixture "${head_changed_dir}" '[{"filename":"README.md"}]' ""
+out=$(run_case "${head_changed_dir}" head-changed); rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'head changed during measurement'; then
+  ok "a PR head change during measurement exits 1"
+else
+  fail "head changed during measurement: got ${rc}: ${out}"
+fi
+
+check_run_time_dir="${WORK_DIR}/check-run-time"
+write_fixture "${check_run_time_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" "${CUBIC_REVIEW}" 0 OPEN false "${rate_limit_comment}"
+printf '%s' '[{"check_runs":[{"name":"ci","created_at":"'"${FRESH_DATE}"'"}]}]' >"${check_run_time_dir}/check-runs.json"
+printf '%s' '[[]]' >"${check_run_time_dir}/timeline.json"
+out=$(run_case "${check_run_time_dir}"); rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'trusted head push time'; then
+  ok "check-run timestamps cannot qualify a missing head push event"
+else
+  fail "check-run timestamp bypass: got ${rc}: ${out}"
 fi
 
 path_before_timestamp_dir="${WORK_DIR}/path-before-timestamp"
@@ -265,12 +335,24 @@ fi
 
 missing_required_dir="${WORK_DIR}/missing-required"
 missing_required_rules='[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"ci"},{"context":"tests (ubuntu-latest)"}]}}]'
-write_fixture "${missing_required_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" "${DEFAULT_REVIEWS}" 0 OPEN false "[]" "${missing_required_rules}"
+missing_required_legacy='{"contexts":["legacy-only"],"checks":[]}'
+write_fixture "${missing_required_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" "${DEFAULT_REVIEWS}" 0 OPEN false "[]" "${missing_required_rules}" "${missing_required_legacy}"
 out=$(run_case "${missing_required_dir}"); rc=$?
-if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'missing required checks: tests (ubuntu-latest)'; then
-  ok "a required context absent from reported checks exits 1 and names it"
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'missing required checks: legacy-only, tests (ubuntu-latest)'; then
+  ok "a required context absent from reported checks exits 1 and names rules and legacy contexts"
 else
   fail "missing required context: got ${rc}: ${out}"
+fi
+
+rules_paginated_dir="${WORK_DIR}/rules-paginated"
+pagination_checks='[{"name":"ci","bucket":"pass","state":"SUCCESS"},{"name":"tests (ubuntu-latest)","bucket":"pass","state":"SUCCESS"}]'
+write_fixture "${rules_paginated_dir}" '[{"filename":"README.md"}]' "" "${pagination_checks}"
+printf '%s' '[[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"ci"}]}}],[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"tests (ubuntu-latest)"}]}}]]' >"${rules_paginated_dir}/rules-pages.json"
+out=$(run_case "${rules_paginated_dir}" rules-paginated); rc=$?
+if [ "${rc}" -eq 0 ] && printf '%s' "${out}" | grep -q 'tests (ubuntu-latest)'; then
+  ok "paginated required-check rules contribute every page"
+else
+  fail "paginated required-check rules: got ${rc}: ${out}"
 fi
 
 rules_fail_dir="${WORK_DIR}/rules-fail"
@@ -315,8 +397,9 @@ fi
 mv "${bots_backup}" "${bots_config}"
 
 skip_stderr="${WORK_DIR}/skip-stderr"
-GH_FIXTURE_DIR="${clean_dir}" GH_STUB_CASE="" "${MERGE_READY}" --repo "${REPO}" --pr 1 >/dev/null 2>"${skip_stderr}"; rc=$?
-if [ "${rc}" -eq 0 ] && grep -Fq 'out-of-contract check skipped (no --contract)' "${skip_stderr}"; then
+skip_stdout="${WORK_DIR}/skip-stdout"
+GH_FIXTURE_DIR="${clean_dir}" GH_STUB_CASE="" "${MERGE_READY}" --repo "${REPO}" --pr 1 >"${skip_stdout}" 2>"${skip_stderr}"; rc=$?
+if [ "${rc}" -eq 0 ] && grep -Fq 'out-of-contract check skipped (no --contract)' "${skip_stderr}" && grep -Fq 'contract scope check skipped (no --contract)' "${skip_stdout}"; then
   ok "missing --contract prints the skipped scope check"
 else
   fail "missing --contract notice: got ${rc}: $(cat "${skip_stderr}")"
@@ -352,6 +435,7 @@ fi
 rate_limit_dir="${WORK_DIR}/rate-limit"
 rate_limit_comment='[{"body":"<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n\n> ## Review limit reached","user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"'"${FRESH_DATE}"'"}]'
 write_fixture "${rate_limit_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" "${CUBIC_REVIEW}" 0 OPEN false "${rate_limit_comment}"
+printf '%s' '[[{"event":"head_ref_force_pushed","commit_id":"'"${HEAD_SHA}"'","created_at":"'"${FRESH_DATE}"'"}]]' >"${rate_limit_dir}/timeline.json"
 out=$(run_case "${rate_limit_dir}"); rc=$?
 assert_rc "measured rate-limit comment covers the listed bot" 0 "${out}" "${rc}"
 
@@ -388,6 +472,7 @@ fi
 stale_rate_limit_dir="${WORK_DIR}/stale-rate-limit"
 stale_rate_limit_comment='[{"body":"<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n\n> ## Review limit reached","user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"'"${STALE_DATE}"'"}]'
 write_fixture "${stale_rate_limit_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" "${CUBIC_REVIEW}" 0 OPEN false "${stale_rate_limit_comment}"
+printf '%s' '[[{"event":"head_ref_force_pushed","commit_id":"'"${HEAD_SHA}"'","created_at":"'"${FRESH_DATE}"'"}]]' >"${stale_rate_limit_dir}/timeline.json"
 out=$(run_case "${stale_rate_limit_dir}"); rc=$?
 if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'coderabbitai'; then
   ok "a stale rate-limit comment exits 1"
@@ -414,6 +499,7 @@ backdated_dir="${WORK_DIR}/backdated-committer"
 backdated_comment='[{"body":"<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n\n> ## Review limit reached","user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"'"${BACKDATED_COMMENT_DATE}"'"}]'
 write_fixture "${backdated_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" "${CUBIC_REVIEW}" 0 OPEN false "${backdated_comment}"
 printf '%s' "${STALE_DATE}" >"${backdated_dir}/commit-date.txt"
+printf '%s' '[[{"event":"head_ref_force_pushed","commit_id":"'"${HEAD_SHA}"'","created_at":"'"${FRESH_DATE}"'"}]]' >"${backdated_dir}/timeline.json"
 out=$(run_case "${backdated_dir}"); rc=$?
 if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'coderabbitai'; then
   ok "a backdated committer date cannot qualify an older rate-limit notice"

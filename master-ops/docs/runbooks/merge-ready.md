@@ -75,8 +75,9 @@ The command validates the shape of every response before using it. It reads the 
 pull-request file list, checks the measured head before and after that read, and pins check runs,
 reviews, and the final head check to the initial head sha. It reads required checks, GraphQL reviews
 and threads, PR comments, and a matching PR timeline push event when a rate-limit exemption needs a
-timestamp. Check-run timestamps do not qualify an exemption. A changed head makes the result not
-ready so the command can be run again.
+timestamp. After the other responses are collected, the final head check reads `headRefOid` again
+and compares it with the initial `head_sha`; a mismatch makes the result not ready so the command
+can be run again. Check-run timestamps do not qualify an exemption.
 
 Reviews and review threads are read up to 100 each. A connection with another page is not ready
 and names pagination as the next action. The pull-request files endpoint caps responses at 3000

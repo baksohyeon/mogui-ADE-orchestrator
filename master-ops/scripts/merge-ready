@@ -233,17 +233,6 @@ sys.exit(0)
 PY
 )"
 PATH_RC=$?
-if [ "${PATH_RC}" -eq 2 ]; then
-  echo "${PATH_VERDICT} (head ${HEAD_SHA})"
-  exit 2
-fi
-if [ "${PATH_RC}" -ne 0 ]; then
-  if [ -n "${PATH_VERDICT}" ]; then
-    not_ready "${PATH_VERDICT}"
-  fi
-  not_ready "changed paths: could not check the stop-list or contract scope"
-fi
-
 OWNER="${REPO%%/*}"
 NAME="${REPO#*/}"
 if ! gh api "repos/${REPO}/rules/branches/${BASE_BRANCH}" \
@@ -261,6 +250,65 @@ if ! gh api "repos/${REPO}/branches/${BASE_BRANCH}/protection/required_status_ch
   fi
 fi
 require_json "${LEGACY_FILE}"
+
+REQUIRED_SUMMARY="$(python3 -I - "${RULES_FILE}" "${LEGACY_FILE}" "${BASE_BRANCH}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+rules = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+legacy = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+base_branch = sys.argv[3]
+required_contexts = set()
+if not isinstance(rules, list):
+    raise ValueError("required-check rules response is not a list")
+for rule in rules:
+    if not isinstance(rule, dict):
+        raise ValueError("required-check rules response contains a malformed rule")
+    if rule.get("type") != "required_status_checks":
+        continue
+    parameters = rule.get("parameters")
+    if not isinstance(parameters, dict) or not isinstance(parameters.get("required_status_checks"), list):
+        raise ValueError("required-check rules response has a malformed required_status_checks rule")
+    for required in parameters["required_status_checks"]:
+        if not isinstance(required, dict) or not isinstance(required.get("context"), str) or not required["context"]:
+            raise ValueError("required-check rules response has a malformed required context")
+        required_contexts.add(required["context"])
+if not isinstance(legacy, dict):
+    raise ValueError("legacy required-check response is not an object")
+legacy_contexts = legacy.get("contexts")
+legacy_checks = legacy.get("checks")
+if legacy_contexts is None and legacy_checks is None:
+    raise ValueError("legacy required-check response has no contexts or checks")
+if legacy_contexts is not None:
+    if not isinstance(legacy_contexts, list) or not all(isinstance(context, str) and context for context in legacy_contexts):
+        raise ValueError("legacy required-check response has malformed contexts")
+    required_contexts.update(legacy_contexts)
+if legacy_checks is not None:
+    if not isinstance(legacy_checks, list):
+        raise ValueError("legacy required-check response has malformed checks")
+    for required in legacy_checks:
+        if not isinstance(required, dict) or not isinstance(required.get("context"), str) or not required["context"]:
+            raise ValueError("legacy required-check response has a malformed check")
+        required_contexts.add(required["context"])
+print(
+    f"required checks from base branch {base_branch}: "
+    + (", ".join(sorted(required_contexts)) if required_contexts else "none")
+)
+PY
+)" || not_ready "could not parse required-check sources"
+
+if [ "${PATH_RC}" -eq 2 ]; then
+  echo "${PATH_VERDICT}; ${REQUIRED_SUMMARY} (head ${HEAD_SHA})"
+  exit 2
+fi
+if [ "${PATH_RC}" -ne 0 ]; then
+  if [ -n "${PATH_VERDICT}" ]; then
+    not_ready "${PATH_VERDICT}"
+  fi
+  not_ready "changed paths: could not check the stop-list or contract scope"
+fi
+
 if ! gh api graphql \
     -f owner="${OWNER}" -f name="${NAME}" -F number="${PR}" \
     -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}} reviews(first:100){nodes{state submittedAt commit{oid} author{login __typename}} pageInfo{hasNextPage}}}}}' \

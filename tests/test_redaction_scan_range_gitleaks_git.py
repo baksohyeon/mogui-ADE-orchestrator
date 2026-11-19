@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import os
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -27,11 +28,15 @@ requires_gitleaks = pytest.mark.skipif(
 pytestmark = skip_windows_exec_surface
 
 
-def _scan(repo: Path, *args: str) -> subprocess.CompletedProcess:
+def _scan(
+    repo: Path, *args: str, extra_env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess:
     env = {**os.environ}
     env.pop("REDACTION_EXTRA_PATTERNS", None)
     env.pop("REDACTION_REQUIRE_EXTRA", None)
     env["HOME"] = str(repo.parent / "test-home")
+    if extra_env:
+        env.update(extra_env)
     return subprocess.run(
         ["bash", str(repo / "scripts" / "redaction-scan.sh"), *args],
         cwd=repo,
@@ -212,3 +217,79 @@ def test_range_mode_with_no_changed_files_stays_clean(tmp_path: Path) -> None:
 
     assert result.returncode == 0, output
     assert "files=0" in result.stdout, output
+
+
+@requires_gitleaks
+def test_range_mode_includes_a_merge_commit_resolution_diff(tmp_path: Path) -> None:
+    repo = _repo_with_commits(tmp_path, ["base"])
+    (repo / "shared.txt").write_text("base\n", encoding="utf-8")
+    _git(repo, "add", "shared.txt")
+    _git(repo, "commit", "-q", "-m", "add shared file")
+    base = _head(repo)
+    main_branch = _git(repo, "branch", "--show-current").stdout.strip()
+
+    _git(repo, "switch", "-c", "feature")
+    (repo / "feature.txt").write_text("feature\n", encoding="utf-8")
+    _git(repo, "add", "feature.txt")
+    _git(repo, "commit", "-q", "-m", "add feature file")
+
+    _git(repo, "switch", main_branch)
+    (repo / "main.txt").write_text("main\n", encoding="utf-8")
+    _git(repo, "add", "main.txt")
+    _git(repo, "commit", "-q", "-m", "add main file")
+    _git(repo, "merge", "--no-ff", "--no-commit", "feature")
+    (repo / "merge-resolution.txt").write_text(
+        f"{_aws_key()}\n", encoding="utf-8"
+    )
+    _git(repo, "add", "merge-resolution.txt")
+    _git(repo, "commit", "-q", "-m", "resolve merge")
+
+    result = _scan(repo, "--range", f"{base}..HEAD")
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 1, output
+    assert "merge-resolution.txt" in output, output
+    assert "aws_access_key" in output, output
+
+
+@requires_gitleaks
+def test_range_mode_fails_closed_on_a_malformed_range_report(tmp_path: Path) -> None:
+    repo = _repo_with_commits(tmp_path, ["base"])
+    (repo / "changed.txt").write_text("clean\n", encoding="utf-8")
+    _git(repo, "add", "changed.txt")
+    _git(repo, "commit", "-q", "-m", "change file")
+    base = _head(repo)
+
+    real_gitleaks = shutil.which("gitleaks")
+    assert real_gitleaks is not None
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    fake_gitleaks = fake_bin / "gitleaks"
+    fake_gitleaks.write_text(
+        "#!/bin/sh\n"
+        'if [ "${1:-}" = "git" ]; then\n'
+        '  previous=""\n'
+        '  for arg in "$@"; do\n'
+        '    if [ "$previous" = "--report-path" ]; then\n'
+        '      printf "%s" "malformed" > "$arg"\n'
+        "      exit 0\n"
+        "    fi\n"
+        '    previous="$arg"\n'
+        "  done\n"
+        "fi\n"
+        f"exec {shlex.quote(real_gitleaks)} \"$@\"\n",
+        encoding="utf-8",
+    )
+    fake_gitleaks.chmod(0o755)
+
+    result = _scan(
+        repo,
+        "--range",
+        f"{base}..HEAD",
+        extra_env={"PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}"},
+    )
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 2, output
+    assert "could not classify range findings" in output, output
+    assert "could not parse range gitleaks report" in output, output

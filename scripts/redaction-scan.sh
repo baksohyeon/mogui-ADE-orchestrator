@@ -559,7 +559,7 @@ PY
   fi
 
   if ! gitleaks git \
-    --log-opts="${RANGE}" \
+    --log-opts="${RANGE} --diff-merges=first-parent" \
     --config "${CONFIG}" \
     --no-banner \
     --exit-code 0 \
@@ -726,7 +726,9 @@ fi
 
 FINDINGS_FILE="${WORK_DIR}/findings.txt"
 PREEXISTING_FILE="${WORK_DIR}/preexisting.txt"
-"${PYTHON}" - "${REPORTS}" "${FINDINGS_FILE}" "${PREEXISTING_FILE}" "${MODE}" "${RANGE_GIT_REPORT}" "${FILTERED_PATHS}" > /dev/null <<'PY'
+CLASSIFY_ERROR="${WORK_DIR}/classify-error"
+classify_rc=0
+"${PYTHON}" - "${REPORTS}" "${FINDINGS_FILE}" "${PREEXISTING_FILE}" "${MODE}" "${RANGE_GIT_REPORT}" "${FILTERED_PATHS}" > /dev/null 2>"${CLASSIFY_ERROR}" <<'PY' || classify_rc=$?
 import hashlib
 import json
 import pathlib
@@ -797,20 +799,30 @@ def render(row):
     )
 
 
+def load_range_json(path, label):
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        print(f"could not parse {label}: {error}", file=sys.stderr)
+        raise SystemExit(1)
+    if not isinstance(value, list):
+        print(f"could not parse {label}: expected a JSON array", file=sys.stderr)
+        raise SystemExit(1)
+    return value
+
+
 range_rows = []
 filtered_paths = set()
 if mode == "range":
-    try:
-        range_rows = json.loads(range_report_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        range_rows = []
-    try:
-        filtered_paths = {
-            canonical_path(path)
-            for path in json.loads(filtered_path.read_text(encoding="utf-8"))
-        }
-    except (OSError, json.JSONDecodeError):
-        filtered_paths = set()
+    range_rows = load_range_json(range_report_path, "range gitleaks report")
+    if any(not isinstance(row, dict) for row in range_rows):
+        print("could not parse range gitleaks report: expected finding objects", file=sys.stderr)
+        raise SystemExit(1)
+    filter_rows = load_range_json(filtered_path, "filter path list")
+    if any(not isinstance(path, str) for path in filter_rows):
+        print("could not parse filter path list: expected path strings", file=sys.stderr)
+        raise SystemExit(1)
+    filtered_paths = {canonical_path(path) for path in filter_rows}
 
 range_keys = {finding_key(row) for row in range_rows if row.get("File")}
 
@@ -848,6 +860,11 @@ preexisting_path.write_text(
     "".join(f"{line}\n" for line in sorted(preexisting)), encoding="utf-8"
 )
 PY
+if [[ "${classify_rc}" -ne 0 ]]; then
+  reason="$(cat "${CLASSIFY_ERROR}" 2>/dev/null)"
+  echo "redaction-scan: FAIL — could not classify range findings${reason:+: ${reason}}" >&2
+  exit 2
+fi
 
 FINDINGS="$(wc -l < "${FINDINGS_FILE}" | tr -d ' ')"
 PREEXISTING_COUNT="$(wc -l < "${PREEXISTING_FILE}" | tr -d ' ')"

@@ -23,6 +23,7 @@ you build on it.
 ### Fixed
 
 - `scripts/redaction-scan.sh --range` now uses `gitleaks git` over the range as its blocking set, while the changed-path tip scan minus that set remains a non-blocking pre-existing warning set; findings added and deleted inside the range block, named filter paths keep tip-content findings blocking, and full-file, staged, and commit-message modes are unchanged (#331).
+- Range mode includes first-parent merge diffs and fails closed with a named exit-2 reason when its generated report or filter-path list cannot be parsed (#331).
 - Range mode now fails with exit 2 and a named reason when its commit range cannot be resolved, and the pull-request workflow fetches complete history before running the range scan (#331).
 - Tracked-mode scans now report `.gitleaksignore` fingerprints that match no current finding; a file fingerprint is `path:rule:line`, its path uses forward slashes for comparison, and it drifts as soon as a line above it shifts (#331).
 - The `internal_host` rule no longer flags a single-label `*.local.env` file name or a comment naming one, while a bare `*.local` host, a real host on the same line, a sentence-final hostname with its terminal period, or a hostname ending in non-ASCII letters or combining marks matched by `\p{M}` still flags (#331, extends #168).

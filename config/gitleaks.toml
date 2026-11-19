@@ -110,7 +110,7 @@ description = "Internal or corp hostname"
 # e.g. "e" + U+0301 instead of the single precomposed "é") is one label. The
 # explicit end condition consumes one non-label separator so the allowlist can
 # keep matching the complete token without relying on ASCII \b behavior.
-regex = '''\b[A-Za-z0-9._-]+\.(internal|corp|local)(?:\.[\p{L}\p{M}\p{N}_-]+)*(?:\z|[^\p{L}\p{M}\p{N}_.-])'''
+regex = '''\b[A-Za-z0-9._-]+\.(internal|corp|local)(?:\.[\p{L}\p{M}\p{N}_-]+)*(?:\z|[^\p{L}\p{M}\p{N}_.-]|\.(?:\z|[^\p{L}\p{M}\p{N}_.-]))'''
   [rules.allowlist]
   # Claude Code's per-checkout settings file, not a host. Bare and the real
   # on-disk name both excused; nothing with more after ".json" is.

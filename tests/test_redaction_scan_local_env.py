@@ -53,6 +53,27 @@ def _scan(repo: Path, *args: str) -> subprocess.CompletedProcess:
 
 
 @requires_gitleaks
+def test_internal_host_followed_by_sentence_final_period_still_flags(
+    tmp_path: Path,
+) -> None:
+    repo = _repo_with_commits(tmp_path, ["base"])
+    host = "db" + "." + "corp" + "."
+    (repo / "notes.md").write_text(
+        f"Use {host}\n",
+        encoding="utf-8",
+    )
+    _git(repo, "add", "notes.md")
+    _git(repo, "commit", "-q", "-m", "notes")
+
+    result = _scan(repo)
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 1, output
+    assert host in output, output
+    assert "internal_host" in output, output
+
+
+@requires_gitleaks
 def test_local_env_file_name_is_excused_but_bare_local_host_still_flags(
     tmp_path: Path,
 ) -> None:

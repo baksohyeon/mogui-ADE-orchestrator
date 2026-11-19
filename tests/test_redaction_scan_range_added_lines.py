@@ -49,6 +49,13 @@ def _head(repo: Path) -> str:
     return _git(repo, "rev-parse", "HEAD").stdout.strip()
 
 
+def _resolve_gitleaks() -> str | None:
+    # mise keeps the original executable search path so callers can bypass a
+    # shim when a test invokes the binary from a temporary checkout.
+    original_path = os.environ.get("__MISE_ORIG_PATH")
+    return shutil.which("gitleaks", path=original_path or os.environ.get("PATH"))
+
+
 @requires_gitleaks
 def test_range_mode_blocks_a_newly_added_secret_line(tmp_path: Path) -> None:
     repo = _repo_with_commits(tmp_path, ["base"])
@@ -307,14 +314,11 @@ def test_range_mode_rechecks_index_flags_after_scanning(
     """An index flag set while a file is being scanned invalidates its
     added-lines map before the findings are classified.
     """
-    real_gitleaks = shutil.which(
-        "gitleaks",
-        path=os.pathsep.join(
-            part for part in os.environ["PATH"].split(os.pathsep)
-            if "mise/shims" not in part
-        ),
-    )
-    assert real_gitleaks is not None
+    real_gitleaks = _resolve_gitleaks()
+    if real_gitleaks is None:
+        pytest.skip(
+            "gitleaks is unavailable; the index-flag mutation test needs a real binary"
+        )
     repo = _repo_with_commits(tmp_path, ["base"])
     (repo / "report.md").write_text(
         f"{LEAK}\nclean base line\n", encoding="utf-8"

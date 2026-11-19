@@ -26,7 +26,7 @@ you build on it.
 - Range-mode findings retain a file-content or commit-message origin, so a file named like a commit-message pseudo-path cannot downgrade a message secret to pre-existing; stale-fingerprint rescans remain reporting-only (#331).
 - Range-mode findings without positive, ordered line coordinates stay blocking, so path-only findings cannot be mistaken for pre-existing content.
 - Tracked-mode scans now report `.gitleaksignore` fingerprints that match no current finding; a file fingerprint is `path:rule:line`, its path uses forward slashes for comparison, and it drifts as soon as a line above it shifts (#331).
-- The `internal_host` rule no longer flags a single-label `*.local.env` file name or a comment naming one, while a bare `*.local` host, a real host on the same line, or a hostname ending in non-ASCII letters or combining marks matched by `\p{M}` still flags (#331, extends #168).
+- The `internal_host` rule no longer flags a single-label `*.local.env` file name or a comment naming one, while a bare `*.local` host, a real host on the same line, a sentence-final hostname with its terminal period, or a hostname ending in non-ASCII letters or combining marks matched by `\p{M}` still flags (#331, extends #168).
 
 ## [0.5.353] - 2026-11-17
 

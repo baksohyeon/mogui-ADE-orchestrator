@@ -1,9 +1,9 @@
-"""Range mode uses gitleaks git history as its blocking set.
+"""Range mode blocks by default and warns only on base-content evidence.
 
-The range scan deliberately keeps the tip file scan for warnings, but it no
-longer joins tip line numbers to a separately parsed diff. That lets it catch a
-finding added and deleted inside the range and avoids path, filter, and index
-representations disagreeing about which line was added.
+The range scan uses gitleaks git history for findings added and deleted inside
+the range. Tip findings become warnings only when their secret is present in
+the same path at the range base revision, so changed, filtered, and uncommitted
+content without that evidence remains blocking.
 """
 
 from __future__ import annotations
@@ -124,7 +124,34 @@ def test_range_mode_keeps_a_pre_existing_finding_as_a_warning_in_an_edited_file(
 
 
 @requires_gitleaks
-def test_range_mode_blocks_tip_content_on_a_named_filter_path(tmp_path: Path) -> None:
+def test_range_mode_blocks_an_uncommitted_key_in_a_changed_path(
+    tmp_path: Path,
+) -> None:
+    repo = _repo_with_commits(tmp_path, ["base"])
+    key = _aws_key()
+    (repo / "changed.txt").write_text("base content\n", encoding="utf-8")
+    _git(repo, "add", "changed.txt")
+    _git(repo, "commit", "-q", "-m", "add changed path")
+    base = _head(repo)
+
+    (repo / "changed.txt").write_text("committed content\n", encoding="utf-8")
+    _git(repo, "add", "changed.txt")
+    _git(repo, "commit", "-q", "-m", "edit changed path")
+    with (repo / "changed.txt").open("a", encoding="utf-8") as handle:
+        handle.write(f"{key}\n")
+
+    result = _scan(repo, "--range", f"{base}..HEAD")
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 1, output
+    assert "changed.txt" in output, output
+    assert "pre-existing=0" in result.stderr, output
+
+
+@requires_gitleaks
+def test_range_mode_blocks_tip_content_without_base_evidence_on_a_filtered_path(
+    tmp_path: Path,
+) -> None:
     repo = _repo_with_commits(tmp_path, ["base"])
     key = _aws_key()
     store = repo / "filter-store"
@@ -170,6 +197,57 @@ def test_range_mode_blocks_tip_content_on_a_named_filter_path(tmp_path: Path) ->
     assert result.returncode == 1, output
     assert "filtered.dat" in output, output
     assert "pre-existing" not in result.stdout, output
+
+
+@requires_gitleaks
+def test_range_mode_blocks_a_key_on_a_diff_disabled_path_while_retained(
+    tmp_path: Path,
+) -> None:
+    repo = _repo_with_commits(tmp_path, ["base"])
+    key = _aws_key()
+    (repo / ".gitattributes").write_text("*.bin -diff\n", encoding="utf-8")
+    (repo / "secret.bin").write_text("clean\n", encoding="utf-8")
+    _git(repo, "add", ".gitattributes", "secret.bin")
+    _git(repo, "commit", "-q", "-m", "add diff-disabled path")
+    base = _head(repo)
+
+    (repo / "secret.bin").write_text(f"{key}\n", encoding="utf-8")
+    _git(repo, "add", "secret.bin")
+    _git(repo, "commit", "-q", "-m", "add key to diff-disabled path")
+
+    result = _scan(repo, "--range", f"{base}..HEAD")
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 1, output
+    assert "secret.bin" in output, output
+
+
+@requires_gitleaks
+def test_range_mode_does_not_pass_when_a_deleted_diff_disabled_path_is_unresolvable(
+    tmp_path: Path,
+) -> None:
+    repo = _repo_with_commits(tmp_path, ["base"])
+    key = _aws_key()
+    (repo / ".gitattributes").write_text("*.bin -diff\n", encoding="utf-8")
+    _git(repo, "add", ".gitattributes")
+    _git(repo, "commit", "-q", "-m", "mark diff-disabled paths")
+    base = _head(repo)
+
+    (repo / "secret.bin").write_text(f"{key}\n", encoding="utf-8")
+    _git(repo, "add", "secret.bin")
+    _git(repo, "commit", "-q", "-m", "add key to diff-disabled path")
+    _git(repo, "rm", "-q", "secret.bin")
+    _git(repo, "commit", "-q", "-m", "delete diff-disabled path")
+
+    result = _scan(repo, "--range", f"{base}..HEAD")
+    output = result.stdout + result.stderr
+
+    assert result.returncode in (1, 2), output
+    assert result.returncode != 0, output
+    if result.returncode == 1:
+        assert "secret.bin" in output, output
+    else:
+        assert "cannot decide" in output, output
 
 
 @requires_gitleaks

@@ -119,12 +119,14 @@ regex = '''\b[A-Za-z0-9._-]+\.(internal|corp|local)(?:\.[\p{L}\p{M}\p{N}_-]+)*(?
   # naming one: the label before ".local" is restricted to a single
   # unbroken token (no dot), so a real corp/internal host wearing a
   # ".local.env" suffix (e.g. "vault.corp.local.env") keeps matching the
-  # base regex but never satisfies this anchored allowlist entry.
+  # base regex but never satisfies this anchored allowlist entry. The final
+  # period alternative keeps normal sentence punctuation inside the accepted
+  # file-name match without permitting another dotted label.
   regexTarget = "match"
   regexes = [
-    '''^settings\.local(?:\z|[^\p{L}\p{M}\p{N}_.-])''',
-    '''^settings\.local\.json(?:\z|[^\p{L}\p{M}\p{N}_.-])''',
-    '''^[A-Za-z0-9_-]+\.local\.env(?:\z|[^\p{L}\p{M}\p{N}_.-])''',
+    '''^settings\.local(?:\z|[^\p{L}\p{M}\p{N}_.-]|\.(?:\z|[^\p{L}\p{M}\p{N}_.-]))''',
+    '''^settings\.local\.json(?:\z|[^\p{L}\p{M}\p{N}_.-]|\.(?:\z|[^\p{L}\p{M}\p{N}_.-]))''',
+    '''^[A-Za-z0-9_-]+\.local\.env(?:\z|[^\p{L}\p{M}\p{N}_.-]|\.(?:\z|[^\p{L}\p{M}\p{N}_.-]))''',
   ]
 
 [[allowlists]]

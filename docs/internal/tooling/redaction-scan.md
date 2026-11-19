@@ -39,18 +39,18 @@ redaction-scan: OK: 0 findings (mode=tracked, files=144, commit-messages=not-sca
 `org-rules-source` names whether the file came from the environment, the workspace root, or the legacy home path. `profile=export` is the safe default and loads every valid rule. `profile=internal` skips rules whose id starts with `workspace_` and reports them as `export-only-skipped=N`.
 `pre-existing=N` and `stale-fingerprints=N` are explained below.
 
-### `--range` blocks on the commit history and warns on tip-only findings
+### `--range` blocks by default and warns only on base-content evidence
 
-A full-tree or staged scan flags every match on the file, full stop. `--range` uses `gitleaks git --log-opts="A..B --diff-merges=first-parent"` with the same generated config as the tip scan to build its blocking set. Every finding in that history report blocks, including a finding added and deleted inside the range or introduced while resolving a merge. This is also why the range scan can catch a leak that the tip tree no longer contains.
+A full-tree or staged scan flags every match on the file, full stop. `--range` uses `gitleaks git --log-opts="A..B --diff-merges=first-parent --text --no-textconv"` with the same generated config as the tip scan to build part of its blocking set. The text and no-textconv options make history scanning inspect raw stored content, including paths marked `-diff`. Every finding in that history report blocks, including a finding added and deleted inside the range or introduced while resolving a merge. This is also why the range scan can catch a leak that the tip tree no longer contains.
 
 ```console
 $ scripts/redaction-scan.sh --range origin/main..HEAD
-redaction-scan: WARNING — 1 pre-existing finding(s) absent from the range's gitleaks git report (not blocking in range mode, still exempt only via .gitleaksignore):
+redaction-scan: WARNING — 1 pre-existing finding(s) found in the range base blob (not blocking in range mode, still exempt only via .gitleaksignore):
   notes.md:40  [internal_host] Internal or corp hostname  :: ci.cor…
 redaction-scan: OK: 0 findings (mode=range, files=3, ..., pre-existing=1, ...)
 ```
 
-The warning set is the tip scan of changed paths minus the blocking set, compared by gitleaks fingerprint after removing the range report's commit prefix. A tip finding in a path with a named `filter` attribute remains blocking because gitleaks git reads the pointer blob while the tip scan reads the smudged content. Commit-message scanning remains separate and unchanged, and commit-message findings always block. Full-file and staged modes do not use the range report. A malformed range report or filter-path list fails closed with exit 2 and a named reason.
+The warning set is a tip-scan finding whose `Secret` text is present in the same path's base blob. For `A..B`, the base is `A`; for `A...B`, it is the merge base. The scanner reads that blob with `git show <base>:<path>` and performs a byte search, so a path absent at the base or a finding without positive content evidence remains blocking. A path with a filter attribute follows the same evidence rule, with no attribute-specific downgrade. A changed path with an uncommitted key is therefore blocking. A deleted path marked `-diff` exits 2 with a named undecidable reason when git mode cannot report it. Commit-message scanning remains separate and unchanged, and commit-message findings always block. Full-file and staged modes do not use the range report. A malformed range report or an unresolvable base exits 2 with a named reason.
 
 The range must resolve before either gitleaks scan starts. A missing commit or an otherwise unresolvable range exits 2 with a named reason; it never becomes an empty, passing scan. CI checks out complete history before invoking range mode for a pull request.
 

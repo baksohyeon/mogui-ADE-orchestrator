@@ -55,6 +55,7 @@ BASE_CONFIG="${REPO_ROOT}/config/gitleaks.toml"
 LEGACY_ALLOWLIST="${REDACTION_ALLOWLIST:-${SCRIPT_DIR}/redaction-allowlist.txt}"
 MODE="tracked"
 RANGE=""
+RANGE_BASE=""
 COMMIT_RANGE=""
 VERBOSE=0
 REQUIRE_EXTRA="${REDACTION_REQUIRE_EXTRA:-0}"
@@ -409,6 +410,26 @@ if [[ -n "${RANGE}" ]] && ! git rev-list --max-count=0 "${RANGE}" >/dev/null 2>&
   echo "redaction-scan: FAIL — range does not resolve in this repository: ${RANGE}" >&2
   exit 2
 fi
+if [[ "${MODE}" == "range" ]]; then
+  if [[ "${RANGE}" == *...* ]]; then
+    RANGE_LEFT="${RANGE%%...*}"
+    RANGE_RIGHT="${RANGE#*...}"
+    if [[ -z "${RANGE_LEFT}" || -z "${RANGE_RIGHT}" ]] \
+      || ! RANGE_BASE="$(git merge-base "${RANGE_LEFT}" "${RANGE_RIGHT}" 2>/dev/null)" \
+      || [[ -z "${RANGE_BASE}" ]]; then
+      echo "redaction-scan: FAIL — could not resolve the merge base for range ${RANGE}" >&2
+      exit 2
+    fi
+  else
+    RANGE_LEFT="${RANGE%%..*}"
+    if [[ -z "${RANGE_LEFT}" ]] \
+      || ! RANGE_BASE="$(git rev-parse --verify "${RANGE_LEFT}^{commit}" 2>/dev/null)" \
+      || [[ -z "${RANGE_BASE}" ]]; then
+      echo "redaction-scan: FAIL — could not resolve the base revision for range ${RANGE}" >&2
+      exit 2
+    fi
+  fi
+fi
 if [[ -n "${COMMIT_RANGE}" && "${COMMIT_RANGE}" != "${RANGE}" ]] \
   && ! git rev-list --max-count=0 "${COMMIT_RANGE}" >/dev/null 2>&1; then
   echo "redaction-scan: FAIL — message range does not resolve: ${COMMIT_RANGE}" >&2
@@ -446,6 +467,35 @@ scan_path() {
   local path="$1"
   [[ -f "${path}" ]] || return 0
   report_index=$((report_index + 1))
+
+  # Git's -diff attribute makes gitleaks dir treat a text path as a binary
+  # patch. Read the working-tree bytes through stdin for that path so the tip
+  # scan still observes the content, while preserving the real path in output.
+  local diff_attribute=""
+  if [[ "${MODE}" == "range" ]]; then
+    if ! diff_attribute="$(git check-attr diff -- "${path}" 2>/dev/null)"; then
+      echo "redaction-scan: FAIL — could not determine diff attribute for ${path}" >&2
+      exit 2
+    fi
+  fi
+  if [[ "${diff_attribute}" == *": diff: unset" ]]; then
+    if ! gitleaks stdin \
+      --config "${CONFIG}" \
+      --no-banner \
+      --exit-code 0 \
+      --report-format json \
+      --report-path "${REPORTS}/${report_index}.json" \
+      < "${path}" \
+      >/dev/null 2>&1; then
+      echo "redaction-scan: FAIL — gitleaks failed on ${path} (engine error, not a finding)" >&2
+      exit 2
+    fi
+    if grep -q '"RuleID"' "${REPORTS}/${report_index}.json"; then
+      annotate_report "${REPORTS}/${report_index}.json" "file_content" "${path}"
+    fi
+    return 0
+  fi
+
   if ! gitleaks dir "${path}" \
     --config "${CONFIG}" \
     --no-banner \
@@ -514,52 +564,12 @@ if [[ "${list_rc}" -ne 0 ]]; then
 fi
 
 # Range mode uses gitleaks' commit-aware scan for the blocking set. The tip
-# file scan below supplies only warnings for findings that are absent from this
-# set. A separate filter-path list keeps smudged content blocking because git
-# mode reads the pointer blob rather than the working-tree content.
+# file scan below supplies a warning only when the finding's secret is present
+# in the same path at the range base revision.
 RANGE_GIT_REPORT="${WORK_DIR}/range-git.json"
-FILTERED_PATHS="${WORK_DIR}/filtered-paths.json"
 if [[ "${MODE}" == "range" ]]; then
-  if ! "${PYTHON}" - "${FILES_LIST}" "${FILTERED_PATHS}" > "${WORK_DIR}/filter-paths-error" <<'PY'
-import json
-import subprocess
-import sys
-
-files_list_path, output_path = sys.argv[1:3]
-with open(files_list_path, "rb") as handle:
-    paths = [path.decode("utf-8") for path in handle.read().split(b"\0") if path]
-
-result = subprocess.run(
-    ["git", "check-attr", "-z", "--stdin", "filter"],
-    input="\0".join(paths),
-    capture_output=True,
-    text=True,
-)
-if result.returncode != 0:
-    print(
-        f"could not read filter attributes (git exit {result.returncode}): "
-        f"{result.stderr.strip()[:200]}"
-    )
-    sys.exit(1)
-
-fields = result.stdout.split("\0")[:-1] if result.stdout else []
-filtered = {
-    fields[index]
-    for index in range(0, len(fields), 3)
-    if index + 2 < len(fields)
-    and fields[index + 2] not in ("unspecified", "unset")
-}
-with open(output_path, "w", encoding="utf-8") as handle:
-    json.dump(sorted(filtered), handle)
-PY
-  then
-    reason="$(cat "${WORK_DIR}/filter-paths-error" 2>/dev/null)"
-    echo "redaction-scan: FAIL — could not determine filtered paths${reason:+: ${reason}}" >&2
-    exit 2
-  fi
-
   if ! gitleaks git \
-    --log-opts="${RANGE} --diff-merges=first-parent" \
+    --log-opts="${RANGE} --diff-merges=first-parent --text --no-textconv" \
     --config "${CONFIG}" \
     --no-banner \
     --exit-code 0 \
@@ -572,6 +582,71 @@ PY
   fi
   if [[ ! -f "${RANGE_GIT_REPORT}" ]]; then
     echo "redaction-scan: FAIL — gitleaks git returned no report for range ${RANGE}" >&2
+    exit 2
+  fi
+
+  # Git treats a deleted path marked -diff as binary, so gitleaks git may have
+  # no finding to report even when the path held a secret in an earlier commit.
+  # There is no tip blob to compare for positive base evidence in this case.
+  DIFF_ATTRIBUTE_ERROR="${WORK_DIR}/diff-attribute-error"
+  DIFF_ATTRIBUTE_PATHS="${WORK_DIR}/deleted-diff-paths"
+  if ! "${PYTHON}" - "${RANGE}" "${RANGE_GIT_REPORT}" > "${DIFF_ATTRIBUTE_PATHS}" 2>"${DIFF_ATTRIBUTE_ERROR}" <<'PY'
+import json
+import subprocess
+import sys
+
+range_spec = sys.argv[1]
+range_report_path = sys.argv[2]
+try:
+    with open(range_report_path, encoding="utf-8") as handle:
+        range_rows = json.load(handle)
+except (OSError, UnicodeError, json.JSONDecodeError):
+    range_rows = None
+reported_paths = set()
+if isinstance(range_rows, list):
+    reported_paths = {
+        str(row.get("File", "")).replace("\\", "/").removeprefix("./")
+        for row in range_rows
+        if isinstance(row, dict) and row.get("File")
+    }
+deleted = subprocess.run(
+    ["git", "log", "--format=", "--name-only", "-z", "--diff-filter=D", "--no-renames", range_spec],
+    capture_output=True,
+    check=False,
+)
+if deleted.returncode != 0:
+    print(f"could not list deleted paths (git exit {deleted.returncode})", file=sys.stderr)
+    raise SystemExit(1)
+
+for path_bytes in deleted.stdout.split(b"\0"):
+    if not path_bytes:
+        continue
+    path = path_bytes.decode("utf-8")
+    attrs = subprocess.run(
+        ["git", "check-attr", "-z", "diff", "--", path],
+        capture_output=True,
+        check=False,
+    )
+    if attrs.returncode != 0:
+        print(f"could not read diff attribute for {path} (git exit {attrs.returncode})", file=sys.stderr)
+        raise SystemExit(1)
+    fields = attrs.stdout.split(b"\0")
+    if (
+        isinstance(range_rows, list)
+        and len(fields) >= 3
+        and fields[2] == b"unset"
+        and path not in reported_paths
+    ):
+        print(path)
+PY
+  then
+    reason="$(cat "${DIFF_ATTRIBUTE_ERROR}" 2>/dev/null)"
+    echo "redaction-scan: FAIL — could not determine deleted -diff paths${reason:+: ${reason}}" >&2
+    exit 2
+  fi
+  if [[ -s "${DIFF_ATTRIBUTE_PATHS}" ]]; then
+    echo "redaction-scan: FAIL — cannot decide: gitleaks git may skip deleted path(s) marked -diff; inspect ${DIFF_ATTRIBUTE_PATHS}" >&2
+    cat "${DIFF_ATTRIBUTE_PATHS}" >&2
     exit 2
   fi
 fi
@@ -728,20 +803,21 @@ FINDINGS_FILE="${WORK_DIR}/findings.txt"
 PREEXISTING_FILE="${WORK_DIR}/preexisting.txt"
 CLASSIFY_ERROR="${WORK_DIR}/classify-error"
 classify_rc=0
-"${PYTHON}" - "${REPORTS}" "${FINDINGS_FILE}" "${PREEXISTING_FILE}" "${MODE}" "${RANGE_GIT_REPORT}" "${FILTERED_PATHS}" > /dev/null 2>"${CLASSIFY_ERROR}" <<'PY' || classify_rc=$?
+"${PYTHON}" - "${REPORTS}" "${FINDINGS_FILE}" "${PREEXISTING_FILE}" "${MODE}" "${RANGE_GIT_REPORT}" "${RANGE_BASE}" > /dev/null 2>"${CLASSIFY_ERROR}" <<'PY' || classify_rc=$?
 import hashlib
 import json
 import pathlib
 import re
+import subprocess
 import sys
 
-reports, findings_path, preexisting_path, mode, range_report_path, filtered_path = (
+reports, findings_path, preexisting_path, mode, range_report_path, range_base = (
     pathlib.Path(sys.argv[1]),
     pathlib.Path(sys.argv[2]),
     pathlib.Path(sys.argv[3]),
     sys.argv[4],
     pathlib.Path(sys.argv[5]),
-    pathlib.Path(sys.argv[6]),
+    sys.argv[6],
 )
 MASKS = (
     (re.compile(r"(AKIA)[0-9A-Z]{16}"), r"\1****************"),
@@ -812,7 +888,6 @@ def load_range_json(path, label):
 
 
 range_rows = []
-filtered_paths = set()
 if mode == "range":
     range_rows = load_range_json(range_report_path, "range gitleaks report")
     if any(not isinstance(row, dict) for row in range_rows):
@@ -824,19 +899,14 @@ if mode == "range":
             file=sys.stderr,
         )
         raise SystemExit(1)
-    filter_rows = load_range_json(filtered_path, "filter path list")
-    if any(not isinstance(path, str) for path in filter_rows):
-        print("could not parse filter path list: expected path strings", file=sys.stderr)
-        raise SystemExit(1)
-    filtered_paths = {canonical_path(path) for path in filter_rows}
-
 range_keys = {finding_key(row) for row in range_rows if row.get("File")}
 
 blocking = set()
 preexisting = set()
 
-# The gitleaks git report is the blocking set. This includes findings in files
-# that were added and deleted inside the range, which the tip scan cannot see.
+# The gitleaks git report is part of the blocking set. This includes findings in
+# files that were added and deleted inside the range, which the tip scan cannot
+# see.
 if mode == "range":
     for row in range_rows:
         if row.get("File"):
@@ -854,10 +924,28 @@ for report in sorted(reports.glob("*.json")):
             continue
 
         file_ = canonical_path(row.get("File"))
-        if file_ in filtered_paths or finding_key(row) in range_keys:
+        if finding_key(row) in range_keys:
             blocking.add(line_text)
-        else:
+            continue
+
+        secret = row.get("Secret")
+        if not isinstance(secret, str) or not secret or not file_ or not range_base:
+            blocking.add(line_text)
+            continue
+
+        try:
+            base_blob = subprocess.run(
+                ["git", "show", f"{range_base}:{file_}"],
+                capture_output=True,
+                check=False,
+            )
+        except OSError:
+            base_blob = None
+
+        if base_blob is not None and base_blob.returncode == 0 and secret.encode("utf-8") in base_blob.stdout:
             preexisting.add(line_text)
+        else:
+            blocking.add(line_text)
 
 findings_path.write_text(
     "".join(f"{line}\n" for line in sorted(blocking)), encoding="utf-8"
@@ -880,7 +968,7 @@ if [[ "${VERBOSE}" -eq 1 ]]; then
 fi
 
 if [[ "${PREEXISTING_COUNT}" -gt 0 ]]; then
-  echo "redaction-scan: WARNING — ${PREEXISTING_COUNT} pre-existing finding(s) absent from the range's gitleaks git report (not blocking in range mode, still exempt only via .gitleaksignore):" >&2
+  echo "redaction-scan: WARNING — ${PREEXISTING_COUNT} pre-existing finding(s) found in the range base blob (not blocking in range mode, still exempt only via .gitleaksignore):" >&2
   cat "${PREEXISTING_FILE}" >&2
 fi
 

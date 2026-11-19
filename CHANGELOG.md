@@ -22,11 +22,11 @@ you build on it.
 
 ### Fixed
 
-- `scripts/redaction-scan.sh --range` now uses `gitleaks git` over the range as its blocking set, while the changed-path tip scan minus that set remains a non-blocking pre-existing warning set; findings added and deleted inside the range block, named filter paths keep tip-content findings blocking, and full-file, staged, and commit-message modes are unchanged (#331).
-- Range mode includes first-parent merge diffs and fails closed with a named exit-2 reason when its generated report or filter-path list cannot be parsed (#331).
+- `scripts/redaction-scan.sh --range` now blocks findings by default and keeps a tip-scan finding as a pre-existing warning only when its `Secret` text is present in the same path's base blob from `git show`; findings added and deleted inside the range still block through `gitleaks git`, uncommitted changed-path findings block, filtered paths use the same evidence rule, and deleted `-diff` paths fail closed when git mode cannot report them (#331).
+- Range mode includes first-parent merge diffs and fails closed with a named exit-2 reason when its generated report cannot be parsed or a deleted `-diff` path cannot be decided (#331).
 - Range mode now fails with exit 2 and a named reason when its commit range cannot be resolved, and the pull-request workflow fetches complete history before running the range scan (#331).
 - Tracked-mode scans now report `.gitleaksignore` fingerprints that match no current finding; a file fingerprint is `path:rule:line`, its path uses forward slashes for comparison, and it drifts as soon as a line above it shifts (#331).
-- The `internal_host` rule no longer flags a single-label `*.local.env` file name or a comment naming one, while a bare `*.local` host, a real host on the same line, a sentence-final hostname with its terminal period, or a hostname ending in non-ASCII letters or combining marks matched by `\p{M}` still flags (#331, extends #168).
+- The `internal_host` rule no longer flags the three accepted single-label file names, including a sentence-final period, while a bare `*.local` host, a real host on the same line, a sentence-final hostname with its terminal period, another dotted label, or a hostname ending in non-ASCII letters or combining marks matched by `\p{M}` still flags (#331, extends #168).
 
 ## [0.5.353] - 2026-11-17
 

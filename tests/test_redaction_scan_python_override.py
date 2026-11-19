@@ -203,7 +203,7 @@ def test_redaction_python_override_runs_per_commit_normalizer(tmp_path: Path) ->
     assert "commit:" in output, output
     assert "aws_access_key" in output, output
     # The resolved interpreter runs its Python 3 check, the two per-commit
-    # message normalizers, the range filter-attribute lookup, and the final
-    # findings merge.
+    # message normalizers, the deleted -diff preflight, and the final findings
+    # merge.
     # Measured on this fixture with gitleaks 8.30.1.
     assert len(log.read_text(encoding="utf-8").splitlines()) == 5

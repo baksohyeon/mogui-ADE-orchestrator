@@ -13,7 +13,8 @@ corp/internal label folded into the same token, or more host-like text after
 `.env`, all keep the match longer than the anchored allowlist entry allows,
 so they still flag (each a real bug caught in review on an earlier version
 that put the exemption in a second, Python-side check outside gitleaks'
-own matching instead).
+own matching instead). Sentence-final periods belong to the three accepted
+file-name shapes, while another dotted label keeps the finding.
 """
 
 from __future__ import annotations
@@ -96,6 +97,50 @@ def test_local_env_file_name_is_excused_but_bare_local_host_still_flags(
     assert "instance.local.env" not in output, output
     assert "notes.md" in output, output
     assert "internal_host" in output, output
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "settings" + ".local",
+        "settings" + ".local" + ".json",
+        "instance" + ".local" + ".env",
+    ],
+)
+def test_filename_allowlist_accepts_a_sentence_final_period(
+    tmp_path: Path, filename: str
+) -> None:
+    repo = _repo_with_commits(tmp_path, ["base"])
+    (repo / "notes.md").write_text(f"The file is {filename}.\n", encoding="utf-8")
+    _git(repo, "add", "notes.md")
+    _git(repo, "commit", "-q", "-m", "notes")
+
+    result = _scan(repo)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "internal_host" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "settings" + ".local" + ".example.net",
+        "settings" + ".local" + ".json" + ".example.net",
+        "instance" + ".local" + ".env" + ".example.net",
+    ],
+)
+def test_filename_allowlist_rejects_another_dotted_label(
+    tmp_path: Path, filename: str
+) -> None:
+    repo = _repo_with_commits(tmp_path, ["base"])
+    (repo / "notes.md").write_text(f"The host is {filename}.\n", encoding="utf-8")
+    _git(repo, "add", "notes.md")
+    _git(repo, "commit", "-q", "-m", "notes")
+
+    result = _scan(repo)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "internal_host" in result.stdout + result.stderr
 
 
 @requires_gitleaks

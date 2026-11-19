@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import stat
 import subprocess
 from pathlib import Path
 
@@ -270,6 +271,106 @@ def test_range_mode_leaves_an_index_flagged_path_fully_blocking(
     result = _scan(repo, "--range", f"{base}..HEAD")
     output = result.stdout + result.stderr
 
+    assert result.returncode == 1, output
+    assert "aws_access_key" in output, output
+    assert "pre-existing" not in result.stdout, output
+
+
+@requires_gitleaks
+def test_range_mode_keeps_a_missing_index_path_fully_blocking(
+    tmp_path: Path,
+) -> None:
+    """A changed working-tree path can lose its index entry after the range
+    was committed. The scan must continue and keep its findings blocking.
+    """
+    repo = _repo_with_commits(tmp_path, ["base"])
+    base = _head(repo)
+    (repo / "report.md").write_text(f"{LEAK}\n", encoding="utf-8")
+    _git(repo, "add", "report.md")
+    _git(repo, "commit", "-q", "-m", "add report")
+    _git(repo, "rm", "--cached", "--quiet", "report.md")
+
+    result = _scan(repo, "--range", f"{base}..HEAD")
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 1, output
+    assert "aws_access_key" in output, output
+    assert "could not read an index entry" not in output, output
+    assert "pre-existing" not in result.stdout, output
+
+
+@pytest.mark.parametrize("index_flag", ["--assume-unchanged", "--skip-worktree"])
+@requires_gitleaks
+def test_range_mode_rechecks_index_flags_after_scanning(
+    tmp_path: Path, index_flag: str
+) -> None:
+    """An index flag set while a file is being scanned invalidates its
+    added-lines map before the findings are classified.
+    """
+    real_gitleaks = shutil.which(
+        "gitleaks",
+        path=os.pathsep.join(
+            part for part in os.environ["PATH"].split(os.pathsep)
+            if "mise/shims" not in part
+        ),
+    )
+    assert real_gitleaks is not None
+    repo = _repo_with_commits(tmp_path, ["base"])
+    (repo / "report.md").write_text(
+        f"{LEAK}\nclean base line\n", encoding="utf-8"
+    )
+    _git(repo, "add", "report.md")
+    _git(repo, "commit", "-q", "-m", "add report")
+    base = _head(repo)
+    with open(repo / "report.md", "a", encoding="utf-8") as handle:
+        handle.write("a new clean append\n")
+    _git(repo, "add", "report.md")
+    _git(repo, "commit", "-q", "-m", "append a clean line")
+
+    shim_dir = tmp_path / "bin"
+    shim_dir.mkdir()
+    shim = shim_dir / "gitleaks"
+    shim.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = "dir" ]; then\n'
+        '  git -C "$MUTATE_REPO" update-index "$MUTATE_FLAG" -- "$MUTATE_PATH"\n'
+        "fi\n"
+        'exec "$REAL_GITLEAKS" "$@"\n',
+        encoding="utf-8",
+    )
+    shim.chmod(shim.stat().st_mode | stat.S_IEXEC)
+    env = {**os.environ}
+    env.pop("REDACTION_EXTRA_PATTERNS", None)
+    env.pop("REDACTION_REQUIRE_EXTRA", None)
+    env["HOME"] = str(repo.parent / "test-home")
+    env["PATH"] = f"{shim_dir}{os.pathsep}{env['PATH']}"
+    env["MUTATE_REPO"] = str(repo)
+    env["MUTATE_FLAG"] = index_flag
+    env["MUTATE_PATH"] = "report.md"
+    env["REAL_GITLEAKS"] = real_gitleaks
+
+    try:
+        result = subprocess.run(
+            [
+                "bash",
+                str(repo / "scripts" / "redaction-scan.sh"),
+                "--range",
+                f"{base}..HEAD",
+            ],
+            cwd=repo,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    finally:
+        clear_flag = {
+            "--assume-unchanged": "--no-assume-unchanged",
+            "--skip-worktree": "--no-skip-worktree",
+        }[index_flag]
+        _git(repo, "update-index", clear_flag, "report.md")
+
+    output = result.stdout + result.stderr
     assert result.returncode == 1, output
     assert "aws_access_key" in output, output
     assert "pre-existing" not in result.stdout, output

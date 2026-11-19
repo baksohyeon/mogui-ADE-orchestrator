@@ -107,9 +107,10 @@ description = "Internal or corp hostname"
 # cache.local.env.équipe.net: the ASCII-only class stopped at "cache.local.env").
 # \p{M} (combining marks) rides along with \p{L}\p{N}: a letter followed by
 # its own combining accent (the decomposed NFD form of the same character,
-# e.g. "e" + U+0301 instead of the single precomposed "é") is one label, not
-# a letter followed by a boundary (confirmed the same way, decomposed).
-regex = '''\b[A-Za-z0-9._-]+\.(internal|corp|local)(?:\.[\p{L}\p{M}\p{N}_-]+)*\b'''
+# e.g. "e" + U+0301 instead of the single precomposed "é") is one label. The
+# explicit end condition consumes one non-label separator so the allowlist can
+# keep matching the complete token without relying on ASCII \b behavior.
+regex = '''\b[A-Za-z0-9._-]+\.(internal|corp|local)(?:\.[\p{L}\p{M}\p{N}_-]+)*(?:\z|[^\p{L}\p{M}\p{N}_.-])'''
   [rules.allowlist]
   # Claude Code's per-checkout settings file, not a host. Bare and the real
   # on-disk name both excused; nothing with more after ".json" is.
@@ -121,9 +122,9 @@ regex = '''\b[A-Za-z0-9._-]+\.(internal|corp|local)(?:\.[\p{L}\p{M}\p{N}_-]+)*\b
   # base regex but never satisfies this anchored allowlist entry.
   regexTarget = "match"
   regexes = [
-    '''^settings\.local$''',
-    '''^settings\.local\.json$''',
-    '''^[A-Za-z0-9_-]+\.local\.env$''',
+    '''^settings\.local(?:\z|[^\p{L}\p{M}\p{N}_.-])''',
+    '''^settings\.local\.json(?:\z|[^\p{L}\p{M}\p{N}_.-])''',
+    '''^[A-Za-z0-9_-]+\.local\.env(?:\z|[^\p{L}\p{M}\p{N}_.-])''',
   ]
 
 [[allowlists]]

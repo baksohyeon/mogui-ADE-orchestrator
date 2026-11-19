@@ -603,8 +603,7 @@ for path in paths:
         sys.exit(1)
     index_entries = [entry for entry in index_check.stdout.split(b"\0") if entry]
     if not index_entries:
-        print(f"could not read an index entry for {path}")
-        sys.exit(1)
+        continue
     if any(entry[:1] in (b"h", b"s", b"S") for entry in index_entries):
         continue
 
@@ -696,7 +695,24 @@ range_to, map_path = sys.argv[1:3]
 with open(map_path, encoding="utf-8") as handle:
     mapped_paths = json.load(handle)
 
-for path in mapped_paths:
+for path in list(mapped_paths):
+    index_check = subprocess.run(
+        ["git", "ls-files", "-v", "-z", "--", path],
+        capture_output=True,
+    )
+    if index_check.returncode != 0:
+        print(
+            f"could not read index flags for {path} "
+            f"(git exit {index_check.returncode})"
+        )
+        sys.exit(1)
+    index_entries = [entry for entry in index_check.stdout.split(b"\0") if entry]
+    if not index_entries or any(
+        entry[:1] in (b"h", b"s", b"S") for entry in index_entries
+    ):
+        del mapped_paths[path]
+        continue
+
     check = subprocess.run(
         [
             "git", "diff", "--quiet", "--no-color", "--no-ext-diff",
@@ -706,6 +722,9 @@ for path in mapped_paths:
     if check.returncode != 0:
         print(f"{path} changed after its added-lines judgment was computed")
         sys.exit(1)
+
+with open(map_path, "w", encoding="utf-8") as handle:
+    json.dump(mapped_paths, handle)
 PY
   then
     reason="$(cat "${RECHECK_ERROR}" 2>/dev/null)"

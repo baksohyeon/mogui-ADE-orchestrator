@@ -147,6 +147,25 @@ def test_local_env_embedded_in_a_unicode_continued_host_still_flags(
 
 
 @requires_gitleaks
+def test_local_env_embedded_in_a_korean_unicode_host_still_flags(
+    tmp_path: Path,
+) -> None:
+    """A hostname ending in a non-ASCII character must stay a finding."""
+    repo = _repo_with_commits(tmp_path, ["base"])
+    host = "cache" + ".local" + ".env." + "한국"
+    (repo / "notes.md").write_text(f"{host}\n", encoding="utf-8")
+    _git(repo, "add", "notes.md")
+    _git(repo, "commit", "-q", "-m", "notes")
+
+    result = _scan(repo)
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 1, output
+    assert host in output, output
+    assert "internal_host" in output, output
+
+
+@requires_gitleaks
 def test_local_env_embedded_in_a_decomposed_unicode_host_still_flags(
     tmp_path: Path,
 ) -> None:

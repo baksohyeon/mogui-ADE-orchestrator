@@ -51,15 +51,28 @@ When the three steps are done, or if one fails, continue with **[Getting Started
 
 For container setup and its coverage boundary, see [`.devcontainer/README.md`](.devcontainer/README.md).
 
+## Which document do you want?
+
+| You are | Start here |
+| --- | --- |
+| Reading about the system for the first time | [`docs/public/overview.md`](./docs/public/overview.md) |
+| Installing it on your own machine | [`docs/public/getting-started.md`](./docs/public/getting-started.md) |
+| Agent-executed onboarding steps after wake-up | [`master-ops/ONBOARDING.md`](./master-ops/ONBOARDING.md) |
+| Looking for a specific document | [`docs/README.md`](./docs/README.md) |
+| Confused by Orca projects, workspaces, or an "Unavailable worktree" label | [`docs/public/orca-concepts.md`](./docs/public/orca-concepts.md) |
+| Reading the code | [Architecture](#architecture), then `src/master_runtime/core/` |
+
+Documentation in this repository is English. `master-ops/` is a template copied and substituted during onboarding. See the index for why the two are separate.
+
 ## Why these tools
 
-The workspace layer addresses three failures in long-lived coordination. Sessions end while work continues. A master that can spawn workers can waste them. Context loss after compaction can look like continuity. This runtime turns those failures into checks: guarded succession, append-only lineage, contract-gated dispatch, and boot probes that hold back state after compaction so recall can be measured.
+The workspace layer addresses three failures in long-lived coordination. Sessions end while work continues. A master that can spawn workers can waste them. Context loss after compaction can look like continuity. This runtime turns them into checks: guarded succession, append-only lineage, contract-gated dispatch, and boot probes. The probes hold back state after compaction so recall can be measured.
 
 The harness accepts any agent behind a master that can reason. `AGENTS.md` and `CLAUDE.md` ship byte-identical, and a repository test asserts it on every change. `claude` is one example CLI; Claude Code is the exercised host.
 
-The template depends on Orca by design as the required execution substrate for live operation. It supplies session lifetime that outlives a window, stable terminal handles, worktree-scoped placement, a durable Run mailbox that survives restarts, a background receiver, supervised dispatch, and pane identity tied to a worktree. Step 0 preflight refuses to proceed until `orca status` reports a usable runtime, `orca --version` meets the minimum declared in `master-ops/scripts/orca-surface-baseline.json`, and the connected runtime version meets that same minimum.
+The template depends on Orca by design as the required execution substrate for live operation. Orca supplies session lifetime that outlasts a window, stable terminal handles, worktree-scoped placement, and a durable Run, an orchestration context bound to a terminal that carries tasks, dispatches, and mailbox messages across restarts. It also supplies a background receiver, supervised dispatch, and pane identity tied to a worktree. Step 0 preflight refuses to proceed until `orca status` reports a usable runtime. It checks `orca --version` against the minimum declared in `master-ops/scripts/orca-surface-baseline.json` and checks the connected runtime version against that same minimum.
 
-The Orca decision is also a labelled preference. It came from building this harness for a month and running it against other agent development environments. What they offered read as a subset of what Orca offers. That is a preference and it is recorded as one.
+The Orca decision is a labelled preference based on running this harness against other agent development environments. Other environments offered a subset of Orca's capabilities. That preference is recorded as such.
 
 For replaceable stack components, five questions decide what belongs in the stack:
 
@@ -69,9 +82,9 @@ For replaceable stack components, five questions decide what belongs in the stac
 4. Does it still work if the operation grows past one person?
 5. Every tool claims to help with agent context. What else does this one resolve?
 
-Failing the first three usually means a subscription presented as a dependency. Passing them while answering nothing for the fifth means a preference. Preferences are allowed, labelled, and kept out of gates. The maintainer-facing version is in `CONTRIBUTING.md`; the installer-facing version is in `master-ops/onboarding/08-settings-and-skills.md`, routed from `master-ops/ONBOARDING.md`.
+Failing the first three usually means a subscription is being presented as a dependency. A tool that passes them but answers nothing for the fifth is a preference. Preferences are allowed, labelled, and kept out of gates. The maintainer-facing version is in `CONTRIBUTING.md`. The installer-facing version is in `master-ops/onboarding/08-settings-and-skills.md`, routed from `master-ops/ONBOARDING.md`.
 
-This project was designed for the case where you already pay for coding-agent CLIs and want a workspace orchestrator with no API key and no per-token bill. If you want an API-key process graph, [LangChain deepagents](https://docs.langchain.com/oss/python/deepagents/overview) is the adjacent project to inspect. The comparison entered this repository after the architecture existed; `git log -S deepagents --reverse` shows when that happened.
+This project is for people who already pay for coding-agent CLIs and want a workspace orchestrator with no API key and no per-token bill. If you want an API-key process graph, [LangChain deepagents](https://docs.langchain.com/oss/python/deepagents/overview) is the adjacent project to inspect.
 
 | Tool | What it does here | Replaceable |
 | --- | --- | --- |
@@ -80,16 +93,16 @@ This project was designed for the case where you already pay for coding-agent CL
 | [ctx](https://ctx.rs) | Cross-provider agent history index: one local query surface for prior session text, decisions, commands, and summaries. | Wired to `ctx`; alternatives exist but have not been evaluated here |
 | Git | Source of truth: charters, decisions, runbooks, lineage, and worktree isolation. | No |
 
-The optional skill layer is raised during onboarding. Declining all of it is normal; every script here runs with the base environment. The recommended set has four roles: method guidance, lifecycle hooks, task commands, and durable state. Some Claude Code plugins in that set edit user configuration during install, so onboarding prints commands for the human to run.
+The optional skill layer is raised during onboarding. Declining all of it is normal because every script here runs with the base environment. The recommended set has four roles: method guidance, lifecycle hooks, task commands, and durable state. Some Claude Code plugins in that set edit user configuration during install. Onboarding prints commands for the human to run.
 
-One integration note if you adopt a context monitor: its warning thresholds can fire before this project's succession threshold. Record in your charter that the warning is advisory, or patch the monitor knowing updates can restore the managed file.
+If you adopt a context monitor, its warning thresholds can fire before this project's succession threshold. Record in your charter that the warning is advisory. A patch to the monitor may be restored by updates.
 
 Agents: ground Orca claims in the [Orca docs snapshot agent index](https://grok-wiki.com/public/docs/stablyai-orca-2036d532bf1c/llms.txt) before improvising; the link hash may change with snapshot updates.
 
 ## What one dispatch looks like
 
 1. **A contract file becomes the dispatch brief.** The work lives in a file. The file is hashed, recorded with the gate decision, and carried with the task so the claim can be checked later.
-2. **The dispatch gate checks an estimate and records token accounting.** `scripts/dispatch-gate check` reads the runtime, model, contract, estimated characters, completion channel, and policy file. The `master-ops/scripts/dispatch` wrapper carries a declared token budget into the brief and register row when the contract declares one, reports that no cap was declared otherwise, and settles runtime usage on `worker_done` or `reap`, recording an explicit unmeasured state when no usage record exists. A deny reason stops dispatch and is written to the JSONL ledger. Tier-default computation and the account quota guard are deferred to a later design for issue #263.
+2. **The dispatch gate checks the request against policy.** `scripts/dispatch-gate check` checks the runtime, model, contract, and estimate against policy. A deny stops the dispatch and is written to the JSONL ledger.
 3. **Task creation makes work into state.** `orca orchestration task-create --spec <text>` creates a task id inside Orca's state machine.
 4. **A worktree and terminal isolate the worker.** `orca worktree create --name <name>` creates a separate checkout. `orca terminal create --worktree <selector>` opens the worker shell there.
 5. **Dispatch binds task to terminal.** `orca orchestration dispatch --task <id> --to <handle> --inject` attaches the task to the terminal and delivers the worker preamble. The dispatch record stays separate from the shell effect.
@@ -97,20 +110,20 @@ Agents: ground Orca claims in the [Orca docs snapshot agent index](https://grok-
 7. **Completion arrives through the mailbox.** The coordinator waits on `orca orchestration check --wait`. The worker sends `worker_done`, and the Run mailbox wakes the coordinator.
 8. **Acceptance comes from re-verification.** The worker report is a claim. The coordinator re-runs gates, reads diffs, examines artifacts, and checks redaction scans.
 
-This separation paid for itself when an inject returned `dispatched` while the worker terminal was still on its startup screen. The Dispatch object and shell effect could be compared, the task was reset to ready, the brief was sent again, and the prompt was confirmed before the record was trusted.
+The dispatch record and shell effect remain separate so acceptance can verify both before trusting the dispatch.
 
 ## What is standing guard
 
 The expanded guard inventory is [`docs/public/defense-inventory.md`](docs/public/defense-inventory.md).
 
-- **Dispatch gate, tier x fan-out, ledgered decisions.** `scripts/dispatch-gate` with `master-ops/model-tier-policy.json` caps agents per tier over a rolling window. Top-tier dispatch is an owner-approval question in `master-ops/scripts/dispatch --top-approved`. Dry-run checks use `--no-record`.
-- **Model identity from transcripts.** `scripts/model-identity-probe` samples recent assistant turns. `scripts/model-drift-audit` walks the transcript for transitions. TUI status lines are renderer output.
-- **Placement verification before master spawn.** `scripts/master-succeed spawn --expected-placement` fail-closes on worktree mismatch with exit 26 and `SPAWN_PLACEMENT_MISMATCH`. The placement three-set is in `master-ops/docs/runbooks/succession-boot-card.md`; the motivating failure is in `docs/public/orca-concepts.md`.
-- **Kickoff names the boot card.** `scripts/master-succeed spawn` refuses, before any Orca call, a kickoff that does not reference `docs/runbooks/succession-boot-card.md`'s path, exit 27 and `SPAWN_KICKOFF_MISSING_BOOT_CARD`.
-- **Empty-seat gate against duplicate masters.** Founding spawn requires zero terminals in the seat. Runtime duplicate detection is `scripts/master-succeed check-duplicates`.
-- **Redaction gates that name blind spots.** `scripts/redaction-scan.sh` prints scope and rules loaded. `REDACTION_REQUIRE_EXTRA=1` exits 2 when organization rules are missing. `scripts/redaction-inventory` reports uncovered candidates.
-- **Revival checks for frozen sessions.** Retirement is complete only when process, pane, and tty are measured gone. Boot scans lineage session ids for revived processes.
-- **Progressive onboarding.** `master-ops/ONBOARDING.md` is a router. It loads one file under `master-ops/onboarding/` per turn, and the next file opens only after Verify.
+- **Dispatch gate and tier fan-out.** A tier is a configured worker class, and `scripts/dispatch-gate` guards fan-out per tier and records each decision in the ledger.
+- **Model identity from transcripts.** `scripts/model-identity-probe` checks the worker model against recent transcript turns.
+- **Placement before master spawn.** `scripts/master-succeed` verifies the requested worktree placement before spawning a master.
+- **Kickoff boot-card reference.** `scripts/master-succeed` requires the succession boot card in the master kickoff.
+- **Empty seat and duplicate masters.** A seat is the workspace-level location assigned to a master, and `scripts/master-succeed` checks it and the runtime for duplicate masters.
+- **Redaction scope.** `scripts/redaction-scan.sh` names the files and rules covered by the redaction scan.
+- **Revival of frozen sessions.** `scripts/master-succeed` verifies process, pane, and tty disappearance during retirement.
+- **Progressive onboarding.** `master-ops/ONBOARDING.md` routes one onboarding step per turn and waits for Verify before the next.
 
 ## Try the core without setup
 
@@ -180,28 +193,15 @@ flowchart LR
 
 Either runs alone. Use both when a track crosses repositories and each repository still needs its own rules.
 
-## Which document do you want?
-
-| You are | Start here |
-| --- | --- |
-| Reading about the system for the first time | [`docs/public/overview.md`](./docs/public/overview.md) |
-| Installing it on your own machine | [`docs/public/getting-started.md`](./docs/public/getting-started.md) |
-| Agent-executed onboarding steps after wake-up | [`master-ops/ONBOARDING.md`](./master-ops/ONBOARDING.md) |
-| Looking for a specific document | [`docs/README.md`](./docs/README.md) |
-| Confused by Orca projects, workspaces, or an "Unavailable worktree" label | [`docs/public/orca-concepts.md`](./docs/public/orca-concepts.md) |
-| Reading the code | [Architecture](#architecture), then `src/master_runtime/core/` |
-
-Documentation in this repository is English. `master-ops/` is a template copied and substituted during onboarding. See the index for why the two are separate.
-
 ## Status
 
-Working and exercised, as of 2026-08-08: the repository test gate reports 579 passed tests and 13 passed subtests. Succession, dispatch-gate, acceptance, compaction, and onboarding paths have run against real workspaces.
+Working and exercised. CI runs the repository test gate for every pull request and every push to `main`; see the [gates workflow](.github/workflows/gates.yml). Succession, dispatch-gate, acceptance, compaction, and onboarding paths have run against real workspaces.
 
-The current release is in `CHANGELOG.md`, which records every version since `0.1.0`. CI runs the test gate and committed-rule redaction scan; the local pre-push redaction scan can add organization rules that are absent from the repository. While the major version is 0, interfaces, CLI flags, and file formats can change in a minor release. Pin a version if you build on it.
+The current release is in `CHANGELOG.md`, which records every version since `0.1.0`. CI runs the test gate and committed-rule redaction scan. The local pre-push redaction scan can add organization rules absent from the repository. While the major version is 0, interfaces, CLI flags, and file formats can change in a minor release. Pin a version if you build on it.
 
-The template that onboarding copies is versioned separately at `master-ops/TEMPLATE-VERSION`; `master-ops/CHANGELOG.md` records each version. A generated operations repository keeps the template version it copied until you apply an upgrade.
+The template that onboarding copies is versioned separately at `master-ops/TEMPLATE-VERSION`. `master-ops/CHANGELOG.md` records each version. A generated operations repository keeps the template version it copied until you apply an upgrade.
 
-Existing installations: compare the `template_version` field in your operations repository `MANIFEST.json` against `master-ops/TEMPLATE-VERSION` in the current template to see whether the ops repository is behind, then start [`master-ops/ONBOARDING.md`](master-ops/ONBOARDING.md) and use its mode router for Reverify or Upgrade.
+Existing installations: compare the `template_version` field in your operations repository `MANIFEST.json` against `master-ops/TEMPLATE-VERSION` in the current template. If the ops repository is behind, start [`master-ops/ONBOARDING.md`](master-ops/ONBOARDING.md) and use its mode router for Reverify or Upgrade.
 
 ## Core concepts
 
@@ -209,7 +209,7 @@ The orchestrating session is called the master in the docs. That is a role label
 
 ### Succession
 
-`src/master_runtime/core/succession.py` implements master-to-master handoff as an explicit guarded procedure. `detect_trigger()` classifies signals into `IMMEDIATE`, `ADVISORY`, or `NONE`. Advisory triggers include context usage ratio at or above the `0.60` default and natural milestones. Advisory triggers only propose succession.
+`src/master_runtime/core/succession.py` implements master-to-master handoff as an explicit guarded procedure. `detect_trigger()` classifies signals into `IMMEDIATE`, `ADVISORY`, or `NONE`. Advisory triggers include context usage ratio at or above the `0.60` default and natural milestones. They only propose succession.
 
 The flow builds a handoff, spawns the successor, verifies inherited state, checks for duplicate master instances, and retires the predecessor. Hard safety violations raise `SuccessionError`.
 
@@ -221,17 +221,17 @@ The schema has 13 required fields. Duplicate generations are rejected, and every
 
 ### Contract-gated dispatch
 
-`src/master_runtime/core/dispatch_gate.py` sits between the master and any worker dispatch. A dispatch request resolves to a `GateDecision` with a stable reason code such as `OK`, `BUDGET_EXCEEDED`, `TIER_FANOUT_CAP`, `NO_COMPLETION_CHANNEL`, `CONTRACT_UNREADABLE`, or `PATH_OUTSIDE_KNOWN_ROOTS`. A contract's optional typed front matter block adds `CONTRACT_FRONT_MATTER`, `CONTRACT_FRONT_MATTER_MISSING` (only a warning this release), `CONTRACT_TIER_MISMATCH`, `CONTRACT_RUNTIME_MISMATCH`, `RUNTIME_NOT_ELIGIBLE`, and `STANDING_RULE_UNKNOWN`.
+`src/master_runtime/core/dispatch_gate.py` sits between the master and any worker dispatch. Every decision carries a stable reason code; see the [Reference](docs/public/reference.md) for the available codes.
 
 Repeated contract hashes are allowed and recorded with attempt ordinals. `register` verifies the job id against an artifact probe and measures the worker's actual model. Dry-run callers use `check --no-record`.
 
 ### Acceptance loop
 
-`src/master_runtime/core/acceptance/` runs candidate changes against a casebook and produces a scorecard. Raw case results and aggregate scores are separate. The casebook owns which split a case belongs to. Candidates that change nothing still produce a decision record.
+`src/master_runtime/core/acceptance/` runs candidate changes against a casebook and produces a scorecard. Raw case results and aggregate scores are separate. The casebook owns each case's split. Candidates that change nothing still produce a decision record.
 
 ### Compaction-resilience probe
 
-`scripts/master-bootstrap-live` emits a small dynamic bootstrap block and is written to degrade to a fallback line with exit code 0 on internal error. When the incoming session event reports `source == "compact"`, the hook suppresses Role State and active-track sections. The next session has to recall that state from its own context before the ledger comparison.
+`scripts/master-bootstrap-live` emits a small dynamic bootstrap block. It degrades to a fallback line with exit code 0 on internal error. When the incoming session event reports `source == "compact"`, the hook suppresses Role State and active-track sections. The next session has to recall that state from its own context before the ledger comparison.
 
 ## Architecture
 
@@ -255,26 +255,23 @@ src/master_runtime/core/
 Two principles shape the layout:
 
 - **Core / adapter split.** `core/` modules avoid depending on any specific agent product. Process spawning, ledgers, and tool CLIs go through injected callables and `adapter/`, so core logic is testable with in-memory fakes.
-- **Vendor neutrality as a direction.** The master should run under different agent hosts. The spawn path defaults to `claude`, onboarding asks for the agent CLI and can use a measured runtime as its fallback, and `core/succession.py` still treats the Claude CLI family specially. Claude Code remains the most exercised host. The worker side is further along: `adapter/profile.py` ships synchronous CLI profiles for `codex` and `cursor-agent`. `adapter doctor` probes a fixed local tool set, and some Korean-language operator strings are embedded.
+- **Vendor neutrality as a direction.** The master should run under different agent hosts. The spawn path defaults to `claude`. Onboarding asks for the agent CLI and can use a measured runtime as its fallback. `core/succession.py` still treats the Claude CLI family specially, and Claude Code remains the most exercised host. The worker side is further along: `adapter/profile.py` ships synchronous CLI profiles for `codex` and `cursor-agent`. `adapter doctor` probes a fixed local tool set, and some Korean-language operator strings are embedded.
 
 ## Working on the harness
 
 To use the system, follow [Getting Started](docs/public/getting-started.md). This section is for changing the harness itself.
 
-Prerequisites: Python 3.11 or newer for the test suite. CI runs the test gate on `ubuntu-latest`, `macos-latest`, and `windows-latest`, all pinned to Python 3.13.17 by `python-version` in `.github/workflows/gates.yml`; keep the root `.python-version` in sync with that value by hand, since CI does not read it. All three legs are required checks. The runtime is stdlib-only. A tool that needs a more capable interpreter locates one itself at runtime, and the [Reference](docs/public/reference.md) table states each tool's behavior in its own row. Contributors can select Python through `uv`, `pyenv`, or the system developer tools.
+Prerequisites: Python 3.11 or newer for the test suite. The Python test job runs on `ubuntu-latest`, `macos-latest`, and `windows-latest` with Python 3.13.17. Branch rules require all three `tests` contexts. Keep the root `.python-version` in sync with `.github/workflows/gates.yml` by hand because CI does not read it. The runtime is stdlib-only. A tool that needs a newer interpreter locates one at runtime. The [Reference](docs/public/reference.md) table states each tool's behavior in its own row. Contributors can select Python through `uv`, `pyenv`, or the system developer tools.
 
 All CLI entry points live in `scripts/` and are self-contained:
 
 ```console
-$ scripts/master-succeed detect "routine status update" --context-ratio 0.7 --json
-$ scripts/dispatch-gate --ledger ./gate-ledger.jsonl check \
-  --runtime codex --model grok-4.5 --contract ./job-contract.md \
-  --agents 1 --est-chars 1000 --completion-channel orchestration
-$ scripts/adapter doctor
 $ scripts/master-bootstrap --charter path/to/charter.md --json
 ```
 
-Other entry points: `scripts/master-succeed` also provides `handoff`, `verify-successor`, `check-duplicates`, `retire`, and `spawn`; `scripts/master-recover` runs recovery from a charter and handoff after abnormal termination; `scripts/master-bootstrap-live` is a session-start hook; `scripts/l1-digest tick` advances the read-only digest loop; `scripts/acceptance-loop` runs the acceptance casebook. Run any of them with `--help` for current flags.
+The core commands are in [Try the core without setup](#try-the-core-without-setup).
+
+`scripts/master-succeed` provides `handoff`, `verify-successor`, `check-duplicates`, `retire`, and `spawn`. `scripts/master-recover` runs recovery from a charter and handoff after abnormal termination. `scripts/master-bootstrap-live` is a session-start hook. `scripts/l1-digest tick` advances the read-only digest loop. `scripts/acceptance-loop` runs the acceptance casebook. Run any of them with `--help` for current flags.
 
 Tests are the agent's job. Ask the agent working on the harness to run them and report.
 
@@ -290,10 +287,10 @@ Local only.
 
 ## Limitations
 
-- **Master defaults to Claude Code out of the box.** The spawn path in `core/succession.py` accepts an agent parameter, defaults it to `claude`, and handles the Claude CLI family specially. Onboarding asks for the agent CLI and records the confirmed runtime. Claude Code is what has been run most, so it is what is recommended.
-- **Workers can be any CLI.** A worker is a terminal session in an Orca pane, so it is whatever binary starts there. Claude, Codex, Cursor, Grok, and Gemini have all run this way under contract. No plugin for any of them.
+- **Master defaults to Claude Code out of the box.** The spawn path in `core/succession.py` accepts an agent parameter and defaults it to `claude`. It handles the Claude CLI family specially. Onboarding asks for the agent CLI and records the confirmed runtime. Claude Code is the most exercised host, so it is recommended.
+- **Workers can be any CLI.** A worker is a terminal session in an Orca pane. It is whatever binary starts there. Claude, Codex, Cursor, Grok, and Gemini have all run this way under contract. No plugin is required for any of them.
 - **Codex as master is untried.** It should work by design. If you run it, a report or patch is useful.
-- **Platform evidence is mixed.** This repository's CI runs the test gate on Linux and macOS, with a measurement-only Windows leg for the Windows-compatible subset. Separately, user reports said Linux and Windows worked well, including Windows through WSL; WSL2 was reported as slightly ambiguous but still working. Versions, distributions, and coverage depth were not recorded.
+- **Platform evidence is mixed.** The test gate runs on Linux, macOS, and Windows, and branch rules require all three test contexts. The Windows leg is measurement-only for the Windows-compatible subset. Shell tests and rendered-shell-tests run on Linux and macOS.
 - **Orca required** for live sessions. Pure functions run without it.
 
 ## What this is not

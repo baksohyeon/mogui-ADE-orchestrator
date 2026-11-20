@@ -403,6 +403,15 @@ if [ -n "${SOURCE_FAILURE}" ]; then
   not_ready "required check summary unavailable: ${SOURCE_FAILURE}"
 fi
 
+if [ "${RULES_FORBIDDEN}" -eq 1 ]; then
+  if [ "${PATH_RC}" -eq 2 ]; then
+    echo "${PATH_VERDICT}; ${REQUIRED_SUMMARY}; GitHub rules endpoint returned HTTP 403; owner confirmation required (head ${HEAD_SHA})"
+  else
+    echo "merge-ready: ask · GitHub rules endpoint returned HTTP 403; ${REQUIRED_SUMMARY}; owner confirmation required (head ${HEAD_SHA})"
+  fi
+  exit 2
+fi
+
 if [ "${PATH_RC}" -eq 2 ]; then
   echo "${PATH_VERDICT}; ${REQUIRED_SUMMARY} (head ${HEAD_SHA})"
   exit 2

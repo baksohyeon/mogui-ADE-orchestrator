@@ -34,8 +34,9 @@ also seeds each missing file after confirmation and preserves an existing file a
 The worker token needs repository `Administration: read` permission to read legacy branch
 protection. If the protection endpoint is unavailable to that token, the command reads the branch
 response's `protection.required_status_checks`; if the rules endpoint returns HTTP 403 for a plan
-limitation, it uses those legacy sources and asks the owner with exit `2` when neither source can
-establish the required set. Other unreadable responses retain their normal not-ready result.
+limitation, it uses those legacy sources to report the available required contexts and asks the owner
+with exit `2` for confirmation. An empty or unreadable fallback source names its cause in that ask.
+Other unreadable responses retain their normal not-ready result.
 
 The command asks the owner with exit `2` when either file is missing, and fails closed when the
 stop-list has no entries or the roster file is empty or comment-only. It has no environment
@@ -56,7 +57,8 @@ the brief ships.
    `gh api repos/<owner/name>/branches/<base>`; an unprotected branch contributes no legacy
    contexts. Failure to read both legacy sources is not ready. Every required context must be
    reported with bucket `pass`.
-   A parseable empty list is not ready because there is no required check to measure. A check that
+   A rules HTTP 403 plan limitation always asks the owner with exit `2`, even when a legacy source
+   supplies a required context summary. A parseable empty list is not ready because there is no required check to measure. A check that
    this repository runs but does not require never reaches this measurement. Every bot whose latest
    decision review on the exact head is `PENDING` or `CHANGES_REQUESTED` blocks separately. Only
    `APPROVED`, `CHANGES_REQUESTED`, `DISMISSED`, and `PENDING` are decision states; a plain
@@ -121,11 +123,10 @@ deployments and required reviewers at merge time; this command does not attest t
 - `0` merge: every measurement passed and no stop-list path was touched.
 - `1` not ready: a check, roster, review thread, PR-state, response-shape, pagination, file-cap, or
   invocation measurement failed. An unavailable GitHub response and an unparseable response are
-  both exit `1`, except for a rules-endpoint HTTP `403` plan limitation whose legacy sources cannot
-  establish the required set.
+  both exit `1`, while a rules-endpoint HTTP `403` plan limitation is handled as an owner ask.
 - `2` ask the owner: a changed path matches the stop list, falls outside the contract's `writes`
-  globs, required configuration is missing, or a rules-endpoint HTTP `403` plan limitation leaves
-  the required set unestablished after the legacy fallbacks.
+  globs, required configuration is missing, or a rules-endpoint HTTP `403` plan limitation needs
+  owner confirmation after the legacy fallbacks.
 
 Every result is one summary line prefixed `merge-ready: merge ·`, `merge-ready: not ready ·`, or
 `merge-ready: ask ·`.

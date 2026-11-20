@@ -550,7 +550,7 @@ fi
 rules_403_legacy_dir="${WORK_DIR}/rules-403-legacy"
 write_fixture "${rules_403_legacy_dir}" '[{"filename":"README.md"}]' "" '[{"name":"rules-403-legacy-context","bucket":"pass","state":"SUCCESS"}]' "${DEFAULT_REVIEWS}" 0 OPEN false "[]" "${DEFAULT_RULES}" '{"contexts":["rules-403-legacy-context"],"checks":[]}'
 out=$(run_case "${rules_403_legacy_dir}" rules-403-legacy); rc=$?
-if [ "${rc}" -eq 0 ] && printf '%s' "${out}" | grep -q 'merge-ready: merge' && printf '%s' "${out}" | grep -q 'rules-403-legacy-context'; then
+if [ "${rc}" -eq 2 ] && printf '%s' "${out}" | grep -q 'merge-ready: ask' && printf '%s' "${out}" | grep -q 'rules-403-legacy-context'; then
   ok "a rules HTTP 403 falls back to legacy protection"
 else
   fail "rules HTTP 403 legacy fallback: got ${rc}: ${out}"
@@ -559,7 +559,7 @@ fi
 rules_403_branch_dir="${WORK_DIR}/rules-403-branch"
 write_fixture "${rules_403_branch_dir}" '[{"filename":"README.md"}]' "" '[{"name":"rules-403-branch-context","bucket":"pass","state":"SUCCESS"}]' "${DEFAULT_REVIEWS}" 0 OPEN false "[]" "${DEFAULT_RULES}" '{"contexts":["rules-403-branch-context"],"checks":[]}'
 out=$(run_case "${rules_403_branch_dir}" rules-403-branch); rc=$?
-if [ "${rc}" -eq 0 ] && printf '%s' "${out}" | grep -q 'merge-ready: merge' && printf '%s' "${out}" | grep -q 'rules-403-branch-context'; then
+if [ "${rc}" -eq 2 ] && printf '%s' "${out}" | grep -q 'merge-ready: ask' && printf '%s' "${out}" | grep -q 'rules-403-branch-context'; then
   ok "a rules HTTP 403 falls back to branch protection"
 else
   fail "rules HTTP 403 branch fallback: got ${rc}: ${out}"

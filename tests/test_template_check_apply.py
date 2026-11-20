@@ -489,7 +489,7 @@ def test_template_apply_refuses_write_for_malformed_retirements_file(tmp_path: P
         ]
     )
     assert result.returncode == 2, result.stdout + result.stderr
-    assert "config/template-retirements.json" in result.stderr
+    assert str(retirements) in result.stderr
     assert not (ops / "card.md").exists()
 
 

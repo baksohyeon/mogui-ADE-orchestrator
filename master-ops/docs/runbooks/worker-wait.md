@@ -1,3 +1,7 @@
+---
+status: active
+---
+
 # worker-wait runbook
 
 ## What it does

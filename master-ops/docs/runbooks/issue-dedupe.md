@@ -1,3 +1,7 @@
+---
+status: active
+---
+
 # Finding Duplicate Issues Before Filing, and a Weekly Sweep
 
 `scripts/issue-similar` searches `gh` for issues that may already cover a title and body,

@@ -1,3 +1,7 @@
+---
+status: active
+---
+
 # Loop runbook
 
 The procedure the master follows around `scripts/loop-check` for a bounded run

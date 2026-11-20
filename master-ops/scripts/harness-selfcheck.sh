@@ -1260,6 +1260,16 @@ else
   exit_code=1
 fi
 
+# --- Runbook index check ---
+# The generator belongs to the template. An older install can keep booting
+# while upgrade has not delivered it yet; once present, stale output is a hard
+# self-check finding and the generator prints the fixing command.
+if [ -x "$OPS_DIR/scripts/runbook-index" ]; then
+  "$OPS_DIR/scripts/runbook-index" --check || exit_code=1
+else
+  echo "Runbook index: undecided (scripts/runbook-index missing or not executable)"
+fi
+
 # --- Warning grading summary (#336 item 2) ---
 echo "Self-check summary: $blocking_warnings blocking warning(s), $informational_warnings informational warning(s)"
 if [ "$exit_code" -eq 0 ] && [ "$blocking_warnings" -gt 0 ]; then

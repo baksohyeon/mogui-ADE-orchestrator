@@ -1,3 +1,7 @@
+---
+status: active
+---
+
 # PR Body Narrative Section Check
 
 `scripts/pr-body-check` validates the four required narrative sections in a pull request body:

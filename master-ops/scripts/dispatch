@@ -11,6 +11,7 @@ TEMPLATE_POLICY=$OPS/model-tier-policy.json
 PROBE_BIN={{RUNTIME_ROOT}}/scripts/model-identity-probe
 ROLLOUT_PROBE_BIN={{RUNTIME_ROOT}}/scripts/model-probe-rollout
 SCRIPTS_DIR=$(cd "$(dirname "$0")" && pwd)
+export DISPATCH_RUNBOOKS_DIR="${DISPATCH_RUNBOOKS_DIR:-$SCRIPTS_DIR/../docs/runbooks}"
 COLLISION_CHECK="$SCRIPTS_DIR/dispatch-collision-check"
 HOOKS_ANSWER_BIN="$SCRIPTS_DIR/codex-hooks-review-answer"
 # pane_classify_text reads this file on every pane read. A missing, unreadable,
@@ -533,6 +534,42 @@ print(value or '')
 " "$SCRIPTS_DIR" "$func"
 }
 
+# Body text of a "## <heading>" section. Exit 1 when the file or heading is
+# absent. Both standing rules and runbook Brief injection use this extractor so
+# the wrapper and gate keep one Markdown-section boundary.
+markdown_section() {
+  local path="$1" heading="$2"
+  python3 - "$path" "$heading" <<'EOF'
+import sys
+
+path, heading_name = sys.argv[1], sys.argv[2]
+
+try:
+    with open(path, encoding="utf-8") as fh:
+        lines = fh.read().splitlines()
+except OSError:
+    sys.exit(1)
+
+heading = f"## {heading_name}"
+body = []
+found = False
+for line in lines:
+    if found:
+        if line.startswith("## "):
+            break
+        body.append(line)
+    elif line.strip() == heading:
+        found = True
+if not found:
+    sys.exit(1)
+while body and not body[0].strip():
+    body.pop(0)
+while body and not body[-1].strip():
+    body.pop()
+print("\n".join(body))
+EOF
+}
+
 # Body text of a "## <name>" heading, read from the local overlay first
 # (so a seat's own copy of a shared block name wins) and the shipped file
 # second. Exit 1 when neither file carries the heading.
@@ -546,11 +583,18 @@ standing_rule_block() {
   local name="$1"
   local main_file="${DISPATCH_STANDING_RULES:-$SCRIPTS_DIR/../rules/standing-rules.md}"
   local local_file="${DISPATCH_STANDING_RULES_LOCAL:-$SCRIPTS_DIR/../config/standing-rules.overlay.md}"
-  python3 - "$name" "$local_file" "$main_file" <<'EOF'
+  local text
+  if type markdown_section >/dev/null 2>&1; then
+    if ! text=$(markdown_section "$local_file" "$name"); then
+      text=$(markdown_section "$main_file" "$name") || return 1
+    fi
+  else
+    # The isolated standing-rule regression fixtures extract this function
+    # alone, so keep that seam runnable without the shared helper definition.
+    text=$(python3 - "$name" "$local_file" "$main_file" <<'EOF'
 import sys
 
 name, local_file, main_file = sys.argv[1], sys.argv[2], sys.argv[3]
-
 
 def extract(path, heading_name):
     try:
@@ -576,7 +620,6 @@ def extract(path, heading_name):
         body.pop()
     return "\n".join(body)
 
-
 text = extract(local_file, name)
 if text is None:
     text = extract(main_file, name)
@@ -584,6 +627,18 @@ if text is None:
     sys.exit(1)
 print(text)
 EOF
+) || return 1
+  fi
+  printf '%s\n' "$text"
+}
+
+# Return the Brief section from one named runbook. The gate validates every
+# name before it reaches this function, so the shell loop stays intentionally
+# simple and the same runbook directory is used by both layers.
+runbook_brief() {
+  local name="$1"
+  local runbook_file="$DISPATCH_RUNBOOKS_DIR/$name.md"
+  markdown_section "$runbook_file" Brief
 }
 
 github_remote_metadata() {
@@ -2633,7 +2688,8 @@ if [ "$TIER" = "top" ] && [ -z "$TOP_APPROVED_TEXT" ]; then
 fi
 GATE_ARGS=(--ledger "$LEDGER" check --runtime "$RUNTIME" --model "$MODEL" \
       --tier-policy "$POLICY" --contract "$CONTRACT" --agents 1 \
-      --est-chars "$EST" --completion-channel orchestration)
+      --est-chars "$EST" --completion-channel orchestration \
+      --runbook-inject-supported)
 [ "$MODEL_NEEDS_MEASUREMENT" = 1 ] && GATE_ARGS+=(--model-needs-measurement)
 CHK=$("$GATE" "${GATE_ARGS[@]}" --no-record 2>/dev/null)
 ALLOW=$(echo "$CHK" | jqf "d['allow']")
@@ -2771,6 +2827,30 @@ Standing rules ($name):
 $block"
   done
   echo "📎 standing rules · $STANDING_RULE_NAMES"
+fi
+
+# 1.7 append the Brief section for every runbook the contract named. The gate
+# reads the same files and records RUNBOOK_BRIEF_MISSING when a section is
+# absent; a pointer keeps that warning actionable for an older install.
+RUNBOOK_NAMES=$(echo "$CHK" | jqf "' '.join(d.get('front_matter', {}).get('runbooks', []) or [])")
+if [ -n "$RUNBOOK_NAMES" ]; then
+  for name in $RUNBOOK_NAMES; do
+    runbook_file="$DISPATCH_RUNBOOKS_DIR/$name.md"
+    if brief=$(runbook_brief "$name"); then
+      SPEC="$SPEC
+
+Runbook ($name):
+
+$brief"
+    else
+      SPEC="$SPEC
+
+Runbook ($name):
+
+Brief missing. Read the runbook at $(cd "$DISPATCH_RUNBOOKS_DIR" && pwd)/$name.md."
+    fi
+  done
+  echo "📎 runbook Brief · $RUNBOOK_NAMES"
 fi
 
 # 1.6b mail-before-done ships to every brief, whether or not the contract

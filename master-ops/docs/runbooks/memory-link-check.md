@@ -1,3 +1,7 @@
+---
+status: active
+---
+
 # Memory `[[name]]` Link Check
 
 `scripts/memory-link-check` sorts every missing `[[name]]` memory link by

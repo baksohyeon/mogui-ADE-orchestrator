@@ -1,3 +1,7 @@
+---
+status: active
+---
+
 # Orca CLI Surface Fingerprint Drift Runbook
 
 ## What This Checks

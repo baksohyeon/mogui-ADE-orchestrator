@@ -1,3 +1,7 @@
+---
+status: active
+---
+
 # Product Path Guard
 
 `scripts/hooks/product-path-guard.sh` is a `PreToolUse(Edit|Write|NotebookEdit|Bash)`

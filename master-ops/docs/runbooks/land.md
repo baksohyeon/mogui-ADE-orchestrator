@@ -1,3 +1,7 @@
+---
+status: active
+---
+
 # Landing Commits Without a Pull Request
 
 `scripts/land` carries one or more already-made commits onto a repository's `main` when that

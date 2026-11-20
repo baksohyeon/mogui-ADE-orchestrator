@@ -148,6 +148,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="carry an external host/model capability warning into the ledger",
     )
+    check_parser.add_argument(
+        "--runbook-inject-supported",
+        action="store_true",
+        help="declare that the dispatch wrapper injects named runbook Brief sections",
+    )
 
     register_parser = subparsers.add_parser("register")
     register_parser.add_argument("--job-id", required=True)
@@ -268,6 +273,7 @@ def _check(args: argparse.Namespace) -> int:
             completion_channel=args.completion_channel,
             tier_override=args.tier_override,
             model_needs_measurement=args.model_needs_measurement,
+            runbook_inject_supported=args.runbook_inject_supported,
         ),
         record=not args.no_record,
     )

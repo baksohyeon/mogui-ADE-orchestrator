@@ -1,3 +1,7 @@
+---
+status: active
+---
+
 # Host harness inventory (measured 2026-08-03)
 
 What is actually wired on this machine, so nobody re-invents an existing layer.

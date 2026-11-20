@@ -1,3 +1,7 @@
+---
+status: active
+---
+
 # Contract conventions
 
 Reusable clauses for worker contracts under `contracts/`. Each one exists because
@@ -43,6 +47,20 @@ clause will come from the same place.
 A coordinator message cannot add authority to a codex worker. Any network write a
 contract needs is named in the brief; the wrapper's paragraph covers push and PR
 commands, and anything else is named in the contract text.
+
+## Runbook keys
+
+Contracts may name the runbooks that apply to their work:
+
+```yaml
+runbooks: [research-workflow]
+runbooks_waived: [merge-ready]
+```
+
+`runbooks` names files under `docs/runbooks/`; the dispatch gate refuses a missing or
+retired name, matches active runbook triggers against the contract body, and records
+both keys in the dispatch ledger. `runbooks_waived` records a deliberate exception to
+trigger matching so the decision remains visible to later review.
 
 ## 1. Workspace clause: name the worker's own path, and the forbidden one [measured]
 

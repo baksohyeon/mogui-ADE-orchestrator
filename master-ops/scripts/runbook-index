@@ -1,0 +1,221 @@
+#!/usr/bin/env python3
+"""Generate and validate the runbook index."""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+RUNBOOK_DIR = Path(__file__).resolve().parents[1] / "docs" / "runbooks"
+RUNBOOK_FRONT_MATTER_KNOWN_KEYS = frozenset({"status", "triggers", "summary"})
+RUNBOOK_STATUSES = frozenset({"active", "draft", "retired"})
+
+
+GROUPS = ("active", "draft", "retired", "no front matter")
+BRIEF_LIMIT_BYTES = 2_000
+
+
+def parse_front_matter(text: str) -> tuple[dict[str, object] | None, str | None]:
+    """Parse the runbook metadata grammar without requiring the runtime tree."""
+
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return None, None
+    parsed: dict[str, object] = {}
+    for line_number, line in enumerate(lines[1:], start=2):
+        if line.strip() == "---":
+            return parsed, None
+        if ":" not in line:
+            return None, f"line {line_number}: not a key: value line"
+        key, _, raw_value = line.partition(":")
+        key = key.strip()
+        raw_value = raw_value.strip()
+        if key not in RUNBOOK_FRONT_MATTER_KNOWN_KEYS:
+            return None, f"unknown key: {key}"
+        if key in parsed:
+            return None, f"line {line_number}: duplicate key: {key}"
+        if raw_value.startswith("["):
+            if not raw_value.endswith("]"):
+                return None, f"line {line_number}: unterminated list"
+            inner = raw_value[1:-1].strip()
+            items = [] if not inner else [item.strip() for item in inner.split(",")]
+            if any(not item for item in items):
+                return None, f"line {line_number}: malformed list"
+            parsed[key] = items
+        else:
+            parsed[key] = raw_value
+    return None, f"line {len(lines) + 1}: unterminated front matter block"
+
+
+def section_body(text: str, heading: str) -> str | None:
+    """Extract a level-two section after the optional front matter block."""
+
+    lines = text.splitlines()
+    if lines and lines[0].strip() == "---":
+        for index, line in enumerate(lines[1:], start=1):
+            if line.strip() == "---":
+                lines = lines[index + 1 :]
+                break
+        else:
+            lines = []
+    target = f"## {heading}"
+    body: list[str] = []
+    found = False
+    for line in lines:
+        if found:
+            if line.startswith("## "):
+                break
+            body.append(line)
+        elif line.strip() == target:
+            found = True
+    if not found:
+        return None
+    while body and not body[0].strip():
+        body.pop(0)
+    while body and not body[-1].strip():
+        body.pop()
+    return "\n".join(body)
+
+
+def h1_summary(text: str, fallback: str) -> str:
+    for line in text.splitlines():
+        if line.startswith("# "):
+            return line[2:].strip() or fallback
+    return fallback
+
+
+def read_entry(path: Path) -> tuple[str, dict[str, object] | None, str | None]:
+    text = path.read_text(encoding="utf-8")
+    parsed, error = parse_front_matter(text)
+    if parsed is None or error is not None:
+        return text, None, error
+    status = parsed.get("status")
+    triggers = parsed.get("triggers", [])
+    if not isinstance(status, str) or status not in RUNBOOK_STATUSES:
+        return text, None, f"invalid status: {status!r}"
+    if not isinstance(triggers, list) or any(
+        not isinstance(trigger, str)
+        or not trigger
+        or trigger != trigger.casefold()
+        or "," in trigger
+        for trigger in triggers
+    ):
+        return text, None, "invalid triggers"
+    if "summary" in parsed and (
+        not isinstance(parsed["summary"], str) or "\n" in parsed["summary"]
+    ):
+        return text, None, "invalid summary"
+    brief = section_body(text, "Brief")
+    if triggers and brief is None:
+        return text, {
+            "status": status,
+            "triggers": triggers,
+            "summary": parsed.get("summary"),
+            "brief": None,
+        }, "missing Brief"
+    if brief is not None and len(brief.encode("utf-8")) > BRIEF_LIMIT_BYTES:
+        return (
+            text,
+            {
+                "status": status,
+                "triggers": triggers,
+                "summary": parsed.get("summary"),
+                "brief": brief,
+            },
+            f"Brief exceeds {BRIEF_LIMIT_BYTES} bytes",
+        )
+    return text, {
+        "status": status,
+        "triggers": triggers,
+        "summary": parsed.get("summary"),
+        "brief": brief,
+    }, None
+
+
+def entries() -> tuple[dict[str, object], ...]:
+    result: list[dict[str, object]] = []
+    for path in sorted(RUNBOOK_DIR.glob("*.md")):
+        if path.name == "README.md" or not path.stem or path.stem == "README":
+            continue
+        text, metadata, error = read_entry(path)
+        result.append(
+            {
+                "name": path.stem,
+                "path": path,
+                "text": text,
+                "metadata": metadata,
+                "error": error,
+            }
+        )
+    return tuple(result)
+
+
+def render() -> str:
+    groups: dict[str, list[dict[str, object]]] = {group: [] for group in GROUPS}
+    for entry in entries():
+        metadata = entry["metadata"]
+        group = metadata["status"] if isinstance(metadata, dict) else "no front matter"
+        groups[group].append(entry)
+
+    lines = [
+        "# Runbook index",
+        "",
+        "Generated by `scripts/runbook-index`; run `scripts/runbook-index --write` to refresh it.",
+        "",
+    ]
+    for group in GROUPS:
+        lines.append(f"## {group.title()}")
+        lines.append("")
+        if not groups[group]:
+            lines.append("_None._")
+            lines.append("")
+            continue
+        for entry in groups[group]:
+            name = entry["name"]
+            path = entry["path"]
+            metadata = entry["metadata"]
+            text = entry["text"]
+            title = h1_summary(text, name)
+            if isinstance(metadata, dict) and isinstance(metadata.get("summary"), str):
+                summary = metadata["summary"]
+            else:
+                summary = title
+            suffix = "" if summary == title else f": {summary}"
+            lines.append(f"- [{title}]({path.name}){suffix}.")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--write", action="store_true", help="write the generated README")
+    mode.add_argument("--check", action="store_true", help="fail when README or Brief limits drift")
+    args = parser.parse_args(argv)
+    output = RUNBOOK_DIR / "README.md"
+    body = render()
+    if args.check:
+        errors = []
+        for entry in entries():
+            if entry["error"] in {"missing Brief", f"Brief exceeds {BRIEF_LIMIT_BYTES} bytes"}:
+                errors.append(f"{entry['name']}: {entry['error']}")
+        try:
+            current = output.read_text(encoding="utf-8")
+        except OSError:
+            current = None
+        if current != body:
+            errors.append("README.md differs from generated output")
+        if errors:
+            for error in errors:
+                print(f"runbook-index: {error}", file=sys.stderr)
+            print("runbook-index: run scripts/runbook-index --write", file=sys.stderr)
+            return 1
+        return 0
+    output.write_text(body, encoding="utf-8")
+    print(f"wrote {output}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

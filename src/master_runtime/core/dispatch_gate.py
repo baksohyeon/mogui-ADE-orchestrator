@@ -248,6 +248,20 @@ def _default_standing_rules_local_path(
     return root / DEFAULT_STANDING_RULES_LOCAL_RELATIVE_PATH
 
 
+def _default_runbook_dir(
+    repo_root: Path | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> Path:
+    """Resolve the runbook directory used by the dispatch gate."""
+
+    env = environ if environ is not None else os.environ
+    value = env.get("DISPATCH_RUNBOOKS_DIR")
+    if value:
+        return Path(value)
+    root = repo_root if repo_root is not None else Path(__file__).resolve().parents[3]
+    return root / "master-ops" / "docs" / "runbooks"
+
+
 class ReasonCode(str, Enum):
     """Stable gate decision reason codes."""
 
@@ -288,6 +302,10 @@ class ReasonCode(str, Enum):
     CONTRACT_RUNTIME_MISMATCH = "CONTRACT_RUNTIME_MISMATCH"
     RUNTIME_NOT_ELIGIBLE = "RUNTIME_NOT_ELIGIBLE"
     STANDING_RULE_UNKNOWN = "STANDING_RULE_UNKNOWN"
+    RUNBOOK_UNKNOWN = "RUNBOOK_UNKNOWN"
+    RUNBOOK_TRIGGER_UNLISTED = "RUNBOOK_TRIGGER_UNLISTED"
+    RUNBOOK_INJECT_UNSUPPORTED = "RUNBOOK_INJECT_UNSUPPORTED"
+    RUNBOOK_BRIEF_MISSING = "RUNBOOK_BRIEF_MISSING"
     LEDGER_LOCK_TIMEOUT = "LEDGER_LOCK_TIMEOUT"
 
 
@@ -304,6 +322,7 @@ class DispatchRequest:
     model: str | None = None
     tier_override: str | None = None
     model_needs_measurement: bool = False
+    runbook_inject_supported: bool = False
 
 
 @dataclass(frozen=True)
@@ -339,6 +358,7 @@ class DispatchGateConfig:
     standing_rules_local_path: str | Path = field(
         default_factory=_default_standing_rules_local_path
     )
+    runbook_dir: str | Path = field(default_factory=_default_runbook_dir)
 
 
 @dataclass(frozen=True)
@@ -546,15 +566,16 @@ class DispatchGate:
             append_decision(decision)
             return decision
         contract_sha = _contract_sha_from_content(contract_content)
+        contract_text = contract_content.decode("utf-8", errors="replace")
         lint_warnings = _contract_lint_warnings(
-            contract_content.decode("utf-8", errors="replace"),
+            contract_text,
             Path(self.config.known_roots_path),
         )
         if tier_warning is not None:
             lint_warnings = (*lint_warnings, tier_warning)
 
         front_matter_result, front_matter_error = _parse_front_matter(
-            contract_content.decode("utf-8", errors="replace")
+            contract_text
         )
         if front_matter_error is not None:
             decision = GateDecision(
@@ -594,6 +615,26 @@ class DispatchGate:
                 append_decision(decision)
                 return decision
             front_matter_result = normalized
+
+        runbook_reason, runbook_warnings, runbook_message = _runbook_gate_checks(
+            front_matter_result,
+            contract_text,
+            Path(self.config.runbook_dir),
+            runbook_inject_supported=request.runbook_inject_supported,
+        )
+        if runbook_warnings:
+            lint_warnings = (*lint_warnings, *runbook_warnings)
+        if runbook_reason is not None:
+            decision = GateDecision(
+                False,
+                runbook_reason,
+                warnings=lint_warnings,
+                contract_sha=contract_sha,
+                message=runbook_message,
+                front_matter=front_matter_result,
+            )
+            append_decision(decision)
+            return decision
 
         cost_proxy = request.n_agents * est_input_chars
         if (
@@ -1627,13 +1668,30 @@ def _validate_request(request: DispatchRequest) -> ReasonCode | None:
 
 FRONT_MATTER_DELIMITER = "---"
 FRONT_MATTER_KNOWN_KEYS = frozenset(
-    {"tier", "runtime", "repo", "budget", "tokens_basis", "writes", "standing_rules"}
+    {
+        "tier",
+        "runtime",
+        "repo",
+        "budget",
+        "tokens_basis",
+        "writes",
+        "standing_rules",
+        "runbooks",
+        "runbooks_waived",
+    }
 )
+RUNBOOK_FRONT_MATTER_KNOWN_KEYS = frozenset({"status", "triggers", "summary"})
 FRONT_MATTER_REQUIRED_KEYS = ("tier", "runtime", "repo")
 FRONT_MATTER_BUDGET_INT_NAMES = frozenset({"rounds", "hours", "tokens"})
+RUNBOOK_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9-]*$")
+RUNBOOK_STATUSES = frozenset({"active", "draft", "retired"})
 
 
-def _parse_front_matter(text: str) -> tuple[dict[str, object] | None, str | None]:
+def _parse_front_matter(
+    text: str,
+    *,
+    known_keys: frozenset[str] | None = None,
+) -> tuple[dict[str, object] | None, str | None]:
     """Parse a contract's optional front matter block.
 
     Grammar: a first line "---", then flat "key: value" lines, then a line
@@ -1647,6 +1705,7 @@ def _parse_front_matter(text: str) -> tuple[dict[str, object] | None, str | None
     ``error`` already names the offending key or line number.
     """
 
+    allowed_keys = known_keys if known_keys is not None else FRONT_MATTER_KNOWN_KEYS
     lines = text.splitlines()
     if not lines or lines[0].strip() != FRONT_MATTER_DELIMITER:
         return None, None
@@ -1660,7 +1719,7 @@ def _parse_front_matter(text: str) -> tuple[dict[str, object] | None, str | None
         key, _, raw_value = line.partition(":")
         key = key.strip()
         raw_value = raw_value.strip()
-        if key not in FRONT_MATTER_KNOWN_KEYS:
+        if key not in allowed_keys:
             return None, f"unknown key: {key}"
         if key in parsed:
             return None, f"line {line_number}: duplicate key: {key}"
@@ -1675,6 +1734,173 @@ def _parse_front_matter(text: str) -> tuple[dict[str, object] | None, str | None
         else:
             parsed[key] = raw_value
     return None, f"line {len(lines) + 1}: unterminated front matter block"
+
+
+def _front_matter_body(text: str) -> str:
+    """Return the text after a leading front matter block."""
+
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != FRONT_MATTER_DELIMITER:
+        return text
+    for index, line in enumerate(lines[1:], start=1):
+        if line.strip() == FRONT_MATTER_DELIMITER:
+            return "\n".join(lines[index + 1 :])
+    return ""
+
+
+def _section_body(text: str, heading: str) -> str | None:
+    """Extract one level-two Markdown section body without interpreting Markdown."""
+
+    lines = _front_matter_body(text).splitlines()
+    target = f"## {heading}"
+    body: list[str] = []
+    found = False
+    for line in lines:
+        if found:
+            if line.startswith("## "):
+                break
+            body.append(line)
+        elif line.strip() == target:
+            found = True
+    if not found:
+        return None
+    while body and not body[0].strip():
+        body.pop(0)
+    while body and not body[-1].strip():
+        body.pop()
+    return "\n".join(body)
+
+
+def _runbook_metadata(path: Path) -> dict[str, object] | None:
+    """Read one runbook's optional metadata without creating a second parser."""
+
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    parsed, error = _parse_front_matter(
+        text,
+        known_keys=RUNBOOK_FRONT_MATTER_KNOWN_KEYS,
+    )
+    if error is not None or parsed is None:
+        return {
+            "status": "active",
+            "triggers": (),
+            "brief": _section_body(text, "Brief"),
+            "text": text,
+        }
+    status = parsed.get("status")
+    if not isinstance(status, str) or status not in RUNBOOK_STATUSES:
+        status = "active"
+    triggers = parsed.get("triggers", [])
+    if not isinstance(triggers, list) or any(
+        not isinstance(trigger, str) or not trigger for trigger in triggers
+    ):
+        triggers = []
+    return {
+        "status": status,
+        "triggers": tuple(triggers),
+        "brief": _section_body(text, "Brief"),
+        "text": text,
+    }
+
+
+def _runbook_inventory(runbook_dir: Path) -> dict[str, tuple[Path, dict[str, object]]]:
+    """Return the safe, stem-keyed runbooks visible to the gate."""
+
+    inventory: dict[str, tuple[Path, dict[str, object]]] = {}
+    try:
+        paths = sorted(runbook_dir.glob("*.md"))
+    except OSError:
+        return inventory
+    for path in paths:
+        name = path.stem
+        if name == "README" or RUNBOOK_NAME_PATTERN.fullmatch(name) is None:
+            continue
+        metadata = _runbook_metadata(path)
+        if metadata is not None:
+            inventory[name] = (path, metadata)
+    return inventory
+
+
+def _validate_runbook_lists(
+    front_matter: Mapping[str, object],
+) -> tuple[dict[str, list[str]] | None, ReasonCode | None, str]:
+    """Validate the two contract runbook lists and keep their values typed."""
+
+    normalized: dict[str, list[str]] = {}
+    for key in ("runbooks", "runbooks_waived"):
+        if key not in front_matter:
+            continue
+        value = front_matter[key]
+        if not isinstance(value, list) or any(
+            not isinstance(name, str) or not name.strip() for name in value
+        ):
+            return None, ReasonCode.CONTRACT_FRONT_MATTER, f"{key} must be a list of non-empty strings"
+        names = [name.strip() for name in value]
+        if any(RUNBOOK_NAME_PATTERN.fullmatch(name) is None for name in names):
+            bad = next(name for name in names if RUNBOOK_NAME_PATTERN.fullmatch(name) is None)
+            return None, ReasonCode.CONTRACT_FRONT_MATTER, f"{key}: invalid name shape: {bad}"
+        if len(set(names)) != len(names):
+            return None, ReasonCode.CONTRACT_FRONT_MATTER, f"{key}: duplicate name"
+        normalized[key] = names
+    if set(normalized.get("runbooks", ())) & set(normalized.get("runbooks_waived", ())):
+        return None, ReasonCode.CONTRACT_FRONT_MATTER, "runbooks and runbooks_waived overlap"
+    return normalized, None, ""
+
+
+def _runbook_gate_checks(
+    front_matter: Mapping[str, object] | None,
+    contract_text: str,
+    runbook_dir: Path,
+    *,
+    runbook_inject_supported: bool,
+) -> tuple[ReasonCode | None, tuple[ReasonCode, ...], str]:
+    """Apply runbook existence, trigger, and wrapper compatibility checks."""
+
+    inventory = _runbook_inventory(runbook_dir)
+    listed = set(front_matter.get("runbooks", ())) if front_matter else set()
+    waived = set(front_matter.get("runbooks_waived", ())) if front_matter else set()
+    warnings: list[ReasonCode] = []
+
+    for name in sorted(listed | waived):
+        item = inventory.get(name)
+        if item is None or item[1].get("status") == "retired":
+            return (
+                ReasonCode.RUNBOOK_UNKNOWN,
+                tuple(warnings),
+                f"runbook={name}",
+            )
+
+    for name in sorted(listed):
+        if inventory[name][1].get("brief") is None:
+            warnings.append(ReasonCode.RUNBOOK_BRIEF_MISSING)
+
+    matched: list[str] = []
+    body = _front_matter_body(contract_text)
+    for name, (_, metadata) in inventory.items():
+        if metadata.get("status") != "active":
+            continue
+        for trigger in metadata.get("triggers", ()):
+            if re.search(rf"(?<!\w){re.escape(trigger)}(?!\w)", body, flags=re.IGNORECASE):
+                matched.append(name)
+                break
+
+    unlisted = sorted(name for name in matched if name not in listed and name not in waived)
+    if unlisted:
+        message = "runbooks=" + ",".join(unlisted)
+        if front_matter is None:
+            warnings.append(ReasonCode.RUNBOOK_TRIGGER_UNLISTED)
+        else:
+            return ReasonCode.RUNBOOK_TRIGGER_UNLISTED, tuple(warnings), message
+
+    if listed and not runbook_inject_supported:
+        return (
+            ReasonCode.RUNBOOK_INJECT_UNSUPPORTED,
+            tuple(warnings),
+            "wrapper did not declare runbook Brief injection support",
+        )
+    return None, tuple(dict.fromkeys(warnings)), ""
 
 
 def _known_standing_rule_names(
@@ -1884,6 +2110,12 @@ def _validate_front_matter(
                     f"standing_rules: unknown block: {name}",
                 )
         normalized["standing_rules"] = list(names)
+
+    runbook_lists, runbook_error, runbook_message = _validate_runbook_lists(front_matter)
+    if runbook_error is not None:
+        return None, runbook_error, runbook_message
+    if runbook_lists:
+        normalized.update(runbook_lists)
 
     return normalized, None, ""
 

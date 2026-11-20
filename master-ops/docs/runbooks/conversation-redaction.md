@@ -1,3 +1,7 @@
+---
+status: active
+---
+
 # Conversation-surface redaction runbook
 
 ## What it does

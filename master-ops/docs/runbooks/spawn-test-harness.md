@@ -1,3 +1,7 @@
+---
+status: active
+---
+
 # Spawn-Test Harness
 
 This document describes the sandbox spawn-test harness: an end-to-end verification that the onboarding installer produces a working master-ops layer in a fresh clone.

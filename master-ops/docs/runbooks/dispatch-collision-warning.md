@@ -1,3 +1,7 @@
+---
+status: active
+---
+
 # Dispatch Collision Warning
 
 `scripts/dispatch` calls `scripts/dispatch-collision-check` right after gate

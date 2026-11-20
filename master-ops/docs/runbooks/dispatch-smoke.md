@@ -1,3 +1,7 @@
+---
+status: active
+---
+
 # dispatch-smoke
 
 `scripts/dispatch-smoke` is a seat-run check that `scripts/dispatch`

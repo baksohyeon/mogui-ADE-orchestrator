@@ -1,3 +1,7 @@
+---
+status: active
+---
+
 # Orchestration inbox warn hook (`scripts/hooks/orch-inbox-warn.sh`)
 
 Add this block to workspace `.claude/settings.json` under `hooks`:

@@ -1,3 +1,7 @@
+---
+status: active
+---
+
 # Harness self-check (scripts/harness-selfcheck.sh)
 
 ## What this checks

@@ -1,3 +1,7 @@
+---
+status: active
+---
+
 # orca-wait runbook
 
 ## What it does

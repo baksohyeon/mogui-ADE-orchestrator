@@ -1,3 +1,7 @@
+---
+status: active
+---
+
 # Hook Fire Observability Runbook
 
 ## Purpose

@@ -1,3 +1,7 @@
+---
+status: active
+---
+
 # Role State
 
 Current Role: (not booted; declare on first master start)

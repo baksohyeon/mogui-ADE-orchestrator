@@ -1,3 +1,7 @@
+---
+status: active
+---
+
 # Master Placement Record
 
 Measured during onboarding by the installer session.

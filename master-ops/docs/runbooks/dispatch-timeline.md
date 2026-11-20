@@ -1,3 +1,7 @@
+---
+status: active
+---
+
 # dispatch-timeline runbook
 
 ## What it does

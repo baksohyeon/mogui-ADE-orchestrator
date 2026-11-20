@@ -1,3 +1,7 @@
+---
+status: active
+---
+
 # Error and logging boundaries
 
 The hook-fire log and event log remain separate. Existing hooks keep writing

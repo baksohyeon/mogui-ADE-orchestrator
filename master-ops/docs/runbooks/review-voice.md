@@ -1,3 +1,7 @@
+---
+status: active
+---
+
 # Review voice
 
 How this workspace writes on public surfaces: pull-request bodies, replies to review bots and people, README and release prose. Rules 8 to 11 are wider and apply to every surface this workspace writes on, including commit messages, code comments, self-checks, and what the master says to the owner in chat. The procedure for handling review threads — pull them all at once, group the fixes, reply per thread, verify at the end of the round — lives in [contract conventions](contract-conventions.md). This file is the other half: what the writing sounds like once you are there.

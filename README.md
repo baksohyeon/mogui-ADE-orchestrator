@@ -110,7 +110,7 @@ Agents: ground Orca claims in the [Orca docs snapshot agent index](https://grok-
 7. **Completion arrives through the mailbox.** The coordinator waits on `orca orchestration check --wait`. The worker sends `worker_done`, and the Run mailbox wakes the coordinator.
 8. **Acceptance comes from re-verification.** The worker report is a claim. The coordinator re-runs gates, reads diffs, examines artifacts, and checks redaction scans.
 
-The dispatch record and the shell effect stay separate. When a retained legacy coordinator drops a write, the record survives while the worker receives nothing; preflight detects the legacy read-only state and reports a failed orchestration check with guidance to create a fresh Run.
+The dispatch record and the shell effect stay separate, so the two can be compared before the record is trusted.
 
 ## What is standing guard
 

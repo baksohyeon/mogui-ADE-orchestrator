@@ -25,6 +25,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import secrets
+import stat
 import sys
 import tempfile
 from pathlib import Path
@@ -39,6 +41,15 @@ from template_common import (  # noqa: E402
 from template_manifest import instance_owned_predicate  # noqa: E402
 
 CONFIRM_PHRASE = "apply"
+
+# These two files are instance-owned after creation, but a pre-existing
+# install still needs a safe first copy so merge-ready can run. They are kept
+# outside MANIFEST.json's broad config/ exclusion and are planned only when
+# the destination is absent.
+INSTANCE_OWNED_SEED_FILES = (
+    "config/merge-ready-stop-paths.txt",
+    "config/merge-ready-bots.txt",
+)
 
 
 def normalize_rel(rel: str) -> str | None:
@@ -93,6 +104,137 @@ def roots_overlap(first: Path, second: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _secure_seed_publish_supported() -> bool:
+    """Whether this Python exposes the directory-descriptor primitives used
+    to keep seed publication inside the already-validated operations tree."""
+    return (
+        getattr(os, "O_DIRECTORY", None) is not None
+        and getattr(os, "O_NOFOLLOW", None) is not None
+        and all(
+            function in os.supports_dir_fd
+            for function in (os.open, os.link, os.unlink, os.stat)
+        )
+        and os.link in os.supports_follow_symlinks
+    )
+
+
+def _open_seed_parent_fd(ops_root: Path, rel: str) -> tuple[int, Path]:
+    """Open a seed's parent through no-follow directory descriptors.
+
+    The returned descriptor pins every parent directory while the caller
+    publishes the seed. A path-based write could follow a parent directory
+    replaced by a symlink after planning; descriptor-relative operations do
+    not leave the validated operations tree in that race.
+    """
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    root = ops_root.resolve()
+    fd = os.open(root, flags)
+    parent = root
+    try:
+        for component in Path(rel).parent.parts:
+            try:
+                next_fd = os.open(component, flags, dir_fd=fd)
+            except FileNotFoundError:
+                # Create missing parents relative to the pinned descriptor.
+                # A concurrent symlink is rejected by the no-follow open below.
+                try:
+                    os.mkdir(component, 0o755, dir_fd=fd)
+                except FileExistsError:
+                    pass
+                next_fd = os.open(component, flags, dir_fd=fd)
+            os.close(fd)
+            fd = next_fd
+            parent = parent / component
+        return fd, parent
+    except Exception:
+        os.close(fd)
+        raise
+
+
+def _open_seed_temp(parent_fd: int, mode: int) -> tuple[int, str]:
+    """Create a private temporary file in an already-open seed directory."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+    for _ in range(128):
+        name = f".template-apply-{os.getpid()}-{secrets.token_hex(8)}"
+        try:
+            return os.open(name, flags, mode, dir_fd=parent_fd), name
+        except FileExistsError:
+            continue
+    raise FileExistsError("could not allocate a temporary seed file")
+
+
+def _same_directory(path: Path, fd: int) -> bool:
+    """Check that a path still names the directory pinned by fd."""
+    try:
+        path_stat = os.stat(path, follow_symlinks=False)
+        fd_stat = os.fstat(fd)
+    except OSError:
+        return False
+    return (
+        stat.S_ISDIR(path_stat.st_mode)
+        and path_stat.st_dev == fd_stat.st_dev
+        and path_stat.st_ino == fd_stat.st_ino
+    )
+
+
+def _publish_seed_with_directory_fd(
+    payload: bytes,
+    ops_root: Path,
+    rel: str,
+    mode: int,
+) -> bool:
+    """Atomically create a seed relative to no-follow parent descriptors.
+
+    Return True when the seed was written and False when a concurrent regular
+    file won the create-only race. The parent identity is checked before and
+    after publication so a replaced directory fails closed instead of
+    reporting a write to a detached directory.
+    """
+    parent_fd, parent = _open_seed_parent_fd(ops_root, rel)
+    temp_name = ""
+    try:
+        if not _same_directory(parent, parent_fd):
+            raise RuntimeError(f"seed destination parent changed: {rel}")
+        temp_fd, temp_name = _open_seed_temp(parent_fd, mode)
+        try:
+            with os.fdopen(temp_fd, "wb") as tmp:
+                tmp.write(payload)
+                tmp.flush()
+                os.fchmod(tmp.fileno(), mode)
+            try:
+                os.link(
+                    temp_name,
+                    Path(rel).name,
+                    src_dir_fd=parent_fd,
+                    dst_dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+            except FileExistsError:
+                existing = os.stat(
+                    Path(rel).name,
+                    dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+                if not stat.S_ISREG(existing.st_mode):
+                    raise RuntimeError(f"destination is not a regular file: {rel}")
+                if not _same_directory(parent, parent_fd):
+                    raise RuntimeError(f"seed destination parent changed: {rel}")
+                return False
+            os.unlink(temp_name, dir_fd=parent_fd)
+            temp_name = ""
+            if not _same_directory(parent, parent_fd):
+                raise RuntimeError(f"seed destination parent changed: {rel}")
+            return True
+        finally:
+            if temp_name:
+                try:
+                    os.unlink(temp_name, dir_fd=parent_fd)
+                except OSError:
+                    pass
+    finally:
+        os.close(parent_fd)
 
 
 def load_manifest(path: Path) -> dict:
@@ -278,6 +420,105 @@ def plan_actions(
             }
         )
 
+    for rel in INSTANCE_OWNED_SEED_FILES:
+        src = resolved_under(template_root, rel)
+        dest = resolved_under(ops_root, rel)
+        lexical_src = template_root.resolve() / rel
+        if dest is None:
+            actions.append(
+                {
+                    "path": rel,
+                    "action": "error-invalid-path",
+                    "reason": "seed destination escapes ops root or resolves through a symlink loop",
+                    "seed": True,
+                }
+            )
+            continue
+        effective = effective_rel_under(ops_root, dest)
+        lexical_dest = ops_root.resolve() / rel
+        if effective is None or lexical_dest.is_symlink() or lexical_dest != dest:
+            actions.append(
+                {
+                    "path": rel,
+                    "action": "error-invalid-path",
+                    "reason": "seed destination resolves through a symlink or outside ops root",
+                    "seed": True,
+                }
+            )
+            continue
+        if lexical_dest.exists() and not lexical_dest.is_file():
+            actions.append(
+                {
+                    "path": rel,
+                    "action": "error-invalid-path",
+                    "reason": "seed destination exists but is not a regular file",
+                    "seed": True,
+                }
+            )
+            continue
+        if src is None:
+            actions.append(
+                {
+                    "path": rel,
+                    "action": "error-invalid-path",
+                    "reason": "seed path escapes template root or resolves through a symlink loop",
+                    "seed": True,
+                }
+            )
+            continue
+        if lexical_src.is_symlink() and not lexical_src.exists():
+            actions.append(
+                {
+                    "path": rel,
+                    "action": "error-invalid-path",
+                    "reason": "seed source is a dangling symlink",
+                    "seed": True,
+                }
+            )
+            continue
+        if not lexical_src.exists():
+            # Scratch templates and older template versions do not carry
+            # these optional seeds; a genuinely absent source remains omitted.
+            continue
+        if not src.is_file():
+            actions.append(
+                {
+                    "path": rel,
+                    "action": "error-invalid-path",
+                    "reason": "seed source exists but is not a regular file",
+                    "seed": True,
+                }
+            )
+            continue
+        if lexical_dest.exists():
+            actions.append(
+                {
+                    "path": rel,
+                    "action": "skipped-as-instance-owned",
+                    "reason": "instance-owned seed; existing file preserved",
+                    "seed": True,
+                }
+            )
+            continue
+        if not src.is_file():
+            actions.append(
+                {
+                    "path": rel,
+                    "action": "error-missing-template-file",
+                    "reason": "instance-owned seed is missing from the template tree",
+                    "seed": True,
+                }
+            )
+            continue
+        actions.append(
+            {
+                "path": rel,
+                "action": "planned",
+                "reason": "instance-owned seed; create only when absent",
+                "seed": True,
+            }
+        )
+
     for raw in extra_targets or []:
         rel = normalize_rel(raw) or raw
         if is_instance_owned(rel if isinstance(rel, str) else raw):
@@ -312,6 +553,7 @@ def apply_planned(
     manifest: dict | None = None,
 ) -> list[dict]:
     is_instance_owned, _ = instance_owned_predicate(manifest)
+    seed_paths = {item["path"] for item in actions if item.get("seed")}
     # Preflight every planned source before the first write so a missing file
     # mid-pass does not leave a half-applied install.
     planned = [a for a in actions if a["action"] == "planned"]
@@ -348,9 +590,18 @@ def apply_planned(
             raise RuntimeError(f"path escaped root during write: {rel}")
         if dest.is_symlink() or dest != resolved_dest or (dest.exists() and not dest.is_file()):
             raise RuntimeError(f"destination is not a regular file: {rel}")
+        if rel in seed_paths and dest.exists():
+            results.append(
+                {
+                    "path": rel,
+                    "action": "skipped-as-instance-owned",
+                    "reason": "instance-owned seed appeared after planning; existing file preserved",
+                }
+            )
+            continue
         # Re-check resolved destination after confirmation (unconditional).
         effective = effective_rel_under(ops_root, resolved_dest)
-        if effective is None or is_instance_owned(effective):
+        if effective is None or (is_instance_owned(effective) and rel not in seed_paths):
             raise RuntimeError(
                 f"destination became instance-owned or escaped before write: {rel}"
             )
@@ -359,14 +610,33 @@ def apply_planned(
             payload = src.read_bytes()
         else:
             payload = substitute(src.read_text(encoding="utf-8"), values).encode("utf-8")
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        # Atomic replace within the destination directory so a crash mid-write
-        # does not leave a truncated target. Preserve destination mode when the
-        # target already exists; otherwise keep the source mode (not mkstemp 0600).
+        # Publish through a temporary file in the destination directory so a
+        # crash mid-write does not leave a truncated target. Seed files use a
+        # hard link for atomic create-only publication, while ordinary files
+        # retain replacement semantics.
         if dest.exists() and not dest.is_symlink():
             mode = dest.stat().st_mode & 0o777
         else:
             mode = src.stat().st_mode & 0o777
+        if rel in seed_paths and _secure_seed_publish_supported():
+            if _publish_seed_with_directory_fd(payload, ops_root, rel, mode):
+                results.append(
+                    {
+                        "path": rel,
+                        "action": "written",
+                        "reason": item["reason"],
+                    }
+                )
+            else:
+                results.append(
+                    {
+                        "path": rel,
+                        "action": "skipped-as-instance-owned",
+                        "reason": "instance-owned seed appeared during write; existing file preserved",
+                    }
+                )
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp_name = tempfile.mkstemp(
             prefix=".template-apply-",
             dir=str(dest.parent),
@@ -375,20 +645,47 @@ def apply_planned(
             with os.fdopen(fd, "wb") as tmp:
                 tmp.write(payload)
             os.chmod(tmp_name, mode)
-            os.replace(tmp_name, dest)
+            if rel in seed_paths:
+                try:
+                    os.link(tmp_name, dest)
+                except FileExistsError:
+                    if dest.is_symlink() or not dest.is_file():
+                        raise RuntimeError(f"destination is not a regular file: {rel}")
+                    results.append(
+                        {
+                            "path": rel,
+                            "action": "skipped-as-instance-owned",
+                            "reason": "instance-owned seed appeared during write; existing file preserved",
+                        }
+                    )
+                else:
+                    os.unlink(tmp_name)
+                    tmp_name = ""
+                    results.append(
+                        {
+                            "path": rel,
+                            "action": "written",
+                            "reason": item["reason"],
+                        }
+                    )
+            else:
+                os.replace(tmp_name, dest)
+                tmp_name = ""
+                results.append(
+                    {
+                        "path": rel,
+                        "action": "written",
+                        "reason": item["reason"],
+                    }
+                )
         except Exception:
-            try:
-                os.unlink(tmp_name)
-            except OSError:
-                pass
             raise
-        results.append(
-            {
-                "path": rel,
-                "action": "written",
-                "reason": item["reason"],
-            }
-        )
+        finally:
+            if tmp_name:
+                try:
+                    os.unlink(tmp_name)
+                except OSError:
+                    pass
     return results
 
 

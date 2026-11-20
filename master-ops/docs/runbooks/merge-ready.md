@@ -28,13 +28,24 @@ cp <template>/config/merge-ready-stop-paths.txt <install>/config/merge-ready-sto
 cp <template>/config/merge-ready-bots.txt <install>/config/merge-ready-bots.txt
 ```
 
+When either file is missing, the command exits `2` and prints this copy instruction. Upgrade mode
+also seeds each missing file after confirmation and preserves an existing file as instance-owned.
+
 The worker token needs repository `Administration: read` permission to read legacy branch
 protection. If the protection endpoint is unavailable to that token, the command reads the branch
-response's `protection.required_status_checks`; if neither response is readable, the measurement
-fails closed.
+response's `protection.required_status_checks`. A rules failure is classified as a plan limitation when
+its combined error text includes the message `Upgrade to GitHub Pro`; this message is the plan-limit
+marker, and the script does not require a particular HTTP status for this classification. When no
+stop-list or contract ask is already known, a usable legacy required-context set lets the command
+continue through every measurement and return the result earned by those checks, reviews, threads, and
+paths. When a stop-list or contract ask is known, the command exits `2` after required-context parsing,
+before later checks, reviews, and threads are measured. When no legacy source is usable, the command
+asks the owner with exit `2` and names the cause. Other HTTP 403 responses, including rate limits and
+permission failures, retain exit `1` when no independent ask applies.
 
-The command fails closed when either file is missing, when the stop-list has no entries, or when
-the roster file is empty or comment-only. It has no environment override for either path.
+The command asks the owner with exit `2` when either file is missing, and fails closed when the
+stop-list has no entries or the roster file is empty or comment-only. It has no environment
+override for either path.
 
 A dispatched worker's cwd is a product-repo worktree, not this ops repo. `scripts/dispatch`
 rewrites the standing rule's relative script path to the installed `scripts/` directory before
@@ -51,7 +62,12 @@ the brief ships.
    `gh api repos/<owner/name>/branches/<base>`; an unprotected branch contributes no legacy
    contexts. Failure to read both legacy sources is not ready. Every required context must be
    reported with bucket `pass`.
-   A parseable empty list is not ready because there is no required check to measure. A check that
+   A rules failure whose combined error text includes the `Upgrade to GitHub Pro` message uses the
+   legacy source when it supplies a required context summary. When no stop-list or contract ask is
+   already known, it continues through the remaining measurements; a known ask exits `2` after
+   required-context parsing, before later checks, reviews, and threads are measured. If no source
+   establishes required contexts, the command asks the owner with exit `2` and names the cause. A
+   parseable empty list is not ready because there is no required check to measure. A check that
    this repository runs but does not require never reaches this measurement. Every bot whose latest
    decision review on the exact head is `PENDING` or `CHANGES_REQUESTED` blocks separately. Only
    `APPROVED`, `CHANGES_REQUESTED`, `DISMISSED`, and `PENDING` are decision states; a plain
@@ -72,7 +88,8 @@ the brief ships.
    threads.
 
 3. **Stop-list and contract paths.** Any changed path matching
-   `config/merge-ready-stop-paths.txt` asks the owner. The list covers charter, workspace card,
+   `config/merge-ready-stop-paths.txt` asks the owner. Matching is case-insensitive, and entries work
+   with both the template prefix and the installed root layout. The list covers charter, workspace card,
    role state, boot comparison set, scanner and redaction configuration, CI workflow and CODEOWNERS
    definitions, succession and bootstrap code, guard hooks, gate code, tier policy, worker
    settings, and this command's own files. A stop-paths file with no real entries fails closed.
@@ -114,10 +131,13 @@ deployments and required reviewers at merge time; this command does not attest t
 
 - `0` merge: every measurement passed and no stop-list path was touched.
 - `1` not ready: a check, roster, review thread, PR-state, response-shape, pagination, file-cap, or
-  invocation measurement failed. An unavailable GitHub response and an unparseable response are
-  both exit `1`.
-- `2` ask the owner: a changed path matches the stop list or falls outside the contract's `writes`
-  globs.
+  invocation measurement failed. When no stop-list, contract, or configuration ask is known, an
+  unavailable GitHub response, an unparseable response, and an HTTP `403` response whose error does not
+  include `Upgrade to GitHub Pro` return exit `1`.
+- `2` ask the owner: a changed path matches the stop list, falls outside the contract's `writes`
+  globs, required configuration is missing, or a rules-endpoint error containing the `Upgrade to
+  GitHub Pro` message has no usable legacy source. An independent path, contract, or configuration ask
+  takes precedence after required-context parsing.
 
 Every result is one summary line prefixed `merge-ready: merge ·`, `merge-ready: not ready ·`, or
 `merge-ready: ask ·`.

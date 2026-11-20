@@ -35,11 +35,31 @@ def strip_bot_suffix(login: Any) -> str:
 
 
 def matches_stop(path: str, entry: str) -> bool:
-    if entry.endswith("/"):
-        return path == entry.rstrip("/") or path.startswith(entry)
-    if any(char in entry for char in "*?["):
-        return fnmatch.fnmatch(path, entry)
-    return path == entry
+    template_layout_prefix = "master-" "ops/"
+
+    def without_template_prefix(value: str) -> str:
+        if value.casefold().startswith(template_layout_prefix.casefold()):
+            return value[len(template_layout_prefix) :]
+        return value
+
+    def with_layout_aliases(value: str) -> set[str]:
+        root_path = without_template_prefix(value)
+        return {root_path, f"{template_layout_prefix}{root_path}"}
+
+    def matches_one(candidate: str, stop_entry: str) -> bool:
+        candidate = candidate.casefold()
+        stop_entry = stop_entry.casefold()
+        if stop_entry.endswith("/"):
+            return candidate == stop_entry.rstrip("/") or candidate.startswith(stop_entry)
+        if any(char in stop_entry for char in "*?["):
+            return fnmatch.fnmatch(candidate, stop_entry)
+        return candidate == stop_entry
+
+    return any(
+        matches_one(candidate, stop_candidate)
+        for candidate in with_layout_aliases(path)
+        for stop_candidate in with_layout_aliases(entry)
+    )
 
 
 def read_stop_entries(path: str) -> list[str]:

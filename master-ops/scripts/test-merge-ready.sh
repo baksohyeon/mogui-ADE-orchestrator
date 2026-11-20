@@ -32,7 +32,7 @@ cp "${MERGE_READY}" "${INSTALL_DIR}/scripts/merge-ready"
 cp "${SCRIPT_DIR}/lib/merge_ready.py" "${INSTALL_DIR}/scripts/lib/merge_ready.py"
 chmod +x "${INSTALL_DIR}/scripts/merge-ready"
 MERGE_READY="${INSTALL_DIR}/scripts/merge-ready"
-printf '%s\n' "config/gitleaks.toml" >"${INSTALL_DIR}/config/merge-ready-stop-paths.txt"
+cp "${SCRIPT_DIR}/../config/merge-ready-stop-paths.txt" "${INSTALL_DIR}/config/merge-ready-stop-paths.txt"
 cat >"${INSTALL_DIR}/config/merge-ready-bots.txt" <<'EOF'
 cubic-dev-ai | none | none
 coderabbitai | <!-- This is an auto-generated comment: rate limited by coderabbit.ai --> | > ## Review limit reached
@@ -131,6 +131,14 @@ case "$1" in
           echo "gh: rules unavailable" >&2
           exit 1
         fi
+        if [ "${GH_STUB_CASE:-}" = "rules-403-legacy" ] || [ "${GH_STUB_CASE:-}" = "rules-403-branch" ] || [ "${GH_STUB_CASE:-}" = "rules-403-no-source" ]; then
+          echo "gh: Upgrade to GitHub Pro or make this repository public (HTTP 403)" >&2
+          exit 1
+        fi
+        if [ "${GH_STUB_CASE:-}" = "rules-403-rate-limit" ]; then
+          echo "gh: API rate limit exceeded (HTTP 403)" >&2
+          exit 1
+        fi
         if [ "${GH_STUB_CASE:-}" = "rules-paginated" ]; then
           cat "${GH_FIXTURE_DIR}/rules-pages.json"
         else
@@ -138,7 +146,7 @@ case "$1" in
         fi
         ;;
       repos/*/branches/*/protection/required_status_checks)
-        if [ "${GH_STUB_CASE:-}" = "legacy-fail" ] || [ "${GH_STUB_CASE:-}" = "legacy-permission" ]; then
+        if [ "${GH_STUB_CASE:-}" = "legacy-fail" ] || [ "${GH_STUB_CASE:-}" = "legacy-permission" ] || [ "${GH_STUB_CASE:-}" = "rules-403-branch" ] || [ "${GH_STUB_CASE:-}" = "rules-403-no-source" ]; then
           echo "gh: legacy protection unavailable" >&2
           exit 1
         fi
@@ -150,7 +158,7 @@ case "$1" in
         cat "${GH_FIXTURE_DIR}/legacy.json"
         ;;
       repos/*/branches/*)
-        if [ "${GH_STUB_CASE:-}" = "legacy-fail" ]; then
+        if [ "${GH_STUB_CASE:-}" = "legacy-fail" ] || [ "${GH_STUB_CASE:-}" = "rules-403-no-source" ]; then
           echo "gh: branch details unavailable" >&2
           exit 1
         fi
@@ -326,8 +334,8 @@ printf '%s' '[]' >"${missing_timestamp_dir}/check-runs.json"
 printf '%s' '[]' >"${missing_timestamp_dir}/check-suites.json"
 printf '%s' '[[]]' >"${missing_timestamp_dir}/timeline.json"
 out=$(run_case "${missing_timestamp_dir}"); rc=$?
-if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'trusted head push time'; then
-  ok "a missing trusted timestamp blocks the rate-limit exemption"
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'trusted head push time' && ! printf '%s' "${out}" | grep -q 'Traceback'; then
+  ok "a missing trusted timestamp blocks the rate-limit exemption with one clean message"
 else
   fail "missing trusted timestamp: got ${rc}: ${out}"
 fi
@@ -543,6 +551,60 @@ else
   fail "rules failure with ask: got ${rc}: ${out}"
 fi
 
+rules_403_legacy_dir="${WORK_DIR}/rules-403-legacy"
+write_fixture "${rules_403_legacy_dir}" '[{"filename":"README.md"}]' "" '[{"name":"rules-403-legacy-context","bucket":"pass","state":"SUCCESS"}]' "${DEFAULT_REVIEWS}" 0 OPEN false "[]" "${DEFAULT_RULES}" '{"contexts":["rules-403-legacy-context"],"checks":[]}'
+out=$(run_case "${rules_403_legacy_dir}" rules-403-legacy); rc=$?
+if [ "${rc}" -eq 0 ] && printf '%s' "${out}" | grep -q 'merge-ready: merge' && printf '%s' "${out}" | grep -q 'rules-403-legacy-context'; then
+  ok "a plan-limit HTTP 403 with usable legacy checks measures every gate"
+else
+  fail "plan-limit HTTP 403 with usable legacy checks: got ${rc}: ${out}"
+fi
+
+rules_403_branch_dir="${WORK_DIR}/rules-403-branch"
+write_fixture "${rules_403_branch_dir}" '[{"filename":"README.md"}]' "" '[{"name":"rules-403-branch-context","bucket":"pass","state":"SUCCESS"}]' "${DEFAULT_REVIEWS}" 0 OPEN false "[]" "${DEFAULT_RULES}" '{"contexts":["rules-403-branch-context"],"checks":[]}'
+out=$(run_case "${rules_403_branch_dir}" rules-403-branch); rc=$?
+if [ "${rc}" -eq 0 ] && printf '%s' "${out}" | grep -q 'merge-ready: merge' && printf '%s' "${out}" | grep -q 'rules-403-branch-context'; then
+  ok "a plan-limit HTTP 403 with usable branch checks measures every gate"
+else
+  fail "plan-limit HTTP 403 with usable branch checks: got ${rc}: ${out}"
+fi
+
+rules_403_legacy_failure_dir="${WORK_DIR}/rules-403-legacy-failure"
+write_fixture "${rules_403_legacy_failure_dir}" '[{"filename":"README.md"}]' "" '[{"name":"rules-403-legacy-context","bucket":"fail","state":"FAILURE"}]' "${DEFAULT_REVIEWS}" 0 OPEN false "[]" "${DEFAULT_RULES}" '{"contexts":["rules-403-legacy-context"],"checks":[]}'
+out=$(run_case "${rules_403_legacy_failure_dir}" rules-403-legacy); rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'rules-403-legacy-context=FAILURE'; then
+  ok "a plan-limit HTTP 403 with a failing required check exits 1"
+else
+  fail "plan-limit HTTP 403 with a failing required check: got ${rc}: ${out}"
+fi
+
+rules_403_no_source_dir="${WORK_DIR}/rules-403-no-source"
+write_fixture "${rules_403_no_source_dir}" '[{"filename":"config/gitleaks.toml"}]' ""
+out=$(run_case "${rules_403_no_source_dir}" rules-403-no-source); rc=$?
+if [ "${rc}" -eq 2 ] && printf '%s' "${out}" | grep -q 'HTTP 403' && printf '%s' "${out}" | grep -q 'legacy branch protection' && printf '%s' "${out}" | grep -q 'config/gitleaks.toml (stop-list)'; then
+  ok "a rules HTTP 403 with no fallback source preserves the stop-list ask"
+else
+  fail "rules HTTP 403 without fallback: got ${rc}: ${out}"
+fi
+
+rules_403_empty_source_dir="${WORK_DIR}/rules-403-empty-source"
+write_fixture "${rules_403_empty_source_dir}" '[{"filename":"config/gitleaks.toml"}]' "" "${DEFAULT_CHECKS}" "${DEFAULT_REVIEWS}" 0 OPEN false "[]" "${DEFAULT_RULES}" '{"contexts":[],"checks":[]}'
+out=$(run_case "${rules_403_empty_source_dir}" rules-403-legacy); rc=$?
+if [ "${rc}" -eq 2 ] && printf '%s' "${out}" | grep -q 'HTTP 403' && printf '%s' "${out}" | grep -q 'no required checks' && printf '%s' "${out}" | grep -q 'config/gitleaks.toml (stop-list)'; then
+  ok "a rules HTTP 403 with an empty legacy source preserves the stop-list ask"
+else
+  fail "rules HTTP 403 empty fallback source: got ${rc}: ${out}"
+fi
+
+rules_403_rate_limit_dir="${WORK_DIR}/rules-403-rate-limit"
+write_fixture "${rules_403_rate_limit_dir}" '[{"filename":"README.md"}]' ""
+out=$(run_case "${rules_403_rate_limit_dir}" rules-403-rate-limit); rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'required check summary unavailable' && ! printf '%s' "${out}" | grep -q 'owner confirmation required'; then
+  ok "a rate-limit HTTP 403 remains exit 1"
+else
+  fail "rate-limit HTTP 403 classification: got ${rc}: ${out}"
+fi
+
 legacy_failure_ask_dir="${WORK_DIR}/legacy-failure-ask"
 write_fixture "${legacy_failure_ask_dir}" '[{"filename":"config/gitleaks.toml"}]' ""
 out=$(run_case "${legacy_failure_ask_dir}" legacy-fail); rc=$?
@@ -750,12 +812,23 @@ write_fixture "${legacy_404_dir}" '[{"filename":"README.md"}]' ""
 out=$(run_case "${legacy_404_dir}" legacy-404); rc=$?
 assert_rc "unprotected legacy status-check endpoint contributes no contexts" 0 "${out}" "${rc}"
 
+stop_paths_config="${INSTALL_DIR}/config/merge-ready-stop-paths.txt"
+stop_paths_backup="${WORK_DIR}/merge-ready-stop-paths.txt.valid"
+mv "${stop_paths_config}" "${stop_paths_backup}"
+out=$(run_case "${clean_dir}"); rc=$?
+if [ "${rc}" -eq 2 ] && printf '%s' "${out}" | grep -q 'config/merge-ready-stop-paths.txt is missing' && printf '%s' "${out}" | grep -q 'copy it from the template'; then
+  ok "missing stop-list config asks for the copy with exit 2"
+else
+  fail "missing stop-list config: got ${rc}: ${out}"
+fi
+mv "${stop_paths_backup}" "${stop_paths_config}"
+
 bots_config="${INSTALL_DIR}/config/merge-ready-bots.txt"
 bots_backup="${WORK_DIR}/merge-ready-bots.txt.valid"
 mv "${bots_config}" "${bots_backup}"
 out=$(run_case "${clean_dir}"); rc=$?
-if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'bots file not found'; then
-  ok "missing roster file exits 1 and fails closed"
+if [ "${rc}" -eq 2 ] && printf '%s' "${out}" | grep -q 'config/merge-ready-bots.txt is missing' && printf '%s' "${out}" | grep -q 'copy it from the template'; then
+  ok "missing roster config asks for the copy with exit 2"
 else
   fail "missing roster file: got ${rc}: ${out}"
 fi
@@ -767,6 +840,80 @@ else
   fail "empty roster file: got ${rc}: ${out}"
 fi
 mv "${bots_backup}" "${bots_config}"
+
+run_upgrade_apply() {
+  local ops="$1" json_out="$2" err_out="$3"
+  python3 -I "${SCRIPT_DIR}/template-apply" \
+    --ops "${ops}" --template "${SCRIPT_DIR}/.." --write --confirm-input apply --json \
+    --placeholder WORKSPACE_NAME=seed-test \
+    --placeholder WORKSPACE_ROOT="${WORK_DIR}/workspace" \
+    --placeholder OPS_REPO="${ops}" \
+    --placeholder MONITOR_NS=seed-test \
+    --placeholder MODEL_ID=seed-test \
+    --placeholder REPO_LIST=seed-test \
+    --placeholder RUNTIME_ROOT="${WORK_DIR}/runtime" \
+    >"${json_out}" 2>"${err_out}"
+}
+
+assert_upgrade_seed_case() {
+  local label="$1" ops="$2" expected_stop="$3" expected_bots="$4"
+  local expected_stop_action="$5" expected_bots_action="$6" json_out="${ops}.json" err_out="${ops}.err"
+  mkdir -p "${ops}/config"
+  if [ "${expected_stop_action}" = "skipped-as-instance-owned" ]; then
+    printf '%s\n' "${expected_stop}" >"${ops}/config/merge-ready-stop-paths.txt"
+  fi
+  if [ "${expected_bots_action}" = "skipped-as-instance-owned" ]; then
+    printf '%s\n' "${expected_bots}" >"${ops}/config/merge-ready-bots.txt"
+  fi
+  run_upgrade_apply "${ops}" "${json_out}" "${err_out}"
+  local rc=$?
+  if [ "${rc}" -eq 0 ] && [ "$(cat "${ops}/config/merge-ready-stop-paths.txt")" = "${expected_stop}" ] && [ "$(cat "${ops}/config/merge-ready-bots.txt")" = "${expected_bots}" ] && python3 - "${json_out}" "${expected_stop_action}" "${expected_bots_action}" <<'PY'
+import json
+import sys
+
+payload = json.load(open(sys.argv[1], encoding="utf-8"))
+actions = {item["path"]: item["action"] for item in payload["actions"]}
+assert actions["config/merge-ready-stop-paths.txt"] == sys.argv[2], actions
+assert actions["config/merge-ready-bots.txt"] == sys.argv[3], actions
+PY
+  then
+    ok "${label} seeds or preserves both merge-ready configs with the expected actions"
+  else
+    fail "${label}: got ${rc}: $(cat "${err_out}" 2>/dev/null || true)"
+  fi
+}
+
+template_stop_contents="$(cat "${SCRIPT_DIR}/../config/merge-ready-stop-paths.txt")"
+template_bots_contents="$(cat "${SCRIPT_DIR}/../config/merge-ready-bots.txt")"
+assert_upgrade_seed_case "upgrade with both configs absent" "${WORK_DIR}/upgrade-both-missing" "${template_stop_contents}" "${template_bots_contents}" written written
+assert_upgrade_seed_case "upgrade with existing stop-list" "${WORK_DIR}/upgrade-stop-existing" "install-owned-stop-list" "${template_bots_contents}" skipped-as-instance-owned written
+assert_upgrade_seed_case "upgrade with existing bot roster" "${WORK_DIR}/upgrade-bots-existing" "${template_stop_contents}" "install-owned-bots" written skipped-as-instance-owned
+assert_upgrade_seed_case "upgrade with both configs existing" "${WORK_DIR}/upgrade-both-existing" "install-owned-stop-list" "install-owned-bots" skipped-as-instance-owned skipped-as-instance-owned
+
+invalid_seed_template="${WORK_DIR}/invalid-seed-template"
+cp -R "${SCRIPT_DIR}/.." "${invalid_seed_template}"
+mv "${invalid_seed_template}/config/merge-ready-stop-paths.txt" "${invalid_seed_template}/config/merge-ready-stop-paths.txt.saved"
+ln -s merge-ready-stop-paths.txt "${invalid_seed_template}/config/merge-ready-stop-paths.txt"
+invalid_seed_ops="${WORK_DIR}/invalid-seed-ops"
+mkdir -p "${invalid_seed_ops}"
+invalid_seed_json="${WORK_DIR}/invalid-seed.json"
+invalid_seed_err="${WORK_DIR}/invalid-seed.err"
+python3 -I "${SCRIPT_DIR}/template-apply" \
+  --ops "${invalid_seed_ops}" --template "${invalid_seed_template}" --write --confirm-input apply --json \
+  --placeholder WORKSPACE_NAME=seed-test \
+  --placeholder WORKSPACE_ROOT="${WORK_DIR}/workspace" \
+  --placeholder OPS_REPO="${invalid_seed_ops}" \
+  --placeholder MONITOR_NS=seed-test \
+  --placeholder MODEL_ID=seed-test \
+  --placeholder REPO_LIST=seed-test \
+  --placeholder RUNTIME_ROOT="${WORK_DIR}/runtime" \
+  >"${invalid_seed_json}" 2>"${invalid_seed_err}"
+rc=$?
+if [ "${rc}" -eq 1 ] && grep -q 'error-invalid-path: config/merge-ready-stop-paths.txt' "${invalid_seed_err}"; then
+  ok "a merge-ready seed symlink loop is reported as error-invalid-path"
+else
+  fail "invalid merge-ready seed path: got ${rc}: $(cat "${invalid_seed_err}" 2>/dev/null || true)"
+fi
 
 skip_stderr="${WORK_DIR}/skip-stderr"
 skip_stdout="${WORK_DIR}/skip-stdout"
@@ -920,6 +1067,54 @@ else
   fail "stop-list path: got ${rc}: ${out}"
 fi
 
+root_layout_stop_dir="${WORK_DIR}/root-layout-stop-path"
+write_fixture "${root_layout_stop_dir}" '[{"filename":"docs/charter/01-document-map.md"}]' ""
+out=$(run_case "${root_layout_stop_dir}"); rc=$?
+if [ "${rc}" -eq 2 ] && printf '%s' "${out}" | grep -q 'docs/charter/01-document-map.md (stop-list)'; then
+  ok "a root-layout charter path matches the template stop-list and exits 2"
+else
+  fail "root-layout stop-list path: got ${rc}: ${out}"
+fi
+
+root_layout_dispatch_dir="${WORK_DIR}/root-layout-dispatch-path"
+write_fixture "${root_layout_dispatch_dir}" '[{"filename":"scripts/dispatch"}]' ""
+out=$(run_case "${root_layout_dispatch_dir}"); rc=$?
+if [ "${rc}" -eq 2 ] && printf '%s' "${out}" | grep -q 'scripts/dispatch (stop-list)'; then
+  ok "an installed dispatch path matches the template stop-list and exits 2"
+else
+  fail "root-layout dispatch stop-list path: got ${rc}: ${out}"
+fi
+
+case_variant_stop_dir="${WORK_DIR}/case-variant-stop-path"
+write_fixture "${case_variant_stop_dir}" '[{"filename":"Docs/Charter/01-document-map.md"}]' ""
+out=$(run_case "${case_variant_stop_dir}"); rc=$?
+if [ "${rc}" -eq 2 ] && printf '%s' "${out}" | grep -q 'Docs/Charter/01-document-map.md (stop-list)'; then
+  ok "a case-variant stop-list path exits 2"
+else
+  fail "case-variant stop-list path: got ${rc}: ${out}"
+fi
+
+template_layout_prefix='master-'"ops/"
+template_layout_stop_path="${template_layout_prefix}docs/charter/01-document-map.md"
+template_layout_stop_dir="${WORK_DIR}/template-layout-stop-path"
+write_fixture "${template_layout_stop_dir}" "[{\"filename\":\"${template_layout_stop_path}\"}]" ""
+out=$(run_case "${template_layout_stop_dir}"); rc=$?
+if [ "${rc}" -eq 2 ] && printf '%s' "${out}" | grep -q "${template_layout_stop_path} (stop-list)"; then
+  ok "a template-layout charter path matches the installed stop-list and exits 2"
+else
+  fail "template-layout charter stop-list path: got ${rc}: ${out}"
+fi
+
+template_layout_dispatch_path="${template_layout_prefix}scripts/dispatch"
+template_layout_dispatch_dir="${WORK_DIR}/template-layout-dispatch-path"
+write_fixture "${template_layout_dispatch_dir}" "[{\"filename\":\"${template_layout_dispatch_path}\"}]" ""
+out=$(run_case "${template_layout_dispatch_dir}"); rc=$?
+if [ "${rc}" -eq 2 ] && printf '%s' "${out}" | grep -q "${template_layout_dispatch_path} (stop-list)"; then
+  ok "a template-layout dispatch path matches the installed stop-list and exits 2"
+else
+  fail "template-layout dispatch stop-list path: got ${rc}: ${out}"
+fi
+
 manifest_dir="${WORK_DIR}/manifest"
 manifest_path_prefix="master-ops"
 manifest_file="${manifest_path_prefix}/MANIFEST.json"
@@ -983,6 +1178,12 @@ elif [ "${scan_rc}" -eq 1 ]; then
   ok "production script has no removed execution interface"
 else
   fail "removed execution interface check failed with grep status ${scan_rc}"
+fi
+
+if grep -Fq 'required configuration' "${SCRIPT_DIR}/merge-ready" && grep -Fq '2  ask the owner' "${SCRIPT_DIR}/merge-ready"; then
+  ok "exit-code documentation includes missing required configuration under exit 2"
+else
+  fail "exit-code documentation omits missing required configuration"
 fi
 
 if [ "${F}" -ne 0 ]; then

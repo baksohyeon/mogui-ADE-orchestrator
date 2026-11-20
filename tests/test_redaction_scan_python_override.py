@@ -120,9 +120,10 @@ def test_redaction_python_override_runs_translator_for_org_rule_finding(tmp_path
     assert result.returncode == 1, result.stdout + result.stderr
     assert "probe_rule" in result.stderr, result.stderr
     # Measured on this fixture with gitleaks 8.30.1: the runnability probe,
-    # the organization-rules translator, and the unconditional findings
-    # merge. No commit range here, so the per-commit normalizer never runs.
-    assert len(log.read_text(encoding="utf-8").splitlines()) == 3
+    # the organization-rules translator, the file-content report annotation,
+    # and the unconditional findings merge. No commit range here, so the
+    # per-commit normalizer never runs.
+    assert len(log.read_text(encoding="utf-8").splitlines()) == 4
 
 
 def test_redaction_python_override_runs_rule_id_check_on_engine_crash(tmp_path: Path) -> None:
@@ -201,8 +202,8 @@ def test_redaction_python_override_runs_per_commit_normalizer(tmp_path: Path) ->
     assert result.returncode != 0, output
     assert "commit:" in output, output
     assert "aws_access_key" in output, output
-    # gitleaks writes a report for every commit in the range, clean or not
-    # (a zero-finding report is still a non-empty file), so the normalizer
-    # runs once per commit here: the probe, two per-commit calls, and the
-    # merge. Measured on this fixture with gitleaks 8.30.1.
-    assert len(log.read_text(encoding="utf-8").splitlines()) == 4
+    # The resolved interpreter runs its Python 3 check, the two per-commit
+    # message normalizers, the deleted -diff preflight, and the final findings
+    # merge.
+    # Measured on this fixture with gitleaks 8.30.1.
+    assert len(log.read_text(encoding="utf-8").splitlines()) == 5

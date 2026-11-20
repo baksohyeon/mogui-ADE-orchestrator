@@ -242,6 +242,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
       - name: Install gitleaks (pinned, checksum verified)
         shell: bash
         run: |
@@ -258,5 +260,23 @@ jobs:
         env:
           REDACTION_PROFILE: export
         run: ./scripts/redaction-scan.sh
+      - name: Scan pull request commit range (committed rules)
+        if: github.event_name == 'pull_request'
+        env:
+          REDACTION_PROFILE: export
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            echo "redaction-scan: FAIL - CI range base commit is missing: ${BASE_SHA}" >&2
+            exit 2
+          fi
+          if ! git cat-file -e "${HEAD_SHA}^{commit}" 2>/dev/null; then
+            echo "redaction-scan: FAIL - CI range head commit is missing: ${HEAD_SHA}" >&2
+            exit 2
+          fi
+          ./scripts/redaction-scan.sh --range "${BASE_SHA}..${HEAD_SHA}"
       - name: Inventory (informational — exit 1 is the normal triage state)
         run: ./scripts/redaction-inventory || true

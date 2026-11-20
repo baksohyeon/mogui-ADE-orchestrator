@@ -49,12 +49,14 @@ MUST_FLAG = {
     "jira_hf": "see " + "HF-" + "1234 for detail",
     "slack_url": "https://acme." + "slack.com" + "/archives/C1",
     "internal_host": "box." + "corp" + " is internal",
+    "local_host_bare": "db." + "local" + " is a bare local host",
 }
 
 MUST_EXCUSE = {
     "placeholder_key": 'api_key = "' + "your_api" + '_key"',
     "synthetic_home": "/Users/" + "dev/workspace/thing",
     "canonical_aws": "AKIAIOSFODNN7" + "EXAMPLE",
+    "local_env_file": "see " + "instance.local.env" + " for local overrides",
 }
 
 requires_gitleaks = pytest.mark.skipif(

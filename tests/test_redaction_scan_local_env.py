@@ -107,6 +107,7 @@ def test_local_env_file_name_is_excused_but_bare_local_host_still_flags(
         "instance" + ".local" + ".env",
     ],
 )
+@requires_gitleaks
 def test_filename_allowlist_accepts_a_sentence_final_period(
     tmp_path: Path, filename: str
 ) -> None:
@@ -129,6 +130,7 @@ def test_filename_allowlist_accepts_a_sentence_final_period(
         "instance" + ".local" + ".env" + ".example.net",
     ],
 )
+@requires_gitleaks
 def test_filename_allowlist_rejects_another_dotted_label(
     tmp_path: Path, filename: str
 ) -> None:

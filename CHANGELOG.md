@@ -22,7 +22,7 @@ you build on it.
 
 ### Fixed
 
-- `scripts/redaction-scan.sh --range` now blocks findings by default and keeps a tip-scan finding as a pre-existing warning only when its `Secret` text is present in the same path's base blob from `git show`; findings added and deleted inside the range still block through `gitleaks git`, uncommitted changed-path findings block, filtered paths use the same evidence rule, and deleted `-diff` paths fail closed when git mode cannot report them (#331).
+- `scripts/redaction-scan.sh --range` now blocks findings by default and keeps a tip-scan finding as a pre-existing warning only when the same `RuleID` and `Secret` are reproduced by scanning the same path's base blob with the same generated gitleaks config; findings added and deleted inside the range still block through `gitleaks git`, uncommitted changed-path findings block, filtered paths use the same evidence rule, and deleted `-diff` paths fail closed when git mode cannot report them (#331).
 - Range mode includes first-parent merge diffs and fails closed with a named exit-2 reason when its generated report cannot be parsed or a deleted `-diff` path cannot be decided (#331).
 - Range mode now fails with exit 2 and a named reason when its commit range cannot be resolved, and the pull-request workflow fetches complete history before running the range scan (#331).
 - Tracked-mode scans now report `.gitleaksignore` fingerprints that match no current finding; a file fingerprint is `path:rule:line`, its path uses forward slashes for comparison, and it drifts as soon as a line above it shifts (#331).

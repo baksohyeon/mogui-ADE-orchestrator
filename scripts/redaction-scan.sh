@@ -801,9 +801,11 @@ fi
 
 FINDINGS_FILE="${WORK_DIR}/findings.txt"
 PREEXISTING_FILE="${WORK_DIR}/preexisting.txt"
+BASE_EVIDENCE_DIR="${WORK_DIR}/base-evidence"
+mkdir -p "${BASE_EVIDENCE_DIR}"
 CLASSIFY_ERROR="${WORK_DIR}/classify-error"
 classify_rc=0
-"${PYTHON}" - "${REPORTS}" "${FINDINGS_FILE}" "${PREEXISTING_FILE}" "${MODE}" "${RANGE_GIT_REPORT}" "${RANGE_BASE}" > /dev/null 2>"${CLASSIFY_ERROR}" <<'PY' || classify_rc=$?
+"${PYTHON}" - "${REPORTS}" "${FINDINGS_FILE}" "${PREEXISTING_FILE}" "${MODE}" "${RANGE_GIT_REPORT}" "${RANGE_BASE}" "${CONFIG}" "${BASE_EVIDENCE_DIR}" > /dev/null 2>"${CLASSIFY_ERROR}" <<'PY' || classify_rc=$?
 import hashlib
 import json
 import pathlib
@@ -811,13 +813,15 @@ import re
 import subprocess
 import sys
 
-reports, findings_path, preexisting_path, mode, range_report_path, range_base = (
+reports, findings_path, preexisting_path, mode, range_report_path, range_base, config, evidence_dir = (
     pathlib.Path(sys.argv[1]),
     pathlib.Path(sys.argv[2]),
     pathlib.Path(sys.argv[3]),
     sys.argv[4],
     pathlib.Path(sys.argv[5]),
     sys.argv[6],
+    pathlib.Path(sys.argv[7]),
+    pathlib.Path(sys.argv[8]),
 )
 MASKS = (
     (re.compile(r"(AKIA)[0-9A-Z]{16}"), r"\1****************"),
@@ -903,6 +907,79 @@ range_keys = {finding_key(row) for row in range_rows if row.get("File")}
 
 blocking = set()
 preexisting = set()
+base_findings_by_path = {}
+
+
+def base_findings(file_):
+    """Scan each base path once with the same generated gitleaks config."""
+    if file_ in base_findings_by_path:
+        return base_findings_by_path[file_]
+
+    try:
+        base_blob = subprocess.run(
+            ["git", "show", f"{range_base}:{file_}"],
+            capture_output=True,
+            check=False,
+        )
+    except OSError as error:
+        print(f"could not read base blob for {file_}: {error}", file=sys.stderr)
+        raise SystemExit(1)
+
+    if base_blob.returncode != 0:
+        base_findings_by_path[file_] = set()
+        return base_findings_by_path[file_]
+
+    base_path = evidence_dir / file_
+    try:
+        base_path.parent.mkdir(parents=True, exist_ok=True)
+        base_path.write_bytes(base_blob.stdout)
+    except OSError as error:
+        print(f"could not materialize base blob for {file_}: {error}", file=sys.stderr)
+        raise SystemExit(1)
+
+    report_path = evidence_dir / f"{hashlib.sha256(file_.encode('utf-8')).hexdigest()}.json"
+    try:
+        base_scan = subprocess.run(
+            [
+                "gitleaks",
+                "dir",
+                file_,
+                "--config",
+                str(config),
+                "--no-banner",
+                "--exit-code",
+                "0",
+                "--report-format",
+                "json",
+                "--report-path",
+                str(report_path),
+            ],
+            cwd=evidence_dir,
+            capture_output=True,
+            check=False,
+        )
+    except OSError as error:
+        print(f"could not scan base blob for {file_}: {error}", file=sys.stderr)
+        raise SystemExit(1)
+    if base_scan.returncode != 0:
+        print(f"gitleaks failed while scanning base blob for {file_}", file=sys.stderr)
+        raise SystemExit(1)
+
+    try:
+        rows = json.loads(report_path.read_text(encoding="utf-8")) if report_path.exists() else []
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        print(f"could not parse base gitleaks report for {file_}: {error}", file=sys.stderr)
+        raise SystemExit(1)
+    if not isinstance(rows, list):
+        print(f"could not parse base gitleaks report for {file_}: expected a JSON array", file=sys.stderr)
+        raise SystemExit(1)
+
+    base_findings_by_path[file_] = {
+        (row.get("RuleID"), row.get("Secret"))
+        for row in rows
+        if isinstance(row, dict) and row.get("RuleID") and isinstance(row.get("Secret"), str)
+    }
+    return base_findings_by_path[file_]
 
 # The gitleaks git report is part of the blocking set. This includes findings in
 # files that were added and deleted inside the range, which the tip scan cannot
@@ -933,16 +1010,7 @@ for report in sorted(reports.glob("*.json")):
             blocking.add(line_text)
             continue
 
-        try:
-            base_blob = subprocess.run(
-                ["git", "show", f"{range_base}:{file_}"],
-                capture_output=True,
-                check=False,
-            )
-        except OSError:
-            base_blob = None
-
-        if base_blob is not None and base_blob.returncode == 0 and secret.encode("utf-8") in base_blob.stdout:
+        if (row.get("RuleID"), secret) in base_findings(file_):
             preexisting.add(line_text)
         else:
             blocking.add(line_text)

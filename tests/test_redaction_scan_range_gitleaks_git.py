@@ -1,9 +1,10 @@
 """Range mode blocks by default and warns only on base-content evidence.
 
 The range scan uses gitleaks git history for findings added and deleted inside
-the range. Tip findings become warnings only when their secret is present in
-the same path at the range base revision, so changed, filtered, and uncommitted
-content without that evidence remains blocking.
+the range. Tip findings become warnings only when the same rule and secret are
+reproduced by scanning the same path's range-base blob with the same config, so
+changed, filtered, and uncommitted content without that evidence remains
+blocking.
 """
 
 from __future__ import annotations
@@ -173,6 +174,39 @@ def test_range_mode_blocks_an_uncommitted_key_in_a_changed_path(
 
 
 @requires_gitleaks
+def test_range_mode_blocks_when_base_finding_is_only_on_an_allowlisted_line(
+    tmp_path: Path,
+) -> None:
+    repo = _repo_with_commits(tmp_path, ["base"])
+    key = _aws_key()
+    config = repo / "config" / "gitleaks.toml"
+    config.write_text(
+        config.read_text(encoding="utf-8")
+        + "\n[[allowlists]]\n"
+        + 'description = "test-only line allowlist"\n'
+        + 'regexTarget = "line"\n'
+        + f'regexes = ["^{key}$"]\n',
+        encoding="utf-8",
+    )
+    (repo / "changed.txt").write_text(f"{key}\n", encoding="utf-8")
+    _git(repo, "add", "config/gitleaks.toml", "changed.txt")
+    _git(repo, "commit", "-q", "-m", "add allowlisted base key")
+    base = _head(repo)
+
+    with (repo / "changed.txt").open("a", encoding="utf-8") as handle:
+        handle.write(f"{key}\n")
+    _git(repo, "add", "changed.txt")
+    _git(repo, "commit", "-q", "-m", "add an unallowlisted copy")
+
+    result = _scan(repo, "--range", f"{base}..HEAD")
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 1, output
+    assert "changed.txt" in output, output
+    assert "pre-existing=0" in result.stderr, output
+
+
+@requires_gitleaks
 def test_range_mode_blocks_tip_content_without_base_evidence_on_a_filtered_path(
     tmp_path: Path,
 ) -> None:
@@ -266,12 +300,8 @@ def test_range_mode_does_not_pass_when_a_deleted_diff_disabled_path_is_unresolva
     result = _scan(repo, "--range", f"{base}..HEAD")
     output = result.stdout + result.stderr
 
-    assert result.returncode in (1, 2), output
-    assert result.returncode != 0, output
-    if result.returncode == 1:
-        assert "secret.bin" in output, output
-    else:
-        assert "cannot decide" in output, output
+    assert result.returncode == 2, output
+    assert "cannot decide" in output, output
 
 
 @requires_gitleaks

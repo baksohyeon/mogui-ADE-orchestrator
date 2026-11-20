@@ -794,6 +794,38 @@ def test_template_apply_preflight_rechecks_destination_after_plan(tmp_path: Path
     assert external.read_text(encoding="utf-8") == "keep\n"
 
 
+def test_template_apply_seed_publish_rejects_replaced_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    loader = importlib.machinery.SourceFileLoader(
+        "template_apply_seed_under_test", str(TEMPLATE_APPLY)
+    )
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    if not module._secure_seed_publish_supported():
+        pytest.skip("Python lacks descriptor-relative no-follow operations")
+
+    template = tmp_path / "template"
+    ops = tmp_path / "ops"
+    template.mkdir()
+    ops.mkdir()
+    (template / "config").mkdir()
+    (template / "config" / "merge-ready-stop-paths.txt").write_text(
+        "docs/charter/\n", encoding="utf-8"
+    )
+    (template / "config" / "merge-ready-bots.txt").write_text(
+        "cubic-dev-ai\n", encoding="utf-8"
+    )
+    actions = module.plan_actions(template, ops, {"files": []}, None)
+    calls = iter([True, False])
+    monkeypatch.setattr(module, "_same_directory", lambda _path, _fd: next(calls))
+
+    with pytest.raises(RuntimeError, match="seed destination parent changed"):
+        module.apply_planned(template, ops, actions, {}, {"files": []})
+
+
 def test_template_apply_invalid_template_version_is_controlled_error(tmp_path: Path):
     template = tmp_path / "template"
     ops = tmp_path / "ops"

@@ -70,9 +70,9 @@ The workspace layer addresses three failures in long-lived coordination. Session
 
 The harness accepts any agent behind a master that can reason. `AGENTS.md` and `CLAUDE.md` ship byte-identical, and a repository test asserts it on every change. `claude` is one example CLI; Claude Code is the exercised host.
 
-The template depends on Orca by design as the required execution substrate for live operation. Orca supplies session lifetime that outlasts a window, stable terminal handles, worktree-scoped placement, and a durable Run, an orchestration context bound to a terminal that carries tasks, dispatches, and mailbox messages across restarts. It also supplies a background receiver, supervised dispatch, and pane identity tied to a worktree. Step 0 preflight refuses to proceed until `orca status` reports a usable runtime. It extracts the connected runtime version from `orca status --json` and compares it with the minimum declared in `master-ops/scripts/orca-surface-baseline.json`.
+The template depends on Orca by design as the required execution substrate for live operation. Orca supplies session lifetime that outlasts a window, stable terminal handles, worktree-scoped placement, and a durable Run (an orchestration context that carries tasks, dispatches, and mailbox messages across restarts). It also supplies a background receiver, supervised dispatch, and pane identity tied to a worktree. Step 0 preflight refuses to proceed until `orca status` reports a usable runtime. It extracts the connected runtime version from `orca status --json` and compares it with the minimum declared in `master-ops/scripts/orca-surface-baseline.json`.
 
-The Orca decision is a labelled preference based on running this harness against other agent development environments. Other environments offered a subset of Orca's capabilities. That preference is recorded as such.
+The Orca decision is also a labelled preference. It came from running this harness against other agent development environments. What they offered read as a subset of what Orca offers. That is a preference and it is recorded as one.
 
 For replaceable stack components, five questions decide what belongs in the stack:
 
@@ -95,7 +95,7 @@ This project is for people who already pay for coding-agent CLIs and want a work
 
 The optional skill layer is raised during onboarding. Declining all of it is normal because every script here runs with the base environment. The recommended set has four roles: method guidance, lifecycle hooks, task commands, and durable state. Some Claude Code plugins in that set edit user configuration during install. Onboarding prints commands for the human to run.
 
-If you adopt a context monitor, its warning thresholds can fire before this project's succession threshold. Record in your charter that the warning is advisory. A patch to the monitor may be restored by updates.
+If you adopt a context monitor, its warning thresholds can fire before this project's succession threshold. Record in your charter that the warning is advisory. If you patch the monitor instead, its updates can undo the patch.
 
 Agents: ground Orca claims in the [Orca docs snapshot agent index](https://grok-wiki.com/public/docs/stablyai-orca-2036d532bf1c/llms.txt) before improvising; the link hash may change with snapshot updates.
 
@@ -110,17 +110,17 @@ Agents: ground Orca claims in the [Orca docs snapshot agent index](https://grok-
 7. **Completion arrives through the mailbox.** The coordinator waits on `orca orchestration check --wait`. The worker sends `worker_done`, and the Run mailbox wakes the coordinator.
 8. **Acceptance comes from re-verification.** The worker report is a claim. The coordinator re-runs gates, reads diffs, examines artifacts, and checks redaction scans.
 
-The dispatch record and shell effect remain separate so acceptance can verify both before trusting the dispatch.
+The dispatch record and the shell effect stay separate, so a dispatch that Orca recorded but the worker terminal never received can be detected and sent again.
 
 ## What is standing guard
 
 The expanded guard inventory is [`docs/public/defense-inventory.md`](docs/public/defense-inventory.md).
 
-- **Dispatch gate and tier fan-out.** A tier is a configured worker class, and `scripts/dispatch-gate` guards fan-out per tier and records each decision in the ledger.
+- **Dispatch gate and tier fan-out.** `scripts/dispatch-gate` caps how many workers of each model tier run at once and records every decision in the ledger.
 - **Model identity from transcripts.** `scripts/model-identity-probe` reads recent assistant model fields and compares them with an expected model when supplied.
 - **Placement before master spawn.** `scripts/master-succeed` verifies the requested worktree placement before spawning a master.
 - **Kickoff boot-card reference.** `scripts/master-succeed` requires the succession boot card in the master kickoff.
-- **Empty seat and duplicate masters.** A seat is the workspace-level location assigned to a master, and `scripts/master-succeed` checks it and the runtime for duplicate masters.
+- **Empty seat and duplicate masters.** `scripts/master-succeed` refuses to found a master where one already sits and detects duplicate masters at runtime.
 - **Redaction scope.** `scripts/redaction-scan.sh` names the files and rules covered by the redaction scan.
 - **Revival of frozen sessions.** `scripts/master-succeed` verifies process, pane, and tty disappearance during retirement.
 - **Progressive onboarding.** `master-ops/ONBOARDING.md` routes one onboarding step per turn and waits for Verify before the next.
@@ -221,7 +221,7 @@ The schema has 13 required fields. Duplicate generations are rejected, and every
 
 ### Contract-gated dispatch
 
-`src/master_runtime/core/dispatch_gate.py` sits between the master and any worker dispatch. Every decision carries a stable reason code; see the [`ReasonCode` definition](src/master_runtime/core/dispatch_gate.py#L251) for the available codes and the [Reference](docs/public/reference.md) for command behavior.
+`src/master_runtime/core/dispatch_gate.py` sits between the master and any worker dispatch. Every decision carries a stable reason code; see the [`ReasonCode` definition](src/master_runtime/core/dispatch_gate.py) for the available codes and the [Reference](docs/public/reference.md) for command behavior.
 
 Repeated contract hashes are allowed and recorded with attempt ordinals. `register` verifies the job id against an artifact probe and measures the worker's actual model. Dry-run callers use `check --no-record`.
 
@@ -290,7 +290,7 @@ Local only.
 - **Master defaults to Claude Code out of the box.** The spawn path in `core/succession.py` accepts an agent parameter and defaults it to `claude`. It handles the Claude CLI family specially. Onboarding asks for the agent CLI and records the confirmed runtime. Claude Code is the most exercised host, so it is recommended.
 - **Workers can be any CLI.** A worker is a terminal session in an Orca pane. It is whatever binary starts there. Claude, Codex, Cursor, Grok, and Gemini have all run this way under contract. No plugin is required for any of them.
 - **Codex as master is untried.** It should work by design. If you run it, a report or patch is useful.
-- **Platform evidence is mixed.** The test gate runs on Linux, macOS, and Windows, and branch rules require all three test contexts. The Windows leg is measurement-only for the Windows-compatible subset. Shell tests and rendered-shell-tests run on Linux and macOS.
+- **Platform evidence is mixed.** The test gate runs on Linux, macOS, and Windows. The Windows job runs the Windows-compatible subset of the tests and is a required check, while tests that require the Unix script execution surface are skipped. Separately, user reports said Linux and Windows worked well, including Windows through WSL; WSL2 was reported as slightly ambiguous but still working. Versions, distributions, and coverage depth were not recorded.
 - **Orca required** for live sessions. Pure functions run without it.
 
 ## What this is not

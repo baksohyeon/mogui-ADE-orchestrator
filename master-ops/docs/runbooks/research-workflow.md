@@ -1,6 +1,16 @@
+---
+status: active
+triggers: [research report, literature review, cited sources]
+summary: records research plans, coverage, literature, and owner-open conclusions
+---
+
 # Research workflow
 
 This workflow governs reusable research records in `docs/research/`. It generalizes the routing workflow that originated in the QFUDS repository for use in this template.
+
+## Brief
+
+Use this workflow for research records. Keep the plan, coverage, verified sources, conclusions, and open owner questions explicit, and leave unverified sources in coverage until they are checked.
 
 ## Scope
 

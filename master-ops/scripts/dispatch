@@ -11,6 +11,7 @@ TEMPLATE_POLICY=$OPS/model-tier-policy.json
 PROBE_BIN={{RUNTIME_ROOT}}/scripts/model-identity-probe
 ROLLOUT_PROBE_BIN={{RUNTIME_ROOT}}/scripts/model-probe-rollout
 SCRIPTS_DIR=$(cd "$(dirname "$0")" && pwd)
+export DISPATCH_RUNBOOKS_DIR="${DISPATCH_RUNBOOKS_DIR:-$SCRIPTS_DIR/../docs/runbooks}"
 COLLISION_CHECK="$SCRIPTS_DIR/dispatch-collision-check"
 HOOKS_ANSWER_BIN="$SCRIPTS_DIR/codex-hooks-review-answer"
 # pane_classify_text reads this file on every pane read. A missing, unreadable,
@@ -389,6 +390,26 @@ print($1)
 "
 }
 
+# A runtime update can arrive after this wrapper is re-stamped. Probe the gate
+# itself before adding a newer option so an older install keeps dispatching
+# contracts that do not use runbook injection.
+gate_supports_runbook_injection() {
+  "$GATE" check --help 2>&1 | grep -Fq -- "--runbook-inject-supported"
+}
+
+# Keep stdout and stderr separate for the normal machine-readable response, but
+# surface both streams when an older or broken gate prints no JSON at all.
+gate_output_is_json() {
+  if printf '%s\n' "$CHK" | jqf "d" >/dev/null 2>/dev/null; then
+    return 0
+  fi
+  if [ -s "$GATE_STDERR_FILE" ]; then
+    cat "$GATE_STDERR_FILE" >&2
+  fi
+  [ -n "$CHK" ] && printf '%s\n' "$CHK" >&2
+  return 1
+}
+
 resolve_token_budget() {
   FRONT_MATTER_JSON=$(printf '%s' "$CHK" | jqf "json.dumps(d.get('front_matter') or {}, separators=(',',':'))") || return 1
   TOKEN_FIELDS=$("$GATE" budget --front-matter "$FRONT_MATTER_JSON" 2>&1) || {
@@ -533,6 +554,75 @@ print(value or '')
 " "$SCRIPTS_DIR" "$func"
 }
 
+# Body text of a "## <heading>" section. Exit 1 when the file or heading is
+# absent. Both standing rules and runbook Brief injection use this extractor so
+# the wrapper and gate keep one Markdown-section boundary.
+markdown_section() {
+  local path="$1" heading="$2"
+  python3 - "$path" "$heading" <<'EOF'
+import sys
+import re
+
+path, heading_name = sys.argv[1], sys.argv[2]
+
+try:
+    with open(path, encoding="utf-8") as fh:
+        lines = fh.read().splitlines()
+except OSError:
+    sys.exit(1)
+
+heading = f"## {heading_name}"
+body = []
+found = False
+fence = None
+
+def fence_marker(line):
+    match = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+    if match is None:
+        return None
+    marker, info = match.groups()
+    if marker[0] == "`" and "`" in info:
+        return None
+    return marker
+
+def fence_closes(line, marker):
+    match = re.match(r"^ {0,3}([`~]{3,})[ \t]*$", line)
+    return (
+        match is not None
+        and match.group(1)[0] == marker[0]
+        and len(match.group(1)) >= len(marker)
+        and all(character == marker[0] for character in match.group(1))
+    )
+
+for line in lines:
+    if fence is not None:
+        if found:
+            body.append(line)
+        if fence_closes(line, fence):
+            fence = None
+        continue
+    fence_start = fence_marker(line)
+    if fence_start is not None:
+        if found:
+            body.append(line)
+        fence = fence_start
+        continue
+    if found:
+        if line.startswith("## "):
+            break
+        body.append(line)
+    elif line.strip() == heading:
+        found = True
+if not found:
+    sys.exit(1)
+while body and not body[0].strip():
+    body.pop(0)
+while body and not body[-1].strip():
+    body.pop()
+print("\n".join(body))
+EOF
+}
+
 # Body text of a "## <name>" heading, read from the local overlay first
 # (so a seat's own copy of a shared block name wins) and the shipped file
 # second. Exit 1 when neither file carries the heading.
@@ -546,44 +636,29 @@ standing_rule_block() {
   local name="$1"
   local main_file="${DISPATCH_STANDING_RULES:-$SCRIPTS_DIR/../rules/standing-rules.md}"
   local local_file="${DISPATCH_STANDING_RULES_LOCAL:-$SCRIPTS_DIR/../config/standing-rules.overlay.md}"
-  python3 - "$name" "$local_file" "$main_file" <<'EOF'
-import sys
+  local text
+  if ! text=$(markdown_section "$local_file" "$name"); then
+    text=$(markdown_section "$main_file" "$name") || return 1
+  fi
+  printf '%s\n' "$text"
+}
 
-name, local_file, main_file = sys.argv[1], sys.argv[2], sys.argv[3]
-
-
-def extract(path, heading_name):
-    try:
-        with open(path, encoding="utf-8") as fh:
-            lines = fh.read().splitlines()
-    except OSError:
-        return None
-    heading = f"## {heading_name}"
-    body = []
-    found = False
-    for line in lines:
-        if found:
-            if line.startswith("## "):
-                break
-            body.append(line)
-        elif line.strip() == heading:
-            found = True
-    if not found:
-        return None
-    while body and not body[0].strip():
-        body.pop(0)
-    while body and not body[-1].strip():
-        body.pop()
-    return "\n".join(body)
-
-
-text = extract(local_file, name)
-if text is None:
-    text = extract(main_file, name)
-if text is None:
-    sys.exit(1)
-print(text)
-EOF
+# Return the Brief section from one named runbook. The gate validates every
+# name before it reaches this function, so the shell loop stays intentionally
+# simple and the same runbook directory is used by both layers.
+runbook_brief() {
+  local name="$1"
+  local runbook_file="$DISPATCH_RUNBOOKS_DIR/$name.md"
+  local brief
+  brief=$(markdown_section "$runbook_file" Brief) || return 1
+  if [ -z "$brief" ]; then
+    return 1
+  fi
+  if ! printf '%s' "$brief" | python3 -c \
+    'import sys; raise SystemExit(0 if len(sys.stdin.buffer.read()) <= 2000 else 1)'; then
+    return 1
+  fi
+  printf '%s\n' "$brief"
 }
 
 github_remote_metadata() {
@@ -2634,10 +2709,28 @@ fi
 GATE_ARGS=(--ledger "$LEDGER" check --runtime "$RUNTIME" --model "$MODEL" \
       --tier-policy "$POLICY" --contract "$CONTRACT" --agents 1 \
       --est-chars "$EST" --completion-channel orchestration)
+if gate_supports_runbook_injection; then
+  GATE_ARGS+=(--runbook-inject-supported)
+fi
 [ "$MODEL_NEEDS_MEASUREMENT" = 1 ] && GATE_ARGS+=(--model-needs-measurement)
-CHK=$("$GATE" "${GATE_ARGS[@]}" --no-record 2>/dev/null)
+GATE_STDERR_FILE=$(mktemp "${TMPDIR:-/tmp}/mogui-dispatch-gate.XXXXXX") || {
+  echo "✗ could not create a temporary gate diagnostics file" >&2
+  exit 2
+}
+GATE_STATUS=0
+CHK=$("$GATE" "${GATE_ARGS[@]}" --no-record 2>"$GATE_STDERR_FILE") || GATE_STATUS=$?
+if ! gate_output_is_json; then
+  rm -f -- "$GATE_STDERR_FILE"
+  [ "$GATE_STATUS" -eq 0 ] && GATE_STATUS=2
+  exit "$GATE_STATUS"
+fi
+rm -f -- "$GATE_STDERR_FILE"
 ALLOW=$(echo "$CHK" | jqf "d['allow']")
 SHA=$(echo "$CHK" | jqf "d.get('contract_sha') or ''")
+RUNBOOK_BRIEF_WARNINGS=$(echo "$CHK" | jqf "' '.join(w for w in d.get('warnings', []) if w == 'RUNBOOK_BRIEF_MISSING')")
+if [ -n "$RUNBOOK_BRIEF_WARNINGS" ]; then
+  echo "⚠ gate warning · RUNBOOK_BRIEF_MISSING · a Brief pointer will be injected for the named runbook" >&2
+fi
 if [ "$ALLOW" != "True" ]; then
   echo "✗ gate DENY · $(echo "$CHK" | jqf "d['reason']") · model=$MODEL tier=$TIER"
   echo "$CHK"; exit 2
@@ -2674,7 +2767,18 @@ else
   ensure_agy_pretrust "$RUNTIME" "$WORKTREE" || exit 2
 fi
 
-CHK=$("$GATE" "${GATE_ARGS[@]}" 2>/dev/null)
+GATE_STDERR_FILE=$(mktemp "${TMPDIR:-/tmp}/mogui-dispatch-gate.XXXXXX") || {
+  echo "✗ could not create a temporary gate diagnostics file" >&2
+  exit 2
+}
+GATE_STATUS=0
+CHK=$("$GATE" "${GATE_ARGS[@]}" 2>"$GATE_STDERR_FILE") || GATE_STATUS=$?
+if ! gate_output_is_json; then
+  rm -f -- "$GATE_STDERR_FILE"
+  [ "$GATE_STATUS" -eq 0 ] && GATE_STATUS=2
+  exit "$GATE_STATUS"
+fi
+rm -f -- "$GATE_STDERR_FILE"
 ALLOW=$(echo "$CHK" | jqf "d['allow']")
 SHA=$(echo "$CHK" | jqf "d.get('contract_sha') or ''")
 if [ "$ALLOW" != "True" ]; then
@@ -2771,6 +2875,35 @@ Standing rules ($name):
 $block"
   done
   echo "📎 standing rules · $STANDING_RULE_NAMES"
+fi
+
+# 1.7 append the Brief section for every runbook the contract named. The gate
+# reads the same files and records RUNBOOK_BRIEF_MISSING when a section is
+# absent; a pointer keeps that warning actionable for an older install.
+RUNBOOK_NAMES=$(echo "$CHK" | jqf "' '.join(d.get('front_matter', {}).get('runbooks', []) or [])")
+if [ -n "$RUNBOOK_NAMES" ]; then
+  RUNBOOK_BRIEF_NAMES=""
+  RUNBOOK_POINTER_NAMES=""
+  for name in $RUNBOOK_NAMES; do
+    runbook_file="$DISPATCH_RUNBOOKS_DIR/$name.md"
+    if brief=$(runbook_brief "$name"); then
+      SPEC="$SPEC
+
+Runbook ($name):
+
+$brief"
+      RUNBOOK_BRIEF_NAMES="${RUNBOOK_BRIEF_NAMES:+$RUNBOOK_BRIEF_NAMES }$name"
+    else
+      SPEC="$SPEC
+
+Runbook ($name):
+
+Brief missing. Read the runbook at $(cd "$DISPATCH_RUNBOOKS_DIR" && pwd)/$name.md."
+      RUNBOOK_POINTER_NAMES="${RUNBOOK_POINTER_NAMES:+$RUNBOOK_POINTER_NAMES }$name"
+    fi
+  done
+  [ -n "$RUNBOOK_BRIEF_NAMES" ] && echo "📎 runbook Brief · $RUNBOOK_BRIEF_NAMES"
+  [ -n "$RUNBOOK_POINTER_NAMES" ] && echo "📎 runbook Brief pointer · $RUNBOOK_POINTER_NAMES"
 fi
 
 # 1.6b mail-before-done ships to every brief, whether or not the contract

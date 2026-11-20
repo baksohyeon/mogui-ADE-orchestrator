@@ -1,3 +1,8 @@
+---
+status: active
+summary: executes supervised worker dispatch and completion gates
+---
+
 # Supervised dispatch wrapper
 
 `scripts/dispatch` runs the checked and registered worker path. Every live

@@ -1,3 +1,8 @@
+---
+status: active
+summary: warns at prompt submission when the orchestration inbox has unacknowledged messages
+---
+
 # Orchestration inbox warn hook (`scripts/hooks/orch-inbox-warn.sh`)
 
 Add this block to workspace `.claude/settings.json` under `hooks`:

@@ -1,3 +1,8 @@
+---
+status: active
+summary: exercises the supervised dispatch wrapper with a bounded smoke fixture
+---
+
 # dispatch-smoke
 
 `scripts/dispatch-smoke` is a seat-run check that `scripts/dispatch`

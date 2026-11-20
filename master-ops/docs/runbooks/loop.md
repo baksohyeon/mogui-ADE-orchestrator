@@ -1,3 +1,8 @@
+---
+status: active
+summary: carries loop-ready tracker items through a bounded verified run
+---
+
 # Loop runbook
 
 The procedure the master follows around `scripts/loop-check` for a bounded run

@@ -1,3 +1,8 @@
+---
+status: active
+summary: records durable master workspace placement evidence
+---
+
 # Master Placement Record
 
 Measured during onboarding by the installer session.

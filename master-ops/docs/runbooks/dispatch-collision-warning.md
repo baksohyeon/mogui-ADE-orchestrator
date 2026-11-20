@@ -1,3 +1,8 @@
+---
+status: active
+summary: records same-host runtime collisions and their advisory warnings
+---
+
 # Dispatch Collision Warning
 
 `scripts/dispatch` calls `scripts/dispatch-collision-check` right after gate

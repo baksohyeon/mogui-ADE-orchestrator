@@ -1,3 +1,8 @@
+---
+status: active
+summary: classifies missing memory links by their recorded cause
+---
+
 # Memory `[[name]]` Link Check
 
 `scripts/memory-link-check` sorts every missing `[[name]]` memory link by

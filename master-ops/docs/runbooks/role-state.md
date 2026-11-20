@@ -1,3 +1,8 @@
+---
+status: active
+summary: records the current master role, lock, and transition rules
+---
+
 # Role State
 
 Current Role: (not booted; declare on first master start)

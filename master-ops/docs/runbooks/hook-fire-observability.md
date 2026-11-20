@@ -1,3 +1,8 @@
+---
+status: active
+summary: measures hook fire records and reports observability gaps
+---
+
 # Hook Fire Observability Runbook
 
 ## Purpose

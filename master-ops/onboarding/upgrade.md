@@ -102,6 +102,23 @@ cp "{{OPS_REPO}}/workspace-card/AGENTS.md" "{{WORKSPACE_ROOT}}/AGENTS.md"
 
 If the owner declines, say that the root card is stale and that `LOCAL.md` is not read until it is redeployed.
 
+### Runbook structure adoption
+
+The runbook index is instance-owned because an install may add its own runbooks. Show
+this one-line edit in the dry-run plan and wait for the owner's explicit confirmation
+before writing the installed `scripts/harness-selfcheck.sh`, then run the self-check:
+
+```bash
+"$OPS_DIR/scripts/runbook-index" --check || exit_code=1
+```
+
+Insert the line before the existing final `exit "$exit_code"` in
+`scripts/harness-selfcheck.sh` so the check remains reachable.
+
+Apply the gate support before contracts containing `runbooks:` or `runbooks_waived:`;
+apply the wrapper support before enabling those keys in a contract. A partial upgrade
+stops at the gate and leaves no worker with an unfixable Brief-injection failure.
+
 ## Report
 
 State, in the owner's language: which report set was produced, installed vs template version, how many paths were written, how many were refused as instance-owned, how many unknown local paths remain, and whether the workspace-root card was redeployed. Then stop; Upgrade has no spawn and no further steps.

@@ -1,5 +1,6 @@
 ---
 status: active
+summary: compares boot evidence with the stored workspace baseline
 ---
 
 # Boot comparison set

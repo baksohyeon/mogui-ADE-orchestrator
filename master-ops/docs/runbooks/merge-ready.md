@@ -1,3 +1,8 @@
+---
+status: active
+summary: measures pull request state before worker completion and merge
+---
+
 # Merge-Ready: One Measurement For A Pull Request
 
 `scripts/merge-ready` measures one pull request and exits non-zero unless its GitHub state is ready

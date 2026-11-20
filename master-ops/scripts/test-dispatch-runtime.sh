@@ -285,10 +285,12 @@ brief_model_measurement_test "$dispatch" || exit 1
 checkonly_ledger_test() (
   set +e
   set -u
-  local dispatch="$1" work jqf_fn tier_fn mark_fn resolve_fn block
+  local dispatch="$1" work jqf_fn probe_fn output_fn tier_fn mark_fn resolve_fn block
   local gate ledger policy contract script_file status before after out mutant_block
 
   jqf_fn=$(awk '$0=="jqf() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  probe_fn=$(awk '$0=="gate_supports_runbook_injection() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  output_fn=$(awk '$0=="gate_output_is_json() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   tier_fn=$(awk '$0=="tier_for_model() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   mark_fn=$(awk '$0=="mark_model_needs_measurement() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   resolve_fn=$(awk '$0=="resolve_token_budget() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
@@ -300,6 +302,8 @@ checkonly_ledger_test() (
   ' "$dispatch")
 
   [ -n "$jqf_fn" ] || { echo "FAIL: could not extract jqf" >&2; return 1; }
+  [ -n "$probe_fn" ] || { echo "FAIL: could not extract gate_supports_runbook_injection" >&2; return 1; }
+  [ -n "$output_fn" ] || { echo "FAIL: could not extract gate_output_is_json" >&2; return 1; }
   [ -n "$tier_fn" ] || { echo "FAIL: could not extract tier_for_model" >&2; return 1; }
   [ -n "$mark_fn" ] || { echo "FAIL: could not extract mark_model_needs_measurement" >&2; return 1; }
   [ -n "$resolve_fn" ] || { echo "FAIL: could not extract resolve_token_budget" >&2; return 1; }
@@ -342,6 +346,8 @@ BIN
     {
       echo 'set -u'
       printf '%s\n' "$jqf_fn"
+      printf '%s\n' "$probe_fn"
+      printf '%s\n' "$output_fn"
       printf '%s\n' "$tier_fn"
       printf '%s\n' "$mark_fn"
       printf '%s\n' "$resolve_fn"
@@ -3097,10 +3103,11 @@ standing_rules_missing_file_test "$dispatch" || exit 1
 standing_rules_append_test() (
   set +e
   set -u
-  local dispatch="$1" work jqf_fn block_fn append_block script_file
+  local dispatch="$1" work jqf_fn section_fn block_fn append_block script_file
   local out status mutant_block
 
   jqf_fn=$(awk '$0=="jqf() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  section_fn=$(awk '$0=="markdown_section() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   block_fn=$(awk '$0=="standing_rule_block() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   append_block=$(awk '
     /^STANDING_RULE_NAMES=\$\(echo "\$CHK" \| jqf/{f=1}
@@ -3109,6 +3116,7 @@ standing_rules_append_test() (
   ' "$dispatch")
 
   [ -n "$jqf_fn" ] || { echo "FAIL: could not extract jqf" >&2; return 1; }
+  [ -n "$section_fn" ] || { echo "FAIL: could not extract markdown_section" >&2; return 1; }
   [ -n "$block_fn" ] || { echo "FAIL: could not extract standing_rule_block" >&2; return 1; }
   [ -n "$append_block" ] || { echo "FAIL: could not extract the STANDING_RULE_NAMES append block" >&2; return 1; }
 
@@ -3137,6 +3145,7 @@ RULES
       printf 'export DISPATCH_STANDING_RULES=%s\n' "$work/rules/standing-rules.md"
       printf 'export DISPATCH_STANDING_RULES_LOCAL=%s\n' "$work/config/standing-rules.overlay.md"
       printf '%s\n' "$jqf_fn"
+      printf '%s\n' "$section_fn"
       printf '%s\n' "$block_fn"
       printf 'CHK=%s\n' "$(printf '%q' "$chat_json")"
       echo 'SPEC="original spec"'
@@ -3255,6 +3264,7 @@ RULES
     printf 'export DISPATCH_STANDING_RULES=%s\n' "$work/rules/standing-rules.md"
     printf 'export DISPATCH_STANDING_RULES_LOCAL=%s\n' "$work/config/standing-rules.overlay.md"
     printf '%s\n' "$jqf_fn"
+    printf '%s\n' "$section_fn"
     printf '%s\n' "$block_fn"
     printf 'CHK=%s\n' "$(printf '%q' '{"allow": true, "front_matter": {"standing_rules": ["headless"]}}')"
     echo 'SPEC="original spec"'
@@ -3283,10 +3293,11 @@ standing_rules_append_test "$dispatch" || exit 1
 mail_before_done_always_test() (
   set +e
   set -u
-  local dispatch="$1" work jqf_fn block_fn append_block mbd_block script_file
+  local dispatch="$1" work jqf_fn section_fn block_fn append_block mbd_block script_file
   local out status mutant_block count
 
   jqf_fn=$(awk '$0=="jqf() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  section_fn=$(awk '$0=="markdown_section() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   block_fn=$(awk '$0=="standing_rule_block() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   append_block=$(awk '
     /^STANDING_RULE_NAMES=\$\(echo "\$CHK" \| jqf/{f=1}
@@ -3300,6 +3311,7 @@ mail_before_done_always_test() (
   ' "$dispatch")
 
   [ -n "$jqf_fn" ] || { echo "FAIL: could not extract jqf" >&2; return 1; }
+  [ -n "$section_fn" ] || { echo "FAIL: could not extract markdown_section" >&2; return 1; }
   [ -n "$block_fn" ] || { echo "FAIL: could not extract standing_rule_block" >&2; return 1; }
   [ -n "$append_block" ] || { echo "FAIL: could not extract the STANDING_RULE_NAMES append block" >&2; return 1; }
   [ -n "$mbd_block" ] || { echo "FAIL: could not extract the mail-before-done always-append block" >&2; return 1; }
@@ -3325,6 +3337,7 @@ RULES
       printf 'export DISPATCH_STANDING_RULES=%s\n' "$rules_file"
       printf 'export DISPATCH_STANDING_RULES_LOCAL=%s\n' "$work/config/standing-rules.overlay.md"
       printf '%s\n' "$jqf_fn"
+      printf '%s\n' "$section_fn"
       printf '%s\n' "$block_fn"
       printf 'CHK=%s\n' "$(printf '%q' "$chat_json")"
       echo 'SPEC="original spec"'
@@ -3456,6 +3469,7 @@ RULES
     printf 'export DISPATCH_STANDING_RULES=%s\n' "$work/rules/standing-rules.md"
     printf 'export DISPATCH_STANDING_RULES_LOCAL=%s\n' "$work/config/standing-rules.overlay.md"
     printf '%s\n' "$jqf_fn"
+    printf '%s\n' "$section_fn"
     printf '%s\n' "$block_fn"
     printf 'CHK=%s\n' "$(printf '%q' '{"allow": true, "front_matter": {}}')"
     echo 'SPEC="original spec"'

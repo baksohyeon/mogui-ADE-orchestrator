@@ -1,3 +1,8 @@
+---
+status: active
+summary: centralizes parsing of JSON returned by Orca commands
+---
+
 # orca-json
 
 `scripts/lib/orca_json.py` is the one place that reads JSON out of `orca

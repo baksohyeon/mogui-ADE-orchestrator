@@ -13,6 +13,7 @@ grep -Fq "## $rule_name" "$rules_file" || {
 }
 
 jqf_fn=$(awk '$0=="jqf() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+section_fn=$(awk '$0=="markdown_section() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
 block_fn=$(awk '$0=="standing_rule_block() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
 append_block=$(awk '
   /^STANDING_RULE_NAMES=\$\(echo "\$CHK" \| jqf/{f=1}
@@ -21,6 +22,7 @@ append_block=$(awk '
 ' "$dispatch")
 
 [ -n "$jqf_fn" ] || { echo "FAIL: could not extract jqf" >&2; exit 1; }
+[ -n "$section_fn" ] || { echo "FAIL: could not extract markdown_section" >&2; exit 1; }
 [ -n "$block_fn" ] || { echo "FAIL: could not extract standing_rule_block" >&2; exit 1; }
 [ -n "$append_block" ] || { echo "FAIL: could not extract the standing-rules append block" >&2; exit 1; }
 
@@ -41,6 +43,7 @@ write_script() {
     printf 'export DISPATCH_STANDING_RULES=%q\n' "$rules_path"
     printf 'export DISPATCH_STANDING_RULES_LOCAL=%q\n' "$work/config/standing-rules.overlay.md"
     printf '%s\n' "$jqf_fn"
+    printf '%s\n' "$section_fn"
     printf '%s\n' "$block_fn"
     printf 'CHK=%s\n' "$(printf '%q' "$chat_json")"
     echo 'SPEC="original spec"'

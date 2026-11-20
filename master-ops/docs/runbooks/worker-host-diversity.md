@@ -1,3 +1,8 @@
+---
+status: active
+summary: makes worker runtime host collisions visible at dispatch time
+---
+
 # Worker Host Diversity
 
 The master and a worker on the same host runtime draw from the same quota pool.

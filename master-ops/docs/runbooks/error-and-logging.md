@@ -1,3 +1,8 @@
+---
+status: active
+summary: defines the hook-fire and event log split, the event schema, and fail-open logging
+---
+
 # Error and logging boundaries
 
 The hook-fire log and event log remain separate. Existing hooks keep writing

@@ -39,6 +39,7 @@ INSTANCE_OWNED_EXACT = frozenset(
         "docs/evals/evidence.instance.json",
         "docs/decisions/closed-decisions-and-facts.md",
         "docs/research/literature/index.csv",
+        "docs/runbooks/README.md",
         "docs/runbooks/boot-comparison-set.md",
         "docs/runbooks/role-state.md",
         "docs/runbooks/succession-boot-card.md",

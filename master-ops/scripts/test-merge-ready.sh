@@ -207,6 +207,7 @@ DISMISSED_REVIEW="[{\"state\":\"DISMISSED\",\"body\":\"Automated review\",\"comm
 MALFORMED_PAGEINFO_REVIEW="[{\"state\":\"COMMENTED\",\"body\":\"\",\"comments\":{\"nodes\":[]},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"coderabbitai\",\"__typename\":\"Bot\"}},{\"state\":\"COMMENTED\",\"body\":\"Automated review\",\"comments\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"cubic-dev-ai\",\"__typename\":\"Bot\"}}]"
 NONBOOLEAN_PAGEINFO_REVIEW="[{\"state\":\"COMMENTED\",\"body\":\"\",\"comments\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":\"false\"}},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"coderabbitai\",\"__typename\":\"Bot\"}},{\"state\":\"COMMENTED\",\"body\":\"Automated review\",\"comments\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"cubic-dev-ai\",\"__typename\":\"Bot\"}}]"
 MALFORMED_REVIEW_STATE="[{\"state\":\"UNKNOWN\",\"body\":\"Automated review\",\"comments\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"coderabbitai\",\"__typename\":\"Bot\"}},{\"state\":\"COMMENTED\",\"body\":\"Automated review\",\"comments\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"cubic-dev-ai\",\"__typename\":\"Bot\"}}]"
+MISSING_REPLYTO_REVIEW="[{\"state\":\"COMMENTED\",\"body\":\"\",\"comments\":{\"nodes\":[{\"databaseId\":8}],\"pageInfo\":{\"hasNextPage\":false}},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"coderabbitai\",\"__typename\":\"Bot\"}},{\"state\":\"COMMENTED\",\"body\":\"Automated review\",\"comments\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"cubic-dev-ai\",\"__typename\":\"Bot\"}}]"
 
 NON_HEAD_REVIEW='[{"state":"COMMENTED","commit":{"oid":"1111111111111111111111111111111111111111"},"author":{"login":"coderabbitai","__typename":"Bot"}}]'
 
@@ -483,6 +484,15 @@ if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'malformed review state';
   ok "an unknown review state exits 1"
 else
   fail "unknown review state: got ${rc}: ${out}"
+fi
+
+missing_replyto_dir="${WORK_DIR}/missing-replyto"
+write_fixture "${missing_replyto_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" "${MISSING_REPLYTO_REVIEW}"
+out=$(run_case "${missing_replyto_dir}"); rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'malformed review comment replyTo'; then
+  ok "a missing review-comment replyTo field exits 1"
+else
+  fail "missing review-comment replyTo: got ${rc}: ${out}"
 fi
 
 nonboolean_thread_dir="${WORK_DIR}/nonboolean-thread"

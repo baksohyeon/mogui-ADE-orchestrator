@@ -141,10 +141,15 @@ def review_is_standalone(review: Any) -> bool:
     comments = review.get("comments")
     if not isinstance(comments, dict) or not isinstance(comments.get("nodes"), list):
         return False
-    has_top_level_comment = any(
-        isinstance(comment, dict) and comment.get("replyTo") is None
-        for comment in comments["nodes"]
-    )
+    has_top_level_comment = False
+    for comment in comments["nodes"]:
+        if not isinstance(comment, dict) or "replyTo" not in comment:
+            raise ValueError("graphql response has malformed review comment replyTo")
+        reply_to = comment["replyTo"]
+        if reply_to is None:
+            has_top_level_comment = True
+        elif not isinstance(reply_to, dict):
+            raise ValueError("graphql response has malformed review comment replyTo")
     page_info = comments.get("pageInfo")
     if not isinstance(page_info, dict) or not isinstance(page_info.get("hasNextPage"), bool):
         raise ValueError("graphql response has malformed review comments pageInfo")

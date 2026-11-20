@@ -12,6 +12,7 @@ asserts the duplicates match this pattern.
 from __future__ import annotations
 
 import json
+import os
 import re
 import stat
 import subprocess
@@ -120,7 +121,19 @@ def resolve_template_version(
 
     repo_root = Path(repo_top.stdout.strip()).resolve()
     source_resolved = source_root.resolve()
-    if source_resolved not in (repo_root, repo_root / "master-ops"):
+    allowed_roots = (repo_root, repo_root / "master-ops")
+
+    def same_path(left: Path, right: Path) -> bool:
+        try:
+            if left.samefile(right):
+                return True
+        except OSError:
+            pass
+        return os.path.normcase(str(left)) == os.path.normcase(str(right))
+
+    if not any(
+        same_path(source_resolved, candidate) for candidate in allowed_roots
+    ):
         return plain_version, None
 
     try:

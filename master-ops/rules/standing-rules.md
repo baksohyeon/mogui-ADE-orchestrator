@@ -1,6 +1,6 @@
 # Standing rules
 
-Eight named rule blocks, each a `## <name>` heading. A contract's front matter
+Nine named rule blocks, each a `## <name>` heading. A contract's front matter
 may name any subset of these under `standing_rules: [...]`; `scripts/dispatch`
 reads the named blocks and appends their text to the dispatched spec, so a
 worker receives the rule as part of its own task text instead of needing a
@@ -9,13 +9,13 @@ human to paste it in by hand. A seat may add further blocks in the overlay
 refreshes on every template re-stamp; the overlay, in the instance-owned
 `config/` directory, never does.
 
-`mail-before-done` and `required-infra` are the two exceptions to "named
-under `standing_rules`": `scripts/dispatch` appends both to every brief
-whether or not a contract's front matter names them, the same way it always
-appends the worker token budget line below the standing-rule blocks. Naming
-either explicitly in `standing_rules` is harmless (the gate accepts it as a
-known block, same as the others) but has no further effect, since the
-wrapper was going to add it anyway.
+`mail-before-done`, `required-infra`, and `merge-ready-before-done` are the
+three exceptions to "named under `standing_rules`": `scripts/dispatch`
+appends all three to every brief whether or not a contract's front matter
+names them, the same way it always appends the worker token budget line
+below the standing-rule blocks. Naming one explicitly in `standing_rules` is
+harmless (the gate accepts it as a known block, same as the others) but has
+no further effect, since the wrapper was going to add it anyway.
 
 ## headless
 
@@ -48,6 +48,25 @@ the completion message why not, and keep calling until one returns no
 mail. Stop at 10 calls even if mail remains and name that cap in the
 completion message. If a check itself fails, name the failed check and
 its error text in the completion message.
+
+## merge-ready-before-done
+
+Skip this block if your task does not end in a pull request (a direct-to-`main` land, for
+example). Otherwise, before `worker_done`: run an independent review pass over your own diff (a
+review subagent or skill, never your own unverified opinion of it). Then run
+`scripts/merge-ready --repo <owner/name> --pr <n>` on your own PR, adding `--contract <file>`
+whenever this task delivered one (omit it only for a contractless task), and quote its one summary
+line in your completion message. Exit `0` means the GitHub-state measurements passed; the command
+does not attest to the master's independent review or separate head-tarball test. Before merging,
+the master completes those separate steps and runs `gh pr merge --match-head-commit <sha>` with the
+full head sha printed in the summary line. Exit `1` means fix the readiness failure named by the
+summary and rerun. Exit `2` means stop and ask the coordinator rather than merge or keep iterating;
+it is not yours to resolve by guessing. The ops repository's own
+`docs/runbooks/merge-ready.md` (the checkout holding this rule's own `rules/` directory, not the
+product repository you are dispatched into) has the exit codes and the separate master-step
+procedure.
+The command reads GitHub state and the checked-in gate configuration, and it does not execute
+pull-request code.
 
 ## placement
 

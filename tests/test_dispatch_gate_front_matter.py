@@ -250,6 +250,24 @@ def test_known_standing_rules_and_budget_and_writes_are_recorded(
     assert decision.front_matter["standing_rules"] == ["headless", "ack-token"]
 
 
+def test_merge_ready_before_done_standing_rule_is_accepted(tmp_path: Path) -> None:
+    # #330: scripts/dispatch appends this block to every brief unconditionally
+    # (the way it already does for mail-before-done and required-infra), but
+    # a contract may still name it explicitly, and the gate's known-name
+    # check must accept it the same way it accepts any other heading the
+    # shipped rules file declares.
+    rules = _standing_rules(tmp_path, names=("headless", "merge-ready-before-done"))
+    contract = _contract(
+        tmp_path,
+        "---\ntier: efficient\nruntime: claude\nrepo: example-repo\n"
+        "standing_rules: [headless, merge-ready-before-done]\n---\n",
+    )
+    decision = _gate(tmp_path, standing_rules_path=rules).check(_request(contract))
+
+    assert decision.allow is True
+    assert decision.front_matter["standing_rules"] == ["headless", "merge-ready-before-done"]
+
+
 def test_token_budget_defaults_basis_to_total_and_is_recorded(tmp_path: Path) -> None:
     contract = _contract(
         tmp_path,

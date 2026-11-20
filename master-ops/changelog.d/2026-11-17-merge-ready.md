@@ -1,0 +1,41 @@
+- New `scripts/merge-ready --repo <owner/name> --pr <n> [--contract <file>]` (#330): one
+  GitHub-state measurement run by a worker before `worker_done` and by the master before merge.
+  Exit `0` means every required check passed, the review-bot roster is covered, no review thread
+  remains unresolved, and no stop-list or contract-scope path asks the owner. The summary carries
+  the full measured head sha for the master's separate merge command. Exit `1` covers failed
+  measurements and unreadable or unparseable GitHub responses. Exit `2` asks the owner for
+  stop-list or contract-scope paths.
+- The command never executes pull-request code. The master separately performs its independent
+  review and reruns the suite from a tarball of the exact head before using
+  `gh pr merge --match-head-commit <sha>`.
+- Existing installs must copy `config/merge-ready-stop-paths.txt` and `config/merge-ready-bots.txt`
+  into their own `config/` directory before running the command. The command fails closed when
+  either file is missing or empty.
+- The review-bot roster compares an exact bot notice with the latest qualifying PR timeline push
+  event, so an author-controlled committer timestamp cannot qualify an older notice. The command rejects a
+  pull-request files response at GitHub's 3000-file cap and reports when the out-of-contract check was skipped.
+- The stop list in `config/merge-ready-stop-paths.txt` covers charter, workspace, gate, hook,
+  workflow, scanner, and CODEOWNERS controls. Its examples include `.github/labeler.yml`,
+  `.github/release.yml`, `CODEOWNERS`, `.github/CODEOWNERS`, and `docs/CODEOWNERS`.
+- Required checks never use a rate-limit exception. Empty required-check, roster, stop-list, or
+  malformed-response shapes fail closed.
+- Required checks are compared with the complete required context set from the PR base branch's
+  rules endpoint and legacy protection data. When the protection endpoint is unavailable, the
+  branch response supplies `protection.required_status_checks`; failure to read both sources is
+  not ready, and missing reported contexts are named in the summary.
+- The final measurement re-reads the base branch and head, uses `gh pr checks --required` for the
+  check verdict, falls back to branch protection data when the legacy endpoint is unavailable, and
+  uses the latest qualifying head push for a rate-limit exemption.
+- A known stop-list ask remains exit 2 when required-check sources are unavailable, and the command
+  reports the check summary as unavailable. Base branch names are encoded in both REST paths, while
+  missing push timestamps keep the rate-limit exemption unavailable without substituting another time.
+- The legacy branch fallback requires explicit `protection` and `required_status_checks` keys;
+  explicit `null` values represent an unprotected branch, while missing keys fail closed.
+- Review-bot coverage now requires a standalone non-dismissed review on the measured head, while
+  rate-limit coverage uses the notice's creation time and the head push event. Changed files and
+  checks are pinned to the measured head, required rules are paginated, and the output reports when
+  the contract scope check was skipped.
+- Review and review-thread connections now paginate with GraphQL cursors and stop at a named page
+  cap on malformed or excessive responses. Unknown ruleset types fail closed instead of being
+  silently omitted, ordinary pushes cannot qualify a rate-limit exemption, and shared parsing keeps
+  preflight and final roster, stop-list, and contract checks consistent.

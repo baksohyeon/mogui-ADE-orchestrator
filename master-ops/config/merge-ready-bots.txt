@@ -1,0 +1,10 @@
+# Review bots scripts/merge-ready requires a head review or a measured
+# rate-limit comment from (#330 round 2).
+# Each roster row has three pipe-separated fields:
+#   login | exact rate-limit marker line | exact required body line
+# Use `none` in both notice fields when that bot has no rate-limit exemption.
+# The REST issue-comments API reports a bot login as "<login>[bot]";
+# merge-ready strips that suffix before comparing it with the login here.
+# Blank lines and lines starting with "#" are ignored.
+cubic-dev-ai | none | none
+coderabbitai | <!-- This is an auto-generated comment: rate limited by coderabbit.ai --> | > ## Review limit reached

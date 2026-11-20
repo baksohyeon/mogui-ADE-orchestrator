@@ -1,0 +1,624 @@
+#!/usr/bin/env bash
+# One measurement for a pull request, run by the worker before `worker_done`
+# and by the master before merge (#330). This command reads GitHub state and
+# never runs code from the pull request.
+#
+# Usage: merge-ready --repo <owner/name> --pr <n> [--contract <file>]
+#
+# Exit codes:
+#   0  merge: every measurement passed and no stop-list path was touched.
+#   1  not ready: a measurement failed, a GitHub response could not be read
+#      or parsed, or this invocation could not run.
+#   2  ask the owner: a changed path matches the stop list, or a changed path
+#      falls outside the contract's `writes` globs.
+#
+# One summary line on stdout names every failing or asking item.
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+STOP_PATHS_FILE="${SCRIPT_DIR}/../config/merge-ready-stop-paths.txt"
+BOTS_FILE="${SCRIPT_DIR}/../config/merge-ready-bots.txt"
+LIB_FILE="${SCRIPT_DIR}/lib/merge_ready.py"
+GRAPHQL_PAGE_CAP=10
+
+usage() {
+  echo "usage: merge-ready --repo <owner/name> --pr <n> [--contract <file>]" >&2
+  exit 1
+}
+
+REPO=""
+PR=""
+CONTRACT=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --repo)
+      [ $# -ge 2 ] || usage
+      REPO="$2"
+      shift 2
+      ;;
+    --pr)
+      [ $# -ge 2 ] || usage
+      PR="$2"
+      shift 2
+      ;;
+    --contract)
+      [ $# -ge 2 ] || usage
+      CONTRACT="$2"
+      shift 2
+      ;;
+    *)
+      usage
+      ;;
+  esac
+done
+[ -n "${REPO}" ] && [ -n "${PR}" ] || usage
+
+command -v gh >/dev/null 2>&1 || { echo "merge-ready: not ready · gh is required"; exit 1; }
+command -v python3 >/dev/null 2>&1 || { echo "merge-ready: not ready · python3 is required"; exit 1; }
+if [ -n "${CONTRACT}" ] && [ ! -f "${CONTRACT}" ]; then
+  echo "merge-ready: not ready · --contract file not found: ${CONTRACT}"
+  exit 1
+fi
+if [ ! -f "${STOP_PATHS_FILE}" ]; then
+  echo "merge-ready: not ready · stop-paths file not found: ${STOP_PATHS_FILE}"
+  exit 1
+fi
+if [ ! -f "${BOTS_FILE}" ]; then
+  echo "merge-ready: not ready · bots file not found: ${BOTS_FILE}"
+  exit 1
+fi
+if [ ! -f "${LIB_FILE}" ]; then
+  echo "merge-ready: not ready · shared parser not found: ${LIB_FILE}"
+  exit 1
+fi
+if [ -z "${CONTRACT}" ]; then
+  echo "merge-ready: out-of-contract check skipped (no --contract)" >&2
+fi
+
+TMP_DIR="$(mktemp -d -t merge-ready.XXXXXX)" || {
+  echo "merge-ready: not ready · mktemp failed"
+  exit 1
+}
+trap 'rm -rf "${TMP_DIR}"' EXIT
+
+PR_HEAD_FILE="${TMP_DIR}/pr-head.json"
+PR_HEAD_ERR="${TMP_DIR}/pr-head.err"
+CHECKS_FILE="${TMP_DIR}/checks.json"
+CHECKS_ERR="${TMP_DIR}/checks.err"
+GQL_FILE="${TMP_DIR}/graphql.json"
+GQL_ERR="${TMP_DIR}/graphql.err"
+GQL_PAGE_FILE="${TMP_DIR}/graphql-page.json"
+GQL_PAGE_ERR="${TMP_DIR}/graphql-page.err"
+REVIEWS_FILE="${TMP_DIR}/reviews.json"
+THREADS_FILE="${TMP_DIR}/review-threads.json"
+REVIEW_STATE_FILE="${TMP_DIR}/review-state.json"
+FILES_RAW="${TMP_DIR}/files-raw.json"
+FILES_FILE="${TMP_DIR}/files.json"
+FILES_ERR="${TMP_DIR}/files.err"
+FILES_HEAD_FILE="${TMP_DIR}/files-head.json"
+FILES_HEAD_ERR="${TMP_DIR}/files-head.err"
+BRANCH_FILE="${TMP_DIR}/branch.json"
+BRANCH_ERR="${TMP_DIR}/branch.err"
+COMMENTS_RAW="${TMP_DIR}/comments-raw.json"
+COMMENTS_FILE="${TMP_DIR}/comments.json"
+COMMENTS_ERR="${TMP_DIR}/comments.err"
+TIMELINE_RAW="${TMP_DIR}/timeline-raw.json"
+TIMELINE_FILE="${TMP_DIR}/timeline.json"
+TIMELINE_ERR="${TMP_DIR}/timeline.err"
+HEAD_TIME_FILE="${TMP_DIR}/head-time.txt"
+HEAD_TIME_ERR="${TMP_DIR}/head-time.err"
+PR_FILE="${TMP_DIR}/pr.json"
+PR_ERR="${TMP_DIR}/pr.err"
+RULES_FILE="${TMP_DIR}/rules.json"
+RULES_ERR="${TMP_DIR}/rules.err"
+RULES_RAW="${TMP_DIR}/rules-raw.json"
+LEGACY_FILE="${TMP_DIR}/legacy-required-status-checks.json"
+LEGACY_ERR="${TMP_DIR}/legacy-required-status-checks.err"
+REQUIRED_CONTEXTS_FILE="${TMP_DIR}/required-contexts.json"
+
+not_ready() {
+  echo "merge-ready: not ready · $1"
+  exit 1
+}
+
+require_json() {
+  local file="$1" kind="${2:-}" mode="${3:-}" reason
+  reason="$(python3 -I -c '
+import json, sys
+file_path, kind = sys.argv[1], sys.argv[2]
+try:
+    data = json.load(open(file_path, encoding="utf-8"))
+except Exception as exc:
+    print("unparseable: " + str(exc)); sys.exit(1)
+if kind == "nonempty-list" and not (isinstance(data, list) and len(data) > 0):
+    print("expected a non-empty list, got " + type(data).__name__); sys.exit(1)
+' "${file}" "${kind}" 2>&1)" && return 0
+  if [ "${mode}" = "defer" ]; then
+    printf '%s: %s' "${file##*/}" "${reason}"
+    return 1
+  fi
+  not_ready "${file##*/}: ${reason}"
+}
+
+fetch_paginated_array() {
+  local api_path="$1" raw="$2" flat="$3" err="$4" label="$5" mode="${6:-}"
+  if ! gh api "${api_path}" --paginate --slurp >"${raw}" 2>"${err}"; then
+    if [ "${mode}" = "defer" ]; then
+      printf 'could not read %s (%s)' "${label}" "$(tr '\n' ' ' <"${err}")"
+      return 1
+    fi
+    not_ready "could not read ${label} ($(tr '\n' ' ' <"${err}"))"
+  fi
+  if ! python3 -I -c '
+import json, sys
+raw_path, flat_path = sys.argv[1], sys.argv[2]
+pages = json.load(open(raw_path, encoding="utf-8"))
+if not isinstance(pages, list) or not all(isinstance(page, list) for page in pages):
+    raise ValueError("expected a list of array pages")
+json.dump([item for page in pages for item in page], open(flat_path, "w", encoding="utf-8"))
+' "${raw}" "${flat}" 2>"${err}"; then
+    if [ "${mode}" = "defer" ]; then
+      printf '%s: could not flatten the response (%s)' "${label}" "$(tr '\n' ' ' <"${err}")"
+      return 1
+    fi
+    not_ready "${label}: could not flatten the response ($(tr '\n' ' ' <"${err}"))"
+  fi
+}
+
+if ! gh pr view "${PR}" --repo "${REPO}" --json headRefOid,baseRefName \
+    >"${PR_HEAD_FILE}" 2>"${PR_HEAD_ERR}"; then
+  not_ready "could not read the PR (gh pr view: $(tr '\n' ' ' <"${PR_HEAD_ERR}"))"
+fi
+require_json "${PR_HEAD_FILE}"
+HEAD_SHA="$(python3 -I -c '
+import json, sys
+print(json.load(open(sys.argv[1], encoding="utf-8"))["headRefOid"])
+' "${PR_HEAD_FILE}" 2>"${TMP_DIR}/head-parse.err")" || {
+  not_ready "PR response missing headRefOid ($(tr '\n' ' ' <"${TMP_DIR}/head-parse.err"))"
+}
+BASE_BRANCH="$(python3 -I -c '
+import json, sys
+base = json.load(open(sys.argv[1], encoding="utf-8")).get("baseRefName")
+if not isinstance(base, str) or not base:
+    raise ValueError("PR response missing baseRefName")
+print(base)
+' "${PR_HEAD_FILE}" 2>"${TMP_DIR}/base-parse.err")" || {
+  not_ready "PR response missing baseRefName ($(tr '\n' ' ' <"${TMP_DIR}/base-parse.err"))"
+}
+BASE_BRANCH_ENCODED="$(python3 -I -c '
+from urllib.parse import quote
+import sys
+print(quote(sys.argv[1], safe=""))
+' "${BASE_BRANCH}" 2>"${TMP_DIR}/base-encode.err")" || {
+  not_ready "could not encode base branch for GitHub API paths ($(tr '\n' ' ' <"${TMP_DIR}/base-encode.err"))"
+}
+
+fetch_paginated_array "repos/${REPO}/pulls/${PR}/files" "${FILES_RAW}" "${FILES_FILE}" "${FILES_ERR}" "changed files"
+require_json "${FILES_FILE}" nonempty-list
+FILE_COUNT="$(python3 -I -c 'import json, sys; print(len(json.load(open(sys.argv[1], encoding="utf-8"))))' "${FILES_FILE}" 2>"${TMP_DIR}/file-count.err")" || {
+  not_ready "changed files: could not count the response ($(tr '\n' ' ' <"${TMP_DIR}/file-count.err"))"
+}
+if [ "${FILE_COUNT}" -ge 3000 ]; then
+  not_ready "pull request files response reached GitHub's 3000-file cap (${FILE_COUNT}); complete file set cannot be verified"
+fi
+if ! gh pr view "${PR}" --repo "${REPO}" --json headRefOid \
+    >"${FILES_HEAD_FILE}" 2>"${FILES_HEAD_ERR}"; then
+  not_ready "could not re-read the PR head after changed files ($(tr '\n' ' ' <"${FILES_HEAD_ERR}"))"
+fi
+FILES_HEAD_SHA="$(python3 -I -c '
+import json, sys
+print(json.load(open(sys.argv[1], encoding="utf-8"))["headRefOid"])
+' "${FILES_HEAD_FILE}" 2>"${TMP_DIR}/files-head-parse.err")" || {
+  not_ready "changed files response missing headRefOid ($(tr '\n' ' ' <"${TMP_DIR}/files-head-parse.err"))"
+}
+if [ "${FILES_HEAD_SHA}" != "${HEAD_SHA}" ]; then
+  not_ready "head changed during changed-file measurement (started ${HEAD_SHA:0:12}, now ${FILES_HEAD_SHA:0:12}); rerun"
+fi
+
+PATH_VERDICT="$(python3 -I "${LIB_FILE}" path-verdict \
+    --files "${FILES_FILE}" --stop-paths "${STOP_PATHS_FILE}" --contract "${CONTRACT}" \
+    2>"${TMP_DIR}/path-verdict.err")"
+PATH_RC=$?
+if [ "${PATH_RC}" -ne 0 ] && [ "${PATH_RC}" -ne 2 ]; then
+  not_ready "$(tr '\n' ' ' <"${TMP_DIR}/path-verdict.err")${PATH_VERDICT:+ ${PATH_VERDICT}}"
+fi
+OWNER="${REPO%%/*}"
+NAME="${REPO#*/}"
+SOURCE_FAILURE=""
+if ! SOURCE_FAILURE="$(fetch_paginated_array "repos/${REPO}/rules/branches/${BASE_BRANCH_ENCODED}" "${RULES_RAW}" "${RULES_FILE}" "${RULES_ERR}" "required-check rules" defer 2>&1)"; then
+  :
+fi
+if [ -z "${SOURCE_FAILURE}" ]; then
+  if ! SOURCE_FAILURE="$(require_json "${RULES_FILE}" "" defer 2>&1)"; then
+    :
+  fi
+fi
+
+if [ -z "${SOURCE_FAILURE}" ]; then
+  if ! gh api "repos/${REPO}/branches/${BASE_BRANCH_ENCODED}/protection/required_status_checks" \
+      >"${LEGACY_FILE}" 2>"${LEGACY_ERR}"; then
+    if ! gh api "repos/${REPO}/branches/${BASE_BRANCH_ENCODED}" \
+        >"${BRANCH_FILE}" 2>"${BRANCH_ERR}"; then
+      SOURCE_FAILURE="could not read legacy required checks for base branch ${BASE_BRANCH} (protection endpoint: $(tr '\n' ' ' <"${LEGACY_ERR}"); branch endpoint: $(tr '\n' ' ' <"${BRANCH_ERR}"))"
+    fi
+    if [ -z "${SOURCE_FAILURE}" ] && ! python3 -I - "${BRANCH_FILE}" "${LEGACY_FILE}" >"${TMP_DIR}/branch-parse.out" 2>"${BRANCH_ERR}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+branch = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if not isinstance(branch, dict):
+    raise ValueError("branch response is not an object")
+if "protection" not in branch:
+    raise ValueError("branch response missing protection")
+protection = branch["protection"]
+if protection is None:
+    legacy = {"contexts": [], "checks": []}
+elif not isinstance(protection, dict):
+    raise ValueError("branch response has malformed protection")
+else:
+    if "required_status_checks" not in protection:
+        raise ValueError("branch response missing required_status_checks")
+    required_status_checks = protection["required_status_checks"]
+    if required_status_checks is None:
+        legacy = {"contexts": [], "checks": []}
+    elif not isinstance(required_status_checks, dict):
+        raise ValueError("branch response has malformed required_status_checks")
+    else:
+        legacy = required_status_checks
+Path(sys.argv[2]).write_text(json.dumps(legacy), encoding="utf-8")
+PY
+    then
+      SOURCE_FAILURE="could not parse legacy required checks from branch response ($(tr '\n' ' ' <"${BRANCH_ERR}"))"
+    fi
+  fi
+fi
+if [ -z "${SOURCE_FAILURE}" ]; then
+  if ! SOURCE_FAILURE="$(require_json "${LEGACY_FILE}" "" defer 2>&1)"; then
+    :
+  fi
+fi
+
+if [ -n "${SOURCE_FAILURE}" ]; then
+  if [ "${PATH_RC}" -eq 2 ]; then
+    echo "${PATH_VERDICT}; required check summary unavailable: ${SOURCE_FAILURE} (head ${HEAD_SHA})"
+    exit 2
+  fi
+  not_ready "required check summary unavailable: ${SOURCE_FAILURE}"
+fi
+
+REQUIRED_SUMMARY=""
+if ! REQUIRED_SUMMARY="$(python3 -I - "${RULES_FILE}" "${LEGACY_FILE}" "${REQUIRED_CONTEXTS_FILE}" "${BASE_BRANCH}" 2>"${TMP_DIR}/required-summary.err" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+rules = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+legacy = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+contexts_file = Path(sys.argv[3])
+base_branch = sys.argv[4]
+required_contexts = set()
+if not isinstance(rules, list):
+    raise ValueError("required-check rules response is not a list")
+non_check_rule_types = {
+    "creation",
+    "update",
+    "deletion",
+    "non_fast_forward",
+    "pull_request",
+    "required_linear_history",
+    "merge_queue",
+    "required_deployments",
+    "required_signatures",
+    "commit_author_email_pattern",
+    "commit_message_pattern",
+    "committer_email_pattern",
+    "branch_name_pattern",
+    "tag_name_pattern",
+    "file_path_restriction",
+    "file_extension_restriction",
+    "file_path_requirement",
+    "required_reviewers",
+    "max_file_size",
+}
+for rule in rules:
+    if not isinstance(rule, dict):
+        raise ValueError("required-check rules response contains a malformed rule")
+    rule_type = rule.get("type")
+    if not isinstance(rule_type, str) or not rule_type:
+        raise ValueError("required-check rules response has a malformed rule type")
+    if rule_type == "required_status_checks":
+        parameters = rule.get("parameters")
+        if not isinstance(parameters, dict) or not isinstance(parameters.get("required_status_checks"), list):
+            raise ValueError("required-check rules response has a malformed required_status_checks rule")
+        for required in parameters["required_status_checks"]:
+            if not isinstance(required, dict) or not isinstance(required.get("context"), str) or not required["context"]:
+                raise ValueError("required-check rules response has a malformed required context")
+            required_contexts.add(required["context"])
+        continue
+    if rule_type not in non_check_rule_types:
+        raise ValueError(f"unsupported ruleset rule type: {rule_type}")
+if not isinstance(legacy, dict):
+    raise ValueError("legacy required-check response is not an object")
+legacy_contexts = legacy.get("contexts")
+legacy_checks = legacy.get("checks")
+if legacy_contexts is None and legacy_checks is None:
+    raise ValueError("legacy required-check response has no contexts or checks")
+if legacy_contexts is not None:
+    if not isinstance(legacy_contexts, list) or not all(isinstance(context, str) and context for context in legacy_contexts):
+        raise ValueError("legacy required-check response has malformed contexts")
+    required_contexts.update(legacy_contexts)
+if legacy_checks is not None:
+    if not isinstance(legacy_checks, list):
+        raise ValueError("legacy required-check response has malformed checks")
+    for required in legacy_checks:
+        if not isinstance(required, dict) or not isinstance(required.get("context"), str) or not required["context"]:
+            raise ValueError("legacy required-check response has a malformed check")
+        required_contexts.add(required["context"])
+contexts_file.write_text(json.dumps(sorted(required_contexts)), encoding="utf-8")
+print(
+    f"required checks from base branch {base_branch}: "
+    + (", ".join(sorted(required_contexts)) if required_contexts else "none")
+)
+PY
+)"; then
+  SOURCE_FAILURE="could not parse required-check sources ($(tr '\n' ' ' <"${TMP_DIR}/required-summary.err"))"
+fi
+if [ -n "${SOURCE_FAILURE}" ]; then
+  if [ "${PATH_RC}" -eq 2 ]; then
+    echo "${PATH_VERDICT}; required check summary unavailable: ${SOURCE_FAILURE} (head ${HEAD_SHA})"
+    exit 2
+  fi
+  not_ready "required check summary unavailable: ${SOURCE_FAILURE}"
+fi
+
+if [ "${PATH_RC}" -eq 2 ]; then
+  echo "${PATH_VERDICT}; ${REQUIRED_SUMMARY} (head ${HEAD_SHA})"
+  exit 2
+fi
+if [ "${PATH_RC}" -ne 0 ]; then
+  if [ -n "${PATH_VERDICT}" ]; then
+    not_ready "${PATH_VERDICT}"
+  fi
+  not_ready "changed paths: could not check the stop-list or contract scope"
+fi
+
+paginate_graphql_connection() {
+  local connection="$1" aggregate="$2" initial_query="$3" after_query="$4"
+  local cursor="" page=0 has_next="false" end_cursor="" query meta
+  printf '[]' >"${aggregate}"
+  while :; do
+    page=$((page + 1))
+    if [ "${page}" -gt "${GRAPHQL_PAGE_CAP}" ]; then
+      not_ready "${connection} pagination exceeded cap of ${GRAPHQL_PAGE_CAP} pages"
+    fi
+    query="${initial_query}"
+    if [ -n "${cursor}" ]; then
+      query="${after_query}"
+      if ! gh api graphql -f owner="${OWNER}" -f name="${NAME}" -F number="${PR}" \
+          -f cursor="${cursor}" -f query="${query}" \
+          >"${GQL_PAGE_FILE}" 2>"${GQL_PAGE_ERR}"; then
+        not_ready "could not read ${connection} page ${page} ($(tr '\n' ' ' <"${GQL_PAGE_ERR}"))"
+      fi
+    else
+      if ! gh api graphql -f owner="${OWNER}" -f name="${NAME}" -F number="${PR}" \
+          -f query="${query}" >"${GQL_PAGE_FILE}" 2>"${GQL_PAGE_ERR}"; then
+        not_ready "could not read ${connection} page ${page} ($(tr '\n' ' ' <"${GQL_PAGE_ERR}"))"
+      fi
+    fi
+    if ! meta="$(python3 -I "${LIB_FILE}" connection-page \
+        --page "${GQL_PAGE_FILE}" --aggregate "${aggregate}" \
+        --connection "${connection}" --page-number "${page}" \
+        --page-cap "${GRAPHQL_PAGE_CAP}" 2>"${GQL_PAGE_ERR}")"; then
+      not_ready "could not parse ${connection} page ${page} ($(tr '\n' ' ' <"${GQL_PAGE_ERR}"))"
+    fi
+    has_next="$(python3 -I -c 'import json,sys; print("true" if json.loads(sys.argv[1])["has_next"] else "false")' "${meta}")"
+    if [ "${has_next}" != "true" ]; then
+      break
+    fi
+    end_cursor="$(python3 -I -c 'import json,sys; print(json.loads(sys.argv[1])["end_cursor"])' "${meta}")"
+    [ -n "${end_cursor}" ] || not_ready "${connection} pagination returned an empty cursor"
+    cursor="${end_cursor}"
+  done
+}
+
+REVIEWS_QUERY='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviews(first:100){nodes{state submittedAt body commit{oid} author{login __typename} comments(first:100){nodes{databaseId replyTo{databaseId}} pageInfo{hasNextPage}}} pageInfo{hasNextPage endCursor}}}}}'
+REVIEWS_AFTER_QUERY='query($owner:String!,$name:String!,$number:Int!,$cursor:String!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviews(first:100,after:$cursor){nodes{state submittedAt body commit{oid} author{login __typename} comments(first:100){nodes{databaseId replyTo{databaseId}} pageInfo{hasNextPage}}} pageInfo{hasNextPage endCursor}}}}}'
+THREADS_QUERY='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage endCursor}}}}}'
+THREADS_AFTER_QUERY='query($owner:String!,$name:String!,$number:Int!,$cursor:String!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100,after:$cursor){nodes{isResolved} pageInfo{hasNextPage endCursor}}}}}'
+paginate_graphql_connection "reviews" "${REVIEWS_FILE}" "${REVIEWS_QUERY}" "${REVIEWS_AFTER_QUERY}"
+paginate_graphql_connection "reviewThreads" "${THREADS_FILE}" "${THREADS_QUERY}" "${THREADS_AFTER_QUERY}"
+
+fetch_paginated_array "repos/${REPO}/issues/${PR}/comments" "${COMMENTS_RAW}" "${COMMENTS_FILE}" "${COMMENTS_ERR}" "PR comments"
+require_json "${COMMENTS_FILE}"
+
+if ! python3 -I "${LIB_FILE}" review-state --reviews "${REVIEWS_FILE}" \
+    --comments "${COMMENTS_FILE}" --bots "${BOTS_FILE}" --head "${HEAD_SHA}" \
+    >"${REVIEW_STATE_FILE}" 2>"${GQL_ERR}"; then
+  not_ready "could not determine whether a rate-limit exemption needs a timestamp ($(tr '\n' ' ' <"${GQL_ERR}"))"
+fi
+EXEMPTION_NEEDED="$(python3 -I -c 'import json,sys; print("yes" if json.load(open(sys.argv[1],encoding="utf-8"))["candidate_bots"] else "no")' "${REVIEW_STATE_FILE}")"
+
+HEAD_TIME=""
+if [ "${EXEMPTION_NEEDED}" = "yes" ]; then
+  fetch_paginated_array "repos/${REPO}/issues/${PR}/timeline" "${TIMELINE_RAW}" "${TIMELINE_FILE}" "${TIMELINE_ERR}" "PR timeline"
+  python3 -I - "${TIMELINE_FILE}" "${HEAD_SHA}" >"${HEAD_TIME_FILE}" 2>"${HEAD_TIME_ERR}" <<'PY' || not_ready "could not establish a trusted head push time ($(tr '\n' ' ' <"${HEAD_TIME_ERR}"))"
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+events = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+head_sha = sys.argv[2]
+if not isinstance(events, list):
+    raise ValueError("expected a list of timeline events")
+timestamps = []
+for event in events:
+    if not isinstance(event, dict):
+        raise ValueError("timeline response contains a malformed event")
+    created_at = event.get("created_at")
+    if not isinstance(created_at, str) or not created_at:
+        continue
+    if event.get("event") == "head_ref_force_pushed" and event.get("commit_id") == head_sha:
+        parsed = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            raise ValueError("head push event timestamp has no timezone")
+        timestamps.append(parsed.astimezone(timezone.utc))
+if not timestamps:
+    raise ValueError("PR timeline has no push event for the measured head")
+print(max(timestamps).isoformat(timespec="seconds").replace("+00:00", "Z"))
+PY
+  HEAD_TIME="$(cat "${HEAD_TIME_FILE}")"
+  [ -n "${HEAD_TIME}" ] || not_ready "head push time response was empty"
+fi
+
+if [ -n "${HEAD_TIME}" ]; then
+  if ! python3 -I "${LIB_FILE}" review-state --reviews "${REVIEWS_FILE}" \
+      --comments "${COMMENTS_FILE}" --bots "${BOTS_FILE}" --head "${HEAD_SHA}" \
+      --head-time "${HEAD_TIME}" >"${REVIEW_STATE_FILE}" 2>"${GQL_ERR}"; then
+    not_ready "could not validate rate-limit comments ($(tr '\n' ' ' <"${GQL_ERR}"))"
+  fi
+fi
+
+if ! gh pr checks "${PR}" --repo "${REPO}" --required --json name,bucket,state \
+    >"${CHECKS_FILE}" 2>"${CHECKS_ERR}"; then
+  if ! python3 -I -c 'import json, sys; json.load(open(sys.argv[1], encoding="utf-8"))' \
+      "${CHECKS_FILE}" >/dev/null 2>&1; then
+    not_ready "could not read required checks (gh pr checks: $(tr '\n' ' ' <"${CHECKS_ERR}"))"
+  fi
+fi
+require_json "${CHECKS_FILE}" nonempty-list
+
+if ! gh pr view "${PR}" --repo "${REPO}" --json number,url,headRefOid,baseRefName,state,isDraft \
+    >"${PR_FILE}" 2>"${PR_ERR}"; then
+  not_ready "could not read the PR (gh pr view: $(tr '\n' ' ' <"${PR_ERR}"))"
+fi
+require_json "${PR_FILE}"
+
+python3 -I - "${PR_FILE}" "${CHECKS_FILE}" "${REVIEWS_FILE}" "${THREADS_FILE}" "${FILES_FILE}" \
+         "${BOTS_FILE}" "${REQUIRED_CONTEXTS_FILE}" "${REVIEW_STATE_FILE}" \
+         "${BASE_BRANCH}" "${HEAD_SHA}" "${HEAD_TIME}" "${CONTRACT}" <<'PY'
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+(pr_file, checks_file, reviews_file, threads_file, files_file, bots_file,
+ contexts_file, review_state_file, base_branch, head_sha, head_time, contract_path) = sys.argv[1:13]
+
+
+def load(path):
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def fail(reason):
+    print(f"merge-ready: not ready · {reason}")
+    sys.exit(1)
+
+
+try:
+    pr = load(pr_file)
+    checks = load(checks_file)
+    reviews = load(reviews_file)
+    threads = load(threads_file)
+    files = load(files_file)
+    review_state = load(review_state_file)
+
+    if not isinstance(pr, dict) or not isinstance(pr.get("headRefOid"), str):
+        fail("PR response missing or malformed headRefOid")
+    if not isinstance(pr.get("baseRefName"), str):
+        fail("PR response missing or malformed baseRefName")
+    if not isinstance(pr.get("state"), str) or not isinstance(pr.get("isDraft"), bool):
+        fail("PR response missing or malformed state/isDraft")
+
+    if pr.get("headRefOid") != head_sha:
+        fail(f"head changed during measurement (started {head_sha[:12]}, now {(pr.get('headRefOid') or '?')[:12]}); rerun")
+    if pr.get("baseRefName") != base_branch:
+        fail(f"base branch changed during measurement (started {base_branch}, now {pr.get('baseRefName')}); rerun")
+
+    if not isinstance(files, list):
+        fail("changed files response is not a list")
+    problems_not_ready = []
+
+    required_contexts = set(load(contexts_file))
+    if not isinstance(review_state, dict):
+        fail("review state response is not an object")
+
+    if not isinstance(checks, list):
+        fail("required checks response is not a list")
+    reported_contexts = set()
+    for check in checks:
+        if not isinstance(check, dict) or not isinstance(check.get("name"), str) or not check["name"]:
+            fail("required checks response has a malformed check")
+        reported_contexts.add(check["name"])
+    missing_required = sorted(required_contexts - reported_contexts)
+    if missing_required:
+        problems_not_ready.append("missing required checks: " + ", ".join(missing_required))
+    required_summary = (
+        f"required checks from base branch {base_branch}: "
+        + (", ".join(sorted(required_contexts)) if required_contexts else "none")
+    )
+
+    if pr.get("state") != "OPEN":
+        problems_not_ready.append(f"PR state is {pr.get('state')}, not OPEN")
+    if pr.get("isDraft"):
+        problems_not_ready.append("PR is a draft")
+
+    failing_checks = [
+        f"{c.get('name', 'unknown')}={c.get('state', c.get('bucket', 'unknown'))}"
+        for c in checks
+        if c.get("bucket") != "pass"
+    ]
+    if failing_checks:
+        problems_not_ready.append("checks: " + ", ".join(failing_checks))
+
+    if not isinstance(reviews, list):
+        fail("graphql response reviews are not a list")
+    if not isinstance(threads, list):
+        fail("graphql response reviewThreads are not a list")
+    if not isinstance(review_state.get("bot_logins"), list):
+        fail("review state response has malformed bot logins")
+    if not isinstance(review_state.get("head_bot_reviewer_logins"), list):
+        fail("review state response has malformed head reviewers")
+    if not isinstance(review_state.get("recent_rate_limited_bots"), list):
+        fail("review state response has malformed rate-limit bots")
+    latest_bot_state = review_state.get("latest_bot_state")
+    if not isinstance(latest_bot_state, dict):
+        fail("review state response has malformed decision states")
+    failing_bots = [
+        f"{login}={state.lower()}"
+        for login, state in latest_bot_state.items()
+        if state in {"PENDING", "CHANGES_REQUESTED"}
+    ]
+    if failing_bots:
+        problems_not_ready.append("review bots: " + ", ".join(failing_bots))
+
+    head_bot_reviewer_logins = set(review_state["head_bot_reviewer_logins"])
+    recent_rate_limited_bots = set(review_state["recent_rate_limited_bots"])
+    missing_bots = [
+        bot for bot in review_state["bot_logins"]
+        if bot not in head_bot_reviewer_logins and bot not in recent_rate_limited_bots
+    ]
+    if missing_bots:
+        problems_not_ready.append(
+            "bot(s) with no head review or measured rate-limit comment: " + ", ".join(missing_bots)
+        )
+
+    for thread in threads:
+        if not isinstance(thread, dict) or not isinstance(thread.get("isResolved"), bool):
+            fail("graphql response has malformed review thread isResolved")
+    open_threads = sum(1 for thread in threads if thread["isResolved"] is not True)
+    if open_threads:
+        problems_not_ready.append(f"{open_threads} open review thread(s)")
+    if problems_not_ready:
+        print("merge-ready: not ready · " + "; ".join(problems_not_ready + [required_summary]))
+        sys.exit(1)
+    scope_summary = "contract scope check passed" if contract_path else "contract scope check skipped (no --contract)"
+    print(f"merge-ready: merge · {required_summary}; {scope_summary}; every GitHub-state measurement passed (head {head_sha})")
+    sys.exit(0)
+except SystemExit:
+    raise
+except Exception as exc:
+    fail(f"internal error: {exc}")
+PY
+exit $?

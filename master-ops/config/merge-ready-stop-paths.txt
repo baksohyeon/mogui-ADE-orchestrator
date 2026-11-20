@@ -1,0 +1,79 @@
+# Stop-list paths for scripts/merge-ready (#330, stop-list items 1-2).
+#
+# A changed path matching an entry here means "ask the owner", never "merge",
+# regardless of what else passed. One entry per line; blank lines and lines
+# starting with "#" are ignored. An entry ending in "/" matches that path and
+# everything under it, the same convention master-ops/MANIFEST.json's
+# instance_owned list uses. An entry containing "*", "?", or "[" is matched
+# with Python's fnmatch (its "*" already crosses "/", so "a/**" and "a/*"
+# match the same set of paths). Everything else is an exact path match.
+#
+# Stop-list item 1: charter, workspace card, role state, boot comparison set.
+master-ops/docs/charter/
+master-ops/CLAUDE.md
+master-ops/AGENTS.md
+master-ops/workspace-card/
+master-ops/docs/runbooks/role-state.md
+master-ops/docs/runbooks/boot-comparison-set.md
+
+# Stop-list item 2: scanner, guard, gate, or permission-policy code -
+# anything that changes what a worker is allowed to do or how that is
+# enforced.
+config/gitleaks.toml
+master-ops/scripts/conversation-redaction-scan
+master-ops/scripts/hooks/
+src/master_runtime/core/dispatch_gate.py
+src/master_runtime/core/approval/
+master-ops/scripts/gate_runner.py
+master-ops/scripts/dispatch
+master-ops/scripts/merge-ready
+master-ops/config/merge-ready-stop-paths.txt
+master-ops/scripts/codex-hooks-review-answer
+master-ops/scripts/approval-prompt-markers.txt
+scripts/dispatch-gate
+scripts/codex-worker-pretrust
+scripts/claude-worker-pretrust
+scripts/agy-worker-pretrust
+scripts/cursor-worker-pretrust
+master-ops/model-tier-policy.json
+master-ops/rules/standing-rules.md
+master-ops/templates/mcp-servers.json
+
+# Added round 2 (#330): paths the master's own review of PR #338 named.
+# Succession/bootstrap code, CI workflow definitions, and the redaction/allowlist scanner all change
+# what a worker is allowed to do or how that is enforced, the same as
+# stop-list item 2 above; CODEOWNERS, root CLAUDE.md/AGENTS.md, and the
+# succession boot card are the same charter/workspace-card/role-state category as stop-list item 1.
+# The CODEOWNERS locations and labeler/release metadata are pre-emptive entries for GitHub-honored
+# paths and remain stop-listed even when a checkout has not created those files yet.
+scripts/redaction-scan.sh
+scripts/redaction-allowlist.txt
+hooks/pre-push
+.github/workflows/**
+.github/CODEOWNERS
+CODEOWNERS
+docs/CODEOWNERS
+.github/labeler.yml
+.github/release.yml
+.claude/**
+master-ops/docs/runbooks/succession-boot-card.md
+CLAUDE.md
+AGENTS.md
+config/*.example.json
+scripts/master-*
+scripts/worker-reap
+src/master_runtime/core/succession.py
+src/master_runtime/core/bootstrap*.py
+src/master_runtime/core/instance_runtime_config.py
+src/master_runtime/core/worker_reap.py
+master-ops/scripts/lib/**
+master-ops/scripts/template-*
+master-ops/scripts/template_*
+master-ops/skills/**
+master-ops/onboarding/**
+master-ops/config/merge-ready-bots.txt
+
+# The tests of a stop-listed script are themselves stop-listed: a change
+# that weakens scripts/merge-ready's own test coverage must also ask,
+# not merge silently alongside the production file it tests.
+master-ops/scripts/test-merge-ready.sh

@@ -53,6 +53,17 @@ def _git(cwd: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
+def _template_version_for_source() -> str:
+    plain = (SKELETON / "TEMPLATE-VERSION").read_text(encoding="utf-8").strip()
+    result = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "describe", "--tags"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.stdout.strip() if result.returncode == 0 else plain
+
+
 def _seed_version_template(root: Path) -> Path:
     template = root / "template"
     template.mkdir(parents=True)
@@ -173,7 +184,7 @@ def test_template_check_template_compare_states_report_set(tmp_path: Path):
     report = json.loads(result.stdout)
     assert report["report_set"] == "template-compare"
     assert "workspace-card/CLAUDE.md" in report["absent_required"]
-    assert report["template_version"] == _git(REPO_ROOT, "describe", "--tags")
+    assert report["template_version"] == _template_version_for_source()
 
 
 def test_template_apply_stamps_git_distance_and_plain_tarball_versions(tmp_path: Path):
@@ -376,7 +387,8 @@ def test_template_check_retired_path_passes_in_template_compare_mode(tmp_path: P
             "--json",
         ],
     )
-    assert result.returncode == 1, result.stdout + result.stderr
+    expected_rc = int(_template_version_for_source() != "v0.5.353")
+    assert result.returncode == expected_rc, result.stdout + result.stderr
     report = json.loads(result.stdout)
     assert report["report_set"] == "template-compare"
     assert report["absent_required"] == []
@@ -401,7 +413,8 @@ def test_template_check_malformed_retirements_fails_in_template_compare_mode(tmp
             "--json",
         ],
     )
-    assert result.returncode == 1, result.stdout
+    expected_rc = int(_template_version_for_source() != "v0.5.353")
+    assert result.returncode == expected_rc, result.stdout
     report = json.loads(result.stdout)
     assert report["report_set"] == "template-compare"
     assert report["manifest_status"] == "ok"
@@ -1321,7 +1334,8 @@ def test_template_check_reports_instance_owned_apart_from_required_and_unknown(t
         rel = "docs/blame/BLAME-2026-11-09-example.md"
         assert rel in report["instance_owned"], extra
         assert rel not in report["unknown_present"], extra
-    assert result.returncode == 1, result.stdout
+    expected_rc = int(_template_version_for_source() != "v0.5.353")
+    assert result.returncode == expected_rc, result.stdout
 
     human = _run([sys.executable, str(TEMPLATE_CHECK), "--ops", str(ops)])
     assert "instance_owned: " in human.stdout

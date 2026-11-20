@@ -23,6 +23,8 @@ STALE_DATE="2025-01-01T00:00:00Z"
 FRESH_DATE="2026-01-02T00:00:00Z"
 BACKDATED_COMMENT_DATE="2025-01-02T00:00:00Z"
 CHECK_RUN_DATE="2026-01-01T12:00:00Z"
+BETWEEN_PUSH_DATE="2026-01-15T00:00:00Z"
+LATEST_PUSH_DATE="2026-02-01T00:00:00Z"
 
 INSTALL_DIR="${WORK_DIR}/install"
 mkdir -p "${INSTALL_DIR}/scripts" "${INSTALL_DIR}/config"
@@ -56,6 +58,16 @@ case "$1" in
           else
             : >"${GH_FIXTURE_DIR}/pr-view-count"
             cat "${GH_FIXTURE_DIR}/pr.json"
+          fi
+        elif [ "${GH_STUB_CASE:-}" = "base-changed" ]; then
+          if [ ! -e "${GH_FIXTURE_DIR}/pr-view-count" ]; then
+            : >"${GH_FIXTURE_DIR}/pr-view-count"
+            cat "${GH_FIXTURE_DIR}/pr.json"
+          elif [ ! -e "${GH_FIXTURE_DIR}/pr-view-final-count" ]; then
+            : >"${GH_FIXTURE_DIR}/pr-view-final-count"
+            cat "${GH_FIXTURE_DIR}/pr.json"
+          else
+            cat "${GH_FIXTURE_DIR}/pr-base-changed.json"
           fi
         else
           cat "${GH_FIXTURE_DIR}/pr.json"
@@ -101,7 +113,7 @@ case "$1" in
         fi
         ;;
       repos/*/branches/*/protection/required_status_checks)
-        if [ "${GH_STUB_CASE:-}" = "legacy-fail" ]; then
+        if [ "${GH_STUB_CASE:-}" = "legacy-fail" ] || [ "${GH_STUB_CASE:-}" = "legacy-permission" ]; then
           echo "gh: legacy protection unavailable" >&2
           exit 1
         fi
@@ -111,6 +123,13 @@ case "$1" in
           exit 1
         fi
         cat "${GH_FIXTURE_DIR}/legacy.json"
+        ;;
+      repos/*/branches/*)
+        if [ "${GH_STUB_CASE:-}" = "legacy-fail" ]; then
+          echo "gh: branch details unavailable" >&2
+          exit 1
+        fi
+        cat "${GH_FIXTURE_DIR}/branch.json"
         ;;
       repos/*/pulls/*/files)
         cat "${GH_FIXTURE_DIR}/files.json"
@@ -178,9 +197,18 @@ PY
 import json, sys
 json.dump({"number": 1, "url": "https://example.invalid/pr/1", "headRefOid": "ffffffffffffffffffffffffffffffffffffffff", "baseRefName": "main", "state": "OPEN", "isDraft": False}, open(sys.argv[1], "w", encoding="utf-8"))
 PY
+  python3 - "${dir}/pr-base-changed.json" <<'PY'
+import json, sys
+json.dump({"number": 1, "url": "https://example.invalid/pr/1", "headRefOid": "0123456789abcdef0123456789abcdef01234567", "baseRefName": "release", "state": "OPEN", "isDraft": False}, open(sys.argv[1], "w", encoding="utf-8"))
+PY
   printf '%s' "${checks_json}" >"${dir}/checks.json"
   printf '%s' "${rules_json}" >"${dir}/rules.json"
   printf '%s' "${legacy_json}" >"${dir}/legacy.json"
+  python3 - "${dir}/branch.json" "${legacy_json}" <<'PY'
+import json, sys
+legacy = json.loads(sys.argv[2])
+json.dump({"name": "main", "protected": True, "protection": {"required_status_checks": legacy}}, open(sys.argv[1], "w", encoding="utf-8"))
+PY
   python3 - "${dir}/graphql.json" "${reviews_json}" "${open_threads}" <<'PY'
 import json, sys
 path, reviews_raw, open_threads = sys.argv[1], sys.argv[2], int(sys.argv[3])
@@ -303,6 +331,17 @@ else
   fail "updated rate-limit notice: got ${rc}: ${out}"
 fi
 
+latest_push_dir="${WORK_DIR}/latest-push"
+latest_push_comment='[{"body":"<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n\n> ## Review limit reached","user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"'"${BETWEEN_PUSH_DATE}"'"}]'
+write_fixture "${latest_push_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" "${CUBIC_REVIEW}" 0 OPEN false "${latest_push_comment}"
+printf '%s' '[[{"event":"head_ref_force_pushed","commit_id":"'"${HEAD_SHA}"'","created_at":"'"${HEAD_COMMIT_DATE}"'"}],[{"event":"head_ref_force_pushed","commit_id":"'"${HEAD_SHA}"'","created_at":"'"${LATEST_PUSH_DATE}"'"}]]' >"${latest_push_dir}/timeline.json"
+out=$(run_case "${latest_push_dir}"); rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'coderabbitai'; then
+  ok "the latest qualifying head push bounds a rate-limit exemption"
+else
+  fail "latest qualifying head push: got ${rc}: ${out}"
+fi
+
 malformed_created_at_dir="${WORK_DIR}/malformed-created-at"
 malformed_created_at_comment='[{"body":"<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n\n> ## Review limit reached","user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"not-a-timestamp"}]'
 write_fixture "${malformed_created_at_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" "${CUBIC_REVIEW}" 0 OPEN false "${malformed_created_at_comment}"
@@ -321,6 +360,15 @@ if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'head changed during chan
   ok "a PR head change during measurement exits 1"
 else
   fail "head changed during measurement: got ${rc}: ${out}"
+fi
+
+base_changed_dir="${WORK_DIR}/base-changed"
+write_fixture "${base_changed_dir}" '[{"filename":"README.md"}]' ""
+out=$(run_case "${base_changed_dir}" base-changed); rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'base branch changed during measurement'; then
+  ok "a PR base change during measurement exits 1"
+else
+  fail "base branch changed during measurement: got ${rc}: ${out}"
 fi
 
 complete_files_dir="${WORK_DIR}/complete-files"
@@ -369,6 +417,22 @@ if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'could not determine whet
   ok "non-boolean nested review-comment pageInfo exits 1"
 else
   fail "non-boolean nested review-comment pageInfo: got ${rc}: ${out}"
+fi
+
+nonboolean_thread_dir="${WORK_DIR}/nonboolean-thread"
+write_fixture "${nonboolean_thread_dir}" '[{"filename":"README.md"}]' ""
+python3 - "${nonboolean_thread_dir}/graphql.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path, encoding="utf-8"))
+data["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"] = [{"isResolved": "true"}]
+json.dump(data, open(path, "w", encoding="utf-8"))
+PY
+out=$(run_case "${nonboolean_thread_dir}"); rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'malformed review thread isResolved'; then
+  ok "a non-boolean review-thread isResolved value exits 1"
+else
+  fail "non-boolean review-thread isResolved: got ${rc}: ${out}"
 fi
 
 check_run_time_dir="${WORK_DIR}/check-run-time"
@@ -432,6 +496,17 @@ if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'legacy required checks';
   ok "an unreadable legacy required-check response exits 1"
 else
   fail "unreadable legacy required checks: got ${rc}: ${out}"
+fi
+
+legacy_permission_dir="${WORK_DIR}/legacy-permission"
+legacy_permission_checks='[{"name":"ci","bucket":"pass","state":"SUCCESS"},{"name":"legacy-only","bucket":"pass","state":"SUCCESS"}]'
+legacy_permission_legacy='{"contexts":["legacy-only"],"checks":[]}'
+write_fixture "${legacy_permission_dir}" '[{"filename":"README.md"}]' "" "${legacy_permission_checks}" "${DEFAULT_REVIEWS}" 0 OPEN false "[]" "${DEFAULT_RULES}" "${legacy_permission_legacy}"
+out=$(run_case "${legacy_permission_dir}" legacy-permission); rc=$?
+if [ "${rc}" -eq 0 ] && printf '%s' "${out}" | grep -q 'legacy-only'; then
+  ok "branch protection data supplies legacy contexts when the protection endpoint is unavailable"
+else
+  fail "legacy protection fallback: got ${rc}: ${out}"
 fi
 
 legacy_404_dir="${WORK_DIR}/legacy-404"
@@ -604,6 +679,12 @@ printf '%s' '[{"check_suites":[]}]' >"${timeline_dir}/check-suites.json"
 printf '%s' '[[{"event":"head_ref_force_pushed","commit_id":"'"${HEAD_SHA}"'","created_at":"2026-01-01T00:00:00Z"}]]' >"${timeline_dir}/timeline.json"
 out=$(run_case "${timeline_dir}"); rc=$?
 assert_rc "PR timeline supplies the trusted head time when check runs are empty" 0 "${out}" "${rc}"
+
+if grep -Fq 'commits/${HEAD_SHA}/check-runs' "${SCRIPT_DIR}/merge-ready"; then
+  fail "check-run fetch remains despite gh pr checks being the verdict source"
+else
+  ok "check-run fetch is removed and gh pr checks remains the verdict source"
+fi
 
 file_cap_dir="${WORK_DIR}/file-cap"
 write_fixture "${file_cap_dir}" '[{"filename":"README.md"}]' ""

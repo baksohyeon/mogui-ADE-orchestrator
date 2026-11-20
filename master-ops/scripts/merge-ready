@@ -86,11 +86,11 @@ FILES_FILE="${TMP_DIR}/files.json"
 FILES_ERR="${TMP_DIR}/files.err"
 FILES_HEAD_FILE="${TMP_DIR}/files-head.json"
 FILES_HEAD_ERR="${TMP_DIR}/files-head.err"
+BRANCH_FILE="${TMP_DIR}/branch.json"
+BRANCH_ERR="${TMP_DIR}/branch.err"
 COMMENTS_RAW="${TMP_DIR}/comments-raw.json"
 COMMENTS_FILE="${TMP_DIR}/comments.json"
 COMMENTS_ERR="${TMP_DIR}/comments.err"
-CHECK_RUNS_RAW="${TMP_DIR}/check-runs-raw.json"
-CHECK_RUNS_ERR="${TMP_DIR}/check-runs.err"
 TIMELINE_RAW="${TMP_DIR}/timeline-raw.json"
 TIMELINE_FILE="${TMP_DIR}/timeline.json"
 TIMELINE_ERR="${TMP_DIR}/timeline.err"
@@ -256,10 +256,35 @@ require_json "${RULES_FILE}"
 
 if ! gh api "repos/${REPO}/branches/${BASE_BRANCH}/protection/required_status_checks" \
     >"${LEGACY_FILE}" 2>"${LEGACY_ERR}"; then
-  if grep -Fq "Branch not protected" "${LEGACY_ERR}" && grep -Eq "404|HTTP 404" "${LEGACY_ERR}"; then
-    printf '%s' '{"contexts":[],"checks":[]}' >"${LEGACY_FILE}"
-  else
-    not_ready "could not read legacy required checks for base branch ${BASE_BRANCH} ($(tr '\n' ' ' <"${LEGACY_ERR}"))"
+  if ! gh api "repos/${REPO}/branches/${BASE_BRANCH}" \
+      >"${BRANCH_FILE}" 2>"${BRANCH_ERR}"; then
+    not_ready "could not read legacy required checks for base branch ${BASE_BRANCH} (protection endpoint: $(tr '\n' ' ' <"${LEGACY_ERR}"); branch endpoint: $(tr '\n' ' ' <"${BRANCH_ERR}"))"
+  fi
+  if ! python3 -I - "${BRANCH_FILE}" "${LEGACY_FILE}" >"${TMP_DIR}/branch-parse.out" 2>"${BRANCH_ERR}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+branch = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if not isinstance(branch, dict):
+    raise ValueError("branch response is not an object")
+protection = branch.get("protection")
+if protection is None:
+    legacy = {"contexts": [], "checks": []}
+elif not isinstance(protection, dict):
+    raise ValueError("branch response has malformed protection")
+else:
+    required_status_checks = protection.get("required_status_checks")
+    if required_status_checks is None:
+        legacy = {"contexts": [], "checks": []}
+    elif not isinstance(required_status_checks, dict):
+        raise ValueError("branch response has malformed required_status_checks")
+    else:
+        legacy = required_status_checks
+Path(sys.argv[2]).write_text(json.dumps(legacy), encoding="utf-8")
+PY
+  then
+    not_ready "could not parse legacy required checks from branch response ($(tr '\n' ' ' <"${BRANCH_ERR}"))"
   fi
 fi
 require_json "${LEGACY_FILE}"
@@ -451,27 +476,11 @@ for event in events:
         timestamps.append(parsed.astimezone(timezone.utc))
 if not timestamps:
     raise ValueError("PR timeline has no push event for the measured head")
-print(min(timestamps).isoformat(timespec="seconds").replace("+00:00", "Z"))
+print(max(timestamps).isoformat(timespec="seconds").replace("+00:00", "Z"))
 PY
   HEAD_TIME="$(cat "${HEAD_TIME_FILE}")"
   [ -n "${HEAD_TIME}" ] || not_ready "head push time response was empty"
 fi
-
-gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" --paginate --slurp \
-    >"${CHECK_RUNS_RAW}" 2>"${CHECK_RUNS_ERR}" || \
-  not_ready "could not read check runs for measured head ${HEAD_SHA} ($(tr '\n' ' ' <"${CHECK_RUNS_ERR}"))"
-python3 -I - "${CHECK_RUNS_RAW}" <<'PY' 2>"${CHECK_RUNS_ERR}" || \
-  not_ready "check runs for measured head: could not parse response ($(tr '\n' ' ' <"${CHECK_RUNS_ERR}"))"
-import json,sys
-from pathlib import Path
-pages=json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-if not isinstance(pages,list) or not all(isinstance(page,dict) for page in pages):
-    raise ValueError("expected a list of check-run response objects")
-for page in pages:
-    runs=page.get("check_runs")
-    if not isinstance(runs,list) or not all(isinstance(run,dict) for run in runs):
-        raise ValueError("check-run response is missing a valid check_runs list")
-PY
 
 if ! gh pr checks "${PR}" --repo "${REPO}" --required --json name,bucket,state \
     >"${CHECKS_FILE}" 2>"${CHECKS_ERR}"; then
@@ -482,7 +491,7 @@ if ! gh pr checks "${PR}" --repo "${REPO}" --required --json name,bucket,state \
 fi
 require_json "${CHECKS_FILE}" nonempty-list
 
-if ! gh pr view "${PR}" --repo "${REPO}" --json number,url,headRefOid,state,isDraft \
+if ! gh pr view "${PR}" --repo "${REPO}" --json number,url,headRefOid,baseRefName,state,isDraft \
     >"${PR_FILE}" 2>"${PR_ERR}"; then
   not_ready "could not read the PR (gh pr view: $(tr '\n' ' ' <"${PR_ERR}"))"
 fi
@@ -547,11 +556,15 @@ try:
 
     if not isinstance(pr, dict) or not isinstance(pr.get("headRefOid"), str):
         fail("PR response missing or malformed headRefOid")
+    if not isinstance(pr.get("baseRefName"), str):
+        fail("PR response missing or malformed baseRefName")
     if not isinstance(pr.get("state"), str) or not isinstance(pr.get("isDraft"), bool):
         fail("PR response missing or malformed state/isDraft")
 
     if pr.get("headRefOid") != head_sha:
         fail(f"head changed during measurement (started {head_sha[:12]}, now {(pr.get('headRefOid') or '?')[:12]}); rerun")
+    if pr.get("baseRefName") != base_branch:
+        fail(f"base branch changed during measurement (started {base_branch}, now {pr.get('baseRefName')}); rerun")
 
     changed_paths = sorted(
         {f["filename"] for f in files}
@@ -713,10 +726,10 @@ try:
     threads = require_connection(pull_request.get("reviewThreads"), "reviewThreads")
     if threads["pageInfo"]["hasNextPage"]:
         problems_not_ready.append("more than 100 review threads; rerun with pagination")
-    open_threads = sum(
-        1 for thread in threads["nodes"]
-        if not isinstance(thread, dict) or not thread.get("isResolved", False)
-    )
+    for thread in threads["nodes"]:
+        if not isinstance(thread, dict) or not isinstance(thread.get("isResolved"), bool):
+            fail("graphql response has malformed review thread isResolved")
+    open_threads = sum(1 for thread in threads["nodes"] if thread["isResolved"] is not True)
     if open_threads:
         problems_not_ready.append(f"{open_threads} open review thread(s)")
 

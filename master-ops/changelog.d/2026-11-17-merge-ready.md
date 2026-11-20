@@ -11,9 +11,8 @@
 - Existing installs must copy `config/merge-ready-stop-paths.txt` and `config/merge-ready-bots.txt`
   into their own `config/` directory before running the command. The command fails closed when
   either file is missing or empty.
-- The review-bot roster compares an exact bot notice with a GitHub-generated check-suite or
-  check-run creation time, with a matching PR timeline push event as fallback, so an
-  author-controlled committer timestamp cannot qualify an older notice. The command rejects a
+- The review-bot roster compares an exact bot notice with the latest qualifying PR timeline push
+  event, so an author-controlled committer timestamp cannot qualify an older notice. The command rejects a
   pull-request files response at GitHub's 3000-file cap and reports when the out-of-contract check was skipped.
 - The stop list in `config/merge-ready-stop-paths.txt` covers charter, workspace, gate, hook,
   workflow, scanner, and CODEOWNERS controls. Its examples include `.github/labeler.yml`,
@@ -21,9 +20,12 @@
 - Required checks never use a rate-limit exception. Empty required-check, roster, stop-list, or
   malformed-response shapes fail closed.
 - Required checks are compared with the complete required context set from the PR base branch's
-  rules endpoint and legacy protection endpoint. A legacy `404 Branch not protected` response
-  contributes no contexts; any other source failure is not ready, and missing reported contexts
-  are named in the summary.
+  rules endpoint and legacy protection data. When the protection endpoint is unavailable, the
+  branch response supplies `protection.required_status_checks`; failure to read both sources is
+  not ready, and missing reported contexts are named in the summary.
+- The final measurement re-reads the base branch and head, uses `gh pr checks --required` for the
+  check verdict, falls back to branch protection data when the legacy endpoint is unavailable, and
+  uses the latest qualifying head push for a rate-limit exemption.
 - Review-bot coverage now requires a standalone non-dismissed review on the measured head, while
   rate-limit coverage uses the notice's creation time and the head push event. Changed files and
   checks are pinned to the measured head, required rules are paginated, and the output reports when

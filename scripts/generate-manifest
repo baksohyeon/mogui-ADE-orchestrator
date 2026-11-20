@@ -73,10 +73,6 @@ INSTANCE_OWNED = (
     "workspace-card/LOCAL.md",
 )
 INSTANCE_OWNED_PREFIXES = tuple(e for e in INSTANCE_OWNED if e.endswith("/"))
-# Existing exact instance-owned records are seeded by the template for founding
-# installs. The generated runbook index is install-owned from its first write,
-# so it is the one exact path excluded from the install file list.
-INSTANCE_OWNED_EXCLUDED_FROM_FILES = frozenset({"docs/runbooks/README.md"})
 
 
 def under_instance_owned_prefix(rel: str) -> bool:
@@ -95,7 +91,7 @@ def iter_install_paths(skeleton: Path) -> list[str]:
             continue
         rel = path.relative_to(skeleton).as_posix()
         parts = rel.split("/")
-        if rel in EXCLUDE_FILES or rel in INSTANCE_OWNED_EXCLUDED_FROM_FILES or under_instance_owned_prefix(rel) or any(
+        if rel in EXCLUDE_FILES or under_instance_owned_prefix(rel) or any(
             rel == excluded or rel.startswith(excluded + "/")
             for excluded in EXCLUDE_DIRS
         ):

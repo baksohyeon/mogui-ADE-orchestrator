@@ -1,5 +1,6 @@
 ---
 status: active
+summary: executes supervised worker dispatch and completion gates
 ---
 
 # Supervised dispatch wrapper

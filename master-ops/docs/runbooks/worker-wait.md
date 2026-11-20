@@ -1,5 +1,6 @@
 ---
 status: active
+summary: accounts for registered dispatches and waits for actionable completion evidence
 ---
 
 # worker-wait runbook

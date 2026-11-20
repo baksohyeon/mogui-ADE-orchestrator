@@ -1,5 +1,6 @@
 ---
 status: active
+summary: defines error boundaries, exit meanings, and durable logging
 ---
 
 # Error and logging boundaries

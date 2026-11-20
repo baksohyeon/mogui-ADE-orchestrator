@@ -1,5 +1,6 @@
 ---
 status: active
+summary: records durable master workspace placement evidence
 ---
 
 # Master Placement Record

@@ -1,5 +1,6 @@
 ---
 status: active
+summary: defines evidence-first ctx queries for prior session context
 ---
 
 # ctx Query Doctrine

@@ -1685,6 +1685,7 @@ FRONT_MATTER_REQUIRED_KEYS = ("tier", "runtime", "repo")
 FRONT_MATTER_BUDGET_INT_NAMES = frozenset({"rounds", "hours", "tokens"})
 RUNBOOK_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9-]*$")
 RUNBOOK_STATUSES = frozenset({"active", "draft", "retired"})
+RUNBOOK_BRIEF_LIMIT_BYTES = 2_000
 
 
 def _parse_front_matter(
@@ -1782,25 +1783,34 @@ def _runbook_metadata(path: Path) -> dict[str, object] | None:
         text,
         known_keys=RUNBOOK_FRONT_MATTER_KNOWN_KEYS,
     )
+    brief = _section_body(text, "Brief")
+    brief_bytes = len(brief.encode("utf-8")) if brief is not None else None
     if error is not None or parsed is None:
         return {
-            "status": "active",
+            "status": None,
             "triggers": (),
-            "brief": _section_body(text, "Brief"),
+            "brief": brief,
+            "brief_bytes": brief_bytes,
+            "error": error or "missing front matter",
             "text": text,
         }
     status = parsed.get("status")
+    metadata_error: str | None = None
     if not isinstance(status, str) or status not in RUNBOOK_STATUSES:
-        status = "active"
+        metadata_error = f"invalid status: {status!r}"
+        status = None
     triggers = parsed.get("triggers", [])
     if not isinstance(triggers, list) or any(
         not isinstance(trigger, str) or not trigger for trigger in triggers
     ):
+        metadata_error = metadata_error or "invalid triggers"
         triggers = []
     return {
         "status": status,
         "triggers": tuple(triggers),
-        "brief": _section_body(text, "Brief"),
+        "brief": brief,
+        "brief_bytes": brief_bytes,
+        "error": metadata_error,
         "text": text,
     }
 
@@ -1865,7 +1875,11 @@ def _runbook_gate_checks(
 
     for name in sorted(listed | waived):
         item = inventory.get(name)
-        if item is None or item[1].get("status") == "retired":
+        if (
+            item is None
+            or item[1].get("status") != "active"
+            or item[1].get("error") is not None
+        ):
             return (
                 ReasonCode.RUNBOOK_UNKNOWN,
                 tuple(warnings),
@@ -1873,7 +1887,11 @@ def _runbook_gate_checks(
             )
 
     for name in sorted(listed):
-        if inventory[name][1].get("brief") is None:
+        metadata = inventory[name][1]
+        if metadata.get("brief") is None or (
+            isinstance(metadata.get("brief_bytes"), int)
+            and metadata["brief_bytes"] > RUNBOOK_BRIEF_LIMIT_BYTES
+        ):
             warnings.append(ReasonCode.RUNBOOK_BRIEF_MISSING)
 
     matched: list[str] = []

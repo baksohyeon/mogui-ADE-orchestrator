@@ -1,5 +1,6 @@
 ---
 status: active
+summary: measures pull request state before worker completion and merge
 ---
 
 # Merge-Ready: One Measurement For A Pull Request

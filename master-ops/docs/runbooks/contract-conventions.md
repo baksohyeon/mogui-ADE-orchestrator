@@ -1,5 +1,6 @@
 ---
 status: active
+summary: documents contract structure, review handling, and scope boundaries
 ---
 
 # Contract conventions
@@ -57,10 +58,11 @@ runbooks: [research-workflow]
 runbooks_waived: [merge-ready]
 ```
 
-`runbooks` names files under `docs/runbooks/`; the dispatch gate refuses a missing or
-retired name, matches active runbook triggers against the contract body, and records
-both keys in the dispatch ledger. `runbooks_waived` records a deliberate exception to
-trigger matching so the decision remains visible to later review.
+`runbooks` names runbook file stems (the file name without `.md`) under
+`docs/runbooks/`; the dispatch gate refuses a missing or retired name, matches active
+runbook triggers against the contract body, and records both keys in the dispatch
+ledger. `runbooks_waived` records a deliberate exception to trigger matching so the
+decision remains visible to later review.
 
 ## 1. Workspace clause: name the worker's own path, and the forbidden one [measured]
 
@@ -475,6 +477,9 @@ Keys, all at top level:
   the seat's own `config/standing-rules.overlay.md` (which wins on a name
   both declare); the wrapper appends each named block's text to the
   dispatched spec.
+- `runbooks` (optional): runbook file stems (the file name without `.md`) under
+  `docs/runbooks/`; active names are validated and matched against the contract body.
+- `runbooks_waived` (optional): runbook file stems recorded as trigger-match waivers.
 
 Example head:
 
@@ -484,6 +489,8 @@ tier: efficient
 runtime: claude
 repo: mogui-ADE-orchestrator
 standing_rules: [headless, ack-token, placement, voice, pr-house]
+runbooks: [research-workflow]
+runbooks_waived: [merge-ready]
 ---
 ```
 

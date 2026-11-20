@@ -1,5 +1,6 @@
 ---
 status: active
+summary: warns at prompt submission when the orchestration inbox has unread mail
 ---
 
 # Orchestration inbox warn hook (`scripts/hooks/orch-inbox-warn.sh`)

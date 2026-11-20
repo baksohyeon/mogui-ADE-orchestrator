@@ -1,5 +1,6 @@
 ---
 status: active
+summary: guards configured product roots against unauthorized writes
 ---
 
 # Product Path Guard

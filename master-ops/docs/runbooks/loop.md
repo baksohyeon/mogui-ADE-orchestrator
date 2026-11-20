@@ -1,5 +1,6 @@
 ---
 status: active
+summary: carries loop-ready tracker items through a bounded verified run
 ---
 
 # Loop runbook

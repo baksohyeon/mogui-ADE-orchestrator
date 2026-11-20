@@ -100,13 +100,16 @@ If the owner declines, say that the root card is stale and that `LOCAL.md` is no
 
 ### Runbook structure adoption
 
-The runbook index is instance-owned because an install may add its own runbooks. After
-the template files are applied, add this line to the installed
-`scripts/harness-selfcheck.sh` and run the self-check:
+The runbook index is instance-owned because an install may add its own runbooks. Show
+this one-line edit in the dry-run plan and wait for the owner's explicit confirmation
+before writing the installed `scripts/harness-selfcheck.sh`, then run the self-check:
 
 ```bash
 "$OPS_DIR/scripts/runbook-index" --check || exit_code=1
 ```
+
+Insert the line before the existing final `exit "$exit_code"` in
+`scripts/harness-selfcheck.sh` so the check remains reachable.
 
 Apply the gate support before contracts containing `runbooks:` or `runbooks_waived:`;
 apply the wrapper support before enabling those keys in a contract. A partial upgrade

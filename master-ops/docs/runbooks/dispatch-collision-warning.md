@@ -1,5 +1,6 @@
 ---
 status: active
+summary: records same-host runtime collisions and their advisory warnings
 ---
 
 # Dispatch Collision Warning

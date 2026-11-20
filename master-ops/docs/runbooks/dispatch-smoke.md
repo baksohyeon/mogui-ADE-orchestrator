@@ -1,5 +1,6 @@
 ---
 status: active
+summary: exercises the supervised dispatch wrapper with a bounded smoke fixture
 ---
 
 # dispatch-smoke

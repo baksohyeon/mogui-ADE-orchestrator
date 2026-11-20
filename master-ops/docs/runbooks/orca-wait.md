@@ -1,5 +1,6 @@
 ---
 status: active
+summary: waits for orchestration events through the bounded Orca protocol
 ---
 
 # orca-wait runbook

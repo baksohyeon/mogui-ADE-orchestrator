@@ -1,5 +1,6 @@
 ---
 status: active
+summary: sets the public voice for pull requests, reviews, and release prose
 ---
 
 # Review voice

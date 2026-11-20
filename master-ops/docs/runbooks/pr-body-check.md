@@ -1,5 +1,6 @@
 ---
 status: active
+summary: validates the four required narrative sections in a pull request body
 ---
 
 # PR Body Narrative Section Check

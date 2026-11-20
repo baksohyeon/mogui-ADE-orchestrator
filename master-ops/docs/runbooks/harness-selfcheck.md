@@ -1,5 +1,6 @@
 ---
 status: active
+summary: checks harness wiring, hooks, tracker state, template drift, and required infrastructure
 ---
 
 # Harness self-check (scripts/harness-selfcheck.sh)

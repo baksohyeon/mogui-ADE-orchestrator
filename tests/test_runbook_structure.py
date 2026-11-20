@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 from master_runtime.core.dispatch_gate import (
@@ -229,9 +232,72 @@ def test_new_gate_old_wrapper_refuses_before_injection(tmp_path: Path) -> None:
     assert decision.reason is ReasonCode.RUNBOOK_INJECT_UNSUPPORTED
 
 
+def test_dispatch_gate_cli_accepts_named_runbook_with_injection_support(tmp_path: Path) -> None:
+    directory = runbook_dir(tmp_path)
+    contract = tmp_path / "contract.md"
+    contract.write_text(frontmatter(runbooks="research-workflow") + "ordinary work\n", encoding="utf-8")
+    script = REPO_ROOT / "scripts" / "dispatch-gate"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--ledger",
+            str(tmp_path / "ledger.jsonl"),
+            "check",
+            "--runtime",
+            "codex",
+            "--model",
+            "gpt-5.6-luna",
+            "--tier-policy",
+            str(policy(tmp_path)),
+            "--contract",
+            str(contract),
+            "--agents",
+            "1",
+            "--est-chars",
+            "100",
+            "--completion-channel",
+            "orchestration",
+            "--runbook-inject-supported",
+            "--no-record",
+        ],
+        cwd=REPO_ROOT,
+        env={**os.environ, "DISPATCH_RUNBOOKS_DIR": str(directory)},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["allow"] is True
+
+
+def test_founding_install_seeds_index_and_passes_check(tmp_path: Path) -> None:
+    template = REPO_ROOT / "master-ops"
+    install = tmp_path / "master-ops"
+    manifest = json.loads((template / "MANIFEST.json").read_text(encoding="utf-8"))
+    assert "docs/runbooks/README.md" in manifest["files"]
+    assert "docs/runbooks/README.md" in manifest["instance_owned"]
+    for relative in manifest["files"]:
+        source = template / relative
+        target = install / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+    result = subprocess.run(
+        [sys.executable, str(install / "scripts" / "runbook-index"), "--check"],
+        cwd=install,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_index_check_detects_deleted_line_and_recovers(tmp_path: Path) -> None:
     index = REPO_ROOT / "master-ops" / "scripts" / "runbook-index"
-    check = subprocess.run([str(index), "--check"], cwd=REPO_ROOT, capture_output=True, text=True)
+    check = subprocess.run(
+        [sys.executable, str(index), "--check"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
     assert check.returncode == 0, check.stderr
 
     readme = REPO_ROOT / "master-ops" / "docs" / "runbooks" / "README.md"
@@ -239,7 +305,12 @@ def test_index_check_detects_deleted_line_and_recovers(tmp_path: Path) -> None:
     try:
         deleted = next(line for line in original.splitlines() if "(land.md)" in line)
         readme.write_text(original.replace(deleted + "\n", "", 1), encoding="utf-8")
-        stale = subprocess.run([str(index), "--check"], cwd=REPO_ROOT, capture_output=True, text=True)
+        stale = subprocess.run(
+            [sys.executable, str(index), "--check"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
         assert stale.returncode == 1
     finally:
         readme.write_text(original, encoding="utf-8")

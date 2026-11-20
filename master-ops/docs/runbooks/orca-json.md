@@ -1,5 +1,6 @@
 ---
 status: active
+summary: centralizes parsing of JSON returned by Orca commands
 ---
 
 # orca-json

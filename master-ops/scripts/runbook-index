@@ -198,7 +198,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.check:
         errors = []
         for entry in entries():
-            if entry["error"] in {"missing Brief", f"Brief exceeds {BRIEF_LIMIT_BYTES} bytes"}:
+            if entry["error"] is not None:
                 errors.append(f"{entry['name']}: {entry['error']}")
         try:
             current = output.read_text(encoding="utf-8")

@@ -1,5 +1,6 @@
 ---
 status: active
+summary: checks public conversation surfaces for private identifiers
 ---
 
 # Conversation-surface redaction runbook

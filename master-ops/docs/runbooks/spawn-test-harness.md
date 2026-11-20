@@ -1,5 +1,6 @@
 ---
 status: active
+summary: validates that onboarding creates a working operations layer and round trip
 ---
 
 # Spawn-Test Harness

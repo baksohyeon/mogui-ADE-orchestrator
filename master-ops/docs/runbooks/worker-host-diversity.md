@@ -1,5 +1,6 @@
 ---
 status: active
+summary: makes worker runtime host collisions visible at dispatch time
 ---
 
 # Worker Host Diversity

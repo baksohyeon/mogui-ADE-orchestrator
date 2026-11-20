@@ -1,5 +1,6 @@
 ---
 status: active
+summary: compares the Orca CLI surface with its stored fingerprint baseline
 ---
 
 # Orca CLI Surface Fingerprint Drift Runbook

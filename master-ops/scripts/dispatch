@@ -584,50 +584,8 @@ standing_rule_block() {
   local main_file="${DISPATCH_STANDING_RULES:-$SCRIPTS_DIR/../rules/standing-rules.md}"
   local local_file="${DISPATCH_STANDING_RULES_LOCAL:-$SCRIPTS_DIR/../config/standing-rules.overlay.md}"
   local text
-  if type markdown_section >/dev/null 2>&1; then
-    if ! text=$(markdown_section "$local_file" "$name"); then
-      text=$(markdown_section "$main_file" "$name") || return 1
-    fi
-  else
-    # The isolated standing-rule regression fixtures extract this function
-    # alone, so keep that seam runnable without the shared helper definition.
-    text=$(python3 - "$name" "$local_file" "$main_file" <<'EOF'
-import sys
-
-name, local_file, main_file = sys.argv[1], sys.argv[2], sys.argv[3]
-
-def extract(path, heading_name):
-    try:
-        with open(path, encoding="utf-8") as fh:
-            lines = fh.read().splitlines()
-    except OSError:
-        return None
-    heading = f"## {heading_name}"
-    body = []
-    found = False
-    for line in lines:
-        if found:
-            if line.startswith("## "):
-                break
-            body.append(line)
-        elif line.strip() == heading:
-            found = True
-    if not found:
-        return None
-    while body and not body[0].strip():
-        body.pop(0)
-    while body and not body[-1].strip():
-        body.pop()
-    return "\n".join(body)
-
-text = extract(local_file, name)
-if text is None:
-    text = extract(main_file, name)
-if text is None:
-    sys.exit(1)
-print(text)
-EOF
-) || return 1
+  if ! text=$(markdown_section "$local_file" "$name"); then
+    text=$(markdown_section "$main_file" "$name") || return 1
   fi
   printf '%s\n' "$text"
 }
@@ -638,7 +596,13 @@ EOF
 runbook_brief() {
   local name="$1"
   local runbook_file="$DISPATCH_RUNBOOKS_DIR/$name.md"
-  markdown_section "$runbook_file" Brief
+  local brief
+  brief=$(markdown_section "$runbook_file" Brief) || return 1
+  if ! printf '%s' "$brief" | python3 -c \
+    'import sys; raise SystemExit(0 if len(sys.stdin.buffer.read()) <= 2000 else 1)'; then
+    return 1
+  fi
+  printf '%s\n' "$brief"
 }
 
 github_remote_metadata() {

@@ -1,5 +1,6 @@
 ---
 status: active
+summary: records dispatch lifecycle events and state transitions
 ---
 
 # dispatch-timeline runbook

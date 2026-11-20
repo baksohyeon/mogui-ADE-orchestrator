@@ -1,5 +1,6 @@
 ---
 status: active
+summary: lands commits directly on main while stopping at the first failed step
 ---
 
 # Landing Commits Without a Pull Request

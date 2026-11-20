@@ -1,5 +1,6 @@
 ---
 status: active
+summary: records the measured host runtime and harness inventory
 ---
 
 # Host harness inventory (measured 2026-08-03)

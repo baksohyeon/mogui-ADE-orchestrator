@@ -6,7 +6,13 @@ Orca is REQUIRED infrastructure. Supervised dispatch = orca orchestration only. 
 
 The workspace master-operations SSOT is the charter index [`../MASTER-OPERATIONS.md`](../MASTER-OPERATIONS.md); this file is its Document Map section.
 
-Document roles stay narrow: a charter section may state a rule and its reason, a runbook may describe one recurring procedure and its worker Brief, a skill may state when to fire and point to a runbook while carrying its own method only when no runbook covers the operation, a workflow script may execute orchestration without serving as the prose procedure, and memory may hold a dated unstable owner preference with no procedure content until it becomes a runbook default; each surface keeps the other surfaces' content out.
+Document roles stay narrow; each surface keeps the other surfaces' content out:
+
+- Charter section: states a rule and its reason.
+- Runbook: describes one recurring procedure and its worker Brief.
+- Skill: states when to fire and points to a runbook; carries its own method only when no runbook covers the operation.
+- Workflow script: executes orchestration without serving as the prose procedure.
+- Issue-tracker memory: holds a dated, unstable owner preference with no procedure content until it becomes a runbook default.
 
 - Template version: `{{TEMPLATE_VERSION}}` (source: installed `MANIFEST.json`, filled at onboarding from the template version stamp)
 - Operations repository: `{{OPS_REPO}}`

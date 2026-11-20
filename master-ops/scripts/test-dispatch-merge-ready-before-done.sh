@@ -15,10 +15,11 @@ dispatch=${1:-$dispatch}
 merge_ready_before_done_always_test() (
   set +e
   set -u
-  local dispatch="$1" work jqf_fn block_fn append_block mrbd_block script_file
+  local dispatch="$1" work jqf_fn section_fn block_fn append_block mrbd_block script_file
   local out status mutant_block count
 
   jqf_fn=$(awk '$0=="jqf() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  section_fn=$(awk '$0=="markdown_section() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   block_fn=$(awk '$0=="standing_rule_block() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   append_block=$(awk '
     /^STANDING_RULE_NAMES=\$\(echo "\$CHK" \| jqf/{f=1}
@@ -32,6 +33,7 @@ merge_ready_before_done_always_test() (
   ' "$dispatch")
 
   [ -n "$jqf_fn" ] || { echo "FAIL: could not extract jqf" >&2; return 1; }
+  [ -n "$section_fn" ] || { echo "FAIL: could not extract markdown_section" >&2; return 1; }
   [ -n "$block_fn" ] || { echo "FAIL: could not extract standing_rule_block" >&2; return 1; }
   [ -n "$append_block" ] || { echo "FAIL: could not extract the STANDING_RULE_NAMES append block" >&2; return 1; }
   [ -n "$mrbd_block" ] || { echo "FAIL: could not extract the merge-ready-before-done always-append block" >&2; return 1; }
@@ -58,6 +60,7 @@ RULES
       printf 'export DISPATCH_STANDING_RULES=%q\n' "$rules_file"
       printf 'export DISPATCH_STANDING_RULES_LOCAL=%q\n' "$work/config/standing-rules.overlay.md"
       printf '%s\n' "$jqf_fn"
+      printf '%s\n' "$section_fn"
       printf '%s\n' "$block_fn"
       printf 'CHK=%s\n' "$(printf '%q' "$chat_json")"
       echo 'SPEC="original spec"'
@@ -174,6 +177,7 @@ RULES
     printf 'export DISPATCH_STANDING_RULES=%s\n' "$work/rules/standing-rules.md"
     printf 'export DISPATCH_STANDING_RULES_LOCAL=%s\n' "$work/config/standing-rules.overlay.md"
     printf '%s\n' "$jqf_fn"
+    printf '%s\n' "$section_fn"
     printf '%s\n' "$block_fn"
     printf 'CHK=%s\n' "$(printf '%q' '{"allow": true, "front_matter": {}}')"
     echo 'SPEC="original spec"'

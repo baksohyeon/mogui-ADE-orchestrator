@@ -1,5 +1,6 @@
 ---
 status: active
+summary: defines clean succession, handshake evidence, and retirement steps
 ---
 
 # Succession Boot Card

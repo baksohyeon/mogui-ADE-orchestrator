@@ -110,17 +110,17 @@ Agents: ground Orca claims in the [Orca docs snapshot agent index](https://grok-
 7. **Completion arrives through the mailbox.** The coordinator waits on `orca orchestration check --wait`. The worker sends `worker_done`, and the Run mailbox wakes the coordinator.
 8. **Acceptance comes from re-verification.** The worker report is a claim. The coordinator re-runs gates, reads diffs, examines artifacts, and checks redaction scans.
 
-The dispatch record and the shell effect stay separate, so a dispatch that Orca recorded but the worker terminal never received can be detected and sent again.
+The dispatch record and the shell effect stay separate. When a retained legacy coordinator drops a write, preflight detects the legacy read-only state and reports a failed orchestration check with guidance to create a fresh Run.
 
 ## What is standing guard
 
 The expanded guard inventory is [`docs/public/defense-inventory.md`](docs/public/defense-inventory.md).
 
-- **Dispatch gate and tier fan-out.** `scripts/dispatch-gate` caps how many workers of each model tier run at once and records every decision in the ledger.
+- **Dispatch gate and tier fan-out.** `scripts/dispatch-gate` applies configured fan-out caps to workers by model tier over a policy window and records each decision in the ledger, except checks run with `--no-record`. The shipped policy leaves `fanout_caps` empty, so no tier cap is active by default.
 - **Model identity from transcripts.** `scripts/model-identity-probe` reads recent assistant model fields and compares them with an expected model when supplied.
 - **Placement before master spawn.** `scripts/master-succeed` verifies the requested worktree placement before spawning a master.
 - **Kickoff boot-card reference.** `scripts/master-succeed` requires the succession boot card in the master kickoff.
-- **Empty seat and duplicate masters.** `scripts/master-succeed` refuses to found a master where one already sits and detects duplicate masters at runtime.
+- **Empty seat and duplicate masters.** `master-ops/onboarding/09-spawn.md` requires an empty founding seat, while `scripts/master-succeed check-duplicates` detects duplicate masters at runtime.
 - **Redaction scope.** `scripts/redaction-scan.sh` names the files and rules covered by the redaction scan.
 - **Revival of frozen sessions.** `scripts/master-succeed` verifies process, pane, and tty disappearance during retirement.
 - **Progressive onboarding.** `master-ops/ONBOARDING.md` routes one onboarding step per turn and waits for Verify before the next.
@@ -261,7 +261,7 @@ Two principles shape the layout:
 
 To use the system, follow [Getting Started](docs/public/getting-started.md). This section is for changing the harness itself.
 
-Prerequisites: Python 3.11 or newer for the test suite. The Python test job runs on `ubuntu-latest`, `macos-latest`, and `windows-latest` with Python 3.13.17. Branch rules require all three `tests` contexts. Keep the root `.python-version` in sync with `.github/workflows/gates.yml` by hand because CI does not read it. The runtime is stdlib-only. A tool that needs a newer interpreter locates one at runtime. The [Reference](docs/public/reference.md) table states each tool's behavior in its own row. Contributors can select Python through `uv`, `pyenv`, or the system developer tools.
+Prerequisites: Python 3.11 or newer for the test suite. The Python test job runs on `ubuntu-latest`, `macos-latest`, and `windows-latest` with Python 3.13.17. Branch rules require all three `tests` contexts, including `tests (windows-latest)`; the Windows matrix leg is measurement-only and `continue-on-error` allows a Windows failure without failing the job. Keep the root `.python-version` in sync with `.github/workflows/gates.yml` by hand because CI does not read it. The runtime is stdlib-only. A tool that needs a newer interpreter locates one at runtime. The [Reference](docs/public/reference.md) table states each tool's behavior in its own row. Contributors can select Python through `uv`, `pyenv`, or the system developer tools.
 
 All CLI entry points live in `scripts/` and are self-contained:
 
@@ -290,7 +290,7 @@ Local only.
 - **Master defaults to Claude Code out of the box.** The spawn path in `core/succession.py` accepts an agent parameter and defaults it to `claude`. It handles the Claude CLI family specially. Onboarding asks for the agent CLI and records the confirmed runtime. Claude Code is the most exercised host, so it is recommended.
 - **Workers can be any CLI.** A worker is a terminal session in an Orca pane. It is whatever binary starts there. Claude, Codex, Cursor, Grok, and Gemini have all run this way under contract. No plugin is required for any of them.
 - **Codex as master is untried.** It should work by design. If you run it, a report or patch is useful.
-- **Platform evidence is mixed.** The test gate runs on Linux, macOS, and Windows. The Windows job runs the Windows-compatible subset of the tests and is a required check, while tests that require the Unix script execution surface are skipped. Separately, user reports said Linux and Windows worked well, including Windows through WSL; WSL2 was reported as slightly ambiguous but still working. Versions, distributions, and coverage depth were not recorded.
+- **Platform evidence is mixed.** The test gate runs on Linux, macOS, and Windows. The Windows job runs the Windows-compatible subset in measurement-only mode. Branch rules require the `tests (windows-latest)` context, while `continue-on-error` allows a Windows failure without failing the job. Tests that require the Unix script execution surface are skipped. Separately, user reports said Linux and Windows worked well, including Windows through WSL; WSL2 was reported as slightly ambiguous but still working. Versions, distributions, and coverage depth were not recorded.
 - **Orca required** for live sessions. Pure functions run without it.
 
 ## What this is not

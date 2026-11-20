@@ -285,10 +285,12 @@ brief_model_measurement_test "$dispatch" || exit 1
 checkonly_ledger_test() (
   set +e
   set -u
-  local dispatch="$1" work jqf_fn tier_fn mark_fn resolve_fn block
+  local dispatch="$1" work jqf_fn probe_fn output_fn tier_fn mark_fn resolve_fn block
   local gate ledger policy contract script_file status before after out mutant_block
 
   jqf_fn=$(awk '$0=="jqf() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  probe_fn=$(awk '$0=="gate_supports_runbook_injection() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
+  output_fn=$(awk '$0=="gate_output_is_json() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   tier_fn=$(awk '$0=="tier_for_model() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   mark_fn=$(awk '$0=="mark_model_needs_measurement() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
   resolve_fn=$(awk '$0=="resolve_token_budget() {"{f=1} f{print} f&&$0=="}"{exit}' "$dispatch")
@@ -300,6 +302,8 @@ checkonly_ledger_test() (
   ' "$dispatch")
 
   [ -n "$jqf_fn" ] || { echo "FAIL: could not extract jqf" >&2; return 1; }
+  [ -n "$probe_fn" ] || { echo "FAIL: could not extract gate_supports_runbook_injection" >&2; return 1; }
+  [ -n "$output_fn" ] || { echo "FAIL: could not extract gate_output_is_json" >&2; return 1; }
   [ -n "$tier_fn" ] || { echo "FAIL: could not extract tier_for_model" >&2; return 1; }
   [ -n "$mark_fn" ] || { echo "FAIL: could not extract mark_model_needs_measurement" >&2; return 1; }
   [ -n "$resolve_fn" ] || { echo "FAIL: could not extract resolve_token_budget" >&2; return 1; }
@@ -342,6 +346,8 @@ BIN
     {
       echo 'set -u'
       printf '%s\n' "$jqf_fn"
+      printf '%s\n' "$probe_fn"
+      printf '%s\n' "$output_fn"
       printf '%s\n' "$tier_fn"
       printf '%s\n' "$mark_fn"
       printf '%s\n' "$resolve_fn"

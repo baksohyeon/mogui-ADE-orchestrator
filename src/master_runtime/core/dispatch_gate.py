@@ -1756,7 +1756,25 @@ def _section_body(text: str, heading: str) -> str | None:
     target = f"## {heading}"
     body: list[str] = []
     found = False
+    fence: str | None = None
     for line in lines:
+        fence_start = re.match(r"^\s*(`{3,}|~{3,})", line)
+        if fence is not None:
+            fence_close = re.match(r"^\s*([`~]{3,})\s*$", line)
+            if found:
+                body.append(line)
+            if (
+                fence_close is not None
+                and fence_close.group(1)[0] == fence[0]
+                and len(fence_close.group(1)) >= len(fence)
+            ):
+                fence = None
+            continue
+        if fence_start is not None:
+            if found:
+                body.append(line)
+            fence = fence_start.group(1)
+            continue
         if found:
             if line.startswith("## "):
                 break
@@ -1770,6 +1788,29 @@ def _section_body(text: str, heading: str) -> str | None:
     while body and not body[-1].strip():
         body.pop()
     return "\n".join(body)
+
+
+def _markdown_without_code(text: str) -> str:
+    """Remove fenced blocks and inline code before matching runbook triggers."""
+
+    visible: list[str] = []
+    fence: str | None = None
+    for line in text.splitlines():
+        fence_start = re.match(r"^\s*(`{3,}|~{3,})", line)
+        if fence is not None:
+            fence_close = re.match(r"^\s*([`~]{3,})\s*$", line)
+            if (
+                fence_close is not None
+                and fence_close.group(1)[0] == fence[0]
+                and len(fence_close.group(1)) >= len(fence)
+            ):
+                fence = None
+            continue
+        if fence_start is not None:
+            fence = fence_start.group(1)
+            continue
+        visible.append(re.sub(r"(?<!\\)`+[^`\n]*`+", "", line))
+    return "\n".join(visible)
 
 
 def _runbook_metadata(path: Path) -> dict[str, object] | None:
@@ -1906,18 +1947,26 @@ def _runbook_gate_checks(
             warnings.append(ReasonCode.RUNBOOK_BRIEF_MISSING)
 
     matched: list[str] = []
-    body = _front_matter_body(contract_text)
+    visible_body = _markdown_without_code(_front_matter_body(contract_text))
     for name, (_, metadata) in inventory.items():
         if metadata.get("status") != "active":
             continue
         for trigger in metadata.get("triggers", ()):
-            if re.search(rf"(?<!\w){re.escape(trigger)}(?!\w)", body, flags=re.IGNORECASE):
+            if re.search(
+                rf"(?<!\w){re.escape(trigger)}(?!\w)",
+                visible_body,
+                flags=re.IGNORECASE,
+            ):
                 matched.append(name)
                 break
 
     unlisted = sorted(name for name in matched if name not in listed and name not in waived)
     if unlisted:
-        message = "runbooks=" + ",".join(unlisted)
+        names = ",".join(unlisted)
+        message = (
+            f"runbooks={names}; add runbooks: [{names}] to load them or "
+            f"runbooks_waived: [{names}] when they do not apply"
+        )
         if front_matter is None:
             warnings.append(ReasonCode.RUNBOOK_TRIGGER_UNLISTED)
         else:

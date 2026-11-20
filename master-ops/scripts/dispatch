@@ -390,6 +390,26 @@ print($1)
 "
 }
 
+# A runtime update can arrive after this wrapper is re-stamped. Probe the gate
+# itself before adding a newer option so an older install keeps dispatching
+# contracts that do not use runbook injection.
+gate_supports_runbook_injection() {
+  "$GATE" check --help 2>&1 | grep -Fq -- "--runbook-inject-supported"
+}
+
+# Keep stdout and stderr separate for the normal machine-readable response, but
+# surface both streams when an older or broken gate prints no JSON at all.
+gate_output_is_json() {
+  if printf '%s\n' "$CHK" | jqf "d" >/dev/null 2>/dev/null; then
+    return 0
+  fi
+  if [ -s "$GATE_STDERR_FILE" ]; then
+    cat "$GATE_STDERR_FILE" >&2
+  fi
+  [ -n "$CHK" ] && printf '%s\n' "$CHK" >&2
+  return 1
+}
+
 resolve_token_budget() {
   FRONT_MATTER_JSON=$(printf '%s' "$CHK" | jqf "json.dumps(d.get('front_matter') or {}, separators=(',',':'))") || return 1
   TOKEN_FIELDS=$("$GATE" budget --front-matter "$FRONT_MATTER_JSON" 2>&1) || {
@@ -541,6 +561,7 @@ markdown_section() {
   local path="$1" heading="$2"
   python3 - "$path" "$heading" <<'EOF'
 import sys
+import re
 
 path, heading_name = sys.argv[1], sys.argv[2]
 
@@ -553,7 +574,25 @@ except OSError:
 heading = f"## {heading_name}"
 body = []
 found = False
+fence = None
 for line in lines:
+    fence_start = re.match(r"^\s*(`{3,}|~{3,})", line)
+    if fence is not None:
+        fence_close = re.match(r"^\s*([`~]{3,})\s*$", line)
+        if found:
+            body.append(line)
+        if (
+            fence_close is not None
+            and fence_close.group(1)[0] == fence[0]
+            and len(fence_close.group(1)) >= len(fence)
+        ):
+            fence = None
+        continue
+    if fence_start is not None:
+        if found:
+            body.append(line)
+        fence = fence_start.group(1)
+        continue
     if found:
         if line.startswith("## "):
             break
@@ -2655,12 +2694,29 @@ if [ "$TIER" = "top" ] && [ -z "$TOP_APPROVED_TEXT" ]; then
 fi
 GATE_ARGS=(--ledger "$LEDGER" check --runtime "$RUNTIME" --model "$MODEL" \
       --tier-policy "$POLICY" --contract "$CONTRACT" --agents 1 \
-      --est-chars "$EST" --completion-channel orchestration \
-      --runbook-inject-supported)
+      --est-chars "$EST" --completion-channel orchestration)
+if gate_supports_runbook_injection; then
+  GATE_ARGS+=(--runbook-inject-supported)
+fi
 [ "$MODEL_NEEDS_MEASUREMENT" = 1 ] && GATE_ARGS+=(--model-needs-measurement)
-CHK=$("$GATE" "${GATE_ARGS[@]}" --no-record 2>/dev/null)
+GATE_STDERR_FILE=$(mktemp "${TMPDIR:-/tmp}/mogui-dispatch-gate.XXXXXX") || {
+  echo "✗ could not create a temporary gate diagnostics file" >&2
+  exit 2
+}
+GATE_STATUS=0
+CHK=$("$GATE" "${GATE_ARGS[@]}" --no-record 2>"$GATE_STDERR_FILE") || GATE_STATUS=$?
+if ! gate_output_is_json; then
+  rm -f -- "$GATE_STDERR_FILE"
+  [ "$GATE_STATUS" -eq 0 ] && GATE_STATUS=2
+  exit "$GATE_STATUS"
+fi
+rm -f -- "$GATE_STDERR_FILE"
 ALLOW=$(echo "$CHK" | jqf "d['allow']")
 SHA=$(echo "$CHK" | jqf "d.get('contract_sha') or ''")
+RUNBOOK_BRIEF_WARNINGS=$(echo "$CHK" | jqf "' '.join(w for w in d.get('warnings', []) if w == 'RUNBOOK_BRIEF_MISSING')")
+if [ -n "$RUNBOOK_BRIEF_WARNINGS" ]; then
+  echo "⚠ gate warning · RUNBOOK_BRIEF_MISSING · a Brief pointer will be injected for the named runbook" >&2
+fi
 if [ "$ALLOW" != "True" ]; then
   echo "✗ gate DENY · $(echo "$CHK" | jqf "d['reason']") · model=$MODEL tier=$TIER"
   echo "$CHK"; exit 2
@@ -2697,7 +2753,18 @@ else
   ensure_agy_pretrust "$RUNTIME" "$WORKTREE" || exit 2
 fi
 
-CHK=$("$GATE" "${GATE_ARGS[@]}" 2>/dev/null)
+GATE_STDERR_FILE=$(mktemp "${TMPDIR:-/tmp}/mogui-dispatch-gate.XXXXXX") || {
+  echo "✗ could not create a temporary gate diagnostics file" >&2
+  exit 2
+}
+GATE_STATUS=0
+CHK=$("$GATE" "${GATE_ARGS[@]}" 2>"$GATE_STDERR_FILE") || GATE_STATUS=$?
+if ! gate_output_is_json; then
+  rm -f -- "$GATE_STDERR_FILE"
+  [ "$GATE_STATUS" -eq 0 ] && GATE_STATUS=2
+  exit "$GATE_STATUS"
+fi
+rm -f -- "$GATE_STDERR_FILE"
 ALLOW=$(echo "$CHK" | jqf "d['allow']")
 SHA=$(echo "$CHK" | jqf "d.get('contract_sha') or ''")
 if [ "$ALLOW" != "True" ]; then
@@ -2801,6 +2868,8 @@ fi
 # absent; a pointer keeps that warning actionable for an older install.
 RUNBOOK_NAMES=$(echo "$CHK" | jqf "' '.join(d.get('front_matter', {}).get('runbooks', []) or [])")
 if [ -n "$RUNBOOK_NAMES" ]; then
+  RUNBOOK_BRIEF_NAMES=""
+  RUNBOOK_POINTER_NAMES=""
   for name in $RUNBOOK_NAMES; do
     runbook_file="$DISPATCH_RUNBOOKS_DIR/$name.md"
     if brief=$(runbook_brief "$name"); then
@@ -2809,15 +2878,18 @@ if [ -n "$RUNBOOK_NAMES" ]; then
 Runbook ($name):
 
 $brief"
+      RUNBOOK_BRIEF_NAMES="${RUNBOOK_BRIEF_NAMES:+$RUNBOOK_BRIEF_NAMES }$name"
     else
       SPEC="$SPEC
 
 Runbook ($name):
 
 Brief missing. Read the runbook at $(cd "$DISPATCH_RUNBOOKS_DIR" && pwd)/$name.md."
+      RUNBOOK_POINTER_NAMES="${RUNBOOK_POINTER_NAMES:+$RUNBOOK_POINTER_NAMES }$name"
     fi
   done
-  echo "📎 runbook Brief · $RUNBOOK_NAMES"
+  [ -n "$RUNBOOK_BRIEF_NAMES" ] && echo "📎 runbook Brief · $RUNBOOK_BRIEF_NAMES"
+  [ -n "$RUNBOOK_POINTER_NAMES" ] && echo "📎 runbook Brief pointer · $RUNBOOK_POINTER_NAMES"
 fi
 
 # 1.6b mail-before-done ships to every brief, whether or not the contract

@@ -14,6 +14,7 @@ from master_runtime.core.dispatch_gate import (
     FRONT_MATTER_KNOWN_KEYS,
     ReasonCode,
     _parse_front_matter,
+    _section_body,
 )
 
 
@@ -120,6 +121,95 @@ def test_trigger_without_listing_is_refused(tmp_path: Path) -> None:
     decision = gate(tmp_path, directory).check(request(tmp_path, body))
     assert decision.reason is ReasonCode.RUNBOOK_TRIGGER_UNLISTED
     assert ledger(tmp_path)["reason"] == "RUNBOOK_TRIGGER_UNLISTED"
+
+
+def test_trigger_matching_ignores_fenced_and_inline_code(tmp_path: Path) -> None:
+    directory = runbook_dir(tmp_path)
+    (directory / "literature-review.md").write_text(
+        "---\nstatus: active\ntriggers: [literature review]\n---\n"
+        "# Literature review\n",
+        encoding="utf-8",
+    )
+
+    fenced = (
+        frontmatter()
+        + "```shell\nrg -n \"literature review\" docs/\n```\n"
+    )
+    inline = frontmatter() + "Use `literature review` as a command example.\n"
+    for body in (fenced, inline):
+        decision = gate(tmp_path, directory).check(request(tmp_path, body))
+        assert decision.allow
+
+    prose = frontmatter() + "Please complete the literature review.\n"
+    decision = gate(tmp_path, directory).check(request(tmp_path, prose))
+    assert decision.reason is ReasonCode.RUNBOOK_TRIGGER_UNLISTED
+    assert "runbooks: [literature-review]" in decision.message
+    assert "runbooks_waived: [literature-review]" in decision.message
+
+
+def test_section_extractors_ignore_headings_inside_fences(tmp_path: Path) -> None:
+    section = (
+        "---\nstatus: active\n---\n"
+        "## Brief\n\nvisible before\n"
+        "```markdown\n## Not a section\nhidden\n```\n"
+        "visible after\n## Next\nafter\n"
+    )
+    runbook = tmp_path / "runbook.md"
+    runbook.write_text(section, encoding="utf-8")
+    expected = "visible before\n```markdown\n## Not a section\nhidden\n```\nvisible after"
+    assert _section_body(section, "Brief") == expected
+
+    dispatch = (REPO_ROOT / "master-ops" / "scripts" / "dispatch").read_text(
+        encoding="utf-8"
+    )
+    start = dispatch.index("markdown_section() {")
+    end = dispatch.index("\n}\n\n# Body text", start) + 2
+    shell_function = dispatch[start:end]
+    shell = subprocess.run(
+        ["bash", "-c", shell_function + "\nmarkdown_section \"$1\" Brief\n", "bash", str(runbook)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert shell.returncode == 0, shell.stderr
+    assert shell.stdout.rstrip("\n") == expected
+
+
+def test_dispatch_probe_skips_flag_for_old_gate_and_surfaces_diagnostics(tmp_path: Path) -> None:
+    dispatch = (REPO_ROOT / "master-ops" / "scripts" / "dispatch").read_text(
+        encoding="utf-8"
+    )
+    probe_start = dispatch.index("gate_supports_runbook_injection() {")
+    probe_end = dispatch.index("\n}\n\n# Keep stdout", probe_start) + 2
+    output_start = dispatch.index("gate_output_is_json() {")
+    output_end = dispatch.index("\n}\n\nresolve_token_budget", output_start) + 2
+    old_gate = tmp_path / "old-gate"
+    old_gate.write_text(
+        "#!/bin/bash\n"
+        "if [ \"${1:-}\" = check ] && [ \"${2:-}\" = --help ]; then\n"
+        "  echo 'usage: old gate'\n"
+        "  exit 0\n"
+        "fi\n"
+        "echo 'old gate failed before JSON' >&2\n"
+        "exit 2\n",
+        encoding="utf-8",
+    )
+    old_gate.chmod(0o755)
+    diagnostics = tmp_path / "diagnostics"
+    script = (
+        "set +e\n"
+        + dispatch[probe_start:probe_end]
+        + "\n"
+        + dispatch[output_start:output_end]
+        + "\n"
+        + f"GATE={old_gate}\n"
+        + "if gate_supports_runbook_injection; then echo supported; else echo unsupported; fi\n"
+        + f"GATE_STDERR_FILE={diagnostics}\nCHK=''\nprintf 'old gate failed before JSON\\n' > \"$GATE_STDERR_FILE\"\n"
+        + "gate_output_is_json\n"
+    )
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+    assert "unsupported" in result.stdout
+    assert "old gate failed before JSON" in result.stderr
 
 
 def test_runbook_list_requires_wrapper_support(tmp_path: Path) -> None:

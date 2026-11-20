@@ -70,7 +70,7 @@ The workspace layer addresses three failures in long-lived coordination. Session
 
 The harness accepts any agent behind a master that can reason. `AGENTS.md` and `CLAUDE.md` ship byte-identical, and a repository test asserts it on every change. `claude` is one example CLI; Claude Code is the exercised host.
 
-The template depends on Orca by design as the required execution substrate for live operation. Orca supplies session lifetime that outlasts a window, stable terminal handles, worktree-scoped placement, and a durable Run, an orchestration context bound to a terminal that carries tasks, dispatches, and mailbox messages across restarts. It also supplies a background receiver, supervised dispatch, and pane identity tied to a worktree. Step 0 preflight refuses to proceed until `orca status` reports a usable runtime. It checks `orca --version` against the minimum declared in `master-ops/scripts/orca-surface-baseline.json` and checks the connected runtime version against that same minimum.
+The template depends on Orca by design as the required execution substrate for live operation. Orca supplies session lifetime that outlasts a window, stable terminal handles, worktree-scoped placement, and a durable Run, an orchestration context bound to a terminal that carries tasks, dispatches, and mailbox messages across restarts. It also supplies a background receiver, supervised dispatch, and pane identity tied to a worktree. Step 0 preflight refuses to proceed until `orca status` reports a usable runtime. It extracts the connected runtime version from `orca status --json` and compares it with the minimum declared in `master-ops/scripts/orca-surface-baseline.json`.
 
 The Orca decision is a labelled preference based on running this harness against other agent development environments. Other environments offered a subset of Orca's capabilities. That preference is recorded as such.
 
@@ -117,7 +117,7 @@ The dispatch record and shell effect remain separate so acceptance can verify bo
 The expanded guard inventory is [`docs/public/defense-inventory.md`](docs/public/defense-inventory.md).
 
 - **Dispatch gate and tier fan-out.** A tier is a configured worker class, and `scripts/dispatch-gate` guards fan-out per tier and records each decision in the ledger.
-- **Model identity from transcripts.** `scripts/model-identity-probe` checks the worker model against recent transcript turns.
+- **Model identity from transcripts.** `scripts/model-identity-probe` reads recent assistant model fields and compares them with an expected model when supplied.
 - **Placement before master spawn.** `scripts/master-succeed` verifies the requested worktree placement before spawning a master.
 - **Kickoff boot-card reference.** `scripts/master-succeed` requires the succession boot card in the master kickoff.
 - **Empty seat and duplicate masters.** A seat is the workspace-level location assigned to a master, and `scripts/master-succeed` checks it and the runtime for duplicate masters.
@@ -221,7 +221,7 @@ The schema has 13 required fields. Duplicate generations are rejected, and every
 
 ### Contract-gated dispatch
 
-`src/master_runtime/core/dispatch_gate.py` sits between the master and any worker dispatch. Every decision carries a stable reason code; see the [Reference](docs/public/reference.md) for the available codes.
+`src/master_runtime/core/dispatch_gate.py` sits between the master and any worker dispatch. Every decision carries a stable reason code; see the [`ReasonCode` definition](src/master_runtime/core/dispatch_gate.py#L251) for the available codes and the [Reference](docs/public/reference.md) for command behavior.
 
 Repeated contract hashes are allowed and recorded with attempt ordinals. `register` verifies the job id against an artifact probe and measures the worker's actual model. Dry-run callers use `check --no-record`.
 

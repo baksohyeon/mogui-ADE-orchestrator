@@ -206,6 +206,7 @@ THREAD_REPLY_REVIEW="[{\"state\":\"COMMENTED\",\"body\":\"\",\"comments\":{\"nod
 DISMISSED_REVIEW="[{\"state\":\"DISMISSED\",\"body\":\"Automated review\",\"comments\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"coderabbitai\",\"__typename\":\"Bot\"}},{\"state\":\"COMMENTED\",\"body\":\"Automated review\",\"comments\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"cubic-dev-ai\",\"__typename\":\"Bot\"}}]"
 MALFORMED_PAGEINFO_REVIEW="[{\"state\":\"COMMENTED\",\"body\":\"\",\"comments\":{\"nodes\":[]},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"coderabbitai\",\"__typename\":\"Bot\"}},{\"state\":\"COMMENTED\",\"body\":\"Automated review\",\"comments\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"cubic-dev-ai\",\"__typename\":\"Bot\"}}]"
 NONBOOLEAN_PAGEINFO_REVIEW="[{\"state\":\"COMMENTED\",\"body\":\"\",\"comments\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":\"false\"}},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"coderabbitai\",\"__typename\":\"Bot\"}},{\"state\":\"COMMENTED\",\"body\":\"Automated review\",\"comments\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"cubic-dev-ai\",\"__typename\":\"Bot\"}}]"
+MALFORMED_REVIEW_STATE="[{\"state\":\"UNKNOWN\",\"body\":\"Automated review\",\"comments\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"coderabbitai\",\"__typename\":\"Bot\"}},{\"state\":\"COMMENTED\",\"body\":\"Automated review\",\"comments\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"cubic-dev-ai\",\"__typename\":\"Bot\"}}]"
 
 NON_HEAD_REVIEW='[{"state":"COMMENTED","commit":{"oid":"1111111111111111111111111111111111111111"},"author":{"login":"coderabbitai","__typename":"Bot"}}]'
 
@@ -475,6 +476,15 @@ else
   fail "non-boolean nested review-comment pageInfo: got ${rc}: ${out}"
 fi
 
+malformed_review_state_dir="${WORK_DIR}/malformed-review-state"
+write_fixture "${malformed_review_state_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" "${MALFORMED_REVIEW_STATE}"
+out=$(run_case "${malformed_review_state_dir}"); rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'malformed review state'; then
+  ok "an unknown review state exits 1"
+else
+  fail "unknown review state: got ${rc}: ${out}"
+fi
+
 nonboolean_thread_dir="${WORK_DIR}/nonboolean-thread"
 write_fixture "${nonboolean_thread_dir}" '[{"filename":"README.md"}]' ""
 python3 - "${nonboolean_thread_dir}/graphql.json" <<'PY'
@@ -709,6 +719,20 @@ if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'missing required_status_
   ok "missing branch required status checks fail closed instead of meaning unprotected"
 else
   fail "missing branch required status checks: got ${rc}: ${out}"
+fi
+
+malformed_contract_dir="${WORK_DIR}/malformed-contract"
+mkdir -p "${malformed_contract_dir}"
+printf '%s\n' '[{"filename":"config/gitleaks.toml"}]' >"${malformed_contract_dir}/files.json"
+printf '%s\n' '---' 'title: malformed' '---' >"${malformed_contract_dir}/contract.md"
+out=$(python3 -I "${SCRIPT_DIR}/lib/merge_ready.py" path-verdict \
+  --files "${malformed_contract_dir}/files.json" \
+  --stop-paths "${INSTALL_DIR}/config/merge-ready-stop-paths.txt" \
+  --contract "${malformed_contract_dir}/contract.md" 2>&1); rc=$?
+if [ "${rc}" -eq 2 ] && printf '%s' "${out}" | grep -q 'stop-list' && printf '%s' "${out}" | grep -q 'no writes'; then
+  ok "a malformed contract preserves a simultaneous stop-list ask"
+else
+  fail "malformed contract with stop-list ask: got ${rc}: ${out}"
 fi
 
 legacy_404_dir="${WORK_DIR}/legacy-404"

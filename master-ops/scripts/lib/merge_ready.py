@@ -98,7 +98,10 @@ def path_verdict(files_path: str, stop_path: str, contract_path: str) -> tuple[i
     if contract_path:
         globs = contract_writes(contract_path)
         if globs is None:
-            return 1, "contract front matter has no writes: list; cannot verify scope"
+            message = "contract front matter has no writes: list; cannot verify scope"
+            if problems:
+                return 2, "merge-ready: ask · " + "; ".join(problems + [message])
+            return 1, message
         outside = [path for path in paths if not any(fnmatch.fnmatch(path, glob) for glob in globs)]
         if outside:
             problems.append("path(s) outside contract writes: " + ", ".join(outside))
@@ -193,7 +196,10 @@ def review_state(reviews_path: str, comments_path: str, bots_path: str, head_sha
             continue
         if not review_is_standalone(review):
             continue
-        state = str(review.get("state") or "").upper()
+        state = review.get("state")
+        if not isinstance(state, str) or state.upper() not in DECISION_STATES | {"COMMENTED"}:
+            raise ValueError("graphql response has malformed review state")
+        state = state.upper()
         if login and state != "DISMISSED":
             head_reviewers.add(login)
         if state in DECISION_STATES:

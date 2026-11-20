@@ -106,7 +106,8 @@ The rules endpoint can include non-check rules such as creation, update, deletio
 pull-request, linear-history, merge-queue, deployment, signature, naming-pattern, path-restriction,
 reviewer, and file-size rules. These rules do not supply required check contexts, so the measurement
 records them and continues; a new or check-gating rule type such as `workflows` or `code_scanning`
-fails closed with exit `1` instead of silently omitting a required gate.
+fails closed with exit `1` instead of silently omitting a required gate. GitHub enforces required
+deployments and required reviewers at merge time; this command does not attest to either requirement.
 
 ## Exit codes
 

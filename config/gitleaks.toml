@@ -93,12 +93,40 @@ regex = '''https?://[A-Za-z0-9._-]*slack\.com/'''
 [[rules]]
 id = "internal_host"
 description = "Internal or corp hostname"
-regex = '''\b[A-Za-z0-9._-]+\.(internal|corp|local)\b'''
+# The trailing (?:\.[\p{L}\p{N}_-]+)* makes the match swallow every further
+# dotted label instead of stopping at the first internal/corp/local keyword.
+# A truncating match (keyword-and-stop) cannot tell "settings.local.json" (a
+# real file name) apart from "cache.local.evil.net" (a real host that merely
+# starts the same way); both would truncate to the same keyword-ending text.
+# Swallowing the whole token means the allowlist below sees the complete
+# name and can require it to end exactly there, nothing further. \p{L}\p{N}
+# (Unicode letters and digits, not just ASCII) continue the label through a
+# non-ASCII dotted segment too: an ASCII-only class truncated the match one
+# label early at a non-ASCII boundary, which the allowlist then exempted as
+# if that truncated prefix were the whole token (confirmed with
+# cache.local.env.équipe.net: the ASCII-only class stopped at "cache.local.env").
+# \p{M} (combining marks) rides along with \p{L}\p{N}: a letter followed by
+# its own combining accent (the decomposed NFD form of the same character,
+# e.g. "e" + U+0301 instead of the single precomposed "é") is one label. The
+# explicit end condition consumes one non-label separator so the allowlist can
+# keep matching the complete token without relying on ASCII \b behavior.
+regex = '''\b[A-Za-z0-9._-]+\.(internal|corp|local)(?:\.[\p{L}\p{M}\p{N}_-]+)*(?:\z|[^\p{L}\p{M}\p{N}_.-]|\.(?:\z|[^\p{L}\p{M}\p{N}_.-]))'''
   [rules.allowlist]
-  # Claude Code's per-checkout settings file, not a host.
+  # Claude Code's per-checkout settings file, not a host. Bare and the real
+  # on-disk name both excused; nothing with more after ".json" is.
+  #
+  # *.local.env (#168-style env override files, issue #331) and a comment
+  # naming one: the label before ".local" is restricted to a single
+  # unbroken token (no dot), so a real corp/internal host wearing a
+  # ".local.env" suffix (e.g. "vault.corp.local.env") keeps matching the
+  # base regex but never satisfies this anchored allowlist entry. The final
+  # period alternative keeps normal sentence punctuation inside the accepted
+  # file-name match without permitting another dotted label.
   regexTarget = "match"
   regexes = [
-    '''^settings\.local$''',
+    '''^settings\.local(?:\z|[^\p{L}\p{M}\p{N}_.-]|\.(?:\z|[^\p{L}\p{M}\p{N}_.-]))''',
+    '''^settings\.local\.json(?:\z|[^\p{L}\p{M}\p{N}_.-]|\.(?:\z|[^\p{L}\p{M}\p{N}_.-]))''',
+    '''^[A-Za-z0-9_-]+\.local\.env(?:\z|[^\p{L}\p{M}\p{N}_.-]|\.(?:\z|[^\p{L}\p{M}\p{N}_.-]))''',
   ]
 
 [[allowlists]]

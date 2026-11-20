@@ -55,6 +55,7 @@ BASE_CONFIG="${REPO_ROOT}/config/gitleaks.toml"
 LEGACY_ALLOWLIST="${REDACTION_ALLOWLIST:-${SCRIPT_DIR}/redaction-allowlist.txt}"
 MODE="tracked"
 RANGE=""
+RANGE_BASE=""
 COMMIT_RANGE=""
 VERBOSE=0
 REQUIRE_EXTRA="${REDACTION_REQUIRE_EXTRA:-0}"
@@ -398,17 +399,36 @@ list_scan_files() {
   case "${MODE}" in
     tracked) git ls-files -z ;;
     staged)  git diff --cached --name-only -z --diff-filter=ACMR ;;
-    range)   git diff --name-only -z --diff-filter=ACMR "${RANGE}" ;;
+    range)   git diff --no-renames --name-only -z --diff-filter=ACMR "${RANGE}" ;;
   esac
 }
 
-# A range neither end of which resolves is not an empty range. git prints a
-# fatal to stderr and this script used to keep going with zero files and zero
-# messages, which read as clean. Measured with an unresolvable left side: OK,
-# exit 0. A range that cannot be enumerated is exit 2.
+# A range endpoint that cannot resolve is not an empty range. Git can print a
+# fatal to stderr while returning no commits, which must never read as clean.
+# A range that cannot be enumerated is exit 2 with a named reason.
 if [[ -n "${RANGE}" ]] && ! git rev-list --max-count=0 "${RANGE}" >/dev/null 2>&1; then
   echo "redaction-scan: FAIL — range does not resolve in this repository: ${RANGE}" >&2
   exit 2
+fi
+if [[ "${MODE}" == "range" ]]; then
+  if [[ "${RANGE}" == *...* ]]; then
+    RANGE_LEFT="${RANGE%%...*}"
+    RANGE_RIGHT="${RANGE#*...}"
+    if [[ -z "${RANGE_LEFT}" || -z "${RANGE_RIGHT}" ]] \
+      || ! RANGE_BASE="$(git merge-base "${RANGE_LEFT}" "${RANGE_RIGHT}" 2>/dev/null)" \
+      || [[ -z "${RANGE_BASE}" ]]; then
+      echo "redaction-scan: FAIL — could not resolve the merge base for range ${RANGE}" >&2
+      exit 2
+    fi
+  else
+    RANGE_LEFT="${RANGE%%..*}"
+    if [[ -z "${RANGE_LEFT}" ]] \
+      || ! RANGE_BASE="$(git rev-parse --verify "${RANGE_LEFT}^{commit}" 2>/dev/null)" \
+      || [[ -z "${RANGE_BASE}" ]]; then
+      echo "redaction-scan: FAIL — could not resolve the base revision for range ${RANGE}" >&2
+      exit 2
+    fi
+  fi
 fi
 if [[ -n "${COMMIT_RANGE}" && "${COMMIT_RANGE}" != "${RANGE}" ]] \
   && ! git rev-list --max-count=0 "${COMMIT_RANGE}" >/dev/null 2>&1; then
@@ -420,6 +440,26 @@ REPORTS="${WORK_DIR}/reports"
 mkdir -p "${REPORTS}"
 report_index=0
 
+annotate_report() {
+  local report_path="$1"
+  local origin="$2"
+  local file_label="${3:-}"
+  "${PYTHON}" - "${report_path}" "${origin}" "${file_label}" <<'PY'
+import json
+import sys
+
+path, origin, file_label = sys.argv[1:]
+with open(path, encoding="utf-8") as handle:
+    rows = json.load(handle)
+for row in rows:
+    row["Origin"] = origin
+    if file_label:
+        row["File"] = file_label
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(rows, handle)
+PY
+}
+
 scan_path() {
   # One path per invocation. gitleaks scopes a single path argument reliably and
   # falls back to the whole directory when given several, which would drag in
@@ -427,6 +467,35 @@ scan_path() {
   local path="$1"
   [[ -f "${path}" ]] || return 0
   report_index=$((report_index + 1))
+
+  # Git's -diff attribute makes gitleaks dir treat a text path as a binary
+  # patch. Read the working-tree bytes through stdin for that path so the tip
+  # scan still observes the content, while preserving the real path in output.
+  local diff_attribute=""
+  if [[ "${MODE}" == "range" ]]; then
+    if ! diff_attribute="$(git check-attr diff -- "${path}" 2>/dev/null)"; then
+      echo "redaction-scan: FAIL — could not determine diff attribute for ${path}" >&2
+      exit 2
+    fi
+  fi
+  if [[ "${diff_attribute}" == *": diff: unset" ]]; then
+    if ! gitleaks stdin \
+      --config "${CONFIG}" \
+      --no-banner \
+      --exit-code 0 \
+      --report-format json \
+      --report-path "${REPORTS}/${report_index}.json" \
+      < "${path}" \
+      >/dev/null 2>&1; then
+      echo "redaction-scan: FAIL — gitleaks failed on ${path} (engine error, not a finding)" >&2
+      exit 2
+    fi
+    if grep -q '"RuleID"' "${REPORTS}/${report_index}.json"; then
+      annotate_report "${REPORTS}/${report_index}.json" "file_content" "${path}"
+    fi
+    return 0
+  fi
+
   if ! gitleaks dir "${path}" \
     --config "${CONFIG}" \
     --no-banner \
@@ -438,6 +507,9 @@ scan_path() {
     # failing, and a failed engine must not read as a clean file.
     echo "redaction-scan: FAIL — gitleaks failed on ${path} (engine error, not a finding)" >&2
     exit 2
+  fi
+  if grep -q '"RuleID"' "${REPORTS}/${report_index}.json"; then
+    annotate_report "${REPORTS}/${report_index}.json" "file_content"
   fi
 }
 
@@ -469,18 +541,7 @@ scan_commit_messages() {
       exit 2
     fi
     if [[ -s "${REPORTS}/${report_index}.json" ]]; then
-      "${PYTHON}" - "${REPORTS}/${report_index}.json" "commit:${sha:0:12}" <<'PY'
-import json
-import sys
-
-path, label = sys.argv[1], sys.argv[2]
-with open(path, encoding="utf-8") as handle:
-    rows = json.load(handle)
-for row in rows:
-    row["File"] = label
-with open(path, "w", encoding="utf-8") as handle:
-    json.dump(rows, handle)
-PY
+      annotate_report "${REPORTS}/${report_index}.json" "commit_message" "commit:${sha:0:12}"
     fi
     count=$((count + 1))
   done < "${sha_list}"
@@ -502,6 +563,94 @@ if [[ "${list_rc}" -ne 0 ]]; then
   exit 2
 fi
 
+# Range mode uses gitleaks' commit-aware scan for the blocking set. The tip
+# file scan below supplies a warning only when the finding's secret is present
+# in the same path at the range base revision.
+RANGE_GIT_REPORT="${WORK_DIR}/range-git.json"
+if [[ "${MODE}" == "range" ]]; then
+  if ! gitleaks git \
+    --log-opts="${RANGE} --diff-merges=first-parent --text --no-textconv" \
+    --config "${CONFIG}" \
+    --no-banner \
+    --exit-code 0 \
+    --report-format json \
+    --report-path "${RANGE_GIT_REPORT}" \
+    "${TARGET_ROOT}" \
+    >/dev/null 2>&1; then
+    echo "redaction-scan: FAIL — gitleaks git could not scan range ${RANGE} (engine error, not a finding)" >&2
+    exit 2
+  fi
+  if [[ ! -f "${RANGE_GIT_REPORT}" ]]; then
+    echo "redaction-scan: FAIL — gitleaks git returned no report for range ${RANGE}" >&2
+    exit 2
+  fi
+
+  # Git treats a deleted path marked -diff as binary, so gitleaks git may have
+  # no finding to report even when the path held a secret in an earlier commit.
+  # There is no tip blob to compare for positive base evidence in this case.
+  DIFF_ATTRIBUTE_ERROR="${WORK_DIR}/diff-attribute-error"
+  DIFF_ATTRIBUTE_PATHS="${WORK_DIR}/deleted-diff-paths"
+  if ! "${PYTHON}" - "${RANGE}" "${RANGE_GIT_REPORT}" > "${DIFF_ATTRIBUTE_PATHS}" 2>"${DIFF_ATTRIBUTE_ERROR}" <<'PY'
+import json
+import subprocess
+import sys
+
+range_spec = sys.argv[1]
+range_report_path = sys.argv[2]
+try:
+    with open(range_report_path, encoding="utf-8") as handle:
+        range_rows = json.load(handle)
+except (OSError, UnicodeError, json.JSONDecodeError):
+    range_rows = None
+reported_paths = set()
+if isinstance(range_rows, list):
+    reported_paths = {
+        str(row.get("File", "")).replace("\\", "/").removeprefix("./")
+        for row in range_rows
+        if isinstance(row, dict) and row.get("File")
+    }
+deleted = subprocess.run(
+    ["git", "log", "--format=", "--name-only", "-z", "--diff-filter=D", "--no-renames", range_spec],
+    capture_output=True,
+    check=False,
+)
+if deleted.returncode != 0:
+    print(f"could not list deleted paths (git exit {deleted.returncode})", file=sys.stderr)
+    raise SystemExit(1)
+
+for path_bytes in deleted.stdout.split(b"\0"):
+    if not path_bytes:
+        continue
+    path = path_bytes.decode("utf-8")
+    attrs = subprocess.run(
+        ["git", "check-attr", "-z", "diff", "--", path],
+        capture_output=True,
+        check=False,
+    )
+    if attrs.returncode != 0:
+        print(f"could not read diff attribute for {path} (git exit {attrs.returncode})", file=sys.stderr)
+        raise SystemExit(1)
+    fields = attrs.stdout.split(b"\0")
+    if (
+        isinstance(range_rows, list)
+        and len(fields) >= 3
+        and fields[2] == b"unset"
+        and path not in reported_paths
+    ):
+        print(path)
+PY
+  then
+    reason="$(cat "${DIFF_ATTRIBUTE_ERROR}" 2>/dev/null)"
+    echo "redaction-scan: FAIL — could not determine deleted -diff paths${reason:+: ${reason}}" >&2
+    exit 2
+  fi
+  if [[ -s "${DIFF_ATTRIBUTE_PATHS}" ]]; then
+    echo "redaction-scan: FAIL — cannot decide: gitleaks git may skip deleted path(s) marked -diff; inspect ${DIFF_ATTRIBUTE_PATHS}" >&2
+    cat "${DIFF_ATTRIBUTE_PATHS}" >&2
+    exit 2
+  fi
+fi
+
 file_count=0
 while IFS= read -r -d '' path; do
   [[ -z "${path}" ]] && continue
@@ -509,14 +658,171 @@ while IFS= read -r -d '' path; do
   scan_path "${path}"
 done < "${FILES_LIST}"
 
+# Stale .gitleaksignore fingerprints (tracked mode only; a staged or range
+# subset would make an untouched file's still-valid fingerprint read as
+# stale purely because this run never scanned that file). A fingerprint is
+# path:rule:line: it drifts as soon as a line above it shifts, so this reruns
+# the same files — and, when this run also scanned commit messages, those
+# same commits — with ignore-matching turned off, and reports any listed
+# fingerprint that now matches nothing live. This never fails the scan on
+# its own: the finding the drift exposes, if any, already fails on its own
+# in the normal pass above, uncovered by any fingerprint that still matches
+# it. A malformed .gitleaksignore (for example, a non-UTF-8 byte) is a
+# distinct problem from drift and fails closed with its own named reason.
+GITLEAKSIGNORE="${TARGET_ROOT}/.gitleaksignore"
+STALE_FINGERPRINTS_FILE="${WORK_DIR}/stale-fingerprints.txt"
+: > "${STALE_FINGERPRINTS_FILE}"
+if [[ "${MODE}" == "tracked" && -f "${GITLEAKSIGNORE}" ]] \
+  && grep -qvE '^[[:space:]]*(#|$)' "${GITLEAKSIGNORE}"; then
+  UNFILTERED_REPORTS="${WORK_DIR}/reports-unfiltered"
+  mkdir -p "${UNFILTERED_REPORTS}"
+  NO_IGNORE_DIR="${WORK_DIR}/no-ignore"
+  mkdir -p "${NO_IGNORE_DIR}"
+  ufi_index=0
+  while IFS= read -r -d '' path; do
+    [[ -z "${path}" ]] && continue
+    [[ -f "${path}" ]] || continue
+    ufi_index=$((ufi_index + 1))
+    if ! gitleaks dir "${path}" \
+      --config "${CONFIG}" \
+      --no-banner \
+      --exit-code 0 \
+      --report-format json \
+      --report-path "${UNFILTERED_REPORTS}/${ufi_index}.json" \
+      -i "${NO_IGNORE_DIR}" \
+      >/dev/null 2>&1; then
+      echo "redaction-scan: FAIL — gitleaks failed on ${path} during the fingerprint-staleness check (engine error, not a finding)" >&2
+      exit 2
+    fi
+    if grep -q '"RuleID"' "${UNFILTERED_REPORTS}/${ufi_index}.json"; then
+      annotate_report "${UNFILTERED_REPORTS}/${ufi_index}.json" "file_content"
+    fi
+  done < "${FILES_LIST}"
+
+  # Commit-message findings (scan_commit_messages above) use gitleaks' stdin
+  # fingerprint shape (no file, so "" instead of a path) and never appear in
+  # the dir rescan above: without this, every .gitleaksignore entry exempting
+  # one would always read as stale, even while actively suppressing a live
+  # secret in the same run (measured with --commit-messages). `gitleaks
+  # stdin` has no source directory of its own, so -i does not replace its
+  # default "." lookup the way it does for `dir`: it reads from both the
+  # working directory's real .gitleaksignore AND -i (measured with -l
+  # debug, two "found .gitleaksignore file" lines). Running it with its
+  # working directory set to NO_IGNORE_DIR, which holds no .gitleaksignore,
+  # is what actually disables it.
+  if [[ -n "${COMMIT_RANGE}" ]]; then
+    ufm_index=0
+    while IFS= read -r sha; do
+      [[ -z "${sha}" ]] && continue
+      ufm_index=$((ufm_index + 1))
+      if ! ( cd "${NO_IGNORE_DIR}" && git -C "${TARGET_ROOT}" log -1 --format=%B "${sha}" \
+        | gitleaks stdin \
+            --config "${CONFIG}" \
+            --no-banner \
+            --exit-code 0 \
+            --report-format json \
+            --report-path "${UNFILTERED_REPORTS}/commit-${ufm_index}.json" \
+            -i "${NO_IGNORE_DIR}" \
+            >/dev/null 2>&1 ); then
+        echo "redaction-scan: FAIL — gitleaks failed on commit ${sha:0:12} message during the fingerprint-staleness check (engine error, not a finding)" >&2
+        exit 2
+      fi
+      if grep -q '"RuleID"' "${UNFILTERED_REPORTS}/commit-${ufm_index}.json"; then
+        annotate_report "${UNFILTERED_REPORTS}/commit-${ufm_index}.json" "commit_message" "commit:${sha:0:12}"
+      fi
+    done < "${WORK_DIR}/commits-to-scan"
+  fi
+
+  STALE_CHECK_ERROR="${WORK_DIR}/stale-check-error"
+  if ! "${PYTHON}" - "${GITLEAKSIGNORE}" "${UNFILTERED_REPORTS}" "${STALE_FINGERPRINTS_FILE}" \
+    "${COMMIT_RANGE:+1}" \
+    > "${STALE_CHECK_ERROR}" <<'PY'
+import json
+import pathlib
+import sys
+
+ignore_path, reports_dir, out_path = (
+    pathlib.Path(sys.argv[1]),
+    pathlib.Path(sys.argv[2]),
+    pathlib.Path(sys.argv[3]),
+)
+commit_messages_scanned = len(sys.argv) > 4 and sys.argv[4] == "1"
+
+try:
+    ignore_text = ignore_path.read_text(encoding="utf-8")
+except (OSError, UnicodeDecodeError) as exc:
+    print(f"cannot read {ignore_path}: {exc}")
+    sys.exit(1)
+
+listed = []
+for line in ignore_text.splitlines():
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        continue
+    # A commit-message fingerprint has no file, so it starts with the
+    # separator (":rule:line"). This run only rescans commit messages when
+    # it scanned them in the first place: without that, such an entry
+    # cannot be told apart from stale, so it is left unchecked rather than
+    # reported stale on an absence this run never looked at (the same
+    # principle a staged/range file subset already gets, above).
+    if stripped.startswith(":") and not commit_messages_scanned:
+        continue
+    path, separator, remainder = stripped.partition(":")
+    normalized = f"{path.replace(chr(92), '/')}{separator}{remainder}"
+    listed.append((stripped, normalized))
+
+live = set()
+for report in sorted(pathlib.Path(reports_dir).glob("*.json")):
+    try:
+        rows = json.loads(report.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        continue
+    for row in rows:
+        fingerprint = row.get("Fingerprint")
+        if fingerprint:
+            path, separator, remainder = fingerprint.partition(":")
+            live.add(f"{path.replace(chr(92), '/')}{separator}{remainder}")
+
+stale = [original for original, normalized in listed if normalized not in live]
+out_path.write_text("".join(f"{fp}\n" for fp in stale), encoding="utf-8")
+PY
+  then
+    reason="$(cat "${STALE_CHECK_ERROR}" 2>/dev/null)"
+    echo "redaction-scan: FAIL — could not check .gitleaksignore for stale fingerprints${reason:+: ${reason}}" >&2
+    exit 2
+  fi
+fi
+
+STALE_COUNT="$(wc -l < "${STALE_FINGERPRINTS_FILE}" | tr -d ' ')"
+if [[ "${STALE_COUNT}" -gt 0 ]]; then
+  echo "redaction-scan: WARNING — ${STALE_COUNT} .gitleaksignore fingerprint(s) match no current finding (stale; the exempted line likely shifted or was removed); review ${GITLEAKSIGNORE}:" >&2
+  cat "${STALE_FINGERPRINTS_FILE}" >&2
+fi
+
 FINDINGS_FILE="${WORK_DIR}/findings.txt"
-"${PYTHON}" - "${REPORTS}" "${FINDINGS_FILE}" > /dev/null <<'PY'
+PREEXISTING_FILE="${WORK_DIR}/preexisting.txt"
+BASE_EVIDENCE_DIR="${WORK_DIR}/base-evidence"
+mkdir -p "${BASE_EVIDENCE_DIR}"
+CLASSIFY_ERROR="${WORK_DIR}/classify-error"
+classify_rc=0
+"${PYTHON}" - "${REPORTS}" "${FINDINGS_FILE}" "${PREEXISTING_FILE}" "${MODE}" "${RANGE_GIT_REPORT}" "${RANGE_BASE}" "${CONFIG}" "${BASE_EVIDENCE_DIR}" > /dev/null 2>"${CLASSIFY_ERROR}" <<'PY' || classify_rc=$?
+import hashlib
 import json
 import pathlib
 import re
+import subprocess
 import sys
 
-reports, out_path = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+reports, findings_path, preexisting_path, mode, range_report_path, range_base, config, evidence_dir = (
+    pathlib.Path(sys.argv[1]),
+    pathlib.Path(sys.argv[2]),
+    pathlib.Path(sys.argv[3]),
+    sys.argv[4],
+    pathlib.Path(sys.argv[5]),
+    sys.argv[6],
+    pathlib.Path(sys.argv[7]),
+    pathlib.Path(sys.argv[8]),
+)
 MASKS = (
     (re.compile(r"(AKIA)[0-9A-Z]{16}"), r"\1****************"),
     (re.compile(r"(gh[pousr]_)[A-Za-z0-9]{8,}"), r"\1********"),
@@ -527,40 +833,219 @@ MASKS = (
     (re.compile(r"""(=\s*["'])[^"']{8,}(["'])"""), r"\1***\2"),
 )
 
-lines = set()
+
+def canonical_path(value):
+    value = (value or "").replace("\\", "/")
+    while value.startswith("./"):
+        value = value[2:]
+    return value
+
+
+def finding_key(row):
+    fingerprint = row.get("Fingerprint")
+    commit = row.get("Commit")
+    if isinstance(fingerprint, str) and fingerprint:
+        if isinstance(commit, str) and commit and fingerprint.startswith(commit + ":"):
+            fingerprint = fingerprint[len(commit) + 1 :]
+        return ("fingerprint", canonical_path(fingerprint))
+
+    # Gitleaks normally supplies Fingerprint. Keep a fail-closed fallback for
+    # engine output that omits it, while avoiding the secret in the key itself.
+    secret = row.get("Secret")
+    secret_hash = hashlib.sha256(str(secret).encode("utf-8")).hexdigest()
+    return (
+        "fields",
+        canonical_path(row.get("File")),
+        row.get("RuleID"),
+        row.get("StartLine"),
+        row.get("EndLine"),
+        secret_hash,
+    )
+
+
+def render(row):
+    file_ = row.get("File", "?")
+    start_value = row.get("StartLine")
+    start = start_value if isinstance(start_value, int) and not isinstance(start_value, bool) else 0
+    snippet = (row.get("Match") or "").strip()
+    for pattern, replacement in MASKS:
+        snippet = pattern.sub(replacement, snippet)
+    return "  {file}:{line}  [{rule}] {desc}  :: {snippet}".format(
+        file=file_,
+        line=start,
+        rule=row.get("RuleID", "?"),
+        desc=row.get("Description", ""),
+        snippet=snippet[:160],
+    )
+
+
+def load_range_json(path, label):
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        print(f"could not parse {label}: {error}", file=sys.stderr)
+        raise SystemExit(1)
+    if not isinstance(value, list):
+        print(f"could not parse {label}: expected a JSON array", file=sys.stderr)
+        raise SystemExit(1)
+    return value
+
+
+range_rows = []
+if mode == "range":
+    range_rows = load_range_json(range_report_path, "range gitleaks report")
+    if any(not isinstance(row, dict) for row in range_rows):
+        print("could not parse range gitleaks report: expected finding objects", file=sys.stderr)
+        raise SystemExit(1)
+    if any(not isinstance(row.get("File"), str) or not row["File"] for row in range_rows):
+        print(
+            "could not parse range gitleaks report: expected non-empty File fields",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+range_keys = {finding_key(row) for row in range_rows if row.get("File")}
+
+blocking = set()
+preexisting = set()
+base_findings_by_path = {}
+
+
+def base_findings(file_):
+    """Scan each base path once with the same generated gitleaks config."""
+    if file_ in base_findings_by_path:
+        return base_findings_by_path[file_]
+
+    try:
+        base_blob = subprocess.run(
+            ["git", "show", f"{range_base}:{file_}"],
+            capture_output=True,
+            check=False,
+        )
+    except OSError as error:
+        print(f"could not read base blob for {file_}: {error}", file=sys.stderr)
+        raise SystemExit(1)
+
+    if base_blob.returncode != 0:
+        base_findings_by_path[file_] = set()
+        return base_findings_by_path[file_]
+
+    base_path = evidence_dir / file_
+    try:
+        base_path.parent.mkdir(parents=True, exist_ok=True)
+        base_path.write_bytes(base_blob.stdout)
+    except OSError as error:
+        print(f"could not materialize base blob for {file_}: {error}", file=sys.stderr)
+        raise SystemExit(1)
+
+    report_path = evidence_dir / f"{hashlib.sha256(file_.encode('utf-8')).hexdigest()}.json"
+    try:
+        base_scan = subprocess.run(
+            [
+                "gitleaks",
+                "dir",
+                file_,
+                "--config",
+                str(config),
+                "--no-banner",
+                "--exit-code",
+                "0",
+                "--report-format",
+                "json",
+                "--report-path",
+                str(report_path),
+            ],
+            cwd=evidence_dir,
+            capture_output=True,
+            check=False,
+        )
+    except OSError as error:
+        print(f"could not scan base blob for {file_}: {error}", file=sys.stderr)
+        raise SystemExit(1)
+    if base_scan.returncode != 0:
+        print(f"gitleaks failed while scanning base blob for {file_}", file=sys.stderr)
+        raise SystemExit(1)
+
+    try:
+        rows = json.loads(report_path.read_text(encoding="utf-8")) if report_path.exists() else []
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        print(f"could not parse base gitleaks report for {file_}: {error}", file=sys.stderr)
+        raise SystemExit(1)
+    if not isinstance(rows, list):
+        print(f"could not parse base gitleaks report for {file_}: expected a JSON array", file=sys.stderr)
+        raise SystemExit(1)
+
+    base_findings_by_path[file_] = {
+        (row.get("RuleID"), row.get("Secret"))
+        for row in rows
+        if isinstance(row, dict) and row.get("RuleID") and isinstance(row.get("Secret"), str)
+    }
+    return base_findings_by_path[file_]
+
+# The gitleaks git report is part of the blocking set. This includes findings in
+# files that were added and deleted inside the range, which the tip scan cannot
+# see.
+if mode == "range":
+    for row in range_rows:
+        if row.get("File"):
+            blocking.add(render(row))
+
 for report in sorted(reports.glob("*.json")):
     try:
         rows = json.loads(report.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         continue
     for row in rows:
-        snippet = (row.get("Match") or "").strip()
-        for pattern, replacement in MASKS:
-            snippet = pattern.sub(replacement, snippet)
-        lines.add(
-            "  {file}:{line}  [{rule}] {desc}  :: {snippet}".format(
-                file=row.get("File", "?"),
-                line=row.get("StartLine", 0),
-                rule=row.get("RuleID", "?"),
-                desc=row.get("Description", ""),
-                snippet=snippet[:160],
-            )
-        )
-out_path.write_text("".join(f"{line}\n" for line in sorted(lines)), encoding="utf-8")
+        line_text = render(row)
+        if mode != "range" or row.get("Origin") == "commit_message":
+            blocking.add(line_text)
+            continue
+
+        file_ = canonical_path(row.get("File"))
+        if finding_key(row) in range_keys:
+            blocking.add(line_text)
+            continue
+
+        secret = row.get("Secret")
+        if not isinstance(secret, str) or not secret or not file_ or not range_base:
+            blocking.add(line_text)
+            continue
+
+        if (row.get("RuleID"), secret) in base_findings(file_):
+            preexisting.add(line_text)
+        else:
+            blocking.add(line_text)
+
+findings_path.write_text(
+    "".join(f"{line}\n" for line in sorted(blocking)), encoding="utf-8"
+)
+preexisting_path.write_text(
+    "".join(f"{line}\n" for line in sorted(preexisting)), encoding="utf-8"
+)
 PY
+if [[ "${classify_rc}" -ne 0 ]]; then
+  reason="$(cat "${CLASSIFY_ERROR}" 2>/dev/null)"
+  echo "redaction-scan: FAIL — could not classify range findings${reason:+: ${reason}}" >&2
+  exit 2
+fi
 
 FINDINGS="$(wc -l < "${FINDINGS_FILE}" | tr -d ' ')"
+PREEXISTING_COUNT="$(wc -l < "${PREEXISTING_FILE}" | tr -d ' ')"
 
 if [[ "${VERBOSE}" -eq 1 ]]; then
-  echo "redaction-scan: mode=${MODE} range=${RANGE:-none} files=${file_count} commit-messages=${COMMIT_MESSAGES_SCANNED} org-rules=${EXTRA_RULE_COUNT} org-rules-source=${EXTRA_SOURCE} profile=${REDACTION_PROFILE} export-only-skipped=${EXTRA_EXPORT_ONLY_SKIPPED} config=$(basename "${CONFIG}") engine=$(gitleaks version 2>/dev/null | head -1) root=${TARGET_ROOT}"
+  echo "redaction-scan: mode=${MODE} range=${RANGE:-none} files=${file_count} commit-messages=${COMMIT_MESSAGES_SCANNED} org-rules=${EXTRA_RULE_COUNT} org-rules-source=${EXTRA_SOURCE} profile=${REDACTION_PROFILE} export-only-skipped=${EXTRA_EXPORT_ONLY_SKIPPED} pre-existing=${PREEXISTING_COUNT} stale-fingerprints=${STALE_COUNT} config=$(basename "${CONFIG}") engine=$(gitleaks version 2>/dev/null | head -1) root=${TARGET_ROOT}"
+fi
+
+if [[ "${PREEXISTING_COUNT}" -gt 0 ]]; then
+  echo "redaction-scan: WARNING — ${PREEXISTING_COUNT} pre-existing finding(s) found in the range base blob (not blocking in range mode, still exempt only via .gitleaksignore):" >&2
+  cat "${PREEXISTING_FILE}" >&2
 fi
 
 if [[ "${FINDINGS}" -gt 0 ]]; then
-  echo "redaction-scan: FAIL: ${FINDINGS} finding(s) (profile=${REDACTION_PROFILE}, fail-closed, root=${TARGET_ROOT})" >&2
+  echo "redaction-scan: FAIL: ${FINDINGS} finding(s) (profile=${REDACTION_PROFILE}, fail-closed, pre-existing=${PREEXISTING_COUNT}, stale-fingerprints=${STALE_COUNT}, root=${TARGET_ROOT})" >&2
   cat "${FINDINGS_FILE}" >&2
   echo "redaction-scan: fix, or exempt with a .gitleaksignore fingerprint, then re-run." >&2
   exit 1
 fi
 
-echo "redaction-scan: OK: 0 findings (mode=${MODE}, files=${file_count}, commit-messages=${COMMIT_MESSAGES_SCANNED}, org-rules=${EXTRA_RULE_COUNT}, org-rules-source=${EXTRA_SOURCE}, profile=${REDACTION_PROFILE}, export-only-skipped=${EXTRA_EXPORT_ONLY_SKIPPED}, read-proof-tokens ack-<12 hex> are allowlisted, root=${TARGET_ROOT})"
+echo "redaction-scan: OK: 0 findings (mode=${MODE}, files=${file_count}, commit-messages=${COMMIT_MESSAGES_SCANNED}, org-rules=${EXTRA_RULE_COUNT}, org-rules-source=${EXTRA_SOURCE}, profile=${REDACTION_PROFILE}, export-only-skipped=${EXTRA_EXPORT_ONLY_SKIPPED}, pre-existing=${PREEXISTING_COUNT}, stale-fingerprints=${STALE_COUNT}, read-proof-tokens ack-<12 hex> are allowlisted, root=${TARGET_ROOT})"
 exit 0

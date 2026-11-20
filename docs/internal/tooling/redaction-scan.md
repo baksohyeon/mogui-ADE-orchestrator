@@ -37,6 +37,36 @@ redaction-scan: OK: 0 findings (mode=tracked, files=144, commit-messages=not-sca
 
 `org-rules=N` counts rules actually loaded into the run, not lines the file happens to hold.
 `org-rules-source` names whether the file came from the environment, the workspace root, or the legacy home path. `profile=export` is the safe default and loads every valid rule. `profile=internal` skips rules whose id starts with `workspace_` and reports them as `export-only-skipped=N`.
+`pre-existing=N` and `stale-fingerprints=N` are explained below.
+
+### `--range` blocks by default and warns only on base-content evidence
+
+A full-tree or staged scan flags every match on the file, full stop. `--range` uses `gitleaks git --log-opts="A..B --diff-merges=first-parent --text --no-textconv"` with the same generated config as the tip scan to build part of its blocking set. The text and no-textconv options make history scanning inspect raw stored content, including paths marked `-diff`. Every finding in that history report blocks, including a finding added and deleted inside the range or introduced while resolving a merge. This is also why the range scan can catch a leak that the tip tree no longer contains.
+
+```console
+$ scripts/redaction-scan.sh --range origin/main..HEAD
+redaction-scan: WARNING — 1 pre-existing finding(s) found in the range base blob (not blocking in range mode, still exempt only via .gitleaksignore):
+  notes.md:40  [internal_host] Internal or corp hostname  :: ci.cor…
+redaction-scan: OK: 0 findings (mode=range, files=3, ..., pre-existing=1, ...)
+```
+
+The warning set is a tip-scan finding whose `RuleID` and `Secret` are also reported when the same path's base blob is scanned with the same generated gitleaks config. For `A..B`, the base is `A`; for `A...B`, it is the merge base. The scanner reads that blob with `git show <base>:<path>` without filters or text conversion, materializes it in a temporary tree, and scans it once per path. A path absent at the base or a finding that the base scan does not reproduce remains blocking. A path with a filter attribute follows the same evidence rule, with no attribute-specific downgrade. An uncommitted finding in a changed path follows this evidence rule and blocks when the base scan does not reproduce the same `RuleID` and `Secret`. A deleted path marked `-diff` exits 2 with a named undecidable reason when git mode cannot report it. Commit-message scanning remains separate and unchanged, and commit-message findings always block. Full-file and staged modes do not use the range report. A malformed range report or an unresolvable base exits 2 with a named reason.
+
+The range must resolve before either gitleaks scan starts. A missing commit or an otherwise unresolvable range exits 2 with a named reason; it never becomes an empty, passing scan. CI checks out complete history before invoking range mode for a pull request.
+
+### Stale `.gitleaksignore` fingerprints
+
+A file fingerprint is `path:rule:line`. gitleaks 8.30.1 normalizes backslashes in the path field to forward slashes before matching. It has no content-based fingerprint (confirmed against its own source, `detect/detect.go`: the fingerprint is built from the file path, rule id, and start line alone), so adding a line above an exempted finding shifts it to a new fingerprint, and the old one silently stops matching anything, which is not visible on its own: the finding it used to cover either reappears as a live, blocking finding (safe, if noisy) or the fingerprint simply goes unused forever (invisible drift). A commit-message fingerprint has the same `rule:line` shape but no file, so it reads as `:rule:line`.
+
+In tracked-mode runs, when `.gitleaksignore` holds entries, the scan reruns the same files with ignore-matching disabled, and, when this run also scanned commit messages, those same commits the same way, then reports any listed fingerprint that now matches nothing live:
+
+```console
+redaction-scan: WARNING — 2 .gitleaksignore fingerprint(s) match no current finding (stale; the exempted line likely shifted or was removed); review .gitleaksignore:
+secret.txt:aws_access_key:1
+secret.txt:aws-access-token:1
+```
+
+This never fails the scan on its own: a fingerprint going stale because its line really did move with the secret still present already fails the normal pass above, on its own merits. The unfiltered reports in this block are used only to collect live fingerprints, so their paths and origins never enter the blocking or pre-existing classification. Staged and range-mode runs skip this check, since they only ever touch a subset of files and would misreport an untouched file's still-valid fingerprint as stale. A run without `--commit-messages` leaves every commit-message-shaped (`:rule:line`) entry unchecked for the same reason: it never rescanned the commits that would confirm one way or the other.
 
 ### Organization-specific rules (`REDACTION_EXTRA_PATTERNS`)
 

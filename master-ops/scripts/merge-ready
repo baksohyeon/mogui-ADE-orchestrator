@@ -9,8 +9,9 @@
 #   0  merge: every measurement passed and no stop-list path was touched.
 #   1  not ready: a measurement failed, a GitHub response could not be read
 #      or parsed, or this invocation could not run.
-#   2  ask the owner: a changed path matches the stop list, or a changed path
-#      falls outside the contract's `writes` globs.
+#   2  ask the owner: a changed path matches the stop list, a changed path
+#      falls outside the contract's `writes` globs, or required configuration
+#      is missing.
 #
 # One summary line on stdout names every failing or asking item.
 set -u
@@ -292,7 +293,11 @@ fi
 if [ -n "${SOURCE_FAILURE}" ]; then
   if [ "${RULES_FORBIDDEN}" -eq 1 ]; then
     SOURCE_FAILURE="GitHub rules endpoint returned HTTP 403; legacy branch protection sources could not establish required checks: ${SOURCE_FAILURE}"
-    echo "merge-ready: ask · ${SOURCE_FAILURE} (head ${HEAD_SHA})"
+    if [ "${PATH_RC}" -eq 2 ]; then
+      echo "${PATH_VERDICT}; ${SOURCE_FAILURE} (head ${HEAD_SHA})"
+    else
+      echo "merge-ready: ask · ${SOURCE_FAILURE} (head ${HEAD_SHA})"
+    fi
     exit 2
   fi
   if [ "${PATH_RC}" -eq 2 ]; then
@@ -303,7 +308,7 @@ if [ -n "${SOURCE_FAILURE}" ]; then
 fi
 
 REQUIRED_SUMMARY=""
-if ! REQUIRED_SUMMARY="$(python3 -I - "${RULES_FILE}" "${LEGACY_FILE}" "${REQUIRED_CONTEXTS_FILE}" "${BASE_BRANCH}" 2>"${TMP_DIR}/required-summary.err" <<'PY'
+if ! REQUIRED_SUMMARY="$(python3 -I - "${RULES_FILE}" "${LEGACY_FILE}" "${REQUIRED_CONTEXTS_FILE}" "${BASE_BRANCH}" "${RULES_FORBIDDEN}" 2>"${TMP_DIR}/required-summary.err" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -312,6 +317,7 @@ rules = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 legacy = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
 contexts_file = Path(sys.argv[3])
 base_branch = sys.argv[4]
+rules_forbidden = sys.argv[5] == "1"
 required_contexts = set()
 if not isinstance(rules, list):
     raise ValueError("required-check rules response is not a list")
@@ -370,6 +376,8 @@ if legacy_checks is not None:
         if not isinstance(required, dict) or not isinstance(required.get("context"), str) or not required["context"]:
             raise ValueError("legacy required-check response has a malformed check")
         required_contexts.add(required["context"])
+if rules_forbidden and not required_contexts:
+    raise ValueError("HTTP 403 fallback source established no required checks")
 contexts_file.write_text(json.dumps(sorted(required_contexts)), encoding="utf-8")
 print(
     f"required checks from base branch {base_branch}: "
@@ -381,7 +389,11 @@ PY
 fi
 if [ -n "${SOURCE_FAILURE}" ]; then
   if [ "${RULES_FORBIDDEN}" -eq 1 ]; then
-    echo "merge-ready: ask · GitHub rules endpoint returned HTTP 403; required-check sources could not establish required checks: ${SOURCE_FAILURE} (head ${HEAD_SHA})"
+    if [ "${PATH_RC}" -eq 2 ]; then
+      echo "${PATH_VERDICT}; GitHub rules endpoint returned HTTP 403; required-check sources could not establish required checks: ${SOURCE_FAILURE} (head ${HEAD_SHA})"
+    else
+      echo "merge-ready: ask · GitHub rules endpoint returned HTTP 403; required-check sources could not establish required checks: ${SOURCE_FAILURE} (head ${HEAD_SHA})"
+    fi
     exit 2
   fi
   if [ "${PATH_RC}" -eq 2 ]; then

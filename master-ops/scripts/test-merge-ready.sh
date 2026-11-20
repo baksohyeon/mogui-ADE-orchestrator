@@ -548,30 +548,39 @@ else
 fi
 
 rules_403_legacy_dir="${WORK_DIR}/rules-403-legacy"
-write_fixture "${rules_403_legacy_dir}" '[{"filename":"README.md"}]' ""
+write_fixture "${rules_403_legacy_dir}" '[{"filename":"README.md"}]' "" '[{"name":"rules-403-legacy-context","bucket":"pass","state":"SUCCESS"}]' "${DEFAULT_REVIEWS}" 0 OPEN false "[]" "${DEFAULT_RULES}" '{"contexts":["rules-403-legacy-context"],"checks":[]}'
 out=$(run_case "${rules_403_legacy_dir}" rules-403-legacy); rc=$?
-if [ "${rc}" -eq 0 ] && printf '%s' "${out}" | grep -q 'merge-ready: merge'; then
+if [ "${rc}" -eq 0 ] && printf '%s' "${out}" | grep -q 'merge-ready: merge' && printf '%s' "${out}" | grep -q 'rules-403-legacy-context'; then
   ok "a rules HTTP 403 falls back to legacy protection"
 else
   fail "rules HTTP 403 legacy fallback: got ${rc}: ${out}"
 fi
 
 rules_403_branch_dir="${WORK_DIR}/rules-403-branch"
-write_fixture "${rules_403_branch_dir}" '[{"filename":"README.md"}]' ""
+write_fixture "${rules_403_branch_dir}" '[{"filename":"README.md"}]' "" '[{"name":"rules-403-branch-context","bucket":"pass","state":"SUCCESS"}]' "${DEFAULT_REVIEWS}" 0 OPEN false "[]" "${DEFAULT_RULES}" '{"contexts":["rules-403-branch-context"],"checks":[]}'
 out=$(run_case "${rules_403_branch_dir}" rules-403-branch); rc=$?
-if [ "${rc}" -eq 0 ] && printf '%s' "${out}" | grep -q 'merge-ready: merge'; then
+if [ "${rc}" -eq 0 ] && printf '%s' "${out}" | grep -q 'merge-ready: merge' && printf '%s' "${out}" | grep -q 'rules-403-branch-context'; then
   ok "a rules HTTP 403 falls back to branch protection"
 else
   fail "rules HTTP 403 branch fallback: got ${rc}: ${out}"
 fi
 
 rules_403_no_source_dir="${WORK_DIR}/rules-403-no-source"
-write_fixture "${rules_403_no_source_dir}" '[{"filename":"README.md"}]' ""
+write_fixture "${rules_403_no_source_dir}" '[{"filename":"config/gitleaks.toml"}]' ""
 out=$(run_case "${rules_403_no_source_dir}" rules-403-no-source); rc=$?
-if [ "${rc}" -eq 2 ] && printf '%s' "${out}" | grep -q 'HTTP 403' && printf '%s' "${out}" | grep -q 'legacy branch protection'; then
-  ok "a rules HTTP 403 with no fallback source asks the owner with exit 2"
+if [ "${rc}" -eq 2 ] && printf '%s' "${out}" | grep -q 'HTTP 403' && printf '%s' "${out}" | grep -q 'legacy branch protection' && printf '%s' "${out}" | grep -q 'config/gitleaks.toml (stop-list)'; then
+  ok "a rules HTTP 403 with no fallback source preserves the stop-list ask"
 else
   fail "rules HTTP 403 without fallback: got ${rc}: ${out}"
+fi
+
+rules_403_empty_source_dir="${WORK_DIR}/rules-403-empty-source"
+write_fixture "${rules_403_empty_source_dir}" '[{"filename":"config/gitleaks.toml"}]' "" "${DEFAULT_CHECKS}" "${DEFAULT_REVIEWS}" 0 OPEN false "[]" "${DEFAULT_RULES}" '{"contexts":[],"checks":[]}'
+out=$(run_case "${rules_403_empty_source_dir}" rules-403-legacy); rc=$?
+if [ "${rc}" -eq 2 ] && printf '%s' "${out}" | grep -q 'HTTP 403' && printf '%s' "${out}" | grep -q 'no required checks' && printf '%s' "${out}" | grep -q 'config/gitleaks.toml (stop-list)'; then
+  ok "a rules HTTP 403 with an empty legacy source preserves the stop-list ask"
+else
+  fail "rules HTTP 403 empty fallback source: got ${rc}: ${out}"
 fi
 
 legacy_failure_ask_dir="${WORK_DIR}/legacy-failure-ask"
@@ -810,26 +819,78 @@ else
 fi
 mv "${bots_backup}" "${bots_config}"
 
-upgrade_ops="${WORK_DIR}/upgrade-ops"
-mkdir -p "${upgrade_ops}/config"
-printf '%s\n' 'install-owned-stop-list' >"${upgrade_ops}/config/merge-ready-stop-paths.txt"
-upgrade_json="${WORK_DIR}/upgrade-write.json"
-upgrade_err="${WORK_DIR}/upgrade-write.err"
+run_upgrade_apply() {
+  local ops="$1" json_out="$2" err_out="$3"
+  python3 -I "${SCRIPT_DIR}/template-apply" \
+    --ops "${ops}" --template "${SCRIPT_DIR}/.." --write --confirm-input apply --json \
+    --placeholder WORKSPACE_NAME=seed-test \
+    --placeholder WORKSPACE_ROOT="${WORK_DIR}/workspace" \
+    --placeholder OPS_REPO="${ops}" \
+    --placeholder MONITOR_NS=seed-test \
+    --placeholder MODEL_ID=seed-test \
+    --placeholder REPO_LIST=seed-test \
+    --placeholder RUNTIME_ROOT="${WORK_DIR}/runtime" \
+    >"${json_out}" 2>"${err_out}"
+}
+
+assert_upgrade_seed_case() {
+  local label="$1" ops="$2" expected_stop="$3" expected_bots="$4"
+  local expected_stop_action="$5" expected_bots_action="$6" json_out="${ops}.json" err_out="${ops}.err"
+  mkdir -p "${ops}/config"
+  if [ "${expected_stop_action}" = "skipped-as-instance-owned" ]; then
+    printf '%s\n' "${expected_stop}" >"${ops}/config/merge-ready-stop-paths.txt"
+  fi
+  if [ "${expected_bots_action}" = "skipped-as-instance-owned" ]; then
+    printf '%s\n' "${expected_bots}" >"${ops}/config/merge-ready-bots.txt"
+  fi
+  run_upgrade_apply "${ops}" "${json_out}" "${err_out}"
+  local rc=$?
+  if [ "${rc}" -eq 0 ] && [ "$(cat "${ops}/config/merge-ready-stop-paths.txt")" = "${expected_stop}" ] && [ "$(cat "${ops}/config/merge-ready-bots.txt")" = "${expected_bots}" ] && python3 - "${json_out}" "${expected_stop_action}" "${expected_bots_action}" <<'PY'
+import json
+import sys
+
+payload = json.load(open(sys.argv[1], encoding="utf-8"))
+actions = {item["path"]: item["action"] for item in payload["actions"]}
+assert actions["config/merge-ready-stop-paths.txt"] == sys.argv[2], actions
+assert actions["config/merge-ready-bots.txt"] == sys.argv[3], actions
+PY
+  then
+    ok "${label} seeds or preserves both merge-ready configs with the expected actions"
+  else
+    fail "${label}: got ${rc}: $(cat "${err_out}" 2>/dev/null || true)"
+  fi
+}
+
+template_stop_contents="$(cat "${SCRIPT_DIR}/../config/merge-ready-stop-paths.txt")"
+template_bots_contents="$(cat "${SCRIPT_DIR}/../config/merge-ready-bots.txt")"
+assert_upgrade_seed_case "upgrade with both configs absent" "${WORK_DIR}/upgrade-both-missing" "${template_stop_contents}" "${template_bots_contents}" written written
+assert_upgrade_seed_case "upgrade with existing stop-list" "${WORK_DIR}/upgrade-stop-existing" "install-owned-stop-list" "${template_bots_contents}" skipped-as-instance-owned written
+assert_upgrade_seed_case "upgrade with existing bot roster" "${WORK_DIR}/upgrade-bots-existing" "${template_stop_contents}" "install-owned-bots" written skipped-as-instance-owned
+assert_upgrade_seed_case "upgrade with both configs existing" "${WORK_DIR}/upgrade-both-existing" "install-owned-stop-list" "install-owned-bots" skipped-as-instance-owned skipped-as-instance-owned
+
+invalid_seed_template="${WORK_DIR}/invalid-seed-template"
+cp -R "${SCRIPT_DIR}/.." "${invalid_seed_template}"
+mv "${invalid_seed_template}/config/merge-ready-stop-paths.txt" "${invalid_seed_template}/config/merge-ready-stop-paths.txt.saved"
+ln -s merge-ready-stop-paths.txt "${invalid_seed_template}/config/merge-ready-stop-paths.txt"
+invalid_seed_ops="${WORK_DIR}/invalid-seed-ops"
+mkdir -p "${invalid_seed_ops}"
+invalid_seed_json="${WORK_DIR}/invalid-seed.json"
+invalid_seed_err="${WORK_DIR}/invalid-seed.err"
 python3 -I "${SCRIPT_DIR}/template-apply" \
-  --ops "${upgrade_ops}" --template "${SCRIPT_DIR}/.." --write --confirm-input apply --json \
+  --ops "${invalid_seed_ops}" --template "${invalid_seed_template}" --write --confirm-input apply --json \
   --placeholder WORKSPACE_NAME=seed-test \
   --placeholder WORKSPACE_ROOT="${WORK_DIR}/workspace" \
-  --placeholder OPS_REPO="${upgrade_ops}" \
+  --placeholder OPS_REPO="${invalid_seed_ops}" \
   --placeholder MONITOR_NS=seed-test \
   --placeholder MODEL_ID=seed-test \
   --placeholder REPO_LIST=seed-test \
   --placeholder RUNTIME_ROOT="${WORK_DIR}/runtime" \
-  >"${upgrade_json}" 2>"${upgrade_err}"
+  >"${invalid_seed_json}" 2>"${invalid_seed_err}"
 rc=$?
-if [ "${rc}" -eq 0 ] && [ -f "${upgrade_ops}/config/merge-ready-bots.txt" ] && [ "$(cat "${upgrade_ops}/config/merge-ready-stop-paths.txt")" = "install-owned-stop-list" ] && grep -q 'config/merge-ready-bots.txt' "${upgrade_json}" && grep -q 'skipped-as-instance-owned' "${upgrade_json}"; then
-  ok "upgrade apply seeds a missing merge-ready config and preserves an existing one"
+if [ "${rc}" -eq 1 ] && grep -q 'error-invalid-path: config/merge-ready-stop-paths.txt' "${invalid_seed_err}"; then
+  ok "a merge-ready seed symlink loop is reported as error-invalid-path"
 else
-  fail "upgrade merge-ready config seeds: got ${rc}: $(cat "${upgrade_err}" 2>/dev/null || true)"
+  fail "invalid merge-ready seed path: got ${rc}: $(cat "${invalid_seed_err}" 2>/dev/null || true)"
 fi
 
 skip_stderr="${WORK_DIR}/skip-stderr"
@@ -1002,6 +1063,27 @@ else
   fail "root-layout dispatch stop-list path: got ${rc}: ${out}"
 fi
 
+template_layout_prefix='master-'"ops/"
+template_layout_stop_path="${template_layout_prefix}docs/charter/01-document-map.md"
+template_layout_stop_dir="${WORK_DIR}/template-layout-stop-path"
+write_fixture "${template_layout_stop_dir}" "[{\"filename\":\"${template_layout_stop_path}\"}]" ""
+out=$(run_case "${template_layout_stop_dir}"); rc=$?
+if [ "${rc}" -eq 2 ] && printf '%s' "${out}" | grep -q "${template_layout_stop_path} (stop-list)"; then
+  ok "a template-layout charter path matches the installed stop-list and exits 2"
+else
+  fail "template-layout charter stop-list path: got ${rc}: ${out}"
+fi
+
+template_layout_dispatch_path="${template_layout_prefix}scripts/dispatch"
+template_layout_dispatch_dir="${WORK_DIR}/template-layout-dispatch-path"
+write_fixture "${template_layout_dispatch_dir}" "[{\"filename\":\"${template_layout_dispatch_path}\"}]" ""
+out=$(run_case "${template_layout_dispatch_dir}"); rc=$?
+if [ "${rc}" -eq 2 ] && printf '%s' "${out}" | grep -q "${template_layout_dispatch_path} (stop-list)"; then
+  ok "a template-layout dispatch path matches the installed stop-list and exits 2"
+else
+  fail "template-layout dispatch stop-list path: got ${rc}: ${out}"
+fi
+
 manifest_dir="${WORK_DIR}/manifest"
 manifest_path_prefix="master-ops"
 manifest_file="${manifest_path_prefix}/MANIFEST.json"
@@ -1065,6 +1147,12 @@ elif [ "${scan_rc}" -eq 1 ]; then
   ok "production script has no removed execution interface"
 else
   fail "removed execution interface check failed with grep status ${scan_rc}"
+fi
+
+if grep -Fq 'required configuration' "${SCRIPT_DIR}/merge-ready" && grep -Fq '2  ask the owner' "${SCRIPT_DIR}/merge-ready"; then
+  ok "exit-code documentation includes missing required configuration under exit 2"
+else
+  fail "exit-code documentation omits missing required configuration"
 fi
 
 if [ "${F}" -ne 0 ]; then

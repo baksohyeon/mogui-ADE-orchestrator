@@ -290,9 +290,40 @@ def plan_actions(
     for rel in INSTANCE_OWNED_SEED_FILES:
         src = resolved_under(template_root, rel)
         dest = resolved_under(ops_root, rel)
-        if src is None or not src.is_file():
+        lexical_src = template_root.resolve() / rel
+        if src is None:
+            actions.append(
+                {
+                    "path": rel,
+                    "action": "error-invalid-path",
+                    "reason": "seed path escapes template root or resolves through a symlink loop",
+                    "seed": True,
+                }
+            )
+            continue
+        if lexical_src.is_symlink() and not lexical_src.exists():
+            actions.append(
+                {
+                    "path": rel,
+                    "action": "error-invalid-path",
+                    "reason": "seed source is a dangling symlink",
+                    "seed": True,
+                }
+            )
+            continue
+        if not lexical_src.exists():
             # Scratch templates and older template versions do not carry
-            # these optional seeds; they remain ordinary apply plans there.
+            # these optional seeds; a genuinely absent source remains omitted.
+            continue
+        if not src.is_file():
+            actions.append(
+                {
+                    "path": rel,
+                    "action": "error-invalid-path",
+                    "reason": "seed source exists but is not a regular file",
+                    "seed": True,
+                }
+            )
             continue
         if dest is None:
             actions.append(
@@ -447,9 +478,10 @@ def apply_planned(
         else:
             payload = substitute(src.read_text(encoding="utf-8"), values).encode("utf-8")
         dest.parent.mkdir(parents=True, exist_ok=True)
-        # Atomic replace within the destination directory so a crash mid-write
-        # does not leave a truncated target. Preserve destination mode when the
-        # target already exists; otherwise keep the source mode (not mkstemp 0600).
+        # Publish through a temporary file in the destination directory so a
+        # crash mid-write does not leave a truncated target. Seed files use a
+        # hard link for atomic create-only publication, while ordinary files
+        # retain replacement semantics.
         if dest.exists() and not dest.is_symlink():
             mode = dest.stat().st_mode & 0o777
         else:
@@ -462,20 +494,45 @@ def apply_planned(
             with os.fdopen(fd, "wb") as tmp:
                 tmp.write(payload)
             os.chmod(tmp_name, mode)
-            os.replace(tmp_name, dest)
+            if rel in seed_paths:
+                try:
+                    os.link(tmp_name, dest)
+                except FileExistsError:
+                    results.append(
+                        {
+                            "path": rel,
+                            "action": "skipped-as-instance-owned",
+                            "reason": "instance-owned seed appeared during write; existing file preserved",
+                        }
+                    )
+                else:
+                    os.unlink(tmp_name)
+                    tmp_name = ""
+                    results.append(
+                        {
+                            "path": rel,
+                            "action": "written",
+                            "reason": item["reason"],
+                        }
+                    )
+            else:
+                os.replace(tmp_name, dest)
+                tmp_name = ""
+                results.append(
+                    {
+                        "path": rel,
+                        "action": "written",
+                        "reason": item["reason"],
+                    }
+                )
         except Exception:
-            try:
-                os.unlink(tmp_name)
-            except OSError:
-                pass
             raise
-        results.append(
-            {
-                "path": rel,
-                "action": "written",
-                "reason": item["reason"],
-            }
-        )
+        finally:
+            if tmp_name:
+                try:
+                    os.unlink(tmp_name)
+                except OSError:
+                    pass
     return results
 
 

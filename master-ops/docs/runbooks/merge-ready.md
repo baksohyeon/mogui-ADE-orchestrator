@@ -121,9 +121,11 @@ deployments and required reviewers at merge time; this command does not attest t
 - `0` merge: every measurement passed and no stop-list path was touched.
 - `1` not ready: a check, roster, review thread, PR-state, response-shape, pagination, file-cap, or
   invocation measurement failed. An unavailable GitHub response and an unparseable response are
-  both exit `1`.
-- `2` ask the owner: a changed path matches the stop list or falls outside the contract's `writes`
-  globs.
+  both exit `1`, except for a rules-endpoint HTTP `403` plan limitation whose legacy sources cannot
+  establish the required set.
+- `2` ask the owner: a changed path matches the stop list, falls outside the contract's `writes`
+  globs, required configuration is missing, or a rules-endpoint HTTP `403` plan limitation leaves
+  the required set unestablished after the legacy fallbacks.
 
 Every result is one summary line prefixed `merge-ready: merge ·`, `merge-ready: not ready ·`, or
 `merge-ready: ask ·`.

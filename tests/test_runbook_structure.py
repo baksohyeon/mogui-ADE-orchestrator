@@ -16,6 +16,7 @@ from master_runtime.core.dispatch_gate import (
     _parse_front_matter,
     _section_body,
 )
+from windows_exec_surface import skip_windows_exec_surface
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -147,6 +148,7 @@ def test_trigger_matching_ignores_fenced_and_inline_code(tmp_path: Path) -> None
     assert "runbooks_waived: [literature-review]" in decision.message
 
 
+@skip_windows_exec_surface
 def test_section_extractors_ignore_headings_inside_fences(tmp_path: Path) -> None:
     section = (
         "---\nstatus: active\n---\n"
@@ -175,6 +177,7 @@ def test_section_extractors_ignore_headings_inside_fences(tmp_path: Path) -> Non
     assert shell.stdout.rstrip("\n") == expected
 
 
+@skip_windows_exec_surface
 def test_dispatch_probe_skips_flag_for_old_gate_and_surfaces_diagnostics(tmp_path: Path) -> None:
     dispatch = (REPO_ROOT / "master-ops" / "scripts" / "dispatch").read_text(
         encoding="utf-8"

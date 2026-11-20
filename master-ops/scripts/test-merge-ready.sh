@@ -89,6 +89,9 @@ case "$1" in
     esac
     ;;
   api)
+    if [ "${GH_STUB_CASE:-}" = "encoded-base" ]; then
+      printf '%s\n' "${2:-}" >>"${GH_FIXTURE_DIR}/api-paths.log"
+    fi
     case "${2:-}" in
       graphql)
         if [ "${GH_STUB_CASE:-}" = "graphql-fail" ]; then
@@ -175,6 +178,8 @@ DEFAULT_LEGACY='{"contexts":[],"checks":[]}'
 DEFAULT_REVIEWS='[{"state":"COMMENTED","body":"Automated review","comments":{"nodes":[],"pageInfo":{"hasNextPage":false}},"commit":{"oid":"HEAD_SHA_PLACEHOLDER"},"author":{"login":"coderabbitai","__typename":"Bot"}},{"state":"COMMENTED","body":"Automated review","comments":{"nodes":[],"pageInfo":{"hasNextPage":false}},"commit":{"oid":"HEAD_SHA_PLACEHOLDER"},"author":{"login":"cubic-dev-ai","__typename":"Bot"}}]'
 DEFAULT_REVIEWS="${DEFAULT_REVIEWS//HEAD_SHA_PLACEHOLDER/${HEAD_SHA}}"
 CUBIC_REVIEW="[{\"state\":\"COMMENTED\",\"body\":\"Automated review\",\"comments\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"cubic-dev-ai\",\"__typename\":\"Bot\"}}]"
+PAGINATED_BLOCKING_REVIEW="[{\"state\":\"COMMENTED\",\"body\":\"Automated review\",\"comments\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"coderabbitai\",\"__typename\":\"Bot\"}},{\"state\":\"CHANGES_REQUESTED\",\"body\":\"\",\"comments\":{\"nodes\":[{\"databaseId\":3,\"replyTo\":null}],\"pageInfo\":{\"hasNextPage\":true}},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"coderabbitai\",\"__typename\":\"Bot\"}}]"
+UNPAGED_COMMENT_REVIEW="[{\"state\":\"COMMENTED\",\"body\":\"\",\"comments\":{\"nodes\":[{\"databaseId\":4,\"replyTo\":{\"databaseId\":5}}],\"pageInfo\":{\"hasNextPage\":true}},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"coderabbitai\",\"__typename\":\"Bot\"}},{\"state\":\"COMMENTED\",\"body\":\"Automated review\",\"comments\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"cubic-dev-ai\",\"__typename\":\"Bot\"}}]"
 THREAD_REPLY_REVIEW="[{\"state\":\"COMMENTED\",\"body\":\"\",\"comments\":{\"nodes\":[{\"databaseId\":1,\"replyTo\":{\"databaseId\":2}}],\"pageInfo\":{\"hasNextPage\":false}},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"coderabbitai\",\"__typename\":\"Bot\"}},{\"state\":\"COMMENTED\",\"body\":\"Automated review\",\"comments\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"cubic-dev-ai\",\"__typename\":\"Bot\"}}]"
 DISMISSED_REVIEW="[{\"state\":\"DISMISSED\",\"body\":\"Automated review\",\"comments\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"coderabbitai\",\"__typename\":\"Bot\"}},{\"state\":\"COMMENTED\",\"body\":\"Automated review\",\"comments\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"cubic-dev-ai\",\"__typename\":\"Bot\"}}]"
 MALFORMED_PAGEINFO_REVIEW="[{\"state\":\"COMMENTED\",\"body\":\"\",\"comments\":{\"nodes\":[]},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"coderabbitai\",\"__typename\":\"Bot\"}},{\"state\":\"COMMENTED\",\"body\":\"Automated review\",\"comments\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}},\"commit\":{\"oid\":\"${HEAD_SHA}\"},\"author\":{\"login\":\"cubic-dev-ai\",\"__typename\":\"Bot\"}}]"
@@ -187,11 +192,12 @@ write_fixture() {
   local reviews_json="${5:-${DEFAULT_REVIEWS}}" open_threads="${6:-0}"
   local state="${7:-OPEN}" is_draft="${8:-false}" extra_comments="${9:-[]}"
   local rules_json="${10:-${DEFAULT_RULES}}" legacy_json="${11:-${DEFAULT_LEGACY}}"
+  local base_branch="${12:-main}"
   mkdir -p "${dir}"
-  python3 - "${dir}/pr.json" "${state}" "${is_draft}" <<'PY'
+  python3 - "${dir}/pr.json" "${state}" "${is_draft}" "${base_branch}" <<'PY'
 import json, sys
-path, state, is_draft = sys.argv[1:]
-json.dump({"number": 1, "url": "https://example.invalid/pr/1", "headRefOid": "0123456789abcdef0123456789abcdef01234567", "baseRefName": "main", "state": state, "isDraft": is_draft == "true"}, open(path, "w", encoding="utf-8"))
+path, state, is_draft, base_branch = sys.argv[1:]
+json.dump({"number": 1, "url": "https://example.invalid/pr/1", "headRefOid": "0123456789abcdef0123456789abcdef01234567", "baseRefName": base_branch, "state": state, "isDraft": is_draft == "true"}, open(path, "w", encoding="utf-8"))
 PY
   python3 - "${dir}/pr-changed.json" <<'PY'
 import json, sys
@@ -204,10 +210,10 @@ PY
   printf '%s' "${checks_json}" >"${dir}/checks.json"
   printf '%s' "${rules_json}" >"${dir}/rules.json"
   printf '%s' "${legacy_json}" >"${dir}/legacy.json"
-  python3 - "${dir}/branch.json" "${legacy_json}" <<'PY'
+  python3 - "${dir}/branch.json" "${legacy_json}" "${base_branch}" <<'PY'
 import json, sys
 legacy = json.loads(sys.argv[2])
-json.dump({"name": "main", "protected": True, "protection": {"required_status_checks": legacy}}, open(sys.argv[1], "w", encoding="utf-8"))
+json.dump({"name": sys.argv[3], "protected": True, "protection": {"required_status_checks": legacy}}, open(sys.argv[1], "w", encoding="utf-8"))
 PY
   python3 - "${dir}/graphql.json" "${reviews_json}" "${open_threads}" <<'PY'
 import json, sys
@@ -300,6 +306,34 @@ if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'trusted head push time';
   ok "a missing trusted timestamp blocks the rate-limit exemption"
 else
   fail "missing trusted timestamp: got ${rc}: ${out}"
+fi
+
+ordinary_push_no_timestamp_dir="${WORK_DIR}/ordinary-push-no-timestamp"
+write_fixture "${ordinary_push_no_timestamp_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" "${CUBIC_REVIEW}" 0 OPEN false "${rate_limit_comment}"
+printf '%s' '[[{"event":"committed","sha":"'"${HEAD_SHA}"'"}]]' >"${ordinary_push_no_timestamp_dir}/timeline.json"
+out=$(run_case "${ordinary_push_no_timestamp_dir}"); rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'trusted head push time'; then
+  ok "an ordinary push without a server timestamp leaves the rate-limit exemption unavailable"
+else
+  fail "ordinary push without server timestamp: got ${rc}: ${out}"
+fi
+
+paginated_blocking_review_dir="${WORK_DIR}/paginated-blocking-review"
+write_fixture "${paginated_blocking_review_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" "${PAGINATED_BLOCKING_REVIEW}"
+out=$(run_case "${paginated_blocking_review_dir}"); rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'review bots: coderabbitai=changes_requested'; then
+  ok "a current blocking review with a top-level first-page comment remains blocking when more comments exist"
+else
+  fail "paginated blocking review: got ${rc}: ${out}"
+fi
+
+unpaged_comment_review_dir="${WORK_DIR}/unpaged-comment-review"
+write_fixture "${unpaged_comment_review_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" "${UNPAGED_COMMENT_REVIEW}"
+out=$(run_case "${unpaged_comment_review_dir}"); rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'could not determine whether a rate-limit exemption needs a timestamp'; then
+  ok "a review without a first-page top-level comment does not silently pass while more pages remain"
+else
+  fail "unpaged review comments: got ${rc}: ${out}"
 fi
 
 thread_reply_review_dir="${WORK_DIR}/thread-reply-review"
@@ -458,6 +492,33 @@ else
   fail "path before timestamp: got ${rc}: ${out}"
 fi
 
+rules_failure_ask_dir="${WORK_DIR}/rules-failure-ask"
+write_fixture "${rules_failure_ask_dir}" '[{"filename":"config/gitleaks.toml"}]' ""
+out=$(run_case "${rules_failure_ask_dir}" rules-fail); rc=$?
+if [ "${rc}" -eq 2 ] && printf '%s' "${out}" | grep -q 'required check summary unavailable' && printf '%s' "${out}" | grep -q 'required-check rules'; then
+  ok "a known stop-list ask survives an unreadable rules response"
+else
+  fail "rules failure with ask: got ${rc}: ${out}"
+fi
+
+legacy_failure_ask_dir="${WORK_DIR}/legacy-failure-ask"
+write_fixture "${legacy_failure_ask_dir}" '[{"filename":"config/gitleaks.toml"}]' ""
+out=$(run_case "${legacy_failure_ask_dir}" legacy-fail); rc=$?
+if [ "${rc}" -eq 2 ] && printf '%s' "${out}" | grep -q 'required check summary unavailable' && printf '%s' "${out}" | grep -q 'legacy required checks'; then
+  ok "a known stop-list ask survives an unreadable legacy response"
+else
+  fail "legacy failure with ask: got ${rc}: ${out}"
+fi
+
+encoded_base_dir="${WORK_DIR}/encoded-base"
+write_fixture "${encoded_base_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" "${DEFAULT_REVIEWS}" 0 OPEN false "[]" "${DEFAULT_RULES}" "${DEFAULT_LEGACY}" "release#1"
+out=$(run_case "${encoded_base_dir}" encoded-base); rc=$?
+if [ "${rc}" -eq 0 ] && grep -Fq 'repos/owner/repo/rules/branches/release%231' "${encoded_base_dir}/api-paths.log" && grep -Fq 'repos/owner/repo/branches/release%231/protection/required_status_checks' "${encoded_base_dir}/api-paths.log" && ! grep -Fq 'release#1' "${encoded_base_dir}/api-paths.log"; then
+  ok "base branch names are percent-encoded in rules and legacy REST paths"
+else
+  fail "encoded base branch paths: got ${rc}: ${out}; paths=$(cat "${encoded_base_dir}/api-paths.log" 2>/dev/null || true)"
+fi
+
 missing_required_dir="${WORK_DIR}/missing-required"
 missing_required_rules='[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"ci"},{"context":"tests (ubuntu-latest)"}]}}]'
 missing_required_legacy='{"contexts":["legacy-only"],"checks":[]}'
@@ -507,6 +568,38 @@ if [ "${rc}" -eq 0 ] && printf '%s' "${out}" | grep -q 'legacy-only'; then
   ok "branch protection data supplies legacy contexts when the protection endpoint is unavailable"
 else
   fail "legacy protection fallback: got ${rc}: ${out}"
+fi
+
+branch_missing_protection_dir="${WORK_DIR}/branch-missing-protection"
+write_fixture "${branch_missing_protection_dir}" '[{"filename":"README.md"}]' "" "${legacy_permission_checks}" "${DEFAULT_REVIEWS}" 0 OPEN false "[]" "${DEFAULT_RULES}" "${legacy_permission_legacy}"
+python3 - "${branch_missing_protection_dir}/branch.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+branch = json.load(open(path, encoding="utf-8"))
+branch.pop("protection")
+json.dump(branch, open(path, "w", encoding="utf-8"))
+PY
+out=$(run_case "${branch_missing_protection_dir}" legacy-permission); rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'missing protection'; then
+  ok "missing branch protection fails closed instead of meaning unprotected"
+else
+  fail "missing branch protection: got ${rc}: ${out}"
+fi
+
+branch_missing_status_dir="${WORK_DIR}/branch-missing-required-status"
+write_fixture "${branch_missing_status_dir}" '[{"filename":"README.md"}]' "" "${legacy_permission_checks}" "${DEFAULT_REVIEWS}" 0 OPEN false "[]" "${DEFAULT_RULES}" "${legacy_permission_legacy}"
+python3 - "${branch_missing_status_dir}/branch.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+branch = json.load(open(path, encoding="utf-8"))
+branch["protection"].pop("required_status_checks")
+json.dump(branch, open(path, "w", encoding="utf-8"))
+PY
+out=$(run_case "${branch_missing_status_dir}" legacy-permission); rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'missing required_status_checks'; then
+  ok "missing branch required status checks fail closed instead of meaning unprotected"
+else
+  fail "missing branch required status checks: got ${rc}: ${out}"
 fi
 
 legacy_404_dir="${WORK_DIR}/legacy-404"

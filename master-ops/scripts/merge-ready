@@ -111,7 +111,7 @@ not_ready() {
 }
 
 require_json() {
-  local file="$1" kind="${2:-}" reason
+  local file="$1" kind="${2:-}" mode="${3:-}" reason
   reason="$(python3 -I -c '
 import json, sys
 file_path, kind = sys.argv[1], sys.argv[2]
@@ -122,12 +122,20 @@ except Exception as exc:
 if kind == "nonempty-list" and not (isinstance(data, list) and len(data) > 0):
     print("expected a non-empty list, got " + type(data).__name__); sys.exit(1)
 ' "${file}" "${kind}" 2>&1)" && return 0
+  if [ "${mode}" = "defer" ]; then
+    printf '%s: %s' "${file##*/}" "${reason}"
+    return 1
+  fi
   not_ready "${file##*/}: ${reason}"
 }
 
 fetch_paginated_array() {
-  local api_path="$1" raw="$2" flat="$3" err="$4" label="$5"
+  local api_path="$1" raw="$2" flat="$3" err="$4" label="$5" mode="${6:-}"
   if ! gh api "${api_path}" --paginate --slurp >"${raw}" 2>"${err}"; then
+    if [ "${mode}" = "defer" ]; then
+      printf 'could not read %s (%s)' "${label}" "$(tr '\n' ' ' <"${err}")"
+      return 1
+    fi
     not_ready "could not read ${label} ($(tr '\n' ' ' <"${err}"))"
   fi
   if ! python3 -I -c '
@@ -138,6 +146,10 @@ if not isinstance(pages, list) or not all(isinstance(page, list) for page in pag
     raise ValueError("expected a list of array pages")
 json.dump([item for page in pages for item in page], open(flat_path, "w", encoding="utf-8"))
 ' "${raw}" "${flat}" 2>"${err}"; then
+    if [ "${mode}" = "defer" ]; then
+      printf '%s: could not flatten the response (%s)' "${label}" "$(tr '\n' ' ' <"${err}")"
+      return 1
+    fi
     not_ready "${label}: could not flatten the response ($(tr '\n' ' ' <"${err}"))"
   fi
 }
@@ -161,6 +173,13 @@ if not isinstance(base, str) or not base:
 print(base)
 ' "${PR_HEAD_FILE}" 2>"${TMP_DIR}/base-parse.err")" || {
   not_ready "PR response missing baseRefName ($(tr '\n' ' ' <"${TMP_DIR}/base-parse.err"))"
+}
+BASE_BRANCH_ENCODED="$(python3 -I -c '
+from urllib.parse import quote
+import sys
+print(quote(sys.argv[1], safe=""))
+' "${BASE_BRANCH}" 2>"${TMP_DIR}/base-encode.err")" || {
+  not_ready "could not encode base branch for GitHub API paths ($(tr '\n' ' ' <"${TMP_DIR}/base-encode.err"))"
 }
 
 fetch_paginated_array "repos/${REPO}/pulls/${PR}/files" "${FILES_RAW}" "${FILES_FILE}" "${FILES_ERR}" "changed files"
@@ -251,16 +270,24 @@ PY
 PATH_RC=$?
 OWNER="${REPO%%/*}"
 NAME="${REPO#*/}"
-fetch_paginated_array "repos/${REPO}/rules/branches/${BASE_BRANCH}" "${RULES_RAW}" "${RULES_FILE}" "${RULES_ERR}" "required-check rules"
-require_json "${RULES_FILE}"
-
-if ! gh api "repos/${REPO}/branches/${BASE_BRANCH}/protection/required_status_checks" \
-    >"${LEGACY_FILE}" 2>"${LEGACY_ERR}"; then
-  if ! gh api "repos/${REPO}/branches/${BASE_BRANCH}" \
-      >"${BRANCH_FILE}" 2>"${BRANCH_ERR}"; then
-    not_ready "could not read legacy required checks for base branch ${BASE_BRANCH} (protection endpoint: $(tr '\n' ' ' <"${LEGACY_ERR}"); branch endpoint: $(tr '\n' ' ' <"${BRANCH_ERR}"))"
+SOURCE_FAILURE=""
+if ! SOURCE_FAILURE="$(fetch_paginated_array "repos/${REPO}/rules/branches/${BASE_BRANCH_ENCODED}" "${RULES_RAW}" "${RULES_FILE}" "${RULES_ERR}" "required-check rules" defer 2>&1)"; then
+  :
+fi
+if [ -z "${SOURCE_FAILURE}" ]; then
+  if ! SOURCE_FAILURE="$(require_json "${RULES_FILE}" "" defer 2>&1)"; then
+    :
   fi
-  if ! python3 -I - "${BRANCH_FILE}" "${LEGACY_FILE}" >"${TMP_DIR}/branch-parse.out" 2>"${BRANCH_ERR}" <<'PY'
+fi
+
+if [ -z "${SOURCE_FAILURE}" ]; then
+  if ! gh api "repos/${REPO}/branches/${BASE_BRANCH_ENCODED}/protection/required_status_checks" \
+      >"${LEGACY_FILE}" 2>"${LEGACY_ERR}"; then
+    if ! gh api "repos/${REPO}/branches/${BASE_BRANCH_ENCODED}" \
+        >"${BRANCH_FILE}" 2>"${BRANCH_ERR}"; then
+      SOURCE_FAILURE="could not read legacy required checks for base branch ${BASE_BRANCH} (protection endpoint: $(tr '\n' ' ' <"${LEGACY_ERR}"); branch endpoint: $(tr '\n' ' ' <"${BRANCH_ERR}"))"
+    fi
+    if [ -z "${SOURCE_FAILURE}" ] && ! python3 -I - "${BRANCH_FILE}" "${LEGACY_FILE}" >"${TMP_DIR}/branch-parse.out" 2>"${BRANCH_ERR}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -268,13 +295,17 @@ from pathlib import Path
 branch = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 if not isinstance(branch, dict):
     raise ValueError("branch response is not an object")
-protection = branch.get("protection")
+if "protection" not in branch:
+    raise ValueError("branch response missing protection")
+protection = branch["protection"]
 if protection is None:
     legacy = {"contexts": [], "checks": []}
 elif not isinstance(protection, dict):
     raise ValueError("branch response has malformed protection")
 else:
-    required_status_checks = protection.get("required_status_checks")
+    if "required_status_checks" not in protection:
+        raise ValueError("branch response missing required_status_checks")
+    required_status_checks = protection["required_status_checks"]
     if required_status_checks is None:
         legacy = {"contexts": [], "checks": []}
     elif not isinstance(required_status_checks, dict):
@@ -283,13 +314,27 @@ else:
         legacy = required_status_checks
 Path(sys.argv[2]).write_text(json.dumps(legacy), encoding="utf-8")
 PY
-  then
-    not_ready "could not parse legacy required checks from branch response ($(tr '\n' ' ' <"${BRANCH_ERR}"))"
+    then
+      SOURCE_FAILURE="could not parse legacy required checks from branch response ($(tr '\n' ' ' <"${BRANCH_ERR}"))"
+    fi
   fi
 fi
-require_json "${LEGACY_FILE}"
+if [ -z "${SOURCE_FAILURE}" ]; then
+  if ! SOURCE_FAILURE="$(require_json "${LEGACY_FILE}" "" defer 2>&1)"; then
+    :
+  fi
+fi
 
-REQUIRED_SUMMARY="$(python3 -I - "${RULES_FILE}" "${LEGACY_FILE}" "${REQUIRED_CONTEXTS_FILE}" "${BASE_BRANCH}" <<'PY'
+if [ -n "${SOURCE_FAILURE}" ]; then
+  if [ "${PATH_RC}" -eq 2 ]; then
+    echo "${PATH_VERDICT}; required check summary unavailable: ${SOURCE_FAILURE} (head ${HEAD_SHA})"
+    exit 2
+  fi
+  not_ready "required check summary unavailable: ${SOURCE_FAILURE}"
+fi
+
+REQUIRED_SUMMARY=""
+if ! REQUIRED_SUMMARY="$(python3 -I - "${RULES_FILE}" "${LEGACY_FILE}" "${REQUIRED_CONTEXTS_FILE}" "${BASE_BRANCH}" 2>"${TMP_DIR}/required-summary.err" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -336,7 +381,16 @@ print(
     + (", ".join(sorted(required_contexts)) if required_contexts else "none")
 )
 PY
-)" || not_ready "could not parse required-check sources"
+)"; then
+  SOURCE_FAILURE="could not parse required-check sources ($(tr '\n' ' ' <"${TMP_DIR}/required-summary.err"))"
+fi
+if [ -n "${SOURCE_FAILURE}" ]; then
+  if [ "${PATH_RC}" -eq 2 ]; then
+    echo "${PATH_VERDICT}; required check summary unavailable: ${SOURCE_FAILURE} (head ${HEAD_SHA})"
+    exit 2
+  fi
+  not_ready "required check summary unavailable: ${SOURCE_FAILURE}"
+fi
 
 if [ "${PATH_RC}" -eq 2 ]; then
   echo "${PATH_VERDICT}; ${REQUIRED_SUMMARY} (head ${HEAD_SHA})"
@@ -385,15 +439,18 @@ def review_is_standalone(review):
     comments = review.get("comments")
     if not isinstance(comments, dict) or not isinstance(comments.get("nodes"), list):
         return False
-    page_info = comments.get("pageInfo")
-    if not isinstance(page_info, dict) or not isinstance(page_info.get("hasNextPage"), bool):
-        raise ValueError("graphql response has malformed review comments pageInfo")
-    if page_info["hasNextPage"]:
-        return False
-    return any(
+    has_top_level_comment = any(
         isinstance(comment, dict) and comment.get("replyTo") is None
         for comment in comments["nodes"]
     )
+    page_info = comments.get("pageInfo")
+    if not isinstance(page_info, dict) or not isinstance(page_info.get("hasNextPage"), bool):
+        raise ValueError("graphql response has malformed review comments pageInfo")
+    if has_top_level_comment:
+        return True
+    if page_info["hasNextPage"]:
+        raise ValueError("graphql response has unpaged review comments without a top-level comment")
+    return False
 
 
 head_reviewers = set()
@@ -622,15 +679,18 @@ try:
         comments = review.get("comments")
         if not isinstance(comments, dict) or not isinstance(comments.get("nodes"), list):
             return False
-        page_info = comments.get("pageInfo")
-        if not isinstance(page_info, dict) or not isinstance(page_info.get("hasNextPage"), bool):
-            fail("graphql response has malformed review comments pageInfo")
-        if page_info["hasNextPage"]:
-            return False
-        return any(
+        has_top_level_comment = any(
             isinstance(comment, dict) and comment.get("replyTo") is None
             for comment in comments["nodes"]
         )
+        page_info = comments.get("pageInfo")
+        if not isinstance(page_info, dict) or not isinstance(page_info.get("hasNextPage"), bool):
+            fail("graphql response has malformed review comments pageInfo")
+        if has_top_level_comment:
+            return True
+        if page_info["hasNextPage"]:
+            fail("graphql response has unpaged review comments without a top-level comment")
+        return False
 
     decision_states = {"APPROVED", "CHANGES_REQUESTED", "DISMISSED", "PENDING"}
     decision_reviews = {}

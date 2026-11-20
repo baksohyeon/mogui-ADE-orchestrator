@@ -60,7 +60,10 @@ the brief ships.
 1b. **The review-bot roster.** Every login in `config/merge-ready-bots.txt` must have a standalone
    GraphQL review on the exact head, including a plain `COMMENTED` review, or a measured rate-limit
    notice from that bot. A review is standalone when it has a non-empty review body or includes a
-   top-level review comment; an empty review whose comments are all replies does not cover the bot.
+   top-level review comment on the returned page; an empty review whose comments are all replies does
+   not cover the bot. A top-level comment on the returned page covers the review even when nested
+   comments have another page; when no top-level comment is returned and more pages remain, the
+   measurement is not ready rather than treating the review as coverage.
    A dismissed review does not cover the bot. The notice must match the exact form emitted by the
    configured bot and its `created_at` must be at or after the measured head push event. A bot
    without either form of current engagement is not ready. An empty roster fails closed.
@@ -85,7 +88,9 @@ required contexts, GraphQL reviews and threads, PR comments, and the latest qual
 push event when a rate-limit exemption needs a timestamp. After the other responses are collected,
 the final head check reads `headRefOid` and `baseRefName` again and compares them with the initial
 `head_sha` and `baseRefName`; a mismatch makes the result not ready so the command can be run again.
-Check-run timestamps do not qualify an exemption.
+Check-run timestamps do not qualify an exemption. If no qualifying push event has a server-recorded
+`created_at`, the rate-limit exemption is unavailable and the command stays not ready; it does not
+substitute a commit or check-run timestamp.
 
 Reviews and review threads are read up to 100 each. A connection with another page is not ready
 and names pagination as the next action. The pull-request files endpoint caps responses at 3000

@@ -26,6 +26,11 @@
 - The final measurement re-reads the base branch and head, uses `gh pr checks --required` for the
   check verdict, falls back to branch protection data when the legacy endpoint is unavailable, and
   uses the latest qualifying head push for a rate-limit exemption.
+- A known stop-list ask remains exit 2 when required-check sources are unavailable, and the command
+  reports the check summary as unavailable. Base branch names are encoded in both REST paths, while
+  missing push timestamps keep the rate-limit exemption unavailable without substituting another time.
+- The legacy branch fallback requires explicit `protection` and `required_status_checks` keys;
+  explicit `null` values represent an unprotected branch, while missing keys fail closed.
 - Review-bot coverage now requires a standalone non-dismissed review on the measured head, while
   rate-limit coverage uses the notice's creation time and the head push event. Changed files and
   checks are pinned to the measured head, required rules are paginated, and the output reports when

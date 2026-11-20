@@ -413,8 +413,7 @@ def test_template_check_malformed_retirements_fails_in_template_compare_mode(tmp
             "--json",
         ],
     )
-    expected_rc = int(_template_version_for_source() != "v0.5.353")
-    assert result.returncode == expected_rc, result.stdout
+    assert result.returncode == 1, result.stdout
     report = json.loads(result.stdout)
     assert report["report_set"] == "template-compare"
     assert report["manifest_status"] == "ok"

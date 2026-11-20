@@ -26,6 +26,14 @@ https://github.com/user-attachments/assets/657a1571-be9a-456d-a866-97d1bc85da1a
 
 Clone it, open it in Orca, start an agent inside the clone, and tell it to wake up. The agent runs the install interview and explains as it goes.
 
+## What it does differently
+
+- **One master runs the whole workspace.** It writes a contract for each worker, dispatches it through a gate that records the contract's hash, and checks the result itself before accepting it.
+- **"Done" is a claim, not a fact.** Acceptance checks are written before dispatch. After a worker reports, the master re-runs or verifies them itself before accepting the result.
+- **The master outlives its context.** When context runs low, the owner can have the master hand the seat to a fresh session, which retires the old one by handshake. The lineage records every generation.
+- **No API key.** It runs on the agent CLI subscriptions you already pay for.
+- **Vendor-neutral workers.** Codex, Claude, Cursor and Grok workers run under the same gate.
+
 ## Quickstart
 1. Clone the repository and add it to Orca as a folder.
 
@@ -50,6 +58,8 @@ The workspace layer addresses three failures in long-lived coordination. Session
 The harness accepts any agent behind a master that can reason. `AGENTS.md` and `CLAUDE.md` ship byte-identical, and a repository test asserts it on every change. `claude` is one example CLI; Claude Code is the exercised host.
 
 The template depends on Orca by design as the required execution substrate for live operation. It supplies session lifetime that outlives a window, stable terminal handles, worktree-scoped placement, a durable Run mailbox that survives restarts, a background receiver, supervised dispatch, and pane identity tied to a worktree. Step 0 preflight refuses to proceed until `orca status` reports a usable runtime, `orca --version` meets the minimum declared in `master-ops/scripts/orca-surface-baseline.json`, and the connected runtime version meets that same minimum.
+
+The harness has run hand-built worker supervision, stall detection and cleanup since August 2026. Orca now ships native versions of these, and an audit ([#352](https://github.com/baksohyeon/mogui-ADE-orchestrator/issues/352)) is deciding which of them to replace with Orca's own.
 
 The Orca decision is also a labelled preference. It came from building this harness for a month and running it against other agent development environments. What they offered read as a subset of what Orca offers. That is a preference and it is recorded as one.
 

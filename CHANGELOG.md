@@ -20,6 +20,10 @@ you build on it.
 
 ## [Unreleased]
 
+### Changed
+
+- README now explains what the harness does differently and notes an audit (#352) of which hand-built supervision to replace with Orca's native features.
+
 ### Fixed
 
 - `scripts/redaction-scan.sh --range` now blocks findings by default and keeps a tip-scan finding as a pre-existing warning only when the same `RuleID` and `Secret` are reproduced by scanning the same path's base blob with the same generated gitleaks config; findings added and deleted inside the range still block through `gitleaks git`, uncommitted changed-path findings follow the same base-evidence rule and block without it, filtered paths use the same evidence rule, and deleted `-diff` paths fail closed when git mode cannot report them (#331).

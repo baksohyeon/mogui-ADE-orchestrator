@@ -6,6 +6,7 @@ import json
 import importlib.util
 import importlib.machinery
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -53,17 +54,6 @@ def _git(cwd: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
-def _template_version_for_source() -> str:
-    plain = (SKELETON / "TEMPLATE-VERSION").read_text(encoding="utf-8").strip()
-    result = subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "describe", "--tags"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return result.stdout.strip() if result.returncode == 0 else plain
-
-
 def _seed_version_template(root: Path) -> Path:
     template = root / "template"
     template.mkdir(parents=True)
@@ -90,6 +80,12 @@ def _seed_version_template(root: Path) -> Path:
     )
     _git(template, "add", "stamp.txt")
     _git(template, "commit", "--quiet", "-m", "post-release")
+    return template
+
+
+def _copy_skeleton_without_git(root: Path) -> Path:
+    template = root / "template"
+    shutil.copytree(SKELETON, template)
     return template
 
 
@@ -166,6 +162,7 @@ def test_template_check_install_manifest_set_on_current_shape(tmp_path: Path):
 
 
 def test_template_check_template_compare_states_report_set(tmp_path: Path):
+    template = _copy_skeleton_without_git(tmp_path)
     ops = tmp_path / "ops"
     ops.mkdir()
     _seed_ops_from_manifest(ops, drop=["workspace-card/CLAUDE.md"])
@@ -176,7 +173,7 @@ def test_template_check_template_compare_states_report_set(tmp_path: Path):
             "--ops",
             str(ops),
             "--template",
-            str(SKELETON),
+            str(template),
             "--json",
         ],
     )
@@ -184,12 +181,12 @@ def test_template_check_template_compare_states_report_set(tmp_path: Path):
     report = json.loads(result.stdout)
     assert report["report_set"] == "template-compare"
     assert "workspace-card/CLAUDE.md" in report["absent_required"]
-    assert report["template_version"] == _template_version_for_source()
+    assert report["template_version"] == "v0.5.353"
 
 
 def test_template_apply_stamps_git_distance_and_plain_tarball_versions(tmp_path: Path):
     template = _seed_version_template(tmp_path / "after")
-    expected_distance = _git(template, "describe", "--tags")
+    expected_distance = _git(template, "describe", "--tags", "--match", "v1.2.3")
     assert expected_distance.startswith("v1.2.3-1-g")
 
     after_ops = tmp_path / "after-ops"
@@ -220,6 +217,103 @@ def test_template_apply_stamps_git_distance_and_plain_tarball_versions(tmp_path:
     assert (tarball_ops / "stamp.txt").read_text(encoding="utf-8") == (
         "stamp=v1.2.3\npost-release\n"
     )
+
+
+def test_template_apply_ignores_nearer_non_release_tag(tmp_path: Path):
+    template = _seed_version_template(tmp_path / "source")
+    _git(template, "tag", "v9.9.9")
+    ops = tmp_path / "ops"
+    result = _apply_version_template(template, ops)
+    assert result.returncode == 0, result.stderr + result.stdout
+    expected = _git(template, "describe", "--tags", "--match", "v1.2.3")
+    assert expected.startswith("v1.2.3-1-g")
+    assert json.loads((ops / "MANIFEST.json").read_text())["template_version"] == expected
+
+
+def test_template_apply_uses_plain_version_for_archive_inside_other_checkout(
+    tmp_path: Path,
+):
+    source = _seed_version_template(tmp_path / "source")
+    outer = tmp_path / "outer"
+    outer.mkdir()
+    _git(outer, "init", "--quiet")
+    archive = outer / "archive"
+    shutil.copytree(source, archive, ignore=shutil.ignore_patterns(".git"))
+    ops = tmp_path / "ops"
+    result = _apply_version_template(archive, ops)
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "warning:" not in result.stderr
+    assert json.loads((ops / "MANIFEST.json").read_text())["template_version"] == "v1.2.3"
+
+
+def test_template_check_same_tag_distance_different_sha_is_unmeasurable(
+    tmp_path: Path,
+):
+    template = tmp_path / "template"
+    ops = tmp_path / "ops"
+    template.mkdir()
+    ops.mkdir()
+    stamp = "v1.2.3-1-gdeadbeef"
+    (template / "TEMPLATE-VERSION").write_text(stamp + "\n", encoding="utf-8")
+    (template / "MANIFEST.json").write_text(
+        json.dumps({"template_version": stamp, "files": []}) + "\n",
+        encoding="utf-8",
+    )
+    (ops / "MANIFEST.json").write_text(
+        json.dumps({"template_version": "v1.2.3-1-gcafebabe", "files": []}) + "\n",
+        encoding="utf-8",
+    )
+    result = _run(
+        [
+            sys.executable,
+            str(TEMPLATE_CHECK),
+            "--ops",
+            str(ops),
+            "--template",
+            str(template),
+            "--json",
+        ]
+    )
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "not measurable" in json.loads(result.stdout)["questions_unanswered"][-1]
+
+
+def test_template_check_shallow_clone_without_release_tag_warns_but_keeps_exit_zero(
+    tmp_path: Path,
+):
+    source = _seed_version_template(tmp_path / "source")
+    shallow = tmp_path / "shallow"
+    subprocess.run(
+        ["git", "clone", "--quiet", "--depth", "1", f"file://{source}", str(shallow)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    (shallow / "MANIFEST.json").write_text(
+        json.dumps({"template_version": "v1.2.3", "files": []}) + "\n",
+        encoding="utf-8",
+    )
+    ops = tmp_path / "ops"
+    ops.mkdir()
+    (ops / "MANIFEST.json").write_text(
+        json.dumps({"template_version": "v1.2.3", "files": []}) + "\n",
+        encoding="utf-8",
+    )
+    result = _run(
+        [
+            sys.executable,
+            str(TEMPLATE_CHECK),
+            "--ops",
+            str(ops),
+            "--template",
+            str(shallow),
+            "--json",
+        ]
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    report = json.loads(result.stdout)
+    assert report["template_version"] == "v1.2.3"
+    assert any("warning" in question for question in report["questions_unanswered"])
 
 
 def test_template_apply_warns_and_falls_back_when_git_is_unavailable(tmp_path: Path):
@@ -318,6 +412,87 @@ def test_template_check_retired_path_is_not_reported_absent(tmp_path: Path):
     assert report["retirements_status"] == "ok"
 
 
+def test_template_apply_skips_retired_path_in_dry_run_and_write_pass(tmp_path: Path):
+    template = tmp_path / "template"
+    ops = tmp_path / "ops"
+    template.mkdir()
+    ops.mkdir()
+    (template / "removed.md").write_text("template\n", encoding="utf-8")
+    manifest = {"template_version": "v0.0.0", "files": ["MANIFEST.json", "removed.md"]}
+    (template / "MANIFEST.json").write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+    (ops / "MANIFEST.json").write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+    _write_retirements(
+        ops,
+        [{"path": "removed.md", "since": "2026-11-20", "why": "removed on purpose"}],
+    )
+
+    dry = _run(
+        [
+            sys.executable,
+            str(TEMPLATE_APPLY),
+            "--ops",
+            str(ops),
+            "--template",
+            str(template),
+            "--json",
+        ]
+    )
+    assert dry.returncode == 0, dry.stderr + dry.stdout
+    dry_actions = {item["path"]: item for item in json.loads(dry.stdout)["actions"]}
+    assert dry_actions["removed.md"]["action"] == "skipped-as-retired"
+    assert "template-retirements.json" in dry_actions["removed.md"]["reason"]
+
+    write = _run(
+        [
+            sys.executable,
+            str(TEMPLATE_APPLY),
+            "--ops",
+            str(ops),
+            "--template",
+            str(template),
+            "--write",
+            "--confirm-input",
+            "apply",
+            "--json",
+        ]
+    )
+    assert write.returncode == 0, write.stderr + write.stdout
+    write_actions = {item["path"]: item for item in json.loads(write.stdout)["actions"]}
+    assert write_actions["removed.md"]["action"] == "skipped-as-retired"
+    assert not (ops / "removed.md").exists()
+
+
+def test_template_apply_refuses_write_for_malformed_retirements_file(tmp_path: Path):
+    template = tmp_path / "template"
+    ops = tmp_path / "ops"
+    template.mkdir()
+    ops.mkdir()
+    (template / "card.md").write_text("template\n", encoding="utf-8")
+    (template / "MANIFEST.json").write_text(
+        json.dumps({"template_version": "v0.0.0", "files": ["card.md"]}) + "\n",
+        encoding="utf-8",
+    )
+    retirements = ops / "config" / "template-retirements.json"
+    retirements.parent.mkdir()
+    retirements.write_text("{not-a-list", encoding="utf-8")
+    result = _run(
+        [
+            sys.executable,
+            str(TEMPLATE_APPLY),
+            "--ops",
+            str(ops),
+            "--template",
+            str(template),
+            "--write",
+            "--confirm-input",
+            "apply",
+        ]
+    )
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "config/template-retirements.json" in result.stderr
+    assert not (ops / "card.md").exists()
+
+
 def test_template_check_retirement_not_in_manifest_reported_not_failing(tmp_path: Path):
     # Failability mutant 2: a retirement not in the manifest is reported and
     # does not fail.
@@ -369,6 +544,7 @@ def test_template_check_retired_path_passes_in_template_compare_mode(tmp_path: P
     # retirement tests above do not exercise build_report's template-compare
     # recompute (absent_required/retired/retirements_unknown against
     # t_required_set), which is a separate code path from the install-only one.
+    template = _copy_skeleton_without_git(tmp_path)
     ops = tmp_path / "ops"
     ops.mkdir()
     _seed_ops_from_manifest(ops, drop=["workspace-card/CLAUDE.md"])
@@ -383,12 +559,11 @@ def test_template_check_retired_path_passes_in_template_compare_mode(tmp_path: P
             "--ops",
             str(ops),
             "--template",
-            str(SKELETON),
+            str(template),
             "--json",
         ],
     )
-    expected_rc = int(_template_version_for_source() != "v0.5.353")
-    assert result.returncode == expected_rc, result.stdout + result.stderr
+    assert result.returncode == 0, result.stdout + result.stderr
     report = json.loads(result.stdout)
     assert report["report_set"] == "template-compare"
     assert report["absent_required"] == []
@@ -1008,6 +1183,15 @@ def test_frame_hygiene_guards_use_explicit_template_and_shared_skeleton_name():
     assert 'local ade_clone_path="$sandbox_dir/$ADE_REPO_NAME"' in spawn
 
 
+def test_harness_stamp_pattern_matches_shared_template_pattern():
+    common = (SKELETON / "scripts" / "template_common.py").read_text(encoding="utf-8")
+    harness = (SKELETON / "scripts" / "harness-selfcheck.sh").read_text(encoding="utf-8")
+    common_pattern = re.search(r'TEMPLATE_VERSION_PATTERN = r"([^"]+)"', common)
+    harness_pattern = re.search(r're\.fullmatch\(r"([^"]+)", manifest_version', harness)
+    assert common_pattern and harness_pattern
+    assert common_pattern.group(1) == harness_pattern.group(1)
+
+
 def test_template_apply_comments_keep_placeholder_descriptions_literal_free(tmp_path: Path):
     ops = tmp_path / "ops"
     ops.mkdir()
@@ -1028,8 +1212,8 @@ def test_template_apply_comments_keep_placeholder_descriptions_literal_free(tmp_
     )
     assert result.returncode == 0, result.stderr + result.stdout
     expected = {
-        "scripts/test-dispatch-required-infra.sh": "# The dispatch fixture uses RUNTIME_ROOT and OPS_REPO template substitutions.",
-        "scripts/test-dispatch-merge-ready-before-done.sh": "# The dispatch fixture uses RUNTIME_ROOT and OPS_REPO template substitutions.",
+        "scripts/test-dispatch-required-infra.sh": "# The dispatch script carries unrendered RUNTIME_ROOT and OPS_REPO template tokens, so it cannot run directly.",
+        "scripts/test-dispatch-merge-ready-before-done.sh": "# The dispatch script carries unrendered RUNTIME_ROOT and OPS_REPO template tokens, so it cannot run directly.",
     }
     for rel, expected_line in expected.items():
         for line in (SKELETON / rel).read_text(encoding="utf-8").splitlines():
@@ -1317,6 +1501,7 @@ def test_template_apply_and_check_refuse_malformed_instance_owned(tmp_path: Path
 
 
 def test_template_check_reports_instance_owned_apart_from_required_and_unknown(tmp_path: Path):
+    template = _copy_skeleton_without_git(tmp_path)
     ops = tmp_path / "ops"
     ops.mkdir()
     # AGENTS.md is claimed and instance-owned; leave it absent.
@@ -1325,7 +1510,7 @@ def test_template_check_reports_instance_owned_apart_from_required_and_unknown(t
     record.parent.mkdir(parents=True)
     record.write_text("an install's own record\n", encoding="utf-8")
 
-    for extra in ([], ["--template", str(SKELETON)]):
+    for extra in ([], ["--template", str(template)]):
         result = _run([sys.executable, str(TEMPLATE_CHECK), "--ops", str(ops), "--json", *extra])
         report = json.loads(result.stdout)
         assert "AGENTS.md" not in report["absent_required"], extra
@@ -1333,8 +1518,7 @@ def test_template_check_reports_instance_owned_apart_from_required_and_unknown(t
         rel = "docs/blame/BLAME-2026-11-09-example.md"
         assert rel in report["instance_owned"], extra
         assert rel not in report["unknown_present"], extra
-    expected_rc = int(_template_version_for_source() != "v0.5.353")
-    assert result.returncode == expected_rc, result.stdout
+    assert result.returncode == 0, result.stdout
 
     human = _run([sys.executable, str(TEMPLATE_CHECK), "--ops", str(ops)])
     assert "instance_owned: " in human.stdout

@@ -65,11 +65,11 @@ chmod +x "$OPS_DIR/scripts/harness-selfcheck.sh"
 # test-template-currency-line.sh.
 cat > "$OPS_DIR/scripts/template-check" <<'EOF'
 #!/bin/bash
-echo '{"installed_version": "v0-fixture", "manifest_status": "ok", "absent_required": [], "retired": [], "unknown_present": [], "report_set": "installed-manifest", "retirements_status": "ok"}'
+echo '{"installed_version": "v0.0.0", "manifest_status": "ok", "absent_required": [], "retired": [], "unknown_present": [], "report_set": "installed-manifest", "retirements_status": "ok"}'
 EOF
 chmod +x "$OPS_DIR/scripts/template-check"
 
-printf '{"template_version": "v0-fixture", "files": ["a"]}\n' > "$OPS_DIR/MANIFEST.json"
+printf '{"template_version": "v0.0.0", "files": ["a"]}\n' > "$OPS_DIR/MANIFEST.json"
 echo "# Adoption ledger" > "$OPS_DIR/docs/observability/template-adoption-2026-08-08.md"
 
 echo "fixture card" > "$OPS_DIR/workspace-card/CLAUDE.md"

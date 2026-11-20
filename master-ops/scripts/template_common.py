@@ -11,7 +11,9 @@ asserts the duplicates match this pattern.
 
 from __future__ import annotations
 
+import json
 import re
+import stat
 import subprocess
 from datetime import date
 from pathlib import Path
@@ -20,44 +22,83 @@ FRAGMENT_NAME_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})-[a-z0-9-]+\.md$")
 TEMPLATE_VERSION_RE = re.compile(
     r"^v(?P<release>\d+(?:\.\d+){2,})(?:-(?P<distance>\d+)-g(?P<sha>[0-9a-f]+))?$"
 )
-TEMPLATE_VERSION_VALID_RE = re.compile(
-    r"^v[0-9A-Za-z][0-9A-Za-z._-]*(?:-\d+-g[0-9a-f]+)?$"
-)
+TEMPLATE_VERSION_PATTERN = r"^v\d+(?:\.\d+){2,}(?:-\d+-g[0-9a-f]+)?$"
+TEMPLATE_VERSION_VALID_RE = re.compile(TEMPLATE_VERSION_PATTERN)
+TEMPLATE_RETIREMENTS_REL = Path("config/template-retirements.json")
 
 
 def template_version_is_valid(value: str) -> bool:
-    """Return whether a template stamp has a supported release-like form."""
+    """Return whether a template stamp has a measurable release-like form."""
     return TEMPLATE_VERSION_VALID_RE.fullmatch(value.strip()) is not None
 
 
-def template_version_key(value: str) -> tuple[tuple[int, ...], int] | None:
+def template_version_key(value: str) -> tuple[tuple[int, ...], int, str | None] | None:
     """Return the release and commit distance represented by a template stamp."""
     match = TEMPLATE_VERSION_RE.fullmatch(value.strip())
     if match is None:
         return None
     release = tuple(int(part) for part in match.group("release").split("."))
     distance = int(match.group("distance") or 0)
-    return release, distance
+    return release, distance, match.group("sha")
 
 
 def template_version_base(value: str) -> str | None:
     """Return the release tag portion of a valid template stamp."""
     key = template_version_key(value)
     if key is None:
-        return value.strip() if template_version_is_valid(value) else None
-    release, _ = key
+        return None
+    release, _, _ = key
     return "v" + ".".join(str(part) for part in release)
 
 
 def compare_template_versions(first: str, second: str) -> int | None:
     """Compare release and commit distance, or return None for an unknown form."""
-    if first.strip() == second.strip():
-        return 0
     first_key = template_version_key(first)
     second_key = template_version_key(second)
     if first_key is None or second_key is None:
         return None
-    return (first_key > second_key) - (first_key < second_key)
+    if first_key[:2] != second_key[:2]:
+        return (first_key[:2] > second_key[:2]) - (first_key[:2] < second_key[:2])
+    if first_key[2] != second_key[2]:
+        return None
+    return 0
+
+
+def load_template_retirements(path: Path) -> tuple[list[dict], str]:
+    """Return (entries, status) for the shared install retirement record."""
+    try:
+        path_stat = path.stat()
+    except FileNotFoundError:
+        return [], "absent"
+    except OSError:
+        return [], "malformed"
+    if not stat.S_ISREG(path_stat.st_mode):
+        return [], "malformed"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return [], "malformed"
+    if not isinstance(data, list):
+        return [], "malformed"
+    entries: list[dict] = []
+    for item in data:
+        if not isinstance(item, dict):
+            return [], "malformed"
+        rel = item.get("path")
+        since = item.get("since")
+        why = item.get("why")
+        if not isinstance(rel, str) or not rel.strip():
+            return [], "malformed"
+        if not isinstance(since, str):
+            return [], "malformed"
+        try:
+            date.fromisoformat(since)
+        except ValueError:
+            return [], "malformed"
+        if not isinstance(why, str) or not why.strip():
+            return [], "malformed"
+        entries.append({"path": rel.strip(), "since": since, "why": why})
+    return entries, "ok"
 
 
 def resolve_template_version(
@@ -66,15 +107,20 @@ def resolve_template_version(
     """Resolve the install stamp and a warning when git measurement is unsafe."""
     git_prefix = ["git", "-C", str(source_root)]
     try:
-        inside = subprocess.run(
-            [*git_prefix, "rev-parse", "--is-inside-work-tree"],
+        repo_top = subprocess.run(
+            [*git_prefix, "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
-            check=False,
+            check=True,
         )
     except FileNotFoundError:
         return plain_version, "git is unavailable; using TEMPLATE-VERSION " + plain_version
-    if inside.returncode != 0 or inside.stdout.strip() != "true":
+    except subprocess.CalledProcessError:
+        return plain_version, None
+
+    repo_root = Path(repo_top.stdout.strip()).resolve()
+    source_resolved = source_root.resolve()
+    if source_resolved not in (repo_root, repo_root / "master-ops"):
         return plain_version, None
 
     try:
@@ -103,7 +149,7 @@ def resolve_template_version(
 
     try:
         described = subprocess.run(
-            [*git_prefix, "describe", "--tags"],
+            [*git_prefix, "describe", "--tags", "--match", plain_version],
             capture_output=True,
             text=True,
             check=True,
@@ -113,10 +159,14 @@ def resolve_template_version(
             plain_version,
             "git describe --tags failed; using TEMPLATE-VERSION " + plain_version,
         )
-    if not described or not template_version_is_valid(described):
+    if (
+        not described
+        or not template_version_is_valid(described)
+        or template_version_base(described) != plain_version
+    ):
         return (
             plain_version,
-            "git describe --tags returned an unusable stamp; using TEMPLATE-VERSION "
+            "git describe --tags --match TEMPLATE-VERSION returned an unusable stamp; using TEMPLATE-VERSION "
             + plain_version,
         )
     return described, None

@@ -111,7 +111,7 @@ manifest_version = manifest.get("template_version")
 files = manifest.get("files")
 if not isinstance(manifest_version, str) or not manifest_version.strip():
     print("ERROR|MANIFEST.json template_version missing")
-elif re.fullmatch(r"v[0-9A-Za-z][0-9A-Za-z._-]*(?:-\d+-g[0-9a-f]+)?", manifest_version.strip()) is None:
+elif re.fullmatch(r"^v\d+(?:\.\d+){2,}(?:-\d+-g[0-9a-f]+)?$", manifest_version.strip()) is None:
     print("ERROR|MANIFEST.json template_version has unsupported stamp form")
 elif not isinstance(files, list):
     print("ERROR|MANIFEST.json files list missing")

@@ -12,6 +12,7 @@ template_manifest.py). Anything the manifest does not claim is refused too.
 Per-file outcomes:
   planned | written
   skipped-as-instance-owned
+  skipped-as-retired
   refused-not-in-manifest
   error-invalid-path
   error-missing-template-file
@@ -37,6 +38,8 @@ if str(_SCRIPT_DIR) not in sys.path:
 from template_common import (  # noqa: E402
     PLACEHOLDERS,
     SKIP_SUBSTITUTE_PATHS,
+    TEMPLATE_RETIREMENTS_REL,
+    load_template_retirements,
     resolve_template_version,
     template_version_is_valid,
 )
@@ -307,6 +310,7 @@ def plan_actions(
     ops_root: Path,
     manifest: dict,
     extra_targets: list[str] | None,
+    retirement_paths: set[str] | None = None,
 ) -> list[dict]:
     """Build the per-path plan. extra_targets are attempted writes outside the
     manifest — used only to prove refusal in tests; normal runs pass None."""
@@ -345,6 +349,18 @@ def plan_actions(
                     "path": rel,
                     "action": "skipped-as-instance-owned",
                     "reason": f"instance-owned by name ({source})",
+                }
+            )
+            continue
+        if retirement_paths and rel in retirement_paths:
+            actions.append(
+                {
+                    "path": rel,
+                    "action": "skipped-as-retired",
+                    "reason": (
+                        "retired by the install record "
+                        f"({TEMPLATE_RETIREMENTS_REL.as_posix()})"
+                    ),
                 }
             )
             continue
@@ -553,12 +569,24 @@ def apply_planned(
     actions: list[dict],
     values: dict[str, str],
     manifest: dict | None = None,
+    retirements_path: Path | None = None,
 ) -> list[dict]:
     is_instance_owned, _ = instance_owned_predicate(manifest)
+    retirement_path = retirements_path or (ops_root / TEMPLATE_RETIREMENTS_REL)
+    retirement_entries, retirement_status = load_template_retirements(retirement_path)
+    if retirement_status == "malformed":
+        raise RuntimeError(
+            f"retirements file is malformed or unreadable: {retirement_path}"
+        )
+    retirement_paths = {entry["path"] for entry in retirement_entries}
     seed_paths = {item["path"] for item in actions if item.get("seed")}
     # Preflight every planned source before the first write so a missing file
     # mid-pass does not leave a half-applied install.
-    planned = [a for a in actions if a["action"] == "planned"]
+    planned = [
+        a
+        for a in actions
+        if a["action"] == "planned" and a["path"] not in retirement_paths
+    ]
     for item in planned:
         src = resolved_under(template_root, item["path"])
         resolved_dest = resolved_under(ops_root, item["path"])
@@ -576,6 +604,18 @@ def apply_planned(
     results: list[dict] = []
     for item in actions:
         rel = item["path"]
+        if item["action"] == "planned" and rel in retirement_paths:
+            results.append(
+                {
+                    "path": rel,
+                    "action": "skipped-as-retired",
+                    "reason": (
+                        "retired by the install record "
+                        f"({TEMPLATE_RETIREMENTS_REL.as_posix()})"
+                    ),
+                }
+            )
+            continue
         if item["action"] != "planned":
             results.append(
                 {
@@ -785,6 +825,14 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(f"template-apply: cannot read template manifest: {exc}\n")
         return 2
 
+    retirements_path = ops_root / TEMPLATE_RETIREMENTS_REL
+    retirement_entries, retirement_status = load_template_retirements(retirements_path)
+    retirement_paths = (
+        {entry["path"] for entry in retirement_entries}
+        if retirement_status == "ok"
+        else set()
+    )
+
     try:
         values = parse_placeholder_args(args.placeholder)
     except SystemExit as exc:
@@ -810,7 +858,13 @@ def main(argv: list[str] | None = None) -> int:
             if warning:
                 sys.stderr.write(f"template-apply: warning: {warning}\n")
 
-    actions = plan_actions(template_root, ops_root, manifest, args.attempt)
+    actions = plan_actions(
+        template_root,
+        ops_root,
+        manifest,
+        args.attempt,
+        retirement_paths,
+    )
 
     try:
         missing = missing_placeholders(template_root, actions, values)
@@ -865,6 +919,13 @@ def main(argv: list[str] | None = None) -> int:
         # write happens, not even the confirmation prompt.
         return 2
 
+    if args.write and retirement_status == "malformed":
+        sys.stderr.write(
+            "template-apply: write refused because retirements file is malformed "
+            f"or unreadable: {retirements_path}\n"
+        )
+        return 2
+
     if not args.write:
         return 0
 
@@ -891,7 +952,14 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
-        results = apply_planned(template_root, ops_root, actions, values, manifest)
+        results = apply_planned(
+            template_root,
+            ops_root,
+            actions,
+            values,
+            manifest,
+            retirements_path,
+        )
     except (OSError, RuntimeError, UnicodeDecodeError) as exc:
         sys.stderr.write(f"template-apply: write aborted: {exc}\n")
         return 2

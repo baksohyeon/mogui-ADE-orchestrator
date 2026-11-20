@@ -3,7 +3,7 @@
 # block that folds into every dispatched brief the same way mail-before-done
 # and required-infra do (test-dispatch-required-infra.sh covers that
 # sibling feature, and this test is lifted from the same shape).
-# The dispatch fixture uses RUNTIME_ROOT and OPS_REPO template substitutions.
+# The dispatch script carries unrendered RUNTIME_ROOT and OPS_REPO template tokens, so it cannot run directly.
 # This extracts just the functions and the 1.6d block by exact-line awk range.
 # It runs that snippet in an isolated subshell with a fixture standing-rules.md,
 # rather than invoking the whole script.

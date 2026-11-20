@@ -1749,6 +1749,30 @@ def _front_matter_body(text: str) -> str:
     return ""
 
 
+def _fence_marker(line: str) -> str | None:
+    """Return a valid CommonMark fence opener marker, if one is present."""
+
+    match = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+    if match is None:
+        return None
+    marker, info = match.groups()
+    if marker[0] == "`" and "`" in info:
+        return None
+    return marker
+
+
+def _fence_closes(line: str, marker: str) -> bool:
+    """Return whether a line closes a fence with the same delimiter."""
+
+    match = re.match(r"^ {0,3}([`~]{3,})[ \t]*$", line)
+    return (
+        match is not None
+        and match.group(1)[0] == marker[0]
+        and len(match.group(1)) >= len(marker)
+        and all(character == marker[0] for character in match.group(1))
+    )
+
+
 def _section_body(text: str, heading: str) -> str | None:
     """Extract one level-two Markdown section body without interpreting Markdown."""
 
@@ -1758,22 +1782,17 @@ def _section_body(text: str, heading: str) -> str | None:
     found = False
     fence: str | None = None
     for line in lines:
-        fence_start = re.match(r"^\s*(`{3,}|~{3,})", line)
         if fence is not None:
-            fence_close = re.match(r"^\s*([`~]{3,})\s*$", line)
             if found:
                 body.append(line)
-            if (
-                fence_close is not None
-                and fence_close.group(1)[0] == fence[0]
-                and len(fence_close.group(1)) >= len(fence)
-            ):
+            if _fence_closes(line, fence):
                 fence = None
             continue
+        fence_start = _fence_marker(line)
         if fence_start is not None:
             if found:
                 body.append(line)
-            fence = fence_start.group(1)
+            fence = fence_start
             continue
         if found:
             if line.startswith("## "):
@@ -1790,26 +1809,50 @@ def _section_body(text: str, heading: str) -> str | None:
     return "\n".join(body)
 
 
+def _strip_inline_code_line(line: str, delimiter: str | None) -> tuple[str, str | None]:
+    """Remove inline code spans while preserving a separator around them."""
+
+    visible: list[str] = []
+    index = 0
+    while index < len(line):
+        if line[index] != "`" or (index > 0 and line[index - 1] == "\\"):
+            if delimiter is None:
+                visible.append(line[index])
+            index += 1
+            continue
+        end = index
+        while end < len(line) and line[end] == "`":
+            end += 1
+        run = line[index:end]
+        if delimiter is None:
+            delimiter = run
+            visible.append(" ")
+        elif run == delimiter:
+            delimiter = None
+            visible.append(" ")
+        index = end
+    return "".join(visible), delimiter
+
+
 def _markdown_without_code(text: str) -> str:
     """Remove fenced blocks and inline code before matching runbook triggers."""
 
     visible: list[str] = []
     fence: str | None = None
+    inline_delimiter: str | None = None
     for line in text.splitlines():
-        fence_start = re.match(r"^\s*(`{3,}|~{3,})", line)
         if fence is not None:
-            fence_close = re.match(r"^\s*([`~]{3,})\s*$", line)
-            if (
-                fence_close is not None
-                and fence_close.group(1)[0] == fence[0]
-                and len(fence_close.group(1)) >= len(fence)
-            ):
+            if _fence_closes(line, fence):
                 fence = None
             continue
+        fence_start = _fence_marker(line)
         if fence_start is not None:
-            fence = fence_start.group(1)
+            fence = fence_start
             continue
-        visible.append(re.sub(r"(?<!\\)`+[^`\n]*`+", "", line))
+        line_visible, inline_delimiter = _strip_inline_code_line(
+            line, inline_delimiter
+        )
+        visible.append(line_visible)
     return "\n".join(visible)
 
 

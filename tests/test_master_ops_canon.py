@@ -78,9 +78,14 @@ def test_template_dispatch_quotes_model_and_checks_top_before_gate():
     assert "instance_policy=$runtime_root/config/model-tier-policy.json" in dispatch
     assert 'echo "$TEMPLATE_POLICY"' in dispatch
     assert dispatch.index('TIER=$(tier_for_model "$MODEL"') < dispatch.index('CHK=$("$GATE"')
-    assert 'gate_supports_runbook_injection()' in dispatch
-    assert 'GATE_ARGS+=(--runbook-inject-supported)' in dispatch
-    assert 'gate_output_is_json()' in dispatch
+    assert 'gate_supports_runbook_injection() {' in dispatch
+    assert (
+        'if gate_supports_runbook_injection; then\n'
+        '  GATE_ARGS+=(--runbook-inject-supported)\n'
+        'fi'
+    ) in dispatch
+    assert 'gate_output_is_json() {' in dispatch
+    assert dispatch.count('if ! gate_output_is_json; then') == 2
     preflight = 'CHK=$("$GATE" "${GATE_ARGS[@]}" --no-record 2>"$GATE_STDERR_FILE")'
     pretrust = 'ensure_codex_pretrust "$RUNTIME" "$WORKTREE"'
     recording = 'CHK=$("$GATE" "${GATE_ARGS[@]}" 2>"$GATE_STDERR_FILE")'

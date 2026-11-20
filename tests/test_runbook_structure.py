@@ -137,15 +137,19 @@ def test_trigger_matching_ignores_fenced_and_inline_code(tmp_path: Path) -> None
         + "```shell\nrg -n \"literature review\" docs/\n```\n"
     )
     inline = frontmatter() + "Use `literature review` as a command example.\n"
-    for body in (fenced, inline):
+    multiline_inline = frontmatter() + "`\nliterature review\n`\n"
+    separated_inline = frontmatter() + "Use literature`ignored` review as prose.\n"
+    invalid_fence_info = frontmatter() + "```a``` runs a command.\nPlease complete the literature review.\n"
+    indented_tilde = frontmatter() + "    ~~~\nPlease complete the literature review.\n"
+    for body in (fenced, inline, multiline_inline, separated_inline):
         decision = gate(tmp_path, directory).check(request(tmp_path, body))
         assert decision.allow
 
-    prose = frontmatter() + "Please complete the literature review.\n"
-    decision = gate(tmp_path, directory).check(request(tmp_path, prose))
-    assert decision.reason is ReasonCode.RUNBOOK_TRIGGER_UNLISTED
-    assert "runbooks: [literature-review]" in decision.message
-    assert "runbooks_waived: [literature-review]" in decision.message
+    for body in (invalid_fence_info, indented_tilde):
+        decision = gate(tmp_path, directory).check(request(tmp_path, body))
+        assert decision.reason is ReasonCode.RUNBOOK_TRIGGER_UNLISTED
+        assert "runbooks: [literature-review]" in decision.message
+        assert "runbooks_waived: [literature-review]" in decision.message
 
 
 @skip_windows_exec_surface
@@ -207,7 +211,8 @@ def test_dispatch_probe_skips_flag_for_old_gate_and_surfaces_diagnostics(tmp_pat
         + "\n"
         + f"GATE={old_gate}\n"
         + "if gate_supports_runbook_injection; then echo supported; else echo unsupported; fi\n"
-        + f"GATE_STDERR_FILE={diagnostics}\nCHK=''\nprintf 'old gate failed before JSON\\n' > \"$GATE_STDERR_FILE\"\n"
+        + f"GATE_STDERR_FILE={diagnostics}\n"
+        + "CHK=$(\"$GATE\" check 2>\"$GATE_STDERR_FILE\") || true\n"
         + "gate_output_is_json\n"
     )
     result = subprocess.run(["bash", "-c", script], capture_output=True, text=True)

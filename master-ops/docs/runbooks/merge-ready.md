@@ -33,10 +33,12 @@ also seeds each missing file after confirmation and preserves an existing file a
 
 The worker token needs repository `Administration: read` permission to read legacy branch
 protection. If the protection endpoint is unavailable to that token, the command reads the branch
-response's `protection.required_status_checks`; if the rules endpoint returns HTTP 403 for a plan
-limitation, it uses those legacy sources to report the available required contexts and asks the owner
-with exit `2` for confirmation. An empty or unreadable fallback source names its cause in that ask.
-Other unreadable responses retain their normal not-ready result.
+response's `protection.required_status_checks`. A rules response is classified as a plan limitation
+when its error includes the message `Upgrade to GitHub Pro`; this message is the plan-limit marker.
+With a usable legacy required-context set, the command continues through every measurement and returns
+the result earned by those checks, reviews, threads, and paths. When no legacy source is usable, the
+command asks the owner with exit `2` and names the cause. Other HTTP 403 responses, including rate
+limits and permission failures, retain exit `1`.
 
 The command asks the owner with exit `2` when either file is missing, and fails closed when the
 stop-list has no entries or the roster file is empty or comment-only. It has no environment
@@ -57,8 +59,10 @@ the brief ships.
    `gh api repos/<owner/name>/branches/<base>`; an unprotected branch contributes no legacy
    contexts. Failure to read both legacy sources is not ready. Every required context must be
    reported with bucket `pass`.
-   A rules HTTP 403 plan limitation always asks the owner with exit `2`, even when a legacy source
-   supplies a required context summary. A parseable empty list is not ready because there is no required check to measure. A check that
+   A rules HTTP 403 plan limitation identified by the `Upgrade to GitHub Pro` message uses the legacy
+   source when it supplies a required context summary and continues through the remaining measurements.
+   If no source establishes required contexts, the command asks the owner with exit `2` and names the
+   cause. A parseable empty list is not ready because there is no required check to measure. A check that
    this repository runs but does not require never reaches this measurement. Every bot whose latest
    decision review on the exact head is `PENDING` or `CHANGES_REQUESTED` blocks separately. Only
    `APPROVED`, `CHANGES_REQUESTED`, `DISMISSED`, and `PENDING` are decision states; a plain
@@ -79,8 +83,8 @@ the brief ships.
    threads.
 
 3. **Stop-list and contract paths.** Any changed path matching
-   `config/merge-ready-stop-paths.txt` asks the owner. Entries work with both the template
-   prefix and the installed root layout. The list covers charter, workspace card,
+   `config/merge-ready-stop-paths.txt` asks the owner. Matching is case-insensitive, and entries work
+   with both the template prefix and the installed root layout. The list covers charter, workspace card,
    role state, boot comparison set, scanner and redaction configuration, CI workflow and CODEOWNERS
    definitions, succession and bootstrap code, guard hooks, gate code, tier policy, worker
    settings, and this command's own files. A stop-paths file with no real entries fails closed.
@@ -123,10 +127,10 @@ deployments and required reviewers at merge time; this command does not attest t
 - `0` merge: every measurement passed and no stop-list path was touched.
 - `1` not ready: a check, roster, review thread, PR-state, response-shape, pagination, file-cap, or
   invocation measurement failed. An unavailable GitHub response and an unparseable response are
-  both exit `1`, while a rules-endpoint HTTP `403` plan limitation is handled as an owner ask.
+  both exit `1`, as are HTTP `403` responses whose error does not include `Upgrade to GitHub Pro`.
 - `2` ask the owner: a changed path matches the stop list, falls outside the contract's `writes`
-  globs, required configuration is missing, or a rules-endpoint HTTP `403` plan limitation needs
-  owner confirmation after the legacy fallbacks.
+  globs, required configuration is missing, or a rules-endpoint HTTP `403` plan limitation has no
+  usable legacy source after the `Upgrade to GitHub Pro` classification.
 
 Every result is one summary line prefixed `merge-ready: merge ·`, `merge-ready: not ready ·`, or
 `merge-ready: ask ·`.

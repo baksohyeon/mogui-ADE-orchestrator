@@ -1,4 +1,5 @@
-- `scripts/merge-ready` now recognizes stop-list entries in both template and installed layouts, uses legacy branch protection to report contexts when the rules endpoint returns an HTTP 403 plan limitation, and asks the owner with exit `2` for confirmation.
+- `scripts/merge-ready` now recognizes stop-list entries in both template and installed layouts, uses the exact `Upgrade to GitHub Pro` message to classify a rules plan limitation, and continues every measurement when a legacy source supplies the required contexts.
 - Upgrade apply plans now seed the merge-ready stop-list and bot roster only when absent, and missing configuration tells the operator how to copy it into the install.
 - Rate-limit timestamp failures now print one clean sentence without a traceback.
 - Round-two review coverage now preserves stop-list asks through both HTTP 403 error paths, requires a non-empty fallback context set, rejects invalid merge-ready seed paths, and publishes absent-only seeds without replacing a concurrent file.
+- Round-three coverage now keeps rate-limit and permission HTTP 403 responses at exit `1`, asks with exit `2` only when the plan-limit fallback has no usable source, and matches stop-list paths case-insensitively.

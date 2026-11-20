@@ -38,13 +38,17 @@ def matches_stop(path: str, entry: str) -> bool:
     template_layout_prefix = "master-" "ops/"
 
     def without_template_prefix(value: str) -> str:
-        return value[len(template_layout_prefix) :] if value.startswith(template_layout_prefix) else value
+        if value.casefold().startswith(template_layout_prefix.casefold()):
+            return value[len(template_layout_prefix) :]
+        return value
 
     def with_layout_aliases(value: str) -> set[str]:
         root_path = without_template_prefix(value)
         return {root_path, f"{template_layout_prefix}{root_path}"}
 
     def matches_one(candidate: str, stop_entry: str) -> bool:
+        candidate = candidate.casefold()
+        stop_entry = stop_entry.casefold()
         if stop_entry.endswith("/"):
             return candidate == stop_entry.rstrip("/") or candidate.startswith(stop_entry)
         if any(char in stop_entry for char in "*?["):

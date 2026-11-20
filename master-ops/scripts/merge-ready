@@ -21,6 +21,7 @@ STOP_PATHS_FILE="${SCRIPT_DIR}/../config/merge-ready-stop-paths.txt"
 BOTS_FILE="${SCRIPT_DIR}/../config/merge-ready-bots.txt"
 LIB_FILE="${SCRIPT_DIR}/lib/merge_ready.py"
 GRAPHQL_PAGE_CAP=10
+PLAN_LIMIT_MARKER='Upgrade to GitHub Pro'
 
 usage() {
   echo "usage: merge-ready --repo <owner/name> --pr <n> [--contract <file>]" >&2
@@ -239,7 +240,7 @@ fi
 if [ -n "${SOURCE_FAILURE}" ] && {
   cat "${RULES_ERR}"
   printf '%s\n' "${SOURCE_FAILURE}"
-} | grep -Eiq '(^|[^0-9])403([^0-9]|$)'; then
+} | grep -Fqi "${PLAN_LIMIT_MARKER}"; then
   RULES_FORBIDDEN=1
   printf '[]' >"${RULES_FILE}"
   SOURCE_FAILURE=""
@@ -401,15 +402,6 @@ if [ -n "${SOURCE_FAILURE}" ]; then
     exit 2
   fi
   not_ready "required check summary unavailable: ${SOURCE_FAILURE}"
-fi
-
-if [ "${RULES_FORBIDDEN}" -eq 1 ]; then
-  if [ "${PATH_RC}" -eq 2 ]; then
-    echo "${PATH_VERDICT}; ${REQUIRED_SUMMARY}; GitHub rules endpoint returned HTTP 403; owner confirmation required (head ${HEAD_SHA})"
-  else
-    echo "merge-ready: ask · GitHub rules endpoint returned HTTP 403; ${REQUIRED_SUMMARY}; owner confirmation required (head ${HEAD_SHA})"
-  fi
-  exit 2
 fi
 
 if [ "${PATH_RC}" -eq 2 ]; then

@@ -135,6 +135,10 @@ case "$1" in
           echo "gh: Upgrade to GitHub Pro or make this repository public (HTTP 403)" >&2
           exit 1
         fi
+        if [ "${GH_STUB_CASE:-}" = "rules-403-rate-limit" ]; then
+          echo "gh: API rate limit exceeded (HTTP 403)" >&2
+          exit 1
+        fi
         if [ "${GH_STUB_CASE:-}" = "rules-paginated" ]; then
           cat "${GH_FIXTURE_DIR}/rules-pages.json"
         else
@@ -550,19 +554,28 @@ fi
 rules_403_legacy_dir="${WORK_DIR}/rules-403-legacy"
 write_fixture "${rules_403_legacy_dir}" '[{"filename":"README.md"}]' "" '[{"name":"rules-403-legacy-context","bucket":"pass","state":"SUCCESS"}]' "${DEFAULT_REVIEWS}" 0 OPEN false "[]" "${DEFAULT_RULES}" '{"contexts":["rules-403-legacy-context"],"checks":[]}'
 out=$(run_case "${rules_403_legacy_dir}" rules-403-legacy); rc=$?
-if [ "${rc}" -eq 2 ] && printf '%s' "${out}" | grep -q 'merge-ready: ask' && printf '%s' "${out}" | grep -q 'rules-403-legacy-context'; then
-  ok "a rules HTTP 403 falls back to legacy protection"
+if [ "${rc}" -eq 0 ] && printf '%s' "${out}" | grep -q 'merge-ready: merge' && printf '%s' "${out}" | grep -q 'rules-403-legacy-context'; then
+  ok "a plan-limit HTTP 403 with usable legacy checks measures every gate"
 else
-  fail "rules HTTP 403 legacy fallback: got ${rc}: ${out}"
+  fail "plan-limit HTTP 403 with usable legacy checks: got ${rc}: ${out}"
 fi
 
 rules_403_branch_dir="${WORK_DIR}/rules-403-branch"
 write_fixture "${rules_403_branch_dir}" '[{"filename":"README.md"}]' "" '[{"name":"rules-403-branch-context","bucket":"pass","state":"SUCCESS"}]' "${DEFAULT_REVIEWS}" 0 OPEN false "[]" "${DEFAULT_RULES}" '{"contexts":["rules-403-branch-context"],"checks":[]}'
 out=$(run_case "${rules_403_branch_dir}" rules-403-branch); rc=$?
-if [ "${rc}" -eq 2 ] && printf '%s' "${out}" | grep -q 'merge-ready: ask' && printf '%s' "${out}" | grep -q 'rules-403-branch-context'; then
-  ok "a rules HTTP 403 falls back to branch protection"
+if [ "${rc}" -eq 0 ] && printf '%s' "${out}" | grep -q 'merge-ready: merge' && printf '%s' "${out}" | grep -q 'rules-403-branch-context'; then
+  ok "a plan-limit HTTP 403 with usable branch checks measures every gate"
 else
-  fail "rules HTTP 403 branch fallback: got ${rc}: ${out}"
+  fail "plan-limit HTTP 403 with usable branch checks: got ${rc}: ${out}"
+fi
+
+rules_403_legacy_failure_dir="${WORK_DIR}/rules-403-legacy-failure"
+write_fixture "${rules_403_legacy_failure_dir}" '[{"filename":"README.md"}]' "" '[{"name":"rules-403-legacy-context","bucket":"fail","state":"FAILURE"}]' "${DEFAULT_REVIEWS}" 0 OPEN false "[]" "${DEFAULT_RULES}" '{"contexts":["rules-403-legacy-context"],"checks":[]}'
+out=$(run_case "${rules_403_legacy_failure_dir}" rules-403-legacy); rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'rules-403-legacy-context=FAILURE'; then
+  ok "a plan-limit HTTP 403 with a failing required check exits 1"
+else
+  fail "plan-limit HTTP 403 with a failing required check: got ${rc}: ${out}"
 fi
 
 rules_403_no_source_dir="${WORK_DIR}/rules-403-no-source"
@@ -581,6 +594,15 @@ if [ "${rc}" -eq 2 ] && printf '%s' "${out}" | grep -q 'HTTP 403' && printf '%s'
   ok "a rules HTTP 403 with an empty legacy source preserves the stop-list ask"
 else
   fail "rules HTTP 403 empty fallback source: got ${rc}: ${out}"
+fi
+
+rules_403_rate_limit_dir="${WORK_DIR}/rules-403-rate-limit"
+write_fixture "${rules_403_rate_limit_dir}" '[{"filename":"README.md"}]' ""
+out=$(run_case "${rules_403_rate_limit_dir}" rules-403-rate-limit); rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'required check summary unavailable' && ! printf '%s' "${out}" | grep -q 'owner confirmation required'; then
+  ok "a rate-limit HTTP 403 remains exit 1"
+else
+  fail "rate-limit HTTP 403 classification: got ${rc}: ${out}"
 fi
 
 legacy_failure_ask_dir="${WORK_DIR}/legacy-failure-ask"
@@ -1061,6 +1083,15 @@ if [ "${rc}" -eq 2 ] && printf '%s' "${out}" | grep -q 'scripts/dispatch (stop-l
   ok "an installed dispatch path matches the template stop-list and exits 2"
 else
   fail "root-layout dispatch stop-list path: got ${rc}: ${out}"
+fi
+
+case_variant_stop_dir="${WORK_DIR}/case-variant-stop-path"
+write_fixture "${case_variant_stop_dir}" '[{"filename":"Docs/Charter/01-document-map.md"}]' ""
+out=$(run_case "${case_variant_stop_dir}"); rc=$?
+if [ "${rc}" -eq 2 ] && printf '%s' "${out}" | grep -q 'Docs/Charter/01-document-map.md (stop-list)'; then
+  ok "a case-variant stop-list path exits 2"
+else
+  fail "case-variant stop-list path: got ${rc}: ${out}"
 fi
 
 template_layout_prefix='master-'"ops/"

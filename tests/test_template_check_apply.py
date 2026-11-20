@@ -284,7 +284,7 @@ def test_template_check_shallow_clone_without_release_tag_warns_but_keeps_exit_z
     source = _seed_version_template(tmp_path / "source")
     shallow = tmp_path / "shallow"
     subprocess.run(
-        ["git", "clone", "--quiet", "--depth", "1", f"file://{source}", str(shallow)],
+        ["git", "clone", "--quiet", "--depth", "1", source.as_uri(), str(shallow)],
         check=True,
         capture_output=True,
         text=True,

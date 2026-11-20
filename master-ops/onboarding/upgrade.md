@@ -10,6 +10,8 @@ Load rule: read this file only when the router's mode question answered **Upgrad
 
 Where we are: this workspace was already set up, and the book the Master reads from may be behind the current template. What we do next: measure what is missing or unknown against the template's file list, show every path that would be written and why, then wait for a clear yes before writing anything. Paths the workspace owns for itself stay untouched by name: lineage, role state, operating cards, operations source of truth, closed decisions, succession card, boot comparison, self-check and compaction scripts, the session card's local extension, tracker data, local config, contracts. Provide the workspace root and ops repository path when those facts are not already available.
 
+The two merge-ready configuration files are the only seed exceptions inside the local `config/` area. `template-apply` includes `config/merge-ready-stop-paths.txt` and `config/merge-ready-bots.txt` in the apply plan when they are absent, creates each missing file after confirmation, and preserves each existing file as instance-owned. Review their contents after the first copy because later upgrades do not overwrite them.
+
 ## Checklist
 
 0. **Bootstrap the facts first**: ask the owner for the workspace root and ops repository path (or the operating card). Do not scan the disk for candidate workspaces. Do not substitute this orchestrator clone's paths. The ops-side `{{WORKSPACE_NAME}}`, `{{WORKSPACE_ROOT}}`, `{{OPS_REPO}}`, `{{MONITOR_NS}}`, `{{MODEL_ID}}`, and `{{REPO_LIST}}` values below mean values measured from that ops repository. `{{RUNTIME_ROOT}}` and `{{TEMPLATE_VERSION}}` come from the template clone.
@@ -59,6 +61,8 @@ absolute path when it is not itself a `{{REPO_LIST}}` member) that is not alread
 
 3. **Dry-run apply (always first)**: print the exact file list and the reason for each path. No write yet. Pass the same eight measured `--placeholder` values as step 5; a dry run that omits them prints the missing-placeholder report and exits 2 by design, since a planned file still carries each unsupplied token.
 
+The dry-run plan also shows the two merge-ready seed files when the install does not have them. Their plan reason says they are created only when absent; an existing file is reported as instance-owned and remains untouched.
+
 ```console
 "{{RUNTIME_ROOT}}/master-ops/scripts/template-apply" --ops "{{OPS_REPO}}" --template "{{RUNTIME_ROOT}}/master-ops" --placeholder WORKSPACE_NAME="{{WORKSPACE_NAME}}" --placeholder WORKSPACE_ROOT="{{WORKSPACE_ROOT}}" --placeholder OPS_REPO="{{OPS_REPO}}" --placeholder MONITOR_NS="{{MONITOR_NS}}" --placeholder MODEL_ID="{{MODEL_ID}}" --placeholder REPO_LIST="{{REPO_LIST}}" --placeholder RUNTIME_ROOT="{{RUNTIME_ROOT}}" --placeholder TEMPLATE_VERSION="{{TEMPLATE_VERSION}}"
 ```
@@ -80,12 +84,12 @@ absolute path when it is not itself a `{{REPO_LIST}}` member) that is not alread
    - `scripts/harness-selfcheck.sh`
    - `workspace-card/LOCAL.md`
    - `.beads/`
-   - `config/`
+   - `config/` paths other than `config/merge-ready-stop-paths.txt` and `config/merge-ready-bots.txt`
    - `contracts/`
    - `docs/blame/` (this one from the manifest only, not the built-in list)
    - anything the manifest does not claim
 
-   Per-file outcomes are one of: planned, written, skipped-as-instance-owned, refused-not-in-manifest, error-invalid-path, error-missing-template-file. Dry-run prints `planned` for each template-layer path that would write; any `error-*` outcome fails the plan (nonzero exit) before confirmation. The `skipped-as-instance-owned` list comes from the template manifest's `instance_owned` key, and each skip's reason says `(manifest)`; a manifest written before that key existed falls back to the built-in list in `scripts/template_common.py`, and the reason says `(built-in list)`.
+   Per-file outcomes are one of: planned, written, skipped-as-instance-owned, refused-not-in-manifest, error-invalid-path, error-missing-template-file. Dry-run prints `planned` for each template-layer path that would write; any `error-*` outcome fails the plan (nonzero exit) before confirmation. The `skipped-as-instance-owned` list comes from the template manifest's `instance_owned` key, the built-in list in `scripts/template_common.py`, or the existing merge-ready seed files; a manifest written before that key existed falls back to the built-in list, and the reason identifies the source.
 
 7. **Re-check**: run `template-check` again with `--template` and confirm the report_set is `template-compare`. A clean shape is the goal; remaining unknown paths that are deliberate local additions stay listed as unknown and are not deleted.
 

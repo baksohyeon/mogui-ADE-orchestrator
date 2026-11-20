@@ -40,6 +40,15 @@ from template_manifest import instance_owned_predicate  # noqa: E402
 
 CONFIRM_PHRASE = "apply"
 
+# These two files are instance-owned after creation, but a pre-existing
+# install still needs a safe first copy so merge-ready can run. They are kept
+# outside MANIFEST.json's broad config/ exclusion and are planned only when
+# the destination is absent.
+INSTANCE_OWNED_SEED_FILES = (
+    "config/merge-ready-stop-paths.txt",
+    "config/merge-ready-bots.txt",
+)
+
 
 def normalize_rel(rel: str) -> str | None:
     """Return a normalized relative path, or None if it escapes the root."""
@@ -278,6 +287,74 @@ def plan_actions(
             }
         )
 
+    for rel in INSTANCE_OWNED_SEED_FILES:
+        src = resolved_under(template_root, rel)
+        dest = resolved_under(ops_root, rel)
+        if src is None or not src.is_file():
+            # Scratch templates and older template versions do not carry
+            # these optional seeds; they remain ordinary apply plans there.
+            continue
+        if dest is None:
+            actions.append(
+                {
+                    "path": rel,
+                    "action": "error-invalid-path",
+                    "reason": "seed path escapes template or ops root",
+                    "seed": True,
+                }
+            )
+            continue
+        effective = effective_rel_under(ops_root, dest)
+        lexical_dest = ops_root.resolve() / rel
+        if effective is None or lexical_dest.is_symlink() or lexical_dest != dest:
+            actions.append(
+                {
+                    "path": rel,
+                    "action": "error-invalid-path",
+                    "reason": "seed destination resolves through a symlink or outside ops root",
+                    "seed": True,
+                }
+            )
+            continue
+        if lexical_dest.exists():
+            if not lexical_dest.is_file():
+                actions.append(
+                    {
+                        "path": rel,
+                        "action": "error-invalid-path",
+                        "reason": "seed destination exists but is not a regular file",
+                        "seed": True,
+                    }
+                )
+            else:
+                actions.append(
+                    {
+                        "path": rel,
+                        "action": "skipped-as-instance-owned",
+                        "reason": "instance-owned seed; existing file preserved",
+                        "seed": True,
+                    }
+                )
+            continue
+        if not src.is_file():
+            actions.append(
+                {
+                    "path": rel,
+                    "action": "error-missing-template-file",
+                    "reason": "instance-owned seed is missing from the template tree",
+                    "seed": True,
+                }
+            )
+            continue
+        actions.append(
+            {
+                "path": rel,
+                "action": "planned",
+                "reason": "instance-owned seed; create only when absent",
+                "seed": True,
+            }
+        )
+
     for raw in extra_targets or []:
         rel = normalize_rel(raw) or raw
         if is_instance_owned(rel if isinstance(rel, str) else raw):
@@ -312,6 +389,7 @@ def apply_planned(
     manifest: dict | None = None,
 ) -> list[dict]:
     is_instance_owned, _ = instance_owned_predicate(manifest)
+    seed_paths = {item["path"] for item in actions if item.get("seed")}
     # Preflight every planned source before the first write so a missing file
     # mid-pass does not leave a half-applied install.
     planned = [a for a in actions if a["action"] == "planned"]
@@ -348,9 +426,18 @@ def apply_planned(
             raise RuntimeError(f"path escaped root during write: {rel}")
         if dest.is_symlink() or dest != resolved_dest or (dest.exists() and not dest.is_file()):
             raise RuntimeError(f"destination is not a regular file: {rel}")
+        if rel in seed_paths and dest.exists():
+            results.append(
+                {
+                    "path": rel,
+                    "action": "skipped-as-instance-owned",
+                    "reason": "instance-owned seed appeared after planning; existing file preserved",
+                }
+            )
+            continue
         # Re-check resolved destination after confirmation (unconditional).
         effective = effective_rel_under(ops_root, resolved_dest)
-        if effective is None or is_instance_owned(effective):
+        if effective is None or (is_instance_owned(effective) and rel not in seed_paths):
             raise RuntimeError(
                 f"destination became instance-owned or escaped before write: {rel}"
             )

@@ -1,0 +1,3 @@
+- `scripts/merge-ready` now recognizes stop-list entries in both template and installed layouts, uses legacy branch protection when the rules endpoint returns an HTTP 403 plan limitation, and asks the owner with exit `2` when required checks cannot be established.
+- Upgrade apply plans now seed the merge-ready stop-list and bot roster only when absent, and missing configuration tells the operator how to copy it into the install.
+- Rate-limit timestamp failures now print one clean sentence without a traceback.

@@ -28,13 +28,18 @@ cp <template>/config/merge-ready-stop-paths.txt <install>/config/merge-ready-sto
 cp <template>/config/merge-ready-bots.txt <install>/config/merge-ready-bots.txt
 ```
 
+When either file is missing, the command exits `2` and prints this copy instruction. Upgrade mode
+also seeds each missing file after confirmation and preserves an existing file as instance-owned.
+
 The worker token needs repository `Administration: read` permission to read legacy branch
 protection. If the protection endpoint is unavailable to that token, the command reads the branch
-response's `protection.required_status_checks`; if neither response is readable, the measurement
-fails closed.
+response's `protection.required_status_checks`; if the rules endpoint returns HTTP 403 for a plan
+limitation, it uses those legacy sources and asks the owner with exit `2` when neither source can
+establish the required set. Other unreadable responses retain their normal not-ready result.
 
-The command fails closed when either file is missing, when the stop-list has no entries, or when
-the roster file is empty or comment-only. It has no environment override for either path.
+The command asks the owner with exit `2` when either file is missing, and fails closed when the
+stop-list has no entries or the roster file is empty or comment-only. It has no environment
+override for either path.
 
 A dispatched worker's cwd is a product-repo worktree, not this ops repo. `scripts/dispatch`
 rewrites the standing rule's relative script path to the installed `scripts/` directory before
@@ -72,7 +77,8 @@ the brief ships.
    threads.
 
 3. **Stop-list and contract paths.** Any changed path matching
-   `config/merge-ready-stop-paths.txt` asks the owner. The list covers charter, workspace card,
+   `config/merge-ready-stop-paths.txt` asks the owner. Entries work with both the template
+   prefix and the installed root layout. The list covers charter, workspace card,
    role state, boot comparison set, scanner and redaction configuration, CI workflow and CODEOWNERS
    definitions, succession and bootstrap code, guard hooks, gate code, tier policy, worker
    settings, and this command's own files. A stop-paths file with no real entries fails closed.

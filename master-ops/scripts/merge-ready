@@ -60,12 +60,12 @@ if [ -n "${CONTRACT}" ] && [ ! -f "${CONTRACT}" ]; then
   exit 1
 fi
 if [ ! -f "${STOP_PATHS_FILE}" ]; then
-  echo "merge-ready: not ready · stop-paths file not found: ${STOP_PATHS_FILE}"
-  exit 1
+  echo "merge-ready: ask · config/merge-ready-stop-paths.txt is missing; copy it from the template into the install's config/ directory"
+  exit 2
 fi
 if [ ! -f "${BOTS_FILE}" ]; then
-  echo "merge-ready: not ready · bots file not found: ${BOTS_FILE}"
-  exit 1
+  echo "merge-ready: ask · config/merge-ready-bots.txt is missing; copy it from the template into the install's config/ directory"
+  exit 2
 fi
 if [ ! -f "${LIB_FILE}" ]; then
   echo "merge-ready: not ready · shared parser not found: ${LIB_FILE}"
@@ -225,6 +225,7 @@ fi
 OWNER="${REPO%%/*}"
 NAME="${REPO#*/}"
 SOURCE_FAILURE=""
+RULES_FORBIDDEN=0
 if ! SOURCE_FAILURE="$(fetch_paginated_array "repos/${REPO}/rules/branches/${BASE_BRANCH_ENCODED}" "${RULES_RAW}" "${RULES_FILE}" "${RULES_ERR}" "required-check rules" defer 2>&1)"; then
   :
 fi
@@ -232,6 +233,15 @@ if [ -z "${SOURCE_FAILURE}" ]; then
   if ! SOURCE_FAILURE="$(require_json "${RULES_FILE}" "" defer 2>&1)"; then
     :
   fi
+fi
+
+if [ -n "${SOURCE_FAILURE}" ] && {
+  cat "${RULES_ERR}"
+  printf '%s\n' "${SOURCE_FAILURE}"
+} | grep -Eiq '(^|[^0-9])403([^0-9]|$)'; then
+  RULES_FORBIDDEN=1
+  printf '[]' >"${RULES_FILE}"
+  SOURCE_FAILURE=""
 fi
 
 if [ -z "${SOURCE_FAILURE}" ]; then
@@ -280,6 +290,11 @@ if [ -z "${SOURCE_FAILURE}" ]; then
 fi
 
 if [ -n "${SOURCE_FAILURE}" ]; then
+  if [ "${RULES_FORBIDDEN}" -eq 1 ]; then
+    SOURCE_FAILURE="GitHub rules endpoint returned HTTP 403; legacy branch protection sources could not establish required checks: ${SOURCE_FAILURE}"
+    echo "merge-ready: ask · ${SOURCE_FAILURE} (head ${HEAD_SHA})"
+    exit 2
+  fi
   if [ "${PATH_RC}" -eq 2 ]; then
     echo "${PATH_VERDICT}; required check summary unavailable: ${SOURCE_FAILURE} (head ${HEAD_SHA})"
     exit 2
@@ -365,6 +380,10 @@ PY
   SOURCE_FAILURE="could not parse required-check sources ($(tr '\n' ' ' <"${TMP_DIR}/required-summary.err"))"
 fi
 if [ -n "${SOURCE_FAILURE}" ]; then
+  if [ "${RULES_FORBIDDEN}" -eq 1 ]; then
+    echo "merge-ready: ask · GitHub rules endpoint returned HTTP 403; required-check sources could not establish required checks: ${SOURCE_FAILURE} (head ${HEAD_SHA})"
+    exit 2
+  fi
   if [ "${PATH_RC}" -eq 2 ]; then
     echo "${PATH_VERDICT}; required check summary unavailable: ${SOURCE_FAILURE} (head ${HEAD_SHA})"
     exit 2
@@ -448,25 +467,28 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-events = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-head_sha = sys.argv[2]
-if not isinstance(events, list):
-    raise ValueError("expected a list of timeline events")
-timestamps = []
-for event in events:
-    if not isinstance(event, dict):
-        raise ValueError("timeline response contains a malformed event")
-    created_at = event.get("created_at")
-    if not isinstance(created_at, str) or not created_at:
-        continue
-    if event.get("event") == "head_ref_force_pushed" and event.get("commit_id") == head_sha:
-        parsed = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-        if parsed.tzinfo is None:
-            raise ValueError("head push event timestamp has no timezone")
-        timestamps.append(parsed.astimezone(timezone.utc))
-if not timestamps:
-    raise ValueError("PR timeline has no push event for the measured head")
-print(max(timestamps).isoformat(timespec="seconds").replace("+00:00", "Z"))
+try:
+    events = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+    head_sha = sys.argv[2]
+    if not isinstance(events, list):
+        raise ValueError("expected a list of timeline events")
+    timestamps = []
+    for event in events:
+        if not isinstance(event, dict):
+            raise ValueError("timeline response contains a malformed event")
+        created_at = event.get("created_at")
+        if not isinstance(created_at, str) or not created_at:
+            continue
+        if event.get("event") == "head_ref_force_pushed" and event.get("commit_id") == head_sha:
+            parsed = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                raise ValueError("head push event timestamp has no timezone")
+            timestamps.append(parsed.astimezone(timezone.utc))
+    if not timestamps:
+        raise ValueError("PR timeline has no push event for the measured head")
+    print(max(timestamps).isoformat(timespec="seconds").replace("+00:00", "Z"))
+except Exception as exc:
+    raise SystemExit(str(exc))
 PY
   HEAD_TIME="$(cat "${HEAD_TIME_FILE}")"
   [ -n "${HEAD_TIME}" ] || not_ready "head push time response was empty"

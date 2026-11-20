@@ -40,6 +40,7 @@ from template_common import (  # noqa: E402
     SKIP_SUBSTITUTE_PATHS,
     TEMPLATE_RETIREMENTS_REL,
     load_template_retirements,
+    normalize_template_rel,
     resolve_template_version,
     template_version_is_valid,
 )
@@ -57,23 +58,7 @@ INSTANCE_OWNED_SEED_FILES = (
 )
 
 
-def normalize_rel(rel: str) -> str | None:
-    """Return a normalized relative path, or None if it escapes the root."""
-    if not isinstance(rel, str) or not rel or rel.startswith("/"):
-        return None
-    # Reject Windows drive / UNC forms and null bytes early.
-    if "\x00" in rel or ":" in rel:
-        return None
-    parts: list[str] = []
-    for part in rel.replace("\\", "/").split("/"):
-        if part in ("", "."):
-            continue
-        if part == "..":
-            return None
-        parts.append(part)
-    if not parts:
-        return None
-    return "/".join(parts)
+normalize_rel = normalize_template_rel
 
 
 def resolved_under(root: Path, rel: str) -> Path | None:
@@ -578,7 +563,8 @@ def apply_planned(
         raise RuntimeError(
             f"retirements file is malformed or unreadable: {retirement_path}"
         )
-    retirement_paths = {entry["path"] for entry in retirement_entries}
+    retirement_paths = {normalize_rel(entry["path"]) for entry in retirement_entries}
+    retirement_paths.discard(None)
     seed_paths = {item["path"] for item in actions if item.get("seed")}
     # Preflight every planned source before the first write so a missing file
     # mid-pass does not leave a half-applied install.
@@ -828,10 +814,11 @@ def main(argv: list[str] | None = None) -> int:
     retirements_path = ops_root / TEMPLATE_RETIREMENTS_REL
     retirement_entries, retirement_status = load_template_retirements(retirements_path)
     retirement_paths = (
-        {entry["path"] for entry in retirement_entries}
+        {normalize_rel(entry["path"]) for entry in retirement_entries}
         if retirement_status == "ok"
         else set()
     )
+    retirement_paths.discard(None)
 
     try:
         values = parse_placeholder_args(args.placeholder)

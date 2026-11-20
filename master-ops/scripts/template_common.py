@@ -28,6 +28,22 @@ TEMPLATE_VERSION_VALID_RE = re.compile(TEMPLATE_VERSION_PATTERN)
 TEMPLATE_RETIREMENTS_REL = Path("config/template-retirements.json")
 
 
+def normalize_template_rel(rel: str) -> str | None:
+    """Return a normalized safe relative path, or None when it escapes root."""
+    if not isinstance(rel, str) or not rel or rel.startswith("/"):
+        return None
+    if "\x00" in rel or ":" in rel:
+        return None
+    parts: list[str] = []
+    for part in rel.replace("\\", "/").split("/"):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            return None
+        parts.append(part)
+    return "/".join(parts) if parts else None
+
+
 def template_version_is_valid(value: str) -> bool:
     """Return whether a template stamp has a measurable release-like form."""
     return TEMPLATE_VERSION_VALID_RE.fullmatch(value.strip()) is not None
@@ -70,6 +86,8 @@ def load_template_retirements(path: Path) -> tuple[list[dict], str]:
     try:
         path_stat = path.stat()
     except FileNotFoundError:
+        if path.is_symlink():
+            return [], "malformed"
         return [], "absent"
     except OSError:
         return [], "malformed"
@@ -90,6 +108,9 @@ def load_template_retirements(path: Path) -> tuple[list[dict], str]:
         why = item.get("why")
         if not isinstance(rel, str) or not rel.strip():
             return [], "malformed"
+        normalized_rel = normalize_template_rel(rel.strip())
+        if normalized_rel is None:
+            return [], "malformed"
         if not isinstance(since, str):
             return [], "malformed"
         try:
@@ -98,7 +119,7 @@ def load_template_retirements(path: Path) -> tuple[list[dict], str]:
             return [], "malformed"
         if not isinstance(why, str) or not why.strip():
             return [], "malformed"
-        entries.append({"path": rel.strip(), "since": since, "why": why})
+        entries.append({"path": normalized_rel, "since": since, "why": why})
     return entries, "ok"
 
 
@@ -175,11 +196,13 @@ def resolve_template_version(
     if (
         not described
         or not template_version_is_valid(described)
-        or template_version_base(described) != plain_version
+        or template_version_base(described) != template_version_base(plain_version)
     ):
         return (
             plain_version,
-            "git describe --tags --match TEMPLATE-VERSION returned an unusable stamp; using TEMPLATE-VERSION "
+            "git describe --tags --match "
+            + plain_version
+            + " returned an unusable stamp; using TEMPLATE-VERSION "
             + plain_version,
         )
     return described, None

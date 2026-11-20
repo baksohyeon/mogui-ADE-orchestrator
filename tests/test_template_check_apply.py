@@ -54,15 +54,15 @@ def _git(cwd: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
-def _seed_version_template(root: Path) -> Path:
+def _seed_version_template(root: Path, version: str = "v1.2.3") -> Path:
     template = root / "template"
     template.mkdir(parents=True)
-    (template / "TEMPLATE-VERSION").write_text("v1.2.3\n", encoding="utf-8")
+    (template / "TEMPLATE-VERSION").write_text(version + "\n", encoding="utf-8")
     (template / "stamp.txt").write_text("stamp={{TEMPLATE_VERSION}}\n", encoding="utf-8")
     (template / "MANIFEST.json").write_text(
         json.dumps(
             {
-                "template_version": "v1.2.3",
+                "template_version": version,
                 "files": ["MANIFEST.json", "stamp.txt"],
             }
         )
@@ -74,7 +74,7 @@ def _seed_version_template(root: Path) -> Path:
     _git(template, "config", "user.name", "Template Test")
     _git(template, "add", "TEMPLATE-VERSION", "MANIFEST.json", "stamp.txt")
     _git(template, "commit", "--quiet", "-m", "release")
-    _git(template, "tag", "v1.2.3")
+    _git(template, "tag", version)
     (template / "stamp.txt").write_text(
         "stamp={{TEMPLATE_VERSION}}\npost-release\n", encoding="utf-8"
     )
@@ -181,7 +181,9 @@ def test_template_check_template_compare_states_report_set(tmp_path: Path):
     report = json.loads(result.stdout)
     assert report["report_set"] == "template-compare"
     assert "workspace-card/CLAUDE.md" in report["absent_required"]
-    assert report["template_version"] == "v0.5.353"
+    assert report["template_version"] == (
+        (SKELETON / "TEMPLATE-VERSION").read_text(encoding="utf-8").strip()
+    )
 
 
 def test_template_apply_stamps_git_distance_and_plain_tarball_versions(tmp_path: Path):
@@ -227,6 +229,17 @@ def test_template_apply_ignores_nearer_non_release_tag(tmp_path: Path):
     assert result.returncode == 0, result.stderr + result.stdout
     expected = _git(template, "describe", "--tags", "--match", "v1.2.3")
     assert expected.startswith("v1.2.3-1-g")
+    assert json.loads((ops / "MANIFEST.json").read_text())["template_version"] == expected
+
+
+def test_template_apply_accepts_leading_zero_release_tag(tmp_path: Path):
+    version = "v01.002.003"
+    template = _seed_version_template(tmp_path / "source", version)
+    ops = tmp_path / "ops"
+    result = _apply_version_template(template, ops)
+    assert result.returncode == 0, result.stderr + result.stdout
+    expected = _git(template, "describe", "--tags", "--match", version)
+    assert expected.startswith(version + "-1-g")
     assert json.loads((ops / "MANIFEST.json").read_text())["template_version"] == expected
 
 
@@ -402,7 +415,7 @@ def test_template_check_retired_path_is_not_reported_absent(tmp_path: Path):
     _seed_ops_from_manifest(ops, drop=["workspace-card/CLAUDE.md"])
     _write_retirements(
         ops,
-        [{"path": "workspace-card/CLAUDE.md", "since": "2026-08-05", "why": "retired by owner"}],
+        [{"path": "./workspace-card/CLAUDE.md", "since": "2026-08-05", "why": "retired by owner"}],
     )
     result = _run([sys.executable, str(TEMPLATE_CHECK), "--ops", str(ops), "--json"])
     assert result.returncode == 0, result.stdout + result.stderr
@@ -423,7 +436,7 @@ def test_template_apply_skips_retired_path_in_dry_run_and_write_pass(tmp_path: P
     (ops / "MANIFEST.json").write_text(json.dumps(manifest) + "\n", encoding="utf-8")
     _write_retirements(
         ops,
-        [{"path": "removed.md", "since": "2026-11-20", "why": "removed on purpose"}],
+        [{"path": "./removed.md", "since": "2026-11-20", "why": "removed on purpose"}],
     )
 
     dry = _run(
@@ -607,6 +620,22 @@ def test_template_check_retirements_path_is_directory_is_malformed(tmp_path: Pat
     assert result.returncode == 1, result.stdout
     report = json.loads(result.stdout)
     assert report["manifest_status"] == "ok"
+    assert report["retirements_status"] == "malformed"
+
+
+def test_template_check_dangling_retirements_symlink_is_malformed(tmp_path: Path):
+    ops = tmp_path / "ops"
+    ops.mkdir()
+    _seed_ops_from_manifest(ops)
+    retirements = ops / "config" / "template-retirements.json"
+    retirements.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        retirements.symlink_to(ops / "missing-retirements.json")
+    except OSError:
+        pytest.skip("symlink creation is unavailable on this platform")
+    result = _run([sys.executable, str(TEMPLATE_CHECK), "--ops", str(ops), "--json"])
+    assert result.returncode == 1, result.stdout
+    report = json.loads(result.stdout)
     assert report["retirements_status"] == "malformed"
 
 

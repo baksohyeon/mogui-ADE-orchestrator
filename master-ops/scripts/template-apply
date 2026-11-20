@@ -37,6 +37,8 @@ if str(_SCRIPT_DIR) not in sys.path:
 from template_common import (  # noqa: E402
     PLACEHOLDERS,
     SKIP_SUBSTITUTE_PATHS,
+    resolve_template_version,
+    template_version_is_valid,
 )
 from template_manifest import instance_owned_predicate  # noqa: E402
 
@@ -610,6 +612,15 @@ def apply_planned(
             payload = src.read_bytes()
         else:
             payload = substitute(src.read_text(encoding="utf-8"), values).encode("utf-8")
+        if rel == "MANIFEST.json" and "TEMPLATE_VERSION" in values:
+            try:
+                manifest_payload = json.loads(payload.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise RuntimeError(f"manifest source is not valid JSON: {exc}") from exc
+            if not isinstance(manifest_payload, dict):
+                raise RuntimeError("manifest source root is not an object")
+            manifest_payload["template_version"] = values["TEMPLATE_VERSION"]
+            payload = (json.dumps(manifest_payload, indent=2) + "\n").encode("utf-8")
         # Publish through a temporary file in the destination directory so a
         # crash mid-write does not leave a truncated target. Seed files use a
         # hard link for atomic create-only publication, while ordinary files
@@ -784,10 +795,20 @@ def main(argv: list[str] | None = None) -> int:
         version_file = template_root / "TEMPLATE-VERSION"
         if version_file.is_file():
             try:
-                values["TEMPLATE_VERSION"] = version_file.read_text(encoding="utf-8").strip()
+                plain_version = version_file.read_text(encoding="utf-8").strip()
             except (OSError, UnicodeDecodeError) as exc:
                 sys.stderr.write(f"template-apply: cannot read template version: {exc}\n")
                 return 2
+            if not plain_version or not template_version_is_valid(plain_version):
+                sys.stderr.write(
+                    "template-apply: TEMPLATE-VERSION has unsupported stamp form\n"
+                )
+                return 2
+            values["TEMPLATE_VERSION"], warning = resolve_template_version(
+                template_root, plain_version
+            )
+            if warning:
+                sys.stderr.write(f"template-apply: warning: {warning}\n")
 
     actions = plan_actions(template_root, ops_root, manifest, args.attempt)
 

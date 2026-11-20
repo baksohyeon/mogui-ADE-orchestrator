@@ -103,7 +103,7 @@ template_adoption_probe() {
   # the whole script with no output instead of falling through to the
   # "undecided" case below.
   probe=$(python3 - "$TEMPLATE_MANIFEST_FILE" << 'EOFTEMPLATE' 2>/dev/null
-import json, sys
+import json, re, sys
 
 manifest_path = sys.argv[1]
 manifest = json.load(open(manifest_path, encoding="utf-8"))
@@ -111,6 +111,8 @@ manifest_version = manifest.get("template_version")
 files = manifest.get("files")
 if not isinstance(manifest_version, str) or not manifest_version.strip():
     print("ERROR|MANIFEST.json template_version missing")
+elif re.fullmatch(r"v[0-9A-Za-z][0-9A-Za-z._-]*(?:-\d+-g[0-9a-f]+)?", manifest_version.strip()) is None:
+    print("ERROR|MANIFEST.json template_version has unsupported stamp form")
 elif not isinstance(files, list):
     print("ERROR|MANIFEST.json files list missing")
 else:

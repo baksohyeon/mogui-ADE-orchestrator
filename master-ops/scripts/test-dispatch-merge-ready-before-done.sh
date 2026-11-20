@@ -2,11 +2,11 @@
 # Regression check for merge-ready-before-done (#330): the standing-rule
 # block that folds into every dispatched brief the same way mail-before-done
 # and required-infra do (test-dispatch-required-infra.sh covers that
-# sibling feature, and this test is lifted from the same shape). dispatch
-# carries {{RUNTIME_ROOT}}/{{OPS_REPO}} template placeholders, so this
-# extracts just the functions and the 1.6d block by exact-line awk range and
-# runs that snippet in an isolated subshell with a fixture
-# standing-rules.md, rather than invoking the whole script.
+# sibling feature, and this test is lifted from the same shape).
+# The dispatch fixture uses RUNTIME_ROOT and OPS_REPO template substitutions.
+# This extracts just the functions and the 1.6d block by exact-line awk range.
+# It runs that snippet in an isolated subshell with a fixture standing-rules.md,
+# rather than invoking the whole script.
 set -eu
 
 dispatch=$(cd "$(dirname "$0")" && pwd)/dispatch

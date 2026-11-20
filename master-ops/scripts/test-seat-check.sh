@@ -140,7 +140,7 @@ template_mutant_check() {
 TEMPLATE_MANIFEST_ABSENT="$TMP/no-manifest.json"
 TEMPLATE_MANIFEST_STAMPED="$TMP/manifest-stamped.json"
 cat > "$TEMPLATE_MANIFEST_STAMPED" <<'EOF'
-{"template_version": "v0.4.1", "files": ["a"]}
+{"template_version": "v0.4.1-1-gdeadbeef", "files": ["a"]}
 EOF
 TEMPLATE_LEDGER_MISSING="$TMP/no-ledger.md"
 TEMPLATE_LEDGER_PRESENT="$TMP/template-adoption-2026-08-08.md"
@@ -157,7 +157,7 @@ template_mutant_check "manifest-absent" \
 
 # T2. Stamped manifest, adoption ledger missing: non-zero exit.
 check_template "stamped manifest with missing ledger is reported" \
-  "Template: v0.4.1 stamped, adoption ledger missing" 1 \
+  "Template: v0.4.1-1-gdeadbeef stamped, adoption ledger missing" 1 \
   "$TEMPLATE_MANIFEST_STAMPED" "$TEMPLATE_LEDGER_MISSING"
 template_mutant_check "ledger-missing" \
   's/stamped, adoption ledger missing/MUTANT-VERDICT/' \
@@ -166,7 +166,7 @@ template_mutant_check "ledger-missing" \
 
 # T3. Stamped manifest, adoption ledger present: zero exit.
 check_template "stamped manifest with ledger present is reported" \
-  "Template: v0.4.1 stamped, adoption incomplete" 0 \
+  "Template: v0.4.1-1-gdeadbeef stamped, adoption incomplete" 0 \
   "$TEMPLATE_MANIFEST_STAMPED" "$TEMPLATE_LEDGER_PRESENT"
 template_mutant_check "ledger-present" \
   's/stamped, adoption incomplete/MUTANT-VERDICT/' \

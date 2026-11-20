@@ -59,6 +59,37 @@ to merge the `code-review-graph` entry, confirm `enabledMcpjsonServers` names it
 absolute path when it is not itself a `{{REPO_LIST}}` member) that is not already a path in
 `~/.code-review-graph/registry.json`, the same registry file `harness-selfcheck.md` reads directly.
 
+### Registering an intentionally removed template path
+
+When a path was removed on purpose, the installer records that retirement in
+`{{OPS_REPO}}/config/template-retirements.json`. The file contains a JSON array
+of objects with the manifest path, an ISO date, and the reason for the removal:
+
+```console
+mkdir -p "{{OPS_REPO}}/config"
+printf '%s\n' '[{"path":"scripts/dispatch-smoke","since":"2026-11-20","why":"removed on purpose"}]' > "{{OPS_REPO}}/config/template-retirements.json"
+```
+
+`template-check` reads this file through its `--retirements` default. Before the
+entry exists, a seeded install reports the path as required and absent:
+
+```text
+absent_required: 1
+  - scripts/dispatch-smoke
+retired: 0
+retirements_status: absent
+```
+
+After the file is written, the same check reports the path as retired, so the
+path no longer contributes to `absent_required`. Other findings remain visible:
+
+```text
+absent_required: 0
+retired: 1
+  - scripts/dispatch-smoke
+retirements_status: ok
+```
+
 3. **Dry-run apply (always first)**: print the exact file list and the reason for each path. No write yet. Pass the same eight measured `--placeholder` values as step 5; a dry run that omits them prints the missing-placeholder report and exits 2 by design, since a planned file still carries each unsupplied token.
 
 The dry-run plan also shows the two merge-ready seed files when the install does not have them. Their plan reason says they are created only when absent; an existing file is reported as instance-owned and remains untouched.

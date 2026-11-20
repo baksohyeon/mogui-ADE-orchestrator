@@ -2,4 +2,4 @@
 - Upgrade apply plans now seed the merge-ready stop-list and bot roster only when absent, and missing configuration tells the operator how to copy it into the install.
 - Rate-limit timestamp failures now print one clean sentence without a traceback.
 - Round-two review coverage now preserves stop-list asks through both HTTP 403 error paths, requires a non-empty fallback context set, rejects invalid merge-ready seed paths, and publishes absent-only seeds without replacing a concurrent file.
-- Round-three coverage now keeps rate-limit and permission HTTP 403 responses at exit `1`, asks with exit `2` only when the plan-limit fallback has no usable source, and matches stop-list paths case-insensitively.
+- Round-three coverage now keeps rate-limit HTTP 403 responses at exit `1` when no independent stop-list, contract, or configuration ask applies; asks with exit `2` for a plan-limit response only when no usable fallback source exists; and matches stop-list paths case-insensitively.

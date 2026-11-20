@@ -22,7 +22,8 @@ you build on it.
 
 ### Changed
 
-- README now explains what the harness does differently and notes an audit (#352) of which hand-built supervision to replace with Orca's native features.
+- README now explains what the harness does differently.
+- The harness has run hand-built worker supervision, stall detection and cleanup since August 2026. Orca now ships native versions of these, and an audit (#352) is deciding which of them to replace with Orca's own.
 
 ### Fixed
 

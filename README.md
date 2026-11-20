@@ -59,8 +59,6 @@ The harness accepts any agent behind a master that can reason. `AGENTS.md` and `
 
 The template depends on Orca by design as the required execution substrate for live operation. It supplies session lifetime that outlives a window, stable terminal handles, worktree-scoped placement, a durable Run mailbox that survives restarts, a background receiver, supervised dispatch, and pane identity tied to a worktree. Step 0 preflight refuses to proceed until `orca status` reports a usable runtime, `orca --version` meets the minimum declared in `master-ops/scripts/orca-surface-baseline.json`, and the connected runtime version meets that same minimum.
 
-The harness has run hand-built worker supervision, stall detection and cleanup since August 2026. Orca now ships native versions of these, and an audit ([#352](https://github.com/baksohyeon/mogui-ADE-orchestrator/issues/352)) is deciding which of them to replace with Orca's own.
-
 The Orca decision is also a labelled preference. It came from building this harness for a month and running it against other agent development environments. What they offered read as a subset of what Orca offers. That is a preference and it is recorded as one.
 
 For replaceable stack components, five questions decide what belongs in the stack:

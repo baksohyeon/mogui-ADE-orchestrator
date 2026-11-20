@@ -291,6 +291,38 @@ def plan_actions(
         src = resolved_under(template_root, rel)
         dest = resolved_under(ops_root, rel)
         lexical_src = template_root.resolve() / rel
+        if dest is None:
+            actions.append(
+                {
+                    "path": rel,
+                    "action": "error-invalid-path",
+                    "reason": "seed destination escapes ops root or resolves through a symlink loop",
+                    "seed": True,
+                }
+            )
+            continue
+        effective = effective_rel_under(ops_root, dest)
+        lexical_dest = ops_root.resolve() / rel
+        if effective is None or lexical_dest.is_symlink() or lexical_dest != dest:
+            actions.append(
+                {
+                    "path": rel,
+                    "action": "error-invalid-path",
+                    "reason": "seed destination resolves through a symlink or outside ops root",
+                    "seed": True,
+                }
+            )
+            continue
+        if lexical_dest.exists() and not lexical_dest.is_file():
+            actions.append(
+                {
+                    "path": rel,
+                    "action": "error-invalid-path",
+                    "reason": "seed destination exists but is not a regular file",
+                    "seed": True,
+                }
+            )
+            continue
         if src is None:
             actions.append(
                 {
@@ -325,47 +357,15 @@ def plan_actions(
                 }
             )
             continue
-        if dest is None:
-            actions.append(
-                {
-                    "path": rel,
-                    "action": "error-invalid-path",
-                    "reason": "seed path escapes template or ops root",
-                    "seed": True,
-                }
-            )
-            continue
-        effective = effective_rel_under(ops_root, dest)
-        lexical_dest = ops_root.resolve() / rel
-        if effective is None or lexical_dest.is_symlink() or lexical_dest != dest:
-            actions.append(
-                {
-                    "path": rel,
-                    "action": "error-invalid-path",
-                    "reason": "seed destination resolves through a symlink or outside ops root",
-                    "seed": True,
-                }
-            )
-            continue
         if lexical_dest.exists():
-            if not lexical_dest.is_file():
-                actions.append(
-                    {
-                        "path": rel,
-                        "action": "error-invalid-path",
-                        "reason": "seed destination exists but is not a regular file",
-                        "seed": True,
-                    }
-                )
-            else:
-                actions.append(
-                    {
-                        "path": rel,
-                        "action": "skipped-as-instance-owned",
-                        "reason": "instance-owned seed; existing file preserved",
-                        "seed": True,
-                    }
-                )
+            actions.append(
+                {
+                    "path": rel,
+                    "action": "skipped-as-instance-owned",
+                    "reason": "instance-owned seed; existing file preserved",
+                    "seed": True,
+                }
+            )
             continue
         if not src.is_file():
             actions.append(
@@ -498,6 +498,8 @@ def apply_planned(
                 try:
                     os.link(tmp_name, dest)
                 except FileExistsError:
+                    if dest.is_symlink() or not dest.is_file():
+                        raise RuntimeError(f"destination is not a regular file: {rel}")
                     results.append(
                         {
                             "path": rel,

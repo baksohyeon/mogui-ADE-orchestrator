@@ -20,6 +20,10 @@ you build on it.
 
 ## [Unreleased]
 
+### Changed
+
+- README now explains what the harness does differently and records the move of hand-built supervision onto Orca's native versions.
+
 ## [0.5.353] - 2026-11-17
 
 ### Fixed

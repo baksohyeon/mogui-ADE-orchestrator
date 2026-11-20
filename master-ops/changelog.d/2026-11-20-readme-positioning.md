@@ -1,0 +1,1 @@
+- The template README now explains what the harness does differently and records the move of hand-built supervision, stall detection and cleanup onto Orca's native versions (#352).

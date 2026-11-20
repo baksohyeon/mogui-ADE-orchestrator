@@ -1,6 +1,6 @@
 ---
 status: active
-summary: warns when tracker cards lack the Beads metadata required by the workspace
+summary: warns when today's dispatches have no tracker card reference
 ---
 
 # Tracker card gap hook (`scripts/hooks/bd-gap-warn.sh`)

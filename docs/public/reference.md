@@ -58,7 +58,7 @@ The table lists the public command surface only. Local host routing, private pat
 
 The dispatch gate records these runbook decisions in its JSONL ledger:
 
-- `RUNBOOK_UNKNOWN` (refusal): a named runbook is missing or retired.
+- `RUNBOOK_UNKNOWN` (refusal): a named runbook is missing or not an active, valid runbook.
 - `RUNBOOK_TRIGGER_UNLISTED` (refusal with front matter, warning without it): an active trigger matches the contract body without a listed or waived runbook.
 - `RUNBOOK_INJECT_UNSUPPORTED` (refusal): a contract names runbooks and the dispatch wrapper has not declared Brief injection support.
 - `RUNBOOK_BRIEF_MISSING` (warning): a named runbook has no `## Brief` section or exceeds the Brief size limit.

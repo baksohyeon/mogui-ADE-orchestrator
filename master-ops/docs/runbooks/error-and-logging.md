@@ -1,6 +1,6 @@
 ---
 status: active
-summary: defines error boundaries, exit meanings, and durable logging
+summary: defines the hook-fire and event log split, the event schema, and fail-open logging
 ---
 
 # Error and logging boundaries

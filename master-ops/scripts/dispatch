@@ -598,6 +598,9 @@ runbook_brief() {
   local runbook_file="$DISPATCH_RUNBOOKS_DIR/$name.md"
   local brief
   brief=$(markdown_section "$runbook_file" Brief) || return 1
+  if [ -z "$brief" ]; then
+    return 1
+  fi
   if ! printf '%s' "$brief" | python3 -c \
     'import sys; raise SystemExit(0 if len(sys.stdin.buffer.read()) <= 2000 else 1)'; then
     return 1

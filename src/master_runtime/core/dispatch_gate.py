@@ -1801,7 +1801,11 @@ def _runbook_metadata(path: Path) -> dict[str, object] | None:
         status = None
     triggers = parsed.get("triggers", [])
     if not isinstance(triggers, list) or any(
-        not isinstance(trigger, str) or not trigger for trigger in triggers
+        not isinstance(trigger, str)
+        or not trigger
+        or trigger != trigger.casefold()
+        or "," in trigger
+        for trigger in triggers
     ):
         metadata_error = metadata_error or "invalid triggers"
         triggers = []
@@ -1880,15 +1884,22 @@ def _runbook_gate_checks(
             or item[1].get("status") != "active"
             or item[1].get("error") is not None
         ):
+            detail = f"runbook={name}"
+            if item is not None:
+                metadata = item[1]
+                if metadata.get("error") is not None:
+                    detail += f"; error={metadata['error']}"
+                elif metadata.get("status") != "active":
+                    detail += f"; status={metadata.get('status')}"
             return (
                 ReasonCode.RUNBOOK_UNKNOWN,
                 tuple(warnings),
-                f"runbook={name}",
+                detail,
             )
 
     for name in sorted(listed):
         metadata = inventory[name][1]
-        if metadata.get("brief") is None or (
+        if not metadata.get("brief") or (
             isinstance(metadata.get("brief_bytes"), int)
             and metadata["brief_bytes"] > RUNBOOK_BRIEF_LIMIT_BYTES
         ):

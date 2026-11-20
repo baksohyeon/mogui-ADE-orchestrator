@@ -1,6 +1,6 @@
 ---
 status: active
-summary: accounts for registered dispatches and waits for actionable completion evidence
+summary: accounts for a Run's dispatches and returns on completion, escalation, question, or a dead, stalled, or open-pane dispatch
 ---
 
 # worker-wait runbook

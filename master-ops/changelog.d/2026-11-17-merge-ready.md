@@ -35,3 +35,7 @@
   rate-limit coverage uses the notice's creation time and the head push event. Changed files and
   checks are pinned to the measured head, required rules are paginated, and the output reports when
   the contract scope check was skipped.
+- Review and review-thread connections now paginate with GraphQL cursors and stop at a named page
+  cap on malformed or excessive responses. Unknown ruleset types fail closed instead of being
+  silently omitted, ordinary pushes cannot qualify a rate-limit exemption, and shared parsing keeps
+  preflight and final roster, stop-list, and contract checks consistent.

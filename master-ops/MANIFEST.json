@@ -94,6 +94,7 @@
     "scripts/install-mcp-config",
     "scripts/issue-similar",
     "scripts/land",
+    "scripts/lib/merge_ready.py",
     "scripts/lib/orca_json.py",
     "scripts/loop-check",
     "scripts/measure",

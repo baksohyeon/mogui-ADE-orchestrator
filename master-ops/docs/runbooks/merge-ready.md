@@ -88,17 +88,25 @@ required contexts, GraphQL reviews and threads, PR comments, and the latest qual
 push event when a rate-limit exemption needs a timestamp. After the other responses are collected,
 the final head check reads `headRefOid` and `baseRefName` again and compares them with the initial
 `head_sha` and `baseRefName`; a mismatch makes the result not ready so the command can be run again.
-Check-run timestamps do not qualify an exemption. If no qualifying push event has a server-recorded
-`created_at`, the rate-limit exemption is unavailable and the command stays not ready; it does not
-substitute a commit or check-run timestamp.
+Check-run timestamps do not qualify an exemption. An ordinary push never qualifies because GitHub's
+`committed` timeline events carry no server-recorded `created_at`; only a force-push event with a
+server-recorded time can establish the exemption boundary. If no such qualifying push event exists,
+the rate-limit exemption is unavailable and the command stays not ready; it does not substitute a
+commit or check-run timestamp.
 
-Reviews and review threads are read up to 100 each; if either connection has another page, the
-measurement is not ready and names pagination as the next action. Nested review comments are also
-read up to 100 for each review, but an empty review with a top-level comment on the returned page
-remains usable even when its nested comments have another page. When no top-level comment is
-returned and more nested-comment pages remain, the measurement is not ready. The pull-request files
-endpoint caps responses at 3000 files; the command exits `1` when the flattened response reaches
-3000 because the complete path set cannot be verified.
+Reviews and review threads are read in pages of up to 100 using their GraphQL cursors. The command
+stops with exit `1` and names the pagination cap after ten pages, or when a page is malformed. Nested
+review comments are also read up to 100 for each review, but an empty review with a top-level comment
+on the returned page remains usable even when its nested comments have another page. When no top-level
+comment is returned and more nested-comment pages remain, the measurement is not ready. The
+pull-request files endpoint caps responses at 3000 files; the command exits `1` when the flattened
+response reaches 3000 because the complete path set cannot be verified.
+
+The rules endpoint can include non-check rules such as creation, update, deletion, non-fast-forward,
+pull-request, linear-history, merge-queue, deployment, signature, naming-pattern, path-restriction,
+reviewer, and file-size rules. These rules do not supply required check contexts, so the measurement
+records them and continues; a new or check-gating rule type such as `workflows` or `code_scanning`
+fails closed with exit `1` instead of silently omitting a required gate.
 
 ## Exit codes
 

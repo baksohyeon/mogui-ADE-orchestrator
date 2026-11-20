@@ -27,8 +27,9 @@ BETWEEN_PUSH_DATE="2026-01-15T00:00:00Z"
 LATEST_PUSH_DATE="2026-02-01T00:00:00Z"
 
 INSTALL_DIR="${WORK_DIR}/install"
-mkdir -p "${INSTALL_DIR}/scripts" "${INSTALL_DIR}/config"
+mkdir -p "${INSTALL_DIR}/scripts/lib" "${INSTALL_DIR}/config"
 cp "${MERGE_READY}" "${INSTALL_DIR}/scripts/merge-ready"
+cp "${SCRIPT_DIR}/lib/merge_ready.py" "${INSTALL_DIR}/scripts/lib/merge_ready.py"
 chmod +x "${INSTALL_DIR}/scripts/merge-ready"
 MERGE_READY="${INSTALL_DIR}/scripts/merge-ready"
 printf '%s\n' "config/gitleaks.toml" >"${INSTALL_DIR}/config/merge-ready-stop-paths.txt"
@@ -100,6 +101,27 @@ case "$1" in
         fi
         if [ "${GH_STUB_CASE:-}" = "graphql-bad-json" ]; then
           echo "not json"
+        elif [ "${GH_STUB_CASE:-}" = "graphql-paginated" ] || [ "${GH_STUB_CASE:-}" = "graphql-malformed-second" ]; then
+          if printf '%s' "$*" | grep -q 'reviewThreads'; then
+            if [ ! -e "${GH_FIXTURE_DIR}/thread-page-count" ]; then
+              : >"${GH_FIXTURE_DIR}/thread-page-count"
+              cat "${GH_FIXTURE_DIR}/thread-page-1.json"
+            else
+              cat "${GH_FIXTURE_DIR}/thread-page-2.json"
+            fi
+          elif printf '%s' "$*" | grep -q 'reviews'; then
+            if [ ! -e "${GH_FIXTURE_DIR}/review-page-count" ]; then
+              : >"${GH_FIXTURE_DIR}/review-page-count"
+              cat "${GH_FIXTURE_DIR}/review-page-1.json"
+            elif [ "${GH_STUB_CASE:-}" = "graphql-malformed-second" ]; then
+              cat "${GH_FIXTURE_DIR}/review-page-2-malformed.json"
+            else
+              cat "${GH_FIXTURE_DIR}/review-page-2.json"
+            fi
+          else
+            echo "gh stub: graphql query did not name a connection" >&2
+            exit 1
+          fi
         else
           cat "${GH_FIXTURE_DIR}/graphql.json"
         fi
@@ -219,8 +241,8 @@ PY
 import json, sys
 path, reviews_raw, open_threads = sys.argv[1], sys.argv[2], int(sys.argv[3])
 data = {"data": {"repository": {"pullRequest": {
-    "reviewThreads": {"nodes": [{"isResolved": False} for _ in range(open_threads)], "pageInfo": {"hasNextPage": False}},
-    "reviews": {"nodes": json.loads(reviews_raw), "pageInfo": {"hasNextPage": False}},
+    "reviewThreads": {"nodes": [{"isResolved": False} for _ in range(open_threads)], "pageInfo": {"hasNextPage": False, "endCursor": None}},
+    "reviews": {"nodes": json.loads(reviews_raw), "pageInfo": {"hasNextPage": False, "endCursor": None}},
 }}}}
 json.dump(data, open(path, "w", encoding="utf-8"))
 PY
@@ -541,6 +563,93 @@ else
   fail "paginated required-check rules: got ${rc}: ${out}"
 fi
 
+unknown_rule_type_dir="${WORK_DIR}/unknown-rule-type"
+write_fixture "${unknown_rule_type_dir}" '[{"filename":"README.md"}]' "" "${DEFAULT_CHECKS}" "${DEFAULT_REVIEWS}" 0 OPEN false "[]" '[{"type":"workflows","parameters":{}}]'
+out=$(run_case "${unknown_rule_type_dir}"); rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'unsupported ruleset rule type: workflows'; then
+  ok "an unknown check-gating ruleset type exits 1 and names workflows"
+else
+  fail "unknown ruleset type: got ${rc}: ${out}"
+fi
+
+graphql_pagination_dir="${WORK_DIR}/graphql-pagination"
+write_fixture "${graphql_pagination_dir}" '[{"filename":"README.md"}]' ""
+python3 - "${graphql_pagination_dir}" "${HEAD_SHA}" <<'PY'
+import json
+import sys
+
+root, head_sha = sys.argv[1:]
+bot_review = lambda login: {
+    "state": "COMMENTED",
+    "body": "Automated review",
+    "comments": {"nodes": [], "pageInfo": {"hasNextPage": False}},
+    "commit": {"oid": head_sha},
+    "author": {"login": login, "__typename": "Bot"},
+}
+reviews = [bot_review("coderabbitai"), bot_review("cubic-dev-ai")]
+reviews.extend(
+    {
+        "state": "COMMENTED",
+        "body": "",
+        "comments": {"nodes": [], "pageInfo": {"hasNextPage": False}},
+        "commit": {"oid": head_sha},
+        "author": {"login": f"reviewer-{index}", "__typename": "User"},
+    }
+    for index in range(98)
+)
+reviews.append(
+    {
+        "state": "COMMENTED",
+        "body": "",
+        "comments": {"nodes": [], "pageInfo": {"hasNextPage": False}},
+        "commit": {"oid": head_sha},
+        "author": {"login": "reviewer-98", "__typename": "User"},
+    }
+)
+def page(connection, nodes, has_next, cursor):
+    return {"data": {"repository": {"pullRequest": {
+        connection: {"nodes": nodes, "pageInfo": {"hasNextPage": has_next, "endCursor": cursor}},
+    }}}}
+json.dump(page("reviews", reviews[:100], True, "reviews-cursor"), open(f"{root}/review-page-1.json", "w", encoding="utf-8"))
+json.dump(page("reviews", reviews[100:], False, None), open(f"{root}/review-page-2.json", "w", encoding="utf-8"))
+json.dump(page("reviewThreads", [{"isResolved": True} for _ in range(100)], True, "threads-cursor"), open(f"{root}/thread-page-1.json", "w", encoding="utf-8"))
+json.dump(page("reviewThreads", [{"isResolved": True}], False, None), open(f"{root}/thread-page-2.json", "w", encoding="utf-8"))
+PY
+out=$(run_case "${graphql_pagination_dir}" graphql-paginated); rc=$?
+if [ "${rc}" -eq 0 ] && printf '%s' "${out}" | grep -q 'merge-ready: merge'; then
+  ok "reviews and review threads paginate beyond 100 nodes"
+else
+  fail "GraphQL reviews and threads pagination: got ${rc}: ${out}"
+fi
+
+graphql_malformed_dir="${WORK_DIR}/graphql-malformed-second"
+write_fixture "${graphql_malformed_dir}" '[{"filename":"README.md"}]' ""
+python3 - "${graphql_malformed_dir}" "${HEAD_SHA}" <<'PY'
+import json
+import sys
+
+root, head_sha = sys.argv[1:]
+review = {
+    "state": "COMMENTED",
+    "body": "Automated review",
+    "comments": {"nodes": [], "pageInfo": {"hasNextPage": False}},
+    "commit": {"oid": head_sha},
+    "author": {"login": "coderabbitai", "__typename": "Bot"},
+}
+page = {"data": {"repository": {"pullRequest": {
+    "reviews": {"nodes": [review], "pageInfo": {"hasNextPage": True, "endCursor": "reviews-cursor"}},
+}}}}
+json.dump(page, open(f"{root}/review-page-1.json", "w", encoding="utf-8"))
+json.dump({"data": {"repository": {"pullRequest": {"reviews": {"nodes": [review]}}}}}, open(f"{root}/review-page-2-malformed.json", "w", encoding="utf-8"))
+json.dump({"data": {"repository": {"pullRequest": {"reviewThreads": {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}}}}}}, open(f"{root}/thread-page-1.json", "w", encoding="utf-8"))
+PY
+out=$(run_case "${graphql_malformed_dir}" graphql-malformed-second); rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'could not parse reviews page 2'; then
+  ok "a malformed second GraphQL page exits 1 with the connection name"
+else
+  fail "malformed second GraphQL page: got ${rc}: ${out}"
+fi
+
 rules_fail_dir="${WORK_DIR}/rules-fail"
 write_fixture "${rules_fail_dir}" '[{"filename":"README.md"}]' ""
 out=$(run_case "${rules_fail_dir}" rules-fail); rc=$?
@@ -676,6 +785,29 @@ if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'coderabbitai'; then
   ok "a marker without the required notice line exits 1"
 else
   fail "missing required notice line: got ${rc}: ${out}"
+fi
+
+incomplete_roster_dir="${WORK_DIR}/incomplete-roster"
+write_fixture "${incomplete_roster_dir}" '[{"filename":"README.md"}]' ""
+printf '%s\n' 'coderabbitai | <!-- This is an auto-generated comment: rate limited by coderabbit.ai --> | none' >"${INSTALL_DIR}/config/merge-ready-bots.txt"
+out=$(run_case "${incomplete_roster_dir}"); rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'incomplete rate-limit form'; then
+  ok "an incomplete roster form fails identically in shared review parsing"
+else
+  fail "incomplete roster form: got ${rc}: ${out}"
+fi
+cat >"${INSTALL_DIR}/config/merge-ready-bots.txt" <<'EOF'
+cubic-dev-ai | none | none
+coderabbitai | <!-- This is an auto-generated comment: rate limited by coderabbit.ai --> | > ## Review limit reached
+EOF
+
+missing_writes_contract="${WORK_DIR}/missing-writes-contract.md"
+printf '%s\n' '---' '---' '# no writes field' >"${missing_writes_contract}"
+out=$(GH_FIXTURE_DIR="${clean_dir}" GH_STUB_CASE="" "${MERGE_READY}" --repo "${REPO}" --pr 1 --contract "${missing_writes_contract}"); rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q 'contract front matter has no writes'; then
+  ok "a contract without writes fails closed in shared path parsing"
+else
+  fail "missing contract writes: got ${rc}: ${out}"
 fi
 
 cubic_rate_limit_dir="${WORK_DIR}/cubic-rate-limit"

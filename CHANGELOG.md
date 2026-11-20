@@ -22,7 +22,7 @@ you build on it.
 
 ### Changed
 
-- README now explains what the harness does differently and records the move of hand-built supervision onto Orca's native versions.
+- README now explains what the harness does differently and notes an audit (#352) of which hand-built supervision to replace with Orca's native features.
 
 ### Fixed
 

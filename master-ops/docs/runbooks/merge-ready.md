@@ -92,10 +92,13 @@ Check-run timestamps do not qualify an exemption. If no qualifying push event ha
 `created_at`, the rate-limit exemption is unavailable and the command stays not ready; it does not
 substitute a commit or check-run timestamp.
 
-Reviews and review threads are read up to 100 each. A connection with another page is not ready
-and names pagination as the next action. The pull-request files endpoint caps responses at 3000
-files; the command exits `1` when the flattened response reaches 3000 because the complete path set
-cannot be verified.
+Reviews and review threads are read up to 100 each; if either connection has another page, the
+measurement is not ready and names pagination as the next action. Nested review comments are also
+read up to 100 for each review, but an empty review with a top-level comment on the returned page
+remains usable even when its nested comments have another page. When no top-level comment is
+returned and more nested-comment pages remain, the measurement is not ready. The pull-request files
+endpoint caps responses at 3000 files; the command exits `1` when the flattened response reaches
+3000 because the complete path set cannot be verified.
 
 ## Exit codes
 

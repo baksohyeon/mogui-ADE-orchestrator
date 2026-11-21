@@ -30,7 +30,7 @@ TEMPLATE_RETIREMENTS_REL = Path("config/template-retirements.json")
 
 def normalize_template_rel(rel: str) -> str | None:
     """Return a normalized safe relative path, or None when it escapes root."""
-    if not isinstance(rel, str) or not rel or rel.startswith("/"):
+    if not isinstance(rel, str) or not rel or rel.startswith(("/", "\\")):
         return None
     if "\x00" in rel or ":" in rel:
         return None
@@ -128,12 +128,16 @@ def resolve_template_version(
 ) -> tuple[str, str | None]:
     """Resolve the install stamp and a warning when git measurement is unsafe."""
     git_prefix = ["git", "-C", str(source_root)]
+    git_env = os.environ.copy()
+    git_env.pop("GIT_DIR", None)
+    git_env.pop("GIT_INDEX_FILE", None)
     try:
         repo_top = subprocess.run(
             [*git_prefix, "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
             check=True,
+            env=git_env,
         )
     except FileNotFoundError:
         return plain_version, "git is unavailable; using TEMPLATE-VERSION " + plain_version
@@ -163,6 +167,7 @@ def resolve_template_version(
             capture_output=True,
             text=True,
             check=True,
+            env=git_env,
         ).stdout.strip()
         tag_ref = f"{plain_version}^" + "{" + "commit}"
         tagged_head = subprocess.run(
@@ -170,6 +175,7 @@ def resolve_template_version(
             capture_output=True,
             text=True,
             check=True,
+            env=git_env,
         ).stdout.strip()
     except (FileNotFoundError, subprocess.CalledProcessError):
         return (
@@ -187,6 +193,7 @@ def resolve_template_version(
             capture_output=True,
             text=True,
             check=True,
+            env=git_env,
         ).stdout.strip()
     except (FileNotFoundError, subprocess.CalledProcessError):
         return (

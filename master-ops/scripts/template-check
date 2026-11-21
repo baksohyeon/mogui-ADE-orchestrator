@@ -517,6 +517,7 @@ def build_report(
             # here without the generator; report what we can.
             exit_code = 1
 
+        version_order: int | None = None
         if installed_version and t_version:
             version_order = compare_template_versions(installed_version, t_version)
             if version_order is None:
@@ -526,6 +527,10 @@ def build_report(
                 return report, 2
             if version_order < 0:
                 exit_code = 1
+            elif version_order > 0:
+                report["questions_unanswered"].append(
+                    "installed is newer than the template source"
+                )
 
         changelog = template_root / "CHANGELOG.md"
         report["adoption_notes"], changelog_error, fragment_errors = adoption_notes_newer_than(
@@ -535,7 +540,7 @@ def build_report(
         if changelog_error:
             report["questions_unanswered"].append(changelog_error)
             return report, 2
-        if report["adoption_notes"] and report["installed_version"] != t_version:
+        if report["adoption_notes"] and version_order not in (None, 0):
             exit_code = 1
 
     if report["questions_unanswered"] and report["manifest_status"] == "malformed":

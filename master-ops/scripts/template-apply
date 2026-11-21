@@ -424,6 +424,19 @@ def plan_actions(
         )
 
     for rel in INSTANCE_OWNED_SEED_FILES:
+        if retirement_paths and rel in retirement_paths:
+            actions.append(
+                {
+                    "path": rel,
+                    "action": "skipped-as-retired",
+                    "reason": (
+                        "retired by the install record "
+                        f"({TEMPLATE_RETIREMENTS_REL.as_posix()})"
+                    ),
+                    "seed": True,
+                }
+            )
+            continue
         src = resolved_under(template_root, rel)
         dest = resolved_under(ops_root, rel)
         lexical_src = template_root.resolve() / rel
@@ -820,6 +833,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     retirement_paths.discard(None)
 
+    if retirement_status == "malformed":
+        sys.stderr.write(
+            "template-apply: write refused because retirements file is malformed "
+            f"or unreadable: {retirements_path}\n"
+        )
+        return 2
+
     try:
         values = parse_placeholder_args(args.placeholder)
     except SystemExit as exc:
@@ -904,13 +924,6 @@ def main(argv: list[str] | None = None) -> int:
         # A write that would ship unsubstituted placeholders is the same
         # could-not-decide status template-check already uses: exit 2, and no
         # write happens, not even the confirmation prompt.
-        return 2
-
-    if args.write and retirement_status == "malformed":
-        sys.stderr.write(
-            "template-apply: write refused because retirements file is malformed "
-            f"or unreadable: {retirements_path}\n"
-        )
         return 2
 
     if not args.write:

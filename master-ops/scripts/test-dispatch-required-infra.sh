@@ -1,11 +1,11 @@
 #!/bin/bash
 # Regression check for required-infra (#317 stage 2): the standing-rule block
 # that folds into every dispatched brief the same way mail-before-done does
-# (test-dispatch-runtime.sh covers that sibling feature). dispatch carries
-# {{RUNTIME_ROOT}}/{{OPS_REPO}} template placeholders, so this extracts just
-# the functions and the 1.6c block by exact-line awk range and runs that
-# snippet in an isolated subshell with a fixture standing-rules.md, rather
-# than invoking the whole script.
+# (test-dispatch-runtime.sh covers that sibling feature).
+# The dispatch script carries unrendered RUNTIME_ROOT and OPS_REPO template tokens, so it cannot run directly.
+# This extracts just the functions and the 1.6c block by exact-line awk range.
+# It runs that snippet in an isolated subshell with a fixture standing-rules.md,
+# rather than invoking the whole script.
 set -eu
 
 dispatch=$(cd "$(dirname "$0")" && pwd)/dispatch

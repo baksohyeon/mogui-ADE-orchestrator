@@ -14,6 +14,10 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SKELETON = REPO_ROOT / "master-ops"
+TEMPLATE_SCRIPTS = REPO_ROOT / "master-ops" / "scripts"
+if str(TEMPLATE_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(TEMPLATE_SCRIPTS))
+from template_common import template_version_is_valid  # noqa: E402
 
 # Files and directories that stay on the template side and never install.
 # Keep this list as the single executable source for Step 3 of onboarding.
@@ -122,6 +126,8 @@ def read_template_version(skeleton: Path) -> str:
         raise SystemExit(f"generate-manifest: TEMPLATE-VERSION unreadable: {exc}") from exc
     if not version:
         raise SystemExit("generate-manifest: TEMPLATE-VERSION is empty")
+    if not template_version_is_valid(version):
+        raise SystemExit("generate-manifest: TEMPLATE-VERSION has unsupported stamp form")
     return version
 
 

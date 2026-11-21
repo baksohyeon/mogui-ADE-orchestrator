@@ -43,7 +43,6 @@ import json
 import re
 import sys
 import tomllib
-from datetime import date
 from pathlib import Path
 from typing import Callable
 
@@ -52,6 +51,12 @@ if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 from template_common import (  # noqa: E402
     FRAGMENT_NAME_RE,
+    TEMPLATE_RETIREMENTS_REL,
+    compare_template_versions,
+    load_template_retirements,
+    resolve_template_version,
+    template_version_base,
+    template_version_is_valid,
 )
 from template_manifest import instance_owned_predicate  # noqa: E402
 
@@ -193,42 +198,7 @@ def resolve_template_root(template: Path | None) -> Path | None:
     return None
 
 
-def load_retirements(path: Path) -> tuple[list[dict], str]:
-    """Return (entries, status) where status is 'ok', 'absent', or 'malformed'.
-
-    An absent file is the normal state (no retirements declared yet) and is
-    not an error. A present-but-broken file is reported as malformed and does
-    not stop the rest of the check from running.
-    """
-    if not path.exists():
-        return [], "absent"
-    if not path.is_file():
-        return [], "malformed"
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return [], "malformed"
-    if not isinstance(data, list):
-        return [], "malformed"
-    entries: list[dict] = []
-    for item in data:
-        if not isinstance(item, dict):
-            return [], "malformed"
-        rel = item.get("path")
-        since = item.get("since")
-        why = item.get("why")
-        if not isinstance(rel, str) or not rel.strip():
-            return [], "malformed"
-        if not isinstance(since, str):
-            return [], "malformed"
-        try:
-            date.fromisoformat(since)
-        except ValueError:
-            return [], "malformed"
-        if not isinstance(why, str) or not why.strip():
-            return [], "malformed"
-        entries.append({"path": rel.strip(), "since": since, "why": why})
-    return entries, "ok"
+load_retirements = load_template_retirements
 
 
 def load_manifest(path: Path) -> tuple[dict | None, str | None]:
@@ -277,29 +247,37 @@ def is_template_side(rel: str) -> bool:
     return top in TEMPLATE_SIDE_DIRS
 
 
-def read_template_version(template_root: Path) -> tuple[str | None, str | None]:
-    """Return (version, error). A non-None error means the version could not be checked."""
+def read_template_version(
+    template_root: Path,
+) -> tuple[str | None, str | None, str | None]:
+    """Return (version, error, warning) for a template source."""
     version_file = template_root / "TEMPLATE-VERSION"
     if version_file.is_file():
         try:
-            version = version_file.read_text(encoding="utf-8").strip()
+            plain_version = version_file.read_text(encoding="utf-8").strip()
         except (OSError, UnicodeDecodeError) as exc:
-            return None, f"template VERSION unreadable: {exc}"
-        if not version:
-            return None, "template VERSION is empty"
-        return version, None
+            return None, f"template VERSION unreadable: {exc}", None
+        if not plain_version:
+            return None, "template VERSION is empty", None
+        if not template_version_is_valid(plain_version):
+            return None, "template VERSION has unsupported stamp form", None
+        version, warning = resolve_template_version(template_root, plain_version)
+        return version, None, warning
     try:
         manifest, err = load_manifest(template_root / "MANIFEST.json")
     except (OSError, UnicodeDecodeError) as exc:
-        return None, f"template manifest unreadable: {exc}"
+        return None, f"template manifest unreadable: {exc}", None
     if err and err != "manifest absent":
-        return None, f"template {err}"
+        return None, f"template {err}", None
     if not manifest:
-        return None, "template version undeterminable (no TEMPLATE-VERSION and no MANIFEST.json)"
+        return None, "template version undeterminable (no TEMPLATE-VERSION and no MANIFEST.json)", None
     version = manifest.get("template_version")
     if not isinstance(version, str) or not version.strip():
-        return None, "template MANIFEST.json missing non-empty template_version"
-    return version.strip(), None
+        return None, "template MANIFEST.json missing non-empty template_version", None
+    version = version.strip()
+    if not template_version_is_valid(version):
+        return None, "template MANIFEST.json has unsupported template_version form", None
+    return version, None, None
 
 
 def parse_changelog_sections(text: str) -> list[tuple[str, str]]:
@@ -373,7 +351,19 @@ def adoption_notes_newer_than(
         # Include sections that are not the installed version. Ordering in the
         # file is newest-first under Unreleased then released tags; stop once
         # the installed tag heading is reached.
-        if heading == installed or heading == installed.lstrip("v") or f"v{heading}" == installed:
+        heading_tag = heading if heading.startswith("v") else f"v{heading}"
+        heading_base = template_version_base(heading_tag)
+        installed_base = template_version_base(installed)
+        if (
+            heading == installed
+            or heading == installed.lstrip("v")
+            or f"v{heading}" == installed
+            or (
+                heading_base is not None
+                and installed_base is not None
+                and heading_base == installed_base
+            )
+        ):
             break
         notes.append({"version": heading, "body": body})
     return notes, None, fragment_errors
@@ -454,6 +444,11 @@ def build_report(
         required = [str(p) for p in manifest["files"]]
         installed_version = manifest.get("template_version")
         report["installed_version"] = installed_version
+        if not isinstance(installed_version, str) or not template_version_is_valid(installed_version):
+            report["questions_unanswered"].append(
+                "installed MANIFEST.json has unsupported template_version form"
+            )
+            return report, 2
 
     required_set = set(required)
     is_instance_owned, _ = instance_owned_predicate(manifest)
@@ -483,8 +478,12 @@ def build_report(
                 f"template path unreadable: {template_root}"
             )
             return report, 2
-        t_version, t_version_err = read_template_version(template_root)
+        t_version, t_version_err, t_version_warning = read_template_version(template_root)
         report["template_version"] = t_version
+        if t_version_warning:
+            report["questions_unanswered"].append(
+                f"template version warning: {t_version_warning}"
+            )
         if t_version_err:
             report["questions_unanswered"].append(t_version_err)
             return report, 2
@@ -518,8 +517,20 @@ def build_report(
             # here without the generator; report what we can.
             exit_code = 1
 
-        if installed_version and t_version and installed_version != t_version:
-            exit_code = 1
+        version_order: int | None = None
+        if installed_version and t_version:
+            version_order = compare_template_versions(installed_version, t_version)
+            if version_order is None:
+                report["questions_unanswered"].append(
+                    "template version comparison was not measurable"
+                )
+                return report, 2
+            if version_order < 0:
+                exit_code = 1
+            elif version_order > 0:
+                report["questions_unanswered"].append(
+                    "installed is newer than the template source"
+                )
 
         changelog = template_root / "CHANGELOG.md"
         report["adoption_notes"], changelog_error, fragment_errors = adoption_notes_newer_than(
@@ -529,7 +540,7 @@ def build_report(
         if changelog_error:
             report["questions_unanswered"].append(changelog_error)
             return report, 2
-        if report["adoption_notes"] and report["installed_version"] != t_version:
+        if report["adoption_notes"] and version_order not in (None, 0):
             exit_code = 1
 
     if report["questions_unanswered"] and report["manifest_status"] == "malformed":
@@ -632,7 +643,7 @@ def main(argv: list[str] | None = None) -> int:
     retirements_path = (
         args.retirements.resolve()
         if args.retirements is not None
-        else ops_root / "config" / "template-retirements.json"
+        else ops_root / TEMPLATE_RETIREMENTS_REL
     )
 
     try:

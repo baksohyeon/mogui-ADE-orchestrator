@@ -69,6 +69,81 @@ The dry-run plan also shows the two merge-ready seed files when the install does
 
 4. **Owner confirmation**: show the dry-run plan in the owner's language. Require an explicit confirmation before any write. There is no silent apply and no flag that skips confirmation on any run. If the owner declines, stop and leave the report.
 
+### Registering an intentionally removed template path
+
+Register a path only when the installation removed that manifest path on
+purpose. Do not register a missing path just to make a check pass. Wait for the
+owner's explicit confirmation above before editing this instance-owned file.
+`config/template-retirements.json` is a JSON array with this shape:
+
+```json
+[
+  {
+    "path": "path/to/intentionally-removed-file",
+    "since": "2026-11-20",
+    "why": "replace with the measured reason"
+  }
+]
+```
+
+When the file is absent, create the array. When it already exists, add or
+update one object while preserving every other entry. The following command
+does that merge; replace the obvious placeholder values with the measured
+manifest path, date, and reason after confirmation:
+
+```console
+python3 - "{{OPS_REPO}}/config/template-retirements.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+record = Path(sys.argv[1])
+retired_path = "path/to/intentionally-removed-file"
+entry = {
+    "path": retired_path,
+    "since": "2026-11-20",
+    "why": "replace with the measured reason",
+}
+if record.exists():
+    entries = json.loads(record.read_text(encoding="utf-8"))
+    if not isinstance(entries, list):
+        raise SystemExit(f"{record} must contain a JSON array")
+else:
+    entries = []
+if any(not isinstance(item, dict) for item in entries):
+    raise SystemExit(f"{record} contains a non-object retirement entry")
+entries = [item for item in entries if item.get("path") != retired_path]
+entries.append(entry)
+record.parent.mkdir(parents=True, exist_ok=True)
+record.write_text(json.dumps(entries, indent=2) + "\n", encoding="utf-8")
+PY
+```
+
+`template-check` reads this file through its `--retirements` default. Before the
+entry exists, a seeded install reports the path as required and absent:
+
+```text
+absent_required: 1
+  - path/to/intentionally-removed-file
+retired: 0
+retirements_status: absent
+```
+
+After the file is written, the same check reports the path as retired, so the
+path no longer contributes to `absent_required`. A confirmed
+`template-apply --write` reads the same file and reports the path as
+`skipped-as-retired`, so it remains absent. Other findings remain visible:
+
+```text
+absent_required: 0
+retired: 1
+  - path/to/intentionally-removed-file
+retirements_status: ok
+```
+
+If the retirements file is unreadable or malformed, `template-apply --write`
+refuses the write and names `config/template-retirements.json`.
+
 5. **Write pass (only after confirmation)**: re-run with `--write` and type the confirmation phrase the tool demands. Placeholder substitution uses only the documented set from the router (`{{WORKSPACE_NAME}}`, `{{WORKSPACE_ROOT}}`, `{{OPS_REPO}}`, `{{MONITOR_NS}}`, `{{MODEL_ID}}`, `{{REPO_LIST}}`, `{{RUNTIME_ROOT}}`, `{{TEMPLATE_VERSION}}`). Add none. Prefer values already measured from the existing install. For example, repeat `--placeholder KEY=VALUE` for each measured value: `"{{RUNTIME_ROOT}}/master-ops/scripts/template-apply" --ops "{{OPS_REPO}}" --template "{{RUNTIME_ROOT}}/master-ops" --write --placeholder WORKSPACE_NAME="{{WORKSPACE_NAME}}" --placeholder WORKSPACE_ROOT="{{WORKSPACE_ROOT}}" --placeholder OPS_REPO="{{OPS_REPO}}" --placeholder MONITOR_NS="{{MONITOR_NS}}" --placeholder MODEL_ID="{{MODEL_ID}}" --placeholder REPO_LIST="{{REPO_LIST}}" --placeholder RUNTIME_ROOT="{{RUNTIME_ROOT}}" --placeholder TEMPLATE_VERSION="{{TEMPLATE_VERSION}}"`. The tool refuses the write, before the confirmation prompt, if any of these eight tokens remains in the substituted text of a planned, non-skipped file, including when a supplied value reintroduces it.
 
 6. **Refusals by name**: the apply step must refuse, and report as such, for:
@@ -89,7 +164,7 @@ The dry-run plan also shows the two merge-ready seed files when the install does
    - `docs/blame/` (this one from the manifest only, not the built-in list)
    - anything the manifest does not claim
 
-   Per-file outcomes are one of: planned, written, skipped-as-instance-owned, refused-not-in-manifest, error-invalid-path, error-missing-template-file. Dry-run prints `planned` for each template-layer path that would write; any `error-*` outcome fails the plan (nonzero exit) before confirmation. The `skipped-as-instance-owned` list comes from the template manifest's `instance_owned` key, the built-in list in `scripts/template_common.py`, or the existing merge-ready seed files; a manifest written before that key existed falls back to the built-in list, and the reason identifies the source.
+   Per-file outcomes are one of: planned, written, skipped-as-instance-owned, skipped-as-retired, refused-not-in-manifest, error-invalid-path, error-missing-template-file. Dry-run prints `planned` for each template-layer path that would write; any `error-*` outcome fails the plan (nonzero exit) before confirmation. The `skipped-as-instance-owned` list comes from the template manifest's `instance_owned` key, the built-in list in `scripts/template_common.py`, or the existing merge-ready seed files; a manifest written before that key existed falls back to the built-in list, and the reason identifies the source. A registered retirement is `skipped-as-retired` in both dry-run and write results.
 
 7. **Re-check**: run `template-check` again with `--template` and confirm the report_set is `template-compare`. A clean shape is the goal; remaining unknown paths that are deliberate local additions stay listed as unknown and are not deleted.
 

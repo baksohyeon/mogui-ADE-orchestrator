@@ -26,6 +26,19 @@ TEMPLATE_VERSION_RE = re.compile(
 TEMPLATE_VERSION_PATTERN = r"^v\d+(?:\.\d+){2,}(?:-\d+-g[0-9a-f]+)?$"
 TEMPLATE_VERSION_VALID_RE = re.compile(TEMPLATE_VERSION_PATTERN)
 TEMPLATE_RETIREMENTS_REL = Path("config/template-retirements.json")
+# Inherited values in this set can redirect Git away from the repository named
+# by a command's explicit -C path. Keep one shared set for production
+# measurement and the fixture helpers that create repositories.
+GIT_REPOSITORY_ENV_VARS = frozenset(
+    {
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_COMMON_DIR",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    }
+)
 
 
 def normalize_template_rel(rel: str) -> str | None:
@@ -128,9 +141,11 @@ def resolve_template_version(
 ) -> tuple[str, str | None]:
     """Resolve the install stamp and a warning when git measurement is unsafe."""
     git_prefix = ["git", "-C", str(source_root)]
-    git_env = os.environ.copy()
-    git_env.pop("GIT_DIR", None)
-    git_env.pop("GIT_INDEX_FILE", None)
+    git_env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in GIT_REPOSITORY_ENV_VARS
+    }
     try:
         repo_top = subprocess.run(
             [*git_prefix, "rev-parse", "--show-toplevel"],

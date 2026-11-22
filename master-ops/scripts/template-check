@@ -348,21 +348,22 @@ def adoption_notes_newer_than(
         if installed is None:
             notes.append({"version": heading, "body": body})
             continue
-        # Include sections that are not the installed version. Ordering in the
-        # file is newest-first under Unreleased then released tags; stop once
-        # the installed tag heading is reached.
+        # Ordering in the file is newest-first under Unreleased then released
+        # tags. Stop at the installed release base, and keep only sections
+        # newer than that base when the install has moved ahead of the source.
         heading_tag = heading if heading.startswith("v") else f"v{heading}"
         heading_base = template_version_base(heading_tag)
         installed_base = template_version_base(installed)
-        if (
+        if heading_base is not None and installed_base is not None:
+            if heading_base == installed_base:
+                break
+            heading_order = compare_template_versions(heading_tag, installed)
+            if heading_order is not None and heading_order < 0:
+                continue
+        elif (
             heading == installed
             or heading == installed.lstrip("v")
             or f"v{heading}" == installed
-            or (
-                heading_base is not None
-                and installed_base is not None
-                and heading_base == installed_base
-            )
         ):
             break
         notes.append({"version": heading, "body": body})

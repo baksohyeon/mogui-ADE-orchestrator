@@ -44,10 +44,27 @@ def _run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, text=True, **kwargs)
 
 
+_TEMPLATE_COMMON_TEST_MODULE = None
+
+
+def _template_common_for_tests():
+    global _TEMPLATE_COMMON_TEST_MODULE
+    if _TEMPLATE_COMMON_TEST_MODULE is None:
+        loader = importlib.machinery.SourceFileLoader(
+            "template_common_for_tests", str(SKELETON / "scripts" / "template_common.py")
+        )
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _TEMPLATE_COMMON_TEST_MODULE = module
+    return _TEMPLATE_COMMON_TEST_MODULE
+
+
 def _git_env() -> dict[str, str]:
     env = os.environ.copy()
-    env.pop("GIT_DIR", None)
-    env.pop("GIT_INDEX_FILE", None)
+    for name in _template_common_for_tests().GIT_REPOSITORY_ENV_VARS:
+        env.pop(name, None)
     return env
 
 
@@ -276,6 +293,33 @@ def test_template_apply_git_measurement_isolated_from_global_signing_and_env(
     result = _apply_version_template(template, ops)
     assert result.returncode == 0, result.stderr + result.stdout
     expected = _git(template, "describe", "--tags", "--match", "v1.2.3")
+    assert json.loads((ops / "MANIFEST.json").read_text())["template_version"] == expected
+
+
+@pytest.mark.parametrize(
+    "variable",
+    [
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    ],
+)
+def test_template_apply_git_measurement_ignores_inherited_repository_location(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, variable: str
+):
+    global_config = tmp_path / "gitconfig"
+    global_config.write_text(
+        "[commit]\n\tgpgsign = true\n[tag]\n\tgpgSign = true\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(global_config))
+    monkeypatch.setenv(variable, str(tmp_path / "redirected-repository"))
+    template = _seed_version_template(tmp_path / "source")
+    expected = _git(template, "describe", "--tags", "--match", "v1.2.3")
+    ops = tmp_path / "ops"
+    result = _apply_version_template(template, ops)
+    assert result.returncode == 0, result.stderr + result.stdout
     assert json.loads((ops / "MANIFEST.json").read_text())["template_version"] == expected
 
 
@@ -1075,6 +1119,42 @@ def test_template_check_adoption_notes_use_comparator_equality(tmp_path: Path):
     assert result.returncode == 0, result.stdout + result.stderr
     report = json.loads(result.stdout)
     assert [note["version"] for note in report["adoption_notes"]] == ["Unreleased"]
+
+
+def test_template_check_newer_install_ignores_older_adoption_notes(tmp_path: Path):
+    ops = tmp_path / "ops"
+    template = tmp_path / "template"
+    ops.mkdir()
+    template.mkdir()
+    (ops / "MANIFEST.json").write_text(
+        json.dumps({"template_version": "v1.2.4-2-gdeadbeef", "files": []}) + "\n",
+        encoding="utf-8",
+    )
+    (template / "TEMPLATE-VERSION").write_text("v1.2.3\n", encoding="utf-8")
+    (template / "MANIFEST.json").write_text(
+        json.dumps({"template_version": "v1.2.3", "files": []}) + "\n",
+        encoding="utf-8",
+    )
+    (template / "CHANGELOG.md").write_text(
+        "## v1.2.3\n\n- source release\n\n"
+        "## v1.2.2\n\n- older release\n",
+        encoding="utf-8",
+    )
+    result = _run(
+        [
+            sys.executable,
+            str(TEMPLATE_CHECK),
+            "--ops",
+            str(ops),
+            "--template",
+            str(template),
+            "--json",
+        ]
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    report = json.loads(result.stdout)
+    assert report["adoption_notes"] == []
+    assert "installed is newer than the template source" in report["questions_unanswered"]
 
 
 def test_template_apply_rejects_path_escape_and_missing_manifest_file(tmp_path: Path):

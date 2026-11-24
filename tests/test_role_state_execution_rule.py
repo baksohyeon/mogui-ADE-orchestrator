@@ -11,7 +11,9 @@ HOOK = Path(__file__).resolve().parents[1] / "master-ops/scripts/hooks/role-stat
 DEFAULT_EXECUTION_RULE = (
     "Execution rule: classify first. G0 read-only and G1 local-reversible: "
     "act, then report. G2 shared state and G3 irreversible, paid or outbound: "
-    "approval first."
+    "approval first. Unknown class: approval first. Hard stops: other "
+    "people's resources, resources reserved for someone else, secret values, "
+    "team-surface posts."
 )
 
 

@@ -9,7 +9,7 @@ BD_GAP="$S/hooks/bd-gap-warn.sh"
 ROLE="$S/hooks/role-state-inject.sh"
 BARE_CD="$S/hooks/bash-bare-cd-warn.sh"
 POLL="$S/hooks/bash-poll-warn.sh"
-EXPECTED_EXECUTION_RULE='Execution rule: classify first. G0 read-only and G1 local-reversible: act, then report. G2 shared state and G3 irreversible, paid or outbound: approval first.'
+EXPECTED_EXECUTION_RULE="Execution rule: classify first. G0 read-only and G1 local-reversible: act, then report. G2 shared state and G3 irreversible, paid or outbound: approval first. Unknown class: approval first. Hard stops: other people's resources, resources reserved for someone else, secret values, team-surface posts."
 F=0
 
 T="$(mktemp -d)"

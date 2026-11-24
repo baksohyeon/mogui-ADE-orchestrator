@@ -219,6 +219,24 @@ if [ -f "$ONBOARDING_SOURCE" ]; then
   fi
 fi
 
+mkdir -p "$OPS_ROOT/docs/runbooks"
+cat > "$OPS_ROOT/docs/runbooks/role-state.md" <<'EOFDEFAULTROLE'
+Current Role: master
+Role Lock: ENABLED
+EOFDEFAULTROLE
+default_role_output=$(cd "$WORKTREE" && \
+  MOGUI_HOOK_FIRE_LOG="$TMP/default-role-fire.jsonl" \
+  WORKSPACE_ROOT="$WORKSPACE_ROOT" \
+  bash "$OPS_ROOT/scripts/hooks/role-state-inject.sh" </dev/null 2>&1)
+expected_role_output="[role-state] Current Role: master | Role Lock: ENABLED | ${EXPECTED_EXECUTION_RULE} Product-repo implementation goes to dispatched workers, never inline."
+if [ "$default_role_output" = "$expected_role_output" ]; then
+  ok "role-state hook emits the classify-first default when the instance rule is absent"
+else
+  printf '%s\n' "$default_role_output"
+  fail "role-state hook default did not match EXPECTED_EXECUTION_RULE"
+  exit 1
+fi
+
 if [ -x "$OPS_ROOT/scripts/harness-selfcheck.sh" ]; then
   harness_output=$(cd "$WORKTREE" && \
     ORCA_WORKSPACE_ID=fixture \

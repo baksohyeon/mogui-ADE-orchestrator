@@ -9,6 +9,7 @@ BD_GAP="$S/hooks/bd-gap-warn.sh"
 ROLE="$S/hooks/role-state-inject.sh"
 BARE_CD="$S/hooks/bash-bare-cd-warn.sh"
 POLL="$S/hooks/bash-poll-warn.sh"
+EXPECTED_EXECUTION_RULE='Execution rule: classify first. G0 read-only and G1 local-reversible: act, then report. G2 shared state and G3 irreversible, paid or outbound: approval first.'
 F=0
 
 T="$(mktemp -d)"
@@ -154,8 +155,8 @@ assert_verdict pass "bd-gap pass path"
 cat > "$T/role.pass.md" <<'EOF'
 Current Role: master
 Role Lock: ENABLED
-Execution rule: Proposal -> Approval -> Execution.
 EOF
+printf '%s\n' "$EXPECTED_EXECUTION_RULE" >> "$T/role.pass.md"
 ROLE_STATE="$T/role.pass.md"
 build_role_mutant "$ROLE" "$ROLE_STATE" "$T/role.pass.sh"
 MOGUI_HOOK_FIRE_LOG="$LOG" bash "$T/role.pass.sh" >/dev/null 2>&1

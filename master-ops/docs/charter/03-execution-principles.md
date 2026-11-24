@@ -2,11 +2,18 @@
 
 Governs the default execution path and recovery procedures. See the index: [`../MASTER-OPERATIONS.md`](../MASTER-OPERATIONS.md).
 
-The default execution path is:
+Execution rule: classify the action first.
 
-```text
-Proposal -> Approval -> Execution
-```
+| Class | Rule |
+| --- | --- |
+| G0 read-only | do it. |
+| G1 local and reversible (your own processes on resources you were given, reversible test runs, files in your own work folder) | do it, then report what you did and why. |
+| G2 shared state (push, PR, issue state) | inside your contract or a standing delegation. |
+| G3 paid external calls, overwriting or deleting what cannot be restored, outbound sends, deploys, credentials | the owner's explicit approval. |
+
+Hard stops whatever the reversibility: other people's resources, resources reserved for someone else, secret values, team-surface posts.
+
+Ask only when the action is G2 or G3, or when you cannot tell its class. G2, G3, and an action whose class cannot be told follow Proposal -> Approval -> Execution. If the approved scope is unclear, ask or stop.
 
 Answer the owner before working when their message contains a question or a shared thought. The first visible response carries the answer, and the final response preserves it, because mid-turn text between tool calls may never render for the owner. Overnight autonomy changes which approved work items may continue; it does not suspend the conversation rule.
 

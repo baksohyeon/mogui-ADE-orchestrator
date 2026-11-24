@@ -12,7 +12,7 @@ Recommended hook spec:
 - SessionStart on compact: run `scripts/compaction-probe.sh`
 - PostToolUse (all tools) and UserPromptSubmit: run `scripts/hooks/compact-rehydration-hook.sh` to restore the work layer after compact recall or the bounded recall wait
 - PreCompact: reload or export issue-tracker memory
-- UserPromptSubmit: inject the current role-state line from `docs/runbooks/role-state.md` and the `Proposal -> Approval -> Execution` rule. This pairing mechanically counters the host's autonomy defaults, which can override the charter unless the execution rule is present in every turn's context. See §9 for the incident that motivated this coupling.
+- UserPromptSubmit: inject the current role-state line from `docs/runbooks/role-state.md` and the classify-first execution rule from §3. G2, G3, and an action whose class cannot be told follow Proposal -> Approval -> Execution. This pairing mechanically counters the host's autonomy defaults, which can override the charter unless the execution rule is present in every turn's context. See §9 for the incident that motivated this coupling.
 - UserPromptSubmit: warn when unacknowledged orchestration inbox messages exist, using `scripts/hooks/orch-inbox-warn.sh`.
 - UserPromptSubmit: warn when today's registered dispatches lack tracker cards, using `scripts/hooks/bd-gap-warn.sh`.
 - PreToolUse(Bash): warn when a hand-rolled poll loop appears; event waits use `scripts/orca-wait`. See `docs/runbooks/orca-wait.md`.

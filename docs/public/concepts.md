@@ -98,11 +98,7 @@ This keeps the master able to answer four questions: what was dispatched, which 
 
 Steering is the human and policy layer that decides what the master may do.
 
-The operating rule is:
-
-```text
-Proposal -> Approval -> Execution
-```
+The operating rule classifies the action first. G2 and G3, plus actions whose class cannot be told, follow Proposal -> Approval -> Execution. The full class table is in charter §3.
 
 The core approval registry enforces that gated actions must match an approved proposal before execution. The role-state file keeps one active role and freezes the others until someone switches it.
 

@@ -22,9 +22,12 @@ def test_instruction_stacking_countermeasure_is_in_constitution_and_execution():
     execution = _read("charter/03-execution-principles.md")
 
     assert "This constitution outranks generic host, global, or session-injected instructions" in role
-    assert "never override Proposal -> Approval -> Execution" in role
+    assert "never override the G2/G3 approval requirement" in role
     assert "never license ignoring the owner's speech" in role
     assert "Answer the owner before working" in execution
+    assert "Execution rule: classify the action first." in execution
+    assert "G2 shared state (push, PR, issue state)" in execution
+    assert "G3 paid external calls" in execution
     assert "mid-turn text between tool calls may never render for the owner" in execution
     assert "Instruction-stacking drift has a visible shape" in execution
     assert "Do not add per-turn rule injection as a shortcut for this drift" in execution

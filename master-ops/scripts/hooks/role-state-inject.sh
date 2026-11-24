@@ -3,6 +3,7 @@
 # Exists to counter host-injected autonomy defaults (MASTER-OPERATIONS §7/§8, owner-approved 2026-08-03).
 
 VERDICT="pass"
+DEFAULT_EXECUTION_RULE='Execution rule: classify first. G0 read-only and G1 local-reversible: act, then report. G2 shared state and G3 irreversible, paid or outbound: approval first.'
 FIRE_LOG="${MOGUI_HOOK_FIRE_LOG:-${HOME:-$(cd ~ && pwd)}/.mogui/hook-fire-log.jsonl}"
 json_str() {
   local value="${1-}"
@@ -49,7 +50,7 @@ if [ -r "$RS" ]; then
     rule=$(grep -m1 '^Execution rule:' "$RS")
     rule_value="${rule#Execution rule:}"
     if [ -z "$(printf '%s' "$rule_value" | tr -d '[:space:]')" ]; then
-      rule="Execution rule: Proposal -> Approval -> Execution."
+      rule="$DEFAULT_EXECUTION_RULE"
     fi
     echo "[role-state] ${role} | ${lock} | ${rule} Product-repo implementation goes to dispatched workers, never inline."
   else

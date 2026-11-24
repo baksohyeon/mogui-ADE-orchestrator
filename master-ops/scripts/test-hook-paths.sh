@@ -16,6 +16,7 @@ BIN_DIR="$TMP/bin"
 SETTINGS="$WORKSPACE_ROOT/.claude/settings.json"
 TRACKER="$OPS_ROOT/scripts/hooks/tracker-check.sh"
 RUNTIME_CONFIG="$TMP/instance-runtime.json"
+EXPECTED_EXECUTION_RULE='Execution rule: classify first. G0 read-only and G1 local-reversible: act, then report. G2 shared state and G3 irreversible, paid or outbound: approval first.'
 
 ok() { echo "  ok:   $*"; }
 fail() { echo "  FAIL: $*"; return 1; }
@@ -54,8 +55,8 @@ PY
 cat > "$WORKSPACE_ROOT/docs/runbooks/role-state.md" <<'EOFROLE'
 Current Role: master
 Role Lock: ENABLED
-Execution rule: Proposal -> Approval -> Execution.
 EOFROLE
+printf '%s\n' "$EXPECTED_EXECUTION_RULE" >> "$WORKSPACE_ROOT/docs/runbooks/role-state.md"
 
 # Render only the placeholders used by the installed scripts. The copied tree
 # stays in a scratch operations repository, so the test exercises installed

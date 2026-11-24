@@ -19,7 +19,7 @@ Wire every shipped hook and skill this template documents, without offering an o
 - SessionStart: master operations context, role state, tracker memory
 - SessionStart on compact: `{{OPS_REPO}}/scripts/compaction-probe.sh`
 - PreCompact: reload or export tracker memory
-- UserPromptSubmit: role-state line + `Proposal -> Approval -> Execution` (see charter §8 / §9)
+- UserPromptSubmit: role-state line + classify-first execution rule (G2/G3 and unknown classes follow Proposal -> Approval -> Execution; see charter §3, §8 / §9)
 - PostToolUse (all tools) and UserPromptSubmit: `{{OPS_REPO}}/scripts/hooks/compact-rehydration-hook.sh` restores the work layer once the compact recall record is present, or after the bounded recall wait
 - UserPromptSubmit: dispatch tracker-card gap warning (`{{OPS_REPO}}/scripts/hooks/bd-gap-warn.sh`) alongside the orchestration inbox warning
 - PreToolUse: supervised-dispatch bypass warning
@@ -203,7 +203,7 @@ When the owner asks to turn something off, explain the piece in one sentence, st
 
 | piece | what it does | how to disable later |
 | --- | --- | --- |
-| Role-state injection (UserPromptSubmit) | Restates the active role and Proposal→Approval→Execution every turn | Remove or comment the UserPromptSubmit hook entry in the host settings that points at the role-state inject script; re-enable by restoring it |
+| Role-state injection (UserPromptSubmit) | Restates the active role and classify-first execution rule every turn; G2/G3 and unknown classes follow Proposal -> Approval -> Execution | Remove or comment the UserPromptSubmit hook entry in the host settings that points at the role-state inject script; re-enable by restoring it |
 | Compaction probe (SessionStart on compact) | Checks that the master still knows required facts after compaction | Remove the compact SessionStart hook that runs `{{OPS_REPO}}/scripts/compaction-probe.sh` |
 | Compact rehydration (PostToolUse and UserPromptSubmit) | Restores tracker work after the recall measurement is recorded or bounded | Remove the two hook entries for `{{OPS_REPO}}/scripts/hooks/compact-rehydration-hook.sh`; restore them to re-enable |
 | Dispatch / supervised-dispatch warning (PreToolUse) | Warns when a worker path bypasses the dispatch gate | Remove the PreToolUse warn hook for bare worker invocation |

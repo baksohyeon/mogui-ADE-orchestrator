@@ -9,9 +9,9 @@ from windows_exec_surface import skip_windows_exec_surface
 
 HOOK = Path(__file__).resolve().parents[1] / "master-ops/scripts/hooks/role-state-inject.sh"
 DEFAULT_EXECUTION_RULE = (
-    "Execution rule: classify first. G0 read-only and G1 local-reversible: "
-    "act, then report. G2 shared state and G3 irreversible, paid or outbound: "
-    "approval first. Unknown class: approval first. Hard stops: other "
+    "Execution rule: classify first. G0 and G1: act, then report. G2 inside "
+    "your contract or standing delegation: proceed; G2 outside it, G3, "
+    "unknown class: approval first. Hard stops: other "
     "people's resources, resources reserved for someone else, secret values, "
     "team-surface posts."
 )

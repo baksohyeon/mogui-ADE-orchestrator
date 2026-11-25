@@ -3,7 +3,7 @@
 # Exists to counter host-injected autonomy defaults (MASTER-OPERATIONS §7/§8, owner-approved 2026-08-03).
 
 VERDICT="pass"
-DEFAULT_EXECUTION_RULE="Execution rule: classify first. G0 read-only and G1 local-reversible: act, then report. G2 shared state and G3 irreversible, paid or outbound: approval first. Unknown class: approval first. Hard stops: other people's resources, resources reserved for someone else, secret values, team-surface posts."
+DEFAULT_EXECUTION_RULE="Execution rule: classify first. G0 and G1: act, then report. G2 inside your contract or standing delegation: proceed; G2 outside it, G3, unknown class: approval first. Hard stops: other people's resources, resources reserved for someone else, secret values, team-surface posts."
 FIRE_LOG="${MOGUI_HOOK_FIRE_LOG:-${HOME:-$(cd ~ && pwd)}/.mogui/hook-fire-log.jsonl}"
 json_str() {
   local value="${1-}"

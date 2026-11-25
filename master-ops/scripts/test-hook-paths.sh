@@ -16,6 +16,7 @@ BIN_DIR="$TMP/bin"
 SETTINGS="$WORKSPACE_ROOT/.claude/settings.json"
 TRACKER="$OPS_ROOT/scripts/hooks/tracker-check.sh"
 RUNTIME_CONFIG="$TMP/instance-runtime.json"
+EXPECTED_EXECUTION_RULE="Execution rule: classify first. G0 and G1: act, then report. G2 inside your contract or standing delegation: proceed; G2 outside it, G3, unknown class: approval first. Hard stops: other people's resources, resources reserved for someone else, secret values, team-surface posts. Classes: charter §3."
 
 ok() { echo "  ok:   $*"; }
 fail() { echo "  FAIL: $*"; return 1; }
@@ -54,8 +55,8 @@ PY
 cat > "$WORKSPACE_ROOT/docs/runbooks/role-state.md" <<'EOFROLE'
 Current Role: master
 Role Lock: ENABLED
-Execution rule: Proposal -> Approval -> Execution.
 EOFROLE
+printf '%s\n' "$EXPECTED_EXECUTION_RULE" >> "$WORKSPACE_ROOT/docs/runbooks/role-state.md"
 
 # Render only the placeholders used by the installed scripts. The copied tree
 # stays in a scratch operations repository, so the test exercises installed
@@ -216,6 +217,24 @@ if [ -f "$ONBOARDING_SOURCE" ]; then
     fail "SessionStart role-state hook did not record its explicit event"
     exit 1
   fi
+fi
+
+mkdir -p "$OPS_ROOT/docs/runbooks"
+cat > "$OPS_ROOT/docs/runbooks/role-state.md" <<'EOFDEFAULTROLE'
+Current Role: master
+Role Lock: ENABLED
+EOFDEFAULTROLE
+default_role_output=$(cd "$WORKTREE" && \
+  MOGUI_HOOK_FIRE_LOG="$TMP/default-role-fire.jsonl" \
+  WORKSPACE_ROOT="$WORKSPACE_ROOT" \
+  bash "$OPS_ROOT/scripts/hooks/role-state-inject.sh" </dev/null 2>&1)
+expected_role_output="[role-state] Current Role: master | Role Lock: ENABLED | ${EXPECTED_EXECUTION_RULE} Product-repo implementation goes to dispatched workers, never inline."
+if [ "$default_role_output" = "$expected_role_output" ]; then
+  ok "role-state hook emits the classify-first default when the instance rule is absent"
+else
+  printf '%s\n' "$default_role_output"
+  fail "role-state hook default did not match EXPECTED_EXECUTION_RULE"
+  exit 1
 fi
 
 if [ -x "$OPS_ROOT/scripts/harness-selfcheck.sh" ]; then

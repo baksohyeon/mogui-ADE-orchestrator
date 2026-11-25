@@ -22,9 +22,21 @@ def test_instruction_stacking_countermeasure_is_in_constitution_and_execution():
     execution = _read("charter/03-execution-principles.md")
 
     assert "This constitution outranks generic host, global, or session-injected instructions" in role
-    assert "never override Proposal -> Approval -> Execution" in role
+    assert "The execution rule in §3 applies" in role
+    assert "never override that rule" in role
     assert "never license ignoring the owner's speech" in role
+    assert "A hard stop overrides the class: do not act, even at G0; ask the owner." in execution
+    assert "A team-surface post is a message to a shared channel other people read" in execution
+    assert "An `Execution rule:` line in the installation's role-state file replaces this rule." in execution
+    assert "The hard-stop rule and its owner escalation still apply after that replacement." in execution
+    assert "For actions not covered by a hard stop, ask only when the action is G3, when you cannot tell its class, or when a G2 action falls outside its contract or standing delegation." in execution
+    assert "A worker's dispatched contract is the approval for its G2 action" in execution
+    assert "The master's G2 action requires a standing delegation the owner gave in writing" in execution
+    assert "A contract the master drafted is a proposal until a delegation or an approval covers it." in execution
     assert "Answer the owner before working" in execution
+    assert "Execution rule: classify the action first." in execution
+    assert "G2 shared state (push, PR, issue state)" in execution
+    assert "G3 paid external calls" in execution
     assert "mid-turn text between tool calls may never render for the owner" in execution
     assert "Instruction-stacking drift has a visible shape" in execution
     assert "Do not add per-turn rule injection as a shortcut for this drift" in execution

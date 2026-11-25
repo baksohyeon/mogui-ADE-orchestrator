@@ -198,7 +198,7 @@ Do not edit any file. Return the heading list as the artifact.
 What you should see, in order:
 
 1. **Proposal.** The master restates the job as a narrow contract: target repository and checkout, allowed surface, acceptance criteria, evidence required, commit rules (for this example: no edits, no commit).
-2. **Your approval.** Non-trivial work follows proposal then approval then execution. Say yes only when the contract matches what you meant.
+2. **Approval, if required.** The [execution rule in charter section 3](../../master-ops/docs/charter/03-execution-principles.md) says this read-only G0 example proceeds without approval; actions that require approval must be approved before dispatch.
 3. **Dispatch.** The master opens a worker session (usually in a repository worktree on its own branch), hands it the contract, and waits on the orchestration mailbox rather than scraping the worker's screen.
 4. **Result and acceptance.** The worker returns an artifact plus evidence. The master checks the evidence itself. "Done" from the worker is a claim; acceptance is the master's decision.
 

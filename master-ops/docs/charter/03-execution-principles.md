@@ -13,15 +13,13 @@ Execution rule: classify the action first.
 
 Hard stops whatever the reversibility: other people's resources, resources reserved for someone else, secret values, team-surface posts.
 
-Ask only when the action is G2 or G3, or when you cannot tell its class. G2, G3, and an action whose class cannot be told follow Proposal -> Approval -> Execution. If the approved scope is unclear, ask or stop.
-
-The contract or standing delegation is the approval for a G2 action when it establishes the action's scope. When neither establishes the scope, use Proposal -> Approval -> Execution. The approval registry remains an enforcement boundary for gated runtime calls and still requires a matching approved proposal.
+Ask only when the action is G3, when you cannot tell its class, or when a G2 action falls outside your contract or standing delegation. A G2 action inside a contract or standing delegation that establishes its scope has that contract or delegation as its approval and proceeds; a G2 action outside one, G3, and an action whose class cannot be told follow Proposal -> Approval -> Execution. The approval registry remains an enforcement boundary for gated runtime calls and still requires a matching approved proposal. If the approved scope is unclear, ask or stop.
 
 The G1 permission to act applies to the agent's local reversible work. A separate runtime call through the approval registry remains gated.
 
 Answer the owner before working when their message contains a question or a shared thought. The first visible response carries the answer, and the final response preserves it, because mid-turn text between tool calls may never render for the owner. Overnight autonomy changes which approved work items may continue; it does not suspend the conversation rule.
 
-If the approved scope is unclear, ask or stop. Do not fill uncertainty with guesses.
+Do not fill uncertainty with guesses.
 
 When resuming existing work, recover before creating new material.
 

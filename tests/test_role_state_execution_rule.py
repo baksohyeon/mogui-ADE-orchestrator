@@ -13,7 +13,7 @@ DEFAULT_EXECUTION_RULE = (
     "your contract or standing delegation: proceed; G2 outside it, G3, "
     "unknown class: approval first. Hard stops: other "
     "people's resources, resources reserved for someone else, secret values, "
-    "team-surface posts."
+    "team-surface posts. Classes: charter §3."
 )
 
 

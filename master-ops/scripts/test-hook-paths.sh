@@ -16,7 +16,7 @@ BIN_DIR="$TMP/bin"
 SETTINGS="$WORKSPACE_ROOT/.claude/settings.json"
 TRACKER="$OPS_ROOT/scripts/hooks/tracker-check.sh"
 RUNTIME_CONFIG="$TMP/instance-runtime.json"
-EXPECTED_EXECUTION_RULE="Execution rule: classify first. G0 and G1: act, then report. G2 inside your contract or standing delegation: proceed; G2 outside it, G3, unknown class: approval first. Hard stops: other people's resources, resources reserved for someone else, secret values, team-surface posts."
+EXPECTED_EXECUTION_RULE="Execution rule: classify first. G0 and G1: act, then report. G2 inside your contract or standing delegation: proceed; G2 outside it, G3, unknown class: approval first. Hard stops: other people's resources, resources reserved for someone else, secret values, team-surface posts. Classes: charter §3."
 
 ok() { echo "  ok:   $*"; }
 fail() { echo "  FAIL: $*"; return 1; }

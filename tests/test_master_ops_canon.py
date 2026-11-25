@@ -27,7 +27,8 @@ def test_instruction_stacking_countermeasure_is_in_constitution_and_execution():
         "Execution rule: classify first. G0 and G1: act, then report. "
         "G2 inside your contract or standing delegation: proceed; G2 outside it, "
         "G3, unknown class: approval first. Hard stops: other people's resources, "
-        "resources reserved for someone else, secret values, team-surface posts."
+        "resources reserved for someone else, secret values, team-surface posts. "
+        "Classes: charter §3."
     ) in role
     assert "G2 outside it, G3, unknown class: approval first." in role
     assert "never license ignoring the owner's speech" in role

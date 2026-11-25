@@ -19,7 +19,7 @@ Wire every shipped hook and skill this template documents, without offering an o
 - SessionStart: master operations context, role state, tracker memory
 - SessionStart on compact: `{{OPS_REPO}}/scripts/compaction-probe.sh`
 - PreCompact: reload or export tracker memory
-- UserPromptSubmit: `Execution rule: classify first. G0 and G1: act, then report. G2 inside your contract or standing delegation: proceed; G2 outside it, G3, unknown class: approval first. Hard stops: other people's resources, resources reserved for someone else, secret values, team-surface posts. Classes: charter §3.` See charter §3, §8, and §9.
+- UserPromptSubmit: inject the current role-state line + `Execution rule: classify first. G0 and G1: act, then report. G2 inside your contract or standing delegation: proceed; G2 outside it, G3, unknown class: approval first. Hard stops: other people's resources, resources reserved for someone else, secret values, team-surface posts. Classes: charter §3.` See charter §3, §8, and §9.
 - PostToolUse (all tools) and UserPromptSubmit: `{{OPS_REPO}}/scripts/hooks/compact-rehydration-hook.sh` restores the work layer once the compact recall record is present, or after the bounded recall wait
 - UserPromptSubmit: dispatch tracker-card gap warning (`{{OPS_REPO}}/scripts/hooks/bd-gap-warn.sh`) alongside the orchestration inbox warning
 - PreToolUse: supervised-dispatch bypass warning

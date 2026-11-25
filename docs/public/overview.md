@@ -46,7 +46,7 @@ Durable operating state: bootstrap code loads a bounded L0/L1 context block, par
 
 Supervised dispatch: the dispatch gate follows `check -> dispatch -> register`. A readable worker contract is checked before dispatch, and a job is registered only after a probe verifies the job identity.
 
-Approval and roles: Actions are classified before execution; see [charter section 3](../../master-ops/docs/charter/03-execution-principles.md) and [Concepts](concepts.md) for the operating rule and its public context. Role State limits which kind of work the master may perform, and non-trivial acceptance can use separated review lenses.
+Approval and roles: actions are classified before execution; see [charter section 3](../../master-ops/docs/charter/03-execution-principles.md) and [Concepts](concepts.md) for the operating rule and its public context. Role State limits which kind of work the master may perform, and non-trivial acceptance can use separated review lenses.
 
 Succession and lineage: the master session itself is replaceable while the work continues. A handoff is built, a successor is spawned with placement proof, its boot is verified against the inherited state, the predecessor is retired, and the whole event lands in an append-only lineage ledger.
 

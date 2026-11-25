@@ -13,7 +13,11 @@ Execution rule: classify the action first.
 
 Hard stops whatever the reversibility: other people's resources, resources reserved for someone else, secret values, team-surface posts.
 
-Ask only when the action is G3, when you cannot tell its class, or when a G2 action falls outside your contract or standing delegation. A G2 action inside a contract or standing delegation that establishes its scope has that contract or delegation as its approval and proceeds; a G2 action outside one, G3, and an action whose class cannot be told follow Proposal -> Approval -> Execution. The approval registry remains an enforcement boundary for gated runtime calls and still requires a matching approved proposal. If the approved scope is unclear, ask or stop.
+A hard stop overrides the class: do not act, even at G0; ask the owner. A team-surface post is a message to a shared channel other people read, such as team chat, a mailing list, or a public discussion; a pull-request or issue comment inside contracted work is not a team-surface post.
+
+An `Execution rule:` line in the installation's role-state file replaces this rule.
+
+Ask only when the action is G3, when you cannot tell its class, or when a G2 action falls outside its contract or standing delegation. A worker's dispatched contract is the approval for its G2 action when it establishes the action's scope. The master's G2 action requires a standing delegation the owner gave in writing and the seat can point to, whether in the installation's local additions or the tracker, or an approval for that action. A contract the master drafted is a proposal until a delegation or an approval covers it. An in-scope G2 action proceeds under its applicable contract or standing delegation; a G2 action outside one, G3, and an action whose class cannot be told follow Proposal -> Approval -> Execution. The approval registry remains an enforcement boundary for gated runtime calls and still requires a matching approved proposal. If the approved scope is unclear, ask or stop.
 
 The G1 permission to act applies to the agent's local reversible work. A separate runtime call through the approval registry remains gated.
 

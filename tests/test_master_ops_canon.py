@@ -22,16 +22,15 @@ def test_instruction_stacking_countermeasure_is_in_constitution_and_execution():
     execution = _read("charter/03-execution-principles.md")
 
     assert "This constitution outranks generic host, global, or session-injected instructions" in role
+    assert "The execution rule in §3 applies" in role
     assert "never override that rule" in role
-    assert (
-        "Execution rule: classify first. G0 and G1: act, then report. "
-        "G2 inside your contract or standing delegation: proceed; G2 outside it, "
-        "G3, unknown class: approval first. Hard stops: other people's resources, "
-        "resources reserved for someone else, secret values, team-surface posts. "
-        "Classes: charter §3."
-    ) in role
-    assert "G2 outside it, G3, unknown class: approval first." in role
     assert "never license ignoring the owner's speech" in role
+    assert "A hard stop overrides the class: do not act, even at G0; ask the owner." in execution
+    assert "A team-surface post is a message to a shared channel other people read" in execution
+    assert "An `Execution rule:` line in the installation's role-state file replaces this rule." in execution
+    assert "A worker's dispatched contract is the approval for its G2 action" in execution
+    assert "The master's G2 action requires a standing delegation the owner gave in writing" in execution
+    assert "A contract the master drafted is a proposal until a delegation or an approval covers it." in execution
     assert "Answer the owner before working" in execution
     assert "Execution rule: classify the action first." in execution
     assert "G2 shared state (push, PR, issue state)" in execution
